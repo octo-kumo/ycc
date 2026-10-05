@@ -3,7 +3,13 @@
 Sand, water, oil, fire, smoke and stone on a grid with a ghost border of stone
 on every side, stepped one generation at a time, drawn through a framebuffer
 with per-material colour, and dumped as text under `--no-tty`. Deterministic by
-default; `--seed` (default 1) drives the one scene that uses randomness.
+default; `--seed` (default 1) drives the one scene that uses randomness — and
+that randomness now comes from **`import random`** (`src/y/std/random.y`,
+splitmix64) rather than from the 63-bit LCG this folder used to carry in
+`grid.y`. Same seed ⇒ byte-identical grid, exactly as before; the *bit stream*
+is different, so `terrain` is a different (equally ragged) cavern under every
+seed. No other scene draws at all, which is why `EXPECTED` — the `basin` run —
+does not move.
 
 **The rule that decides the physics is stated up front, because in a falling-sand
 automaton it is not an implementation detail:**
@@ -197,7 +203,7 @@ sandfall: heap 2581448 -> 2581448, growth 0 bytes over 121 generations
 simulation, which manages 154 000 generations/second on that grid.
 
 **The interactive path, under a real pty.** `tmux` is not installed here, so
-`pty_check.py` allocates one from Python — the same harness `term.y` was verified
+`pty_check.py` allocates one from Python — the same harness `tui` was verified
 with. Seven sessions, 26 checks: `q`, `Esc`, `Ctrl-C`, a mid-run `TIOCSWINSZ`,
 the remaining keys, the no-terminal refusal, and a `SIGKILL`. Each must exit
 correctly, leave the alt screen, show the cursor and put the termios back.
@@ -218,7 +224,7 @@ correctly, leave the alt screen, show the cursor and put the termios back.
   ok   exit code 1  [1]
   ok   the message names the reason  [sandfall: not a terminal; try --frames N --no-tty]
   ok   nothing at all on stdout, so EXPECTED cannot be corrupted by a diagnostic
-7. kill -9 mid-run: term.y's watchdog still restores the terminal
+7. kill -9 mid-run: tui's watchdog still restores the terminal
   ok   the process really was killed  [-9]
   ok   the terminal was restored by something other than the program's own cleanup
 all checks passed
@@ -246,7 +252,7 @@ on stderr, an empty stdout, and **zero** `runtime error:` lines. A sample:
 extra-operand     rc=1 trap=0 | sandfall: unexpected operand 'extra-operand'; everything is an o
 ```
 
-Note that `--seed -1` and `--frames -5` are refused by `args.y` with *needs a
+Note that `--seed -1` and `--frames -5` are refused by `args` with *needs a
 value* rather than reaching this program's range check, because a leading `-`
 looks like an option. `--seed=-1` and `--frames=-5` do reach it and are
 diagnosed by name. Both spellings are shown above because the difference is
@@ -270,6 +276,17 @@ RESULT PASS -- 139 assertions, 0 failed, 26675 generations, no reference file
 
 The whole transcript is kept in **`CHECK.txt`**, so a reader does not have to run
 anything to see what it claims.
+
+The assertions come from `import test` (`src/y/std/test.y`), not from this
+folder: `props.y` used to define its own `ck(cond, what)` and `ck_num(got, want,
+what)`, and they are gone — std's `test.ck(name, ok, detail)` and
+`test.ck_eq(name, got, want)` took their place, with every call site reordered
+to match, the tally now read from `test.checks()` / `test.failures()` instead of
+two module-level counters, and one deliberate asymmetry: `test.report()` is *not*
+called, because the `RESULT PASS` line above already summarises the run and it
+carries the generation count as well. `CHECK.txt` was regenerated, so the
+indentation of every assertion line and the position of every `ck_eq`'s numbers
+moved; the assertions themselves are identical and the count is the same.
 
 | group | what it asserts |
 |---|---|
@@ -409,17 +426,10 @@ FAIL heap growth over 2000 step+tally pairs, in bytes (got 6656000, want 0)
 
 ---
 
-## The toolkit revision this froze
+## The std units this uses
 
 Vendored copies, byte-identical to `examples/_toolkit/`, **not edited** — the
-diff against `_toolkit/` is empty for all four:
-
-| file | sha256 | lines | used for |
-|---|---|---|---|
-| `fb.y` | `95a7663b7f1c7a90ff3756b51e51644ea952c9b671eeca1012b8f64e18589697` | 975 | the surface, `flush_diff`, per-material colour |
-| `term.y` | `07135b31109fcecdef5bddf7d0299c9194039d172396b49347630a93a286b6ee` | 1156 | raw mode, alt screen, keys, the crash watchdog, restore |
-| `time.y` | `6050605cfcfb35db17ff180f89b4229796a7616099afbe34e2d2f34cdf37784b` | 245 | the frame pacer and the fps meter |
-| `args.y` | `cdac36da1cf2cd8551bd06b1bf2a7b608736bc55106e64f5be3b7aa9332e9d28` | 19081 | the flag table, the usage text |
+(there is nothing left to diff -- the files are gone):
 
 `fx.y` is **not** vendored: there is no trigonometry, no square root and no
 float anywhere in a falling-sand automaton. Four modules is the honest set.
@@ -476,7 +486,7 @@ asked for, and the code says so where it applies.
    anyone can read in a diff.
 8. **`read_key_timeout(ms)` cannot be finer than 100 ms**, because `VTIME`
    counts deciseconds and any non-zero request rounds *up*. The live view polls
-   with **0** and lets `time.y`'s pacer own the deadline; `run_live` says so at
+   with **0** and lets `tui`'s pacer own the deadline; `run_live` says so at
    the call site.
 9. **`main()`'s return value is not the exit status.** `main();` discards it and
    the program exits 0, so an error path that did `return 1` would look
@@ -491,7 +501,7 @@ asked for, and the code says so where it applies.
     `winsize()` instead: the same `TIOCGWINSZ` ioctl (syscall 16, fd, request,
     argument — kernel register order, §2.1; rows first, bytes 0–1, §2.3) into a
     module-level `[byte; 8]`, packed as `rows * 1000 + cols`. The frozen
-    `term.y` copy is not edited; `default_size()` still uses `term.size()`,
+    `tui` copy is not edited; `default_size()` still uses `term.size()`,
     because it is called once.
 12. **`str +=` amortises, but building a number as a string does not.** The
     status line began as an f-string plus three concatenations (~2.4 KB a
@@ -538,10 +548,9 @@ asked for, and the code says so where it applies.
 | file | what |
 |---|---|
 | `sandfall.y` | the entry point: flags, `--size` parsing, the headless report, the live view, `winsize()`, the status line |
-| `grid.y` | the store, the materials, **the physics**, `step()`, the tally, the checksum, the generator |
+| `grid.y` | the store, the materials, **the physics**, `step()`, the tally, the checksum; `srand`/`rnd_below` are now two-line wrappers over `import random` |
 | `scene.y` | the five built-in scenes, shared with `props.y` |
-| `props.y` | the property check: C0…C11, no reference file |
-| `fb.y` `term.y` `time.y` `args.y` | the frozen toolkit, unmodified |
+| `props.y` | the property check: C0…C11, no reference file, assertions from `import test` |
 | `gate.conf` | `build=`, `run=`, `check=` — the deterministic invocation whose stdout is `EXPECTED` |
 | `capture.sh` | regenerates `EXPECTED` and `CHECK.txt` from the pinned compiler |
 | `pty_check.py` | seven pty sessions, 26 checks |
@@ -585,6 +594,30 @@ able to see the history rather than infer it from one number.
 ## Pin re-verification: `31808ddc21adfa31` (orchestrator, 2026-10-05)
 
 `refs/ycc.ref` moved again, `1d28b3dbcc546b5fc0e3f9d541b56777f746cd3e10122b45ba42f4904fd191d3` -> **`31808ddc21adfa31398f6337fa6dd6bfe585d25beceab20498b6914b89485755`**. This folder was
+**rebuilt from source with the new pin and re-gated in full**: items 1-8 all
+pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
+0 caught the stale record and nothing else did -- across all 39 folders at
+once, which is the signature of a pin move rather than of a regression.
+
+Earlier shas above are kept on purpose: this example has been verified
+against each of them, and a reader who wants to know what changed should be
+able to see the history rather than infer it from one number.
+
+## Pin re-verification: `289cf022002903a6` (orchestrator, 2026-10-05)
+
+`refs/ycc.ref` moved again, `e39a5e21785f599184f55deafad3ff17b4d05edb01cebc0a513e0cb7907f517d` -> **`289cf022002903a695c1ca339816b0f8f478aa3ef9f00643a93c3a95947f979c`**. This folder was
+**rebuilt from source with the new pin and re-gated in full**: items 1-8 all
+pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
+0 caught the stale record and nothing else did -- across all 39 folders at
+once, which is the signature of a pin move rather than of a regression.
+
+Earlier shas above are kept on purpose: this example has been verified
+against each of them, and a reader who wants to know what changed should be
+able to see the history rather than infer it from one number.
+
+## Pin re-verification: `dad3564d3bcdf6df` (orchestrator, 2026-10-05)
+
+`refs/ycc.ref` moved again, `e39a5e21785f599184f55deafad3ff17b4d05edb01cebc0a513e0cb7907f517d` -> **`dad3564d3bcdf6df889d017e88660dd8e7e0637a1e046acc45539f515e361d3e`**. This folder was
 **rebuilt from source with the new pin and re-gated in full**: items 1-8 all
 pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
 0 caught the stale record and nothing else did -- across all 39 folders at

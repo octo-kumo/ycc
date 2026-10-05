@@ -126,6 +126,10 @@
 // reaches a fixed point" false.  Requiring a gap of 2 costs one row of surface
 // unevenness and buys a strictly decreasing potential.
 
+// std's seeded generator (splitmix64).  It replaced a 63-bit LCG that lived in
+// this file; see "the deterministic generator -- now std's" below.
+import random;
+
 const M_EMPTY = 0;
 const M_STONE = 1;
 const M_SAND = 2;
@@ -605,7 +609,7 @@ def tally() {
 // checksum() -> long -- FNV-1a 64 over the whole store's material AND age bytes.
 // Used by the property check to compare two grids, and by the report.  It is
 // over the WHOLE store, border included, so a corrupted ghost border cannot
-// hide.  `long` multiply wraps (the same note fb.y's capture_checksum makes), so
+// hide.  `long` multiply wraps (the same note tui's capture_checksum makes), so
 // the FNV prime's high bits fold in as intended and there is no masking.
 def checksum() -> long {
     let h: long = -3750763034362895579;   // 14695981039346656037, signed
@@ -670,36 +674,31 @@ def vol_total() -> long { CNT[M_OIL] + CNT[M_FIRE] + CNT[M_SMOKE] };
 def col_level(liq: long, x: long) -> long { lvl_get(liq, x) };
 
 // ===========================================================================
-// the deterministic generator -- and why it is a module-level LCG
+// the deterministic generator -- now std's
 //
-// No float, no clock, no unseeded randomness.  A 64-bit LCG whose state lives
-// in two module-level longs, so filling a scene allocates nothing and the same
-// --seed gives the same grid on every run and every machine.  The multiplication
-// is masked to 64 bits after every step; without the mask the state would grow
-// out of the range a long holds.
-let RNG = 1;
-
-def srand(s: long) {
-    let v = s & 0x7FFFFFFFFFFFFFFF;
-    if (v == 0) { v = 0x2545F4914F6CDD1D };
-    RNG = v;
+// THIS USED TO BE A HAND-ROLLED 63-BIT LCG HERE: a module-level `RNG`, an
+// `srand`, an `rnd` and an `rnd_below` built on MMIX's constants.  All four are
+// gone.  `scene.y` calls `random.seed(seed)` and `random.below(n)` itself
+// (src/y/std/random.y, splitmix64), and the one thing that stays here is the
+// seed BOOKKEEPING, because grid.SEEDV is part of the report header and
+// `puts(field("seed", ...))` reads it.
+//
+// What that costs and what it buys, stated because the README used to promise
+// the local version: no float, no clock and no unseeded randomness all still
+// hold -- random.seed() is the only way a draw happens and the state lives in
+// std's module-level long, not in this one -- and the same --seed still gives
+// the same grid on every run and every machine.  What changes is the BIT STREAM,
+// so the `terrain` scene is a different (equally ragged) cavern under every
+// seed.  EXPECTED is unaffected because the golden run uses `basin`, which is
+// arithmetic only and never draws (scene.y says so at the top).
+//
+// The old `rnd_below` was a multiply-shift over a 63-bit LCG draw; std's
+// `below` is rejection-sampled over 2^62, which is uniform rather than very
+// nearly so.  Both answer 0 for a frontier of 0 or 1 cells, so the scene
+// builder's arithmetic does not have to know which generator is underneath.
+def set_seed(s: long) {
+    random.seed(s);
     SEEDV = s
-};
-
-// rnd() -> long -- the next value, a 63-bit LCG (Knuth's MMIX constants).
-// `long` multiply wraps, so the mask is only there to keep the value in range.
-def rnd() -> long {
-    RNG = (RNG * 6364136223846793005 + 1442695040888963407) & 0x7FFFFFFFFFFFFFFF;
-    RNG
-};
-
-// rnd_below(n) -> long -- a value in 0..n-1.  The multiply-shift: a plain
-// `RND % n` would bias toward the low end, which matters only cosmetically
-// here, but the shift costs nothing and the range is exact.
-def rnd_below(n: long) -> long {
-    if (n <= 1) { return 0 };
-    let v = (rnd() >> 16) * n;
-    (v >> 48) % n
 };
 
 // ===========================================================================

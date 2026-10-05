@@ -42,12 +42,14 @@
 // array or record inside a per-request function costs 64/40 bytes a call
 // for ever; the buffers are module level and the body is written digit by
 // digit into obuf. The two places that do allocate are the error bodies
-// that quote the request target back (`slice_path`) and the title that
-// came in (`sbuf` -> from_bytes), and they are the right trade: a few
-// dozen bytes on a diagnostic, against zero on the hot path.
+// that quote the request target back (`slice_path`) and the request body
+// itself, which is now handed to std's JSON parser as a `str` (`rbuf`'s
+// slice -> from_bytes, and the parse), and they are the right trade: a few
+// hundred bytes on a POST, against zero on the hot GET path.
 
 import net;
 import json;
+import jint;
 import store;
 
 // ── the buffers ───────────────────────────────────────────────────────
@@ -58,7 +60,6 @@ const MAX_BODY = 4096;        // a longer body is 413
 
 let rbuf: [byte; 65536] = [0; 65536];
 let obuf: [byte; 65536] = [0; 65536];
-let sbuf: [byte; 256] = [0; 256];
 let digits: [byte; 24] = [0; 24];
 let sa: [byte; 16] = [0; 16];
 
@@ -425,44 +426,53 @@ def parse_body() -> bool {
     have_id = false;
     want_done = false;
     want_title = "";
-    let end0 = body_at + body_len;
     if (body_len <= 0) {
         body_bad = "a body is required";
         return false;
     };
-    // the document starts where the body starts, not at 0 -- doc_at, not
-    // doc: rbuf[0:body_at] is the request head, and handing the head to a
-    // JSON parser answers every POST with "the body is not JSON"
-    if (!json.doc_at(rbuf, body_at, body_at + body_len)) {
+    // The body is sliced out of the one big read buffer before it is parsed:
+    // rbuf[0:body_at] is the request head, and handing the head to a JSON
+    // parser would answer every POST with "the body is not JSON". The old
+    // json.y had doc_at() for exactly this; std's parse takes a str, so the
+    // slice is the same job done one step earlier.
+    let text = from_bytes(rbuf[body_at:body_at + body_len]);
+    let pe = json.parse_err(text);
+    if (!pe.ok) {
         body_bad = "the body is not JSON";
         return false;
     };
-    if (rbuf[body_at] != 123) {
+    let doc = pe.value!;
+    if (json.as_obj(doc) == none) {
         body_bad = "the body must be an object";
         return false;
     };
-    let at = json.member(rbuf, body_at, end0, "title");
-    if (at < 0) {
+    // Every complaint below is the one the old reader produced, and the
+    // order is unchanged: the first field that is wrong wins, so a body with
+    // no title and no qty says "title is required".
+    let tf = json.field(doc, "title");
+    if (tf == none) {
         body_bad = "title is required";
         return false;
     };
-    let n = json.text_into(rbuf, at, end0, sbuf);
-    if (n < 0) {
+    let ts = json.as_str(tf!);
+    if (ts == none) {
         body_bad = "title must be a string";
         return false;
     };
-    if (n > 120) {
+    if (len(ts!) > 120) {
         body_bad = "title is longer than 120 bytes";
         return false;
     };
-    want_title = from_bytes(sbuf[0:n]);
-    let q = json.member(rbuf, body_at, end0, "qty");
-    if (q < 0) {
+    want_title = ts!;
+    let qf = json.field(doc, "qty");
+    if (qf == none) {
         body_bad = "qty is required";
         return false;
     };
-    let qv = json.int_at(rbuf, q, end0);
-    if (!json.iok) {
+    // jint.of, not json.as_long: a fractional qty is refused rather than
+    // truncated to its integer part, so a client cannot read 3 out of 3.5
+    let qv = jint.of(qf!);
+    if (jint.err != "") {
         body_bad = "qty must be an integer";
         return false;
     };
@@ -471,21 +481,22 @@ def parse_body() -> bool {
         return false;
     };
     want_qty = qv;
-    let d = json.member(rbuf, body_at, end0, "done");
-    if (d >= 0) {
-        // a bare JSON literal, not the quoted word json.text_is() wants:
-        // "done": true, which is what a REST body actually carries
-        let dv = json.bool_at(rbuf, d, end0);
-        if (dv < 0) {
+    let df = json.field(doc, "done");
+    if (df != none) {
+        // json.as_bool, because "done": true is a bare JSON literal on the
+        // wire -- the old json.bool_at existed for the same reason, because
+        // text_is only ever matched the *quoted* word
+        let db = json.as_bool(df!);
+        if (db == none) {
             body_bad = "done must be true or false";
             return false;
         };
-        want_done = dv == 1;
+        want_done = db!;
     };
-    let i0 = json.member(rbuf, body_at, end0, "id");
-    if (i0 >= 0) {
-        let iv = json.int_at(rbuf, i0, end0);
-        if (!json.iok) {
+    let idf = json.field(doc, "id");
+    if (idf != none) {
+        let iv = jint.of(idf!);
+        if (jint.err != "") {
             body_bad = "id must be an integer";
             return false;
         };
@@ -498,6 +509,7 @@ def parse_body() -> bool {
     };
     true
 };
+
 
 // ── the routes ────────────────────────────────────────────────────────
 

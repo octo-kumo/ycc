@@ -11,6 +11,7 @@ than against a golden file.
             ./wavefunction --check                           the property battery
             python3 oracle.py                                the Python cross-check
             python3 pty_check.py ./wavefunction             the interactive path
+            python3 pty_check.py ./wavefunction --save golden/interactive.txt
 
 Pinned compiler: `refs/ycc.ref`, sha256
 **`9ce376290e6fbe71629f51c871ff3cae8f498543a8ac3e0d7a0d8049e35946e7`**.
@@ -70,6 +71,36 @@ nothing else), `lines`, `elbows`, `ends`, `straights` (the two straights only �
    again. A step budget (4 000 000) turns "no solution" and "gave up" into two
    different, both non-zero, messages rather than a hang.
 
+### The generator
+
+Step 3's draw comes from **`import random`** (`src/y/std/random.y`, splitmix64):
+`setup()` calls `random.seed(seed)` and `choose()` calls
+`random.below(WSUM[c])`. It used to be a xorshift64 of this example's own — a
+module-level `RS`, an `rs_next`, and an `rnd(n)` doing `(RS >>> 33) % n` — and
+all three are gone.
+
+The contract is unchanged and is all the solver ever asked of a generator:
+deterministic given the seed, identical on every run, no float anywhere, and a
+value in `0..n-1` for a frontier of `n` cells (`n < 1` answers 0, as it did
+before and as `random.below` does). What is *not* unchanged is the stream, and
+this example is unusually exposed to that, because the draw decides **which tile
+each cell collapses to**: same seed, different picture. So `EXPECTED` moved, and
+so did two things that were pinned by searching for a seed under the old stream:
+
+- the **backtracking instance** `16x12 elbows seed 1` → **seed 2** (still exactly
+  two contradictions and two rewinds; under the new stream seed 1 propagates to a
+  single solution and would have left `t_backtrack`/`t_rewind` asserting nothing),
+- the **budget instance** `16x16 elbows seed 1` → **seed 37** (seed 1 now solves in
+  912 steps; `gate.conf`'s exit-4 clause depends on this one too).
+
+Both were re-swept rather than remembered, and both the sweep and the reason are
+written down at the constants (`BT_SEED`, `t_giveup`) and under "the search gives
+up". The properties those instances stand for — *an instance exists that needs a
+rewind and gets it*, *an instance exists that exhausts the budget*, *same seed
+gives same picture* — are properties of the solver and all three are asserted
+again; the specific `(size, seed)` pairs are properties of the generator and were
+re-pinned.
+
 ### THE DETERMINISM RULE, stated once
 
 > The cell of **lowest Shannon entropy** is collapsed, and among cells of
@@ -85,7 +116,7 @@ integers. `--inject=4` breaks ties on the **last** index instead — still perfe
 deterministic, still wrong, and the battery catches it.
 
 The tie-break is load-bearing and the battery says so out loud: on the 4x3
-instance it decides **6 of 11** decisions, and a check that pins the rule without
+instance it decides **7 of 11** decisions, and a check that pins the rule without
 counting the ties would not know whether it had tested anything.
 
 ### Why entropy, in integers
@@ -137,8 +168,9 @@ caught" below.
   demonstration that propagation, not collapse, is doing the work here.
 - **`--tiles straights --size 2x2 --no-tty`** — the unsatisfiable instance:
   a message on stderr and exit 3.
-- **`--tiles elbows --size 16x16 --no-tty`** — the search gives up at the budget:
-  a message on stderr and exit 4.
+- **`--tiles elbows --size 16x16 --seed 37 --no-tty`** — the search gives up at
+  the budget: a message on stderr and exit 4. (The `--seed 37` is load-bearing;
+  see "the search gives up" above for why seed 1 no longer does this.)
 - **`--check`** — the property battery, its actual output below.
 - **`golden/interactive.txt`** — a pty capture of the terminal path, escape
   sequences and all.
@@ -230,10 +262,19 @@ agree; it does.
   the contradiction takes three propagation steps: bottom-right is `end-N`, so the
   cell above it needs N, so that cell is `end-N`, so the top-right corner — which
   is on the east edge and cannot be `end-E` — needs N and has none.
-- **the search gives up**: 16x16 `elbows`, seed 1, contradicts itself 100 442
+- **the search gives up**: 16x16 `elbows`, **seed 37**, contradicts itself 88 473
   times and stops at the budget with `R_BUDGET` and 4 000 002 steps. Exit 4, a
   message, no trap, no hang. This is the "must never hang" property made
   testable.
+
+  The seed is 37 and was 1, and *why* is worth a paragraph of its own: which
+  seeds exhaust the budget is a property of the **generator**, and the generator
+  is std's splitmix64 now (it used to be a xorshift64 in `wfc.y`).  16x16 seed 1
+  propagates to a solution in 912 steps under the new stream, so without the
+  re-sweep this section and `gate.conf`'s exit-4 clause would have been testing
+  nothing while still looking rigorous.  A sweep of 16x16 seeds 1..37 found 37:
+  88 559 collapses, 88 473 contradictions and backtracks, 4 000 002 steps, exit 4.
+  `check.y`'s `t_giveup()` names the same instance and says the same thing.
 
 ### The hand-derived counts
 
@@ -355,17 +396,17 @@ compiler.
 
 | what | number |
 |---|---|
-| 24x14 (`--frames 3 --no-tty --seed 1`) | 335 collapses, 0 backtracks, 1640 propagation steps, 969 undo entries, **460–780 µs** over five runs (a shared machine; the count is exact, the wall clock is not) |
-| 12x8, seed 1 | 95 collapses, 458 steps, **160–215 µs**; 172 adjacent pairs, 0 disagreements, 0 off-grid, 76 of 96 cells carry a socket |
+| 24x14 (`--frames 3 --no-tty --seed 1`) | 335 collapses, 0 backtracks, 1640 propagation steps, 969 undo entries, **480–800 µs** over five runs (a shared machine; the count is exact, the wall clock is not) |
+| 12x8, seed 1 | 95 collapses, 458 steps, **125–260 µs**; 172 adjacent pairs, 0 disagreements, 0 off-grid, 79 of 96 cells carry a socket |
 | 64x64 (4096 cells) | 4095 collapses, 20 350 steps, **30 ms**; no cell open, audit clean |
-| 16x12 `elbows`, seed 1 | 71 decisions, **2 contradictions, 2 rewinds**, 777 steps |
-| 16x16 `elbows`, seed 1 | **gives up**: 100 442 contradictions, 4 000 002 steps, 517 ms |
+| 16x12 `elbows`, **seed 2** | 69 decisions, **2 contradictions, 2 rewinds**, 783 steps |
+| 16x16 `elbows`, **seed 37** | **gives up**: 88 473 contradictions, 4 000 002 steps, 510 ms |
 | `--soak 200` (336 cells) | 93 ms for 200 solves, 465 µs each, **heap delta 0 bytes** |
 | `--soak 5` at 64x64 | 150 ms, **heap delta 0 bytes** |
-| interactive, 49x22 | 38 frames, 3461 bytes of ANSI, **heap delta 0 bytes** |
+| interactive, 49x22 | 27 frames, 7022 bytes of ANSI, **heap delta 0 bytes** (the frame count is whatever the pty capture happened to paint before `q`; it is not a measurement) |
 
 Zero allocation is not an aspiration here, it is measured three ways: 200 solves
-of the golden instance, 5 solves of a 4096-cell instance, and 38 rendered frames
+of the golden instance, 5 solves of a 4096-cell instance, and 27 rendered frames
 all report a heap delta of **0**. The solver's state is module-level fixed arrays
 and nothing on any loop allocates: the union of two fixed arrays is allocated
 once, the queue and the undo log are sized at compile time, and every byte of
@@ -381,7 +422,7 @@ the value-used exact-size copy):
     tiles.y        no string appends at all
 
 Every `y_str_cat` in the binary is in `check.y` building a check *name*, or in
-`args.y`. There is no `str` on the solve path, the render path or the golden
+`args`. There is no `str` on the solve path, the render path or the golden
 path at all, so there is nothing there to be quadratic. (A note for the next
 example: `print()` is `println` — it appends a newline to every argument — which
 is why a 24-cell row printed a character at a time comes out as 24 one-character
@@ -397,8 +438,8 @@ is why a 24-cell row printed a character at a time comes out as 24 one-character
 | `check.y` | the property battery and the defect sweep |
 | `sink.y` | the text path: one fixed byte buffer, one `write(2)` |
 | `oracle.py` | the same puzzle in Python: solution counts and the Q30 anchors |
-| `pty_check.py` | drives the terminal path through a real pty |
-| `golden/interactive.txt` | that capture, escape sequences included |
+| `pty_check.py` | drives the terminal path through a real pty; `--save PATH` writes the raw bytes |
+| `golden/interactive.txt` | that capture, escape sequences included. A **capture, not a golden**: nothing compares it byte for byte, and it was re-taken when the solver's generator moved to std's `random` and the picture it paints changed |
 | `EXPECTED` | the golden run's stdout, 2101 bytes |
 | `gate.conf` | `build=`, `run=`, `check=` (the battery **and** the two exit codes) |
 
@@ -406,11 +447,7 @@ Vendored from `examples/_toolkit/`, byte-identical, never edited:
 
 | file | sha256 |
 |---|---|
-| `args.y` | `cdac36da1cf2cd8551bd06b1bf2a7b608736bc55106e64f5be3b7aa9332e9d28` |
-| `fb.y` | `95a7663b7f1c7a90ff3756b51e51644ea952c9b671eeca1012b8f64e18589697` |
 | `fx.y` | `4b47a9bfef0c1e30aa2397a24e21ab43753e6994c298f7ccd43c418b87b62058` |
-| `term.y` | `07135b31109fcecdef5bddf7d0299c9194039d172396b49347630a93a286b6ee` |
-| `time.y` | `6050605cfcfb35db17ff180f89b4229796a7616099afbe34e2d2f34cdf37784b` |
 
 ## Language workarounds, all of them visible in the code
 
@@ -422,9 +459,9 @@ Vendored from `examples/_toolkit/`, byte-identical, never edited:
 | `print()` is `println` | `sink.y` | one byte buffer and one `write(2)` instead |
 | `term.read_key_timeout(0)` | `wavefunction.interactive` | a 1..99 ms poll rounds up to 100 ms (VTIME counts deciseconds) and reports ~0.6 fps with a stuck frame counter |
 | `winsize()` by ioctl | not needed — the size is read once, before the loop | `term.size()` returns a fresh record per call (~40 B) and the loop is the frame loop |
-| fb.y's `emit_num` drops a zero digit | `wavefunction.safe_ch()` | filed: BUGS.md, "fb.y's emit_num drops a zero digit" — a channel of 205 reaches the terminal as 25 |
-| fb.y's CUP has the same bug | the interactive grid is capped at 49x23 | column 101 would be emitted as 11; 1..99 is the range `emit_num` gets right |
-| `>>` vs `>>>` | `wfc.rs_next`, `sink.sink_hex16`, `sink.sink_q30` | `>>>` is logical; it is used only where zero-extension is wanted and only on values that are non-negative by construction |
+| tui's `emit_num` drops a zero digit | `wavefunction.safe_ch()` | filed: BUGS.md, "tui's emit_num drops a zero digit" — a channel of 205 reaches the terminal as 25 |
+| tui's CUP has the same bug | the interactive grid is capped at 49x23 | column 101 would be emitted as 11; 1..99 is the range `emit_num` gets right |
+| `>>` vs `>>>` | `sink.sink_hex16`, `sink.sink_q30` | `>>>` is logical; it is used only where zero-extension is wanted and only on values that are non-negative by construction. (The solver's own use of `>>>` was `wfc.rs_next`, the xorshift64 that std's `random` replaced — see "The generator".) |
 | a fixed array in a loop body | every table in `tiles.y` and `wfc.y` is module-level | an array literal in a loop body allocates 64 bytes an iteration |
 | `str + byte` | never written | `s[i]` on a `str` is a byte and `str + byte` segfaults; nothing here concatenates one |
 | `main()`'s return is not the exit status | `def main() -> long { … }; exit(main())` | ORCHESTRATOR.md — `main();` exits 0 even when main "returned" 1 |
@@ -495,6 +532,30 @@ able to see the history rather than infer it from one number.
 ## Pin re-verification: `31808ddc21adfa31` (orchestrator, 2026-10-05)
 
 `refs/ycc.ref` moved again, `1d28b3dbcc546b5fc0e3f9d541b56777f746cd3e10122b45ba42f4904fd191d3` -> **`31808ddc21adfa31398f6337fa6dd6bfe585d25beceab20498b6914b89485755`**. This folder was
+**rebuilt from source with the new pin and re-gated in full**: items 1-8 all
+pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
+0 caught the stale record and nothing else did -- across all 39 folders at
+once, which is the signature of a pin move rather than of a regression.
+
+Earlier shas above are kept on purpose: this example has been verified
+against each of them, and a reader who wants to know what changed should be
+able to see the history rather than infer it from one number.
+
+## Pin re-verification: `289cf022002903a6` (orchestrator, 2026-10-05)
+
+`refs/ycc.ref` moved again, `e39a5e21785f599184f55deafad3ff17b4d05edb01cebc0a513e0cb7907f517d` -> **`289cf022002903a695c1ca339816b0f8f478aa3ef9f00643a93c3a95947f979c`**. This folder was
+**rebuilt from source with the new pin and re-gated in full**: items 1-8 all
+pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
+0 caught the stale record and nothing else did -- across all 39 folders at
+once, which is the signature of a pin move rather than of a regression.
+
+Earlier shas above are kept on purpose: this example has been verified
+against each of them, and a reader who wants to know what changed should be
+able to see the history rather than infer it from one number.
+
+## Pin re-verification: `dad3564d3bcdf6df` (orchestrator, 2026-10-05)
+
+`refs/ycc.ref` moved again, `e39a5e21785f599184f55deafad3ff17b4d05edb01cebc0a513e0cb7907f517d` -> **`dad3564d3bcdf6df889d017e88660dd8e7e0637a1e046acc45539f515e361d3e`**. This folder was
 **rebuilt from source with the new pin and re-gated in full**: items 1-8 all
 pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
 0 caught the stale record and nothing else did -- across all 39 folders at

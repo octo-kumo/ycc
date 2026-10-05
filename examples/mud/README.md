@@ -23,7 +23,7 @@ c53cc41524a7baa2de88d0f56faf5e2c9d006845ab5fa7a1b70edc53f9df6631
 beside it, sha256
 
 ```
-3bcf646f92a8ace87da10c708c0f127df9ec116a67cec7cdaf371e5643224009  mud
+3a854b1552505053da7d1cf2d23b38fa6b9367779613073d156db27ab996f4be  mud
 ```
 
 `refs/` moves on every rebless. If that first sha no longer matches, rebuild,
@@ -33,13 +33,7 @@ against the compiler that produced it.
 **Vendored toolkit** — copied byte-identical from `examples/_toolkit/`, never
 edited:
 
-| file | sha256 |
-|---|---|
-| `term.y` | `07135b31109fcecdef5bddf7d0299c9194039d172396b49347630a93a286b6ee` |
-| `args.y` | `cdac36da1cf2cd8551bd06b1bf2a7b608736bc55106e64f5be3b7aa9332e9d28` |
-| `time.y` | `6050605cfcfb35db17ff180f89b4229796a7616099afbe34e2d2f34cdf37784b` |
-
-`fx.y` and `fb.y` are not used: there is no fixed-point math here, and the live
+`fx.y` and `tui` are not used: there is no fixed-point math here, and the live
 view draws with a handful of escapes rather than a framebuffer. No copy differs
 from the toolkit.
 
@@ -76,7 +70,7 @@ from the toolkit.
 
 ## What to look at
 
-* `EXPECTED` — 6 249 bytes: two transcripts, 13 steps each, and a summary.
+* `EXPECTED` — 6 511 bytes: two transcripts, 13 steps each, and a summary.
 * `golden/check.txt` — the five property checks.
 * `golden/bench-1000.txt` — 1 000 connections: heap growth **zero**.
 * `golden/live-frame.txt` — the raw bytes `--live` drew into a 30×100 pty.
@@ -261,10 +255,10 @@ than filing a duplicate.
 | `client.y` | the parsed view, the renderers, the transcripts |
 | `driver.y` | `serve`, the step table, the scripted clients, `run_pair`, `run_chat_pair` |
 | `props.y` | the five property checks and the tally |
-| `world.y` | the seeded generator and the graph soundness predicates |
+| `world.y` | the seeded world (on `std/random.y`) and the graph soundness predicates |
 | `sockio.y` | the listener, the dial, the line reader, the byte appends |
-| `rnd.y` | a seeded LCG, and a per-session one |
-| `term.y`, `args.y`, `time.y` | vendored toolkit, byte-identical |
+| — | the per-session combat stream lives in `server.y` (`srng`), and is the one generator in the campaign that is NOT std's: a thread shares the address space, so one module-level state cannot be one stream per session. `server.y`, "the session's own generator", says why at length |
+| `tui`, `args` | from std, unedited |
 | `pty_check.py` | drives `--live` through a pseudo-terminal |
 | `gate.conf` | build / run / check lines for `examples/gate.py` |
 | `EXPECTED` | the exact stdout of `./mud --frames 13 --seed 1` |
@@ -353,6 +347,30 @@ able to see the history rather than infer it from one number.
 ## Pin re-verification: `31808ddc21adfa31` (orchestrator, 2026-10-05)
 
 `refs/ycc.ref` moved again, `1d28b3dbcc546b5fc0e3f9d541b56777f746cd3e10122b45ba42f4904fd191d3` -> **`31808ddc21adfa31398f6337fa6dd6bfe585d25beceab20498b6914b89485755`**. This folder was
+**rebuilt from source with the new pin and re-gated in full**: items 1-8 all
+pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
+0 caught the stale record and nothing else did -- across all 39 folders at
+once, which is the signature of a pin move rather than of a regression.
+
+Earlier shas above are kept on purpose: this example has been verified
+against each of them, and a reader who wants to know what changed should be
+able to see the history rather than infer it from one number.
+
+## Pin re-verification: `289cf022002903a6` (orchestrator, 2026-10-05)
+
+`refs/ycc.ref` moved again, `e39a5e21785f599184f55deafad3ff17b4d05edb01cebc0a513e0cb7907f517d` -> **`289cf022002903a695c1ca339816b0f8f478aa3ef9f00643a93c3a95947f979c`**. This folder was
+**rebuilt from source with the new pin and re-gated in full**: items 1-8 all
+pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
+0 caught the stale record and nothing else did -- across all 39 folders at
+once, which is the signature of a pin move rather than of a regression.
+
+Earlier shas above are kept on purpose: this example has been verified
+against each of them, and a reader who wants to know what changed should be
+able to see the history rather than infer it from one number.
+
+## Pin re-verification: `dad3564d3bcdf6df` (orchestrator, 2026-10-05)
+
+`refs/ycc.ref` moved again, `e39a5e21785f599184f55deafad3ff17b4d05edb01cebc0a513e0cb7907f517d` -> **`dad3564d3bcdf6df889d017e88660dd8e7e0637a1e046acc45539f515e361d3e`**. This folder was
 **rebuilt from source with the new pin and re-gated in full**: items 1-8 all
 pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
 0 caught the stale record and nothing else did -- across all 39 folders at

@@ -619,6 +619,7 @@ def tokenize(src: str) -> [Tok] {
             if (word == "let") { ty = "kw"; }
             else if (word == "const") { ty = "kw"; }
             else if (word == "def") { ty = "kw"; }
+            else if (word == "native") { ty = "kw"; }
             else if (word == "if") { ty = "kw"; }
             else if (word == "else") { ty = "kw"; }
             else if (word == "while") { ty = "kw"; }
@@ -628,6 +629,8 @@ def tokenize(src: str) -> [Tok] {
             else if (word == "return") { ty = "kw"; }
             else if (word == "true") { ty = "kw"; }
             else if (word == "false") { ty = "kw"; }
+            else if (word == "break") { ty = "kw"; }
+            else if (word == "continue") { ty = "kw"; }
            ;
             if (word == "b") {
                 // b"..." / b'...' -- a byte-string literal: the same type

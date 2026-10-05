@@ -384,11 +384,20 @@ caught it.
    middle agrees; and **exactly** the two machines built to be unsolvable are
    unsolvable — no machine of the real input may report −1.
 9. **The generated battery** (240 machines, seed 20251210). Machines built
-   from a fixed LCG (1–5 lamps, 1–5 buttons, random wirings, targets 0–5),
+   from a fixed seed (1–5 lamps, 1–5 buttons, random wirings, targets 0–5),
    each solved **through the same `solve_machine` the real run uses** — so a
    defect injected into the solver is injected for the check — and compared
    against *both* definition-faithful searches. 240 machines × 2 oracles × 2
    parts = 960 comparisons in 0.2 s.
+
+   The generator is **`import random`** (`src/y/std/random.y`, splitmix64) —
+   `random.seed(20251210)` then `random.below(n)`. It used to be a module-level
+   `rng_s` stepped by `(s * 1103515245 + 12345) % 2147483648` behind a local
+   `rnd(n)`: the textbook glibc LCG, which is biased for every `n` that is not
+   a power of two. The battery is unchanged in strength — it asserts nothing
+   about a *particular* machine, so a different stream is a different 240
+   machines rather than a different set of expectations — and `EXPECTED` does not
+   move at all, because the generator is reached only from `--check`.
 
 **Route through one entry point.** Everything goes through `solve_machine(idx)`
 and the `--check` synthetic machines are parsed by the *same* `parse_machine`
@@ -479,7 +488,7 @@ injected defects unprompted. The only filing is suggestion #18.
 | `.gitignore` | keeps `input.txt` out of git |
 
 No vendored toolkit files: this example is a parser and two solvers, so it uses
-none of `fx.y`/`term.y`/`fb.y`/`args.y`/`time.y` and there are no shas to
+none of `fx.y`/`tui`/`args` and there are no shas to
 record. The frozen-toolkit revision is therefore not applicable here.
 ## Pin re-verification: `e55fa8d0` (orchestrator, 2026-10-04)
 
@@ -542,6 +551,30 @@ able to see the history rather than infer it from one number.
 ## Pin re-verification: `31808ddc21adfa31` (orchestrator, 2026-10-05)
 
 `refs/ycc.ref` moved again, `1d28b3dbcc546b5fc0e3f9d541b56777f746cd3e10122b45ba42f4904fd191d3` -> **`31808ddc21adfa31398f6337fa6dd6bfe585d25beceab20498b6914b89485755`**. This folder was
+**rebuilt from source with the new pin and re-gated in full**: items 1-8 all
+pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
+0 caught the stale record and nothing else did -- across all 39 folders at
+once, which is the signature of a pin move rather than of a regression.
+
+Earlier shas above are kept on purpose: this example has been verified
+against each of them, and a reader who wants to know what changed should be
+able to see the history rather than infer it from one number.
+
+## Pin re-verification: `289cf022002903a6` (orchestrator, 2026-10-05)
+
+`refs/ycc.ref` moved again, `e39a5e21785f599184f55deafad3ff17b4d05edb01cebc0a513e0cb7907f517d` -> **`289cf022002903a695c1ca339816b0f8f478aa3ef9f00643a93c3a95947f979c`**. This folder was
+**rebuilt from source with the new pin and re-gated in full**: items 1-8 all
+pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
+0 caught the stale record and nothing else did -- across all 39 folders at
+once, which is the signature of a pin move rather than of a regression.
+
+Earlier shas above are kept on purpose: this example has been verified
+against each of them, and a reader who wants to know what changed should be
+able to see the history rather than infer it from one number.
+
+## Pin re-verification: `dad3564d3bcdf6df` (orchestrator, 2026-10-05)
+
+`refs/ycc.ref` moved again, `e39a5e21785f599184f55deafad3ff17b4d05edb01cebc0a513e0cb7907f517d` -> **`dad3564d3bcdf6df889d017e88660dd8e7e0637a1e046acc45539f515e361d3e`**. This folder was
 **rebuilt from source with the new pin and re-gated in full**: items 1-8 all
 pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
 0 caught the stale record and nothing else did -- across all 39 folders at

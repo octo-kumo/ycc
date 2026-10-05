@@ -29,14 +29,17 @@ type ArrRep = { k: long, v: Node, n: long, line: long, col: long };
 type Assign = { k: long, name: str, v: Node, line: long, col: long };
 type Block = { k: long, stmts: [Node], line: long, col: long };
 type Call = { k: long, callee: Node, args: [Node], line: long, col: long };
-type Decl = { k: long, kind: str, name: str, typ: Type, v: Node, line: long, col: long };
-type Dot = { k: long, obj: Node, key: str, line: long, col: long };
-type DotAssign = { k: long, obj: Node, key: str, v: Node, line: long, col: long };
+type Decl = { k: long, kind: str, name: str, typ: Type, v: Node, line: long, col: long, nline: long, ncol: long };
+type Dot = { k: long, obj: Node, key: str, line: long, col: long, nline: long, ncol: long };
+//   The key's position, as on Decl: `a.b` is an expression whose node starts
+//   at `a`, so line/col is where the whole thing begins, not where the member
+//   name is. An editor highlighting `b` needs the second.
+type DotAssign = { k: long, obj: Node, key: str, v: Node, line: long, col: long, nline: long, ncol: long };
 type Err = { k: long, msg: str, line: long, col: long };
 type For = { k: long, init: Node, cond: Node, step: Node, body: Node, line: long, col: long };
 type Foreach = { k: long, name: str, iter: Node, body: Node, line: long, col: long };
 type ForRange = { k: long, name: str, lo: Node, hi: Node, body: Node, line: long, col: long };
-type Func = { k: long, params: [str], ptypes: [Type], ret: Type, body: Node, defs: [Node], line: long, col: long };
+type Func = { k: long, params: [str], ptypes: [Type], ret: Type, body: Node, defs: [Node], label: str, line: long, col: long };
 type IdxAssign = { k: long, arr: Node, idx: Node, v: Node, line: long, col: long };
 type If = { k: long, cond: Node, then: Node, els: Node, has_else: bool, line: long, col: long };
 type IncDec = { k: long, op: str, pre: bool, tgt: Node, line: long, col: long };
@@ -342,7 +345,7 @@ def parse_primary(toks: [Tok], p: long) -> Parsed {
     } else if (is_punct(toks, p, "{")) {
         if (brace_is_map(toks, p)) { parse_map(toks, p) } else { parse_block(toks, p) }
     } else if (is_kw(toks, p, "def")) {
-        parse_func(toks, p)
+        parse_func(toks, p, false)
     } else if (is_kw(toks, p, "if")) {
         parse_if(toks, p)
     } else if (is_kw(toks, p, "while")) {
@@ -385,7 +388,7 @@ def sync_type(nm: str) -> Type {
 
 // A block as a function of no parameters, its return type inferred.
 def block_func(body: Node, ln: long, cl: long) -> Node {
-    let f: Func = { k: K.func, params: [], ptypes: [], ret: { k: K.tnone }, body: body, defs: [], line: ln, col: cl };
+    let f: Func = { k: K.func, params: [], ptypes: [], ret: { k: K.tnone }, body: body, defs: [], label: "", line: ln, col: cl };
     let node: Node = f;
     node
 };
@@ -448,7 +451,7 @@ def parse_postfix(toks: [Tok], p: long) -> Parsed {
         } else if (is_op(toks, pos, ".")) {
             if (is_name_tok(toks, pos + 1)) {
                 let name = tv(toks, pos + 1);
-                node = { k: K.dot, obj: node, key: name, line: tline(toks, pos), col: tcol(toks, pos) };
+                node = { k: K.dot, obj: node, key: name, line: tline(toks, pos), col: tcol(toks, pos), nline: tline(toks, pos + 1), ncol: tcol(toks, pos + 1) };
                 pos = pos + 2;
             } else {
                 node = expect_err(toks, pos + 1, "a field name after '.'");
@@ -488,7 +491,7 @@ def parse_postfix(toks: [Tok], p: long) -> Parsed {
             if (is_name_tok(toks, pos + 1)) {
                 // The name belongs to the `?.`, not to the loop's own `.`
                 // branch: `x?.y` is one operator, like `x[y]`.
-                node = { k: K.dot, obj: node, key: tv(toks, pos + 1), line: pln, col: pcl };
+                node = { k: K.dot, obj: node, key: tv(toks, pos + 1), line: pln, col: pcl, nline: tline(toks, pos + 1), ncol: tcol(toks, pos + 1) };
                 pos = pos + 2;
             } else {
                 pos = pos + 1;  // the loop's `[` branch takes the subscript
@@ -1276,25 +1279,45 @@ def num_lit_type(s: str) -> Type {
     else { { k: K.tlong } }
 };
 
-def parse_func(toks: [Tok], p: long) -> Parsed {
-    // Named:    def name(params) -> ret { body }   (top-level declaration)
-    // Anonymous: def(params) -> ret { body }        (function expression)
+def parse_func(toks: [Tok], p: long, isnat: bool) -> Parsed {
+    // Named:    def name(params) -> ret { body }      (top-level declaration)
+    // Anonymous: def(params) -> ret { body }           (function expression)
+    // Native:   native def name(params) -> ret [= "label"];
+    //           a declaration with no body -- the assembly label named after
+    //           `=` (or `y_<name>`) IS the body
     let ln = tline(toks, p);
     let cl = tcol(toks, p);
-    let pos = p + 1;  // skip 'def'
+    let nln = ln;   // the name's position; an anonymous def has none of its own
+    let ncl = cl;
+    let pos = p + 1;  // skip 'def' (or 'native', handled just below)
     let fname = "";
     // A malformed header plants its errors here; they run first in the body.
     let derrs: [Node] = [];
-    // optional function name (present unless next token is '(')
+    if (isnat) {
+        // 'native' is a keyword, so `p` is on it and `def` must follow.
+        if (is_kw(toks, pos, "def")) {
+            pos = pos + 1;
+        } else {
+            derrs += expect_err(toks, pos, "'def' after 'native'");
+        };
+    };
+    // optional function name (present unless next token is '(') -- a native
+    // declaration has no anonymous form, so there it is required.
     // Only the optional-name branch changes `fname` and `pos`; both are
     // consumed by the common parsing path below.
     if (!is_punct(toks, pos, "(")) {
         if (tt(toks, pos) == "id") {
             fname = tv(toks, pos);
+            nln = tline(toks, pos);
+            ncl = tcol(toks, pos);
             pos = pos + 1;
+        } else if (isnat) {
+            derrs += expect_err(toks, pos, "a name after 'native def'");
         } else {
             derrs += expect_err(toks, pos, "a function name or '('");
         };
+    } else if (isnat) {
+        derrs += expect_err(toks, pos, "a name after 'native def'");
     };
     let hbad = len(derrs) > 0;
     if (is_punct(toks, pos, "(")) {
@@ -1393,20 +1416,46 @@ def parse_func(toks: [Tok], p: long) -> Parsed {
             ret = { k: K.tnone };
         }
     };
-    let body = parse_block(toks, pos);
-    let bnode: Block = body.node;
-    if (len(derrs) > 0) {
-        let bst: [Node] = bnode.stmts;
-        let nst: [Node] = [];
-        nst += derrs;
-        nst += bst;
-        bnode = { k: K.block, stmts: nst, line: bnode.line, col: bnode.col };
-    };
-    let func: Func = { k: K.func, params: names, ptypes: ptypes, ret: ret, body: bnode, line: ln, col: cl, defs: defs };
-    if (fname == "") {
-        res(func, body.pos)
+    if (isnat) {
+        // `= "label"` names the assembly entry point; leave it out and the
+        // declared name gives `y_<name>`.
+        let label = "y_" + fname;
+        if (is_op(toks, pos, "=")) {
+            let lr = parse_expr(toks, pos + 1);
+            pos = lr.pos;
+            if (lr.node.k == K.str) {
+                let slit: Leaf = lr.node;
+                label = slit.v;
+            } else {
+                derrs += { k: K.err, msg: "the label after '=' must be a string", line: tline(toks, pos), col: tcol(toks, pos) };
+            };
+        };
+        // no body: the declaration ends at the ';', which the statement loop
+        // consumes like any other statement's
+        if (!is_punct(toks, pos, ";")) {
+            derrs += expect_err(toks, pos, "';' after a native declaration");
+        };
+        // the body holds only the header's errors, if any: a native has none
+        // of its own, and the checker reads them so they are reported once
+        let bnode: Block = { k: K.block, stmts: derrs, line: ln, col: cl };
+        let func: Func = { k: K.func, params: names, ptypes: ptypes, ret: ret, body: bnode, line: ln, col: cl, defs: defs, label: label };
+        res({ k: K.decl, kind: "native", name: fname, typ: { k: K.tnone }, v: func, line: ln, col: cl, nline: nln, ncol: ncl }, pos)
     } else {
-        res({ k: K.decl, kind: "def", name: fname, typ: { k: K.tnone }, v: func, line: ln, col: cl }, body.pos)
+        let body = parse_block(toks, pos);
+        let bnode: Block = body.node;
+        if (len(derrs) > 0) {
+            let bst: [Node] = bnode.stmts;
+            let nst: [Node] = [];
+            nst += derrs;
+            nst += bst;
+            bnode = { k: K.block, stmts: nst, line: bnode.line, col: bnode.col };
+        };
+        let func: Func = { k: K.func, params: names, ptypes: ptypes, ret: ret, body: bnode, line: ln, col: cl, defs: defs, label: "" };
+        if (fname == "") {
+            res(func, body.pos)
+        } else {
+            res({ k: K.decl, kind: "def", name: fname, typ: { k: K.tnone }, v: func, line: ln, col: cl, nline: nln, ncol: ncl }, body.pos)
+        }
     }
 };
 
@@ -1513,6 +1562,26 @@ def parse_stmt(toks: [Tok], p: long) -> Parsed {
     else if (is_kw(toks, p, "let")) { parse_decl(toks, p) }
     else if (is_kw(toks, p, "const")) { parse_decl(toks, p) }
     else if (is_typedef_start(toks, p)) { parse_typedef(toks, p) }
+    else if (is_kw(toks, p, "native")) {
+        // `native def name(...) -> T [= "label"];` — a declaration with no
+        // body. parse_stmt sees it wherever it appears; the checker is what
+        // insists on the top level (a nested one has no assembly to land in).
+        parse_func(toks, p, true)
+    }
+    else if (is_kw(toks, p, "break") || is_kw(toks, p, "continue")) {
+        // `break;` and `continue;` -- a jump out of, or to the next turn of,
+        // the innermost enclosing loop. Bare nodes: there is nothing to carry,
+        // so they are a `Bare` and the shape needs no union member.
+        //
+        // Only the keyword is consumed, and the `;` is left to the caller --
+        // exactly what `return` does below, and the reason it must: the caller
+        // is the one that eats the `;` and tolerates its absence before a `}`.
+        // Consuming it here as well makes the caller report "expected ';', got
+        // <the next statement>", which is what a first attempt did.
+        let kind = 0;
+        if (is_kw(toks, p, "break")) { kind = K.kw_break; } else { kind = K.kw_continue; };
+        res({ k: kind, line: tline(toks, p), col: tcol(toks, p) }, p + 1)
+    }
     else if (is_kw(toks, p, "return")) {
         if (is_punct(toks, p + 1, ";") || is_punct(toks, p + 1, "}") || tt(toks, p + 1) == "eof") {
             res({ k: K.ret, e: { k: K.void, line: tline(toks, p), col: tcol(toks, p) }, line: tline(toks, p), col: tcol(toks, p) }, p + 1)
@@ -1627,7 +1696,7 @@ def parse_stmt_dotassign(toks: [Tok], p: long, tgt: Dot, epos: long) -> Parsed {
 
 def parse_stmt_dotassign_go(toks: [Tok], p: long, dtgt: Dot, epos: long) -> Parsed {
     let rhs = parse_expr(toks, epos + 1);
-    res({ k: K.dotassign, obj: dtgt.obj, key: dtgt.key, v: rhs.node, line: tline(toks, p), col: tcol(toks, p) }, rhs.pos)
+    res({ k: K.dotassign, obj: dtgt.obj, key: dtgt.key, v: rhs.node, line: tline(toks, p), col: tcol(toks, p), nline: dtgt.nline, ncol: dtgt.ncol }, rhs.pos)
 };
 
 
@@ -1680,6 +1749,12 @@ def parse_decl(toks: [Tok], p: long) -> Parsed {
     let name = tv(toks, p + 1);
     let ln = tline(toks, p);
     let cl = tcol(toks, p);
+    // The NAME's position, which is not the keyword's. A diagnostic wants the
+    // keyword -- that is where the reader looks -- but a go-to-definition or a
+    // highlight wants the name, and `line`/`col` cannot be both. So the name's
+    // is carried alongside rather than instead (LSP.md R5.4, 9.2 A5).
+    let nln = tline(toks, p + 1);
+    let ncl = tcol(toks, p + 1);
     if (tt(toks, p + 1) != "id") {
         return res(expect_err(toks, p + 1, "a name after '" + kind + "'"), sync_stmt(toks, p + 1));
     };
@@ -1695,14 +1770,14 @@ def parse_decl(toks: [Tok], p: long) -> Parsed {
         if (te.k == K.err) {
             // The name stays bound (untyped), so its later uses do not
             // pile up "undefined" errors behind this one.
-            return res({ k: K.decl, kind: kind, name: name, typ: { k: K.tnone }, v: te, line: ln, col: cl }, sync_stmt(toks, pos));
+            return res({ k: K.decl, kind: kind, name: name, typ: { k: K.tnone }, v: te, line: ln, col: cl, nline: nln, ncol: ncl }, sync_stmt(toks, pos));
         };
     };
     if (!is_op(toks, pos, "=")) {
-        return res({ k: K.decl, kind: kind, name: name, typ: { k: K.tnone }, v: expect_err(toks, pos, "'='"), line: ln, col: cl }, sync_stmt(toks, pos));
+        return res({ k: K.decl, kind: kind, name: name, typ: { k: K.tnone }, v: expect_err(toks, pos, "'='"), line: ln, col: cl, nline: nln, ncol: ncl }, sync_stmt(toks, pos));
     };
     let e = parse_expr(toks, pos + 1);
-    res({ k: K.decl, kind: kind, name: name, typ: typ, v: e.node, line: ln, col: cl }, e.pos)
+    res({ k: K.decl, kind: kind, name: name, typ: typ, v: e.node, line: ln, col: cl, nline: nln, ncol: ncl }, e.pos)
 };
 
 // Past a broken statement: to the next `;` or the `}` closing the
@@ -2005,7 +2080,7 @@ def parse_match(toks: [Tok], subj: Node, bpos: long, ln: long, cl: long) -> Pars
         i = i - 1;
     };
     let stmts: [Node] = [];
-    stmts += { k: K.decl, kind: "let", name: tmp, typ: { k: K.tnone }, v: subj, line: ln, col: cl };
+    stmts += { k: K.decl, kind: "let", name: tmp, typ: { k: K.tnone }, v: subj, line: ln, col: cl, nline: ln, ncol: cl };
     stmts += chain;
     let endp = pos;
     if (is_punct(toks, pos, "}")) { endp = pos + 1; };
@@ -2028,7 +2103,7 @@ def pat_res(test: Node, binds: [Node], cover: Type, wild: bool, pos: long) -> Pa
 };
 
 def let_node(name: str, v: Node, ln: long, cl: long) -> Decl {
-    { k: K.decl, kind: "let", name: name, typ: { k: K.tnone }, v: v, line: ln, col: cl }
+    { k: K.decl, kind: "let", name: name, typ: { k: K.tnone }, v: v, line: ln, col: cl, nline: ln, ncol: cl }
 };
 
 def parse_pattern(toks: [Tok], p: long, tmp: str) -> PatRes {
@@ -2120,7 +2195,7 @@ def parse_type_pattern(toks: [Tok], p: long, tmp: str) -> PatRes {
                 bname = tv(toks, pos + 1);
                 pos = pos + 2;
             };
-            let fread: Node = { k: K.dot, obj: { k: K.narrow, e: subj, typ: ty, line: ln, col: cl }, key: fname, line: ln, col: cl };
+            let fread: Node = { k: K.dot, obj: { k: K.narrow, e: subj, typ: ty, line: ln, col: cl }, key: fname, line: ln, col: cl, nline: ln, ncol: cl };
             binds += let_node(bname, fread, ln, cl);
             if (is_punct(toks, pos, ",")) { pos = pos + 1; go = !is_punct(toks, pos, "}"); } else { go = false; };
         };
@@ -2152,7 +2227,7 @@ def parse_value_pattern(toks: [Tok], node: Node, pos: long, tmp: str, ln: long, 
             if (key == "...") {
                 test = { k: K.err, msg: "'...' is not allowed in a match pattern", line: ln, col: cl };
             } else {
-                let fread: Node = { k: K.dot, obj: { k: K.narrow, e: subj, typ: ty, line: ln, col: cl }, key: key, line: ln, col: cl };
+                let fread: Node = { k: K.dot, obj: { k: K.narrow, e: subj, typ: ty, line: ln, col: cl }, key: key, line: ln, col: cl, nline: ln, ncol: cl };
                 test = { k: K.bin, op: "&&", l: test, r: { k: K.bin, op: "==", l: fread, r: vals[i], line: ln, col: cl }, line: ln, col: cl };
             };
             i = i + 1;
@@ -2190,7 +2265,36 @@ def parse_program(toks: [Tok]) -> Block {
             pos = pos + 1;
         };
     };
-    { k: K.block, stmts: stmts, line: 1, col: 1 }
+    // A native def owns an assembly label, so it cannot share its name with
+    // another top-level declaration of the same unit. This is the only place
+    // that can see it: renaming makes every name unique, so by the time the
+    // checker runs the two would look like different names.
+    let clash: [Node] = [];
+    let ci = 0;
+    while (ci < len(stmts)) {
+        let cs: Node = stmts[ci];
+        if (cs.k == K.decl) {
+            let cdec: Decl = cs;
+            if (cdec.kind == "native") {
+                let co = 0;
+                while (co < len(stmts)) {
+                    let os: Node = stmts[co];
+                    if (os.k == K.decl) {
+                        let odec: Decl = os;
+                        if (co != ci && odec.name == cdec.name) {
+                            clash += { k: K.err, msg: "'" + cdec.name + "' is a native def and is declared again at the top level (a native def cannot share a name)", line: cdec.line, col: cdec.col };
+                        };
+                    };
+                    co = co + 1;
+                };
+            };
+        };
+        ci = ci + 1;
+    };
+    let all: [Node] = [];
+    all += clash;
+    all += stmts;
+    { k: K.block, stmts: all, line: 1, col: 1 }
 };
 
 export { parse_program, parse_type_full, nameix_new, nameix_put, nameix_get };

@@ -1,4 +1,4 @@
-// args_test.y -- the self-test for the toolkit's args.y and time.y.
+// args_test.y -- the self-test for std args, and for the tui pacer it uses.
 //
 //   ycc args_test.y -o args_test && ./args_test
 //
@@ -23,7 +23,7 @@
 // Exit status: 0 when every check passed, 1 otherwise.
 
 import args;
-import time;
+import tui;
 
 // ── the harness ──────────────────────────────────────────────────────────
 
@@ -76,7 +76,7 @@ const DECLARES_HELP: [args.Opt] = [
 // line must produce the same line: that is the determinism check, and it
 // covers the parse, the lookups and the diagnostics together.
 def report(toks: [str]) -> str {
-    args.init("at", "the args.y self-test", TEST_OPTS, "[file...]");
+    args.init("at", "the args self-test", TEST_OPTS, "[file...]");
     let st = args.parse(toks);
     let err = args.errmsg();
     let fps = args.get_long("fps", 30);
@@ -92,7 +92,7 @@ def report(toks: [str]) -> str {
 // A DECLARED-`help` variant of report(), for checks 6f/6g. Same shape, the
 // second spec, and it prints the flag so a test can see it was stored.
 def report_declared(toks: [str]) -> str {
-    args.init("at", "the args.y self-test", DECLARES_HELP, "[file...]");
+    args.init("at", "the args self-test", DECLARES_HELP, "[file...]");
     let st = args.parse(toks);
     let err = args.errmsg();
     let h = args.has("help");
@@ -127,7 +127,7 @@ def run_child_spec(rest: [str], spec: [args.Opt]) -> Res {
     let pid = fork {
         syscall(33, wfd, 1);
         syscall(33, wfd, 2);
-        args.init("at", "the args.y self-test", spec, "[file...]");
+        args.init("at", "the args self-test", spec, "[file...]");
         args.parse_or_exit([argv()[0]] + rest);
         exit(0);
     };
@@ -226,7 +226,7 @@ def test_args() {
         && ok_contains(h.text, "--stats") && ok_contains(h.text, "--help"));
     ck("6c the usage text carries the short flags and the description",
         ok_contains(h.text, "-f, --fps") && ok_contains(h.text, "-h, --help")
-        && ok_contains(h.text, "the args.y self-test"));
+        && ok_contains(h.text, "the args self-test"));
     ck("6d -h means --help too", ok_contains(report(["at", "-h"]), "st=1"));
 
     // 6e. THE OTHER SPELLING. Every `--help` test above uses a spec with NO
@@ -234,7 +234,7 @@ def test_args() {
     // the spec DOES declare `help`, parse() finds the name, takes the
     // ordinary BOOL path and stores it -- so `--help` is NOT a help request,
     // nothing is printed, and the program runs on. That is documented in
-    // args.y's header, and it is pinned here so it cannot change silently
+    // std args' header, and it is pinned here so it cannot change silently
     // in either direction.
     //
     // It matters because the failure it enables is invisible: `mud`
@@ -301,54 +301,54 @@ def test_args() {
 
 def test_time() {
     // 11. the clock never runs backwards
-    let prev = time.now_us();
+    let prev = clock_us();
     let back = 0;
     for i in 0..100000 {
-        let v = time.now_us();
+        let v = clock_us();
         if (v < prev) { back = back + 1; };
         prev = v;
     };
     ck("11 now_us() never goes backwards over 100000 calls", back == 0);
     ck("11b now_ms() is the same clock, coarser",
-        time.now_ms() * 1000 <= time.now_us() + 2000
-        && time.now_ms() * 1000 > 0);
+        (clock_us() / 1000) * 1000 <= clock_us() + 2000
+        && (clock_us() / 1000) * 1000 > 0);
 
     // 12. a nap waits
-    let t0 = time.now_us();
-    let slept = time.nap_us(2000);
-    let el = time.now_us() - t0;
+    let t0 = clock_us();
+    let slept = tui.nap_us(2000);
+    let el = clock_us() - t0;
     note(f"nap_us(2000): returned {slept}, clock measured {el}");
     ck("12 nap_us(2000) waits at least 1900us and returns", el >= 1900 && slept >= 1900);
-    let short = time.nap_us(0);
+    let short = tui.nap_us(0);
     ck("12b nap_us(0) returns at once without waiting", short == 0);
 
     // 13. the pacer holds a rate, and drops rather than lags
-    let p = time.pacer_new(30);
-    let per = time.pacer_period_us(p);
+    let p = tui.pacer_new(30);
+    let per = tui.pacer_period_us(p);
     let drew = 0;
     let skipped = 0;
-    let t1 = time.now_us();
+    let t1 = clock_us();
     for i in 0..15 {
-        let w = time.pacer_next(p);
+        let w = tui.pacer_next(p);
         if (w >= 0) { drew = drew + 1 } else { skipped = skipped + 1 };
     };
-    let span = time.now_us() - t1;
+    let span = clock_us() - t1;
     note(f"30fps x15: {drew} drawn, {skipped} skipped, {span}us, period {per}us");
     ck("13a 30 fps: fifteen frames, none dropped", drew == 15 && skipped == 0);
     ck("13b 30 fps: fifteen frames took 400..900ms", span >= 400000 && span <= 900000);
     ck("13c the period is 1e6/fps and the lag stays small",
-        per > 33000 && per < 34000 && time.pacer_lag_us(p) > 0 - per);
+        per > 33000 && per < 34000 && tui.pacer_lag_us(p) > 0 - per);
 
     // starved: stall for six frames and the pacer must say so
-    let q = time.pacer_new(30);
-    let qper = time.pacer_period_us(q);
-    time.pacer_next(q);
-    time.nap_us(qper * 6);
-    let w1 = time.pacer_next(q);
+    let q = tui.pacer_new(30);
+    let qper = tui.pacer_period_us(q);
+    tui.pacer_next(q);
+    tui.nap_us(qper * 6);
+    let w1 = tui.pacer_next(q);
     let worst = w1;
     let recovered = false;
     for i in 0..8 {
-        let w = time.pacer_next(q);
+        let w = tui.pacer_next(q);
         if (w < worst) { worst = w };
         if (w >= 0) { recovered = true };
     };
@@ -359,23 +359,23 @@ def test_time() {
     ck("13f the schedule recovers within a few frames of the stall", recovered);
     ck("13g the lag does not accumulate: it stays inside the stall",
         worst > 0 - 10 * qper && worst <= 0 - qper);
-    ck("13h dropped frames are counted", time.pacer_dropped(q) >= 1);
+    ck("13h dropped frames are counted", tui.pacer_dropped(q) >= 1);
 
     // 14. the rate meter
-    let r = time.pacer_new(30);
-    let m = time.fps_new(100000);
+    let r = tui.pacer_new(30);
+    let m = tui.fps_new(100000);
     for i in 0..12 {
-        if (time.pacer_next(r) >= 0) { time.fps_tick(m) };
+        if (tui.pacer_next(r) >= 0) { tui.fps_tick(m) };
     };
-    let now_x100 = time.fps_x100(m);
-    let avg_x100 = time.fps_avg_x100(m);
-    let line = time.fps_line(m);
+    let now_x100 = tui.fps_x100(m);
+    let avg_x100 = tui.fps_avg_x100(m);
+    let line = tui.fps_line(m);
     note(f"fps meter: now {now_x100} avg {avg_x100} line '{line}'");
     ck("14a the window rate is plausible for 30 fps (15..45 fps)",
         now_x100 > 1500 && now_x100 < 4500);
     ck("14b the average over the run is plausible", avg_x100 > 1500 && avg_x100 < 4500);
     ck("14c the meter counted every drawn frame",
-        time.fps_frames(m) == time.pacer_frames(r) && time.fps_frames(m) == 12);
+        tui.fps_frames(m) == tui.pacer_frames(r) && tui.fps_frames(m) == 12);
     ck("14d fps_line renders both rates", ok_contains(line, "fps now,")
         && ok_contains(line, "over 12 frames"));
 
@@ -385,25 +385,25 @@ def test_time() {
     // 1 us period so every call is a skip with no sleeping at all, and a
     // 1000 fps period so every call sleeps.  A warmed-up heap is measured
     // either side of 5000 + 100 calls of now_us + pacer_next + fps_tick.
-    let fast = time.pacer_new(1000000);
-    let slow = time.pacer_new(1000);
-    let fm = time.fps_new();
+    let fast = tui.pacer_new(1000000);
+    let slow = tui.pacer_new(1000);
+    let fm = tui.fps_new();
     for i in 0..200 {
-        time.now_us();
-        time.pacer_next(fast);
-        time.fps_tick(fm);
+        clock_us();
+        tui.pacer_next(fast);
+        tui.fps_tick(fm);
     };
     let h0 = heap_used();
     for i in 0..5000 {
-        time.now_us();
-        time.pacer_next(fast);
-        time.fps_tick(fm);
+        clock_us();
+        tui.pacer_next(fast);
+        tui.fps_tick(fm);
     };
     let h1 = heap_used();
     for i in 0..100 {
-        time.now_us();
-        time.pacer_next(slow);
-        time.fps_tick(fm);
+        clock_us();
+        tui.pacer_next(slow);
+        tui.fps_tick(fm);
     };
     let h2 = heap_used();
     note(f"heap: {h0} -> {h1} after 5000 skip-path calls, -> {h2} after 100 sleeping calls");
@@ -411,7 +411,7 @@ def test_time() {
     ck("15b 100 sleeping pacing calls allocate nothing", h2 - h1 <= 0);
     ck("15c and the heap did not creep either", h2 - h0 <= 0);
     ck("15d the fast loop really did take the skip path (no sleeping in it)",
-        time.pacer_dropped(fast) > 4000);
+        tui.pacer_dropped(fast) > 4000);
 
     // 16. determinism of the timing decisions that are not timing
     //
@@ -420,24 +420,24 @@ def test_time() {
     // whatever the machine's clock does.  The verdict must then be a skip,
     // every time, and the same every time -- which is the property an
     // animation can rely on, as opposed to how many frames a second fit.
-    let d1 = time.pacer_new(1000);
+    let d1 = tui.pacer_new(1000);
     let all_skip_a = true;
     for i in 0..6 {
-        time.nap_us(3000);
-        if (time.pacer_next(d1) >= 0) { all_skip_a = false };
+        tui.nap_us(3000);
+        if (tui.pacer_next(d1) >= 0) { all_skip_a = false };
     };
-    let d2 = time.pacer_new(1000);
+    let d2 = tui.pacer_new(1000);
     let all_skip_b = true;
     for i in 0..6 {
-        time.nap_us(3000);
-        if (time.pacer_next(d2) >= 0) { all_skip_b = false };
+        tui.nap_us(3000);
+        if (tui.pacer_next(d2) >= 0) { all_skip_b = false };
     };
-    let lag1 = time.pacer_lag_us(d1);
-    let lag2 = time.pacer_lag_us(d2);
-    note(f"forced skips: {time.pacer_dropped(d1)} and {time.pacer_dropped(d2)}, lags {lag1} and {lag2}");
+    let lag1 = tui.pacer_lag_us(d1);
+    let lag2 = tui.pacer_lag_us(d2);
+    note(f"forced skips: {tui.pacer_dropped(d1)} and {tui.pacer_dropped(d2)}, lags {lag1} and {lag2}");
     ck("16a a pacer three periods late skips, deterministically, twice over",
-        all_skip_a && all_skip_b && time.pacer_dropped(d1) == 6
-        && time.pacer_dropped(d2) == 6 && lag1 < 0 && lag2 < 0);
+        all_skip_a && all_skip_b && tui.pacer_dropped(d1) == 6
+        && tui.pacer_dropped(d2) == 6 && lag1 < 0 && lag2 < 0);
 
     // The lag those six stalls built is finite: stop stalling and the very
     // next calls draw again, one dropped frame per frame of debt.  This is
@@ -447,12 +447,12 @@ def test_time() {
     let again = 0 - 1;
     let tries = 0;
     while (tries < 64 && again < 0) {
-        again = time.pacer_next(d1);
+        again = tui.pacer_next(d1);
         tries = tries + 1;
     };
     note(f"after six forced stalls: drew again on call {tries}, value {again}");
     ck("16b the lag is finite -- it draws again once the caller stops stalling",
-        again >= 0 && time.pacer_dropped(d1) == 6 + tries - 1);
+        again >= 0 && tui.pacer_dropped(d1) == 6 + tries - 1);
 };
 
 // ── the run ──────────────────────────────────────────────────────────────
@@ -460,16 +460,16 @@ def test_time() {
 def main() -> long {
     let av = argv();
     if (len(av) > 2 && av[1] == "--help") {
-        puts("args_test -- the self-test for args.y and time.y\n\n");
+        puts("args_test -- the self-test for std args and the tui pacer\n\n");
         puts("  Takes no options.  Run it with no arguments; it prints one\n");
         puts("  line per check and exits 0 only when all of them passed.\n");
         puts("  Timing numbers go to stderr, so stdout is comparable:\n");
         puts("    ./args_test > out.1 2>/dev/null && ./args_test > out.2 2>/dev/null\n");
         exit(0);
     };
-    puts("== args.y ==\n");
+    puts("== args (std) ==\n");
     test_args();
-    puts("== time.y ==\n");
+    puts("== tui pacer (std) ==\n");
     test_time();
     puts("\n");
     if (n_fails == 0) {

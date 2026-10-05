@@ -34,37 +34,20 @@ import crypto;
 import dsp;
 import wav;
 import pcm;
+import test;
 
-let checks = 0;
-let failed = 0;
+// This battery used to define its own `ck`, `ck_eq` and `ck_near` right here,
+// with the counters `checks`/`failed` beside them and its own "N of M checks
+// passed" line at the end.  They are std/test.y's nine functions now -- this was
+// one of the folders that made the module necessary -- so the tally, the
+// verdict lines and the summary all come from one place.  The local `ck_near`
+// printed "got G, want W +/- T"; std adds the difference, which is the number
+// you actually want when a tolerance is the thing that failed.
 
 // prep_calls counts the PREPARE calls the battery's own prep function made.
 // Declared up here because check_feed is defined above the H section and Y
 // resolves module-level names in declaration order.
 let prep_calls: long = 0;
-
-def ck(name: str, ok: bool, detail: str) {
-    checks = checks + 1;
-    if (ok) {
-        print("  ok    " + name);
-        if (detail != "") { print("          " + detail); };
-    } else {
-        failed = failed + 1;
-        print("  FAIL  " + name);
-        print("          " + detail);
-    }
-};
-
-def ck_eq(name: str, got: long, want: long) {
-    ck(name, got == want, "got " + tostring(got) + ", want " + tostring(want))
-};
-
-def ck_near(name: str, got: long, want: long, tol: long) {
-    let d = got - want;
-    if (d < 0) { d = 0 - d; };
-    ck(name, d <= tol, "got " + tostring(got) + ", want " + tostring(want) +
-       " +/- " + tostring(tol))
-};
 
 // one_ms(x): a Q30 value as integer millionths, for tolerances.
 def micro(q: long) -> long { (q * 1000000) / fx.ONE };
@@ -181,33 +164,33 @@ def stat_of(frames: long) -> dsp.Stat { dsp.stats(img, wav.HDR, frames) };
 // RIFF specification requires at those offsets, so this is not the writer
 // agreeing with itself.
 def check_container() {
-    print("[A] the WAV container, parsed back out of the image");
+    test.group("[A] the WAV container, parsed back out of the image");
     let total = wav.render_demo(wav.DEMO_CUTOFF);
     snap();
-    ck("A00 the demo rendered", total > 0, tostring(total) + " bytes");
+    test.ck("A00 the demo rendered", total > 0, tostring(total) + " bytes");
     if (total <= 0) { return; };
     let frames = wav.wav_frames;
     let h = wav.wav_read_hdr();
-    ck("A01 'RIFF' at 0", h.riff_ok, wav.str_get(0));
-    ck("A02 'WAVE' at 8", h.wave_ok, wav.str_get(8));
-    ck("A03 'fmt ' at 12", h.fmt_ok, wav.str_get(12));
-    ck("A04 'data' at 36", h.data_ok, wav.str_get(36));
-    ck_eq("A05 fmt chunk size is 16", h.fmt_size, 16);
-    ck_eq("A06 format is 1 (PCM)", h.format, 1);
-    ck_eq("A07 channels", h.channels, dsp.CHANNELS);
-    ck_eq("A08 sample rate", h.rate, dsp.RATE);
-    ck_eq("A09 bits per sample", h.bits, dsp.BITS);
-    ck_eq("A10 byte rate = rate*ch*2", h.byterate, dsp.RATE * dsp.CHANNELS * 2);
-    ck_eq("A11 block align = ch*2", h.align, dsp.CHANNELS * 2);
-    ck_eq("A12 data size = frames*4", h.data_size, frames * 4);
-    ck_eq("A13 riff size = 36 + data", h.riff_size, 36 + h.data_size);
-    ck_eq("A14 header is 44 bytes", wav.HDR, 44);
-    ck_eq("A15 total = 44 + data", total, wav.HDR + h.data_size);
+    test.ck("A01 'RIFF' at 0", h.riff_ok, wav.str_get(0));
+    test.ck("A02 'WAVE' at 8", h.wave_ok, wav.str_get(8));
+    test.ck("A03 'fmt ' at 12", h.fmt_ok, wav.str_get(12));
+    test.ck("A04 'data' at 36", h.data_ok, wav.str_get(36));
+    test.ck_eq("A05 fmt chunk size is 16", h.fmt_size, 16);
+    test.ck_eq("A06 format is 1 (PCM)", h.format, 1);
+    test.ck_eq("A07 channels", h.channels, dsp.CHANNELS);
+    test.ck_eq("A08 sample rate", h.rate, dsp.RATE);
+    test.ck_eq("A09 bits per sample", h.bits, dsp.BITS);
+    test.ck_eq("A10 byte rate = rate*ch*2", h.byterate, dsp.RATE * dsp.CHANNELS * 2);
+    test.ck_eq("A11 block align = ch*2", h.align, dsp.CHANNELS * 2);
+    test.ck_eq("A12 data size = frames*4", h.data_size, frames * 4);
+    test.ck_eq("A13 riff size = 36 + data", h.riff_size, 36 + h.data_size);
+    test.ck_eq("A14 header is 44 bytes", wav.HDR, 44);
+    test.ck_eq("A15 total = 44 + data", total, wav.HDR + h.data_size);
     // And the bytes that reached the disk agree with the bytes in memory.
     let path = TMP + "/a.wav";
-    ck("A16 the image was written", wav.wav_save(path), path);
-    ck_eq("A17 the file on disk is this long", wav.wav_size_on_disk(path), total);
-    ck("A18 the file's sha256 is the image's sha256",
+    test.ck("A16 the image was written", wav.wav_save(path), path);
+    test.ck_eq("A17 the file on disk is this long", wav.wav_size_on_disk(path), total);
+    test.ck("A18 the file's sha256 is the image's sha256",
        wav.file_sha(path) == wav.image_sha(),
        wav.image_sha());
 };
@@ -219,31 +202,31 @@ def check_container() {
 // (which must clamp and not wrap), and the half-way cases (which must round
 // away from zero and not to even).
 def check_quant() {
-    print("[B] Q30 -> s16 quantisation");
-    ck_eq("B01 0.0 quantises to 0", dsp.q_to_s16(0), 0);
-    ck_eq("B02 +1.0 is full scale", dsp.q_to_s16(fx.ONE), dsp.FULL);
-    ck_eq("B03 -1.0 is -full scale", dsp.q_to_s16(0 - fx.ONE), 0 - dsp.FULL);
-    ck_eq("B04 +2.0 clamps at full scale, does not wrap", dsp.q_to_s16(2 * fx.ONE),
+    test.group("[B] Q30 -> s16 quantisation");
+    test.ck_eq("B01 0.0 quantises to 0", dsp.q_to_s16(0), 0);
+    test.ck_eq("B02 +1.0 is full scale", dsp.q_to_s16(fx.ONE), dsp.FULL);
+    test.ck_eq("B03 -1.0 is -full scale", dsp.q_to_s16(0 - fx.ONE), 0 - dsp.FULL);
+    test.ck_eq("B04 +2.0 clamps at full scale, does not wrap", dsp.q_to_s16(2 * fx.ONE),
           dsp.FULL);
-    ck_eq("B05 -2.0 clamps at -32768, does not wrap",
+    test.ck_eq("B05 -2.0 clamps at -32768, does not wrap",
           dsp.q_to_s16(0 - 2 * fx.ONE), 0 - dsp.FULL - 1);
     // -32768 is the most negative s16 and it has to be reachable, or a hot
     // mix cannot use the bottom of the range at all.  -(1 + 32768/2^30) times
     // 32767 is 32767.99997..., which rounds to 32768; 16384/2^30 gives exactly
     // 0.49999 and lands one short, which is why the bound is 32768 and not
     // the tidier 16384.
-    ck_eq("B06 -32768 is reachable", dsp.q_to_s16(0 - fx.ONE - 32768),
+    test.ck_eq("B06 -32768 is reachable", dsp.q_to_s16(0 - fx.ONE - 32768),
           0 - dsp.FULL - 1);
     // Rounding, not truncation: every one of these lands on a fraction above
     // one half, where truncating toward zero would answer one LSB lower.
     // 0.5 * 32767 = 16383.5, 0.375 * 32767 = 12287.625.
-    ck_eq("B07 +0.5 rounds up, not down", dsp.q_to_s16(fx.HALF), 16384);
-    ck_eq("B08 -0.5 rounds away from zero", dsp.q_to_s16(0 - fx.HALF), -16384);
-    ck_eq("B09 0.375 rounds to 12288", dsp.q_to_s16(fx.ONE * 3 / 8), 12288);
-    ck_eq("B10 -0.375 rounds away from zero",
+    test.ck_eq("B07 +0.5 rounds up, not down", dsp.q_to_s16(fx.HALF), 16384);
+    test.ck_eq("B08 -0.5 rounds away from zero", dsp.q_to_s16(0 - fx.HALF), -16384);
+    test.ck_eq("B09 0.375 rounds to 12288", dsp.q_to_s16(fx.ONE * 3 / 8), 12288);
+    test.ck_eq("B10 -0.375 rounds away from zero",
           dsp.q_to_s16(0 - fx.ONE * 3 / 8), -12288);
-    ck_eq("B11 one LSB is one LSB", dsp.q_to_s16(fx.ONE / dsp.FULL), 1);
-    ck_eq("B12 -one LSB is -one LSB", dsp.q_to_s16(0 - fx.ONE / dsp.FULL), -1);
+    test.ck_eq("B11 one LSB is one LSB", dsp.q_to_s16(fx.ONE / dsp.FULL), 1);
+    test.ck_eq("B12 -one LSB is -one LSB", dsp.q_to_s16(0 - fx.ONE / dsp.FULL), -1);
 };
 
 // ── C. the oscillator, measured ───────────────────────────────────────────
@@ -255,15 +238,15 @@ def check_quant() {
 // interpolation error of a 4096-point table is (2*pi/4096)^2/8 = 2.9e-7, so
 // the bound is set by the table and is deliberately generous.
 def check_osc() {
-    print("[C] the wavetable and the oscillator");
+    test.group("[C] the wavetable and the oscillator");
     dsp.table_build();
     let n = len(dsp.tab);
-    ck("C01 the table is present", n == 4 * dsp.TBL_STRIDE,
+    test.ck("C01 the table is present", n == 4 * dsp.TBL_STRIDE,
        tostring(n) + " entries, want " + tostring(4 * dsp.TBL_STRIDE));
-    ck_eq("C02 a sine starts at zero", dsp.tab[0], 0);
-    ck_near("C03 a sine peaks at fx.ONE at the quarter turn",
+    test.ck_eq("C02 a sine starts at zero", dsp.tab[0], 0);
+    test.ck_near("C03 a sine peaks at fx.ONE at the quarter turn",
             dsp.tab[1024], fx.ONE, 2);
-    ck_near("C04 a sine is -fx.ONE at three quarters",
+    test.ck_near("C04 a sine is -fx.ONE at three quarters",
             dsp.tab[3072], 0 - fx.ONE, 2);
     // Odd symmetry: sin(t + pi) = -sin(t), exactly, for a table built by one
     // formula.  This is the check that a table built by two different code
@@ -275,7 +258,7 @@ def check_osc() {
         if (dsp.tab[i] != 0 - dsp.tab[j]) { bad = bad + 1; };
         i = i + 1;
     };
-    ck_eq("C05 the sine table is exactly odd-symmetric", bad, 0);
+    test.ck_eq("C05 the sine table is exactly odd-symmetric", bad, 0);
     // Monotone over the first quarter: a table with a hole or a stray entry
     // breaks this and nothing else short of comparing every entry would.
     let falls = 0;
@@ -284,7 +267,7 @@ def check_osc() {
         if (dsp.tab[i + 1] < dsp.tab[i]) { falls = falls + 1; };
         i = i + 1;
     };
-    ck_eq("C06 the first quarter rises monotonically", falls, 0);
+    test.ck_eq("C06 the first quarter rises monotonically", falls, 0);
     // The oscillator against fx.sin, over a whole turn.  The PHASE here is in
     // TURNS (that is what a wavetable oscillator carries) and fx.sin takes
     // RADIANS, so the comparison has to convert -- fx.mul does it without
@@ -314,7 +297,7 @@ def check_osc() {
     // (h^2)/8 * sin, which for 4096 points is (2*pi/4096)^2/8 = 2.9e-7 of full
     // scale = 311 Q30 units.  The bound is 400, and fx.sin's own 1.5e-9 (1.6
     // Q30 units) is inside that.
-    ck("C07 the table oscillator tracks fx.sin in radians", worst <= 400,
+    test.ck("C07 the table oscillator tracks fx.sin in radians", worst <= 400,
        "worst error " + tostring(worst) + " Q30 units over " +
        tostring(steps) + " phases, bound 400 (the interpolation error of " +
        "a 4096-point table is 311)");
@@ -326,7 +309,7 @@ def check_osc() {
     let walked = (inc * dsp.RATE) - fx.ONE * 1000;
     let aw = walked;
     if (aw < 0) { aw = 0 - aw; };
-    ck("C08 osc_inc is a fixed-point quotient, not a ratio", aw < dsp.RATE,
+    test.ck("C08 osc_inc is a fixed-point quotient, not a ratio", aw < dsp.RATE,
        "1000 Hz at 48000 Hz: increment " + tostring(inc) +
        ", a whole second accumulates to " + tostring(inc * dsp.RATE) +
        " vs " + tostring(fx.ONE * 1000) + " wanted (drift " + tostring(aw) +
@@ -341,7 +324,7 @@ def check_osc() {
         ph = p2;
         t = t + 1;
     };
-    ck_eq("C09 the phase stays in [0, ONE)", wrapped_bad, 0);
+    test.ck_eq("C09 the phase stays in [0, ONE)", wrapped_bad, 0);
     // 1 kHz over exactly one second is 1000 periods of 48 samples, so 2000
     // zero crossings -- except that the FIRST one falls on sample 0, which the
     // 1 ms attack makes exactly zero, and a counter that remembers the last
@@ -352,10 +335,10 @@ def check_osc() {
     // bytes, not from the oscillator's own state.
     render_one(dsp.W_SINE, 100000, 20000, dsp.RATE, 0);
     snap();
-    ck_eq("C10 one second of 1 kHz sine has 1999 crossings",
+    test.ck_eq("C10 one second of 1 kHz sine has 1999 crossings",
           cross_of(dsp.RATE), 1999);
     let f_est = (cross_of(dsp.RATE) * dsp.RATE) / (2 * dsp.RATE);
-    ck("C11 the crossing count implies the frequency", f_est == 999,
+    test.ck("C11 the crossing count implies the frequency", f_est == 999,
        "1999 crossings in 1 s over both edges = " + tostring(f_est) +
        " Hz against a nominal 1000 Hz");
 };
@@ -390,7 +373,7 @@ const SINE_TOL: long = 20;
 const RAMP_TOL: long = 60;
 
 def check_rms() {
-    print("[D] RMS identities, measured from the written bytes");
+    test.group("[D] RMS identities, measured from the written bytes");
     // Presence first: 48000 frames and a non-zero peak, BEFORE any RMS is
     // compared.  A buffer that rendered nothing has an RMS of 0 and every
     // identity below would "pass" in the sense of not trapping.
@@ -398,18 +381,18 @@ def check_rms() {
     render_one(dsp.W_SINE, 100000, A_T, frames, 0);
     snap();
     let pk = peak_of(frames);
-    ck("D00 the sine render is present and not silent", pk > 0,
+    test.ck("D00 the sine render is present and not silent", pk > 0,
        "peak " + tostring(pk) + ", frames " + tostring(wav.wav_frames));
-    ck_eq("D01 the sine render is exactly one second", wav.wav_frames, frames);
-    ck_near("D02 a sine of amplitude A has RMS A/sqrt(2)", rms_of(frames),
+    test.ck_eq("D01 the sine render is exactly one second", wav.wav_frames, frames);
+    test.ck_near("D02 a sine of amplitude A has RMS A/sqrt(2)", rms_of(frames),
             EXPECT_SINE, SINE_TOL);
-    ck_near("D03 ... and its peak is A", peak_of(frames), A_T, 4);
+    test.ck_near("D03 ... and its peak is A", peak_of(frames), A_T, 4);
     // The continuous identity is sum(sin) = 0 over whole periods, and the
     // measured mean is a couple of LSB rather than exactly zero.  The residue
     // is the one-sample envelope ramp at each end, which is not symmetric: the
     // note starts at zero amplitude and leaves at zero, but the sine under it
     // is not at the same phase at the two ends.  4 LSB of 20000 is 200 ppm.
-    ck("D04 ... and its DC offset is under 4 LSB",
+    test.ck("D04 ... and its DC offset is under 4 LSB",
        0 - dc_of(frames) <= 4 && dc_of(frames) <= 4,
        "mean " + tostring(dc_of(frames)) + " LSB of " + tostring(A_T));
     // The square: amplitude A exactly, so RMS A to the bit.
@@ -419,7 +402,7 @@ def check_rms() {
     // in this group: rms == peak, to the bit.
     render_one(dsp.W_SQR, 100000, A_T, frames, 0);
     snap();
-    ck("D10 the square render is present", peak_of(frames) > 0,
+    test.ck("D10 the square render is present", peak_of(frames) > 0,
        "peak " + tostring(peak_of(frames)));
     // The identity, to one LSB.  The square table is SAMPLED rather than
     // interpolated, so every sample really is +-A, and the only reason RMS and
@@ -428,9 +411,9 @@ def check_rms() {
     // comparison the sine differs from its own amplitude by 1.41 and the
     // triangle by 1.73, so a bound of 2 LSB -- 100 ppm -- separates "this is a
     // square" from "this is not a square" by three orders of magnitude.
-    ck_near("D11 a square of amplitude A has RMS equal to its amplitude",
+    test.ck_near("D11 a square of amplitude A has RMS equal to its amplitude",
             rms_of(frames), peak_of(frames), 2);
-    ck_near("D12 ... and that amplitude is A", peak_of(frames), A_T, 4);
+    test.ck_near("D12 ... and that amplitude is A", peak_of(frames), A_T, 4);
     // The triangle and the sawtooth both integrate to A/sqrt(3).  375 Hz and
     // not 1000 Hz, because 375 Hz at 48000 is 128 samples a period -- and 128
     // samples a period is EXACTLY 32 wavetable cells a period, so every sample
@@ -440,34 +423,34 @@ def check_rms() {
     // differ by 0.0055% rather than by the 0.2% they differ by at 1000 Hz.
     render_one(dsp.W_TRI, 37500, A_T, frames, 0);
     snap();
-    ck("D20 the triangle render is present", peak_of(frames) > 0,
+    test.ck("D20 the triangle render is present", peak_of(frames) > 0,
        "peak " + tostring(peak_of(frames)));
-    ck_near("D21 a triangle of amplitude A has RMS A/sqrt(3)", rms_of(frames),
+    test.ck_near("D21 a triangle of amplitude A has RMS A/sqrt(3)", rms_of(frames),
             EXPECT_RAMP, RAMP_TOL);
-    ck_eq("D22 ... and its peak is A", peak_of(frames), A_T);
+    test.ck_eq("D22 ... and its peak is A", peak_of(frames), A_T);
     render_one(dsp.W_SAW, 37500, A_T, frames, 0);
     snap();
-    ck("D30 the sawtooth render is present", peak_of(frames) > 0,
+    test.ck("D30 the sawtooth render is present", peak_of(frames) > 0,
        "peak " + tostring(peak_of(frames)));
-    ck_near("D31 a sawtooth of amplitude A has RMS A/sqrt(3)", rms_of(frames),
+    test.ck_near("D31 a sawtooth of amplitude A has RMS A/sqrt(3)", rms_of(frames),
             EXPECT_RAMP, RAMP_TOL);
-    ck_near("D31b ... and its peak is A", peak_of(frames), A_T, 4);
-    ck_near("D32 ... and its peak is A", peak_of(frames), A_T, 4);
+    test.ck_near("D31b ... and its peak is A", peak_of(frames), A_T, 4);
+    test.ck_near("D32 ... and its peak is A", peak_of(frames), A_T, 4);
     // Silence: all zero, and the buffer is the right length.  The pair is the
     // point -- a "silence is silent" check alone passes on an empty buffer.
     render_one(dsp.W_SINE, 100000, 0, frames, 0);
     snap();
-    ck_eq("D40 a zero-amplitude render is exactly one second",
+    test.ck_eq("D40 a zero-amplitude render is exactly one second",
           wav.wav_frames, frames);
-    ck_eq("D41 every sample of it is zero", rms_of(frames), 0);
-    ck_eq("D42 ... and its peak is zero", peak_of(frames), 0);
-    ck_eq("D43 ... and not one sample is non-zero",
+    test.ck_eq("D41 every sample of it is zero", rms_of(frames), 0);
+    test.ck_eq("D42 ... and its peak is zero", peak_of(frames), 0);
+    test.ck_eq("D43 ... and not one sample is non-zero",
           stat_of(frames).nonzero, 0);
     // And the same code path on a non-silent piece is NOT silent: the negative
     // control, so D40..D43 cannot be passing because the render does nothing.
     render_one(dsp.W_SINE, 100000, A_T, frames, 0);
     snap();
-    ck("D44 the same render at amplitude A is not silent",
+    test.ck("D44 the same render at amplitude A is not silent",
        stat_of(frames).nonzero > frames / 2,
        tostring(stat_of(frames).nonzero) + " of " +
        tostring(frames) + " frames non-zero");
@@ -475,7 +458,7 @@ def check_rms() {
 
 // ── E. the envelope ───────────────────────────────────────────────────────
 def check_env() {
-    print("[E] the ADSR envelope");
+    test.group("[E] the ADSR envelope");
     dsp.nvoices = 0;
     dsp.voices = [];
     let rate = dsp.RATE;
@@ -484,27 +467,27 @@ def check_env() {
     let at = 100;
     let v = dsp.voice_add(dsp.W_SINE, 44000, at, 400, fx.ONE, 500000, 0,
                          fx.ONE / 2, 20, 60, 100);
-    ck("E00 the voice was taken", v == 1, "");
+    test.ck("E00 the voice was taken", v == 1, "");
     if (v != 1) { return; };
     let vo: dsp.Voice = dsp.voices[0];
     let v_sus_2 = vo.sus;
     let s0 = (at * rate) / 1000;
-    ck_eq("E01 the note starts where it was asked to", vo.s0, s0);
-    ck_eq("E02 the attack ends after 20 ms", vo.aend - s0, 960);
-    ck_eq("E03 the decay ends after 80 ms", vo.dend - s0, 3840);
-    ck_eq("E04 the release starts at the note's end", vo.rel0 - s0, 19200);
-    ck_eq("E05 the note ends after the release", vo.snd - s0, 24000);
-    ck_eq("E06 one sample before the note is silent", dsp.env_at(vo, vo.s0 - 1), 0);
-    ck_eq("E07 the last sample of the note is silent", dsp.env_at(vo, vo.snd), 0);
-    ck_eq("E08 far past the note is silent", dsp.env_at(vo, vo.snd + 5000), 0);
-    ck_eq("E09 the note starts at zero", dsp.env_at(vo, vo.s0), 0);
+    test.ck_eq("E01 the note starts where it was asked to", vo.s0, s0);
+    test.ck_eq("E02 the attack ends after 20 ms", vo.aend - s0, 960);
+    test.ck_eq("E03 the decay ends after 80 ms", vo.dend - s0, 3840);
+    test.ck_eq("E04 the release starts at the note's end", vo.rel0 - s0, 19200);
+    test.ck_eq("E05 the note ends after the release", vo.snd - s0, 24000);
+    test.ck_eq("E06 one sample before the note is silent", dsp.env_at(vo, vo.s0 - 1), 0);
+    test.ck_eq("E07 the last sample of the note is silent", dsp.env_at(vo, vo.snd), 0);
+    test.ck_eq("E08 far past the note is silent", dsp.env_at(vo, vo.snd + 5000), 0);
+    test.ck_eq("E09 the note starts at zero", dsp.env_at(vo, vo.s0), 0);
     // The attack is LINEAR IN SAMPLES, so the last sample before the corner is
     // one step short of unity by construction, not by error: the step is the
     // slope.  The invariant worth checking is that it is within one step.
     let e_atk = dsp.env_at(vo, vo.aend - 1);
     // Two steps, not one: the last attack sample is one step short by
     // construction, and fx.mul truncates, which is worth up to one more.
-    ck("E10 the attack reaches full scale to within two sample steps",
+    test.ck("E10 the attack reaches full scale to within two sample steps",
        e_atk >= fx.ONE - 2 * vo.ia && e_atk <= fx.ONE,
        "got " + tostring(e_atk) + ", one step is " + tostring(vo.ia));
     // Monotonicity.  With no `break`, these are counted, not stopped: a counter
@@ -515,20 +498,20 @@ def check_env() {
         if (dsp.env_at(vo, i + 1) < dsp.env_at(vo, i)) { bad_a = bad_a + 1; };
         i = i + 1;
     };
-    ck_eq("E11 the attack never falls", bad_a, 0);
+    test.ck_eq("E11 the attack never falls", bad_a, 0);
     let bad_d = 0;
     i = vo.aend;
     while (i < vo.dend - 1) {
         if (dsp.env_at(vo, i + 1) > dsp.env_at(vo, i)) { bad_d = bad_d + 1; };
         i = i + 1;
     };
-    ck_eq("E12 the decay never rises", bad_d, 0);
+    test.ck_eq("E12 the decay never rises", bad_d, 0);
     let e_dec = dsp.env_at(vo, vo.dend - 1);
-    ck("E13 the decay lands on the sustain level to within two steps",
+    test.ck("E13 the decay lands on the sustain level to within two steps",
        e_dec >= v_sus_2 && e_dec <= v_sus_2 + 2 * vo.idr,
        "got " + tostring(e_dec) + ", sustain " + tostring(v_sus_2) +
        ", one step " + tostring(vo.idr));
-    ck_eq("E14 the sustain is held flat",
+    test.ck_eq("E14 the sustain is held flat",
           dsp.env_at(vo, vo.rel0 - 1), fx.ONE / 2);
     let bad_r = 0;
     i = vo.rel0;
@@ -536,12 +519,12 @@ def check_env() {
         if (dsp.env_at(vo, i + 1) > dsp.env_at(vo, i)) { bad_r = bad_r + 1; };
         i = i + 1;
     };
-    ck_eq("E15 the release never rises", bad_r, 0);
+    test.ck_eq("E15 the release never rises", bad_r, 0);
     // Same story at the end of the release: the last sample before the note is
     // over is one step above zero, and the sample AT the end is exactly zero
     // (E07).  Together those are "the note leaves no DC step behind".
     let e_rel = dsp.env_at(vo, vo.snd - 1);
-    ck("E16 the release ends within two steps of zero",
+    test.ck("E16 the release ends within two steps of zero",
        e_rel >= 0 && e_rel <= 2 * vo.ir,
        "got " + tostring(e_rel) + ", one step is " + tostring(vo.ir));
     // No overshoot anywhere: the envelope is bounded by 1.
@@ -552,7 +535,7 @@ def check_env() {
         if (e > fx.ONE || e < 0) { over = over + 1; };
         i = i + 1;
     };
-    ck_eq("E17 the envelope stays inside [0, ONE]", over, 0);
+    test.ck_eq("E17 the envelope stays inside [0, ONE]", over, 0);
     // A note shorter than its own attack must not run its segments out of
     // order: the boundaries are clamped, and this is the check for it.
     dsp.nvoices = 0;
@@ -560,12 +543,12 @@ def check_env() {
     dsp.voice_add(dsp.W_SINE, 44000, 0, 2, fx.ONE, 500000, 0, fx.ONE / 2,
                   200, 200, 200);
     let tiny: dsp.Voice = dsp.voices[0];
-    ck("E18 a 2 ms note with a 200 ms attack is still ordered",
+    test.ck("E18 a 2 ms note with a 200 ms attack is still ordered",
        tiny.aend <= tiny.dend && tiny.dend <= tiny.rel0 &&
        tiny.rel0 < tiny.snd,
        "aend " + tostring(tiny.aend) + " dend " + tostring(tiny.dend) +
        " rel0 " + tostring(tiny.rel0) + " snd " + tostring(tiny.snd));
-    ck_eq("E19 ... and its envelope is still monotone",
+    test.ck_eq("E19 ... and its envelope is still monotone",
           dsp.env_at(tiny, 0), 0);
     // More notes than the buffer holds must be refused and counted, never
     // quietly dropped and never a write past the end of the array.
@@ -577,10 +560,10 @@ def check_env() {
         taken = taken + dsp.voice_add(dsp.W_SINE, 44000, 0, 100, fx.ONE,
                                       500000, 0, fx.ONE, 5, 5, 20);
     };
-    ck_eq("E20 no more than MAXV voices are taken", dsp.nvoices, dsp.MAXV);
-    ck_eq("E21 the rest are refused and counted", dsp.voices_refused,
+    test.ck_eq("E20 no more than MAXV voices are taken", dsp.nvoices, dsp.MAXV);
+    test.ck_eq("E21 the rest are refused and counted", dsp.voices_refused,
           40 - dsp.MAXV);
-    ck_eq("E22 the voice array really is that long", len(dsp.voices), dsp.MAXV);
+    test.ck_eq("E22 the voice array really is that long", len(dsp.voices), dsp.MAXV);
 };
 
 // ── F. the one-pole lowpass, measured ─────────────────────────────────────
@@ -591,18 +574,18 @@ def check_env() {
 // catches a coefficient that is wrong by a factor of two, which is exactly the
 // mistake the first draft of lp_coeff made.
 def check_filter() {
-    print("[F] the one-pole lowpass, measured");
+    test.group("[F] the one-pole lowpass, measured");
     let a1k = dsp.lp_coeff(1000, dsp.RATE);
-    ck("F00 the coefficient is inside [0, ONE]", a1k > 0 && a1k <= fx.ONE,
+    test.ck("F00 the coefficient is inside [0, ONE]", a1k > 0 && a1k <= fx.ONE,
        "a(1000 Hz) = " + tostring(a1k) + " = " + tostring(micro(a1k)) +
        " / 1000000");
-    ck("F01 the coefficient rises with the cutoff",
+    test.ck("F01 the coefficient rises with the cutoff",
        dsp.lp_coeff(200, dsp.RATE) < dsp.lp_coeff(1000, dsp.RATE) &&
        dsp.lp_coeff(1000, dsp.RATE) < dsp.lp_coeff(5000, dsp.RATE),
        "a(200)=" + tostring(dsp.lp_coeff(200, dsp.RATE)) +
        " a(1000)=" + tostring(a1k) +
        " a(5000)=" + tostring(dsp.lp_coeff(5000, dsp.RATE)));
-    ck("F02 a cutoff of 0 is a bypass", dsp.lp_coeff(0, dsp.RATE) == fx.ONE,
+    test.ck("F02 a cutoff of 0 is a bypass", dsp.lp_coeff(0, dsp.RATE) == fx.ONE,
        "a(0) = " + tostring(dsp.lp_coeff(0, dsp.RATE)));
     // DC gain: a constant input must arrive at itself.  Run the filter for
     // 16 time constants -- tau = 1/(1-a) samples -- and look at the end.
@@ -614,7 +597,7 @@ def check_filter() {
         y = dsp.lp_step(y, fx.ONE, a1k);
         i = i + 1;
     };
-    ck("F03 a DC input arrives at its own value", 0 - y <= 8 && y <= fx.ONE,
+    test.ck("F03 a DC input arrives at its own value", 0 - y <= 8 && y <= fx.ONE,
        "after " + tostring(steps) + " samples (16 time constants of " +
        tostring(tau / 1000) + " samples) the output is " + tostring(y) +
        " = " + tostring(micro(y)) + " / 1000000 of 1.0");
@@ -627,35 +610,35 @@ def check_filter() {
     render_one(dsp.W_SINE, 100000, A_T, frames, 1000);
     snap();
     let atfc = rms_of(frames);
-    ck("F10 the filter run is present", wide > 0 && atfc > 0,
+    test.ck("F10 the filter run is present", wide > 0 && atfc > 0,
        "unfiltered RMS " + tostring(wide) + ", at the cutoff " +
        tostring(atfc));
     // sqrt(2)/2 = 0.70711, to five places.  The tolerance is 2.5% of the
     // unfiltered RMS, which covers the finite-record edge effects of a
     // 48000-sample measurement and nothing else.
     let want = (wide * 70711) / 100000;
-    ck_near("F11 at the cutoff the gain is 1/sqrt(2)", atfc, want,
+    test.ck_near("F11 at the cutoff the gain is 1/sqrt(2)", atfc, want,
             wide / 40 + 20);
     render_one(dsp.W_SINE, 100000, A_T, frames, 5000);
     snap();
     let above = rms_of(frames);
-    ck("F12 above the cutoff less is attenuated than at it", above > atfc,
+    test.ck("F12 above the cutoff less is attenuated than at it", above > atfc,
        "5 kHz cutoff gives RMS " + tostring(above) + " against " +
        tostring(atfc) + " at 1 kHz");
     render_one(dsp.W_SINE, 100000, A_T, frames, 200);
     snap();
     let below = rms_of(frames);
-    ck("F13 below the cutoff more is attenuated than at it", below < atfc,
+    test.ck("F13 below the cutoff more is attenuated than at it", below < atfc,
        "200 Hz cutoff gives RMS " + tostring(below) + " against " +
        tostring(atfc) + " at 1 kHz");
-    ck("F14 the response is monotone in the cutoff",
+    test.ck("F14 the response is monotone in the cutoff",
        below < atfc && atfc < above,
        tostring(below) + " < " + tostring(atfc) + " < " + tostring(above));
 };
 
 // ── G. determinism, the demo, and the stereo image ────────────────────────
 def check_demo() {
-    print("[G] determinism and the demo mix");
+    test.group("[G] determinism and the demo mix");
     let a = wav.render_demo(wav.DEMO_CUTOFF);
     snap();
     let da = wav.image_sha();
@@ -667,12 +650,12 @@ def check_demo() {
     let b = wav.render_demo(wav.DEMO_CUTOFF);
     snap();
     let db = wav.image_sha();
-    ck("G00 the demo renders", a > 0 && b > 0, tostring(a) + " and " +
+    test.ck("G00 the demo renders", a > 0 && b > 0, tostring(a) + " and " +
        tostring(b) + " bytes");
-    ck("G01 two renders are byte-identical", da == db,
+    test.ck("G01 two renders are byte-identical", da == db,
        "sha256 " + da);
-    ck_eq("G02 no voice was refused", dsp.voices_refused, 0);
-    ck("G03 the score has voices", dsp.nvoices >= 4 && dsp.nvoices <= dsp.MAXV,
+    test.ck_eq("G02 no voice was refused", dsp.voices_refused, 0);
+    test.ck("G03 the score has voices", dsp.nvoices >= 4 && dsp.nvoices <= dsp.MAXV,
        tostring(dsp.nvoices) + " voices");
     // Every voice inside the render: the last note's release must not run off
     // the end of the buffer, and no note may start before it.
@@ -684,20 +667,20 @@ def check_demo() {
         if (v.s0 < 0 || v.snd > frames) { late = late + 1; };
         i = i + 1;
     };
-    ck_eq("G04 every voice fits inside the render", late, 0);
+    test.ck_eq("G04 every voice fits inside the render", late, 0);
     let st = stat_of(frames);
-    ck("G05 the demo is present and not silent", st.nonzero > frames / 2,
+    test.ck("G05 the demo is present and not silent", st.nonzero > frames / 2,
        tostring(st.nonzero) + " of " + tostring(frames) +
        " frames non-zero, peak " + tostring(st.peak));
-    ck("G06 nothing clipped", st.peak <= dsp.FULL && st.peak > 15000,
+    test.ck("G06 nothing clipped", st.peak <= dsp.FULL && st.peak > 15000,
        "peak " + tostring(st.peak) + " of " + tostring(dsp.FULL));
-    ck("G07 the DC offset is small",
+    test.ck("G07 the DC offset is small",
        0 - dc_of(frames) <= 40 && dc_of(frames) <= 40,
        "mean " + tostring(dc_of(frames)) + " LSB of " + tostring(dsp.FULL) +
        " (" + tostring(micro(dc_of(frames) * dsp.FULL)) + " ppm)");
     // Stereo: a mix with panning and a per-channel detune must have channels
     // that differ, and they must differ by the right sign on the lead.
-    ck("G08 the two channels differ", st.lsum != st.rsum,
+    test.ck("G08 the two channels differ", st.lsum != st.rsum,
        "L mean " + tostring(st.lsum / frames) + ", R mean " +
        tostring(st.rsum / frames));
     // A single centred note must land on both channels equally: the pan law
@@ -705,15 +688,15 @@ def check_demo() {
     // This is the check that catches a swapped channel.
     pan_note(dsp.W_SINE, 44000, 20000, 4800, fx.ONE / 2);
     let c = stat_of(4800);
-    ck_eq("G09 a centred note puts the same mean in both channels",
+    test.ck_eq("G09 a centred note puts the same mean in both channels",
           c.lsum / 4800, c.rsum / 4800);
-    ck("G10 a centred note is not silent", c.lsum != 0 && c.rsum != 0,
+    test.ck("G10 a centred note is not silent", c.lsum != 0 && c.rsum != 0,
        "L " + tostring(c.lsum) + ", R " + tostring(c.rsum));
     // A hard-left note must be louder on the left.  Pan 0 gives full left and
     // a quarter right.
     pan_note(dsp.W_SINE, 44000, 20000, 4800, 0);
     let p = stat_of(4800);
-    ck("G11 a hard-left note is louder on the left",
+    test.ck("G11 a hard-left note is louder on the left",
        0 - p.lsum > 0 - p.rsum && p.rsum != 0,
        "L " + tostring(p.lsum) + " against R " + tostring(p.rsum));
 };
@@ -804,12 +787,12 @@ def count_prep(dev: long) -> long {
 };
 
 def check_feed() {
-    print("[H] the snd_pcm_writei loop, against scripted sinks");
+    test.group("[H] the snd_pcm_writei loop, against scripted sinks");
     // H1: everything at once.
     sc_reset();
     let n = 4800;
     let x = pcm.feed(0, n, fixed_sink, ok_prep);
-    ck("H01 a sink that takes everything needs one call",
+    test.ck("H01 a sink that takes everything needs one call",
        x.ok && x.frames_written == n && x.short_writes == 0 && calls == 1,
        "ok " + tostring(x.ok) + ", frames " + tostring(x.frames_written) +
        ", calls " + tostring(calls));
@@ -821,7 +804,7 @@ def check_feed() {
     sc_push(n / 2);
     sc_push(n / 2);
     x = pcm.feed(0, n, script_sink, ok_prep);
-    ck("H02 half-sized writes still reach every frame",
+    test.ck("H02 half-sized writes still reach every frame",
        x.ok && x.frames_written == n,
        "frames " + tostring(x.frames_written) + " of " + tostring(n) +
        ", short writes " + tostring(x.short_writes));
@@ -829,7 +812,7 @@ def check_feed() {
     // calls, but the loop stops as soon as nothing is left, so it is two calls
     // and one short write: 4800 = 2400 + 2400.  A counter that said 4 here
     // would be counting calls, not short writes.
-    ck("H03 the short-write count is the calls that were short",
+    test.ck("H03 the short-write count is the calls that were short",
        x.short_writes == 1 && calls == 2,
        tostring(x.short_writes) + " short of " + tostring(calls) + " calls");
     // H3: one frame at a time -- the worst a well-behaved device does.
@@ -837,15 +820,15 @@ def check_feed() {
     let k = 0;
     while (k < n - 1) { sc_push(1); k = k + 1; };
     x = pcm.feed(0, n, script_sink, ok_prep);
-    ck("H04 one frame at a time still terminates", x.ok,
+    test.ck("H04 one frame at a time still terminates", x.ok,
        "frames " + tostring(x.frames_written) + " of " + tostring(n) +
        ", calls " + tostring(calls));
-    ck_eq("H05 ... having written exactly every frame", x.frames_written, n);
+    test.ck_eq("H05 ... having written exactly every frame", x.frames_written, n);
     // H4: a sink that never progresses.  The loop must give up, not hang.
     sc_reset();
     never_v = 0;
     x = pcm.feed(0, n, never_sink, ok_prep);
-    ck("H06 a sink that never progresses is given up on, not waited on",
+    test.ck("H06 a sink that never progresses is given up on, not waited on",
        !x.ok && x.err == 0 - 11 && x.stalls == 9,
        "err " + tostring(x.err) + " (EAGAIN), stalls " + tostring(x.stalls) +
        ", frames " + tostring(x.frames_written));
@@ -854,7 +837,7 @@ def check_feed() {
     eagain_left = 5;
     sc_reset();
     x = pcm.feed(0, n, eagain_sink, ok_prep);
-    ck("H06b EAGAIN is waited out, not treated as fatal",
+    test.ck("H06b EAGAIN is waited out, not treated as fatal",
        x.ok && x.frames_written == n && x.stalls == 5,
        "frames " + tostring(x.frames_written) + " of " + tostring(n) +
        ", stalls " + tostring(x.stalls) + ", why '" + x.why + "'");
@@ -862,7 +845,7 @@ def check_feed() {
     epipe_left = 2;
     sc_reset();
     x = pcm.feed(0, n, epipe_sink, ok_prep);
-    ck("H07 two EPIPEs are recovered and the frames still all go",
+    test.ck("H07 two EPIPEs are recovered and the frames still all go",
        x.ok && x.frames_written == n && x.recoveries == 2 && prep_calls == 2,
        "recoveries " + tostring(x.recoveries) + ", PREPARE calls " +
        tostring(prep_calls) + ", frames " + tostring(x.frames_written));
@@ -870,7 +853,7 @@ def check_feed() {
     epipe_left = 99;
     sc_reset();
     x = pcm.feed(0, n, epipe_sink, ok_prep);
-    ck("H08 EPIPE for ever is given up on",
+    test.ck("H08 EPIPE for ever is given up on",
        !x.ok && x.err == 0 - 32 && x.recoveries == 9 && prep_calls == 8,
        "err " + tostring(x.err) + " (EPIPE), recoveries " +
        tostring(x.recoveries) + ", PREPARE calls " + tostring(prep_calls) +
@@ -880,7 +863,7 @@ def check_feed() {
     epipe_left = 1;
     prep_v = 0 - 22;
     x = pcm.feed(0, n, epipe_sink, ok_prep);
-    ck("H08b a failing PREPARE is reported with its errno",
+    test.ck("H08b a failing PREPARE is reported with its errno",
        !x.ok && x.err == 0 - 22 && x.frames_written == 0,
        "err " + tostring(x.err) + ", why '" + x.why + "'");
     prep_v = 0;
@@ -888,12 +871,12 @@ def check_feed() {
     sc_reset();
     bad_v = 0 - 22;
     x = pcm.feed(0, n, bad_sink, ok_prep);
-    ck("H09 a hard errno is reported, not retried",
+    test.ck("H09 a hard errno is reported, not retried",
        !x.ok && x.err == 0 - 22 && x.why == "transfer: EINVAL",
        "err " + tostring(x.err) + ", why '" + x.why + "'");
     bad_v = 0 - 86;
     x = pcm.feed(0, n, bad_sink, ok_prep);
-    ck("H10 ESTRPIPE is reported rather than half-handled",
+    test.ck("H10 ESTRPIPE is reported rather than half-handled",
        !x.ok && x.err == 0 - 86,
        "err " + tostring(x.err) + ", why '" + x.why + "'");
     // H8: a sink that over-reports.  The loop must clamp, so the total can
@@ -901,13 +884,13 @@ def check_feed() {
     sc_reset();
     sc_push(n * 3);
     x = pcm.feed(0, n, script_sink, ok_prep);
-    ck("H11 a sink that over-reports cannot invent frames",
+    test.ck("H11 a sink that over-reports cannot invent frames",
        x.ok && x.frames_written == n,
        "offered " + tostring(n) + ", claimed " + tostring(x.frames_written));
     // H9: nothing to do is not a failure.
     sc_reset();
     x = pcm.feed(0, 0, fixed_sink, ok_prep);
-    ck("H12 zero frames is success, and calls nobody",
+    test.ck("H12 zero frames is success, and calls nobody",
        x.ok && x.frames_written == 0 && calls == 0,
        "ok " + tostring(x.ok) + ", calls " + tostring(calls));
 };
@@ -919,67 +902,67 @@ def check_feed() {
 // two disagree then one of them is wrong, and a hex table on its own could
 // not tell you which.
 def check_abi() {
-    print("[I] the ALSA ioctl ABI, recomputed from its components");
-    ck_eq("I01 SNDRV_PCM_IOCTL_INFO", pcm.REQ_INFO,
+    test.group("[I] the ALSA ioctl ABI, recomputed from its components");
+    test.ck_eq("I01 SNDRV_PCM_IOCTL_INFO", pcm.REQ_INFO,
           pcm.ioc(pcm.IOC_READ, pcm.INFO_NR, pcm.SIZE_PCM_INFO));
-    ck_eq("I02 SNDRV_PCM_IOCTL_HW_PARAMS", pcm.REQ_HW_PARAMS,
+    test.ck_eq("I02 SNDRV_PCM_IOCTL_HW_PARAMS", pcm.REQ_HW_PARAMS,
           pcm.ioc(3, pcm.HW_PARAMS_NR, pcm.SIZE_HW_PARAMS));
-    ck_eq("I03 SNDRV_PCM_IOCTL_SW_PARAMS", pcm.REQ_SW_PARAMS,
+    test.ck_eq("I03 SNDRV_PCM_IOCTL_SW_PARAMS", pcm.REQ_SW_PARAMS,
           pcm.ioc(3, pcm.SW_PARAMS_NR, pcm.SIZE_SW_PARAMS));
-    ck_eq("I04 SNDRV_PCM_IOCTL_PREPARE", pcm.REQ_PREPARE,
+    test.ck_eq("I04 SNDRV_PCM_IOCTL_PREPARE", pcm.REQ_PREPARE,
           pcm.ioc(0, pcm.PREPARE_NR, 0));
-    ck_eq("I05 SNDRV_PCM_IOCTL_DRAIN", pcm.REQ_DRAIN,
+    test.ck_eq("I05 SNDRV_PCM_IOCTL_DRAIN", pcm.REQ_DRAIN,
           pcm.ioc(0, pcm.DRAIN_NR, 0));
-    ck_eq("I06 SNDRV_PCM_IOCTL_DROP", pcm.REQ_DROP,
+    test.ck_eq("I06 SNDRV_PCM_IOCTL_DROP", pcm.REQ_DROP,
           pcm.ioc(0, pcm.DROP_NR, 0));
-    ck_eq("I07 SNDRV_PCM_IOCTL_WRITEI_FRAMES", pcm.REQ_WRITEI,
+    test.ck_eq("I07 SNDRV_PCM_IOCTL_WRITEI_FRAMES", pcm.REQ_WRITEI,
           pcm.ioc(pcm.IOC_WRITE, pcm.WRITEI_NR, pcm.SIZE_WRITEI));
     // The encoded sizes must be the real struct sizes, which is what stops a
     // struct layout change from being silently ignored.
-    ck_eq("I08 the encoded hw_params size is 608",
+    test.ck_eq("I08 the encoded hw_params size is 608",
           (pcm.REQ_HW_PARAMS >> 16) & 16383, 608);
-    ck_eq("I09 the encoded sw_params size is 136",
+    test.ck_eq("I09 the encoded sw_params size is 136",
           (pcm.REQ_SW_PARAMS >> 16) & 16383, 136);
-    ck_eq("I10 the encoded info size is 288",
+    test.ck_eq("I10 the encoded info size is 288",
           (pcm.REQ_INFO >> 16) & 16383, 288);
-    ck_eq("I11 the encoded writei size is 24",
+    test.ck_eq("I11 the encoded writei size is 24",
           (pcm.REQ_WRITEI >> 16) & 16383, 24);
     // Every struct offset the module uses must land inside its struct.
-    ck("I12 the last hw_params offset used is inside 608 bytes",
+    test.ck("I12 the last hw_params offset used is inside 608 bytes",
        pcm.HW_PARAMS_OFF_MASKS + 3 * 32 <= 608 &&
        pcm.HW_PARAMS_OFF_INTERVALS + 12 * 12 <= 608 &&
        pcm.HW_PARAMS_OFF_RMASK + 4 <= 608,
        "masks " + tostring(pcm.HW_PARAMS_OFF_MASKS) + ", intervals " +
        tostring(pcm.HW_PARAMS_OFF_INTERVALS) + ", rmask " +
        tostring(pcm.HW_PARAMS_OFF_RMASK));
-    ck_eq("I13 the ioctl type is 'A'", pcm.ALSA_TYPE, 65);
-    ck_eq("I14 PREPARE is _IO('A',0x40)", pcm.REQ_PREPARE, 0x4140);
-    ck_eq("I15 DRAIN is _IO('A',0x44)", pcm.REQ_DRAIN, 0x4144);
+    test.ck_eq("I13 the ioctl type is 'A'", pcm.ALSA_TYPE, 65);
+    test.ck_eq("I14 PREPARE is _IO('A',0x40)", pcm.REQ_PREPARE, 0x4140);
+    test.ck_eq("I15 DRAIN is _IO('A',0x44)", pcm.REQ_DRAIN, 0x4144);
     // errno names, because a diagnostic that says "errno -16" is not one.
-    ck("I16 EBUSY", pcm.errno_name(0 - 16) == "EBUSY", pcm.errno_name(0 - 16));
-    ck("I17 EACCES", pcm.errno_name(0 - 13) == "EACCES", pcm.errno_name(0 - 13));
-    ck("I18 EPIPE", pcm.errno_name(0 - 32) == "EPIPE", pcm.errno_name(0 - 32));
-    ck("I19 ENXIO", pcm.errno_name(0 - 6) == "ENXIO", pcm.errno_name(0 - 6));
-    ck("I20 EFAULT is named, and that is what an unbuilt snd_xferi answers",
+    test.ck("I16 EBUSY", pcm.errno_name(0 - 16) == "EBUSY", pcm.errno_name(0 - 16));
+    test.ck("I17 EACCES", pcm.errno_name(0 - 13) == "EACCES", pcm.errno_name(0 - 13));
+    test.ck("I18 EPIPE", pcm.errno_name(0 - 32) == "EPIPE", pcm.errno_name(0 - 32));
+    test.ck("I19 ENXIO", pcm.errno_name(0 - 6) == "ENXIO", pcm.errno_name(0 - 6));
+    test.ck("I20 EFAULT is named, and that is what an unbuilt snd_xferi answers",
        pcm.errno_name(0 - 14) == "EFAULT", pcm.errno_name(0 - 14));
-    ck("I21 an unknown errno still names itself",
+    test.ck("I21 an unknown errno still names itself",
        pcm.errno_name(0 - 4095) == "errno 4095", pcm.errno_name(0 - 4095));
-    ck("I22 ESTRPIPE is named", pcm.errno_name(0 - 86) == "ESTRPIPE",
+    test.ck("I22 ESTRPIPE is named", pcm.errno_name(0 - 86) == "ESTRPIPE",
        pcm.errno_name(0 - 86));
     // The three request shapes, checked against the ABI rather than against the
     // code that builds them: 608 bytes of hw_params, the ioctl type 'A', and
     // three strategies tried in order from most to least constrained.
-    ck_eq("I23 there are three request shapes", pcm.NSTRATEGY, 3);
-    ck("I24 the full shape is the first one tried",
+    test.ck_eq("I23 there are three request shapes", pcm.NSTRATEGY, 3);
+    test.ck("I24 the full shape is the first one tried",
        pcm.STRATEGY_FULL == 0 && pcm.STRATEGY_RATE == 1 &&
        pcm.STRATEGY_MIN == 2, "full/rate/min are 0/1/2");
-    ck_eq("I25 the intervals occupy 144 bytes of the 608", pcm.NINTERVAL * 12,
+    test.ck_eq("I25 the intervals occupy 144 bytes of the 608", pcm.NINTERVAL * 12,
           144);
-    ck("I27 fcntl is syscall 72, not 55",
+    test.ck("I27 fcntl is syscall 72, not 55",
        pcm.SYS_FCNTL == 72 && pcm.F_SETFL == 4,
        "fcntl is " + tostring(pcm.SYS_FCNTL) + ", F_SETFL is " +
        tostring(pcm.F_SETFL));
-    ck("I28 the last interval ends before the struct does",
+    test.ck("I28 the last interval ends before the struct does",
        pcm.HW_PARAMS_OFF_INTERVALS + pcm.NINTERVAL * 12 <= pcm.SIZE_HW_PARAMS,
        "intervals end at " +
        tostring(pcm.HW_PARAMS_OFF_INTERVALS + pcm.NINTERVAL * 12) +
@@ -997,35 +980,35 @@ def check_abi() {
 // pcmC9D9p (which opens and then answers ENOTTY to INFO), and one holding the
 // same file with mode 000, which gives a real EACCES.
 def check_degrade() {
-    print("[J] degradation, against directories that are not /dev/snd");
+    test.group("[J] degradation, against directories that are not /dev/snd");
     tmp_mk();
-    ck("J00 the scratch directory exists", fs.is_dir(TMP), TMP);
+    test.ck("J00 the scratch directory exists", fs.is_dir(TMP), TMP);
     // The name filter, which is what keeps capture devices out of the list.
-    ck("J01 pcmC3D0p is a playback node", pcm.is_playback_node("pcmC3D0p"), "");
-    ck("J02 pcmC0D0c is not", !pcm.is_playback_node("pcmC0D0c"), "");
-    ck("J03 controlC0 is not", !pcm.is_playback_node("controlC0"), "");
-    ck("J04 seq is not", !pcm.is_playback_node("seq"), "");
-    ck("J05 by-id is not", !pcm.is_playback_node("by-id"), "");
-    ck("J06 a bare pcm is not", !pcm.is_playback_node("pcm"), "");
-    ck("J07 pcmC3D0x is not", !pcm.is_playback_node("pcmC3D0x"), "");
+    test.ck("J01 pcmC3D0p is a playback node", pcm.is_playback_node("pcmC3D0p"), "");
+    test.ck("J02 pcmC0D0c is not", !pcm.is_playback_node("pcmC0D0c"), "");
+    test.ck("J03 controlC0 is not", !pcm.is_playback_node("controlC0"), "");
+    test.ck("J04 seq is not", !pcm.is_playback_node("seq"), "");
+    test.ck("J05 by-id is not", !pcm.is_playback_node("by-id"), "");
+    test.ck("J06 a bare pcm is not", !pcm.is_playback_node("pcm"), "");
+    test.ck("J07 pcmC3D0x is not", !pcm.is_playback_node("pcmC3D0x"), "");
     // A directory that is not there at all.
     let missing = TMP + "/nope";
     let n = pcm.enumerate(missing, dsp.RATE, dsp.CHANNELS, true);
-    ck("J08 a missing directory is reported, not fatal",
+    test.ck("J08 a missing directory is reported, not fatal",
        n == 0 - 1 && pcm.nnodes == 0,
        "enumerate answered " + tostring(n) + " (" + pcm.errno_name(n) + ")");
     let fd = pcm.pick(missing, dsp.RATE, dsp.CHANNELS);
-    ck("J09 pick on a missing directory fails cleanly",
+    test.ck("J09 pick on a missing directory fails cleanly",
        fd < 0 && pcm.pick_why != "" && pcm.pick_why.index_of(missing) >= 0,
        "fd " + tostring(fd) + ", why '" + pcm.pick_why + "'");
     // An empty directory: there are nodes, and none of them plays.
     let empty = TMP + "/empty";
     fs.make_dir(empty);
     n = pcm.enumerate(empty, dsp.RATE, dsp.CHANNELS, true);
-    ck("J10 an empty directory lists nothing", n == 0 && pcm.nnodes == 0,
+    test.ck("J10 an empty directory lists nothing", n == 0 && pcm.nnodes == 0,
        tostring(n) + " candidate(s)");
     fd = pcm.pick(empty, dsp.RATE, dsp.CHANNELS);
-    ck("J11 pick on an empty directory says what it looked for",
+    test.ck("J11 pick on an empty directory says what it looked for",
        fd < 0 && pcm.pick_why.index_of("pcm*p") >= 0,
        "why '" + pcm.pick_why + "'");
     // A regular file with a PCM node's name: it opens, and INFO refuses it.
@@ -1036,18 +1019,18 @@ def check_degrade() {
     let fpath = fake + "/pcmC9D9p";
     fs.write_file(fpath, "not a device\n");
     n = pcm.enumerate(fake, dsp.RATE, dsp.CHANNELS, true);
-    ck("J12 a regular file named pcm*p is found as a candidate", n == 1,
+    test.ck("J12 a regular file named pcm*p is found as a candidate", n == 1,
        tostring(n) + " candidate(s)");
     if (n == 1) {
         let d: pcm.Node = pcm.nodes[0];
-        ck("J13 ... and it is refused", !d.playable,
+        test.ck("J13 ... and it is refused", !d.playable,
            "why '" + d.why + "'");
-        ck("J14 ... with the errno the kernel gave",
+        test.ck("J14 ... with the errno the kernel gave",
            d.why.index_of("ENOTTY") > 0 || d.why.index_of("ENOTTY") == 0,
            "why '" + d.why + "'");
     };
     fd = pcm.pick(fake, dsp.RATE, dsp.CHANNELS);
-    ck("J15 pick refuses the file too", fd < 0, "fd " + tostring(fd));
+    test.ck("J15 pick refuses the file too", fd < 0, "fd " + tostring(fd));
     // The same file with mode 000: a real EACCES from openat.  This is the
     // path a machine whose POSIX ACL does not grant this user would take, and
     // it is exercised without touching the real sound hardware at all.
@@ -1057,21 +1040,21 @@ def check_degrade() {
     fs.write_file(npath, "x");
     fs.set_mode(npath, 0);
     n = pcm.enumerate(noacc, dsp.RATE, dsp.CHANNELS, true);
-    ck("J16 an unreadable node is found as a candidate", n == 1,
+    test.ck("J16 an unreadable node is found as a candidate", n == 1,
        tostring(n) + " candidate(s)");
     if (n == 1) {
         let d: pcm.Node = pcm.nodes[0];
-        ck("J17 ... and it is refused with EACCES",
+        test.ck("J17 ... and it is refused with EACCES",
            !d.playable && d.why.index_of("EACCES") >= 0,
            "why '" + d.why + "'");
     };
     fd = pcm.pick(noacc, dsp.RATE, dsp.CHANNELS);
-    ck("J18 pick reports the EACCES and the path",
+    test.ck("J18 pick reports the EACCES and the path",
        fd < 0 && pcm.pick_why.index_of("EACCES") >= 0,
        "why '" + pcm.pick_why + "'");
     fs.set_mode(npath, 420);
     tmp_rm();
-    ck("J19 the scratch directory is gone", !fs.exists(TMP), TMP);
+    test.ck("J19 the scratch directory is gone", !fs.exists(TMP), TMP);
 };
 
 def do_check() -> long {
@@ -1093,11 +1076,9 @@ def do_check() -> long {
     check_abi();
     check_degrade();
     tmp_rm();
-    print("");
-    print(tostring(checks - failed) + " of " + tostring(checks) +
-          " checks passed");
-    if (failed > 0) { return 1; };
-    0
+    // std/test.y's summary, in the same words this battery always used: the
+    // blank line, "N of M checks passed", and 0 or 1 to exit on.
+    test.report()
 };
 
-export { do_check, checks, failed };
+export { do_check };

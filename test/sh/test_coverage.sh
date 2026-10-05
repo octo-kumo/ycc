@@ -95,6 +95,9 @@ awk '/\\begin\{description\}/ { on = 1 } on { print } /\\end\{description\}/ { o
     sed 's/^\\ic{//; s/($//; s/\\_/_/g; s/^[a-z]*\././' | sort -u > "$TMP/builtins"
 {
     cat "$ROOT"/test/y/native/t*.y
+    # the ulp harness's calls: it is what calls std/math.y's float layer, and it
+    # lives outside test/y/native (it reads a table, so it is not a fixture)
+    cat "$ROOT"/test/math/*.y
     for s in "$ROOT"/test/sh/test_*.sh; do
         [ "$(basename "$s")" = test_coverage.sh ] || cat "$s"
     done
@@ -189,6 +192,13 @@ while IFS=$'\t' read -r doc title feature tests; do
             sh/test_*.sh) [ -f "$ROOT/test/$ref" ] && ok=1 ;;
             native/t*.y) [ -f "$ROOT/test/y/$ref" ] && [ -f "$ROOT/test/y/${ref%.y}.expected" ] && ok=1 ;;
             native/e*.y) [ -f "$ROOT/test/y/$ref" ] && ok=1 ;;
+            # The language server's fixtures are checked the same way a native
+            # fixture is: compiled, run, and compared against a .expected -- by
+            # src/tools/lsp/test/test-json.sh, which sh/test_lsp.sh runs under
+            # both compilers. So a row may name them, and naming one means the
+            # same thing here as naming native/tNNN_*.y.
+            lsp/test/t*.y) [ -f "$ROOT/src/tools/$ref" ] && [ -f "$ROOT/src/tools/${ref%.y}.expected" ] && ok=1 ;;
+            lsp/test/test-*.sh) [ -f "$ROOT/src/tools/$ref" ] && ok=1 ;;
         esac
         if [ $ok -eq 0 ]; then
             nmiss=$((nmiss + 1))

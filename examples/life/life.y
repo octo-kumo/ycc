@@ -19,15 +19,15 @@
 // ===========================================================================
 // THE TWO MODES
 //
-// The interactive path follows the pattern term.y's header insists on --
+// The interactive path follows the pattern tui's header insists on --
 // raw mode, alt screen, the crash watchdog, and ONE restore_all_exit at the
 // bottom that every early exit routes through:
 //
-//     if (!term.raw_mode()) { ...exit 1... };
-//     term.enter_screen();
-//     term.arm_watchdog();      // covers SIGKILL and crashes
+//     if (!tui.raw_mode()) { ...exit 1... };
+//     tui.enter_screen();
+//     tui.arm_watchdog();      // covers SIGKILL and crashes
 //     ... the loop, whose only exit is `running = false` ...
-//     term.restore_all_exit(0);
+//     tui.restore_all_exit(0);
 //
 // The headless path never touches the terminal at all: no termios, no escape
 // sequences, no watchdog.  That is what makes its stdout diffable, and it is
@@ -50,11 +50,9 @@
 // `while` -- see run_live().
 
 import args;
-import fb;
-import term;
-import time;
 import sim;
 import rle;
+import tui;
 
 // The report's fixed-size bookkeeping.  Both are allocated once, before the
 // run loop, and neither grows: a per-generation `+=` into an array would
@@ -158,14 +156,14 @@ def die(msg: str) -> long {
     1
 };
 
-// The grid the program would use when --size was not given.  term.size() is
+// The grid the program would use when --size was not given.  tui.size() is
 // right here -- it answers 24x80 when stdin is not a terminal, which is also
 // the right answer for a headless run whose stdout went to a file -- and this
 // is called ONCE at start-up, so the record it builds is one record.  The
 // frame loop uses winsize() below instead, which is the same ioctl without the
 // allocation.
 def default_size() -> Size {
-    let ws = term.size();
+    let ws = tui.size();
     let w = ws.cols;
     let h = ws.rows - 1;          // one row of the terminal for the status line
     if (w < 2) { w = 2; };
@@ -381,7 +379,7 @@ def run_headless(s: sim.Sim, frames: long, dump: long, f: Filled, want_stats: bo
     let hist: [long; 4097] = [0; 4097];
     puts("life -- Conway's Game of Life, rule B3/S23, torus edges\n\n");
     let w0 = 0;
-    if (want_stats) { w0 = time.now_us(); };
+    if (want_stats) { w0 = clock_us(); };
 
     puts(field("pattern", f.what));
     puts(field("grid", tostring(s.w) + " x " + tostring(s.h) + " (torus)"));
@@ -449,7 +447,7 @@ def run_headless(s: sim.Sim, frames: long, dump: long, f: Filled, want_stats: bo
         puts(field("extinct", "generation " + tostring(s.extinct_at)))
     };
     if (want_stats) {
-        stats_block(time.now_us() - w0, s.gen, h0, h1, shown)
+        stats_block(clock_us() - w0, s.gen, h0, h1, shown)
     };
     0
 };
@@ -459,13 +457,13 @@ def run_headless(s: sim.Sim, frames: long, dump: long, f: Filled, want_stats: bo
 // winsize() -> long -- the window size packed as rows * 1000 + cols, read into
 // THIS module's own buffer.
 //
-// Why not term.size()?  Because term.size() answers `{ rows, cols }` -- a
+// Why not tui.size()?  Because tui.size() answers `{ rows, cols }` -- a
 // record LITERAL, built fresh on every call -- and a record literal inside a
 // loop body allocates (examples/SUGGESTIONS.md §7 measures 40 bytes for a
 // two-field record).  Polling it once a frame leaked exactly 40 bytes a frame:
 // 222 KB over 90 frames, dead linear, and the measurement is in README.md.
 //
-// The copy of term.y in this folder is frozen and NOT edited, so the four lines
+// The copy of tui in this folder is frozen and NOT edited, so the four lines
 // it would take to fix it upstream are written out here instead: one ioctl
 // (syscall 16, fd, REQUEST, arg -- kernel register order, §2.1) into a
 // module-level [byte; 64], then two 16-bit little-endian reads.  ROW FIRST, at
@@ -475,7 +473,7 @@ def run_headless(s: sim.Sim, frames: long, dump: long, f: Filled, want_stats: bo
 // 24x80 when the ioctl fails or reports a zero, which is what a pty from
 // pty.fork() looks like before anybody sets TIOCSWINSZ.
 //
-// WS is a GROWABLE [byte], like term.y's own WS, and not a fixed [byte; 64]:
+// WS is a GROWABLE [byte], like tui's own WS, and not a fixed [byte; 64]:
 // a fixed array carries its elements inline, so `&WS[0]` has to box it, and
 // the box is a one-time 64-byte heap block.  Measured as "64 bytes over 121
 // frames" and the same 64 over 421 -- constant, so not a leak, but a growable
@@ -505,7 +503,7 @@ def ws_cols(packed: long) -> long { packed % 1000 };
 // The status line is built into a FIXED byte buffer, not into a `str`, and
 // that is the reason this whole block exists.  The obvious spelling is
 //
-//     fb.text(surf, s.h, 0, f"gen {s.gen} | live {s.pop} | …", fg, bg)
+//     tui.text(surf, s.h, 0, f"gen {s.gen} | live {s.pop} | …", fg, bg)
 //
 // which is one f-string and several `+` per frame -- and every one of those
 // allocates, because the heap is an arena and nothing is freed.  Measured
@@ -515,7 +513,7 @@ def ws_cols(packed: long) -> long { packed % 1000 };
 // it -- see --stats, and README.md.
 //
 // The buffer is module level, so it is allocated ONCE, and every helper writes
-// into it in place.  term.y's ESC_BUF is the same idea, but it is 64 bytes and
+// into it in place.  tui's ESC_BUF is the same idea, but it is 64 bytes and
 // a status line is 80.
 
 // A status line plus its padding has to fit; nothing here is unbounded, and
@@ -559,7 +557,7 @@ def sb_num(v: long) {
     }
 };
 
-// sb_hundredths(x) -- x hundredths as "12.3".  time.y reports hundredths of a
+// sb_hundredths(x) -- x hundredths as "12.3".  tui reports hundredths of a
 // frame per second because there is no float -> long (§2.4a), and this prints
 // them without one.
 def sb_hundredths(x: long) {
@@ -580,11 +578,11 @@ def sb_pad(to: long) {
 
 // sb_draw(surf, row, fg, bg) -- the buffer onto one surface row, one cell per
 // byte.  The buffer is ASCII, so a byte is a codepoint of width 1.
-def sb_draw(surf: fb.Surface, row: long, fg: long, bg: long) {
+def sb_draw(surf: tui.Surface, row: long, fg: long, bg: long) {
     let n = SBN;
     if (n > SB_CAP) { n = SB_CAP; };
     for i in 0..n {
-        fb.put(surf, row, i, SBUF[i], fg, bg)
+        tui.put(surf, row, i, SBUF[i], fg, bg)
     }
 };
 
@@ -595,32 +593,32 @@ def sb_draw(surf: fb.Surface, row: long, fg: long, bg: long) {
 def live_colour(age: long, mode: long) -> long {
     let k = age;
     if (k > 40) { k = 40; };
-    if (mode == 1) { return fb.grey(80 + k * 4); };
-    if (mode == 2) { return fb.rgb(40 + k * 4, 190, 80 + k * 3); };
-    fb.DEFAULT
+    if (mode == 1) { return tui.grey(80 + k * 4); };
+    if (mode == 2) { return tui.rgb(40 + k * 4, 190, 80 + k * 3); };
+    tui.DEFAULT
 };
 
 // dead_colour(mode) -> long -- the board behind the cells.  The default
 // terminal background in mono mode, a very dark blue otherwise.
 def dead_colour(mode: long) -> long {
-    if (mode == 0) { return fb.DEFAULT; };
-    fb.rgb(10, 12, 16)
+    if (mode == 0) { return tui.DEFAULT; };
+    tui.rgb(10, 12, 16)
 };
 
 // draw(surf, s, mode) -- the whole grid into the surface.  Allocation-free:
-// fb.put writes into arrays that already exist.  It does NOT flush; the caller
+// tui.put writes into arrays that already exist.  It does NOT flush; the caller
 // draws the status line and then flushes once, so a frame costs one
 // flush_diff and therefore one write(2) per row that changed.
-def draw(surf: fb.Surface, s: sim.Sim, mode: long) {
+def draw(surf: tui.Surface, s: sim.Sim, mode: long) {
     let dead = dead_colour(mode);
     for y in 0..s.h {
         let row = y;
         for x in 0..s.w {
             let i = y * s.w + x;
             if (s.cur[i] == 1) {
-                fb.put(surf, row, x, 9608, live_colour(s.age[i], mode), dead)
+                tui.put(surf, row, x, 9608, live_colour(s.age[i], mode), dead)
             } else {
-                fb.put(surf, row, x, 32, fb.DEFAULT, dead)
+                tui.put(surf, row, x, 32, tui.DEFAULT, dead)
             }
         }
     }
@@ -630,14 +628,14 @@ def draw(surf: fb.Surface, s: sim.Sim, mode: long) {
 // the bottom of the screen, built into the fixed buffer above and drawn in
 // place.  Padded to the full width so a shorter line erases the longer one it
 // replaces.  'h' puts the key list here instead.
-def status(surf: fb.Surface, s: sim.Sim, pat: str, seed: long, fps: long, mode: long,
-           paused: bool, meter: time.Fps, help: bool) {
+def status(surf: tui.Surface, s: sim.Sim, pat: str, seed: long, fps: long, mode: long,
+           paused: bool, meter: tui.Fps, help: bool) {
     let bg = dead_colour(mode);
     sb_reset();
     if (help) {
         sb_str("q quit  space pause  . step  n pattern  r reseed  c colour  +/- speed  h back");
         sb_pad(s.w);
-        sb_draw(surf, s.h, fb.rgb(255, 200, 0), bg)
+        sb_draw(surf, s.h, tui.rgb(255, 200, 0), bg)
     } else {
         sb_str("gen ");
         sb_num(s.gen);
@@ -664,7 +662,7 @@ def status(surf: fb.Surface, s: sim.Sim, pat: str, seed: long, fps: long, mode: 
             sb_str("mono");
         };
         sb_str(" | ");
-        sb_hundredths(time.fps_x100(meter));
+        sb_hundredths(tui.fps_x100(meter));
         sb_str(" fps");
         // The measured rate and the cap it is measured against, as "30.00/30",
         // so the line fits 80 columns even with a three-digit generation count.
@@ -680,7 +678,7 @@ def status(surf: fb.Surface, s: sim.Sim, pat: str, seed: long, fps: long, mode: 
         sb_str(pat);
         sb_str(" | h keys");
         sb_pad(s.w);
-        sb_draw(surf, s.h, fb.DEFAULT, bg)
+        sb_draw(surf, s.h, tui.DEFAULT, bg)
     }
 };
 
@@ -688,22 +686,22 @@ def status(surf: fb.Surface, s: sim.Sim, pat: str, seed: long, fps: long, mode: 
 // restore_all_exit at the bottom, including the one the quit key causes.
 def run_live(s: sim.Sim, f: Filled, pat_arg: str, seed: long, density: long,
              rle_text: str, fps: long, mode: long, want_stats: bool) -> long {
-    if (!term.raw_mode()) {
+    if (!tui.raw_mode()) {
         eputs("life: stdin is not a terminal, so there is no live view.\n");
         eputs("life: use --frames N for the headless summary, e.g. `life --frames 200`.\n");
         return 1
     };
-    term.enter_screen();
-    term.arm_watchdog();
+    tui.enter_screen();
+    tui.arm_watchdog();
 
     let rows = s.h + 1;
     let cols = s.w;
-    let surf = fb.new(rows, cols);
-    let meter = time.fps_new();
-    let w0 = time.now_us();
+    let surf = tui.new(rows, cols);
+    let meter = tui.fps_new();
+    let w0 = clock_us();
     let cap = fps;
     if (cap < 1) { cap = 1000000; };
-    let pacer = time.pacer_new(cap);
+    let pacer = tui.pacer_new(cap);
     let running = true;
     let paused = false;
     let help = false;
@@ -714,7 +712,7 @@ def run_live(s: sim.Sim, f: Filled, pat_arg: str, seed: long, density: long,
     let cur_mode = mode;
     let cur_fps = fps;
     let cur_seed = seed;
-    // Read here, not one line earlier, because time.pacer_new() above returns
+    // Read here, not one line earlier, because tui.pacer_new() above returns
     // a RECORD LITERAL and that is its own 64 bytes -- a setup cost, not a
     // frame cost.  With the reading taken before it, --stats reported a
     // constant "64 bytes over N generations" that was neither zero nor a leak,
@@ -722,7 +720,7 @@ def run_live(s: sim.Sim, f: Filled, pat_arg: str, seed: long, density: long,
     let h0 = heap_used();
 
     while (running) {
-        let wait = time.pacer_next(pacer);
+        let wait = tui.pacer_next(pacer);
 
         // The window can change under a running program.  winsize() is one
         // ioctl into a fixed buffer, so it is cheap enough to ask every frame;
@@ -744,12 +742,12 @@ def run_live(s: sim.Sim, f: Filled, pat_arg: str, seed: long, density: long,
                 s = ns;
                 cols = nw;
                 rows = nh + 1;
-                fb.resize(surf, rows, cols);
-                fb.clear(surf, dead_colour(cur_mode));
-                time.pacer_start(pacer);
+                tui.resize(surf, rows, cols);
+                tui.clear(surf, dead_colour(cur_mode));
+                tui.pacer_start(pacer);
                 draw(surf, s, cur_mode);
                 status(surf, s, cur_pat, cur_seed, cur_fps, cur_mode, paused, meter, help);
-                fb.flush_diff(surf)
+                tui.flush_diff(surf)
             }
         };
 
@@ -757,8 +755,8 @@ def run_live(s: sim.Sim, f: Filled, pat_arg: str, seed: long, density: long,
             if (!paused) { sim.step(s); };
             draw(surf, s, cur_mode);
             status(surf, s, cur_pat, cur_seed, cur_fps, cur_mode, paused, meter, help);
-            fb.flush_diff(surf);
-            time.fps_tick(meter)
+            tui.flush_diff(surf);
+            tui.fps_tick(meter)
         };
 
         // One keypress, polled WITHOUT waiting.
@@ -776,11 +774,11 @@ def run_live(s: sim.Sim, f: Filled, pat_arg: str, seed: long, density: long,
         //
         // The keys are compared with ord("q") and friends rather than written
         // as `k == 'q'`: this compiler has no character literal at all, and
-        // `'q'` is a lexer error ("expected ')', got 'q'").  term.y's header
+        // `'q'` is a lexer error ("expected ')', got 'q'").  tui's header
         // comment shows the `'q'` spelling; the numbers are what works.
-        let k = term.read_key_timeout(0);
-        if (k != term.KEY_NONE) {
-            if (k == ord("q") || k == term.KEY_ESC || k == 3) {
+        let k = tui.read_key_timeout(0);
+        if (k != tui.KEY_NONE) {
+            if (k == ord("q") || k == tui.KEY_ESC || k == 3) {
                 running = false
             } else if (k == 32) {
                 paused = !paused
@@ -790,16 +788,16 @@ def run_live(s: sim.Sim, f: Filled, pat_arg: str, seed: long, density: long,
                 help = !help
             } else if (k == ord("c")) {
                 cur_mode = (cur_mode + 1) % 3;
-                fb.clear(surf, dead_colour(cur_mode))
+                tui.clear(surf, dead_colour(cur_mode))
             } else if (k == ord("+") || k == 61) {
                 cur_fps = if (cur_fps == 0) { 30 } else { cur_fps * 2 };
-                pacer = time.pacer_new(if (cur_fps > 0) { cur_fps } else { 1000000 });
-                time.pacer_start(pacer)
+                pacer = tui.pacer_new(if (cur_fps > 0) { cur_fps } else { 1000000 });
+                tui.pacer_start(pacer)
             } else if (k == ord("-") || k == 95) {
                 cur_fps = cur_fps / 2;
                 if (cur_fps < 1) { cur_fps = 0; };
-                pacer = time.pacer_new(if (cur_fps > 0) { cur_fps } else { 1000000 });
-                time.pacer_start(pacer)
+                pacer = tui.pacer_new(if (cur_fps > 0) { cur_fps } else { 1000000 });
+                tui.pacer_start(pacer)
             } else if (k == ord("n")) {
                 let names = ["glider", "gosper", "lwss", "blinker", "block", "random", "empty"];
                 let at = 0;
@@ -827,10 +825,10 @@ def run_live(s: sim.Sim, f: Filled, pat_arg: str, seed: long, density: long,
     // exits, so it could never print anything.  restore() and leave_screen()
     // are idempotent, so doing them here and then calling restore_all_exit
     // below is safe -- the last call is still the one that exits.
-    term.restore();
-    term.leave_screen();
-    if (want_stats) { stats_block(time.now_us() - w0, s.gen, h0, h1, s.gen); };
-    term.restore_all_exit(0);
+    tui.restore();
+    tui.leave_screen();
+    if (want_stats) { stats_block(clock_us() - w0, s.gen, h0, h1, s.gen); };
+    tui.restore_all_exit(0);
     0
 };
 
@@ -841,7 +839,7 @@ def main() {
               "Conway's Game of Life (B3/S23) on a torus: a live view, or a headless summary",
               OPTS);
 
-    // args.y's own convention is exit 2 for a usage error; this program's
+    // args's own convention is exit 2 for a usage error; this program's
     // contract is 1 for every diagnostic it raises, and it is a one-line
     // difference.  The message is already on stderr.
     let st = args.parse(argv());

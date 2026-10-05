@@ -87,8 +87,7 @@
 // NOTE ON IMPORTS.  Every .y file in this folder compiles on its own (the
 // acceptance gate builds each one), and a module's own `import` lines do not
 // carry for the modules IT imports -- `import world;` here does not bring in
-// the `rnd` that world.y uses.  So each file names the whole closure.
-import rnd;
+// the `random` that world.y uses.  So each file names the whole closure.
 import net;
 import world;
 import sockio;
@@ -238,9 +237,44 @@ def pbar(b: [byte; 4096], n: long) -> long { sockio.ob(b, n, 124) };
 // ---------------------------------------------------------------------------
 // the session's own generator
 // ---------------------------------------------------------------------------
-// rnd.y's generator is module-global state; a session must NOT share it (that is
-// the whole reason sessions are separate), so the step is spelled out again
-// here against the session's own slot.  Same constants, same shift.
+// THIS ONE IS NOT std's, and the reason is the whole design of this file.
+//
+// A thread shares the address space and the module-level lets with its
+// spawner (NATIVE.md, "Threads and processes"), so std/random.y's single
+// state is a single state for the WHOLE PROCESS: two sessions fighting in the
+// same room, each on its own worker, would interleave draws and each player's
+// transcript would come to depend on the other's timing.  The golden file
+// would be unreproducible, and worse, it would be unreproducible only
+// sometimes.  A session must NOT share a generator -- that is the whole reason
+// sessions are separate -- so the state is per slot, in S_RNG.
+//
+// The three ways to get std's generator to draw on behalf of one session, and
+// what each of them costs HERE:
+//
+//   * random.below() outright -- one stream for every session.  Wrong.
+//   * random.set_state(S_RNG[slot]); v = random.below(n); S_RNG[slot] =
+//     random.state() -- RACE.  Two workers interleave the three steps, so
+//     session A's draw can come out of session B's state, which is the bug
+//     above wearing a disguise.
+//   * the same, under LM -- correct, and free of allocation, because LM is a
+//     semaphore rather than a `lock m { }` block (see "THE ONE LOCK IS A
+//     BINARY SEMAPHORE, NOT A MUTEX" above).  It is still the wrong trade: a
+//     draw would then serialise against every other session's draws AND
+//     against the chat fanout that shares LM, on the per-command path, and a
+//     critical section that ever took LM twice would deadlock the whole server
+//     instead of failing a check.  The property being bought here -- one stream
+//     per session -- is bought by one word per session, with no shared
+//     anything.
+//
+// So the step is spelled out here against the session's own slot, and it is the
+// only generator left in the program: world.y's (which lays down the world on
+// the main thread, where sharing is not a question) is std/random.y's.
+//
+// 64-bit LCG, s' = (s*a + c) with the numerical-recipes constants.  A long is
+// what it is because the point is that the state lives in a plain array slot:
+// one word per session, no allocation, nothing to free.  The high 32 bits are
+// what srng_below() uses, because the low bits of an LCG have very short
+// periods.
 def srng(slot: long) -> long {
     S_RNG[slot] = S_RNG[slot] * 6364136223846793005 + 1442695040888963407;
     S_RNG[slot]

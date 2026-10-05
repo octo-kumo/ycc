@@ -3,8 +3,8 @@
 Opens a file, shows it as **offset / hex bytes / ASCII gutter**, pages through it,
 and edits bytes in place. Two faces of one model:
 
-* **interactively** — raw mode through the vendored `term.y`, drawn through
-  `fb.y`, with a cursor, hex entry, bookmarks, search, an in-place save, and a
+* **interactively** — raw mode through std `tui`, drawn through
+  `tui`, with a cursor, hex entry, bookmarks, search, an in-place save, and a
   recent-file list;
 * **non-interactively** — `--no-tty` prints exactly what
   `od -A d -t x1z -v` prints, byte for byte, and `--check` **proves** that by
@@ -216,7 +216,7 @@ literal out of every loop"), and it is invisible in a golden. Two `sbs` calls
 fixed it. `--frames 120 --time` is what measured it; the numbers above are the
 "after".
 
-`term.read_key_timeout(0)` is the poll and `time.y`'s pacer owns the deadline
+`term.read_key_timeout(0)` is the poll and `tui`'s pacer owns the deadline
 (`VIEW_FPS = 30`) — a 1..99 ms poll rounds up to 100 ms because `VTIME` counts
 *deciseconds*, and every frame then lands a period late. The resize poll is a
 module-level `TIOCGWINSZ` into `WSBUF`, not `term.size()`, which returns a fresh
@@ -277,28 +277,54 @@ from something outside the code under test: a literal table, a hand-computed od
 line, a count taken from `fs.file_size` (i.e. from the operating system), or GNU
 `od` itself.
 
+Every assertion goes through **`std/test.y`**'s `test.ck` / `test.ck_eq` /
+`test.ck_str`, which `selftest.y` used to write for itself as `ok` / `ck` /
+`ckstr`. Two things changed and one did not:
+
+* the counts are **unchanged** — 720 assertions, 0 failed;
+* a **failure is now two lines** (the name, then the measurement) instead of one;
+* a **pass is now printed at all**. The local `ok` was silent unless it failed,
+  which is why this block used to be 19 lines; `std/test.y` prints a verdict and
+  a detail line on both outcomes, so a clean run is 1464. That is the module's
+  deliberate trade — "a check whose output only appears on failure is one nobody
+  can read" — and the detail on a pass is the measurement.
+
 ```
 $ ./hexview --check --od
 hexview property check
   toolkit-free model: hx.y holds a file as [byte]; the row format is
   GNU od -A d -t x1z -v, reproduced byte for byte
+
 [1 the ASCII gutter, all 256 byte values]
-[2 the hex digits, all 256 byte values]
-[3 one fixture's dump, against four hand-written lines]
-[4 round-tripped edits: write, save, re-read with a fresh reader]
-[5 struct's u32 readers against two hand compositions]
-[6 bounds: every hostile offset is a value, not a trap]
-[7 the histogram conserves the byte count]
-[8 the histogram hexview prints, cell by cell]
-[9 the row formatter is deterministic]
-[10 the summary line's own numbers, at eight --rows values]
+  ok    every one of 256 byte values renders right
+  ok    values that render as themselves
+          got 95, want 95
+  ok    values that render as the placeholder
+          got 161, want 161
+  ok    the two counts cover every byte value
+          got 256, want 256
+  ok    neither class is empty
+          nself=95 ndot=161
+  ok    0x20 is a space, not a placeholder
+          got 32, want 32
+  ...
+  ... 711 more, then:
+
 [11 the GNU od cross-check: od -A d -t x1z -v, byte for byte]
+  ok    the od cross-check compared something
+  ...
   15 of 15 dumps identical to od, 29458 bytes compared against 29458 bytes of od output
 [12 every flag's error path: non-zero exit, ITS OWN message, no trap]
+  ok    the check ran a real number of assertions
+          only 719
   720 assertions, 0 failed
   od cross-check: 15 files, 29458 bytes identical to od -A d -t x1z -v
 hexview --check: every property held
 ```
+
+The elision is real: `--check --od` prints one verdict line plus one detail line
+per assertion, so the whole thing is 1464 lines. `EXPECTED` is unaffected — it is
+the `run=` line's stdout (`--no-tty --hist`), not this.
 
 ### The oracles
 
@@ -372,6 +398,12 @@ defect neither oracle notices is a defect the example cannot find, and saying
 "the check passes" without doing this is the failure mode `day08` set the
 standard against.
 
+**Measured after the move to `std/test.y`: 26 injected, 26 caught, 0 missed, 0
+other** — unchanged. The last column is the first failing assertion and, after the
+`:`, the measurement it reported; the two are now on **two lines** in the output
+(`FAIL  <name>` then `<detail>`), joined here for width. Every cell below was
+re-measured rather than carried over.
+
 | # | injected defect | caught by | first assertion to fail |
 |---|---|---|---|
 | M1 | the gutter's low bound `32 → 33`: a space becomes a placeholder | `--check` | every one of 256 byte values renders right: first at 32: got 46, want 32 |
@@ -418,7 +450,8 @@ and fixing them is the reason the battery is worth more than a claim:
   writing to `path + ".tmp"` the fresh reader read the *old* file and every
   assertion passed. §4 now deletes the paths first and says they were absent. And
   the *first* time the fix was in place M10 was still reported as a trap rather
-  than as its own assertion: `ck(sz2!, FIXN)` unwrapped a `none` from
+  than as its own assertion: `ck(sz2!, FIXN)` — now `test.ck_eq("...", sz2!, FIXN)`
+  — unwrapped a `none` from
   `fs.file_size` before the assertion that names the defect could run, and
   `ok(...)` records a failure without stopping. Every `!` on a
   `file_size`/`read_bytes` answer is now behind a guard, so a check that finds a
@@ -443,7 +476,7 @@ and fixing them is the reason the battery is worth more than a claim:
 Named rather than left implied:
 
 * **The vendored toolkit.** `inject.py` mutates only `hx.y` and `hexview.y`. A
-  defect in `fb.y`, `term.y`, `time.y` or `args.y` is out of scope by
+  defect in `tui` or `args` is out of scope by
   construction — they are byte-identical copies of `examples/_toolkit/` and must
   not be edited. `pty_check.py` exercises them heavily but cannot attribute a
   failure to them.
@@ -507,16 +540,9 @@ Two shapes worth calling out:
 
 ---
 
-## The frozen toolkit
+## The std units this uses
 
 Copied byte-identical from `examples/_toolkit/` with `cp`, never edited:
-
-| file | sha256 |
-|---|---|
-| `fb.y` | `95a7663b7f1c7a90ff3756b51e51644ea952c9b671eeca1012b8f64e18589697` |
-| `term.y` | `07135b31109fcecdef5bddf7d0299c9194039d172396b49347630a93a286b6ee` |
-| `time.y` | `6050605cfcfb35db17ff180f89b4229796a7616099afbe34e2d2f34cdf37784b` |
-| `args.y` | `cdac36da1cf2cd8551bd06b1bf2a7b608736bc55106e64f5be3b7aa9332e9d28` |
 
 `fx.y` is **not** vendored: a hex editor does trigonometry and square roots
 never. Nothing in this folder imports across folders.
@@ -543,7 +569,7 @@ measurement.
 | the status line is one `[byte; 256]` and `sbw`/`msgn` append to it; **two `sbs` calls instead of one call with a `+` between two literals** | `hexview.y`, `draw_status` | `examples/BUGS.md` — the `str +=` in a value-used position is O(n²) in heap — and the narrower case measured and filed as `examples/SUGGESTIONS.md` **#20**: a `str` built by `+` from constants inside a loop body allocates **48 bytes an evaluation**, while the same concatenation in a `const` costs 0. Measured here: 136 bytes a frame before, 0 after. |
 | `sput` walks the byte buffer into the surface cell by cell instead of calling `fb.text` | `hexview.y` | `ORCHESTRATOR.md` 2.7 — `fb.text` plus a freshly built `str` is ~2.4 KB a frame. |
 | a module-level `TIOCGWINSZ` read instead of `term.size()` | `poll_winsize` | `term.size()` returns a fresh record (~40 B) per call, and a per-frame resize poll leaks. |
-| `read_key_timeout(0)` plus `time.y`'s pacer | `run_interactive` | `ORCHESTRATOR.md` 2.1 — `VTIME` counts deciseconds, so a 1..99 ms poll rounds up to 100 ms and every frame lands a period late. |
+| `read_key_timeout(0)` plus `tui`'s pacer | `run_interactive` | `ORCHESTRATOR.md` 2.1 — `VTIME` counts deciseconds, so a 1..99 ms poll rounds up to 100 ms and every frame lands a period late. |
 | `&buf[i]` for the `syscall(1, 1, …)` in the buffered writer and in `selftest.say` | `hexview.y`, `selftest.y` | `syscall` accepts a `*byte` and `&buf[i]` yields one; `p + got` on a `*byte` is the missing half of **#12**, so the offset is carried in the index instead. |
 | `hexview --check` needs `exec`, so it needs a binary **not** built with `ycc --no-exec` | `gate.conf` | `exec` is spliced in only when the program mentions it, and `--no-exec` omits it entirely. Sections 1–10 and the `EXPECTED` run need nothing. |
 | a guard flag with an explicit terminal assignment for early exit | `selftest.y` §10 | there is no `break` and no `continue` in this language (`ORCHESTRATOR.md` §2.10). |
@@ -639,6 +665,30 @@ able to see the history rather than infer it from one number.
 ## Pin re-verification: `31808ddc21adfa31` (orchestrator, 2026-10-05)
 
 `refs/ycc.ref` moved again, `1d28b3dbcc546b5fc0e3f9d541b56777f746cd3e10122b45ba42f4904fd191d3` -> **`31808ddc21adfa31398f6337fa6dd6bfe585d25beceab20498b6914b89485755`**. This folder was
+**rebuilt from source with the new pin and re-gated in full**: items 1-8 all
+pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
+0 caught the stale record and nothing else did -- across all 39 folders at
+once, which is the signature of a pin move rather than of a regression.
+
+Earlier shas above are kept on purpose: this example has been verified
+against each of them, and a reader who wants to know what changed should be
+able to see the history rather than infer it from one number.
+
+## Pin re-verification: `289cf022002903a6` (orchestrator, 2026-10-05)
+
+`refs/ycc.ref` moved again, `e39a5e21785f599184f55deafad3ff17b4d05edb01cebc0a513e0cb7907f517d` -> **`289cf022002903a695c1ca339816b0f8f478aa3ef9f00643a93c3a95947f979c`**. This folder was
+**rebuilt from source with the new pin and re-gated in full**: items 1-8 all
+pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
+0 caught the stale record and nothing else did -- across all 39 folders at
+once, which is the signature of a pin move rather than of a regression.
+
+Earlier shas above are kept on purpose: this example has been verified
+against each of them, and a reader who wants to know what changed should be
+able to see the history rather than infer it from one number.
+
+## Pin re-verification: `dad3564d3bcdf6df` (orchestrator, 2026-10-05)
+
+`refs/ycc.ref` moved again, `e39a5e21785f599184f55deafad3ff17b4d05edb01cebc0a513e0cb7907f517d` -> **`dad3564d3bcdf6df889d017e88660dd8e7e0637a1e046acc45539f515e361d3e`**. This folder was
 **rebuilt from source with the new pin and re-gated in full**: items 1-8 all
 pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
 0 caught the stale record and nothing else did -- across all 39 folders at

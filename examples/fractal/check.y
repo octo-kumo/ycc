@@ -79,7 +79,6 @@
 import fx;
 import scene;
 import sink;
-import time;
 
 // ─────────────────────────────────────────────────────────── the grid ───
 //
@@ -1148,7 +1147,7 @@ def acc_reset() -> void {
 };
 
 def run(poses: long) -> long {
-    let t0 = time.now_us();
+    let t0 = clock_us();
     scene.qseed_init();
     scene.solo(0);
     scene.grid_setup(CK_COLS, CK_ROWS, 1, 2);
@@ -1508,7 +1507,7 @@ def run(poses: long) -> long {
     if (P_BAD != 0) { fail("T4 the hit set moved away from the boundary band") };
     if (P_MIS * 50 > P_CELLS) { fail("T4 more than one fiftieth of the cells moved") };
 
-    let t1 = time.now_us();
+    let t1 = clock_us();
     if (NFAIL == 0) {
         sink.out_str("\nRESULT  PASS\n")
     } else {

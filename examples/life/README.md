@@ -106,7 +106,7 @@ list.
 - **`life.y:winsize()` and the `sb_*` helpers** — the two places where the
   obvious spelling allocates and the fixed-buffer one does not. Both carry the
   measurement that found them.
-- **`life.y:run_live()`** — the term.y lifecycle pattern: `raw_mode`,
+- **`life.y:run_live()`** — the tui lifecycle pattern: `raw_mode`,
   `enter_screen`, `arm_watchdog`, one `restore_all_exit` at the bottom that
   every exit routes through.
 - **`golden/`** — generations as text: `glider.txt` (the documented run),
@@ -187,7 +187,7 @@ needs 1 920 cells a frame and manages ~50 000 generations/second, so it has
 bytes.
 
 **The interactive path, under a real pty.** `tmux` is not installed here, so
-`pty_smoke.py` allocates one from Python — the same harness `term.y` was
+`pty_smoke.py` allocates one from Python — the same harness `tui` was
 verified with. It checks five sessions: `q`, `Esc`, `Ctrl-C`, a mid-run
 `TIOCSWINSZ`, and the remaining keys; each must exit 0, leave the alt screen,
 show the cursor and put the termios back.
@@ -231,17 +231,13 @@ os.waitpid(pid, 0)                   # -> 0, terminal restored
 
 ---
 
-## The toolkit revision this froze
+## The std units this uses
 
 Vendored copies, byte-identical to `examples/_toolkit/`, **not edited**:
 
 | file | sha256 (first 16) | lines | used for |
 |---|---|---|---|
 | `fx.y` | `4b47a9bfef0c1e30` | 687 | *not imported* — see below |
-| `fb.y` | `95a7663b7f1c7a90` | 962 | the surface, `flush_diff`, the block glyph, colours |
-| `term.y` | `07135b31109fcecd` | 1156 | raw mode, window size, keys, alt screen, restore |
-| `time.y` | `6050605cfcfb35db` | 245 | the pacer and the fps meter |
-| `args.y` | `cdac36da1cf2cd85` | 19081 | the flag table, the usage text, exit codes |
 
 `fx.y` is vendored because the frozen set is the frozen set, and this example
 **does not import it**: Life is integers and booleans, so there is no trig, no
@@ -267,7 +263,7 @@ asked for, and the code says so where it applies.
 
 1. **No character literals at all.** `k == 'q'` is a *lexer* error
    (`expected ')', got 'q'`). The live view compares `ord("q")` and friends.
-   `term.y`'s header comment shows the `k == 'q'` spelling, which does not
+   `tui`'s header comment shows the `k == 'q'` spelling, which does not
    compile against the pin. Not filed: the absence of a feature is a suggestion
    at most, and `TODO.md` §7 already covers literal syntax.
 2. **`[v; n]` takes an integer literal only**, so a grid cannot be allocated at
@@ -307,7 +303,7 @@ asked for, and the code says so where it applies.
     iteration every frame was more than a whole period late, the pacer dropped
     it, and the loop settled at 0.6 fps with the generation counter stuck on 1.
     `run_live` says so at the call site.
-11. **Exit code for a usage error is 1, not `args.y`'s 2.** `args.parse_or_exit`
+11. **Exit code for a usage error is 1, not `args`'s 2.** `args.parse_or_exit`
     would exit 2; this program's contract is 1 for every diagnostic, so it calls
     `args.parse()` and applies its own code. One line, commented in `main`.
 12. **A record returned by a function allocates on every call** — the same
@@ -317,7 +313,7 @@ asked for, and the code says so where it applies.
     `winsize()` instead: the same `TIOCGWINSZ` ioctl (syscall 16, fd, REQUEST,
     arg — kernel register order, §2.1; row first, bytes 0–1, §2.3) into a
     module-level `[byte]`, returned as one packed `rows * 1000 + cols`. The
-    frozen `term.y` copy is not edited; `default_size()` still uses `term.size()`,
+    std `tui` is not edited; `default_size()` still uses `tui.size()`,
     because it is called once.
 13. **`s += t` is amortised O(1), but a frame's worth of `+` is not free.** The
     status line began as `fb.text(surf, s.h, 0, f"gen {s.gen} | …" + f" …")`:
@@ -325,7 +321,7 @@ asked for, and the code says so where it applies.
     measured ~2.4 KB a frame — a program that looks fine for an hour and then
     meets the 3.5 GiB cap. It is now built by `sb_byte` / `sb_str` / `sb_num` /
     `sb_hundredths` into a module-level `[byte; 256]` and drawn with one `fb.put`
-    per cell, so a frame allocates nothing. Same discipline as `term.y`'s
+    per cell, so a frame allocates nothing. Same discipline as `tui`'s
     `ESC_BUF`, one size up.
 14. **`pacer_new()` is a record literal too**, so it costs its own 64 bytes. Not
     a leak (once), but `--stats` measures `heap_used()` in the live path *after*
@@ -343,9 +339,9 @@ are fixed-size with a stated cap (`TRACE_CAP`/`HIST_CAP`, both reported in
 | file | what |
 |---|---|
 | `life.y` | the entry point: flags, the headless report, the live view |
-| `sim.y` | the grid, the step function, the built-in patterns, the seeded PRNG |
+| `sim.y` | the grid, the step function, the built-in patterns, the random pattern (`std/random.y`) |
 | `rle.y` | the RLE parser (`{ ok, msg }`, never exits) |
-| `fx.y` `fb.y` `term.y` `time.y` `args.y` | the frozen toolkit, unmodified |
+| `fx.y` | `4b47a9bfef0c1e30` | 694 | |
 | `capture.sh` | regenerates `EXPECTED` and `golden/` from the pinned compiler |
 | `pty_smoke.py` | the five pty sessions above |
 | `EXPECTED`, `golden/` | the documented run, and generations as text |
@@ -448,6 +444,30 @@ able to see the history rather than infer it from one number.
 ## Pin re-verification: `31808ddc21adfa31` (orchestrator, 2026-10-05)
 
 `refs/ycc.ref` moved again, `1d28b3dbcc546b5fc0e3f9d541b56777f746cd3e10122b45ba42f4904fd191d3` -> **`31808ddc21adfa31398f6337fa6dd6bfe585d25beceab20498b6914b89485755`**. This folder was
+**rebuilt from source with the new pin and re-gated in full**: items 1-8 all
+pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
+0 caught the stale record and nothing else did -- across all 39 folders at
+once, which is the signature of a pin move rather than of a regression.
+
+Earlier shas above are kept on purpose: this example has been verified
+against each of them, and a reader who wants to know what changed should be
+able to see the history rather than infer it from one number.
+
+## Pin re-verification: `289cf022002903a6` (orchestrator, 2026-10-05)
+
+`refs/ycc.ref` moved again, `e39a5e21785f599184f55deafad3ff17b4d05edb01cebc0a513e0cb7907f517d` -> **`289cf022002903a695c1ca339816b0f8f478aa3ef9f00643a93c3a95947f979c`**. This folder was
+**rebuilt from source with the new pin and re-gated in full**: items 1-8 all
+pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
+0 caught the stale record and nothing else did -- across all 39 folders at
+once, which is the signature of a pin move rather than of a regression.
+
+Earlier shas above are kept on purpose: this example has been verified
+against each of them, and a reader who wants to know what changed should be
+able to see the history rather than infer it from one number.
+
+## Pin re-verification: `dad3564d3bcdf6df` (orchestrator, 2026-10-05)
+
+`refs/ycc.ref` moved again, `e39a5e21785f599184f55deafad3ff17b4d05edb01cebc0a513e0cb7907f517d` -> **`dad3564d3bcdf6df889d017e88660dd8e7e0637a1e046acc45539f515e361d3e`**. This folder was
 **rebuilt from source with the new pin and re-gated in full**: items 1-8 all
 pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
 0 caught the stale record and nothing else did -- across all 39 folders at

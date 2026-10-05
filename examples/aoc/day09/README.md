@@ -231,6 +231,17 @@ reversal. Each permutation is asserted to **actually reorder** the tiles — an
 oracle that is secretly the identity cannot see an order bug, which is the
 "two absent values compare equal" trap in permutation form.
 
+`shuffled`'s draw comes from **`import random`** (`src/y/std/random.y`,
+splitmix64): `random.seed(seed)` then `random.below(k + 1)` inside the
+Fisher-Yates walk. It used to inline an LCG in the loop body
+(`s = (s * 1103515245 + 12345) % 2147483648`) — the same generator day10
+carried — which is biased for every `(k + 1)` that is not a power of two.
+`random.seed` is called inside `shuffled` rather than by the caller so that
+`shuffled(flat, s)` stays a pure function of `(flat, s)` even though std's
+stream is module-level; that is what the eight-seed sweep above relies on, and
+it is also why `EXPECTED` does not move (the shuffle is reached only from
+`--check`).
+
 Two more answers were obtained outside this program and are pinned, not merely
 bounded: part 1's maximum is attained by **exactly 1** pair and part 2's by
 **exactly 1** legal pair (an independent exhaustive enumeration). Pinning a
@@ -478,7 +489,7 @@ each worked around visibly in `day09.y` rather than silently:
   reporting of `report`/`main`/`run_check`; none of them is inside a loop over
   pairs. There is no `str +=` anywhere in the file.
 
-## The frozen toolkit
+## The std units this uses
 
 **Nothing is vendored.** This example needs no `fx` (every quantity is an
 integer — there are no floats, no division except exact integer division of the
@@ -486,10 +497,10 @@ shoelace sum), no `term`, no `fb`, no `args` (four flags are read from
 `argv()` directly) and no `time`. The frozen toolkit in `examples/_toolkit/`
 is byte-identical and untouched; its shas, for the record, are
 `fx.y 4b47a9bfef0c1e30aa2397a24e21ab43753e6994c298f7ccd43c418b87b62058`,
-`term.y 07135b31109fcecdef5bddf7d0299c9194039d172396b49347630a93a286b6ee`,
-`fb.y 95a7663b7f1c7a90ff3756b51e51644ea952c9b671eeca1012b8f64e18589697`,
-`args.y cdac36da1cf2cd8551bd06b1bf2a7b608736bc55106e64f5be3b7aa9332e9d28`,
-`time.y 6050605cfcfb35db17ff180f89b4229796a7616099afbe34e2d2f34cdf37784b`.
+tui 07135b31109fcecdef5bddf7d0299c9194039d172396b49347630a93a286b6ee`,
+tui 95a7663b7f1c7a90ff3756b51e51644ea952c9b671eeca1012b8f64e18589697`,
+args cdac36da1cf2cd8551bd06b1bf2a7b608736bc55106e64f5be3b7aa9332e9d28`,
+tui 6050605cfcfb35db17ff180f89b4229796a7616099afbe34e2d2f34cdf37784b`.
 
 ## Files
 
@@ -702,6 +713,30 @@ able to see the history rather than infer it from one number.
 ## Pin re-verification: `31808ddc21adfa31` (orchestrator, 2026-10-05)
 
 `refs/ycc.ref` moved again, `1d28b3dbcc546b5fc0e3f9d541b56777f746cd3e10122b45ba42f4904fd191d3` -> **`31808ddc21adfa31398f6337fa6dd6bfe585d25beceab20498b6914b89485755`**. This folder was
+**rebuilt from source with the new pin and re-gated in full**: items 1-8 all
+pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
+0 caught the stale record and nothing else did -- across all 39 folders at
+once, which is the signature of a pin move rather than of a regression.
+
+Earlier shas above are kept on purpose: this example has been verified
+against each of them, and a reader who wants to know what changed should be
+able to see the history rather than infer it from one number.
+
+## Pin re-verification: `289cf022002903a6` (orchestrator, 2026-10-05)
+
+`refs/ycc.ref` moved again, `e39a5e21785f599184f55deafad3ff17b4d05edb01cebc0a513e0cb7907f517d` -> **`289cf022002903a695c1ca339816b0f8f478aa3ef9f00643a93c3a95947f979c`**. This folder was
+**rebuilt from source with the new pin and re-gated in full**: items 1-8 all
+pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
+0 caught the stale record and nothing else did -- across all 39 folders at
+once, which is the signature of a pin move rather than of a regression.
+
+Earlier shas above are kept on purpose: this example has been verified
+against each of them, and a reader who wants to know what changed should be
+able to see the history rather than infer it from one number.
+
+## Pin re-verification: `dad3564d3bcdf6df` (orchestrator, 2026-10-05)
+
+`refs/ycc.ref` moved again, `e39a5e21785f599184f55deafad3ff17b4d05edb01cebc0a513e0cb7907f517d` -> **`dad3564d3bcdf6df889d017e88660dd8e7e0637a1e046acc45539f515e361d3e`**. This folder was
 **rebuilt from source with the new pin and re-gated in full**: items 1-8 all
 pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
 0 caught the stale record and nothing else did -- across all 39 folders at

@@ -47,6 +47,9 @@ const MAXCELLS = 262144;   // the store size.  The array types below have to
 const MAXW = 512;
 const MAXH = 512;
 
+// The only std unit this file needs, and only for random_fill()'s draw.
+import random;
+
 // A grid and its scratch.  Every array is fixed-size and allocated once;
 // w and h are the logical size and always satisfy w*h <= MAXCELLS.
 type Sim = {
@@ -286,28 +289,36 @@ def names() -> str {
 };
 
 // random_fill(s, seed, pct) -- the one random pattern, and it is NOT random
-// at all until you give it a seed: `seed` feeds a Lehmer LCG (the classic
-// 48271/2^31-1 multiplier), so the same seed fills the same grid on every
-// machine and every run.  life.y calls this with an explicit seed, never with
-// a clock or an unseeded generator, so the default path is deterministic.
+// at all until you give it a seed, so the same seed fills the same grid on
+// every machine and every run.  life.y calls this with an explicit seed, never
+// with a clock or an unseeded generator, so the default path is deterministic.
+//
+// The draw is std's (import random at the top of this file); it was a
+// hand-rolled Lehmer LCG, the classic 48271/2^31-1 multiplier, held in a LOCAL
+// long so the fill allocated nothing.  Only the uniformity mattered -- "about
+// pct% of the cells alive", which is the whole of what a random start wants --
+// and that is what std's generator is for.
+//
+// The local became one module-level state, so the property the local was there
+// to give -- the grid is a function of `seed` and of nothing else -- is now
+// bought with the random.seed() below, which is why the seed is taken HERE
+// rather than left to the caller: two calls with the same seed fill the same
+// grid whatever happened in between, and `r` (reseed with seed+1) cannot see
+// the grid it just replaced.  A negative seed is still a seed: std's seed()
+// takes any long and offsets it, where the old code folded it into [1, 2^31-1).
 //
 // pct is a percentage of cells that start alive.  The draw is
-// `next() % 100 < pct`, so the generator only has to be uniform over a
-// modulus, not over anything wider.
+// `random.chance(pct)`, i.e. `below(100) < pct` -- the same predicate as the
+// old `st % 100 < p`, and chance() already answers false below 0 and true from
+// 100 up, so the local clamp of pct went with the LCG.
 def random_fill(s: Sim, seed: long, pct: long) -> long {
-    // A Lehmer LCG in the module's own state: one long, never allocated.
-    let st = seed % 2147483647;
-    if (st <= 0) { st = st + 2147483646; };
-    let p = pct;
-    if (p < 0) { p = 0; };
-    if (p > 100) { p = 100; };
+    random.seed(seed);
     let n = 0;
     let k = s.w * s.h;
     let cur = s.cur;
     for i in 0..k {
-        st = (st * 48271) % 2147483647;
         let hit = 0;
-        if (st % 100 < p) { hit = 1; };
+        if (random.chance(pct)) { hit = 1; };
         cur[i] = hit;
         if (hit == 1) { s.age[i] = 1; } else { s.age[i] = 0; };
         n = n + hit

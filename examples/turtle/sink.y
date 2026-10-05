@@ -1,3 +1,4 @@
+import tui;
 // sink.y -- the deterministic output path for turtle.y.
 //
 // Everything this program prints goes through here: the headless frame table,
@@ -14,7 +15,6 @@
 // and `x + y` on a str is the exact-size copy (y_str_cat), which is the
 // quadratic position the campaign's audit counts.  out_* here append in place.
 
-import fb;
 
 const OB_CAP: long = 65536;
 const FNV_SEED: long = -3750763034362895579;   // 14695981039346656037, signed
@@ -32,7 +32,7 @@ def out_mark() -> long { ON };
 
 // out_trunc(m) -- throw away everything written since mark m.  The HUD uses it
 // to build a line into the shared buffer, blit it into the surface cell by cell
-// and then put the buffer back, instead of allocating a str for fb.text.
+// and then put the buffer back, instead of allocating a str for tui.text.
 def out_trunc(m: long) -> void { ON = m };
 
 def out_byte(b: long) -> void {
@@ -140,10 +140,10 @@ def out_glyph(cp: long) -> void {
     let c = cp;
     if (c < 0) { c = 32 };
     if (c > 1114111) { c = 65533 };
-    let n = fb.utf8_len(c);
+    let n = tui.utf8_len(c);
     let i = 0;
     while (i < n) {
-        out_byte(fb.utf8_byte(c, i));
+        out_byte(tui.utf8_byte(c, i));
         i = i + 1
     }
 };
@@ -170,7 +170,7 @@ def out_capture(fd: long, n: long) -> void {
         if (take > 4096) { take = 4096 };
         let i = 0;
         while (i < take) {
-            CHUNK[i] = fb.capture_byte(at + i);
+            CHUNK[i] = tui.capture_byte(at + i);
             i = i + 1
         };
         syscall(1, fd, &CHUNK[0], take);
@@ -182,7 +182,7 @@ def out_capture(fd: long, n: long) -> void {
 // so a frame that changed colour but not shape is a different digest.  This is
 // the per-frame line in the deterministic output, which is why that line is
 // evidence rather than decoration.
-def grid_digest(s: fb.Surface) -> long {
+def grid_digest(s: tui.Surface) -> long {
     let h: long = FNV_SEED;
     let n = s.rows * s.cols;
     let i = 0;
@@ -200,11 +200,11 @@ def grid_digest(s: fb.Surface) -> long {
 // the --no-tty output are, so the deterministic output is readable in a diff
 // and not merely comparable.
 //
-// Each glyph goes through fb.utf8_byte into the module-level byte buffer and
+// Each glyph goes through tui.utf8_byte into the module-level byte buffer and
 // out through one write(2), because there is no other route to a non-ASCII
 // character in this language (examples/BUGS.md, "str + byte segfaults", and the
 // suggestion filed there: chr() cannot make a glyph outside ASCII).
-def grid_text(s: fb.Surface) -> void {
+def grid_text(s: tui.Surface) -> void {
     let r = 0;
     while (r < s.rows) {
         let c = 0;

@@ -236,6 +236,309 @@ print(struct.get_u8(hdr, 9));                  // 65 -- the fill's byte, by offs
 \end{lstlisting}
 \end{description}
 
+\subsection{Mathematics (the math module)}
+\label{sec:builtin-math}
+
+\ic{import math;} brings number helpers: integer and bit twiddling, the float
+comparisons and constants, random numbers, and whole-array arithmetic over
+\ic{[float]}. Every function is called through the \ic{math} namespace.
+
+Y has no overloading, so \ic{min}, \ic{max}, \ic{abs}, \ic{clamp} and \ic{sign}
+take \ty{long}s and their float counterparts carry an \ic{f}: \ic{fmin},
+\ic{fmax}, \ic{fabs}, \ic{fsign}.
+
+\ic{math.sqrt}, \ic{math.floor}, \ic{math.ceil}, \ic{math.trunc},
+\ic{math.round}, \ic{math.fract}, \ic{math.cbrt}, \ic{math.hypot},
+\ic{math.to\_int}, \ic{math.ldexp}, \ic{math.frexp}, \ic{math.nextafter},
+\ic{math.is\_signed\_zero} and the bit casts \ic{math.fbits} /
+\ic{math.bitsf} need a machine primitive Y has no spelling for: a truncating
+\ty{float}-to-\ty{long} cast, or a look at a float's bits. The module declares
+those with \ic{native def} (Section~\ref{sec:grammar}) and the four \ic{y\_}
+routines behind them live in \ic{src/y/arch/math.s}; everything else here,
+\emph{including every transcendental below}, is ordinary Y.
+
+The transcendentals are written the way the good libraries write them, and the
+two halves of that matter separately. Each polynomial is a \emph{correction} to a
+term already in hand --- $\ty{e}^r = 1 + r(1 + rQ(r))$,
+$\log m = z(2 + z^2P(z^2))$ with $z = (m-1)/(m+1)$, $\sin x = x(1 + x^2P(x^2))$,
+$\cos x = 1 - x^2P(x^2)$ --- so its error reaches the answer multiplied by the
+argument's square rather than standing on its own. And every coefficient is split
+in two with the low parts carried in a second accumulator, because Horner's rule
+rounds once a term and a degree-$n$ kernel otherwise sits $n$ ulps out for good;
+the split costs one multiply and one add a term and nothing at all in the
+constants. \ic{test/math/gen\_kernel.py} fits the coefficients, prints them as
+the literals in the module, and reports the error of the split evaluation in ulps
+of the answer --- so no coefficient set was ever pasted in unseen.
+
+Argument reduction is Cody--Waite, and \ic{$\pi/2$} gets four pieces (to about
+fifty decimal digits) where \ic{$\ln 2$} gets two, because the double nearest
+$\pi$ is \num{1.2e-16} from it and a reduction good to \num{1e-26} is already a
+hundred thousand ulps of \ic{math.sin(math.pi)}.
+
+\emph{How close.} \ic{test/sh/test\_math.sh} is the gate: a checked-in table of
+IEEE-754 bit patterns (\ic{test/math/ulp\_table.txt}, \num{2695} cases, written
+by \ic{test/math/gen\_ulp\_table.py} from this platform's libm) and a program
+that reads it, calls this module, and measures the gap in ulps. Two NaNs count as
+the same answer however their signs differ --- a sign bit is not an ulp --- and any
+other NaN is infinitely far away. Over that table every function here is within
+\emph{one} ulp of all its pinned edge cases (the overflows, the flushes, the
+poles, both sides of 1, the signed zeros) and of a seeded \num{1500}-case spread,
+and \ic{asin} and \ic{acos} additionally of \num{240} cases drawn over their own
+domain. That second spread is not tidiness: a uniform value in [-8, 8] lands
+inside [-1, 1] about one time in eight, so the general one left each of them with
+eight interior arguments --- which is not a gate on a 24-term polynomial, and
+which was how \ic{acos} went on cancelling eight digits near \ic{x = 1} for a
+forty-ulp answer that nothing in the suite could see.
+
+A third gap of the same shape was still open after that: nine functions this
+module exports had \emph{no cases at all} --- \ic{ldexp}, \ic{fmin}, \ic{fmax},
+\ic{fabs}, \ic{fsign}, \ic{lerp}, and the three predicates --- because the table
+only ever carried the ones with rounding in them. \ic{fmin} and \ic{fmax} were
+the ones that mattered. Their zeros' signs were decided by whichever operand came
+last, so \ic{fmax(0.0, -0.0)} answered \ic{-0.0} and \ic{1.0/fmax(0.0, -0.0)}
+came out \ic{-inf}; C99 does allow either sign there, and IEEE~754-2019's
+\ic{maxNum}, this platform's libm and any caller dividing by the answer do not.
+The tie now goes to the positive-signed operand for \ic{fmax} and the
+negative-signed one for \ic{fmin}, which is \ic{minNum}/\ic{maxNum}, and all
+four orderings of the \ic{$\pm0$} pair are pinned.
+
+Getting every case inside one ulp took three one-rounding
+fixes, and all three were the same mistake in different clothes: the question is
+never \emph{which} line rounds, it is \emph{at what size}. \ic{cosh} summed two
+exponentials where one exponential and its reciprocal is enough (for
+\ic{a >= 0.5}, \ic{$e^{-a}$} is \num{1.2}\% of the answer, so its own rounding is a
+hundredth of an ulp, while a second \ic{exp()} call brings a whole kernel's
+error along). \ic{pow} was three and two ulps out because its logarithm formed
+\ic{z*(2 + w*P)}, whose brackets round \emph{at the size of \num{2.0}} --- a whole
+ulp of the logarithm, which \ic{pow} then multiplies by the exponent; as a
+\ic{two\_sum} of \ic{2*z} and \ic{(z*w)*P} that term is \num{2.3} times more
+accurate and both cases went with it. \ic{asin} reached \ic{atan}, whose own ulp
+lands inside the answer whole, and then needed \ic{two = 2*asin(s)} to be a
+double before the \ic{pi/2} subtraction, whose half-ulp is a whole ulp of the
+answer; it has its own \num{24}-term kernel on the Taylor values
+\ic{$C(2k,k)/(4^k(2k+1))$} --- the same rationals \ic{sinh} uses --- with the square
+root's own residual put back and \ic{two} carried in two parts \emph{through} the
+subtraction. \ic{acos} was the same cancellation seen from the other side: it
+was \ic{pi/2 - asin(x)}, and near \ic{x = 1} that answer is \num{3e-8} against a
+\ic{pi/2}, so \ic{acos(1 - 4e-17)} was forty ulps out. Its large half now takes
+the half-angle \ic{2*asin(sqrt((1-x)/2))} \ic{asin}'s kernel already computes, and
+forms the small answer directly. \ic{pow} is still the one to know about: its accuracy degrades with
+the \emph{exponent}, not the base, so \ic{math.pow(x, 0.5)} for a large \ic{x} is
+a few ulps out while \ic{math.pow(x, 3.0)} is exact (an integer exponent is
+computed by squaring).
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{math.sqrt(x)}] The IEEE square root, and the one function here that
+  is a machine instruction: correctly rounded, so \ic{math.sqrt(2)} is the double
+  below and not a number computed to a few digits. A negative \ty{x} is the
+  NaN; $\pm\infty$ is itself.
+\item[\ic{math.floor(x)}, \ic{math.ceil(x)}, \ic{math.trunc(x)}] The
+  greatest integer $\leq x$, the least integer $\geq x$, and the integer part
+  alone. A zero keeps its sign (\ic{math.floor(-0.0)} is \ic{-0.0}), and so does an
+  input too large for a \ty{long}, which comes back unchanged.
+\item[\ic{math.round(x)}] The nearest integer, halves away from zero --- C's
+  \ic{round}, which is neither the current rounding mode nor \ic{rint}.
+\item[\ic{math.fract(x)}] The fractional part, $x-\ty{trunc}(x)$, with
+  $x$'s sign. An infinite \ty{x} gives a NaN, as C's does.
+\item[\ic{math.to\_int(x)}] The integer part as a \ty{long}, truncated toward
+  zero. A NaN, an infinity, or a magnitude past the largest \ty{long} has no
+  answer, and \emph{stops the program} (\ic{runtime error: a float with no
+  integer part a long holds}) rather than returning a value indistinguishable
+  from a real one.
+\item[\ic{math.cbrt(x)}] The cube root. The exponent is split into threes
+  first, so the Newton iteration that finishes the job always begins within
+  17\% of the answer: a cube root's iteration is only locally convergent, and
+  the obvious seed --- a fourth root --- is off by a factor of $a^{1/12}$, which
+  is \num{1e27} for a subnormal.
+\item[\ic{math.hypot(x, y)}] $\sqrt{x^2+y^2}$ without the overflow: the larger
+  magnitude divides both out first, and that is exact.
+\item[\ic{math.ldexp(x, e)}] $x\cdot 2^e$, exactly. Scaling by a power of two
+  is exact while the result stays normal, so this is the one scaling that never
+  rounds.
+\item[\ic{math.frexp(x)}] $[\,\ty{fraction\ bits}, \;\ty{exponent}\,]$: the
+  fraction's IEEE-754 pattern, a value in $[0.5, 1)$, and the exponent, such that
+  \ic{math.ldexp(math.bitsf(math.frexp(x)[0]), math.frexp(x)[1])} is $x$ exactly.
+  Bits rather than a float because this is the one conversion with no rounding
+  in it at all.
+\item[\ic{math.nextafter(x, y)}] The next double from \ty{x} toward \ty{y} (C's
+  \ic{nextafter}, also \ic{nexttoward} toward \ty{y}). The step is one unit in
+  the last place, and its \emph{direction flips with the sign}: the bit patterns
+  run the other way for a negative double.
+\item[\ic{math.fbits(x)}, \ic{math.bitsf(b)}] A double's 64-bit pattern as a
+  \ty{long}, and a \ty{long} read back as a double. The two casts Y cannot
+  spell, and the reason the names above can exist at all.
+\item[\ic{math.is\_signed\_zero(x)}] True for \ic{-0.0}, which no comparison
+  can see.
+  \item[\ic{math.exp(x)}, \ic{math.exp2(x)}, \ic{math.expm1(x)}] $e^x$, $2^x$
+    and $e^x-1$. The argument is split as $k\ln 2 + r$, the kernel computes
+    $e^r$ in $[0.707, 1.414)$, and $2^k$ goes back on by adding to the exponent
+    field --- which is exact, so the whole answer is as accurate as the kernel and
+    the reduction. The top of the range is the interesting part: $2^{1024}$ is an
+    overflow and $\operatorname{round}(x\log_2 e)$ reaches \num{1024} for every $x$ above
+    \num{709.4}, so the last whole $\ln 2$ stays in $r$ and its factor of two
+    goes in by hand. \ic{expm1} is not $e^x - 1$ with a cast: it is
+    $2^k\!\left(e^r-1\right) + \left(2^k-1\right)$, and the second term is
+    \emph{exact} ($2^k-1$ needs at most 53 bits), so nothing is ever subtracted
+    from something nearly equal to it --- which is the whole difficulty with
+    $e^x-1$: it is \ic{0.0} for $x = \num{1e-300}$, and at $x = -9$ it is
+    \num{1.23e-4} $- 1$ with the answer's last bits gone.
+    \ic{exp} is machine code (\texttt{src/y/arch/math.s}), reached through
+    \ic{native def}: \num{106} instructions with no calls at
+    all, against the ten Y functions it replaced and \num{1422} instructions a
+    call. It is \emph{bit-identical} to that loop --- same operations in the same
+    order --- and \texttt{test/y/native/t311\_math\_exp\_asm.y} says so over
+    \num{10420} arguments; \ic{exp\_y} is that loop, kept as the oracle, and
+    \texttt{test/math/gen\_exp.py} generates the routine from the module's own
+    constants so the two cannot drift apart.
+  \item[\ic{math.log(x)}, \ic{math.log2(x)}, \ic{math.log10(x)},
+    \ic{math.log1p(x)}] $\log x$ in the base given. \ic{frexp} splits
+    $x = f\,2^e$ and $f$ is doubled into $[1/\sqrt{2}, \sqrt{2})$ when it is
+    below $1/\sqrt{2}$, which keeps $|z| = |(m-1)/(m+1)|$ at $\sqrt{2}-1$ and the
+    kernel short; the two halves of the answer --- the small $z$ part and the
+    large $e\ln 2$ --- are each computed to their own scale and added last.
+    $m+1$ rounds as well as the division, and its half-ulp is a whole ulp of $z$,
+    so \ic{two\_sum} takes its residual out and one more divide turns it into the
+    low part of the quotient. \ic{log1p} is \ic{log}'s kernel with $m = 1+x$ and
+    $z = x/(2+x)$, so a tiny \ic{x} comes out as itself instead of as
+    \ic{log(1.0)} $-$ \ic{0}.
+    \ic{log} is machine code (\texttt{src/y/arch/math.s}), reached through
+    \ic{native def} and \emph{bit-identical} to the loop it replaced ---
+    \texttt{test/y/native/t312\_math\_log\_asm.y} says so over
+    \num{10317} arguments --- \num{1335} instructions a call against \num{115},
+    as \num{115} in one routine with no calls at all against eight functions
+    and a hundred and thirty-odd calls between them. The module's \ic{nan} is
+    \ic{0.0}/\ic{0.0}, so the assembly's is a divide rather than a stored
+    constant: the default NaN carries the sign bit, and the one you would write
+    down is a different double from the one the Y returns.
+  \item[\ic{math.sin(x)}, \ic{math.cos(x)}, \ic{math.tan(x)}] The trigonometry,
+    reduced modulo $\pi/2$ with \ic{two\_sum} taking out the two products that can
+    round (the first piece's product needs more than 53 bits once $n$ passes
+    $2^{21}$, the first tail piece's once $n$ passes $2^{10}$; the other two
+    are \num{3.5e-27} and below, where the rounding is twenty orders under the
+    answer's last bit however large $n$ grows). The quadrant is $n \bmod 4$
+    normalized --- C's \% keeps the sign of the dividend, so a negative count
+    comes out negative. The range is $|x| \lesssim 2^{52}$: like every library
+    without Payne--Hanek reduction, a larger argument reduces to something near
+    $x$ rather than to its own angle. \ic{cos}'s coefficient table is \ic{sin}'s rotated left by one, which is what
+    lets one routine answer both: \ic{sin} and \ic{cos} are two instructions
+    each that set a register and fall into the same body, and the quadrant picks
+    between the two halves at the end with two tests of the index rather than
+    eight cases. \ic{math.sin} and \ic{math.cos} are machine code
+    (\texttt{src/y/arch/math.s}), reached through \ic{native def} and
+    \emph{bit-identical} to the loops they replaced ---
+    \texttt{test/y/native/t313\_math\_sin\_asm.y} says so over \num{10410}
+    arguments each --- \num{190} instructions a call against \num{1775}, and one
+    routine for both rather than one for each. \ic{sin\_y} and \ic{cos\_y} are
+    the loops, kept as the oracle, and \texttt{test/math/gen\_sin.py} generates
+    the routine from the module's own constants. The negation is
+    \ic{0.0} $- x$ and not a sign-bit flip, which is the difference in
+    \ic{sin(-0.0)}.
+  \item[\ic{math.asin(x)}, \ic{math.acos(x)}, \ic{math.atan(x)},
+    \ic{math.atan2(y, x)}] The inverse trigonometry. \ic{atan} folds until its
+    argument is inside the kernel's range --- the reciprocal above 1, then the
+    tangent addition at $\pi/8$ --- and both folds are exact identities, so unlike
+    a division they cost nothing of their own. \ic{asin} above $0.5$ uses the
+    half-angle step $\arcsin x = \pi/2 - 2\arcsin\sqrt{(1-x)/2}$, one step, with the
+    square root computed from $1-x$ alone (which Sterbenz makes exact) so nothing
+    is lost however close $x$ is to 1; \ic{acos} is $\pi/2 - \arcsin x$ with the
+    subtraction corrected afterwards, because $\pi/2$ minus something an ulp off
+    is an ulp off. \ic{atan2} is the quadrant of $(y,x)$, with every zero and
+    infinity spelled out --- and the sign of a \emph{zero} is a direction:
+    \ic{math.atan2(-0.0, -1.0)} is $-\pi$.
+  \item[\ic{math.sinh(x)}, \ic{math.cosh(x)}, \ic{math.tanh(x)}] One formula
+    each, out of \ic{expm1}:
+    $\cosh x = 1 + (\operatorname{expm1} x + \operatorname{expm1}(-x))/2$ and
+    $\tanh x = \operatorname{expm1}(2x)/(\operatorname{expm1}(2x) + 2)$. The plain forms ---
+    $(e^x+e^{-x})/2$ and $\sinh/\cosh$ --- are a rounding or two worse, because
+    each of their terms is computed to its own last bit and then added.
+    \ic{sinh} needs a polynomial of its own below \num{0.5}, where $(e^x-e^{-x})/2$
+    is a subtraction of nearly equal numbers.
+  \item[\ic{math.pow(x, y)}] $x^y$, with C's cases. An integer exponent is
+    computed by repeated squaring, which is exact --- so every integer exponent
+    below \num{1024} comes out exactly, and it is the only way a negative base
+    is defined at all. Past that, and for a fractional exponent, it is
+    $\operatorname{expm1}$-style: the logarithm in two parts, the exponent in two parts, and
+    the reduced argument in two parts, because the exponent multiplies the
+    logarithm's error --- one ulp of an exponent of \num{500} is
+    \num{5.7e-14} of the answer, which is 360 ulps of it. That is also why $1/\ln 2$
+    is a pair of constants here and not one. \ic{math.pow} is machine code
+    (\texttt{src/y/arch/math.s}) like \ic{exp}, \ic{log} and \ic{sin}, reached
+    through \ic{native def} and \emph{bit-identical} to the loop it replaced ---
+    \texttt{test/y/native/t315\_math\_pow\_asm.y} says so over \num{15137}
+    pairs, every arm of the dispatch and then the general path from a subnormal
+    base to an overflowing exponent --- \num{472} instructions a call against
+    \num{3004}. It is the only kernel in the file with a frame, because it is the
+    only one that \emph{calls}: the dispatch, the two-part logarithm, $\exp 2$ of
+    the pair and \ic{ldexp} are four routines, and every SSE register is
+    caller-saved, so what has to outlive a call lives in memory. \ic{pow\_y} is the
+    loop, kept as the oracle, and \texttt{test/math/gen\_pow.py} generates the
+    routine from the module's own constants --- the same generator shape as the
+    three before it, and its intermediate probes are what located the four bugs
+    listed in \texttt{ideas/math.md} \S8.
+\item[\ic{math.min(a, b)}, \ic{math.max(a, b)}] The smaller or larger of two
+  \ty{long}s.
+\item[\ic{math.abs(x)}] \ic{|x|}. The most negative \ty{long} has no positive
+  counterpart and comes back unchanged, as in C.
+\item[\ic{math.clamp(x, lo, hi)}, \ic{math.sign(x)}] \ty{x} moved into
+  \ic{[lo, hi]}; and \ic{-1}, \ic{0} or \ic{1}.
+\item[\ic{math.gcd(a, b)}, \ic{math.lcm(a, b)}] The greatest common divisor
+  and the least common multiple, both $\geq 0$; \ic{math.gcd(0, 0)} and
+  \ic{math.lcm(0, x)} are \ic{0}.
+\item[\ic{math.isqrt(n)}] $\lfloor\sqrt{n}\rfloor$ for $n \geq 0$, and \ic{0}
+  for a negative $n$.
+\item[\ic{math.popcount(x)}, \ic{math.ctz(x)}, \ic{math.clz(x)}] The number of
+  set bits, of trailing zeros and of leading zeros in the 64-bit word;
+  \ic{math.ctz(0)} and \ic{math.clz(0)} are \ic{64}, since \ic{0} has no other answer. A
+  negative \ty{x} is counted in its two's-complement form, so
+  \ic{math.popcount(-1)} is \ic{64} and \ic{math.clz(-1)} is \ic{0}.
+\item[\ic{math.next\_pow2(x)}] The smallest power of two $\geq$ \ty{x}; \ic{1}
+  for $x \leq 1$, and \ic{0} past \ic{2\^{}62}, where no such power fits.
+\item[\ic{math.mul\_mod(a, b, m)}, \ic{math.pow\_mod(b, e, m)}] \ic{a * b} and
+  \ic{b\^{}e} reduced modulo \ic{m}, for \ic{0 < m <= 2147483647}: the operands
+  are reduced first, so the product cannot overflow a \ty{long}. A larger
+  modulus would need a 128-bit product and would be silently wrong.
+  \ic{pow\_mod} gives \ic{0} for a negative exponent.
+\item[\ic{math.inv\_mod(a, m)}] The inverse of \ty{a} modulo \ic{m}, or \ic{0}
+  when there is none.
+\item[\ic{math.fmin(a, b)}, \ic{math.fmax(a, b)}] The smaller or larger float,
+  with C's rule that a NaN loses to the other operand.
+\item[\ic{math.fabs(x)}, \ic{math.fsign(x)}] \ic{|x|}, with \ic{-0.0} coming
+  back as \ic{+0.0}; and \ic{-1.0}, \ic{0.0} or \ic{1.0}.
+\item[\ic{math.lerp(a, b, t)}] \ic{a + (b - a) * t}.
+\item[\ic{math.is\_nan(x)}, \ic{math.is\_inf(x)}, \ic{math.is\_finite(x)}]
+  The three IEEE classifications, as \ty{bool}.
+\item[\ic{math.pi}, \ic{e}, \ic{tau}, \ic{ln2}, \ic{ln10}, \ic{sqrt2},
+  \ic{phi}, \ic{nan}, \ic{inf}] Constants, each the \ty{float} nearest the
+  mathematical value; \ic{math.nan} and \ic{math.inf} are values, not calls.
+\item[\ic{math.splitmix64(state)}, \ic{math.seed\_xoshiro256(state, seed)},
+  \ic{math.xoshiro256pp(state)}, \ic{math.xoshiro256ss(state)}] SplitMix64 and
+  xoshiro256** / xoshiro256+. The state is a \ic{[long]} the caller owns and
+  passes in, so a stream is reproducible from its seed: \ic{splitmix64} wants
+  one element, the xoshiro pair four, and a shorter array traps. Seed with
+  \ic{seed\_xoshiro256}, which fills four words from SplitMix64 --- xoshiro must
+  not start from all zeros.
+\item[\ic{math.rand\_unit(state)}, \ic{math.rand\_range(state, n)}] A
+  \ty{float} in \ic{[0, 1)} from 53 random bits, and a \ty{long} in \ic{[0, n)}
+  with no modulo bias, for \ic{0 < n <= 2\^{}62}. Both drive xoshiro, so they
+  want the four-element state.
+\item[\ic{math.fsum(a)}, \ic{math.fsum\_kahan(a)}] The sum of a \ic{[float]},
+  the second with Neumaier compensation, which keeps the error near one ulp of
+  the total however long the array is. \ic{fsum}, \ic{fdot}, \ic{fmin\_of},
+  \ic{fmax\_of}, \ic{fscale} and \ic{faxpy} are machine code
+  (\texttt{src/y/arch/math.s}), reached through \ic{native def}; each returns
+  exactly what the equivalent Y loop would, which is what makes it a
+  drop-in rather than a second opinion, and \ic{bench/y/fmath.y} measures them
+  at \num{0.37} ns an element against \num{1.26} for the loop.
+\item[\ic{math.fdot(a, b)}] The dot product of two equal-length arrays.
+\item[\ic{math.fmin\_of(a)}, \ic{math.fmax\_of(a)}] The smallest and largest
+  element, or NaN for an empty array.
+\item[\ic{math.fscale(a, k)}, \ic{math.faxpy(y, k, x)}] \ic{a *= k} and
+  \ic{y += k * x}, in place.
+\item[\ic{math.fmean(a)}, \ic{math.fvariance(a)}] The arithmetic mean and the
+  sample variance (dividing by $n-1$), the latter by the two-pass method; NaN
+  for an empty array, and NaN for a variance of fewer than two elements.
+\end{description}
+
 \subsection{Options}
 \label{sec:builtin-option-b}
 
@@ -575,6 +878,234 @@ as PEM. A single certificate is \ic{parse\_cert(der)}, checked with
 date arithmetic \ic{verify\_chain} uses, and \ic{b64\_decode} the
 Base64 one.
 \end{sloppypar}
+
+\subsection{The terminal (the tui module)}
+\label{sec:builtin-tui}
+
+\ic{import tui;} gives a program a terminal: the tty and its modes, a grid of
+cells with colours, the diff that turns a changed grid into escape sequences, a
+capture for testing, and a frame pacer. It is one unit rather than three
+because the parts do not separate --- diffing a grid means diffing it
+\emph{into a tty}, and a frame loop needs a pacer to call both at a rate --- so
+one import cannot get the order wrong.
+
+Four types come with it. \ic{Size} is a record of \ic{rows} and \ic{cols}. A
+\ic{Surface} is a grid: \ic{tui.new(rows, cols)} makes one, and it carries \ic{rows},
+\ic{cols} and the cell data as plain fields. \ic{Pacer} and \ic{Fps} are the
+frame clock and the frame meter.
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{tui.is\_tty()}] \ty{bool}: whether the output is a terminal. Every
+  drawing program asks this first, because the answer decides whether to animate
+  or to print something a diff can check.
+\item[\ic{tui.size()}] The terminal's size as \ic{Size}, from
+  \ic{TIOCGWINSZ}.
+\item[\ic{tui.raw\_mode()}] Put the tty in raw mode and remember the old
+  termios; \ic{tui.cooked\_mode()} puts it back, and \ic{tui.restore()} puts back whatever
+  was saved at the last \ic{tui.raw\_mode()}.
+\item[\ic{tui.active()}] \ty{bool}: whether raw mode is on now, so a cleanup path
+  can be called from anywhere without checking first.
+\item[\ic{tui.restore\_exit()}] Install an \ic{atexit} handler that restores the
+  terminal, and \ic{tui.restore\_all\_exit()} the same for every standard descriptor.
+  This is what stops a crash from leaving a shell in raw mode.
+\item[\ic{tui.arm\_watchdog()}] \ic{fork} a child that waits for this process to
+  die and restores the terminal from the child --- the one path a handler cannot
+  cover, since \ic{SIGKILL} runs nothing. The alt screen and the cursor are
+  emulator state, so the watchdog can put the \emph{termios} back but not those.
+\item[\ic{tui.read\_key()}] The next key, decoded: arrows, function keys,
+  \ic{Esc}, \ic{Ctrl-C} and the rest as their own constants, printable keys as
+  their code point, and \ic{KEY\_NONE} when nothing is waiting.
+\item[\ic{tui.read\_key\_timeout(ms)}] The same, but it gives up after \ic{ms} and
+  answers \ic{KEY\_NONE}. Note the unit --- the code is \ic{let ds = (ms + 99) /
+  100;} because \ic{VTIME} counts \emph{deciseconds}, so a request under 10 ms
+  becomes 100 ms. Poll with \ic{0} for a non-blocking read, and let the pacer own
+  the frame deadline.
+\item[\ic{tui.push\_key(k)}, \ic{tui.pop\_key()}] Push a key back so a later read
+  returns it, and pop the pushed one; \ic{tui.pop\_key()} on an empty stack answers
+  \ic{KEY\_NONE}. This is how a program peeks at the keyboard without consuming
+  it.
+\item[\ic{tui.key\_pending()}] \ty{bool}: whether a key is waiting, without
+  blocking and without decoding one.
+\item[\ic{tui.enter\_screen()}, \ic{tui.leave\_screen()}] The alternate screen
+  buffer, so a full-screen program leaves the scrollback alone.
+\item[\ic{tui.hide\_cursor()}, \ic{tui.show\_cursor()}] Cursor visibility, and
+  \ic{tui.cursor\_to(row, col)}, \ic{tui.home()}, \ic{tui.clear\_screen()} to move
+  it.
+\item[\ic{tui.new(rows, cols)}] A \ic{Surface}. It allocates six
+  \ic{[long; 32768]} arrays --- 1.5 MiB --- \emph{once}, whatever size it is asked
+  for, and the surface is capped at 32768 cells: a 128x256 screen. A larger one
+  does not fit, which is why a program wanting 320x240 keeps its own byte buffer
+  instead. Cells above \ic{rows * cols} are never flushed.
+\item[\ic{tui.resize(s, rows, cols)}] The same surface at another size, without a
+  second allocation, and \ic{tui.rows(s)} / \ic{tui.cols(s)} read its size back.
+\item[\ic{tui.clear(s)}, \ic{tui.fill(s, ch, fg, bg)}] Every cell to a space, or to
+  a code point with a foreground and a background.
+\item[\ic{tui.put(s, r, c, ch, fg, bg)}] One cell; \ic{tui.put\_skip(s, r, c, ch,
+  fg, bg)} the same for a character that is a \emph{continuation} of a wide glyph
+  to its left, and \ic{tui.put\_at(s, r, c, ch, fg, bg)} an absolute write that
+  does no continuation bookkeeping.
+\item[\ic{tui.get(s, r, c)}] The code point in a cell, \ic{tui.key\_at(s, r, c)}
+  its colour packed as one integer, and \ic{tui.text(s, r, c, n)} a run of cells
+  read back as a string.
+\item[\ic{tui.hline(s, r, c, n, fg, bg)}, \ic{tui.vline(...)}, \ic{tui.rect(...)},
+  \ic{tui.fill\_rect(...)}] Straight runs and boxes --- the primitives a chart or
+  a frame border is made of.
+\item[\ic{tui.blit(dst, src, dr, dc, sr, sc, rows, cols)}] A rectangle of one
+  surface onto another.
+\item[\ic{tui.rgb(r, g, b)}, \ic{tui.grey(v)}, \ic{tui.lerp\_rgb(a, b, t)},
+  \ic{tui.clamp\_255(v)}] Colour, and \ic{tui.r\_of(c)}, \ic{tui.g\_of(c)},
+  \ic{tui.b\_of(c)} to take one apart. A colour is one integer, so a frame buffer
+  of them is an array of integers.
+\item[\ic{tui.begin\_frame(s)}, \ic{tui.cell\_same(s, r, c, ch, fg, bg)},
+  \ic{tui.cell\_commit(s, r, c, ch, fg, bg)}] The diff's three steps: start a
+  frame, ask whether a cell already holds what you want, and write it if not.
+\item[\ic{tui.flush(s)}] Every changed cell as escape sequences, and
+  \ic{tui.flush\_diff(s)} the same but only for the rows that changed ---
+  \ic{tui.row\_count()} rows in the worst case, \ic{tui.row\_bytes(s, r)} the
+  size of one, \ic{tui.frame\_bytes(s)} the whole frame.
+\item[\ic{tui.end\_frame(s)}, \ic{tui.spill(s)}] Finish a frame, and what to do
+  when one row's worth of output overflows the buffer: the cursor is positioned
+  absolutely, so a spill is a row boundary, not a corruption.
+\item[\ic{tui.set\_fd(n)}, \ic{tui.fd()}] Draw to a descriptor other than 1, which
+  is how output goes to a file or a pipe for a test.
+\item[\ic{tui.put\_byte(b)}, \ic{tui.put\_num(n)}, \ic{tui.put\_str(s)},
+  \ic{tui.put\_csi()}] The output buffer, below the grid: a byte, a decimal
+  number, a string, and a control-sequence introducer.
+\item[\ic{tui.esc\_fg(r, g, b)}, \ic{tui.esc\_bg(...)}] One complete SGR sequence
+  as a number, \ic{tui.esc\_clear()}, \ic{tui.esc\_home()}, \ic{tui.esc\_cursor(r, c)},
+  \ic{tui.esc\_reset()}, and \ic{tui.out\_flush()} to write the buffer out. The
+  \ic{sgr\_*} forms are the same sequences without the introducer, for a caller
+  assembling its own.
+\item[\ic{tui.buf\_len()}, \ic{tui.buf\_at(i)}, \ic{tui.buf\_reset()}] The output
+  buffer read back and cleared, which is how a test checks what a draw would
+  have written without a terminal.
+\item[\ic{tui.rd16(b, i)}, \ic{tui.rd32(b, i)}] Little-endian reads from a
+  \ic{[byte]}, for a protocol that arrives in that order.
+\item[\ic{tui.capture\_on()}, \ic{tui.capture\_off()}, \ic{tui.capture\_reset()}] Record
+  everything drawn, so a test can compare it; \ic{tui.capture\_len()},
+  \ic{tui.capture\_byte(i)}, \ic{tui.capture\_str(from, to)} and
+  \ic{tui.capture\_checksum()} read it back. The checksum is FNV-1a over the bytes,
+  which makes a frame comparable without being readable.
+\item[\ic{tui.grid\_digest(s)}] FNV-1a over the surface's \emph{cells} --- a
+  different number from \ic{tui.capture\_checksum()}, which is over the bytes
+  written, so a colour change moves one and not the other.
+\item[\ic{tui.grid\_text(s)}] The grid as plain text, no escapes. This is what a
+  golden file holds.
+\item[\ic{tui.shade(c)}] A colour mapped to a glyph by luminance, and
+  \ic{shade\_ascii}, \ic{shade\_blocks}, \ic{shade\_half}, \ic{shade\_braille} the
+  ramps for each; \ic{tui.shade\_len(ramp)} and \ic{tui.ramp\_index(v, n, k)} to index
+  one. \ic{tui.braille(cp)}, \ic{tui.braille\_mask(sub)} and \ic{tui.braille\_put(s, r, c,
+  mask)} address one braille dot pattern directly.
+\item[\ic{tui.utf8\_len(cp)}, \ic{tui.utf8\_byte(cp, i)}, \ic{tui.width\_of(cp)}] A
+  code point's UTF-8 length and bytes, and how many terminal columns it occupies
+  --- 2 for a wide CJK or emoji glyph, 0 for a combining mark.
+\item[\ic{tui.pacer\_new(fps)}] A \ic{Pacer} for a frame rate, with the period
+  clamped so a rate below 1 or above a million cannot divide by zero.
+  \ic{tui.pacer\_next(p)} draws the next frame or skips it, and returns whether it
+  drew; \ic{tui.pacer\_start(p)} re-bases the schedule for a second run;
+  \ic{tui.pacer\_period\_us(p)} the period, \ic{tui.pacer\_frames(p)} and
+  \ic{tui.pacer\_dropped(p)} the counters, and \ic{tui.pacer\_lag\_us(p)} how far behind
+  the schedule is.
+\item[\ic{tui.fps\_new(win\_us = 500000)}, \ic{tui.fps\_tick(f)},
+  \ic{tui.fps\_x100(f)}, \ic{tui.fps\_avg\_x100(f)}, \ic{tui.fps\_frames(f)},
+  \ic{tui.fps\_line(f)}] A sliding-window frame meter. The window defaults to half
+  a second, which at 30 fps holds about 15 frames --- so one frame either way is
+  6.7\% and the reading cannot resolve 29 from 30. Measure a \emph{sustained}
+  rate from outside the meter, over seconds, or you will file a defect against a
+  program holding 29.99.
+\end{description}
+
+\subsection{Command lines (the args module)}
+\label{sec:builtin-args}
+
+\ic{import args;} parses \ic{argv} against a table you declare, so a program does
+not hand-roll \ic{index\_of} loops over \ic{--} and \ic{=} and an \ic{args.exit(2)}
+convention. The table is \ic{[args.Opt]}, one entry per flag, and each
+\ic{Opt}'s \ic{kind} is \ic{args.BOOL}, \ic{args.STR} or \ic{args.NUM} --- a flag
+with no value, a flag taking one of any shape, or a flag whose value must parse
+as a whole number.
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{args.init(name, blurb, opts, tail)}] Declare the program and its flags.
+  \ic{name} is what usage calls it, \ic{blurb} the line under it, \ic{opts} the
+  table, and \ic{tail} the argument summary after the flags --- \ic{"[file...]"},
+  say. Any \ic{Opt} with a non-empty \ic{help} makes \ic{--help} an ordinary flag
+  rather than a special case.
+\item[\ic{args.parse()}] Read \ic{argv}: \ic{args.OK} when every flag was
+  understood, \ic{args.HELP} for \ic{--help}, and \ic{args.USAGE} for a usage
+  error --- after which \ic{args.errmsg()} says what was wrong and
+  \ic{args.print\_usage()} writes the usage text.
+\item[\ic{args.parse\_or\_exit()}] The same, but it prints the diagnostic and
+  exits \textbf{2} itself. A program wanting a different exit code calls
+  \ic{args.parse()} and decides --- which is why one example exits 1 on an unknown
+  flag rather than \ic{args}' own 2.
+\item[\ic{args.nopts()}] How many entries the table has, and
+  \ic{args.positional()} the arguments that were not flags, as \ic{[str]}.
+\item[\ic{args.has(long)}] \ty{bool}, \ic{args.get\_str(long, default)} a
+  string, \ic{args.get\_long(long, default)} a number. \ic{get\_long} on a value
+  that is not a number is a \ic{USAGE} error, not a silent zero --- which is why
+  \ic{args.num\_ok(s)} exists to check before asking.
+\item[\ic{args.usage()}] The usage text as a \ic{str}, for a program that wants to
+  print it somewhere other than stderr.
+\end{description}
+
+Accepted spellings are \ic{--long}, \ic{--long=value} and \ic{--long value} for a
+flag that takes one, \ic{-s} and \ic{-svalue} for a short one, and \ic{--} to end
+the flags. A flag not in the table is an error naming it. An \ic{Opt} whose
+\ic{short} is empty simply has no short spelling.
+
+\subsection{Assertions (the test module)}
+\label{sec:builtin-test}
+
+\ic{import test;} is a checking harness for a program's own self-test: it counts
+checks, prints the ones that failed with what they got and what they wanted, and
+\ic{test.report()} prints the summary and returns the failure count --- which is
+what a program hands to \ic{exit}, so a self-test that fails is a non-zero exit
+rather than a line somebody has to notice.
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{test.group(name)}] Start a named section; the failures under it are
+  reported beneath it.
+\item[\ic{test.ck(name, ok, detail)}] \ty{bool}: record whether \ic{ok} holds,
+  with \ic{detail} printed when it does not. Every function below is this one
+  with a comparison already written, and all of them return \ty{bool} so a caller
+  can stop at the first failure.
+\item[\ic{test.ck\_eq(name, got, want)}] Two longs equal, and
+  \ic{test.ck\_near(name, got, want, tol)} equal within \ic{tol} --- for a measurement
+  rather than a constant.
+\item[\ic{test.ck\_str(name, got, want)}, \ic{test.ck\_bytes(name, got, want)}]
+  The same for a \ic{str} and a \ic{[byte]}.
+\item[\ic{test.checks()}, \ic{test.failures()}] How many have run and how many
+  failed. \ic{test.report()} prints both plus the detail lines, and returns the
+  failure count.
+\end{description}
+
+There is no assertion that aborts on the first failure, and no way to register a
+teardown. A self-test needing either is a program, not a check list.
+
+\subsection{Randomness (the random module)}
+\label{sec:builtin-random}
+
+\ic{import random;} is one stream, and it is deliberately \emph{not}
+thread-local: \ic{random.state()} and \ic{random.set\_state()} are there so a caller needing a
+private stream can make one.
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{random.seed(v)}] Start the stream at \ic{v}.
+\item[\ic{random.next()}] The next 64 bits of splitmix64. The shifts are
+  \ic{>>>} and not \ic{>>}, because the reference algorithm shifts a bit pattern
+  and an arithmetic shift on a signed long carries the sign down, mixing in a
+  weaker mixer.
+\item[\ic{random.below(n)}] A uniform integer in \ic{0..n-1}, by rejection
+  sampling --- not \ic{\% n}, which is measurably biased for an \ic{n} that does
+  not divide the range. An \ic{n} below 1 answers 0 rather than trapping: a
+  caller dividing by an empty frontier has already lost, and a trap prints to
+  stdout.
+\item[\ic{random.range(lo, hi)}] Uniform in \ic{lo..hi-1}, and
+  \ic{random.chance(pct)} a \ty{bool} true \ic{pct} times in 100.
+\item[\ic{random.state()}, \ic{random.set\_state(v)}] Read and write the state,
+  for a save file or for a second independent stream.
+\end{description}
 
 \subsection{Patterns (the regex module)}
 \label{sec:builtin-regex}

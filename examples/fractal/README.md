@@ -109,7 +109,7 @@ picture. `--steps 0`, `--steps -1`, `--seed -1`, `--quality 5`, `--el 46` and
 
 > **`--az` with a negative value needs the `=` form.** `--az -360` is read as the
 > flag `--az` with no value, because `-360` looks like a flag; `--az=-360` works.
-> That is `args.y`'s documented convention and its message says so.
+> That is `args`'s documented convention and its message says so.
 
 Exit codes: `0` ran (or `--help`), `1` a bad option, a bad value, or a stray
 operand.
@@ -889,7 +889,7 @@ right; see the section above for what item 8 now reports.
 > ./fractal --frames 1  --no-tty --size 78x21 --dist 5 --el 18 --az 25 --dump 0 > golden/close-up-the-blend.txt
 > ```
 
-### The frozen toolkit
+## The std units this uses
 
 Vendored byte-identical from `examples/_toolkit/` and **not edited** (the folder
 contract, `ORCHESTRATOR.md` §4):
@@ -897,22 +897,18 @@ contract, `ORCHESTRATOR.md` §4):
 | file | sha256 prefix | lines |
 |---|---|---|
 | `fx.y` | `4b47a9bfef0c1e30` | 687 |
-| `fb.y` | `95a7663b7f1c7a90` | 975 |
-| `term.y` | `07135b31109fcecd` | 1156 |
-| `time.y` | `6050605cfcfb35db` | 245 |
-| `args.y` | `cdac36da1cf2cd85` | 19081 |
 
 ```sh
-cd examples/fractal && sha256sum fx.y fb.y term.y time.y args.y
+cd examples/fractal && sha256sum fx.y tui tui tui args
 ```
 
-> **`fx.y` and `fb.y` moved while this example was being built, and every
+> **`fx.y` and `tui` moved while this example was being built, and every
 > example in the campaign moved with them.** This folder started on
-> `fx.y` `97c3c02d345efb7f` (687 lines) and `fb.y` `741300d71f99b06e` (962
+> `fx.y` `97c3c02d345efb7f` (687 lines) and `tui` `741300d71f99b06e` (962
 > lines); the canonical copies were re-vendored campaign-wide with the two
 > fixes filed against them (`fx.isqrt` on a negative argument, and `fb.emit_num`
 > dropping a zero digit — both in `examples/BUGS.md`), and they are now
-> `4b47a9bfef0c1e30…` and `95a7663b7f1c7a90…`. `term.y`, `time.y` and `args.y`
+> `4b47a9bfef0c1e30…`. std `tui` and `args`
 > did not move. The two shas above are what this folder is built and verified
 > against now, and `sha256sum` in this folder reports the same thing as
 > `sha256sum` in `examples/_toolkit/` — which is the check worth running after
@@ -941,7 +937,7 @@ This is worth writing down because it is the one thing that made this example
 look broken when it was not, and because the fix is a worked example of the
 campaign's own protocol.
 
-**`fb.y`'s `emit_num` dropped a zero digit.** It takes the hundreds digit and
+**`tui`'s `emit_num` dropped a zero digit.** It takes the hundreds digit and
 then only emits further digits while the remainder is ≥ 10, so **104 was written
 as `14`**. Every SGR channel and every CUP operand goes through it, which makes
 it two things at once:
@@ -951,7 +947,7 @@ it two things at once:
 * a **cursor column** in the same ranges landing in the wrong place, so a whole
   row is drawn in the wrong columns.
 
-Filed by `examples/maze`: `examples/BUGS.md` §"`fb.y`'s `emit_num` drops a zero
+Filed by `examples/maze`: `examples/BUGS.md` §"`tui`'s `emit_num` drops a zero
 digit: colour channel 205 is emitted as `25`, and column 101 as `11`". This
 example hit it hard — an ember raymarcher passes through both windows on every
 frame, and the first working build came out as a picture of magenta and cyan
@@ -964,7 +960,7 @@ the colour half cannot be dodged from outside `fb` and the cursor half cannot be
 dodged at all without capping the surface at 99 columns (`examples/maze` does).
 
 **Then the canonical copies were fixed and re-vendored campaign-wide**, so
-`fb.y` here is now `95a7663b7f1c7a90…` with the corrected `emit_num`, and
+`tui` here is now `95a7663b7f1c7a90…` with the corrected `emit_num`, and
 `ansi.y` is **gone**: this folder uses `fb.flush`, `fb.flush_diff`,
 `fb.frame_bytes`, `fb.row_count` and `fb.capture_*` unchanged, exactly as every
 other example in the campaign now does. `EXPECTED` and every file in `golden/`
@@ -1048,7 +1044,7 @@ Audited here, over every `.y` in this folder:
   buffer precisely because a growable `str` on an arena heap is a bad idea, and the
   measurement above says why: not because it is slow once, but because a
   value-used `+=` in a loop is `n²`.
-* The only value-used `+=` in the folder is `args.y:421`, in the **vendored**
+* The only value-used `+=` in the folder is `src/y/std/args:463`, in the **vendored**
   toolkit, inside `def ar_left(k: long) -> str` — the last statement of an
   `else if` arm, **not in a loop**, so it costs one exact-sized allocation per
   usage line and nothing accumulates. It is left exactly as vendored.
@@ -1172,6 +1168,30 @@ able to see the history rather than infer it from one number.
 ## Pin re-verification: `31808ddc21adfa31` (orchestrator, 2026-10-05)
 
 `refs/ycc.ref` moved again, `1d28b3dbcc546b5fc0e3f9d541b56777f746cd3e10122b45ba42f4904fd191d3` -> **`31808ddc21adfa31398f6337fa6dd6bfe585d25beceab20498b6914b89485755`**. This folder was
+**rebuilt from source with the new pin and re-gated in full**: items 1-8 all
+pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
+0 caught the stale record and nothing else did -- across all 39 folders at
+once, which is the signature of a pin move rather than of a regression.
+
+Earlier shas above are kept on purpose: this example has been verified
+against each of them, and a reader who wants to know what changed should be
+able to see the history rather than infer it from one number.
+
+## Pin re-verification: `289cf022002903a6` (orchestrator, 2026-10-05)
+
+`refs/ycc.ref` moved again, `e39a5e21785f599184f55deafad3ff17b4d05edb01cebc0a513e0cb7907f517d` -> **`289cf022002903a695c1ca339816b0f8f478aa3ef9f00643a93c3a95947f979c`**. This folder was
+**rebuilt from source with the new pin and re-gated in full**: items 1-8 all
+pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
+0 caught the stale record and nothing else did -- across all 39 folders at
+once, which is the signature of a pin move rather than of a regression.
+
+Earlier shas above are kept on purpose: this example has been verified
+against each of them, and a reader who wants to know what changed should be
+able to see the history rather than infer it from one number.
+
+## Pin re-verification: `dad3564d3bcdf6df` (orchestrator, 2026-10-05)
+
+`refs/ycc.ref` moved again, `e39a5e21785f599184f55deafad3ff17b4d05edb01cebc0a513e0cb7907f517d` -> **`dad3564d3bcdf6df889d017e88660dd8e7e0637a1e046acc45539f515e361d3e`**. This folder was
 **rebuilt from source with the new pin and re-gated in full**: items 1-8 all
 pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
 0 caught the stale record and nothing else did -- across all 39 folders at

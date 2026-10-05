@@ -59,7 +59,7 @@
 // other and a luminance-only rendering throws the sign away.  That is the one
 // thing a vorticity plot has to get right.
 //
-// The glyph is fb.shade_blocks(), which maps a value to a glyph by COVERAGE
+// The glyph is tui.shade_blocks(), which maps a value to a glyph by COVERAGE
 // rather than by brightness, so it reads the same on a light terminal and a
 // dark one (examples/donut's note on ramp choice).  The magnitude it is fed is
 // norm() then gmag(): position on [0,1], then the display gamma.  The gamma is
@@ -74,7 +74,7 @@
 // scale is always on screen.
 //
 // KEYS (interactive)
-//   q  Esc  Ctrl-C   quit -- always through term.restore_all_exit(0)
+//   q  Esc  Ctrl-C   quit -- always through tui.restore_all_exit(0)
 //   arrows           move the emitter: the stirrer, at its own position
 //   space            pause / resume
 //   .                one step, even while paused
@@ -89,12 +89,10 @@
 // and the loop's own exit is a guard flag tested in the while.
 
 import fx;
-import fb;
-import term;
-import time;
 import args;
 import sim;
 import textout;
+import tui;
 
 // ───────────────────────────────────────────────────────────────── options ───
 
@@ -149,39 +147,39 @@ let GLYPHS: [str] = ["blocks", "half", "ascii", "braille", "none"];
 // channel difference is at most 255 and the weight at most 2^30, so the product
 // is at most 2^38.
 const RAMP_SPEED: [long; 6] = [
-    fb.rgb(4, 6, 12),
-    fb.rgb(12, 34, 74),
-    fb.rgb(18, 88, 144),
-    fb.rgb(40, 156, 194),
-    fb.rgb(136, 216, 220),
-    fb.rgb(255, 255, 232)
+    tui.rgb(4, 6, 12),
+    tui.rgb(12, 34, 74),
+    tui.rgb(18, 88, 144),
+    tui.rgb(40, 156, 194),
+    tui.rgb(136, 216, 220),
+    tui.rgb(255, 255, 232)
 ];
 // Vorticity: two ramps, one per sign.  Cool for clockwise (negative here), warm
 // for counter-clockwise, and both starting at the same near-black so that a
 // quiet field is quiet in HUE as well as in brightness.
 const RAMP_COOL: [long; 6] = [
-    fb.rgb(4, 6, 12),
-    fb.rgb(10, 22, 60),
-    fb.rgb(18, 58, 128),
-    fb.rgb(34, 126, 186),
-    fb.rgb(96, 200, 232),
-    fb.rgb(214, 248, 255)
+    tui.rgb(4, 6, 12),
+    tui.rgb(10, 22, 60),
+    tui.rgb(18, 58, 128),
+    tui.rgb(34, 126, 186),
+    tui.rgb(96, 200, 232),
+    tui.rgb(214, 248, 255)
 ];
 const RAMP_WARM: [long; 6] = [
-    fb.rgb(4, 6, 12),
-    fb.rgb(52, 14, 22),
-    fb.rgb(140, 34, 24),
-    fb.rgb(212, 86, 20),
-    fb.rgb(248, 168, 40),
-    fb.rgb(255, 244, 206)
+    tui.rgb(4, 6, 12),
+    tui.rgb(52, 14, 22),
+    tui.rgb(140, 34, 24),
+    tui.rgb(212, 86, 20),
+    tui.rgb(248, 168, 40),
+    tui.rgb(255, 244, 206)
 ];
 const RAMP_DYE: [long; 6] = [
-    fb.rgb(4, 4, 10),
-    fb.rgb(38, 12, 62),
-    fb.rgb(116, 22, 84),
-    fb.rgb(198, 70, 44),
-    fb.rgb(248, 152, 52),
-    fb.rgb(255, 248, 224)
+    tui.rgb(4, 4, 10),
+    tui.rgb(38, 12, 62),
+    tui.rgb(116, 22, 84),
+    tui.rgb(198, 70, 44),
+    tui.rgb(248, 152, 52),
+    tui.rgb(255, 248, 224)
 ];
 
 let BG = 0;                 // the background we paint over
@@ -200,9 +198,9 @@ def ramp6(st: [long; 6], t: long) -> long {
     let f = t * 5 - (x << 30);
     let a = st[x];
     let b = st[x + 1];
-    fb.rgb(fb.r_of(a) + ((fb.r_of(b) - fb.r_of(a)) * f) / fx.ONE,
-           fb.g_of(a) + ((fb.g_of(b) - fb.g_of(a)) * f) / fx.ONE,
-           fb.b_of(a) + ((fb.b_of(b) - fb.b_of(a)) * f) / fx.ONE)
+    tui.rgb(tui.r_of(a) + ((tui.r_of(b) - tui.r_of(a)) * f) / fx.ONE,
+           tui.g_of(a) + ((tui.g_of(b) - tui.g_of(a)) * f) / fx.ONE,
+           tui.b_of(a) + ((tui.b_of(b) - tui.b_of(a)) * f) / fx.ONE)
 };
 
 // ──────────────────────────────────────────────────────────── module state ───
@@ -318,11 +316,11 @@ def gmag(t: long) -> long {
 // glyph by COVERAGE, so the glyph is monotonic in magnitude on any terminal,
 // light or dark, and the hue is free to carry the sign.
 def glyph_q(m: long) -> long {
-    if (GLY == 1) { return fb.shade_half(m, fx.ONE); };
-    if (GLY == 2) { return fb.shade_ascii(m, fx.ONE); };
-    if (GLY == 3) { return fb.shade_braille(m, fx.ONE); };
-    if (GLY == 4) { return fb.space; };
-    fb.shade_blocks(m, fx.ONE)
+    if (GLY == 1) { return tui.shade_half(m, fx.ONE); };
+    if (GLY == 2) { return tui.shade_ascii(m, fx.ONE); };
+    if (GLY == 3) { return tui.shade_braille(m, fx.ONE); };
+    if (GLY == 4) { return tui.space; };
+    tui.shade_blocks(m, fx.ONE)
 };
 
 // colour_q(neg, m) -> long -- the sign picks the ramp for a vorticity field, the
@@ -339,7 +337,7 @@ def colour_q(neg: bool, m: long) -> long {
 // ──────────────────────────────────────────────────────────────── render ────
 
 // render(s) -- one frame: the field, then the colour bar on row 0.
-def render(s: fb.Surface) -> void {
+def render(s: tui.Surface) -> void {
     let peak = 0;
     if (FLD == 0) { peak = V_LAST; };
     if (FLD == 1) { peak = sim.vort_peak(FL); };
@@ -359,7 +357,7 @@ def render(s: fb.Surface) -> void {
             // the gamma is paid for as many square roots per cell as there are
             // gamma steps, not twice
             let m = gmag(norm(v));
-            fb.put(s, r + TOP, c, glyph_q(m), colour_q(v < 0, m), BG);
+            tui.put(s, r + TOP, c, glyph_q(m), colour_q(v < 0, m), BG);
             c = c + 1
         };
         r = r + 1
@@ -375,15 +373,15 @@ def render(s: fb.Surface) -> void {
         let p = (c * fx.ONE * 2) / s.cols;      // 0 .. 2*ONE
         if (FLD == 1) {
             let q = p - fx.ONE;                // -ONE .. ONE, the signed position
-            fb.put(s, 0, c, 9608, colour_q(q < 0, gmag(q)), BG)
+            tui.put(s, 0, c, 9608, colour_q(q < 0, gmag(q)), BG)
         } else {
-            fb.put(s, 0, c, 9608, colour_q(false, gmag(p / 2)), BG)
+            tui.put(s, 0, c, 9608, colour_q(false, gmag(p / 2)), BG)
         };
         c = c + 1
     };
     // the two ends, marked in the colours they stand for
-    fb.put(s, 0, 0, 9472, colour_q(true, fx.ONE), BG);
-    fb.put(s, 0, s.cols - 1, 9470, colour_q(false, fx.ONE), BG)
+    tui.put(s, 0, 0, 9472, colour_q(true, fx.ONE), BG);
+    tui.put(s, 0, s.cols - 1, 9470, colour_q(false, fx.ONE), BG)
 };
 
 // ───────────────────────────────────────────── allocation-free status line ───
@@ -396,14 +394,14 @@ def render(s: fb.Surface) -> void {
 // expression runs (72 bytes for [long; 12], measured), so a literal written
 // inside these defs would leak several times a frame.
 //
-// fb.text() is safe to use per frame (it decodes in place out of the caller's
+// tui.text() is safe to use per frame (it decodes in place out of the caller's
 // bytes and allocates nothing), so the labels come from it and only the NUMBERS
 // need a hand-rolled digit loop.
 let DIG: [long; 24] = [48; 24];
 
 // hnum(s, row, col, v) -> long -- a decimal `long`, no padding; returns the
 // column just past it.
-def hnum(s: fb.Surface, row: long, col: long, v: long) -> long {
+def hnum(s: tui.Surface, row: long, col: long, v: long) -> long {
     let n = if (v < 0) { 0 - v } else { v };
     let d = textout.digits(n);
     let at = col;
@@ -415,7 +413,7 @@ def hnum(s: fb.Surface, row: long, col: long, v: long) -> long {
     };
     i = 0;
     while (i < d) {
-        fb.put(s, row, at, DIG[i], FG_HI, BG);
+        tui.put(s, row, at, DIG[i], FG_HI, BG);
         at = at + 1;
         i = i + 1
     };
@@ -423,13 +421,13 @@ def hnum(s: fb.Surface, row: long, col: long, v: long) -> long {
 };
 
 // hpad(s, row, col, v, w) -> long -- right-aligned in `w` columns.
-def hpad(s: fb.Surface, row: long, col: long, v: long, w: long) -> long {
+def hpad(s: tui.Surface, row: long, col: long, v: long, w: long) -> long {
     let n = if (v < 0) { 0 - v } else { v };
     let d = textout.digits(n);
     let at = col;
     let k = d;
     while (k < w) {
-        fb.put(s, row, at, 32, FG_DIM, BG);
+        tui.put(s, row, at, 32, FG_DIM, BG);
         at = at + 1;
         k = k + 1
     };
@@ -439,27 +437,27 @@ def hpad(s: fb.Surface, row: long, col: long, v: long, w: long) -> long {
 // hq(s, row, col, v, shift) -> long -- v / 2^shift with four decimals, a digit
 // at a time.  The fraction is (remainder * 10000) >> shift, at most
 // 2^30 * 10^4 = 2^43.3 for a Q30 value.
-def hq(s: fb.Surface, row: long, col: long, v: long, shift: long) -> long {
+def hq(s: tui.Surface, row: long, col: long, v: long, shift: long) -> long {
     let a = if (v < 0) { 0 - v } else { v };
     let ip = a >> shift;
     let fr = ((a - (ip << shift)) * 10000) >> shift;
     let at = col;
     if (v < 0) {
-        fb.put(s, row, at, 45, FG_HI, BG);
+        tui.put(s, row, at, 45, FG_HI, BG);
         at = at + 1
     };
     at = hnum(s, row, at, ip);
-    fb.put(s, row, at, 46, FG_HI, BG);
+    tui.put(s, row, at, 46, FG_HI, BG);
     at = at + 1;
     let f = fr;
     if (f < 1000) {
-        fb.put(s, row, at, 48, FG_HI, BG); at = at + 1
+        tui.put(s, row, at, 48, FG_HI, BG); at = at + 1
     };
     if (f < 100) {
-        fb.put(s, row, at, 48, FG_HI, BG); at = at + 1
+        tui.put(s, row, at, 48, FG_HI, BG); at = at + 1
     };
     if (f < 10) {
-        fb.put(s, row, at, 48, FG_HI, BG); at = at + 1
+        tui.put(s, row, at, 48, FG_HI, BG); at = at + 1
     };
     hnum(s, row, at, f)
 };
@@ -467,29 +465,29 @@ def hq(s: fb.Surface, row: long, col: long, v: long, shift: long) -> long {
 // htext(s, row, col, t, fg) -> long -- a HUD label, returning the column just
 // past it.
 //
-// NOT fb.text's return value, and this is worth being explicit about because
+// NOT tui.text's return value, and this is worth being explicit about because
 // getting it wrong is invisible for a frame and ruins the line for ever after:
-// fb.text() answers HOW MANY CODEPOINTS IT DREW, which is a length and not a
+// tui.text() answers HOW MANY CODEPOINTS IT DREW, which is a length and not a
 // position.  Using it as the next column walks the cursor backwards by the
 // length of every label, so each label lands on top of the last and the row
 // ends up with the last string drawn sitting at column 2.  (It looks plausible
 // enough to be worth the three debug lines it cost to find.)  Every label on
 // this line is ASCII, so one byte is exactly one column and len(t) is the
 // advance; a label with a box-drawing or CJK character in it would want
-// fb.width_of() summed instead, and there are none.
-def htext(s: fb.Surface, row: long, col: long, t: str, fg: long) -> long {
-    fb.text(s, row, col, t, fg, BG);
+// tui.width_of() summed instead, and there are none.
+def htext(s: tui.Surface, row: long, col: long, t: str, fg: long) -> long {
+    tui.text(s, row, col, t, fg, BG);
     col + len(t)
 };
 
 // hgap(s, row, col, n) -> long -- n blanks, so a number does not touch the rule
 // the hline drew.  A bare `c = c + 2` moves the cursor and leaves the rule
 // showing through the gap, which reads as a separator and is not one.
-def hgap(s: fb.Surface, row: long, col: long, n: long) -> long {
+def hgap(s: tui.Surface, row: long, col: long, n: long) -> long {
     let at = col;
     let k = 0;
     while (k < n) {
-        fb.put(s, row, at, 32, FG_DIM, BG);
+        tui.put(s, row, at, 32, FG_DIM, BG);
         at = at + 1;
         k = k + 1
     };
@@ -499,15 +497,15 @@ def hgap(s: fb.Surface, row: long, col: long, n: long) -> long {
 // hud(s, row, fps) -- the status line: what the solver is doing, and how well.
 //
 // The key list at the right is chosen by how much room is left, because
-// fb.text() clips SILENTLY at the surface edge (it is bounds-safe, not
+// tui.text() clips SILENTLY at the surface edge (it is bounds-safe, not
 // complaining) and a status line cut in half mid-word is worse than one that
-// says less.  Four lengths, longest that fits.  fb.put() ignoring an
+// says less.  Four lengths, longest that fits.  tui.put() ignoring an
 // out-of-range column is right for a renderer and wrong for a status line,
-// which is the whole reason this function exists rather than one fb.text()
+// which is the whole reason this function exists rather than one tui.text()
 // call.
-def hud(s: fb.Surface, row: long, fps: long) -> void {
+def hud(s: tui.Surface, row: long, fps: long) -> void {
     let c = 0;
-    fb.hline(s, row, 0, s.cols, 9472, fb.rgb(28, 32, 38), BG);
+    tui.hline(s, row, 0, s.cols, 9472, tui.rgb(28, 32, 38), BG);
     c = 2;
     c = htext(s, row, c, "fluid", FG_HI);
     c = hpad(s, row, c, FL.steps, 6);
@@ -529,9 +527,9 @@ def hud(s: fb.Surface, row: long, fps: long) -> void {
     c = htext(s, row, c, "+/-", FG_DIM);
     c = hpad(s, row, c, CFG.iters, 3);
     c = hgap(s, row, c, 1);
-    c = htext(s, row, c, NAMES[FLD], fb.rgb(198, 170, 96));
+    c = htext(s, row, c, NAMES[FLD], tui.rgb(198, 170, 96));
     if (PAUSED != 0) {
-        htext(s, row, c, "  PAUSED", fb.rgb(232, 176, 72))
+        htext(s, row, c, "  PAUSED", tui.rgb(232, 176, 72))
     } else {
         let room = s.cols - c;
         if (room >= 80) {
@@ -688,11 +686,15 @@ DUMPEVERY = args.get_long("dump", 0);
 FLD = mode_of(args.get_str("field", "speed"), "--field", NAMES);
 GLY = mode_of(args.get_str("glyph", "blocks"), "--glyph", GLYPHS);
 
-// The seed's range is 2^32-1 and not "any long" because the generator is
-// xorshift32 (sim.y's rnd): its state is 32 bits, so seeds above 2^32-1 would be
-// aliases of seeds below it.  Saying so beats letting two different --seed
-// values quietly produce the same run.  args.y also refuses more than 18 digits
-// outright, which is a clean diagnostic and not a trap.
+// The seed's range is 2^32-1 and not "any long".  It was 2^32-1 because the
+// generator was xorshift32 (sim.y's old rnd) and its 32-bit state made every
+// larger seed an alias of one below; the generator is now std's splitmix64,
+// whose state is 64 bits, so the limit is conservative rather than necessary --
+// it is kept because it is already printed in the header and in --help, and a
+// range that silently widened would change what two different --seed values
+// mean.  Saying so beats letting two different --seed values quietly produce
+// the same run.  args also refuses more than 18 digits outright, which is a
+// clean diagnostic and not a trap.
 SEEDV = ranged("seed", args.get_long("seed", 1), 0, 4294967295);
 ITERS = ranged("iters", args.get_long("iters", 24), 0, 400);
 let diters = ranged("diters", args.get_long("diters", 4), 0, 64);
@@ -730,7 +732,7 @@ let wsize = args.get_str("size", "");
 let have_size = args.has("size");
 SR = 38;
 SC = 96;
-let ws = term.size();
+let ws = tui.size();
 if (ws.rows > 4 && ws.cols > 11) {
     SR = ws.rows;
     SC = ws.cols
@@ -756,11 +758,11 @@ if (SR < 5) { SR = 5; };
 if (SC < 12) { SC = 12; };
 if (SR > sim.MAXH + 2) { SR = sim.MAXH + 2; };
 if (SC > sim.MAXW) { SC = sim.MAXW; };
-let srf = fb.new(SR, SC);
+let srf = tui.new(SR, SC);
 
-BG = fb.rgb(2, 3, 6);
-FG_DIM = fb.rgb(126, 136, 148);
-FG_HI = fb.rgb(226, 232, 240);
+BG = tui.rgb(2, 3, 6);
+FG_DIM = tui.rgb(126, 136, 148);
+FG_HI = tui.rgb(226, 232, 240);
 
 sim.setup(FL, SC, grid_rows(), SEEDV, ITERS);
 emitter_home();
@@ -796,7 +798,7 @@ def measure() -> void {
 
 // ═══════════════════════════════════════════════ the deterministic path ═══
 //
-// The same draw and the same fb.flush_diff as the terminal path -- the ANSI
+// The same draw and the same tui.flush_diff as the terminal path -- the ANSI
 // stream is built and counted either way, which is what makes the digest column
 // evidence rather than a claim -- except that it goes to /dev/null and the text
 // goes to stdout instead.
@@ -809,11 +811,11 @@ if (NOTTY != 0) {
         die("--no-tty needs --frames N, or it would run forever into a stdout nobody is watching")
     };
     let devnull = syscall(257, 0 - 100, "/dev/null", 1, 0, 0, 0);   // openat
-    if (devnull >= 0) { fb.set_fd(devnull); };
-    fb.capture_on();
+    if (devnull >= 0) { tui.set_fd(devnull); };
+    tui.capture_on();
 
     let h0 = heap_used();
-    let t0 = time.now_us();
+    let t0 = clock_us();
 
     textout.out_str("fluid -- Jos Stam's stable fluids, integer Q30, no float in it\n\n");
     textout.out_str("grid         ");
@@ -881,8 +883,8 @@ if (NOTTY != 0) {
     while (f <= FRAMES) {
         if (f > 0) { step_and_measure(); };
         render(srf);
-        fb.capture_reset();
-        fb.flush_diff(srf);
+        tui.capture_reset();
+        tui.flush_diff(srf);
         textout.out_pad(f, 6);
         textout.out_str("  ");
         textout.out_q(E_LAST, 28);
@@ -911,7 +913,7 @@ if (NOTTY != 0) {
         f = f + 1
     };
     let h1 = heap_used();
-    let t1 = time.now_us();
+    let t1 = clock_us();
 
     textout.out_str("\nsummary\n");
     textout.out_str("steps        ");
@@ -975,20 +977,20 @@ if (NOTTY != 0) {
 
 // ═══════════════════════════════════════════════════ the interactive path ══
 //
-// term.y's pattern verbatim: raw mode, alt screen, watchdog, and ONE place that
+// tui's pattern verbatim: raw mode, alt screen, watchdog, and ONE place that
 // leaves.  Y has no atexit and no signal handler, so every exit below is a call
-// to term.restore_all_exit() -- there is no path out of this loop that does not
+// to tui.restore_all_exit() -- there is no path out of this loop that does not
 // go through it.
-if (!term.raw_mode()) {
+if (!tui.raw_mode()) {
     eputs("fluid: not a terminal; try --frames N --no-tty\n");
     exit(1)
 };
-term.enter_screen();
-term.arm_watchdog();
+tui.enter_screen();
+tui.arm_watchdog();
 
-let pacer = time.pacer_new(fpswant);
-let meter = time.fps_new();
-time.pacer_start(pacer);
+let pacer = tui.pacer_new(fpswant);
+let meter = tui.fps_new();
+tui.pacer_start(pacer);
 measure();
 
 let ih0 = heap_used();
@@ -1003,16 +1005,16 @@ let tcols = SC;
 // ioctl failed, or reported a degenerate size, which is what a pty with no
 // TIOCSWINSZ looks like).
 //
-// TIOCGWINSZ into a byte buffer plus term.rd16 IS term.size(): the same decode,
-// one syscall, zero bytes of heap.  term.size() answers with a record, and a
+// TIOCGWINSZ into a byte buffer plus tui.rd16 IS tui.size(): the same decode,
+// one syscall, zero bytes of heap.  tui.size() answers with a record, and a
 // record literal is evaluated onto the heap every time the expression runs
 // (ORCHESTRATOR.md 2.7), so a once-a-frame size check through it would leak
 // 1.4 MB an hour.  Y has no SIGWINCH, so a program that wants to follow a
 // resize has to poll.
 def poll_winsize() -> long {
-    if (syscall(16, 1, term.TIOCGWINSZ, &WSB[0]) < 0) { return 0; };
-    let r = term.rd16(WSB, 0);
-    let c = term.rd16(WSB, 2);
+    if (syscall(16, 1, tui.TIOCGWINSZ, &WSB[0]) < 0) { return 0; };
+    let r = tui.rd16(WSB, 0);
+    let c = tui.rd16(WSB, 2);
     if (r < 5 || c < 12) { return 0; };
     if (r == trows && c == tcols) { return 0; };
     trows = r;
@@ -1021,13 +1023,13 @@ def poll_winsize() -> long {
 };
 
 while (quit == false) {
-    let wait = time.pacer_next(pacer);
+    let wait = tui.pacer_next(pacer);
     if (wait >= 0) {
         if (PAUSED == 0) { step_and_measure(); };
         render(srf);
-        hud(srf, SR - 1, time.fps_x100(meter) / 100);
-        fb.flush_diff(srf);
-        time.fps_tick(meter);
+        hud(srf, SR - 1, tui.fps_x100(meter) / 100);
+        tui.flush_diff(srf);
+        tui.fps_tick(meter);
         frame = frame + 1;
         // A guard flag instead of `break`; Y has no `break`.
         if (FRAMES > 0 && frame >= FRAMES) { quit = true; }
@@ -1041,19 +1043,19 @@ while (quit == false) {
         checked = 0;
         // Keys come back as bytes, so they are compared as bytes: Y has no
         // character literal and ord() is how a name becomes the byte it means.
-        let k = term.read_key_timeout(0);
-        if (k == ord("q") || k == ord("Q") || k == term.KEY_ESC) {
+        let k = tui.read_key_timeout(0);
+        if (k == ord("q") || k == ord("Q") || k == tui.KEY_ESC) {
             quit = true
-        } else if (k == term.KEY_LEFT) {
+        } else if (k == tui.KEY_LEFT) {
             if (CFG.ex > 0) { CFG.ex = CFG.ex - 1; };
             DRIFT = 0
-        } else if (k == term.KEY_RIGHT) {
+        } else if (k == tui.KEY_RIGHT) {
             if (CFG.ex < SC - 1) { CFG.ex = CFG.ex + 1; };
             DRIFT = 0
-        } else if (k == term.KEY_UP) {
+        } else if (k == tui.KEY_UP) {
             if (CFG.ey > 0) { CFG.ey = CFG.ey - 1; };
             DRIFT = 0
-        } else if (k == term.KEY_DOWN) {
+        } else if (k == tui.KEY_DOWN) {
             if (CFG.ey < grid_rows() - 1) { CFG.ey = CFG.ey + 1; };
             DRIFT = 0
         } else if (k == ord(" ")) {
@@ -1088,7 +1090,7 @@ while (quit == false) {
             // thrown away.
             SR = trows;
             SC = tcols;
-            srf = fb.resize(srf, SR, SC);
+            srf = tui.resize(srf, SR, SC);
             sim.setup(FL, SC, grid_rows(), SEEDV, ITERS);
             emitter_home();
             E_PEAK = 0;
@@ -1097,20 +1099,20 @@ while (quit == false) {
             measure();
             // The notice goes through term's own byte buffer rather than
             // eputs(), because it is painted INSIDE the alt screen: eputs()
-            // writes to fd 2, which is still the terminal, but term.flush()
+            // writes to fd 2, which is still the terminal, but tui.out_flush()
             // puts it in the same stream as the frames and in the same place
             // (the top-left corner, over the colour bar).
-            term.put_csi();
-            term.put_str("1;1H");
-            term.put_str("fluid: resized to ");
-            term.put_num(SC);
-            term.put_str(" x ");
-            term.put_num(SR);
-            term.put_str(", field re-seeded  ");
-            term.put_csi();
-            term.put_str("0m");
-            term.put_byte(10);
-            term.flush()
+            tui.put_csi();
+            tui.put_str("1;1H");
+            tui.put_str("fluid: resized to ");
+            tui.put_num(SC);
+            tui.put_str(" x ");
+            tui.put_num(SR);
+            tui.put_str(", field re-seeded  ");
+            tui.put_csi();
+            tui.put_str("0m");
+            tui.put_byte(10);
+            tui.out_flush()
         }
     }
 };
@@ -1127,4 +1129,4 @@ if (SHOWSTATS != 0) {
     eputs(tostring(ih1 - ih0));
     eputs("\n")
 };
-term.restore_all_exit(0);
+tui.restore_all_exit(0);

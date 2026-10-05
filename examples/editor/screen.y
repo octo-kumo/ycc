@@ -35,19 +35,19 @@
 // redraws; the README carries the number.
 //
 // ===========================================================================
-// WHY winsize() IS WRITTEN HERE AND term.size() IS NOT CALLED
+// WHY winsize() IS WRITTEN HERE AND tui.size() IS NOT CALLED
 //
-// term.size() builds a FRESH {rows, cols} record on every call -- about 40
+// tui.size() builds a FRESH {rows, cols} record on every call -- about 40
 // bytes, measured by heap_used().  An editor calls the window-size query once
 // per redraw to notice a resize, which makes it a 40-byte-per-frame leak with
 // nothing printed anywhere.  winsize() below does the TIOCGWINSZ ioctl into a
 // module-level [byte; 8] and assigns two module-level longs, so it costs zero
-// allocations however often it runs.  term.y stays vendored byte-identical and
-// term.size() is simply not on this path -- see README.md.
+// allocations however often it runs.  tui stays vendored byte-identical and
+// tui.size() is simply not on this path -- see README.md.
 
 import buf;
 import modes;
-import term;
+import tui;
 
 // ---- the grid ------------------------------------------------------------
 // The stride is MAXC, not the live width, so a resize changes which cells are

@@ -97,6 +97,22 @@ let ty_sig_bkts: [[long]] = [];
 // union_shared's answers in this unit, by the union's node.
 let ush_nodes: [Type] = [];
 let ush_vals: [[str]] = [];
+// The innermost enclosing loop's `break` and `continue` targets, -1 outside any
+// loop (2025). Labels are ids from labels.y, so -1 is the "none" marker and 0
+// would not do: it is a real id. Module state rather than an EmitSt field, for the same reason
+// the globals above are: EmitSt is rebuilt field by field at a dozen sites and
+// another pair would have to be threaded through all of them.
+//
+// Set by the four loop generators just before the body and restored after, so
+// nesting works -- an inner loop's targets are in force while its body is
+// generated and the outer loop's are back for whatever follows.
+//
+// types.y has already refused a `break` that would cross a function boundary,
+// so these are only ever read inside the function that set them; gen_func clears
+// them regardless, because relying on a check in another file to keep these two
+// consistent is how a jump ends up in an unrelated body.
+let brk_label: long = 0 - 1;
+let cont_label: long = 0 - 1;
 
 // ── native import resolution ───────────────────────────────────────────
 // An import is a COMPILE-TIME text splice, and the C copy splices the same
@@ -833,6 +849,28 @@ def tok_push(out: [str], t: str) -> [str] {
     if (len(t) == 0) { out } else { out += t }
 };
 
+// Is this mnemonic one whose operands may name a label, other than `mov`? The
+// answer is every SSE form -- `mulsd c7(%rip), %xmm0` is the only mention of a
+// coefficient-table entry a kernel has, and without it the shaker drops the
+// table and the label comes back undefined at link time.
+//
+// Naming the ten forms instead costs a dozen string comparisons on EVERY line
+// of the emitted text, which measured +1.3% of compile instructions on its own.
+// They all end in "sd" or "ss" and nothing else in the language does, so two
+// byte reads replace those comparisons. A false match would be harmless in any
+// case -- the two tokens this pushes match no label -- so it is a speed gate,
+// not a correctness one.
+def sse_mnemonic(w: str) -> bool {
+    let n = len(w);
+    if (n < 5) {
+        false
+    } else {
+        let a = byte_at(w, n - 2);
+        let b = byte_at(w, n - 1);
+        (a == 115 && b == 100) || (a == 100 && b == 115)
+    }
+};
+
 // Every symbol one line [lo, hi) references: call/lea/jump operands and
 // both labels of a computed immediate (`mov $A-B, ...`). Dispatch on the
 // mnemonic — this walks every line of the emitted text, so no searching.
@@ -848,7 +886,7 @@ def line_refs_b(text: str, b: [byte], lo: long, hi: long, out: [str], want_jumps
             out = tok_push(out, tok_at_b(text, b, op, hi));
         } else if (w == "lea") {
             out = tok_push(out, tok_at_b(text, b, op, hi));
-        } else if (w == "mov") {
+        } else if (w == "mov" || sse_mnemonic(w)) {
             let q = p;
             let go = true;
             while (go) {
@@ -871,6 +909,33 @@ def line_refs_b(text: str, b: [byte], lo: long, hi: long, out: [str], want_jumps
                         out = tok_push(out, tok_at_b(text, b, after + 1, hi));
                     }
                 }
+            };
+            // The `mov` scan above only looks at a `$`-immediate, so an SSE
+            // form's operand was invisible here and the coefficient table was
+            // shaken away. Both operands are pushed: the syntax is AT&T, so the
+            // source is the FIRST one and `movsd`'s store form puts the memory
+            // SECOND, and a register name matches no label, so the extra token
+            // costs nothing.
+            if (w != "mov") {
+                let t1 = tok_at_b(text, b, op, hi);
+                if (t1 != "") {
+                    out = tok_push(out, t1);
+                };
+                let q2 = op;
+                let seen = false;
+                while (q2 < hi && !seen) {
+                    if (b[q2] == c',' || b[q2] == c'$') {
+                        seen = true;
+                    } else {
+                        q2 = q2 + 1;
+                    };
+                };
+                if (seen && b[q2] == c',') {
+                    let t2 = tok_at_b(text, b, skip_sp(b, q2 + 1, hi), hi);
+                    if (t2 != "") {
+                        out = tok_push(out, t2);
+                    }
+                }
             }
         } else {
             if (want_jumps) {
@@ -890,16 +955,39 @@ def refs_range(text: str, b: [byte], lo: long, hi: long, out: [str], want_jumps:
     let res = out;
     while (i < hi) {
         if (b[i] == c'\n') {
-            res = line_refs_b(text, b, ls, i, res, want_jumps);
+            if (!directive_line_b(b, ls)) {
+                res = line_refs_b(text, b, ls, i, res, want_jumps);
+            };
             ls = i + 1;
         }
         i = i + 1;
     };
     if (ls < hi) {
-        res = line_refs_b(text, b, ls, hi, res, want_jumps);
+        if (!directive_line_b(b, ls)) {
+            res = line_refs_b(text, b, ls, hi, res, want_jumps);
+        };
     }
     res
 };
+
+
+// A line that opens with `.` is a directive, and no directive this assembler
+// has names a label: `.text`/`.data`/`.bss`/`.section`/`.globl` take a section,
+// `.quad`/`.zero` a number, `.string`/`.ascii` text, and `.file`/`.loc` a DWARF
+// file and line -- the path in a `.file` goes in a fixup's label FIELD, which is
+// not a code reference and matches no label. Scanning them was pure cost, and
+// arch_consts is nearly all directives: a `.quad` of a float constant costs ~27
+// instructions per byte to scan, which is ~33K instructions on every compile of
+// a program that does not use math at all. The coefficient tables are the reason
+// that matters (P4's five tables are ~1 KB), and it is why the skip is worth a
+// measured 0.85% rather than a guess.
+def directive_line_b(b: [byte], ls: long) -> bool {
+    if (ls < len(b)) { b[ls] == c'.' } else { false }
+};
+
+// `text_refs` (the text scan that answered this over a body's text) is gone:
+// the items say all of it, and asking twice was the same answer twice. The
+// text scans below stay, because arch_consts and the arch asm are still text.
 
 // ── the same three questions, asked of a body's ITEMS ────────────────────
 // A body is a list of IR items, and everything the text scans answered is in
@@ -1439,9 +1527,18 @@ def shake_prelude(pb: PBlocks, roots: [str]) -> PShake {
     { text: join(pieces, ""), refs: out }
 };
 
-// The prelude's lines, the thread runtime's after them when it is used.
-def prelude_with(core: [str], threads: bool) -> [str] {
-    if (threads) { core + arch.arch_prelude_threads_lines() } else { core }
+// The prelude's lines, then the thread runtime's and the float primitives'
+// after them when a program's code calls into them.
+//
+// Appending one at a time is not just tidier: `+` on an array makes a NEW one,
+// so concatenating unconditionally copied the prelude's ~1500 lines for every
+// compile that wanted neither -- 52K instructions on hello.y, which is 99.9%
+// of what this module cost before the branches (callgrind, bench/compile_ir.sh).
+def prelude_with(core: [str], threads: bool, mathasm: bool) -> [str] {
+    let out: [str] = core;
+    if (threads) { out = out + arch.arch_prelude_threads_lines(); };
+    if (mathasm) { out = out + arch.arch_math_lines(); };
+    out
 };
 
 // The references (a kept prelude's) that name a body not kept.
@@ -1574,6 +1671,109 @@ def normtype(ty: Type) -> Type { ty };
 // strip_namespaces: dot(NAME, key) with NAME an import namespace -> id(key).
 // Full AST rebuild (only dot nodes change, but uniform rebuild is simplest).
 
+// `m.T` -> `T`, when `m` names a path import. Anything else unchanged: a
+// primitive name, a bare name, or a PACKAGE-qualified one, which `strip_ns`'s
+// own Dot arm keeps on purpose (pkg_ns) because a package is linked as a unit of
+// its own and its names stay qualified.
+def strip_ns_name(q: str, imports: [str]) -> str {
+    let out = q;
+    let dot = index_of(q, ".");
+    if (dot > 0) {
+        let ns = q[0:dot];
+        if (is_ns(ns, imports)) { out = q[dot + 1:len(q)]; };
+    };
+    out
+}
+
+// A type with a path-import namespace stripped.
+//
+// strip_ns has always done this for EXPRESSIONS -- `m.f(x)` is a call to `f` --
+// and the origin map documents the consequence: a file imported BY PATH
+// contributes no module name, because everything of its is already flat. That
+// was true of expressions and false of TYPES, and the asymmetry was a bug rather
+// than a decision.
+//
+// A `type` alias in a path-imported module is registered by rename under its
+// BARE name: rn_prepass_one qualifies a statement only when rn_stmt_mod names its
+// module, and rn_stmt_mod reads `mods`, which native_resolve fills with "" for
+// every path import (native.y 623, and the note above `type Origin` says so).
+// A reference to that alias is written `m.T`, which the parser keeps as a tname
+// spelled "m.T" (parser.y 1128) and which nothing had rewritten. So:
+//
+//     import m from "./mod.y";
+//     let p: m.Pair = m.mk(1, 2);      error: unknown type 'm.Pair'
+//     let p: Pair = m.mk(1, 2);        compiles
+//
+// Two spellings of one declaration in a language that documents a path import as
+// flattened. Stripping the prefix here makes a type behave like an expression,
+// which is what the ORIGIN MAP's own note already claimed.
+def strip_type(t: Type, imports: [str]) -> Type {
+    let k = t.k;
+    if (k == K.tname) {
+        let nm: TName = t;
+        let out: TName = { k: K.tname, name: strip_ns_name(nm.name, imports) };
+        let result: Type = out;
+        result
+    } else if (k == K.tptr) {
+        let ptr: TPtr = t;
+        let out: TPtr = { k: K.tptr, to: strip_type(ptr.to, imports) };
+        let result: Type = out;
+        result
+    } else if (k == K.tarr) {
+        let arr: TOf = t;
+        let out: TOf = { k: K.tarr, of: strip_type(arr.of, imports) };
+        let result: Type = out;
+        result
+    } else if (k == K.tarrfix) {
+        let arr: TFix = t;
+        let out: TFix = { k: K.tarrfix, of: strip_type(arr.of, imports), n: arr.n };
+        let result: Type = out;
+        result
+    } else if (k == K.topt) {
+        let opt: TOf = t;
+        let out: TOf = { k: K.topt, of: strip_type(opt.of, imports) };
+        let result: Type = out;
+        result
+    } else if (k == K.tmap) {
+        let map: TMap = t;
+        let out: TMap = { k: K.tmap, key: strip_type(map.key, imports), of: strip_type(map.of, imports) };
+        let result: Type = out;
+        result
+    } else if (k == K.tparams) {
+        let list: TList = t;
+        let out: TList = { k: K.tparams, ts: strip_type_list(list.ts, imports) };
+        let result: Type = out;
+        result
+    } else if (k == K.tunion) {
+        let list: TList = t;
+        let out: TList = { k: K.tunion, ts: strip_type_list(list.ts, imports) };
+        let result: Type = out;
+        result
+    } else if (k == K.tfunc) {
+        let func: TFunc = t;
+        let out: TFunc = { k: K.tfunc, args: strip_type_list(func.args, imports), ret: strip_type(func.ret, imports) };
+        let result: Type = out;
+        result
+    } else if (k == K.trec) {
+        let rec: TRec = t;
+        let fs: [Field] = [];
+        foreach (f in rec.fields) { fs += { name: f.name, opt: f.opt, typ: strip_type(f.typ, imports) }; };
+        let out: TRec = { k: K.trec, fields: fs };
+        let result: Type = out;
+        result
+    } else { t }
+}
+
+def strip_type_list(ts: [Type], imports: [str]) -> [Type] {
+    let out: [Type] = [];
+    let i = 0;
+    while (i < len(ts)) {
+        out += strip_type(ts[i], imports);
+        i = i + 1;
+    };
+    out
+}
+
 def strip_list(nodes: [Node], imports: [str]) -> [Node] {
     let out: [Node] = [];
     let i = 0;
@@ -1601,10 +1801,10 @@ def strip_ns(node: Node, imports: [str]) -> Node {
             } else if (is_ns(ov, pkg_ns)) {
                 normnode({ k: K.id, v: ov + "." + okey, line: oline, col: ocol })
             } else {
-                normnode({ k: K.dot, obj: obj, key: okey, line: oline, col: ocol })
+                normnode({ k: K.dot, obj: obj, key: okey, line: oline, col: ocol, nline: oline, ncol: ocol })
             }
         } else {
-            normnode({ k: K.dot, obj: obj, key: okey, line: oline, col: ocol })
+            normnode({ k: K.dot, obj: obj, key: okey, line: oline, col: ocol, nline: oline, ncol: ocol })
         }
     } else if (k == K.un) {
         let un: Un = node;
@@ -1632,7 +1832,7 @@ def strip_ns(node: Node, imports: [str]) -> Node {
         strip_decl(decl, imports)
     } else if (k == K.func) {
         let func: Func = node;
-        normnode({ k: K.func, params: func.params, ptypes: func.ptypes, ret: func.ret, body: strip_ns(func.body, imports), line: func.line, col: func.col, defs: func.defs })
+        normnode({ k: K.func, params: func.params, ptypes: strip_type_list(func.ptypes, imports), ret: strip_type(func.ret, imports), body: strip_ns(func.body, imports), line: func.line, col: func.col, defs: func.defs, label: func.label })
     } else if (k == K.assign) {
         let assign: Assign = node;
         normnode({ k: K.assign, name: assign.name, v: strip_ns(assign.v, imports), line: assign.line, col: assign.col })
@@ -1679,10 +1879,10 @@ def strip_ns(node: Node, imports: [str]) -> Node {
                 // (the checker says so of the qualified name)
                 normnode({ k: K.assign, name: id.v + "." + assign.key, v: strip_ns(assign.v, imports), line: assign.line, col: assign.col })
             } else {
-                normnode({ k: K.dotassign, obj: strip_ns(dao, imports), key: assign.key, v: strip_ns(assign.v, imports), line: assign.line, col: assign.col })
+                normnode({ k: K.dotassign, obj: strip_ns(dao, imports), key: assign.key, v: strip_ns(assign.v, imports), line: assign.line, col: assign.col, nline: assign.nline, ncol: assign.ncol })
             }
         } else {
-            normnode({ k: K.dotassign, obj: strip_ns(dao, imports), key: assign.key, v: strip_ns(assign.v, imports), line: assign.line, col: assign.col })
+            normnode({ k: K.dotassign, obj: strip_ns(dao, imports), key: assign.key, v: strip_ns(assign.v, imports), line: assign.line, col: assign.col, nline: assign.nline, ncol: assign.ncol })
         }
     } else if (k == K.kw_foreach) {
         let loop: Foreach = node;
@@ -1703,9 +1903,9 @@ def strip_ns(node: Node, imports: [str]) -> Node {
 
 def strip_decl(node: Decl, imports: [str]) -> Node {
     if (node.kind == "def") {
-        normnode({ k: K.decl, kind: "def", name: node.name, typ: normtype({ k: K.tnone }), v: strip_ns(node.v, imports), line: node.line, col: node.col })
+        normnode({ k: K.decl, kind: "def", name: node.name, typ: normtype({ k: K.tnone }), v: strip_ns(node.v, imports), line: node.line, col: node.col, nline: node.nline, ncol: node.ncol })
     } else {
-        normnode({ k: K.decl, kind: node.kind, name: node.name, typ: node.typ, v: strip_ns(node.v, imports), line: node.line, col: node.col })
+        normnode({ k: K.decl, kind: node.kind, name: node.name, typ: strip_type(node.typ, imports), v: strip_ns(node.v, imports), line: node.line, col: node.col, nline: node.nline, ncol: node.ncol })
     }
 };
 
@@ -2322,6 +2522,8 @@ def infer_go(st: EmitSt, node: Node) -> Type {
         infer(st, store.v)
     } else if (k == K.kw_while) {
         normtype({ k: K.tvoid })
+    } else if (k == K.kw_break || k == K.kw_continue) {
+        normtype({ k: K.tvoid })
     } else if (k == K.ret) {
         let ret: Wrap = node;
         infer(st, ret.e)
@@ -2620,6 +2822,37 @@ def uses_threads(refs: [str]) -> bool {
     found
 };
 
+// The float primitives (src/y/arch/math.s), by the same rule as the thread
+// runtime: a `native def` names one as its body, so the call is a reference
+// like any other and the block stays. Looking first is what makes this cheap
+// -- split()ing the lines for every compile measured +2.6% instructions on
+// hello.y, against a few dozen lines (bench/compile_ir.sh).
+def uses_math(refs: [str]) -> bool {
+    let i = 0;
+    let found = false;
+    while ((i < len(refs)) && (!found)) {
+        let r: str = refs[i];
+        let n = len(r);
+        // y_sqrt 6, y_fbits 7, y_bitsf 7, y_to_int 8, y_int_trap 10, and the
+        // length-first names of the bulk kernels: y_dot/y_sum 5, y_exp/y_log/
+        // y_pow/y_sin/y_cos 5, y_min_of/y_max_of/y_scale/y_axpy 8
+        found = (n == 5 && (r == "y_exp" || r == "y_log" || r == "y_pow"
+                            || r == "y_sin" || r == "y_cos" || r == "y_dot"
+                            || r == "y_sum"))
+            || (n == 6 && r == "y_sqrt")
+            || (n == 7 && (r == "y_fbits" || r == "y_bitsf"))
+            || (n == 8 && (r == "y_to_int" || r == "y_min_of" || r == "y_max_of"
+                           || r == "y_scale" || r == "y_axpy"))
+            || (n == 10 && (r == "y_int_trap" || r == "y_len_stop"))
+            // the encoder's own form probes: y_sse_forms, y_sse_flags,
+            // y_test_imm
+            || (n == 11 && (r == "y_sse_forms" || r == "y_sse_flags"))
+            || (n == 10 && r == "y_test_imm");
+        i = i + 1;
+    };
+    found
+};
+
 def name_in(xs: [str], n: str) -> bool {
     let i = 0;
     let found = false;
@@ -2633,16 +2866,32 @@ def name_in(xs: [str], n: str) -> bool {
     found
 };
 
-// Builtins are resolved by name at the call site, never captured.
-def is_intrinsic_name(n: str) -> bool {
-    name_in(["print", "syscall", "len", "push", "some", "is_some", "unwrap",
+// The builtins, as a list rather than an inline argument, so that the ONE copy
+// can be handed out. The language server's completion list used to be its own
+// transcription of this, which is exactly the kind of copy that rots: adding a
+// builtin here would leave the server offering the old set, and nothing would
+// fail. `opt$test`/`opt$val` and `#fmt` are the compiler's own halves of the
+// option operators and the `#fmt` builtin -- internal, but they are what
+// is_intrinsic_name tests, so they are in the list.
+let INTRINSICS: [str] = ["print", "syscall", "len", "push", "some", "is_some", "unwrap",
              "opt$test", "opt$val",
              "trim", "ord", "byte_at", "chr", "tonum", "tostring", "index_of",
              "prepend",
              "last_index_of", "join", "split", "puts", "eputs", "clock_us",
              "time_us", "sleep", "heap_used", "keys", "spawn", "fork", "wait_pid",
              "mutex", "sem", "lock", "try_lock", "post", "wait", "exit", "argv", "range", "typeof", "bytes",
-             "from_bytes", "ptr_addr", "self", "none", "#fmt"], n)
+             "from_bytes", "ptr_addr", "self", "none", "#fmt"];
+
+// Builtins are resolved by name at the call site, never captured.
+def is_intrinsic_name(n: str) -> bool {
+    name_in(INTRINSICS, n)
+};
+
+// The same list, for a caller that needs to enumerate it rather than test one
+// name (the language server's completion list -- see LSP.md R5.3). Returns the
+// live array, so a caller must not modify it.
+def intrinsic_names() -> [str] {
+    INTRINSICS
 };
 
 // Every identifier READ in a subtree (callee names included: calling a
@@ -3114,6 +3363,14 @@ def gen_go(st: EmitSt, node: Node) -> EmitSt {
     } else if (k == K.store) {
         let store: Store = node;
         gen_store(st, store)
+    } else if (k == K.kw_break) {
+        // types.y has already refused a `break` with no loop to leave and one
+        // that would cross a function boundary, so `brk_label` is a live label
+        // here. Nothing is left in %rax: the merge label that follows needs no
+        // value (the same reason a loop's own does not -- see gen_while).
+        emit_insn(st, insn.F_JMP_L, brk_label, 0, 0, 0, 0, 0, 0)
+    } else if (k == K.kw_continue) {
+        emit_insn(st, insn.F_JMP_L, cont_label, 0, 0, 0, 0, 0, 0)
     } else if (k == K.ret) {
         let ret: Wrap = node;
         st = gen_as(st, ret.e, cur_fn_ret(st));
@@ -5148,10 +5405,10 @@ def gen_cat_conv(st: EmitSt, node: Bin, lt: Type) -> EmitSt {
     st = r.st;
     let t1 = "y_t" + tostring(r.uid);
     let noelems: [Node] = [];
-    let da: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "l", v: node.l, line: ln, col: cl };
-    let db: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "r", v: node.r, line: ln, col: cl };
+    let da: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "l", v: node.l, line: ln, col: cl, nline: ln, ncol: cl };
+    let db: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "r", v: node.r, line: ln, col: cl, nline: ln, ncol: cl };
     let arr_type: ArrTy = lt;
-    let dc: Decl = { k: K.decl, kind: "let", typ: type_node({ k: K.tarr, of: arr_type.of }), name: t1 + "c", v: { k: K.array, elems: noelems, line: ln, col: cl }, line: ln, col: cl };
+    let dc: Decl = { k: K.decl, kind: "let", typ: type_node({ k: K.tarr, of: arr_type.of }), name: t1 + "c", v: { k: K.array, elems: noelems, line: ln, col: cl }, line: ln, col: cl, nline: ln, ncol: cl };
     let pa: OpAssign = { k: K.opassign, tgt: n_id(t1 + "c", ln, cl), op: "+", v: n_id(t1 + "l", ln, cl), line: ln, col: cl };
     let pb: OpAssign = { k: K.opassign, tgt: n_id(t1 + "c", ln, cl), op: "+", v: n_id(t1 + "r", ln, cl), line: ln, col: cl };
     let panode: Node = pa;
@@ -5473,7 +5730,15 @@ def gen_while(st: EmitSt, node: While) -> EmitSt {
         st = emit_insn(st, insn.F_TEST_R_R, insn.R_RAX, 64, insn.R_RAX, 64, 0, 0, 0);
         st = emit_insn(st, insn.F_JZ_L, r2.label, 0, 0, 0, 0, 0, 0);
     };
+    // A `while` has no step, so "the next turn" IS the head: continue goes to
+    // r1 and nothing else is needed.
+    let saved_brk = brk_label;
+    let saved_cont = cont_label;
+    brk_label = r2.label;
+    cont_label = r1.label;
     st = gen_discard(st, node.body);
+    brk_label = saved_brk;
+    cont_label = saved_cont;
     st = gen_loc_loop(st, node);
     st = emit_insn(st, insn.F_JMP_L, r1.label, 0, 0, 0, 0, 0, 0);
     emit_label(st, r2.label)
@@ -5510,7 +5775,20 @@ def gen_for(st: EmitSt, node: For) -> EmitSt {
         st = emit_insn(st, insn.F_TEST_R_R, insn.R_RAX, 64, insn.R_RAX, 64, 0, 0, 0);
         st = emit_insn(st, insn.F_JZ_L, r2.label, 0, 0, 0, 0, 0, 0);
     };
+    // `for` is the one loop where `continue` cannot go to the head: the step is
+    // between the body and the head, and skipping it would leave the loop
+    // variable where it was -- `for (i = 0; i < n; i++) { continue; }` would
+    // never end. So a third label sits between the body and the step.
+    let r3 = next_loc(st);
+    st = r3.st;
+    let saved_brk = brk_label;
+    let saved_cont = cont_label;
+    brk_label = r2.label;
+    cont_label = r3.label;
     st = gen_discard(st, node.body);
+    brk_label = saved_brk;
+    cont_label = saved_cont;
+    st = emit_label(st, r3.label);
     st = gen_loc_loop(st, node);
     st = gen(st, node.step);
     st = emit_insn(st, insn.F_JMP_L, r1.label, 0, 0, 0, 0, 0, 0);
@@ -5548,10 +5826,28 @@ def gen_forrange(st: EmitSt, node: ForRange) -> EmitSt {
     st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, loff, -1, insn.R_RCX, 64);
     st = emit_insn(st, insn.F_CMP_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0);
     st = emit_insn(st, insn.F_JGE_L, r2.label, 0, 0, 0, 0, 0, 0);
-    // a captured loop variable gets a fresh cell per iteration (the
-    // counter itself stays in its raw slot)
+    // `continue` goes to a label just BEFORE the increment, not to the head.
+    //
+    // Two mistakes are available here and both were made before this was right.
+    // Jumping to the head looks right -- "the next turn" -- but the counter is
+    // incremented at the BOTTOM of the loop, after the body, so a `continue`
+    // that jumps to the head never advances it and the loop spins forever on one
+    // value. (`for x in 0..10 { if x < 5 { continue; } ... }` hung.) Jumping to
+    // the increment itself is correct, and the fresh per-turn cell is still
+    // made: box_bound runs at the TOP of the next turn, which the `jmp r1` after
+    // the increment reaches. So the label goes before the `inc`, and the reason
+    // it is not simply the `inc` is that nothing may run between them.
+    let r3 = next_loc(st);
+    st = r3.st;
+    let saved_brk = brk_label;
+    let saved_cont = cont_label;
+    brk_label = r2.label;
+    cont_label = r3.label;
     st = box_bound(st, node.name);
     st = gen_discard(st, node.body);
+    brk_label = saved_brk;
+    cont_label = saved_cont;
+    st = emit_label(st, r3.label);
     st = gen_loc_loop(st, node);
     // the counter in place: one instruction, not a load, an inc and a store
     st = emit_insn(st, insn.F_INC_D, insn.R_RBP, -1, 1, voff, -1, 0, 0);
@@ -5609,8 +5905,18 @@ def gen_foreach(st: EmitSt, node: Foreach) -> EmitSt {
     // x = arr[i]
     st = elem_load(st, arr_elem_bytes(elt), insn.R_RDX, insn.R_RAX, insn.R_RCX);
     st = emit_insn(st, insn.F_MOV_R_D, insn.R_RCX, 64, insn.R_RBP, -1, 1, voff, -1);
+    // continue -> just before the increment, for the reason in gen_forrange
+    let r3 = next_loc(st);
+    st = r3.st;
+    let saved_brk = brk_label;
+    let saved_cont = cont_label;
+    brk_label = r2.label;
+    cont_label = r3.label;
     st = box_bound(st, node.name);
     st = gen_discard(st, node.body);
+    brk_label = saved_brk;
+    cont_label = saved_cont;
+    st = emit_label(st, r3.label);
     st = gen_loc_loop(st, node);
     // the counter in place: one instruction, not a load, an inc and a store
     st = emit_insn(st, insn.F_INC_D, insn.R_RBP, -1, 1, ioff, -1, 0, 0);
@@ -7596,12 +7902,12 @@ def gen_incdec_desugar(st: EmitSt, node: IncDec, dropped: bool) -> EmitSt {
     if (node.pre) {
         // ++x -> { bind; let v = x + 1; x = v; v }
         let nv: Bin = { k: K.bin, op: binop, l: place, r: one, line: ln, col: cl };
-        let d2: Decl = { k: K.decl, kind: "let", typ: place_value_type(infer(st, tgt)), name: t1 + "v", v: nv, line: ln, col: cl };
+        let d2: Decl = { k: K.decl, kind: "let", typ: place_value_type(infer(st, tgt)), name: t1 + "v", v: nv, line: ln, col: cl, nline: ln, ncol: cl };
         let asg: Node = gen_place_assign(tgt, n_id(t1 + "v", ln, cl), t1, ln, cl);
         gen_incdec_end(st, bind, d2, asg, dropped, ln, cl)
     } else {
         // x++ -> { bind; let v = x; x = v + 1; v }
-        let d2: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "v", v: place, line: ln, col: cl };
+        let d2: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "v", v: place, line: ln, col: cl, nline: ln, ncol: cl };
         let nv: Bin = { k: K.bin, op: binop, l: n_id(t1 + "v", ln, cl), r: one, line: ln, col: cl };
         let asg: Node = gen_place_assign(tgt, nv, t1, ln, cl);
         gen_incdec_end(st, bind, d2, asg, dropped, ln, cl)
@@ -7727,7 +8033,7 @@ def gen_opassign_desugar(st: EmitSt, node: OpAssign, dropped: bool) -> EmitSt {
     let bind: Node = gen_place_bind(tgt, t1, ln, cl);
     let rd: Node = gen_place_read(tgt, t1, ln, cl);
     let bin: Bin = { k: K.bin, op: op, l: rd, r: node.v, line: ln, col: cl };
-    let d2: Decl = { k: K.decl, kind: "let", typ: place_value_type(infer(st, tgt)), name: t1 + "v", v: bin, line: ln, col: cl };
+    let d2: Decl = { k: K.decl, kind: "let", typ: place_value_type(infer(st, tgt)), name: t1 + "v", v: bin, line: ln, col: cl, nline: ln, ncol: cl };
     let asg: Node = gen_place_assign(tgt, n_id(t1 + "v", ln, cl), t1, ln, cl);
     let rest: [Node] = [];
     rest += d2;
@@ -7768,7 +8074,7 @@ def place_read_idx(tgt: Index, t1: str, ln: long, cl: long) -> Index {
 };
 
 def place_read_dot(tgt: Dot, t1: str, ln: long, cl: long) -> Dot {
-    { k: K.dot, obj: n_id(t1, ln, cl), key: tgt.key, line: ln, col: cl }
+    { k: K.dot, obj: n_id(t1, ln, cl), key: tgt.key, line: ln, col: cl, nline: ln, ncol: cl }
 };
 
 def gen_place_read(tgt: Node, t1: str, ln: long, cl: long) -> Node {
@@ -7796,7 +8102,7 @@ def place_asg_idx(tgt: Index, valnode: Node, t1: str, ln: long, cl: long) -> Idx
 };
 
 def place_asg_dot(tgt: Dot, valnode: Node, t1: str, ln: long, cl: long) -> DotAssign {
-    { k: K.dotassign, obj: n_id(t1, ln, cl), key: tgt.key, v: valnode, line: ln, col: cl }
+    { k: K.dotassign, obj: n_id(t1, ln, cl), key: tgt.key, v: valnode, line: ln, col: cl, nline: tgt.nline, ncol: tgt.ncol }
 };
 
 def gen_place_assign(tgt: Node, valnode: Node, t1: str, ln: long, cl: long) -> Node {
@@ -7820,14 +8126,14 @@ def place_bind_id(tgt: Leaf, t1: str, ln: long, cl: long) -> Block {
 };
 
 def place_bind_idx_id(tgt: Index, t1: str, ln: long, cl: long) -> Decl {
-    { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1, v: tgt.idx, line: ln, col: cl }
+    { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1, v: tgt.idx, line: ln, col: cl, nline: ln, ncol: cl }
 };
 
 def place_bind_idx_nest(tgt: Index, t1: str, ln: long, cl: long) -> Block {
     // nested base (`grid[0][1]`, `x.y[i]`, `f()[i]`): capture it in
     // `t1 + "a"` as well, so the place evaluates it exactly once.
-    let tba: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "a", v: tgt.arr, line: ln, col: cl };
-    let tib: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1, v: tgt.idx, line: ln, col: cl };
+    let tba: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "a", v: tgt.arr, line: ln, col: cl, nline: ln, ncol: cl };
+    let tib: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1, v: tgt.idx, line: ln, col: cl, nline: ln, ncol: cl };
     block2(tba, tib, ln, cl)
 };
 
@@ -7843,7 +8149,7 @@ def place_bind_idx(tgt: Index, t1: str, ln: long, cl: long) -> Node {
 };
 
 def place_bind_dot(tgt: Dot, t1: str, ln: long, cl: long) -> Decl {
-    { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1, v: tgt.obj, line: ln, col: cl }
+    { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1, v: tgt.obj, line: ln, col: cl, nline: ln, ncol: cl }
 };
 
 // The synthetic `let` that runs the target's index/base exactly once (a
@@ -7900,9 +8206,9 @@ def gen_opassign_arr(st: EmitSt, node: OpAssign, dropped: bool) -> EmitSt {
         // { let tv = v; let ti = 0; let tn = len(tv);
         //   while (ti < tn) { place += tv[ti]; ti = ti + 1 }
         //   place }
-        let tv: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "v", v: v, line: ln, col: cl };
-        let ti: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "i", v: n_num("0", ln, cl), line: ln, col: cl };
-        let tn: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "n", v: n_call1("len", n_id(t1 + "v", ln, cl), ln, cl), line: ln, col: cl };
+        let tv: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "v", v: v, line: ln, col: cl, nline: ln, ncol: cl };
+        let ti: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "i", v: n_num("0", ln, cl), line: ln, col: cl, nline: ln, ncol: cl };
+        let tn: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "n", v: n_call1("len", n_id(t1 + "v", ln, cl), ln, cl), line: ln, col: cl, nline: ln, ncol: cl };
         let elem: Index = { k: K.index, arr: n_id(t1 + "v", ln, cl), idx: n_id(t1 + "i", ln, cl), line: ln, col: cl };
         let put: Node = gen_place_assign(tgt, n_call2("push", gen_place_read(tgt, t1, ln, cl), elem, ln, cl), t1, ln, cl);
         let step: Assign = { k: K.assign, name: t1 + "i", v: { k: K.bin, op: "+", l: n_id(t1 + "i", ln, cl), r: n_num("1", ln, cl), line: ln, col: cl }, line: ln, col: cl };
@@ -9062,6 +9368,14 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
     // closure literal), so the caller's mark is put back on the way out.
     let prev_max = frame_max;
     frame_max = 0;
+    // No loop encloses this body: any loop the closure was made inside is in
+    // the CALLER's function, and a jump out of one into another is what the
+    // checker's function-boundary rule refuses. Clearing here makes the emitter
+    // right on its own terms rather than relying on that check in another file.
+    let prev_brk = brk_label;
+    let prev_cont = cont_label;
+    brk_label = 0 - 1;
+    cont_label = 0 - 1;
     let f: EmitSt = { ir: [], txt: [], rodata: st.rodata, uid: st.uid,
       fuid: fuid, loc: 1, env: [], slots: 0, temp: 0,
       self_label: label, end_label: lbl_new(arch.arch_loc_label(fuid, 0)),
@@ -9155,6 +9469,8 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
     if (f.slots + f.temp > frame_max) { frame_max = f.slots + f.temp; };
     let frame = arch.arch_frame(frame_max);
     frame_max = prev_max;
+    brk_label = prev_brk;
+    cont_label = prev_cont;
     // The body is one IR stream: the prologue, what the body emitted, the
     // epilogue (see ir.y). The text the linker and -S read is rendered from
     // it, so nothing here is spelled twice.
@@ -9871,7 +10187,10 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
                 hdefs += d;
                 let rl = next_uid(st);
                 st = rl.st;
-                let label = fn_label_of(rl.uid, d.name);
+                // A native def's label is the one it named -- the assembly it
+                // calls into. Everything else gets a generated label.
+                let label = "";
+                if (len(d.func.label) > 0) { label = d.func.label; } else { label = fn_label_of(rl.uid, d.name); };
                 let lid = lbl_new(label);
                 hsyms += { name: d.name, label: label, typ: func_type(d.func) };
                 hids += lid;
@@ -9929,13 +10248,17 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
           self_label: st.self_label, end_label: st.end_label,
           fns: fntab_of(fixedfns, idsA), bodies: st.bodies,
           btext: st.btext, blabels: st.blabels };
-        // emit each hoisted body
+        // emit each hoisted body. A native def has none: its label names
+        // assembly that is already in the output, so emitting anything under
+        // that label would duplicate it.
         i = 0;
         while (i < len(hdefs)) {
             let d = hdefs[i];
-            let rf = next_uid(st);
-            st = rf.st;
-            st = emit_one_fn(st, st.fns.ids[i], rf.uid, d.func, false, false, [], "");
+            if (len(d.func.label) == 0) {
+                let rf = next_uid(st);
+                st = rf.st;
+                st = emit_one_fn(st, st.fns.ids[i], rf.uid, d.func, false, false, [], "");
+            };
             i = i + 1;
         };
         pr = phase_end(times, "emit_fns", pt, ph);
@@ -10450,7 +10773,8 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
     let body_refs = shaken.refs;
     let core_lines = arch.arch_prelude_lines();
     let thr = uses_threads(body_refs);
-    let pb = prelude_blocks(prelude_with(core_lines, thr));
+    let mth = uses_math(body_refs);
+    let pb = prelude_blocks(prelude_with(core_lines, thr, mth));
     let ps = shake_prelude(pb, body_refs);
     // A kept prelude block may call a Y helper (none does today): the
     // helper is kept too, and everything shaken again from there.
@@ -10461,9 +10785,10 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
         shaken = prune_bodies(labels, refs, extra);
         keep = shaken.keep;
         body_refs = shaken.refs;
-        if (!thr && uses_threads(body_refs)) {
-            thr = true;
-            pb = prelude_blocks(prelude_with(core_lines, thr));
+        if ((!thr && uses_threads(body_refs)) || (!mth && uses_math(body_refs))) {
+            if (uses_threads(body_refs)) { thr = true; };
+            if (uses_math(body_refs)) { mth = true; };
+            pb = prelude_blocks(prelude_with(core_lines, thr, mth));
         };
         ps = shake_prelude(pb, body_refs);
         more = unkept_refs(ps.refs, bmap, keep);
@@ -11402,7 +11727,11 @@ def emit_program(ast: Block, nr: Resolved, debug: bool, wlevel: long, std: [Unit
     }
 };
 
-export { emit_program, compile_package, std_units, std_unit_names, std_pack, unit_obj, unit_unobj, unit_iface, native_resolve, native_resolve_x, native_resolve_pk, origin_at, strip_ns, strip_list, strip_decl, phase_end, link_text };
+// is_intrinsic_name is exported for the language server's completion list: it
+// needs to KNOW whether a word is a builtin, and the list it keeps of them is
+// the one this predicate tests. Inert like the rest of the names here -- the
+// splicer deletes the export line, so nothing reaches codegen (LSP.md 9.1).
+export { emit_program, compile_package, std_units, std_unit_names, std_pack, unit_obj, unit_unobj, unit_iface, native_resolve, native_resolve_x, native_resolve_pk, origin_at, strip_ns, strip_list, strip_decl, phase_end, link_text, is_intrinsic_name, intrinsic_names };
 
 // ── maps: dynamic {K => V} ────────────────────────────────────────────
 // A map value is a two-field record -- {keys: [K], vals: [V]} -- and
@@ -11420,7 +11749,7 @@ def n_bool(v: str, line: long, col: long) -> Leaf {
 };
 
 def n_dot(obj: Node, key: str, line: long, col: long) -> Dot {
-    { k: K.dot, obj: obj, key: key, line: line, col: col }
+    { k: K.dot, obj: obj, key: key, line: line, col: col, nline: line, ncol: col }
 };
 
 def n_idx(arr: Node, idx: Node, line: long, col: long) -> Index {
@@ -11444,7 +11773,7 @@ def n_while(c: Node, b: Node, ln: long, cl: long) -> While {
 };
 
 def n_decl(name: str, v: Node, ln: long, cl: long) -> Decl {
-    { k: K.decl, kind: "let", typ: type_node({ k: K.tnone }), name: name, v: v, line: ln, col: cl }
+    { k: K.decl, kind: "let", typ: type_node({ k: K.tnone }), name: name, v: v, line: ln, col: cl, nline: ln, ncol: cl }
 };
 
 def n_assign(name: str, v: Node, ln: long, cl: long) -> Assign {

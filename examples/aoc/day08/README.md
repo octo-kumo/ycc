@@ -127,6 +127,21 @@ own copy of the input.
 never correctness — and an AoC answer is a single integer that a wrong algorithm
 reproduces perfectly — so the interesting assertions are these.
 
+The assertions come from **`import test`** (`src/y/std/test.y`): `day08.y` used
+to define its own `ck(name, ok, detail)` and `eq(name, got, want)` with two
+tallies beside them, and both are gone — std's `test.ck` / `test.ck_eq` print and
+count, the tallies are `test.checks()` / `test.failures()`, and the argument
+order did not have to change because the local `ck` already read
+`(name, ok, detail)`. What std does not keep is *which* assertion failed first,
+so the two-line remainder of the old helper survives for that alone (and the
+`FAIL, first failure:` line at the bottom still names it). `test.report()` is
+deliberately not called: this file prints its own one-line summary. One visible
+consequence of std printing the detail on both outcomes is the `refusal()`
+helper — the eight "this input must not parse" assertions used to carry a
+detail phrased as their own failure ("an empty file parsed"), which under an
+`ok` line reads as a contradiction; they now say what the parser did and why.
+`EXPECTED` does not move: it is the answer run, not the check.
+
 ### 1. A hand-computed micro-case, worked out in full
 
 Five boxes on a line, so every distance is an integer (`day08.y`'s
@@ -254,7 +269,7 @@ check caught something the answers alone did not.)
 | M11 | part 2 records the connection *before* the one that finishes | yes | micro part 2 — got 18, want 60 |
 | M12 | product of only the two largest circuits | yes | example part 1 — got 20, want 40 |
 | M13 | squared distance forgets the Z axis | yes | example part 1 — got 24, want 40 |
-| M14 | parse stops checking the field count | yes | "trailing comma is refused" — a trailing comma parsed |
+| M14 | parse stops checking the field count | yes | "trailing comma is refused" — PARSED ANYWAY: a trailing comma |
 | M15 | `merged` counts every pair, not just part 1's cut | yes | micro part 1 merges — got 4, want 3 |
 | M16 | k clamped to one pair too few | yes | micro k>m clamps to all pairs — got 9, want 10 |
 
@@ -345,9 +360,9 @@ language facts, each handled in the code rather than papered over:
 | `day08` | the built binary (gitignored by the repo's rules) |
 
 **Toolkit: none vendored.** This example needs no file from
-`examples/_toolkit/` — no `fx.y` (all arithmetic is integer, no trig), no
-`term.y`/`fb.y` (no terminal drawing), no `args.y` (the four flags are a
-30-line hand-rolled loop), no `time.y` (nothing is timed in-process). Nothing is
+`examples/_toolkit/` and no std unit beyond `fs` — no `fx.y` (all arithmetic
+is integer, no trig), no `tui` (no terminal drawing, nothing timed
+in-process), no `args` (the four flags are a 30-line hand-rolled loop). Nothing is
 edited and nothing is imported across folders; `day08.y` imports only `fs` from
 the compiler's own std pack. The frozen toolkit's shas are therefore not
 recorded here because no file from it is present.
@@ -429,6 +444,30 @@ able to see the history rather than infer it from one number.
 ## Pin re-verification: `31808ddc21adfa31` (orchestrator, 2026-10-05)
 
 `refs/ycc.ref` moved again, `1d28b3dbcc546b5fc0e3f9d541b56777f746cd3e10122b45ba42f4904fd191d3` -> **`31808ddc21adfa31398f6337fa6dd6bfe585d25beceab20498b6914b89485755`**. This folder was
+**rebuilt from source with the new pin and re-gated in full**: items 1-8 all
+pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
+0 caught the stale record and nothing else did -- across all 39 folders at
+once, which is the signature of a pin move rather than of a regression.
+
+Earlier shas above are kept on purpose: this example has been verified
+against each of them, and a reader who wants to know what changed should be
+able to see the history rather than infer it from one number.
+
+## Pin re-verification: `289cf022002903a6` (orchestrator, 2026-10-05)
+
+`refs/ycc.ref` moved again, `e39a5e21785f599184f55deafad3ff17b4d05edb01cebc0a513e0cb7907f517d` -> **`289cf022002903a695c1ca339816b0f8f478aa3ef9f00643a93c3a95947f979c`**. This folder was
+**rebuilt from source with the new pin and re-gated in full**: items 1-8 all
+pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
+0 caught the stale record and nothing else did -- across all 39 folders at
+once, which is the signature of a pin move rather than of a regression.
+
+Earlier shas above are kept on purpose: this example has been verified
+against each of them, and a reader who wants to know what changed should be
+able to see the history rather than infer it from one number.
+
+## Pin re-verification: `dad3564d3bcdf6df` (orchestrator, 2026-10-05)
+
+`refs/ycc.ref` moved again, `e39a5e21785f599184f55deafad3ff17b4d05edb01cebc0a513e0cb7907f517d` -> **`dad3564d3bcdf6df889d017e88660dd8e7e0637a1e046acc45539f515e361d3e`**. This folder was
 **rebuilt from source with the new pin and re-gated in full**: items 1-8 all
 pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
 0 caught the stale record and nothing else did -- across all 39 folders at

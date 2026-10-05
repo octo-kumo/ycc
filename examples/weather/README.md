@@ -349,7 +349,7 @@ Across those five functions `y_str_cat` goes **24 → 6** and `y_str_app`
 `;` — the only candidates for a value-used append — is this, and nothing else:
 
 ```
-args.y:421          s += " VALUE"                  value-used: left alone, see below
+std/args:463          s += " VALUE"                  value-used: left alone, see below
 selftest.y:654      if (c == 34) { out += "\\\"" } value-used: the twin, on purpose
 wxrep.y:37          out += table(...)              value-used: the return value
 wxdata.y:225        items += json.obj_node(...)    an ARRAY append, not a string
@@ -368,8 +368,8 @@ for above; everything else already had its `;`.
   'wxrep.render' body: expected str, got void`. Verified by trying it. So the
   load-bearing case is a compile error, never a silent break, and that is the
   reason the audit could be done by measurement.
-* `args.ar_left` has one value-used append (`s += " VALUE"`), and `args.y` is
-  a **vendored, byte-identical copy** of `examples/_toolkit/args.y`, which must
+* `args.ar_left` has one value-used append (`s += " VALUE"`), and `args` is
+  a **vendored, byte-identical copy** of `examples/_toolkit/args, which must
   not be edited. It is left as it is: `--help` builds one ~30-byte column per
   declared option (there are eight), so the quadratic term is a few hundred
   bytes once, at startup, on a path that prints the usage text. Trading
@@ -410,7 +410,7 @@ says so.
    column, and widths are in **display cells**, counted by `wxfmt.dwidth`
    (non-continuation bytes), not bytes — otherwise the three-byte snowflake
    would skew every number.
-7. **`args.y` only treats `--help` as help when it is *not* declared** in the
+7. **`args` only treats `--help` as help when it is *not* declared** in the
    option table; a declared one is an ordinary option and demands a value
    (`option '--help' needs a value`). The table therefore omits it.
 8. **Exit codes from `exec()`** are the child's, and `exec()` is
@@ -419,16 +419,18 @@ says so.
 
 ## Toolkit
 
-`args.y` is the frozen toolkit module, **copied byte-identical** from
-`examples/_toolkit/args.y` and **not edited**:
+`args` comes from std. It used to be the frozen toolkit module, copied
+byte-identical from `examples/_toolkit/` and never edited:
 
 ```
 sha256  cdac36da1cf2cd8551bd06b1bf2a7b608736bc55106e64f5be3b7aa9332e9d28
 ```
 
-Toolkit revision frozen: the state of `examples/_toolkit/` on 2026-10-04.
-The other four modules (`fx.y`, `term.y`, `fb.y`, `time.y`) are **not**
-vendored: this program is a one-shot CLI with no animation and no frame
+That sha is kept on purpose: it is the revision this example was verified
+against, and it is the same bytes std ships today.
+
+The other modules (`fx.y`, `tui`) are **not**
+used: this program is a one-shot CLI with no animation and no frame
 loop, so integer fixed-point trig, a terminal framebuffer and a pacer would
 be dead weight. Everything else in the folder is this example's own code.
 
@@ -554,6 +556,30 @@ able to see the history rather than infer it from one number.
 ## Pin re-verification: `31808ddc21adfa31` (orchestrator, 2026-10-05)
 
 `refs/ycc.ref` moved again, `1d28b3dbcc546b5fc0e3f9d541b56777f746cd3e10122b45ba42f4904fd191d3` -> **`31808ddc21adfa31398f6337fa6dd6bfe585d25beceab20498b6914b89485755`**. This folder was
+**rebuilt from source with the new pin and re-gated in full**: items 1-8 all
+pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
+0 caught the stale record and nothing else did -- across all 39 folders at
+once, which is the signature of a pin move rather than of a regression.
+
+Earlier shas above are kept on purpose: this example has been verified
+against each of them, and a reader who wants to know what changed should be
+able to see the history rather than infer it from one number.
+
+## Pin re-verification: `289cf022002903a6` (orchestrator, 2026-10-05)
+
+`refs/ycc.ref` moved again, `e39a5e21785f599184f55deafad3ff17b4d05edb01cebc0a513e0cb7907f517d` -> **`289cf022002903a695c1ca339816b0f8f478aa3ef9f00643a93c3a95947f979c`**. This folder was
+**rebuilt from source with the new pin and re-gated in full**: items 1-8 all
+pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
+0 caught the stale record and nothing else did -- across all 39 folders at
+once, which is the signature of a pin move rather than of a regression.
+
+Earlier shas above are kept on purpose: this example has been verified
+against each of them, and a reader who wants to know what changed should be
+able to see the history rather than infer it from one number.
+
+## Pin re-verification: `dad3564d3bcdf6df` (orchestrator, 2026-10-05)
+
+`refs/ycc.ref` moved again, `e39a5e21785f599184f55deafad3ff17b4d05edb01cebc0a513e0cb7907f517d` -> **`dad3564d3bcdf6df889d017e88660dd8e7e0637a1e046acc45539f515e361d3e`**. This folder was
 **rebuilt from source with the new pin and re-gated in full**: items 1-8 all
 pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
 0 caught the stale record and nothing else did -- across all 39 folders at

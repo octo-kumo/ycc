@@ -382,15 +382,11 @@ checked rather than assumed (§3 of `ORCHESTRATOR.md`).
 
 ---
 
-## The frozen toolkit
+## The std units this uses
 
 | file | sha256 (prefix) | lines | what it is used for |
 |---|---|---|---|
 | `fx.y` | `4b47a9bfef0c1e30` | 687 | integer fixed point: `ONE`, `sin`, `cos`, `isqrt`, `abs`, `TWO_PI`. No floats, no state, no allocation |
-| `fb.y` | `95a7663b7f1c7a90` | 962 | the ANSI framebuffer: cells, SGR truecolor, per-row diffing, the coverage ramps (`shade_blocks`, `shade_half`, `shade_ascii`, `shade_braille`) |
-| `term.y` | `07135b31109fcecd` | 1156 | termios raw mode, window size, key and escape-sequence decode, alt screen, restore on every exit path |
-| `time.y` | `6050605cfcfb35db` | 245 | `clock_gettime`/`nanosleep` pacing and the fps meter |
-| `args.y` | `cdac36da1cf2cd85` | 19081 | flag parsing, `--flag=value`, the usage text, exit codes |
 
 **Vendored unmodified from `examples/_toolkit/` — all five are byte-identical to
 the canonical copies.** Nothing in this folder edits any of them. Where the
@@ -480,13 +476,13 @@ lengths, longest that fits.
 
 | file | lines | |
 |---|---|---|
-| `fluid.y` | 1122 | entry: command line, validation, colour ramps, glyph ramps, the display gamma, the status line, the two frame loops |
+| `fluid.y` | 1125 | entry: command line, validation, colour ramps, glyph ramps, the display gamma, the status line, the two frame loops |
 | `sim.y` | 1026 | the solver: borders, `project` (the pressure solve), `diffuse`, `advect`, `confine`, `emit`, `seed`, `step`, and the five measurements — with the overflow analysis in its header |
 | `textout.y` | 231 | the allocation-free deterministic sink; vendored from `examples/donut/textout.y` **plus `out_q()`** |
 | `pty_check.py` | 137 | drives `./fluid` through a real pty and checks the alt screen, `q`, the restored termios and that frames were painted |
 | `gate.sh` | | re-runnable acceptance gate: all seven items of §7 plus the 55-invocation error-path sweep |
 | `gate.conf` | | `build=` and `run=` for `../gate.py` |
-| `EXPECTED` | | the exact stdout of `run=`, 11 757 bytes |
+| `EXPECTED` | | the exact stdout of `run=`, 11 963 bytes |
 | `golden/*.txt` | 19 | captured states as text, diffable |
 
 ## Verification
@@ -497,7 +493,7 @@ Every item below was run, with every process under `ulimit -S -v 3670016` and
 | gate item | result |
 |---|---|
 | 1. clean compile, **zero warnings** | `../../refs/ycc.ref fluid.y -o fluid` → exit 0, **0 bytes on stderr** |
-| 2. deterministic output | `./fluid --frames 10 --no-tty` three times → sha256 `7d1b2aec…` every time, `cmp` against `EXPECTED` clean (11 757 B), **and the same bytes by absolute path** (see "The heap figure in the golden is a DELTA" above) |
+| 2. deterministic output | `./fluid --frames 10 --no-tty` three times → sha256 `c214b2e8…` every time, `cmp` against `EXPECTED` clean (11 963 B), **and the same bytes by absolute path** (see "The heap figure in the golden is a DELTA" above) |
 | 3. no trap on any path | **55 invocations, 0 traps** (`gate.sh` item 3, `sh gate.sh`): `--help`, unknown flag, missing value, every flag out of range on both sides, `--size 0x0`/`1x1`/`1x120`/`250x1`/`250x120`/`axb`/`251x10`, `--iters 0`/`-1`/`401`, `--viscosity 10001`, `--vort 1000`, `--damping 1000`, `--swirl 4000`, `--radius 1`/`64`, `--gamma 8`, `--no-tty` with no `--frames`, a stray operand, `--`, four seeds, three fields, five glyphs, and every extreme at once for 400 steps at 250×120 |
 | 4. inside the cap, no per-frame allocation | cap enforced on every run; `heap_used()` delta **0** over **10 000** steps |
 | 5. self-contained | the folder alone in a fresh temp dir builds **byte-identically** and its stdout `cmp`s clean against `EXPECTED` |
@@ -531,8 +527,8 @@ before typing `q` — 14 918 171 bytes, 495 395 CSI sequences, `RESULT: PASS`.
 ## Determinism
 
 The default path has **no unseeded randomness anywhere**. The only randomness is
-`sim.rnd()`, an xorshift32 whose 32-bit state is a pure function of `--seed`,
-and the emitter's orbit is a Lissajous curve whose phase also comes from
+`std/random.y` (splitmix64), seeded by `sim.seed()` from `--seed`, and the
+emitter's orbit is a Lissajous curve whose phase also comes from
 `--seed`. `--fps` is the only clock-driven flag and it is live-view only; the
 headless path never paces and never reads the clock except to time itself, which
 goes to stderr under `--stats`. The colour scale is a decaying maximum, so even
@@ -621,6 +617,30 @@ able to see the history rather than infer it from one number.
 ## Pin re-verification: `31808ddc21adfa31` (orchestrator, 2026-10-05)
 
 `refs/ycc.ref` moved again, `1d28b3dbcc546b5fc0e3f9d541b56777f746cd3e10122b45ba42f4904fd191d3` -> **`31808ddc21adfa31398f6337fa6dd6bfe585d25beceab20498b6914b89485755`**. This folder was
+**rebuilt from source with the new pin and re-gated in full**: items 1-8 all
+pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
+0 caught the stale record and nothing else did -- across all 39 folders at
+once, which is the signature of a pin move rather than of a regression.
+
+Earlier shas above are kept on purpose: this example has been verified
+against each of them, and a reader who wants to know what changed should be
+able to see the history rather than infer it from one number.
+
+## Pin re-verification: `289cf022002903a6` (orchestrator, 2026-10-05)
+
+`refs/ycc.ref` moved again, `e39a5e21785f599184f55deafad3ff17b4d05edb01cebc0a513e0cb7907f517d` -> **`289cf022002903a695c1ca339816b0f8f478aa3ef9f00643a93c3a95947f979c`**. This folder was
+**rebuilt from source with the new pin and re-gated in full**: items 1-8 all
+pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
+0 caught the stale record and nothing else did -- across all 39 folders at
+once, which is the signature of a pin move rather than of a regression.
+
+Earlier shas above are kept on purpose: this example has been verified
+against each of them, and a reader who wants to know what changed should be
+able to see the history rather than infer it from one number.
+
+## Pin re-verification: `dad3564d3bcdf6df` (orchestrator, 2026-10-05)
+
+`refs/ycc.ref` moved again, `e39a5e21785f599184f55deafad3ff17b4d05edb01cebc0a513e0cb7907f517d` -> **`dad3564d3bcdf6df889d017e88660dd8e7e0637a1e046acc45539f515e361d3e`**. This folder was
 **rebuilt from source with the new pin and re-gated in full**: items 1-8 all
 pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
 0 caught the stale record and nothing else did -- across all 39 folders at

@@ -27,7 +27,7 @@
 //
 // KEYS, interactive: arrows or hjkl scroll, +/- zoom, f fit, 1 native, g
 // cycles the mode, q or Escape quits.  Every exit goes through
-// term.restore_all_exit(), and the watchdog is armed, so a crash or a kill -9
+// tui.restore_all_exit(), and the watchdog is armed, so a crash or a kill -9
 // still puts the terminal back (ORCHESTRATOR.md 2.3).
 //
 // THE ASSET IS EMBEDDED.  `embed` turns data/tux.bmp into a `const` string at
@@ -49,13 +49,11 @@
 // a scale factor, and a pixel is three bytes, not a vector.  Downscaling
 // averages in integers; luma is (77r + 150g + 29b) / 256.
 
-import fb;
-import term;
-import time;
 import args;
 import fs;
 import bmp;
 import selftest;
+import tui;
 
 // The shipped picture, and the three others the self-test decodes.  `embed` is
 // a statement on its own line, terminated with ';', and its path resolves at
@@ -283,7 +281,7 @@ def sample(x0: long, xs: long, y0: long, ys: long) -> long {
         j = j + 1;
     };
     let k = w * h;
-    (fb.clamp255(sr / k) << 16) | (fb.clamp255(sg / k) << 8) | fb.clamp255(sb / k)
+    (tui.clamp255(sr / k) << 16) | (tui.clamp255(sg / k) << 8) | tui.clamp255(sb / k)
 };
 
 // ────────────────────────────────────────────── the allocation-free HUD ───
@@ -295,7 +293,7 @@ def sample(x0: long, xs: long, y0: long, ys: long) -> long {
 // bytes per evaluation, per frame (ORCHESTRATOR.md 2.7).
 let DIG: [long; 12] = [48; 12];
 
-def sline(s: fb.Surface, row: long, col: long, v: long) -> long {
+def sline(s: tui.Surface, row: long, col: long, v: long) -> long {
     let d = DIG;
     let q = v;
     if (q < 0) { q = 0; };
@@ -308,24 +306,24 @@ def sline(s: fb.Surface, row: long, col: long, v: long) -> long {
     let at = col;
     let i = 12 - n;
     while (i < 12) {
-        fb.put(s, row, at, d[i], HUD_FG, BG);
+        tui.put(s, row, at, d[i], HUD_FG, BG);
         at = at + 1;
         i = i + 1;
     };
     at
 };
 
-// label() -- a fixed string at a cell, then the cursor it left behind.  fb.text
+// label() -- a fixed string at a cell, then the cursor it left behind.  tui.text
 // decodes UTF-8 out of the caller's own bytes, so this allocates nothing.
-def label(s: fb.Surface, row: long, col: long, t: str, fg: long) -> long {
-    fb.text(s, row, col, t, fg, BG);
+def label(s: tui.Surface, row: long, col: long, t: str, fg: long) -> long {
+    tui.text(s, row, col, t, fg, BG);
     col + len(t)
 };
 
-def hud(s: fb.Surface) -> void {
+def hud(s: tui.Surface) -> void {
     let row = s.rows - 1;
     if (row < 0) { return; };
-    fb.hline(s, row, 0, s.cols, 9472, FRAME_FG, BG);
+    tui.hline(s, row, 0, s.cols, 9472, FRAME_FG, BG);
     let c = label(s, row, 1, NAME, HUD_FG);
     c = label(s, row, c, "  ", HUD_FG);
     c = sline(s, row, c, IM.w);
@@ -350,7 +348,7 @@ def hud(s: fb.Surface) -> void {
 
 // img_rows(s) -- the cell rows the picture gets, leaving the last row for the
 // status line.  A one-row surface is all status.
-def img_rows(s: fb.Surface) -> long {
+def img_rows(s: tui.Surface) -> long {
     let n = s.rows - 1;
     if (n < 1) { return 1; };
     n
@@ -359,8 +357,8 @@ def img_rows(s: fb.Surface) -> long {
 // draw(s) -- the whole picture, once.  Nothing in here allocates: every
 // argument is a long, every array is module-level, and the two MODE tests are
 // outside the per-cell loop.
-def draw(s: fb.Surface) -> long {
-    fb.fill(s, fb.space, fb.DEFAULT, BG);
+def draw(s: tui.Surface) -> long {
+    tui.fill(s, tui.space, tui.DEFAULT, BG);
     let rows = img_rows(s);
     let r = 0;
     while (r < rows) {
@@ -380,7 +378,7 @@ def draw(s: fb.Surface) -> long {
                 if (re - rs - half >= 1) {
                     bot = sample(x0, span_x(c), rs + half, re - rs - half);
                 };
-                fb.put(s, r, c, UPPER_HALF, top, bot);
+                tui.put(s, r, c, UPPER_HALF, top, bot);
                 c = c + 1;
             };
         } else {
@@ -390,9 +388,9 @@ def draw(s: fb.Surface) -> long {
                 let x0 = view_x(c);
                 let col = sample(x0, span_x(c), y0, ys);
                 if (MODE == M_COLOUR) {
-                    fb.put(s, r, c, fb.space, fb.DEFAULT, col);
+                    tui.put(s, r, c, tui.space, tui.DEFAULT, col);
                 } else {
-                    fb.put(s, r, c, fb.shade_ascii(bmp.luma(col), 255), HUD_FG, BG);
+                    tui.put(s, r, c, tui.shade_ascii(bmp.luma(col), 255), HUD_FG, BG);
                 };
                 c = c + 1;
             };
@@ -425,7 +423,7 @@ def dump_text(rows: long, cols: long) -> void {
         let c = 0;
         while (c < cols && n < 250) {
             let col = sample(view_x(c), span_x(c), y0, ys);
-            TBUF[n] = fb.shade_ascii(bmp.luma(col), 255);
+            TBUF[n] = tui.shade_ascii(bmp.luma(col), 255);
             n = n + 1;
             c = c + 1;
         };
@@ -480,9 +478,9 @@ def or_exit(path: str) -> [byte] {
 
 // open_bytes() -- decode into the one buffer; diagnose and exit 1 on refusal.
 def open_bytes(src: [byte]) -> long {
-    let t0 = time.now_us();
+    let t0 = clock_us();
     let im = bmp.load(src);
-    DECODE_US = time.now_us() - t0;
+    DECODE_US = clock_us() - t0;
     IM = im;
     if (len(im.err) > 0) {
         eputs("bmpview: " + NAME + ": " + im.err + "\n");
@@ -528,25 +526,25 @@ def zoom_by(dir: long) -> void {
 // to read.
 def headless(rows: long, cols: long) -> void {
     let devnull = fs.open_file("/dev/null", "w");
-    if (devnull >= 0) { fb.set_fd(devnull); };
-    let s = fb.new(rows, cols);
+    if (devnull >= 0) { tui.set_fd(devnull); };
+    let s = tui.new(rows, cols);
     set_view(img_rows(s), cols);
-    fb.capture_on();
+    tui.capture_on();
     let want = FRAMES;
     if (want < 1) { want = 1; };
     let heap0 = heap_used();
-    let t0 = time.now_us();
+    let t0 = clock_us();
     let f = 0;
     while (f < want) {
         draw(s);
-        fb.flush_diff(s);
+        tui.flush_diff(s);
         f = f + 1;
     };
-    let el = time.now_us() - t0;
+    let el = clock_us() - t0;
     let heap1 = heap_used();
-    ANSI_BYTES = fb.capture_len();
-    ANSI_CKS = fb.capture_checksum();
-    fb.capture_off();
+    ANSI_BYTES = tui.capture_len();
+    ANSI_CKS = tui.capture_checksum();
+    tui.capture_off();
     summary(want);
     if (SHOWTIME != 0) {
         eputs("bmpview: decode " + tostring(DECODE_US) + " us, " +
@@ -566,24 +564,24 @@ def headless(rows: long, cols: long) -> void {
 // interactive() -- the viewer proper.  term owns the restore guarantee, so the
 // shape is term's shape: enter, run, and leave through exactly one call.
 def interactive(rows: long, cols: long) -> void {
-    if (!term.raw_mode()) {
+    if (!tui.raw_mode()) {
         eputs("bmpview: not a terminal; use --no-tty\n");
         exit(1);
     };
-    term.enter_screen();
-    term.arm_watchdog();
-    let s = fb.new(rows, cols);
+    tui.enter_screen();
+    tui.arm_watchdog();
+    let s = tui.new(rows, cols);
     CUR_ROWS = img_rows(s);
     CUR_COLS = cols;
     set_view(CUR_ROWS, cols);
-    fb.flush(s);
+    tui.flush(s);
     let done = false;
     let f = 0;
     let heap0 = heap_used();
-    let t0 = time.now_us();
+    let t0 = clock_us();
     while (done == false) {
         draw(s);
-        fb.flush_diff(s);
+        tui.flush_diff(s);
         f = f + 1;
         if (FRAMES > 0 && f >= FRAMES) {
             done = true;
@@ -591,16 +589,16 @@ def interactive(rows: long, cols: long) -> void {
             // There is no animation here, so a frame is only drawn again once
             // a key has been read: a blocking read, which is what a viewer
             // wants, and what makes redraw-on-keypress the whole event loop.
-            let k = term.read_key();
-            if (k == K_Q || k == K_ETX || k == term.KEY_ESC) {
+            let k = tui.read_key();
+            if (k == K_Q || k == K_ETX || k == tui.KEY_ESC) {
                 done = true;
-            } else if (k == term.KEY_UP || k == K_K) {
+            } else if (k == tui.KEY_UP || k == K_K) {
                 scroll(0, -1);
-            } else if (k == term.KEY_DOWN || k == K_J) {
+            } else if (k == tui.KEY_DOWN || k == K_J) {
                 scroll(0, 1);
-            } else if (k == term.KEY_LEFT || k == K_H) {
+            } else if (k == tui.KEY_LEFT || k == K_H) {
                 scroll(-1, 0);
-            } else if (k == term.KEY_RIGHT || k == K_L) {
+            } else if (k == tui.KEY_RIGHT || k == K_L) {
                 scroll(1, 0);
             } else if (k == K_PLUS) {
                 zoom_by(1);
@@ -622,7 +620,7 @@ def interactive(rows: long, cols: long) -> void {
         };
     };
     let heap1 = heap_used();
-    let el = time.now_us() - t0;
+    let el = clock_us() - t0;
     // Report BEFORE leaving: restore_all_exit() exits, so anything after it
     // never runs -- which is exactly the sort of thing a pty test finds and a
     // headless run never does.
@@ -633,7 +631,7 @@ def interactive(rows: long, cols: long) -> void {
     };
     // Put the cursor back, leave the alt screen, restore the mode and exit, in
     // one call, and let that be the end of the program.
-    term.restore_all_exit(0);
+    tui.restore_all_exit(0);
 };
 
 def main() {
@@ -697,16 +695,16 @@ def main() {
                 rows = tonum(parts[1]);
             };
         };
-        if (rows < 3 || rows > fb.MAX_ROWS || cols < 8 || cols > fb.MAX_COLS) {
-            eputs("bmpview: --size must be 8x3 to " + tostring(fb.MAX_COLS) + "x" +
-                  tostring(fb.MAX_ROWS) + " cells\n");
+        if (rows < 3 || rows > tui.MAX_ROWS || cols < 8 || cols > tui.MAX_COLS) {
+            eputs("bmpview: --size must be 8x3 to " + tostring(tui.MAX_COLS) + "x" +
+                  tostring(tui.MAX_ROWS) + " cells\n");
             exit(1);
         };
         headless(rows, cols);
         exit(0);
     };
 
-    let ws = term.size();
+    let ws = tui.size();
     interactive(ws.rows, ws.cols);
     exit(0)
 }

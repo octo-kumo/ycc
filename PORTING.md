@@ -48,6 +48,7 @@ requires byte-identical binaries).
 | —                       | `src/c/yv.c`/`yv.h`   | the value model (no Y twin; the runtime of *compiled* programs is `src/y/std/rt.y`) |
 | `src/y/std/rt.y`, `prelude.y`, `exec.y`, `str.y` | (stay Y)  | the std units, compiled separately and linked into programs (std_units; precompiled in ycc's std pack): their sources are native.y's `embed`, the C copy's `Y_EMBED` (rule 10) |
 | `src/y/std/fs.y`, `net.y`, `struct.y`   | (stay Y)  | optional modules resolved **from disk** by `std_resolve` when a program imports them; not embedded |
+| `src/tools/lsp/*.y`    | (none — stays Y)  | the language server (`yserve`), the VS Code extension and `LSP.md`. **Not ported, and not to be**: it is a tool, not the compiler, and it is the only program that imports the compiler's own modules **by path** — `types.y`, `native.y`, `parser.y`, `rename.y`, `lint.y`. A path import *flattens* (no namespace), so every name `src/tools/lsp/` defines lands in the compiler's vocabulary and two of them colliding is a duplicate-definition error reported against the wrong file. `src/tools/lsp/check-names.py` is what keeps that from happening, and it runs in `test/sh/test_lsp.sh`; it also checks each module's **basename**, because `strip_ns` rewrites any `name.field` in the whole program as a module reference — a module called `index.y` turned the compiler's own 42 `index.idx` reads into names that do not exist. Add a module there and the checker has to pass before the port gate means anything |
 
 ## Translation rules
 
@@ -104,6 +105,14 @@ requires byte-identical binaries).
    Names are kept exactly as written (the Y modules do not collide).
    `alias.fn(...)` (module call) → `fn(...)` (names are flattened).
    `self(...)` recursion → the function's own name.
+   A `bool` flag parameter is `int`: `def parse_func(toks: [Tok], p: long,
+   isnat: bool)` → `Yv *parse_func(Yv *toks, long p, int isnat)`, the call
+   sites passing `0`/`1`. A record gained a field (`Func.label`) is read and
+   written with `yr`/`yr_get` at every construction site in *both* copies —
+   `block_func`, `parse_func`, `rn_func_finish`, `rn_decl_native_go` and
+   `native.c`'s `strip_ns` all rebuild the whole record, and a `yr(n, ...)`
+   whose `n` no longer matches the field pairs silently drops the tail (a
+   `col` of 0 in a diagnostic is what that looks like).
 
 7. **Control flow is 1:1**: same `if`/`else if` chains, same `while`/`for`
    loops, same early `return`s, same statement order. A block whose last
@@ -146,6 +155,56 @@ requires byte-identical binaries).
     `#` comment line in a `.s` file is legal and dropped by `arch_asm_lines`,
     so the in-tree assembler never sees one. `make asm-check` reads them with
     GNU `as`.
+
+12. **`native def` is a declaration, and it ports as one.** `native def
+     name(params) -> ret [= "label"];` is a `Func` whose `label` field carries
+     the assembly label and whose `body` holds only the header's own errors —
+     there is no body to walk and none to emit. Six places know that, and each
+     needs its twin to agree exactly, because the label is what the two copies
+     must spell identically for `ycc`'s output to be byte-identical:
+
+     - **`parse_decl` → `parse_decl`** (`parser.y`/`parser.c`) sees the
+       `native` keyword, skips it, and takes the *rest* of the declaration
+       through the ordinary path — so params, defaults and the return type are
+       parsed by the same code that parses a `def`'s. It returns `K.decl` with
+       `kind: "native"` and `typ: {k: K.tnone}`. The C twin must build the same
+       record with the same field count: `Func` is a record, so a `yr(n, ...)`
+       that disagrees silently drops its tail.
+     - **`rn_decl` → `rn_decl_native` → `rn_decl_native_lookup` →
+       `rn_decl_native_go`** (`rename.y`/`rename.c`) renames a native exactly
+       as a `def`, then returns without descending. Nothing else differs.
+     - **`types.y`/`types.c`** require the return type to be written (there is
+       no body to infer it from), require the label to start with `y_`, and
+       require the declaration to be at top level. The three messages are
+       `"native def '<name>' needs a return type (there is no body to infer it
+       from)"`, `"native label '<label>' must start with 'y_' (generated code
+       calls it by that prefix)"` and `"native def '<name>' must be at the top
+       level (an assembly label has no place inside a function)"` — same text,
+       same order, on both sides, because the diagnostics are compared verbatim
+       by the port gate.
+     - **`fn_label_of`** (`native.y`/`native.c`) answers the label a call site
+       emits. For a native that is the declared `y_`-prefixed label, reached
+       through `runtime_base`, which strips a trailing `$<digits>` suffix so a
+       generated `y_foo$3` calls `y_foo`.
+     - **The shaker** (`native.y`'s `plabels`, ~line 10600; `native.c`) keeps
+       every `y_`-prefixed label a reachable function refers to, since nothing
+       in the AST names the instruction that defines it. Drop one and the link
+       reports `undefined label '<x>'` (`asm_link`, `asm.y`/`asm.c`) — which is
+       also what a native with no assembly on the target backend gets, by
+       design rather than by fallback.
+     - **`asm.y`/`asm.c`** treat a `y_` name as a call target in their operand
+       classification (~line 1784).
+     - **The clash check** is in `parse_decl`'s caller (`parser.y` ~2270,
+       `parser.c` ~2650), not in rename: a top-level `native def` may not share
+       its name with a `def` in the same unit, and the message is
+       `"'<name>' is a native def and is declared again at the top level (a
+       native def cannot share a name)"`. Both copies must reject the same
+       programs — the port gate compiles every fixture with both and compares
+       the diagnostics a program both reject must get.
+
+     The diagnostics above, and `native` being a reserved keyword, are what
+     `test/y/native/e3*.y` pins; the bit-identity that matters for the port is
+     `make ycc`, which compiles the compiler with both copies and compares.
 
 ## What the port must NOT do
 

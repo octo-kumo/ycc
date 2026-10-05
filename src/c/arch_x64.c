@@ -5,6 +5,7 @@
 
 Y_EMBED(PRELUDE_ASM, "src/y/arch/prelude.s")
 Y_EMBED(THREADS_ASM, "src/y/arch/threads.s")
+Y_EMBED(MATH_ASM, "src/y/arch/math.s")
 
 /* imported */
 /* none — arch_x64.y calls no other module's defs. The only builtins used
@@ -14,7 +15,8 @@ Y_EMBED(THREADS_ASM, "src/y/arch/threads.s")
 /* the twin of arch_x64.y's arch_asm_lines: the embedded text as prelude
    lines, one per line, indentation kept. Dropped: a whole-line '#' comment
    (the in-tree assembler treats a comment as a backend bug and must never see
-   one — every comment line in src/y/arch/*.s starts at column 0 for exactly
+   one — every comment line in the .s files under src/y/arch starts at column 0
+   for exactly
    this reason) and the empty tail a trailing newline leaves behind. The two
    costs are accounted for in the Y comment: split() materialising the lines
    (+374K instructions once per process, the price of one copy of the asm), and
@@ -142,6 +144,17 @@ Yv *arch_prelude_threads_lines(void) {
     return arch_asm_lines(THREADS_ASM());
 }
 
+
+/* The floating-point primitives (src/y/arch/math.s): the four a std module
+ * reaches through `native def`, and the only machine code between Y and a
+ * numeric library -- Y has no float-to-long conversion and no way to read a
+ * float's bits. Always given to the shaking (they are a few lines, unlike the
+ * thread runtime, so there is nothing to save by looking first). */
+Yv *arch_math_lines(void) {
+    return arch_asm_lines(MATH_ASM());
+}
+
+
 Yv *arch_consts(void) {
     // rodata literals emitted once at the end of the file (string headers,
     // error messages)
@@ -162,5 +175,7 @@ Yv *arch_consts(void) {
     lines = ya_push(lines, ys("ystr_oom_end:"));
     lines = ya_push(lines, ys("ystr_opt: .ascii \"runtime error: unwrap of none\\n\""));
     lines = ya_push(lines, ys("ystr_opt_end:"));
+    lines = ya_push(lines, ys("ystr_int: .ascii \"runtime error: a float with no integer part a long holds\\n\""));
+    lines = ya_push(lines, ys("ystr_int_end:"));
     return ys_cat(ys_join(lines, ys("\n")), ys("\n"));
 }

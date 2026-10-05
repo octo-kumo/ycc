@@ -175,7 +175,7 @@ def sink_flush() -> void {
 //   L  N+E (└)          7  E+S (┌)        J  S+W (┐)        F  W+N (┘)
 //   +  three sockets    *  four sockets
 //
-// The fb.y painter draws the same sixteen tiles as real box-drawing
+// The tui painter draws the same sixteen tiles as real box-drawing
 // codepoints (└ ┌ ┐ ┘ │ ─), so the terminal picture and this text are the same
 // picture; the ASCII is a lossy but total stand-in, and tiles.ASC / tiles.GLY
 // are the only place the two encodings exist.

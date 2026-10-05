@@ -14,8 +14,8 @@
 //
 // NOTHING here depends on the terminal, the clock, a random source or the
 // network.  `demo` is a pure function of its arguments.  There is no
-// vendored toolkit: this example needs no terminal, no framebuffer, no
-// fixed-point maths and no flag parser, and `args.y` would be the only file
+// no toolkit at all: this example needs no terminal, no framebuffer, no
+// fixed-point maths and no flag parser, and `args` would be the only file
 // it could have used.
 //
 // EXIT CODES

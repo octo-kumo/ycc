@@ -47,13 +47,9 @@ Everything runs inside the campaign's memory cap:
 One module is vendored, copied in rather than imported across folders
 (ORCHESTRATOR.md §4) and **unmodified** — byte-identical to the canonical copy:
 
-| file | sha256 | source |
-|---|---|---|
-| `args.y` | `cdac36da1cf2cd8551bd06b1bf2a7b608736bc55106e64f5be3b7aa9332e9d28` | `examples/_toolkit/args.y` |
-
-`fx.y`, `term.y`, `fb.y` and `time.y` are **not** vendored: this example draws
+`fx.y` and `tui` are **not** used here: this example draws
 no framebuffer, reads no key and uses no floating point, so a copy of them here
-would be dead weight. The frozen `args.y` is the revision the campaign's Wave 0
+would be dead weight. The `args` revision the campaign's Wave 0
 gate blessed.
 
 The rest are this example's own, listed with their own shas so a drift is
@@ -90,7 +86,7 @@ Exit codes: `0` the exchange completed and every property held · `1` a property
 failed or the child reported one · `2` a usage error (message on stderr) ·
 `3` the protocol broke (a pipe, a short frame, or the child died).
 
-Flags are parsed by the vendored `args.y`; `--seed abc` and `--seed
+Flags are parsed by std `args`; `--seed abc` and `--seed
 99999999999999999999` are both diagnosed rather than silently becoming a number.
 
 ## What to LOOK AT
@@ -498,6 +494,30 @@ able to see the history rather than infer it from one number.
 ## Pin re-verification: `31808ddc21adfa31` (orchestrator, 2026-10-05)
 
 `refs/ycc.ref` moved again, `1d28b3dbcc546b5fc0e3f9d541b56777f746cd3e10122b45ba42f4904fd191d3` -> **`31808ddc21adfa31398f6337fa6dd6bfe585d25beceab20498b6914b89485755`**. This folder was
+**rebuilt from source with the new pin and re-gated in full**: items 1-8 all
+pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
+0 caught the stale record and nothing else did -- across all 39 folders at
+once, which is the signature of a pin move rather than of a regression.
+
+Earlier shas above are kept on purpose: this example has been verified
+against each of them, and a reader who wants to know what changed should be
+able to see the history rather than infer it from one number.
+
+## Pin re-verification: `289cf022002903a6` (orchestrator, 2026-10-05)
+
+`refs/ycc.ref` moved again, `e39a5e21785f599184f55deafad3ff17b4d05edb01cebc0a513e0cb7907f517d` -> **`289cf022002903a695c1ca339816b0f8f478aa3ef9f00643a93c3a95947f979c`**. This folder was
+**rebuilt from source with the new pin and re-gated in full**: items 1-8 all
+pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
+0 caught the stale record and nothing else did -- across all 39 folders at
+once, which is the signature of a pin move rather than of a regression.
+
+Earlier shas above are kept on purpose: this example has been verified
+against each of them, and a reader who wants to know what changed should be
+able to see the history rather than infer it from one number.
+
+## Pin re-verification: `dad3564d3bcdf6df` (orchestrator, 2026-10-05)
+
+`refs/ycc.ref` moved again, `e39a5e21785f599184f55deafad3ff17b4d05edb01cebc0a513e0cb7907f517d` -> **`dad3564d3bcdf6df889d017e88660dd8e7e0637a1e046acc45539f515e361d3e`**. This folder was
 **rebuilt from source with the new pin and re-gated in full**: items 1-8 all
 pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
 0 caught the stale record and nothing else did -- across all 39 folders at

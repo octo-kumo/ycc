@@ -50,13 +50,11 @@
 // scan and the recent-file list is a fixed [str; 8] ring; both are hand-rolled
 // and both are named in the README.
 
-import fb;
-import term;
-import time;
 import args;
 import fs;
 import hx;
 import selftest;
+import tui;
 
 // The shipped file, so `./hexview` opens something and the folder needs nothing
 // beside it.  `embed` makes it a const str at compile time; bytes() is the
@@ -450,7 +448,7 @@ def run_bench(passes: long) -> long {
     let rows = 0;
     let off = 0;
     while (off < hx.SIZE) { hx.row(off, WIDTH); off = off + WIDTH; rows = rows + 1; };
-    let t0 = time.now_us();
+    let t0 = clock_us();
     let nrows = 0;
     let p = 0;
     while (p < passes) {
@@ -458,7 +456,7 @@ def run_bench(passes: long) -> long {
         while (o < hx.SIZE) { hx.row(o, WIDTH); nrows = nrows + 1; o = o + WIDTH; };
         p = p + 1;
     };
-    let dt = time.now_us() - t0;
+    let dt = clock_us() - t0;
     if (dt < 1) { dt = 1; };
     // MB/s in thousandths, in integers: no float and no division that loses
     // precision.  bytes / microseconds IS bytes per second / 1e6 IS MB/s, so
@@ -539,10 +537,10 @@ const MAXMARKS = 64;
 const MAXPAT = 96;
 const MAXPATH = 256;
 const RULECOL = 0x003040;                  // the rule under the panes
-let SURF: fb.Surface = fb.new(24, 80);
+let SURF: tui.Surface = tui.new(24, 80);
 let WROWS: long = 24;
 let WCOLS: long = 80;
-let WSBUF: [byte; 64] = [0; 64];           // the winsize scratch, not term.size()
+let WSBUF: [byte; 64] = [0; 64];           // the winsize scratch, not tui.size()
 
 // Cursor state.
 let CUR: long = 0;                         // the byte the cursor is on
@@ -570,7 +568,7 @@ const MAXREC = 8;
 let RECENT: [str] = [];
 
 // The line buffer the status line is assembled into.  A [byte; 256] at module
-// scope, never a str built per frame (ORCHESTRATOR.md 2.7: fb.text plus a
+// scope, never a str built per frame (ORCHESTRATOR.md 2.7: tui.text plus a
 // freshly built string costs ~2.4 KB a frame).
 let SBUF: [byte; 256] = [0; 256];
 let SN: long = 0;
@@ -650,13 +648,13 @@ def sbclr() {
     SN = 0
 };
 
-// SBUF -> the surface, one cell at a time.  `fb.text` wants a str, and a str
+// SBUF -> the surface, one cell at a time.  `tui.text` wants a str, and a str
 // made per frame is the 2.4 KB leak ORCHESTRATOR.md 2.7 warns about, so the
 // cells are put directly.
 def sput(row: long, col: long, fg: long) -> long {
     let i = 0;
     while (i < SN) {
-        fb.put(SURF, row, col + i, SBUF[i], fg, C_BG);
+        tui.put(SURF, row, col + i, SBUF[i], fg, C_BG);
         i = i + 1;
     };
     SN
@@ -664,12 +662,12 @@ def sput(row: long, col: long, fg: long) -> long {
 
 // ── the window size ──
 //
-// term.size() answers a fresh record per call (~40 B), so a per-frame resize
+// tui.size() answers a fresh record per call (~40 B), so a per-frame resize
 // poll with it leaks; this reads TIOCGWINSZ into a module-level buffer instead.
 def poll_winsize() -> bool {
     for i in 0..8 { WSBUF[i] = 0; };
     let changed = false;
-    if (syscall(16, 1, term.TIOCGWINSZ, &WSBUF[0]) >= 0) {
+    if (syscall(16, 1, tui.TIOCGWINSZ, &WSBUF[0]) >= 0) {
         let r = (WSBUF[0] & 255) | ((WSBUF[1] & 255) << 8);
         let c = (WSBUF[2] & 255) | ((WSBUF[3] & 255) << 8);
         if (r > 0 && c > 0 && (r != WROWS || c != WCOLS)) {
@@ -679,7 +677,7 @@ def poll_winsize() -> bool {
         }
     };
     if (changed && WROWS > 2 && WCOLS > 4) {
-        SURF = fb.resize(SURF, WROWS, WCOLS);
+        SURF = tui.resize(SURF, WROWS, WCOLS);
         // A resize invalidates the shadow, so the next frame repaints in full.
         REDRAW_ALL = 1;
     };
@@ -787,7 +785,7 @@ def recent_at(i: long) -> str {
 // ── drawing ──
 
 def draw_title() -> void {
-    fb.clear(SURF, C_BG);
+    tui.clear(SURF, C_BG);
     sbclr();
     sbs(NAME);
     sb(32);
@@ -797,7 +795,7 @@ def draw_title() -> void {
     sbs(" bytes");
     if (hx.DIRTY == 1) { sbs("  [modified]"); };
     sput(0, 0, C_TITLE);
-    fb.hline(SURF, WROWS - 3, 0, WCOLS, 9472, C_RULE, C_BG);
+    tui.hline(SURF, WROWS - 3, 0, WCOLS, 9472, C_RULE, C_BG);
     0
 };
 
@@ -815,11 +813,11 @@ def draw_row(row: long, base: long) -> void {
         let sh = 7 - i;
         let dg = 0;
         if (sh < d) { dg = (base / P10[sh]) % 10; };
-        fb.put(SURF, row, i, 48 + dg, C_OFF, C_BG);
+        tui.put(SURF, row, i, 48 + dg, C_OFF, C_BG);
         i = i + 1;
     };
-    fb.put(SURF, row, 8, 32, C_OFF, C_BG);
-    fb.put(SURF, row, 9, 32, C_OFF, C_BG);
+    tui.put(SURF, row, 8, 32, C_OFF, C_BG);
+    tui.put(SURF, row, 9, 32, C_OFF, C_BG);
     let k = 0;
     while (k < WIDTH && base + k < hx.SIZE) {
         let v = hx.byte_at(base + k);
@@ -835,27 +833,27 @@ def draw_row(row: long, base: long) -> void {
         let mark_lo = here && PANE == 0 && NIBBLE == 1;
         let bg = C_BG;
         if (here && PANE == 0) { bg = C_SEL; };
-        if (mark_hi) { fb.put(SURF, row, col, hb, 16, C_SEL); } else {
-            fb.put(SURF, row, col, hb, fg, bg);
+        if (mark_hi) { tui.put(SURF, row, col, hb, 16, C_SEL); } else {
+            tui.put(SURF, row, col, hb, fg, bg);
         };
-        if (mark_lo) { fb.put(SURF, row, col + 1, lb, 16, C_SEL); } else {
-            fb.put(SURF, row, col + 1, lb, fg, bg);
+        if (mark_lo) { tui.put(SURF, row, col + 1, lb, 16, C_SEL); } else {
+            tui.put(SURF, row, col + 1, lb, fg, bg);
         };
         let g = hx.glyph(v);
         let gfg = C_GUT;
         if (g == hx.DOT) { gfg = C_ZERO; };
         let gbg = C_BG;
         if (here && PANE == 1) { gbg = C_SEL; };
-        fb.put(SURF, row, gut_col(k), g, gfg, gbg);
+        tui.put(SURF, row, gut_col(k), g, gfg, gbg);
         k = k + 1;
     };
     if (base < hx.SIZE) {
-        fb.put(SURF, row, hex_col(0) - 1, 62, C_RULE, C_BG);
-        fb.put(SURF, row, gut_col(0) - 1, 62, C_RULE, C_BG);
+        tui.put(SURF, row, hex_col(0) - 1, 62, C_RULE, C_BG);
+        tui.put(SURF, row, gut_col(0) - 1, 62, C_RULE, C_BG);
     };
     if (mark_find(base) >= 0 || mark_find(base + WIDTH - 1) >= 0) {
         // A bookmarked row says so on the rule line under the offset.
-        fb.put(SURF, row, 0, 42, C_MSG, C_BG);
+        tui.put(SURF, row, 0, 42, C_MSG, C_BG);
     };
     0
 };
@@ -945,8 +943,8 @@ def draw() -> long {
         r = r + 1;
     };
     draw_status();
-    term.cursor_to(cursor_row(), cursor_col());
-    if (REDRAW_ALL == 1) { fb.flush(SURF); REDRAW_ALL = 0; } else { fb.flush_diff(SURF); };
+    tui.cursor_to(cursor_row(), cursor_col());
+    if (REDRAW_ALL == 1) { tui.flush(SURF); REDRAW_ALL = 0; } else { tui.flush_diff(SURF); };
     FRAMES_DRAWN = FRAMES_DRAWN + 1;
     DIRTYF = 0;
     FRAMES_DRAWN
@@ -1022,19 +1020,19 @@ def search_from(from: long, dir: long) -> long {
 
 // ── the loop ──
 
-// Every exit from here goes through term.restore_all_exit(), and the watchdog is
+// Every exit from here goes through tui.restore_all_exit(), and the watchdog is
 // armed, so a signal still puts the terminal back (ORCHESTRATOR.md 2.3).
 def run_interactive() -> long {
-    if (!term.raw_mode()) {
+    if (!tui.raw_mode()) {
         eputs(NAME + ": not a terminal (stdin); use --no-tty for the dump\n");
         return 2
     };
-    term.arm_watchdog();
-    term.enter_screen();
-    fb.set_fd(1);
+    tui.arm_watchdog();
+    tui.enter_screen();
+    tui.set_fd(1);
     poll_winsize();
-    SURF = fb.resize(SURF, WROWS, WCOLS);
-    let pacer = time.pacer_new(VIEW_FPS);
+    SURF = tui.resize(SURF, WROWS, WCOLS);
+    let pacer = tui.pacer_new(VIEW_FPS);
     let rc = 0;
     HEAP0 = heap_used();
     DIRTYF = 1;
@@ -1044,9 +1042,9 @@ def run_interactive() -> long {
         // read_key_timeout(0): a poll, with the pacer owning the deadline.  A
         // 1..99 ms poll rounds up to 100 ms (VTIME counts deciseconds,
         // ORCHESTRATOR.md 2.1) and every frame lands a period late.
-        let k = term.read_key_timeout(0);
-        if (k != term.KEY_NONE) { handle(k); };
-        let wait = time.pacer_next(pacer);
+        let k = tui.read_key_timeout(0);
+        if (k != tui.KEY_NONE) { handle(k); };
+        let wait = tui.pacer_next(pacer);
         let due = wait > 0;
         // An editor redraws when something changed.  `--frames N` is the other
         // contract -- draw exactly N frames whether or not anything happened --
@@ -1061,10 +1059,10 @@ def run_interactive() -> long {
         eputs(NAME + ": frames " + tostring(FRAMES_DRAWN) + ", heap "
               + tostring(HEAP0) + " -> " + tostring(heap_used()) + " (delta "
               + tostring(heap_used() - HEAP0) + "), keys dropped "
-              + tostring(time.pacer_dropped(pacer)) + "\n");
+              + tostring(tui.pacer_dropped(pacer)) + "\n");
     };
     if (OUTERR == 1) { rc = 5; };
-    term.restore_all_exit(rc);
+    tui.restore_all_exit(rc);
     rc
 };
 
@@ -1115,7 +1113,7 @@ def setmsg(s: str) -> void {
 };
 
 def handle_open(k: long) -> void {
-    if (k == term.KEY_ESC) {
+    if (k == tui.KEY_ESC) {
         HITS = 0;
         PATHN = 0;
         return
@@ -1162,7 +1160,7 @@ def handle_open(k: long) -> void {
 };
 
 def handle_find(k: long) -> void {
-    if (k == term.KEY_ESC) {
+    if (k == tui.KEY_ESC) {
         HITS = 0;
         PATN = 0;
         return
@@ -1186,20 +1184,20 @@ def handle_find(k: long) -> void {
 let LASTMESS: long = 0;                    // 1 = the status line carries a message
 
 def handle_normal(k: long) -> void {
-    if (k == term.KEY_UP || k == 75) { step(0 - WIDTH); return };
-    if (k == term.KEY_DOWN || k == 74) { step(WIDTH); return };
-    if (k == term.KEY_LEFT || k == 72) { step(0 - 1); return };
-    if (k == term.KEY_RIGHT || k == 76) { step(1); return };
-    if (k == term.KEY_PGUP || k == 21) { step(0 - WIDTH * view_rows()); return };
-    if (k == term.KEY_PGDN || k == 22) { step(WIDTH * view_rows()); return };
+    if (k == tui.KEY_UP || k == 75) { step(0 - WIDTH); return };
+    if (k == tui.KEY_DOWN || k == 74) { step(WIDTH); return };
+    if (k == tui.KEY_LEFT || k == 72) { step(0 - 1); return };
+    if (k == tui.KEY_RIGHT || k == 76) { step(1); return };
+    if (k == tui.KEY_PGUP || k == 21) { step(0 - WIDTH * view_rows()); return };
+    if (k == tui.KEY_PGDN || k == 22) { step(WIDTH * view_rows()); return };
     // No letter that is a HEX DIGIT may be bound to a command: 0-9 a-f have to
     // be typeable, because a byte is made of them.  `a` was bound to Home here
     // and `f` to fit, so neither could be typed -- found by pty_check.py, which
     // typed a byte and watched the file not change.  Home/End are the escape
     // sequences, and g / G do first and last.
-    if (k == term.KEY_HOME || k == 103) { CUR = 0; NIBBLE = 0; return };
+    if (k == tui.KEY_HOME || k == 103) { CUR = 0; NIBBLE = 0; return };
     if (k == 9) { PANE = 1 - PANE; NIBBLE = 0; return };
-    if (k == term.KEY_ESC || k == 113 || k == 3) { handle_quit(); return };
+    if (k == tui.KEY_ESC || k == 113 || k == 3) { handle_quit(); return };
     if (k == 8 || k == 127) { step(0 - 1); return };
     if (k == 10 || k == 13) { step(WIDTH); return };
     if (k == 47) { HITS = 2; PATN = 0; return };

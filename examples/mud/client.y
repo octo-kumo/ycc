@@ -39,9 +39,8 @@
 
 // NOTE ON IMPORTS.  Every .y file here compiles on its own (the acceptance
 // gate builds each one), and a module's own imports do not carry for the
-// modules IT imports -- `import sockio;` does not bring in the `rnd` that
+// modules IT imports -- `import sockio;` does not bring in the `random` that
 // world.y uses.  So each file names its whole closure.  See server.y.
-import rnd;
 import net;
 import sockio;
 import world;

@@ -62,7 +62,7 @@ two commands plus `check=./httpsrv --self-test`.
 **Pinned compiler.** Built and verified against `refs/ycc.ref` sha256
 `c53cc41524a7baa2de88d0f56faf5e2c9d006845ab5fa7a1b70edc53f9df6631`.
 The binary this produced is sha256
-`a77d15f627f7ec75fd0d14d810736202cda44c3b7b7ec754c68af695e5fbf755`, and
+`b0696c64fd460309f2475a0796b29af9bd8769d468de3fd72ca47db3cdad3cab`, and
 rebuilding from the same sources with the same compiler reproduces it byte
 for byte. The pin moves when the compiler is reblessed; if the sha above
 stops matching, rebuild, re-run `./httpsrv --self-test` and the golden
@@ -72,25 +72,52 @@ the binary, so it is updated with it).
 **A note on buffer typing**, because it explains a design choice that
 looks odd. Each module's buffers are declared with an exact fixed size
 (`let buf: [byte; 65536]`), and the helpers that take one name that exact
-size (`def write(b: [byte; 65536], ...)`). That is deliberate: it makes
-`json.y`'s parser and `httpc.y`'s response buffer **the same type**, so the
-compiler refuses a mismatch instead of letting it become a misparse. The
-price is that each module keeps its own small byte-writer rather than
-sharing one; a `[byte]` parameter would allow a single shared writer (a
-runtime-sized `let b: [byte] = [0; 65536]` does work, and unifies), so this
-is a choice for the compile-time check, not a wall. Both facts are
-verified here.
+size (`def write(b: [byte; 65536], ...)`). That was deliberate: it made
+this folder's own `json.y` parser and `httpc.y`'s response buffer **the
+same type**, so the compiler refused a mismatch instead of letting it
+become a misparse. `json.y` is gone now — see *The JSON parser* below —
+so the check is `httpc`'s alone: the size is declared once and every
+helper that takes the buffer names it. The price is that each module keeps
+its own small byte-writer rather than sharing one; a `[byte]` parameter
+would allow a single shared writer (a runtime-sized `let b: [byte] =
+[0; 65536]` does work, and unifies), so this is a choice for the
+compile-time check, not a wall. Both facts are verified here.
 
-**Frozen toolkit.** `args.y`, `term.y` and `time.y` are byte-identical
-copies of `examples/_toolkit/`, vendored (not imported across folders):
+**The JSON parser.** This folder used to carry its own `json.y` (411
+lines): an *extractive* reader over `httpc`'s fixed buffer that returned
+**offsets** and allocated nothing — `validate`/`get`/`int_at`/`alen`/
+`elem`, with a malformed document getting a position and a reason rather
+than a wrong number. It has been deleted. `import json;` now resolves to
+std's `std/json.y`, which builds a `json.Val` instead, and
+`httpsrv.y`'s `pull()` is the whole adaptation: `json.parse_err` over the
+bytes `httpc` left in `buf`, then `json.get_arr`/`json.field`. The
+transcript and all 26 self-test checks are unchanged.
 
-| file | sha256 | lines | used for |
-|---|---|---|---|
-| `args.y` | `cdac36da1cf2cd8551bd06b1bf2a7b608736bc55106e64f5be3b7aa9332e9d28` | 19081 | flags, usage, exit code 2 on a bad one |
-| `term.y` | `07135b31109fcecdef5bddf7d0299c9194039d172396b49347630a93a286b6ee` | 1156 | raw mode, alt screen, key decode, terminal restore on every exit |
-| `time.y` | `6050605cfcfb35db17ff180f89b4229796a7616099afbe34e2d2f34cdf37784b` | 245 | the frame pacer and the fps meter |
+Two things the old reader did that std's accessors do **not**, re-created
+in `doc_int()` and called out here because they are the interesting part:
 
-`fx.y` and `fb.y` are **not** vendored: there is no trigonometry here, and
+* `json.int_at` **refused** a fraction or an exponent (`not an integer`)
+  rather than truncating it. `json.as_long` truncates — `as_long` on `3.5`
+  is `3`, on `1e3` is `1` — so `doc_int` re-implements the refusal on the
+  number's literal text, and keeps the old 13-digit bound so a value past
+  it is an error instead of a wrapped long. Y has no float-to-long
+  conversion, which is exactly why a JSON number is text here.
+* `json.err`/`json.at` named the offending byte. `json.parse_err` does
+  too, and better: a reason, the byte, and a position relative to the
+  **body** rather than to a 64 KiB buffer the reader cannot see.
+
+The cost is honest and worth stating: parsing allocates now, where the
+old reader allocated nothing. It does not touch the property that matters
+for this example — the 200-request *polling* loop in `--self-test` calls
+`httpc.get` only and still measures `heap_used()` deltas of 0, because
+that is the path a dashboard runs in.
+
+**The std units.** `args`, `http`, `json` and `tui` are std's, imported
+(`args` and `tui` are byte-identical copies of `examples/_toolkit/` —
+they are std units now, so they are imported rather than vendored into
+this folder):
+
+`fx.y` and `tui` are **not** used: there is no trigonometry here, and
 the renderer writes bytes into fixed buffers rather than into a cell grid
 (see *No per-frame allocation* below for why that is the right call here).
 
@@ -312,7 +339,7 @@ one is a silent failure rather than a crash:
 * **`term.read_key_timeout(ms)` cannot be finer than 100 ms** (VTIME counts
   deciseconds), so a frame loop that polls a key with a timeout loses
   whole frame periods. The live loop polls with
-  `read_key_timeout(0)` — a non-blocking read — and `time.y`'s pacer owns
+  `read_key_timeout(0)` — a non-blocking read — and `tui`'s pacer owns
   the deadline: **10.00 fps, 0 dropped, worst lag 0 ms** at
   `--poll-ms 100`.
 * **`term.size()` returns a fresh record every call** (~40 bytes), so a
@@ -328,12 +355,16 @@ one is a silent failure rather than a crash:
   `examples/BUGS.md`). The std client is used exactly once per URL in the
   cross-check and the body is read into a variable, and `r.err`/`r.status`
   are checked before the body is touched.
-* **No JSON module, so `json.y` is hand-rolled** (411 lines, over
-  `split`/`index_of`/`ord` on a byte buffer): a recursive-descent
-  validator with a depth bound, a key lookup, integer and string readers,
-  and an array walker. A malformed document gets a position and a reason,
-  not a wrong number. This is expected work rather than a workaround — a
-  JSON module is already on the compiler's roadmap.
+* **The parser is std's `json`**, which this folder used to hand-roll
+  (411 lines, over `split`/`index_of`/`ord` on a byte buffer) because no
+  JSON module existed. It still supplies the property the old one had: a
+  malformed document gets a position and a reason, not a wrong number. Two
+  of the old reader's guarantees are not in std's accessors and are
+  re-created locally — see *The JSON parser* above.
+* **`parse_bytes` takes `[byte]`, not `[byte; N]`**, so a fixed response
+  buffer reaches it as a slice (`buf[off:end]`). That is a real gap in std
+  rather than a style choice: the slice copies, which is the copy
+  `parse_bytes`' own comment says it was added to remove.
 * **No `break`/`continue`**, so every early exit is a guard flag or a
   positive condition, and **every scan loop advances its cursor on every
   path** — a cursor that is only advanced on the matching branch is an
@@ -373,12 +404,12 @@ one is a silent failure rather than a crash:
 
 | file | lines | what |
 |---|---|---|
-| `httpsrv.y` | 814 | the driver: flags, the transcript, the property check, the live loop |
-| `srv.y` | 777 | the server: the model, the accept loop, the routes, the dashboard page, the fork/stop |
-| `json.y` | 411 | a hand-rolled JSON reader that works in place over bytes |
-| `httpc.y` | 321 | a fixed-buffer HTTP/1.1 GET client (no allocation per request) |
-| `dash.y` | 403 | the dashboard renderer, its own `winsize()`, row-diffed painting |
-| `args.y`, `term.y`, `time.y` | — | vendored from `examples/_toolkit/`, byte-identical |
+| `httpsrv.y` | 891 | the driver: flags, the transcript, the property check, the live loop |
+| `srv.y` | 776 | the server: the model, the accept loop, the routes, the dashboard page, the fork/stop |
+| `httpc.y` | 326 | a fixed-buffer HTTP/1.1 GET client (no allocation per request) |
+| `json` | — | from std, unedited (this folder's own 411-line reader is gone) |
+| `dash.y` | 404 | the dashboard renderer, its own `winsize()`, row-diffed painting |
+| `args`, `tui` | — | from std, unedited |
 | `EXPECTED` | 3865 B | the default run's stdout, exact |
 | `golden/dashboard-frame.txt` | 1701 B | the frame alone, a byte-identical slice of `EXPECTED` |
 | `golden/live-frame-ansi.txt` | ~8 KB | a pty capture of `--live`, escapes included (numbers vary: real clock) |
@@ -485,6 +516,30 @@ able to see the history rather than infer it from one number.
 ## Pin re-verification: `31808ddc21adfa31` (orchestrator, 2026-10-05)
 
 `refs/ycc.ref` moved again, `1d28b3dbcc546b5fc0e3f9d541b56777f746cd3e10122b45ba42f4904fd191d3` -> **`31808ddc21adfa31398f6337fa6dd6bfe585d25beceab20498b6914b89485755`**. This folder was
+**rebuilt from source with the new pin and re-gated in full**: items 1-8 all
+pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
+0 caught the stale record and nothing else did -- across all 39 folders at
+once, which is the signature of a pin move rather than of a regression.
+
+Earlier shas above are kept on purpose: this example has been verified
+against each of them, and a reader who wants to know what changed should be
+able to see the history rather than infer it from one number.
+
+## Pin re-verification: `289cf022002903a6` (orchestrator, 2026-10-05)
+
+`refs/ycc.ref` moved again, `e39a5e21785f599184f55deafad3ff17b4d05edb01cebc0a513e0cb7907f517d` -> **`289cf022002903a695c1ca339816b0f8f478aa3ef9f00643a93c3a95947f979c`**. This folder was
+**rebuilt from source with the new pin and re-gated in full**: items 1-8 all
+pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
+0 caught the stale record and nothing else did -- across all 39 folders at
+once, which is the signature of a pin move rather than of a regression.
+
+Earlier shas above are kept on purpose: this example has been verified
+against each of them, and a reader who wants to know what changed should be
+able to see the history rather than infer it from one number.
+
+## Pin re-verification: `dad3564d3bcdf6df` (orchestrator, 2026-10-05)
+
+`refs/ycc.ref` moved again, `e39a5e21785f599184f55deafad3ff17b4d05edb01cebc0a513e0cb7907f517d` -> **`dad3564d3bcdf6df889d017e88660dd8e7e0637a1e046acc45539f515e361d3e`**. This folder was
 **rebuilt from source with the new pin and re-gated in full**: items 1-8 all
 pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
 0 caught the stale record and nothing else did -- across all 39 folders at

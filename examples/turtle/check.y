@@ -72,10 +72,10 @@
 // module-level `let`, every scalar crosses a call boundary as a `long`, and no
 // array or record literal is written inside a loop.
 
-import fb;
 import tlang;
 import scene;
 import sink;
+import tui;
 
 // The check renders at its own fixed size and never asks the terminal, so its
 // answer does not depend on the window it was run in.
@@ -1305,15 +1305,15 @@ def case_capture() -> void {
     scene.set_size(CK_ROWS, CK_COLS);
     scene.clear_frame();
     render("colour red forward 50 right 90 forward 50 right 90 forward 50");
-    fb.capture_on();
-    fb.capture_reset();
-    fb.flush(scene.SRF);
-    let n1 = fb.capture_len();
-    let c1 = fb.capture_checksum();
-    fb.capture_reset();
-    fb.flush(scene.SRF);
-    let n2 = fb.capture_len();
-    let c2 = fb.capture_checksum();
+    tui.capture_on();
+    tui.capture_reset();
+    tui.flush(scene.SRF);
+    let n1 = tui.capture_len();
+    let c1 = tui.capture_checksum();
+    tui.capture_reset();
+    tui.flush(scene.SRF);
+    let n2 = tui.capture_len();
+    let c2 = tui.capture_checksum();
     // C1 FIRST, and separately: a checksum compared without first proving it is
     // over a non-empty stream is the vacuous pass this campaign has produced
     // twice.  c1 over zero bytes would equal c2 over zero bytes for ever.
@@ -1334,20 +1334,20 @@ def case_capture() -> void {
     };
     // perturb exactly one cell and flush again
     scene.perturb();
-    fb.capture_reset();
-    fb.flush(scene.SRF);
-    let n3 = fb.capture_len();
-    let c3 = fb.capture_checksum();
+    tui.capture_reset();
+    tui.flush(scene.SRF);
+    let n3 = tui.capture_len();
+    let c3 = tui.capture_checksum();
     // and put it back: the checksum must return
     scene.perturb();
-    fb.capture_reset();
-    fb.flush(scene.SRF);
-    let c4 = fb.capture_checksum();
+    tui.capture_reset();
+    tui.flush(scene.SRF);
+    let c4 = tui.capture_checksum();
     // and a blank surface must not have the same checksum as a drawn one
     scene.clear_frame();
-    fb.capture_reset();
-    fb.flush(scene.SRF);
-    let c5 = fb.capture_checksum();
+    tui.capture_reset();
+    tui.flush(scene.SRF);
+    let c5 = tui.capture_checksum();
     if (n3 > 0 && c3 != c1 && c4 == c1 && c5 != c1) {
         note("C2", "one perturbed cell changes the checksum, back again restores it",
              "bytes", n1)
@@ -1365,7 +1365,7 @@ def case_capture() -> void {
         sink.out_str("\n");
         FAILED = FAILED + 1
     };
-    fb.capture_off()
+    tui.capture_off()
 };
 
 // ───────────────────────────────── V: absolute geometry ───
@@ -1400,7 +1400,7 @@ def case_cells() -> void {
     let c = 0;
     let at = 10;
     while (c < cols) {
-        let is_ink = scene.SRF.ch[r * cols + c] != fb.space;
+        let is_ink = scene.SRF.ch[r * cols + c] != tui.space;
         if (c >= at && c < at + want) {
             if (is_ink == false) {
                 if (first < 0) { first = c };
@@ -1418,7 +1418,7 @@ def case_cells() -> void {
         if (rr != r) {
             let cc = 0;
             while (cc < cols) {
-                if (scene.SRF.ch[rr * cols + cc] != fb.space) {
+                if (scene.SRF.ch[rr * cols + cc] != tui.space) {
                     wrong = wrong + 1;
                     if (first < 0) { first = cc }
                 };
@@ -1532,7 +1532,7 @@ def case_zero_alloc() -> void {
     scene.fit(CK_ROWS, CK_COLS, tlang.BX0, tlang.BY0, tlang.BX1, tlang.BY1);
     scene.clear_frame();
     tlang.reset();
-    fb.capture_on();
+    tui.capture_on();
     // warm the frame path once, so a first-call allocation is not counted
     scene.step_draw();
     let h0 = heap_used();
@@ -1540,11 +1540,11 @@ def case_zero_alloc() -> void {
     let f = 0;
     while (f < frames) {
         scene.step_draw();
-        fb.flush_diff(scene.SRF);
+        tui.flush_diff(scene.SRF);
         f = f + 1
     };
     let h1 = heap_used();
-    fb.capture_off();
+    tui.capture_off();
     let delta = h1 - h0;
     if (delta == 0 && frames > 0) {
         note("Z1", "heap delta over 400 drawn frames", "delta", delta)

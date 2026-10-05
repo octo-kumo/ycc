@@ -80,7 +80,7 @@ keeps stdout clean for the next stage of a pipe.
 
 Two codes, not one, so a script can tell "the data is broken" from "you
 asked wrongly". A bare invocation prints the usage on **stderr** and exits
-**2** — in this tool stdout is only ever data. `args.y` supplies the 2 for
+**2** — in this tool stdout is only ever data. `args` supplies the 2 for
 its own parse errors; the table above is what this program guarantees on
 top of that.
 
@@ -331,22 +331,17 @@ compiler generates, not an absent feature.
 | `csvio.y` | 475 | RFC 4180 parse and emit, plus the two JSON bridges |
 | `b64.y` | 242 | RFC 4648 encode and decode |
 | `selftest.y` | 788 | the 143 property checks and the fork/exec harness |
-| `args.y` | 470 | **vendored, unmodified** from `examples/_toolkit/` |
 | `data/demo.json` | 1 014 B | the demo document, embedded in the binary |
 | `data/demo.csv` | 146 B | the demo table, embedded, in canonical form |
 | `EXPECTED` | 5 560 B | the exact stdout of `./toolkit_cli demo` |
 | `golden/selftest.txt` | 15.7 kB | the property check's output, for a human to read |
 
-### Frozen toolkit revision
+## The std units this uses
 
 Vendored from `examples/_toolkit/` at the revision the campaign table
 records, copied in **byte-identically** and **not edited** — only
-`args.y` is needed, since this example has no terminal, no framebuffer and
+`args` is needed, since this example has no terminal, no framebuffer and
 no trigonometry.
-
-| file | sha256 | matches `_toolkit/` |
-|---|---|---|
-| `args.y` | `cdac36da1cf2cd8551bd06b1bf2a7b608736bc55106e64f5be3b7aa9332e9d28` | yes |
 
 ### sha256 of this example's own sources
 
@@ -494,6 +489,30 @@ able to see the history rather than infer it from one number.
 ## Pin re-verification: `31808ddc21adfa31` (orchestrator, 2026-10-05)
 
 `refs/ycc.ref` moved again, `1d28b3dbcc546b5fc0e3f9d541b56777f746cd3e10122b45ba42f4904fd191d3` -> **`31808ddc21adfa31398f6337fa6dd6bfe585d25beceab20498b6914b89485755`**. This folder was
+**rebuilt from source with the new pin and re-gated in full**: items 1-8 all
+pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
+0 caught the stale record and nothing else did -- across all 39 folders at
+once, which is the signature of a pin move rather than of a regression.
+
+Earlier shas above are kept on purpose: this example has been verified
+against each of them, and a reader who wants to know what changed should be
+able to see the history rather than infer it from one number.
+
+## Pin re-verification: `289cf022002903a6` (orchestrator, 2026-10-05)
+
+`refs/ycc.ref` moved again, `e39a5e21785f599184f55deafad3ff17b4d05edb01cebc0a513e0cb7907f517d` -> **`289cf022002903a695c1ca339816b0f8f478aa3ef9f00643a93c3a95947f979c`**. This folder was
+**rebuilt from source with the new pin and re-gated in full**: items 1-8 all
+pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
+0 caught the stale record and nothing else did -- across all 39 folders at
+once, which is the signature of a pin move rather than of a regression.
+
+Earlier shas above are kept on purpose: this example has been verified
+against each of them, and a reader who wants to know what changed should be
+able to see the history rather than infer it from one number.
+
+## Pin re-verification: `dad3564d3bcdf6df` (orchestrator, 2026-10-05)
+
+`refs/ycc.ref` moved again, `e39a5e21785f599184f55deafad3ff17b4d05edb01cebc0a513e0cb7907f517d` -> **`dad3564d3bcdf6df889d017e88660dd8e7e0637a1e046acc45539f515e361d3e`**. This folder was
 **rebuilt from source with the new pin and re-gated in full**: items 1-8 all
 pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
 0 caught the stale record and nothing else did -- across all 39 folders at

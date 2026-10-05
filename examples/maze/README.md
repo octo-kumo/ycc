@@ -26,7 +26,7 @@ randomised Kruskal sits between them. Read `longest` down the three rows.
 
 ## Build and run
 
-The five toolkit modules are **vendored**: `fx.y fb.y term.y time.y args.y`
+The five toolkit modules are **vendored**: `fx.y tui tui tui args
 sit beside the program and are imported by bare name (`import fb;`), so this
 folder builds on its own with no sibling folder present.
 
@@ -56,7 +56,7 @@ copy somewhere else: it resolves `std/` relative to its own path.
 | `-h, --help` | the generated usage plus notes on the three generators |
 
 Exit codes: **0** fine, **1** a bad flag or a bad argument (message on
-stderr), **2** reserved for a usage error from the flag parser. `args.y`'s own
+stderr), **2** reserved for a usage error from the flag parser. `args`'s own
 `parse_or_exit` uses 2 for a usage error; this example follows the brief and
 uses 1 for everything wrong on the command line, so the two disagree — that is
 deliberate and it is a real inconsistency in the campaign's convention, worth
@@ -555,14 +555,14 @@ RESULT                  : PASS
 | `capture.py` | 120 | rebuilds `golden/`, including a pyte replay of the interactive view |
 | `pty_check.py` | 113 | drives the interactive path under a real pty |
 | `gate.sh` | 150 | the whole acceptance gate, re-runnable |
-| `fx.y fb.y term.y time.y args.y` | 3520 | the vendored toolkit, byte-identical to `examples/_toolkit/` |
+| `fx.y` | `4b47a9bfef0c1e30` | 694 | | the vendored toolkit, byte-identical to `examples/_toolkit/` |
 | `README.md` | 703 | this file |
 | `EXPECTED` | 6574 bytes | the stdout of the `run=` line in `gate.conf` |
 | `golden/*.txt` | 4 files | the three generators as text, plus the interactive view as the terminal rendered it |
 
 ---
 
-## The frozen toolkit
+## The std units this uses
 
 These five files are **copies of `examples/_toolkit/` and are NOT edited** —
 verified by sha256 at the top of `gate.sh`'s sibling check and again here:
@@ -570,14 +570,10 @@ verified by sha256 at the top of `gate.sh`'s sibling check and again here:
 | file | sha256 (first 16) | lines |
 |---|---|---|
 | `fx.y` | `4b47a9bfef0c1e30` | 687 |
-| `fb.y` | `95a7663b7f1c7a90` | 962 |
-| `term.y` | `07135b31109fcecd` | 1156 |
-| `time.y` | `6050605cfcfb35db` | 245 |
-| `args.y` | `cdac36da1cf2cd85` | 19081 |
 
-This folder vendors `time.y` and uses it (the frame pacer), `term.y` (raw mode,
-alt screen, keys, the restore guarantee), `fb.y` (the interactive surface) and
-`args.y` (the CLI). It vendors **`fx.y` and never calls it** — there is no
+This folder reaches std for `tui` -- the frame pacer, raw mode, the alt screen,
+keys, the restore guarantee and the interactive surface are all in it now -- and
+for `args` (the CLI). It vendors **`fx.y` and never calls it** — there is no
 floating point in this example at all, which is the point, so there is nothing
 for an integer trigonometry module to do.
 
@@ -643,12 +639,12 @@ That is the actual answer to "how do you draw a maze in Y without hitting the
 string layer": **write codepoints, not characters.** The status line's digits
 go out one digit at a time as `48 + n % 10`, which is the same idea.
 
-### 2. `fb.y`'s `emit_num` drops a zero digit — filed here
+### 2. `tui`'s `emit_num` drops a zero digit — filed here
 
-While checking the interactive view I found that `fb.y` writes colour channels
+While checking the interactive view I found that `tui` writes colour channels
 and CUP operands wrong whenever the **tens digit is zero**: `205` is emitted as
 `25`, `104` as `14`, `column 101` as `11`. Filed in `examples/BUGS.md` as
-"`fb.y`'s `emit_num` drops a zero digit". It is a toolkit bug, not a compiler
+"`tui`'s `emit_num` drops a zero digit". It is a toolkit bug, not a compiler
 bug, and it is visible in other examples too — `fb.rgb(255, 206, 96)` in
 `examples/donut`'s amber palette reaches the terminal as `38;2;255;26;96m`.
 
@@ -664,7 +660,7 @@ The vendored copy cannot be edited, so `maze.y` works around it two ways:
   the program emits lands in a broken range and no SGR channel has a zero tens
   digit.**
 
-`term.y` has the same helper (`put_num`) in each vendored copy, so the fix
+std `tui` has the helper (`put_num`) once, so the fix
 belongs in `examples/_toolkit/` and reaches every example at the next
 re-vendor.
 
@@ -677,7 +673,7 @@ re-vendor.
 | **no math functions, no `PI`** | nothing needed one — `rng.y` is bit arithmetic and the heuristics are `abs` by hand |
 | **nothing is ever freed** | every buffer module-level; `--soak` measures the result |
 | **no `sort`, no `push`, no `map_get`** | union-find over a `[long]` instead of a map; a `[long]` worklist with a stack pointer for the frontier; Fisher–Yates by hand |
-| **a fixed `[T; N]` is not a `[T]`** | the solver's expansion order and route arrays live in `grid.y` next to the render code that reads them, because they cannot be passed to `grid_paint()` as parameters. Same reason `term.y`'s termios buffers are growable `[byte]` |
+| **a fixed `[T; N]` is not a `[T]`** | the solver's expansion order and route arrays live in `grid.y` next to the render code that reads them, because they cannot be passed to `grid_paint()` as parameters. Same reason `tui`'s termios buffers are growable `[byte]` |
 | **traps print to stdout** | every divisor is guarded: `s_corr == 0` in a 1×1 maze would be a division by zero *in the middle of the report line* |
 | **`split` drops a trailing empty field; `join` puts the separator first** | not used — no line is parsed back |
 | **an array literal in a loop body allocates** | every scratch array is a module-level `let`; see §7 of `SUGGESTIONS.md` |
@@ -786,6 +782,30 @@ able to see the history rather than infer it from one number.
 ## Pin re-verification: `31808ddc21adfa31` (orchestrator, 2026-10-05)
 
 `refs/ycc.ref` moved again, `1d28b3dbcc546b5fc0e3f9d541b56777f746cd3e10122b45ba42f4904fd191d3` -> **`31808ddc21adfa31398f6337fa6dd6bfe585d25beceab20498b6914b89485755`**. This folder was
+**rebuilt from source with the new pin and re-gated in full**: items 1-8 all
+pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
+0 caught the stale record and nothing else did -- across all 39 folders at
+once, which is the signature of a pin move rather than of a regression.
+
+Earlier shas above are kept on purpose: this example has been verified
+against each of them, and a reader who wants to know what changed should be
+able to see the history rather than infer it from one number.
+
+## Pin re-verification: `289cf022002903a6` (orchestrator, 2026-10-05)
+
+`refs/ycc.ref` moved again, `e39a5e21785f599184f55deafad3ff17b4d05edb01cebc0a513e0cb7907f517d` -> **`289cf022002903a695c1ca339816b0f8f478aa3ef9f00643a93c3a95947f979c`**. This folder was
+**rebuilt from source with the new pin and re-gated in full**: items 1-8 all
+pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
+0 caught the stale record and nothing else did -- across all 39 folders at
+once, which is the signature of a pin move rather than of a regression.
+
+Earlier shas above are kept on purpose: this example has been verified
+against each of them, and a reader who wants to know what changed should be
+able to see the history rather than infer it from one number.
+
+## Pin re-verification: `dad3564d3bcdf6df` (orchestrator, 2026-10-05)
+
+`refs/ycc.ref` moved again, `e39a5e21785f599184f55deafad3ff17b4d05edb01cebc0a513e0cb7907f517d` -> **`dad3564d3bcdf6df889d017e88660dd8e7e0637a1e046acc45539f515e361d3e`**. This folder was
 **rebuilt from source with the new pin and re-gated in full**: items 1-8 all
 pass and `EXPECTED` is reproduced **byte for byte** over two runs. Gate item
 0 caught the stale record and nothing else did -- across all 39 folders at

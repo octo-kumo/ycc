@@ -36,7 +36,7 @@
 // even where the loop runs once.
 
 import buf;
-import term;
+import tui;
 
 // ---- modes ---------------------------------------------------------------
 const NORMAL = 0;
@@ -79,7 +79,7 @@ let CMD_LEN = 0;
 // the key script
 // ===========================================================================
 //
-// `--keys` takes one string and decodes it into the SAME longs term.read_key()
+// `--keys` takes one string and decodes it into the SAME longs tui.read_key()
 // returns, so a scripted run and a real one execute identical code.  Names are
 // spelled in angle brackets and everything else is a literal byte:
 //
@@ -97,22 +97,22 @@ let SCRIPT_ERR = "";
 type Named = { name: str, code: long };
 
 let NAMED: [Named] = [
-    { name: "Esc",  code: term.KEY_ESC },
+    { name: "Esc",  code: tui.KEY_ESC },
     { name: "CR",   code: 13 },
     { name: "NL",   code: 10 },
     { name: "BS",   code: 127 },
     { name: "Tab",  code: 9 },
-    { name: "Del",  code: term.KEY_DELETE },
-    { name: "Up",   code: term.KEY_UP },
-    { name: "Down", code: term.KEY_DOWN },
-    { name: "Left", code: term.KEY_LEFT },
-    { name: "Right", code: term.KEY_RIGHT },
-    { name: "Home", code: term.KEY_HOME },
-    { name: "End",  code: term.KEY_END },
-    { name: "PgUp", code: term.KEY_PGUP },
-    { name: "PgDn", code: term.KEY_PGDN },
-    { name: "F1",   code: term.KEY_F1 },
-    { name: "F2",   code: term.KEY_F2 },
+    { name: "Del",  code: tui.KEY_DELETE },
+    { name: "Up",   code: tui.KEY_UP },
+    { name: "Down", code: tui.KEY_DOWN },
+    { name: "Left", code: tui.KEY_LEFT },
+    { name: "Right", code: tui.KEY_RIGHT },
+    { name: "Home", code: tui.KEY_HOME },
+    { name: "End",  code: tui.KEY_END },
+    { name: "PgUp", code: tui.KEY_PGUP },
+    { name: "PgDn", code: tui.KEY_PGDN },
+    { name: "F1",   code: tui.KEY_F1 },
+    { name: "F2",   code: tui.KEY_F2 },
     { name: "Space", code: 32 }
 ];
 
@@ -187,9 +187,9 @@ def script_decode(s: str) -> long {
 };
 
 def script_count() -> long { SCRIPT_N };
-def script_at(i: long) -> long { if (i >= 0 && i < SCRIPT_N) { SCRIPT[i] } else { term.KEY_NONE } };
+def script_at(i: long) -> long { if (i >= 0 && i < SCRIPT_N) { SCRIPT[i] } else { tui.KEY_NONE } };
 def script_take() -> long {
-    let k = term.KEY_NONE;
+    let k = tui.KEY_NONE;
     if (SCRIPT_I < SCRIPT_N) { k = SCRIPT[SCRIPT_I]; SCRIPT_I = SCRIPT_I + 1 };
     k
 };
@@ -278,13 +278,13 @@ def count_now() -> long { if (COUNT < 1) { 1 } else { COUNT } };
 
 def is_digit(k: long) -> bool { k >= 48 && k <= 57 };
 
-// term.read_key() NEVER answers 27: a bare ESC is decoded into term.KEY_ESC,
+// tui.read_key() NEVER answers 27: a bare ESC is decoded into tui.KEY_ESC,
 // which is 4096.  Comparing against 27 alone works in a script whose <Esc> the
 // decoder turned into 4096 and silently does nothing on a real terminal -- and
 // "silently does nothing" here means INSERT mode never ends, so everything typed
 // after an Escape is inserted into the file instead.  Both spellings are accepted
 // because 27 is what a non-raw read would hand back.
-def is_esc(k: long) -> bool { k == 27 || k == term.KEY_ESC };
+def is_esc(k: long) -> bool { k == 27 || k == tui.KEY_ESC };
 
 def take_count() -> long {
     let c = COUNT;
@@ -358,17 +358,17 @@ def insert_key(k: long) -> void {
     // editor does and costs three lines here.
     let ln = buf.cursor_line();
     let s = buf.line_at(ln);
-    if (k == term.KEY_LEFT) { buf.goto(ln, buf.prev_start(s, buf.cursor_col()), true); return };
-    if (k == term.KEY_RIGHT) { buf.goto(ln, buf.adv(s, buf.cursor_col()), true); return };
-    if (k == term.KEY_HOME) { buf.goto(ln, 0, true); return };
-    if (k == term.KEY_END) { buf.goto(ln, len(s), true); return };
-    if (k == term.KEY_UP) { buf.goto_motion(buf.M_K, 1); buf.clamp_cursor(true); buf.scroll_fix(); return };
-    if (k == term.KEY_DOWN) { buf.goto_motion(buf.M_J, 1); buf.clamp_cursor(true); buf.scroll_fix(); return };
-    if (k == term.KEY_DELETE) {
+    if (k == tui.KEY_LEFT) { buf.goto(ln, buf.prev_start(s, buf.cursor_col()), true); return };
+    if (k == tui.KEY_RIGHT) { buf.goto(ln, buf.adv(s, buf.cursor_col()), true); return };
+    if (k == tui.KEY_HOME) { buf.goto(ln, 0, true); return };
+    if (k == tui.KEY_END) { buf.goto(ln, len(s), true); return };
+    if (k == tui.KEY_UP) { buf.goto_motion(buf.M_K, 1); buf.clamp_cursor(true); buf.scroll_fix(); return };
+    if (k == tui.KEY_DOWN) { buf.goto_motion(buf.M_J, 1); buf.clamp_cursor(true); buf.scroll_fix(); return };
+    if (k == tui.KEY_DELETE) {
         if (buf.delete_chars(1) != 0) { buf.clamp_cursor(true); buf.scroll_fix() };
         return
     };
-    if (k == term.KEY_ESC) { set_mode(NORMAL); return }
+    if (k == tui.KEY_ESC) { set_mode(NORMAL); return }
 };
 
 // ===========================================================================
@@ -410,14 +410,14 @@ def visual_key(k: long) -> void {
     if (k == ord("G")) { buf.goto_motion(buf.M_G, raw_count()); return };
     let m = buf.motion_id(k, COUNT > 0);
     if (m != buf.M_NONE) { buf.goto_motion(m, take_count()); return };
-    if (k == term.KEY_LEFT) { buf.goto_motion(buf.M_H, 1); return };
-    if (k == term.KEY_RIGHT) { buf.goto_motion(buf.M_L, 1); return };
-    if (k == term.KEY_UP) { buf.goto_motion(buf.M_K, 1); return };
-    if (k == term.KEY_DOWN) { buf.goto_motion(buf.M_J, 1); return };
-    if (k == term.KEY_HOME) { buf.goto_motion(buf.M_ZERO, 1); return };
-    if (k == term.KEY_END) { buf.goto_motion(buf.M_DOLLAR, 1); return };
-    if (k == term.KEY_PGUP) { buf.scroll_page(0 - 1); return };
-    if (k == term.KEY_PGDN) { buf.scroll_page(1); return };
+    if (k == tui.KEY_LEFT) { buf.goto_motion(buf.M_H, 1); return };
+    if (k == tui.KEY_RIGHT) { buf.goto_motion(buf.M_L, 1); return };
+    if (k == tui.KEY_UP) { buf.goto_motion(buf.M_K, 1); return };
+    if (k == tui.KEY_DOWN) { buf.goto_motion(buf.M_J, 1); return };
+    if (k == tui.KEY_HOME) { buf.goto_motion(buf.M_ZERO, 1); return };
+    if (k == tui.KEY_END) { buf.goto_motion(buf.M_DOLLAR, 1); return };
+    if (k == tui.KEY_PGUP) { buf.scroll_page(0 - 1); return };
+    if (k == tui.KEY_PGDN) { buf.scroll_page(1); return };
     if (k == ord("n")) { search_next(SEARCH_BACK); return };
     if (k == ord("N")) { search_next(!SEARCH_BACK); return };
     if (k == ord(":")) { set_mode(NORMAL); enter_command(); return };
@@ -781,15 +781,15 @@ def normal_key(k: long) -> long {
     if (k == ord("n")) { search_next(SEARCH_BACK); return ACT_CONTINUE };
     if (k == ord("N")) { search_next(!SEARCH_BACK); return ACT_CONTINUE };
     if (k == ord("Z")) { return write_and_quit() };
-    if (k == term.KEY_LEFT) { buf.goto_motion(buf.M_H, 1); return ACT_CONTINUE };
-    if (k == term.KEY_RIGHT) { buf.goto_motion(buf.M_L, 1); return ACT_CONTINUE };
-    if (k == term.KEY_UP) { buf.goto_motion(buf.M_K, 1); return ACT_CONTINUE };
-    if (k == term.KEY_DOWN) { buf.goto_motion(buf.M_J, 1); return ACT_CONTINUE };
-    if (k == term.KEY_HOME) { buf.goto_motion(buf.M_ZERO, 1); return ACT_CONTINUE };
-    if (k == term.KEY_END) { buf.goto_motion(buf.M_DOLLAR, 1); return ACT_CONTINUE };
-    if (k == term.KEY_DELETE) { buf.delete_chars(1); return ACT_CONTINUE };
-    if (k == term.KEY_PGUP) { buf.scroll_page(0 - 1); return ACT_CONTINUE };
-    if (k == term.KEY_PGDN) { buf.scroll_page(1); return ACT_CONTINUE };
+    if (k == tui.KEY_LEFT) { buf.goto_motion(buf.M_H, 1); return ACT_CONTINUE };
+    if (k == tui.KEY_RIGHT) { buf.goto_motion(buf.M_L, 1); return ACT_CONTINUE };
+    if (k == tui.KEY_UP) { buf.goto_motion(buf.M_K, 1); return ACT_CONTINUE };
+    if (k == tui.KEY_DOWN) { buf.goto_motion(buf.M_J, 1); return ACT_CONTINUE };
+    if (k == tui.KEY_HOME) { buf.goto_motion(buf.M_ZERO, 1); return ACT_CONTINUE };
+    if (k == tui.KEY_END) { buf.goto_motion(buf.M_DOLLAR, 1); return ACT_CONTINUE };
+    if (k == tui.KEY_DELETE) { buf.delete_chars(1); return ACT_CONTINUE };
+    if (k == tui.KEY_PGUP) { buf.scroll_page(0 - 1); return ACT_CONTINUE };
+    if (k == tui.KEY_PGDN) { buf.scroll_page(1); return ACT_CONTINUE };
     // ^E and ^Y arrive as control bytes 5 and 4: half a screen each.
     if (k == 5) { buf.scroll_page(1); return ACT_CONTINUE };
     if (k == 4) { buf.scroll_page(0 - 1); return ACT_CONTINUE };
@@ -971,10 +971,10 @@ def op_pending_key(k: long) -> long {
     };
     if (k == ord("g")) { PEND_G = true; return ACT_CONTINUE };
     if (k == ord("G")) { return op_motion_raw(op, buf.M_G) };
-    if (k == term.KEY_LEFT) { return op_motion(op, buf.M_H) };
-    if (k == term.KEY_RIGHT) { return op_motion(op, buf.M_L) };
-    if (k == term.KEY_UP) { return op_motion(op, buf.M_K) };
-    if (k == term.KEY_DOWN) { return op_motion(op, buf.M_J) };
+    if (k == tui.KEY_LEFT) { return op_motion(op, buf.M_H) };
+    if (k == tui.KEY_RIGHT) { return op_motion(op, buf.M_L) };
+    if (k == tui.KEY_UP) { return op_motion(op, buf.M_K) };
+    if (k == tui.KEY_DOWN) { return op_motion(op, buf.M_J) };
     let m = buf.motion_id(k, COUNT > 0);
     if (m != buf.M_NONE) { return op_motion(op, m) };
     // An operator followed by anything else cancels, as vi does.  vi then
@@ -995,7 +995,7 @@ def op_pending_key(k: long) -> long {
 // ===========================================================================
 
 def feed(k: long) -> long {
-    if (k == term.KEY_NONE) { return ACT_CONTINUE };
+    if (k == tui.KEY_NONE) { return ACT_CONTINUE };
     if (MODE == COMMAND) { return command_key(k) };
     if (MODE == INSERT) {
         insert_key(k);

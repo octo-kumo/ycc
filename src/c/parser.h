@@ -73,7 +73,7 @@ long parse_type_atom(Yv *toks, long p);
 long parse_type(Yv *toks, long p);
 
 /* ── function literal ───────────────────────────────────────────────────── */
-Yv *parse_func(Yv *toks, long p);
+Yv *parse_func(Yv *toks, long p, int isnat);
 
 /* ── block { stmt; stmt; ... } ──────────────────────────────────────────── */
 Yv *parse_block(Yv *toks, long p);

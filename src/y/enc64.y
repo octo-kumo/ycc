@@ -53,6 +53,16 @@ def reg_num(name: str) -> long {
     else if (name == "%xmm3") { 3 }
     else if (name == "%xmm4") { 4 }
     else if (name == "%xmm5") { 5 }
+    else if (name == "%xmm6") { 6 }
+    else if (name == "%xmm7") { 7 }
+    else if (name == "%xmm8") { 8 }
+    else if (name == "%xmm9") { 9 }
+    else if (name == "%xmm10") { 10 }
+    else if (name == "%xmm11") { 11 }
+    else if (name == "%xmm12") { 12 }
+    else if (name == "%xmm13") { 13 }
+    else if (name == "%xmm14") { 14 }
+    else if (name == "%xmm15") { 15 }
     else { -1 }
 };
 
@@ -97,8 +107,9 @@ def sib(scale: long, index: long, base: long) -> long {
 };
 
 // A little-endian run as its own array, for the callers outside the encoders
-// (asm.y's .quad and its patcher). Inside an encoder use put_le16/32/64,
-// which write the same bytes through the cursor and allocate nothing.
+// (asm.y's .quad and its patcher). Inside an encoder use put_le32/put_le64,
+// which write the same bytes through the cursor and allocate nothing. There is
+// no put_le16: no encoder here writes a 16-bit field, so it had no caller.
 def le16(v: long) -> [byte] {
     let out: [byte] = [byte_of(v, 0), byte_of(v, 1)];
     out
@@ -200,10 +211,6 @@ def put3(buf: [byte], at: long, a: long, b: long, c: long) -> long {
     n + 1
 };
 
-def put_le16(buf: [byte], at: long, v: long) -> long {
-    put2(buf, at, byte_of(v, 0), byte_of(v, 1))
-};
-
 def put_le32(buf: [byte], at: long, v: long) -> long {
     let n = put2(buf, at, byte_of(v, 0), byte_of(v, 1));
     put2(buf, n, byte_of(v, 2), byte_of(v, 3))
@@ -300,6 +307,12 @@ def rex_rm(w: bool, reg: long, m: Operand) -> long {
 // Fixup record for label-relative fields, resolved in pass 2:
 // {off, kind, lbl, lbl2} (off relative to instruction start).
 // kind: "rel32" (call/jmp/jcc), "rip32", "imm32diff".
+// NOTE: do not add a field here. `asm_loc`/`asm_file` build four-field records
+// for the DWARF markers and hand them back where a Fixup is expected; the C
+// twin passes records straight through, and the port gate builds ycc.y WITHOUT
+// -g, so nothing compares the two shapes until test_debug.sh sees that cycc and
+// ycc write different .debug_line tables. The table offset for `tab+8(%rip)`
+// rides in `lbl` instead, and asm.y's label_addr evaluates it.
 type Fixup = { off: long, kind: str, lbl: str, lbl2: str };
 def fixup(at: long, kind: str, lbl: str, lbl2: str) -> Fixup {
     { off: at, kind: kind, lbl: lbl, lbl2: lbl2 }
@@ -656,6 +669,48 @@ def enc_alu_imm_body(buf: [byte], at: long, op: str, dst: Operand, v: long) -> E
     }
 };
 
+// test $imm, %r32/%r64: F7 /0 id, always. The ALU group's other six mnemonics
+// have 83 and 81 to lean on -- one opcode for "an immediate that sign-extends
+// from a byte" and one for the 32-bit case -- and test has neither: its
+// immediate form is F6/F7, where the pair is the OPERAND's width rather than the
+// immediate's. F6 is the 8-bit-operand form, and x86 ignores REX.W on it, so
+// `test $1, %rax` written as F6 tests %al: the flag test of a value under 256
+// still agrees, which is how it stayed wrong through a whole kernel. F7 is the
+// 32-or-64-bit form and takes the immediate as an imm32 whether or not it fits
+// in a byte. It is the one form that sets flags from a value without writing it
+// back, which is what a kernel wants when it is asking "which of these four"
+// rather than computing.
+//
+// Registers only. F7 can name a memory operand, but a sizeless one carries no
+// width to encode, and guessing 64 bits (what enc_alu_imm_mem does, for the
+// reason it gives) would be right by luck rather than by reading. Nothing
+// reaches it: a kernel asks this of a value it computed.
+def enc_test_imm(buf: [byte], at: long, dst: Operand, v: long) -> Encoded {
+    // (split: this is the shape gate; the body sees a 32- or 64-bit register
+    // and no merged-shape read, so it reads dst.n straight.)
+    if (dst.k != K.reg) {
+        enc_err(at, "test imm dst")
+    } else if (op_size(dst) != 64 && op_size(dst) != 32) {
+        enc_err(at, "test imm dst")
+    } else {
+        enc_test_imm_body(buf, at, dst, v)
+    }
+};
+
+def enc_test_imm_body(buf: [byte], at: long, dst: Operand, v: long) -> Encoded {
+    // (the shape gate lives in enc_test_imm; this one is on the value)
+    let r = rex(op_size(dst) == 64, -1, -1, dst.n);
+    if (v < -2147483648 || v > 2147483647) {
+        // the same door enc_alu_imm_body has, and for the same reason: F7 takes
+        // a sign-extended imm32 and put_le32 would keep the low four bytes.
+        enc_err(at, "an immediate does not fit in 32 bits")
+    } else {
+        let n = put_rex(buf, at, r);
+        let m = put2(buf, n, 247, modrm(3, 0, dst.n));
+        enc_ok(put_le32(buf, m, v), [])
+    }
+};
+
 def enc_shift(buf: [byte], at: long, mn: str, dst: Operand, cnt: Operand) -> Encoded {
     // shl/shr/sar $imm8 (0-63) or %cl, %r64: C1 /ext ib and D3 /ext, where
     // ext is shl 4, shr 5 (logical), sar 7 (arithmetic)
@@ -691,38 +746,107 @@ def enc_shift(buf: [byte], at: long, mn: str, dst: Operand, cnt: Operand) -> Enc
 // comparison move them into %xmmN, so the rest of the backend (slots,
 // pushes, calls) is unchanged.
 
+def sse_op(mn: str) -> long {
+    // addsd 58, subsd 5C, mulsd 59, divsd 5E
+    let op = 88;
+    if (mn == "subsd") { op = 92; }
+    if (mn == "mulsd") { op = 89; }
+    if (mn == "divsd") { op = 94; }
+    op
+};
+
 def enc_sse_arith(buf: [byte], at: long, mn: str, dst: Operand, src: Operand) -> Encoded {
-    // F2 0F <op> /r  — addsd 58, subsd 5C, mulsd 59, divsd 5E
-    if (dst.k != K.reg) {
+    // F2 0F <op> /r, with the destination an xmm and the source either an xmm
+    // or memory.
+    //
+    // The memory form is the point. A transcendental's kernel is
+    // `mulsd %xmm0, c7(%rip)` over a table of coefficients, and the F2 is what
+    // makes it the SCALAR form: without it the same bytes are the packed mulps,
+    // which multiplies sixteen bytes at once -- and they assemble.
+    if (dst.k != K.reg || op_size(dst) != 128) {
         enc_err(at, "sse dst")
-    } else if (src.k != K.reg) {
-        enc_err(at, "sse src")
-    } else {
-        let op = 88;
-        if (mn == "subsd") { op = 92; }
-        if (mn == "mulsd") { op = 89; }
-        if (mn == "divsd") { op = 94; }
+    } else if (src.k == K.reg) {
         let n = put(buf, at, 242);
         let m = put_rex(buf, n, rex(false, dst.n, -1, src.n));
-        enc_ok(put3(buf, m, 15, op, modrm(3, dst.n, src.n)), [])
+        enc_ok(put3(buf, m, 15, sse_op(mn), modrm(3, dst.n, src.n)), [])
+    } else if (src.k == K.mem) {
+        let t = mem_tail(src, dst.n);
+        let n = put_rex(buf, put(buf, at, 242), rex_rm(false, dst.n, src));
+        let m = put2(buf, n, 15, sse_op(mn));
+        enc_mem_result(buf, mem_tail_put(buf, put(buf, m, t.modrm), t), t)
+    } else {
+        enc_err(at, "sse src")
+    }
+};
+
+// F2 0F 10 /r loads into an xmm (or moves xmm to xmm); F2 0F 11 /r stores.
+// There is no REX.W: the value is eight bytes wide either way.
+def enc_movsd(buf: [byte], at: long, dst: Operand, src: Operand) -> Encoded {
+    if (dst.k == K.reg && op_size(dst) == 128) {
+        if (src.k == K.reg && op_size(src) == 128) {
+            let n = put(buf, at, 242);
+            let m = put_rex(buf, n, rex(false, dst.n, -1, src.n));
+            enc_ok(put3(buf, m, 15, 16, modrm(3, dst.n, src.n)), [])
+        } else if (src.k == K.mem) {
+            let t = mem_tail(src, dst.n);
+            let n = put_rex(buf, put(buf, at, 242), rex_rm(false, dst.n, src));
+            let m = put2(buf, n, 15, 16);
+            enc_mem_result(buf, mem_tail_put(buf, put(buf, m, t.modrm), t), t)
+        } else {
+            enc_err(at, "movsd src")
+        }
+    } else if (dst.k == K.mem && src.k == K.reg && op_size(src) == 128) {
+        let t = mem_tail(dst, src.n);
+        let n = put_rex(buf, put(buf, at, 242), rex_rm(false, src.n, dst));
+        let m = put2(buf, n, 15, 17);
+        enc_mem_result(buf, mem_tail_put(buf, put(buf, m, t.modrm), t), t)
+    } else {
+        enc_err(at, "movsd form")
     }
 };
 
 def enc_ucomisd(buf: [byte], at: long, dst: Operand, src: Operand) -> Encoded {
-    // 66 0F 2E /r
-    if (dst.k != K.reg) {
+    // 66 0F 2E /r, with the source an xmm or memory. The memory form is what a
+    // float kernel tests against -- `ucomisd tab+0(%rip), %xmm0` is "is the
+    // argument above exp_hi" -- and it is the comparison whose UNORDERED result
+    // (PF set) is how every float function first asks "was one of them a NaN".
+    if (dst.k != K.reg || op_size(dst) != 128) {
         enc_err(at, "ucomisd dst")
-    } else if (src.k != K.reg) {
-        enc_err(at, "ucomisd src")
-    } else {
+    } else if (src.k == K.reg) {
         let n = put(buf, at, 102);
         let m = put_rex(buf, n, rex(false, dst.n, -1, src.n));
         enc_ok(put3(buf, m, 15, 46, modrm(3, dst.n, src.n)), [])
+    } else if (src.k == K.mem) {
+        let t = mem_tail(src, dst.n);
+        let n = put_rex(buf, put(buf, at, 102), rex_rm(false, dst.n, src));
+        let m = put2(buf, n, 15, 46);
+        enc_mem_result(buf, mem_tail_put(buf, put(buf, m, t.modrm), t), t)
+    } else {
+        enc_err(at, "ucomisd src")
+    }
+};
+
+def enc_sqrtsd(buf: [byte], at: long, dst: Operand, src: Operand) -> Encoded {
+    // F2 0F 51 /r  — sqrtsd %xmm, %xmm
+    if (dst.k != K.reg) {
+        enc_err(at, "sqrtsd dst")
+    } else if (src.k != K.reg) {
+        enc_err(at, "sqrtsd src")
+    } else {
+        let n = put(buf, at, 242);
+        let m = put_rex(buf, n, rex(false, dst.n, -1, src.n));
+        enc_ok(put3(buf, m, 15, 81, modrm(3, dst.n, src.n)), [])
     }
 };
 
 def enc_cvtsi2sd(buf: [byte], at: long, dst: Operand, src: Operand) -> Encoded {
     // F2 REX.W 0F 2A /r  — cvtsi2sd %gpr, %xmm
+    // F2 and not 66: on 0F 2A the mandatory prefix IS the choice of width, F2
+    // for the double and F3 for the single, so the 66 belongs to the packed
+    // form and adding it here would be a prefix this encoding does not have.
+    // (Measured the other way round first — objdump takes `F2 66` for a
+    // cvtsi2sd and the CPU runs it, but it is not the documented encoding, and
+    // a kernel that wants a double conversion should ask for one.)
     if (dst.k != K.reg) {
         enc_err(at, "cvtsi2sd dst")
     } else if (src.k != K.reg) {
@@ -735,7 +859,8 @@ def enc_cvtsi2sd(buf: [byte], at: long, dst: Operand, src: Operand) -> Encoded {
 };
 
 def enc_cvttsd2si(buf: [byte], at: long, dst: Operand, src: Operand) -> Encoded {
-    // F2 REX.W 0F 2C /r  — cvttsd2si %xmm, %gpr (truncating)
+    // F2 REX.W 0F 2C /r  — cvttsd2si %xmm, %gpr (truncating). F2 for the
+    // reason above: F3 here would be CVTTSS2SI.
     if (dst.k != K.reg) {
         enc_err(at, "cvttsd2si dst")
     } else if (src.k != K.reg) {
@@ -754,6 +879,24 @@ def enc_movq(buf: [byte], at: long, dst: Operand, src: Operand) -> Encoded {
         enc_err(at, "movq dst")
     } else if (src.k != K.reg) {
         enc_err(at, "movq src")
+    } else if (op_size(dst) == 128 && op_size(src) == 128) {
+        // xmm -> xmm: F3 0F 7E /r (MOVDQ2), the DESTINATION in the reg field.
+        //
+        // This arm is not optional. Without it the gpr->xmm arm below took
+        // the pair and read the SOURCE'S NUMBER as a GPR, so `movq %xmm2,
+        // %xmm0` assembled to `movq %rdx, %xmm0` -- a silent miscompile, and
+        // the first one this encoder had that the "be loud instead" rule
+        // below is about.
+        //
+        // It is F3 and not 66, and the reason is the one worth remembering: 66
+        // 0F 7E is MOVQ with a 64-bit GENERAL-PURPOSE register or memory operand,
+        // so its rm field names a GPR -- `movq %xmm1, %xmm0` with a 66 prefix
+        // reads %rcx. F3 0F 7E is the same instruction with a 32-bit operand, and
+        // for a REGISTER source that is MOVDQ2, which moves all 64 bits. GNU as
+        // spells it F3 too; measured here, after getting it wrong.
+        let n = put(buf, at, 243);
+        let m = put_rex(buf, n, rex(false, dst.n, -1, src.n));
+        enc_ok(put3(buf, m, 15, 126, modrm(3, dst.n, src.n)), [])
     } else if (op_size(dst) == 128) {
         // into an xmm: the xmm is the reg field, the gpr the rm field
         let n = put(buf, at, 102);
@@ -975,7 +1118,9 @@ def enc_insn(buf: [byte], at: long, mn: str, ops: [Operand], lng: bool) -> Encod
                 if (mn == "add" || mn == "sub" || mn == "cmp" || mn == "xor" || mn == "and" || mn == "or") {
                     enc_alu_imm(buf, at, mn, dst, src.v)
                 } else {
-                    enc_err(at, mn + " imm form")
+                    // test is the only mnemonic left in this arm, and its
+                    // immediate form is the one that has no 81/83 to share.
+                    enc_test_imm(buf, at, dst, src.v)
                 }
             } else if (dst.k == K.reg && src.k == K.reg && mn == "xor" && op_size(dst) == 32 && op_size(src) == 32) {
                 enc_xor32(buf, at, dst, src)
@@ -989,6 +1134,9 @@ def enc_insn(buf: [byte], at: long, mn: str, ops: [Operand], lng: bool) -> Encod
     } else if (mn == "addsd" || mn == "subsd" || mn == "mulsd" || mn == "divsd") {
         let e = need2(mn, ops);
         if (e != "") { enc_err(at, e) } else { enc_sse_arith(buf, at, mn, ops[1], ops[0]) }
+    } else if (mn == "sqrtsd") {
+        let e = need2(mn, ops);
+        if (e != "") { enc_err(at, e) } else { enc_sqrtsd(buf, at, ops[1], ops[0]) }
     } else if (mn == "ucomisd") {
         let e = need2(mn, ops);
         if (e != "") { enc_err(at, e) } else { enc_ucomisd(buf, at, ops[1], ops[0]) }
@@ -1094,6 +1242,32 @@ def enc_insn(buf: [byte], at: long, mn: str, ops: [Operand], lng: bool) -> Encod
         enc_ok(put2(buf, at, 15, 5), [])
     } else if (mn == "ret") {
         enc_ok(put(buf, at, 195), [])
+        // The five jumps and movsd below sit LAST in the chain on purpose. An
+        // arm costs every line below it one or more comparisons, and this runs
+        // once per line of emitted text: beside the other jumps they measured
+        // +1.1% of compile instructions, almost all of it on the `ret` and
+        // `syscall` lines that now stop before ever reaching them.
+    } else if (mn == "movsd") {
+        let e = need2(mn, ops);
+        if (e != "") { enc_err(at, e) } else { enc_movsd(buf, at, ops[1], ops[0]) }
+    } else if (mn == "jp" || mn == "jpe") {
+        // parity set: how an SSE comparison says "unordered", which is to say
+        // that one operand was a NaN -- the first test of every float function
+        let e = need1(mn, ops);
+        if (e != "") { enc_err(at, e) } else { enc_jcc(buf, at, 138, ops[0], lng) }
+    } else if (mn == "jnp" || mn == "jpo") {
+        // parity clear: the same test, for the other side of the branch
+        let e = need1(mn, ops);
+        if (e != "") { enc_err(at, e) } else { enc_jcc(buf, at, 139, ops[0], lng) }
+    } else if (mn == "ja" || mn == "jnbe") {
+        let e = need1(mn, ops);
+        if (e != "") { enc_err(at, e) } else { enc_jcc(buf, at, 135, ops[0], lng) }
+    } else if (mn == "jae" || mn == "jnb" || mn == "jnc") {
+        let e = need1(mn, ops);
+        if (e != "") { enc_err(at, e) } else { enc_jcc(buf, at, 131, ops[0], lng) }
+    } else if (mn == "jbe" || mn == "jna") {
+        let e = need1(mn, ops);
+        if (e != "") { enc_err(at, e) } else { enc_jcc(buf, at, 134, ops[0], lng) }
     } else {
         enc_err(at, "unknown mnemonic '" + mn + "'")
     }

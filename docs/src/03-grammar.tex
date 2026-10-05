@@ -155,6 +155,7 @@ network. Git runs through \ic{/bin/sh} with the compiler's environment.
 \ty{declaration} ::={}& \ic{let}~\ty{name}~[\ic{:}~\ty{type}]~\ic{=}~\ty{expr}~\ic{;} \\
   |~& \ic{const}~\ty{name}~[\ic{:}~\ty{type}]~\ic{=}~\ty{expr}~\ic{;} \\
   |~& \ic{def}~\ty{name}~\ic{(}~\ty{params}~\ic{)}~[\ic{->}~\ty{type}]~\ty{block} \\
+  |~& \ic{native}~\ic{def}~\ty{name}~\ic{(}~\ty{params}~\ic{)}~\ic{->}~\ty{type}~[\ic{=}~\ic{label}]~\ic{;} \\
   |~& \ic{type}~\ty{name}~\ic{=}~\ty{type}~\ic{;}                && \text{(alias)}
 \end{align*}
 
@@ -179,7 +180,7 @@ same mark on a record field). Three rules keep the list readable, and
 each names the mistake:
 
 \begin{center}
-\begin{tabular}{ll}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.30\linewidth}@{\quad}>{\raggedright\arraybackslash}p{0.60\linewidth}@{}}
 \toprule
 mistake & message \\
 \midrule
@@ -203,6 +204,49 @@ draw(cv, {r: 255});           // fg: some({r: 255}); bg: none
 
 Function literals may also appear bound or anonymous:
 \ic{let f = def (x: long) -> long \{ x \};}.
+
+\paragraph{\texorpdfstring{$\mathrm{native}\ \mathrm{def}$}{native def}.}
+The last declaration form has no body: its implementation is an assembly
+label, and the declaration is the compiler's promise about what that label
+does. \ic{label} is a string naming the symbol; left out, it is
+\ic{y\_} plus the declared name. Four rules, each with its own message:
+
+\begin{center}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.30\linewidth}@{\quad}>{\raggedright\arraybackslash}p{0.60\linewidth}@{}}
+\toprule
+mistake & message \\
+\midrule
+the label has no \ic{y\_} &
+  \ic{native label 'x' must start with 'y\_'} \\
+no return type after \ic{->} &
+  \ic{native def 'f' needs a return type} \\
+inside a function &
+  \ic{native def 'f' must be at the top level} \\
+another top-level name already taken &
+  \ic{'f' is a native def and is declared again at the top level} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent The return type is required because there is no body to infer it
+from. A label with no assembly behind it is not found at link time:
+\ic{undefined label 'y\_f'} --- the same error a call to a missing symbol
+gives.
+
+A \ic{native def} is called with the ordinary convention (arguments pushed
+on the stack, the result in \ic{\%rax}), so it reaches the runtime's
+string and array helpers, and any assembly a package contributes. It cannot
+reach a helper written for the binary-float convention, which takes its
+operands in \ic{\%xmm0} and \ic{\%xmm1} (\ic{math.fmod} in the prelude is
+one). Nothing checks the declared types against the label --- the assembly
+is opaque, exactly as an \ic{extern} declaration in C is --- so the promise
+has to be kept by hand.
+
+\begin{lstlisting}
+native def hash2(s: str) -> long = "y_str_cmp";   // a promise about y_str_cmp
+native def heap_bytes() -> long;                 // means y_heap_bytes
+print(hash2("abc") < 0);
+\end{lstlisting}
 
 \subsection{Types}
 \label{sec:type-grammar}
@@ -256,6 +300,8 @@ def area(s: Shape) -> float { ... };
   |~& \ty{expr}~\ic{;} \\
   |~& \ty{assignment}~\ic{;} \\
   |~& \ic{return}~[\ty{expr}]~\ic{;} \\
+  |~& \ic{break}~\ic{;} \\
+  |~& \ic{continue}~\ic{;} \\
   |~& \ty{block} \\
   |~& \ic{if}~\ic{(}~\ty{expr}~\ic{)}~\ty{block}~[\ic{else}~(\ty{block} \mid \ty{statement})] \\
   |~& \ic{if}~\ic{let}~\ty{pattern}~\ic{=}~\ty{expr}~\ty{block}
@@ -288,6 +334,17 @@ declares are still visible after the loop, holding the value the loop
 last gave them. A \ic{for x in a..b} or \ic{foreach (x in a)} variable
 belongs to its loop and is gone after it --- reading it there is
 \ic{undefined variable 'i'}.
+
+\noindent \ic{break} leaves the innermost enclosing loop and
+\ic{continue} starts its next turn: \ic{continue} in a C-style
+\ic{for} runs the step first, and in a \ic{foreach} or a
+\ic{for x in a..b} it takes the next element. A loop nested inside
+another is left alone, so \ic{break} never leaves more than one. Either
+word outside a loop is the error \ic{'break' outside of a loop}, and
+either inside a \ic{def} nested in a loop is \ic{'break' cannot cross
+a function boundary} --- a closure is a function of its own, so there is
+no loop in it to leave. The \ic{;} may be left out before the
+\ic{\{\}} closing a block, as after \ic{return}.
 
 \noindent \ic{if let}~\ty{pattern}~\ic{=}~\ty{expr}~\ty{block} is the
 pattern form of \ic{if} (Section~\ref{sec:type-unions}): the block runs when

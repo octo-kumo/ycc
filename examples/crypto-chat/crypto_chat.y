@@ -22,7 +22,7 @@
 //
 //   0  the exchange completed and every property held
 //   1  a property failed, or the child reported a failure
-//   2  a usage error (from args.y)
+//   2  a usage error (from args)
 //   3  the protocol failed: a pipe broke, a frame was short, the child died
 
 import args;

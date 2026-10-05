@@ -654,6 +654,14 @@ static long pkg_index(Yv *pkgs, Yv *name) {
  * interfaces the loop gave it. */
 long build_one(Yv *dir, Yv *one, int debug, int nowarn, long wlevel,
                int allow_exec, int std_src) {
+    /* `debug` and `nowarn` are part of the driver's one uniform build
+     * signature, and neither applies to a single package's object: a package
+     * carries no DWARF (the line table is the bin's, made when it links), and
+     * its warnings are written to build/obj/<pkg>.warn for the bin to replay on
+     * every build -- which is where -w is honoured. Kept in the signature so
+     * the call sites read alike; Y leaves unused parameters alone. */
+    (void)debug;
+    (void)nowarn;
     Yv *g = pk_load(dir);
     Yv *pkgs = yr_get(g, "pkgs");
     Yv *odir = ys_cat(pk_join(dir, ys("build")), ys("/obj"));
