@@ -285,6 +285,24 @@ branch-disjointness false positive.
   harness has no tty for wine, so a console handle (as opposed to a pipe) is
   unverified, and `test_std_suites.sh`'s `term_test` needs a pty and only runs
   against ELF.
+- **`tolong`/`tofloat` -> `T?`: HALF DONE, ON THE `tolong-option` BRANCH (round
+  65).** The user asked for this and it is genuinely a whole-tree change, so it
+  is being done where it cannot break `master`: branch `tolong-option`, commit
+  `21865f6`, WHICH DOES NOT BUILD.
+  What is done there: `rt.y`'s three functions now require a fully valid input
+  and answer `none` otherwise (including out-of-range instead of a silent wrap,
+  and a NaN/2^63 float instead of a trap) -- all in Y, because the emitter has
+  always called them by their bare `y_` labels; the inferred type, the
+  checker's return type and the `str_method` table in both copies; and the Y
+  emitter's box for `tofloat(long)`.
+  What is NOT: the C emitter's box (the patch anchor missed and the C build
+  error that followed is in `native.c`), and THE 169 CALL SITES -- 53 in
+  `src/y` (which is what `make ycc` compiles, so the compiler cannot build
+  itself until those are done) and 116 in `test/` and `tools/`.
+  To continue: `git checkout tolong-option`, fix the C box, then `make ycc` and
+  let it name the 53, then the 116, then `t352_parse_long.y` (which prints the
+  OLD `tolong` column and must be rewritten) and the manual in `docs/`.
+  `master` is untouched and verified: `make ycc` byte-identical.
 - **NEXT, AND REQUESTED: `tolong`/`tofloat` MUST RETURN `T?` (round 64, planned
   from a survey rather than started).** The requirement: a fully valid input is
   required, whitespace is fine, and anything else is `none`; today
