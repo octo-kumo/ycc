@@ -141,7 +141,29 @@ def tokens(src: str) -> [SemTok] {
 
 // The same, over a document whose line starts are already known. One table for
 // the whole document instead of one per line -- see pos.line_bytes_from.
-def tokens_in(d: SrcDoc, over: [long]) -> [SemTok] {
+// The byte offset line `ln` starts at, clamped: line 1 is 0 and a line past the
+// end is the end of the text, so a range that overshoots the document costs
+// nothing and cannot read out of bounds.
+def byte_of_line(d: SrcDoc, ln: long) -> long {
+    let st = d.starts;
+    if (ln < 1) {
+        0
+    } else if (ln > len(st)) {
+        len(d.src)
+    } else {
+        st[ln - 1]
+    }
+}
+
+// The tokens whose span intersects the byte range [lo, hi).
+//
+// Every token in a Y document comes from one scanner span and `split_lines` breaks
+// it per line, so a line range IS a byte range and the only change needed is to
+// skip spans outside it. A multi-line comment straddling the edge is emitted whole
+// rather than clipped: the lines above the range come along and VS Code discards
+// tokens it did not ask for. Clipping would be tidier and would cost a pass over
+// the token list to achieve.
+def tokens_in_range(d: SrcDoc, over: [long], lo: long, hi: long) -> [SemTok] {
     let src = d.src;
     let out: [SemTok] = [];
     let r = scan.scan_full(src);
@@ -149,7 +171,7 @@ def tokens_in(d: SrcDoc, over: [long]) -> [SemTok] {
     let i = 0;
     while (i < len(sps)) {
         let s = sps[i];
-        if (s.end > s.off && s.end <= len(src)) {
+        if (s.end > s.off && s.end <= len(src) && s.end > lo && s.off < hi) {
             let t = type_of(src, s);
             // An override only ever REPLACES a name's class, never a comment's or
             // a number's: `semantic_overrides` is handed the identifier spans and has no
@@ -172,6 +194,12 @@ def tokens_in(d: SrcDoc, over: [long]) -> [SemTok] {
         i = i + 1;
     }
     out
+}
+
+// The whole document, kept named: "the whole thing" is the common case and should
+// read as such at the call site.
+def tokens_in(d: SrcDoc, over: [long]) -> [SemTok] {
+    tokens_in_range(d, over, 0, len(d.src))
 }
 
 // An f-string's tokens: the literal runs as `string`, and each `{...}` is scanned
@@ -435,10 +463,33 @@ def sem_full_in(d: SrcDoc, over: [long]) -> { data: [long] } {
     r
 }
 
+// The tokens for ONE range of lines, 1-based and inclusive.
+//
+// This is what `range: true` in the server's capabilities buys. The whole-document
+// answer is not merely larger than it needs to be, it is large ENOUGH TO BE THE
+// PROBLEM: src/y/types.y has 40,410 tokens, so a whole-file reply is 202,050
+// integers -- around a megabyte of JSON -- and the client decodes and re-renders
+// every one of them. A viewport of fifty lines is 1% of that.
+//
+// Measured, because the cost is not where a person would guess. The SERVER answers
+// a whole-file request for types.y in 3 ms and then sits idle, which is what made
+// this look like nothing was happening at all: the time was on the other side of
+// the socket, in the client, decoding what had just been sent. So the fix is to send
+// less, not to compute it faster -- and the standard feature for that is a range.
+//
+// The token stream is split per line, so a range is contiguous and the encoding's
+// first delta is the line offset from zero, exactly as for a whole document.
+def sem_range_in(d: SrcDoc, over: [long], from_line: long, to_line: long) -> { data: [long] } {
+    let lo = byte_of_line(d, from_line);
+    let hi = byte_of_line(d, to_line + 1);
+    let r: { data: [long] } = { data: encode(tokens_in_range(d, over, lo, hi)) };
+    r
+}
+
 export {
   SemTok, T_comment, T_string, T_number, T_keyword, T_selfnone,
   T_operator, T_punct, T_variable, T_error,
   T_parameter, T_function, T_property, T_type, T_builtin,
-  token_types, type_of, word, tokens, tokens_in, split_lines, encode,
-  sem_full_of, sem_full_in
+  token_types, type_of, word, tokens, tokens_in, tokens_in_range, byte_of_line,
+  split_lines, encode, sem_full_of, sem_full_in, sem_range_in
 };

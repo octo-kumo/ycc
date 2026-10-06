@@ -251,6 +251,17 @@ function main() {
             (((pkgExt.contributes || {}).semanticTokenTypes) || []).map((t) => [t.id, t.superType]));
         const undeclared = (leg && leg.tokenTypes ? leg.tokenTypes : [])
             .filter((t) => !LSP_STANDARD.has(t) && !declaredTypes.has(t));
+        // `range: true` is the switch that makes t022_semrange's ranges happen at
+        // all, and it is the difference between shipping a 50-line viewport as 400KB
+        // of JSON and shipping it as 4KB. Asserted here because this is where a real
+        // initialize response is already in hand; t022 asserts what the range
+        // contains, which is the other half.
+        const stp0 = (init.capabilities || {}).semanticTokensProvider || {};
+        check(
+            'initialize: semantic tokens advertise range, not whole documents only',
+            stp0.full === true && stp0.range === true,
+            'full=' + stp0.full + ' range=' + stp0.range,
+        );
         check(
             'initialize: every token type is either standard or declared with a superType',
             undeclared.length === 0,

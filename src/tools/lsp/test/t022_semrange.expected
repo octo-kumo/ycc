@@ -1,0 +1,8 @@
+no range -> 92 tokens
+range 5-15 -> 74 tokens
+fewer than the whole document: true
+nothing outside the range: true
+every ranged token is in the whole-document answer: true
+identical, not merely present: true
+a one-line range is smaller still: true
+a range past the end answers empty: true
