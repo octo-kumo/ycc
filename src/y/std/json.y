@@ -147,7 +147,9 @@ def as_str(v: Val) -> str? {
 
 def as_long(v: Val) -> long? {
     let out: long? = none;
-    if let Num n = v { out = some(tolong(n.num)!); };
+    // tolong answers long?: a JSON number with a fraction or an exponent is
+    // none here rather than silently truncated, which is what as_long means.
+    if let Num n = v { out = tolong(n.num); };
     out
 }
 
@@ -752,7 +754,13 @@ def get_long(o: Val, key: str, dflt: long) -> long {
     let out = dflt;
     let f = field(o, key);
     if (f != none) {
-        if let Num n = f! { out = tolong(n.num)! };
+        // A number that is not a whole one (a fraction, an exponent, junk)
+        // leaves the caller's default: tolong answers none rather than
+        // truncating, and this function's contract is a long, not an option.
+        if let Num n = f! {
+            let v = tolong(n.num);
+            if (v != none) { out = v!; };
+        };
     };
     out
 }

@@ -11354,7 +11354,10 @@ Yv *gen_tofloat(Yv *st, Yv *node) {
     if (yv_l(yr_get(infer(st, a0), "k")) == K_tlong) {
         st = gen(st, a0);
         st = emit_insn(st, F_CVTSI2SD_R_R, R_RAX, 64, R_XMM0, 128, 0, 0, 0);
-        return emit_insn(st, F_MOVQ_R_R, R_XMM0, 128, R_RAX, 64, 0, 0, 0);
+        st = emit_insn(st, F_MOVQ_R_R, R_XMM0, 128, R_RAX, 64, 0, 0, 0);
+        /* tofloat answers an OPTION now, so the widened value is boxed the same
+           way some(v) is: a pointer with the value at offset 0. */
+        return gen_box_rax(st);
     } else {
         st = gen_push_args(st, targs);
         st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_str_tofloat"))), 0, 0, 0, 0, 0, 0);

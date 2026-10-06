@@ -127,7 +127,7 @@ run_test "tostring: map" 'print(tostring({a:1}));' '{a: 1}'
 echo ""
 echo "── Builtins: tolong ──"
 run_test "tolong: integer string" 'print(tolong("123"));' '123'
-run_test "tolong: float string" 'print(tolong("3.14"));' '3'
+run_test "tolong: float string is not a whole number" 'print(tolong("3.14"));' 'none'
 run_test "tolong: negative" 'print(tolong("-42"));' '-42'
 # print separates its arguments with a space only when they are strings, so
 # two longs come out as "2-2": the point here is that -2.75 gives -2 and not
@@ -145,7 +145,7 @@ run_test "tofloat: method form" 'print("2.5".tofloat());' '2.500000'
 # An exponent is not read: the scan stops at the 'e', the same way tolong
 # stops at the '.' -- one tolerance for both, so a value cannot behave
 # differently depending on which conversion it went through.
-run_test "tofloat: no exponent" 'print(tofloat("1e9"));' '1.000000'
+run_test "tofloat: no exponent is not read" 'print(tofloat("1e9"));' 'none'
 
 # ── Builtins: len ──
 echo ""

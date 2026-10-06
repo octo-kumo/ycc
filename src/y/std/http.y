@@ -89,7 +89,10 @@ def parse_url(u: str) -> Url {
     let colon = last_index_of(hostport, ":");
     if (colon >= 0) {
         host = hostport[0:colon];
-        port = tolong(hostport[colon + 1:len(hostport)])!;
+        // A port that is not a number is a bad URL, not port 0.
+        let pn = tolong(hostport[colon + 1:len(hostport)]);
+        if (pn == none) { return bad; };
+        port = pn!;
     };
     if (len(host) == 0 || port <= 0 || port > 65535) { return bad; };
     { ok: true, secure: secure, host: host.lower(), port: port, path: path }
@@ -409,7 +412,9 @@ def read_head(l: Link) -> Head {
         bad.err = "the response head ended early";
         return bad;
     };
-    { ok: true, err: "", status: tolong(parts[1])!, reason: reason, headers: headers }
+    let st = tolong(parts[1]);
+    if (st == none) { return bad; };
+    { ok: true, err: "", status: st!, reason: reason, headers: headers }
 };
 
 // Send the request on l and read the response's head (past any interim
@@ -421,7 +426,10 @@ def exchange(l: Link, method: str, url: str, u: Url, hdrs: {str => str}, body: s
     if (!h.ok) { return failed(url, h.err); };
     let headers = h.headers;
     let size = -1;
-    if (headers["content-length"] != none) { size = tolong(headers["content-length"]!)!; };
+    if (headers["content-length"] != none) {
+        let cl = tolong(headers["content-length"]!);
+        if (cl != none) { size = cl!; };
+    };
     let mode = "close";
     let te = "";
     if (headers["transfer-encoding"] != none) { te = headers["transfer-encoding"]!.lower(); };

@@ -48,10 +48,17 @@ def addr_set(a: [byte; 16], host: str, port: long) -> long {
     a[7] = 0;
     let d = split(host, ".");
     if (len(d) == 4) {
-        a[4] = tolong(d[0])!;
-        a[5] = tolong(d[1])!;
-        a[6] = tolong(d[2])!;
-        a[7] = tolong(d[3])!;
+        // One octet at a time, leaving 0 where the part is not a number --
+        // which is the read this had before tolong required a fully valid
+        // input (it stopped at the first non-digit and answered what it had).
+        let o0 = tolong(d[0]);
+        let o1 = tolong(d[1]);
+        let o2 = tolong(d[2]);
+        let o3 = tolong(d[3]);
+        if (o0 != none) { a[4] = o0!; };
+        if (o1 != none) { a[5] = o1!; };
+        if (o2 != none) { a[6] = o2!; };
+        if (o3 != none) { a[7] = o3!; };
         0
     }
     0
@@ -299,7 +306,10 @@ def is_quad(s: str) -> bool {
             if (p[i] < '0' || p[i] > '9') { ok = false; };
             i = i + 1;
         };
-        if (ok && tolong(p)! > 255) { ok = false; };
+        if (ok) {
+            let pn = tolong(p);
+            if (pn == none || pn! > 255) { ok = false; };
+        };
     };
     ok
 };
