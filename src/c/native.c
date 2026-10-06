@@ -23,6 +23,7 @@
 #include "native.h"
 
 #include "lexer.h"
+#include "meta.h"
 #include "parser.h"
 #include "lint.h"
 #include "asm.h"
@@ -183,6 +184,16 @@ Yv *dir_of(Yv *p);
 Yv *std_resolve(Yv *name, Yv *base_dir);
 Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen,
                         Yv *smods, long fid);
+/* the meta pass (see "the meta pass" below): meta.y hoists these defs, so C
+ * needs them said twice -- meta_prepare is called from resolve_unit, which is
+ * above it, and meta_run_generator from meta_prepare, which is above that. */
+static Yv *meta_prepare(Yv *src, Yv *base_dir, long depth, int allow_exec,
+                        Yv *root);
+static Yv *meta_resolve(Yv *src, Yv *base_dir, long depth, int allow_exec,
+                        Yv *root, Yv *first);
+static long meta_run_generator(Yv *src, Yv *base_dir, int allow_exec,
+                               Yv *root, Yv *first);
+static Yv *meta_compile_gen(void);
 int is_embed_decl(Yv *trimmed);
 Yv *embed_decl(Yv *trimmed, Yv *base_dir);
 Yv *quote_text(Yv *s);
@@ -556,7 +567,7 @@ Yv *lit_text(Yv *d);
 Yv *lit_neg_text(Yv *d);
 Yv *lit_decode(Yv *c);
 Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, long wlevel,
-                 Yv *name, long base, Yv *xt);
+                 Yv *name, long base, Yv *xt, Yv *ogen);
 Yv *link_locs(Yv *body, long file);
 Yv *rodata_intern(Yv *pieces, Yv *allrod, Yv *refs);
 Yv *relabel_dups(Yv *body, Yv *m, Yv *dup_new);
@@ -642,7 +653,7 @@ Yv *resolve_unit(Yv *src, Yv *base_dir, long depth, int allow_exec,
     /* NOTE: seen-threading wrapper (see native_resolve_seen): asm.y imports
      * enc64 as `enc` AND elf.y imports enc64 as `elfenc`; without dedup the
      * encoder splices twice and every enc64 def collides (find_dup). */
-    Yv *r = native_resolve_seen(src, base_dir, depth, yav(0), yav(0), 0);
+    Yv *r = meta_prepare(src, base_dir, depth, allow_exec, root);
     Yv *rsrc = ys_join(yr_get(r, "lines"), ys("\n"));
     Yv *rimports = yr_get(r, "imports");
     Yv *files = yav(1, root);
@@ -728,8 +739,13 @@ Yv *resolve_unit(Yv *src, Yv *base_dir, long depth, int allow_exec,
      * so there is no name to test for. Unused helpers cost nothing in the
      * output -- prune_bodies drops them at link time. */
     std = ya_push(std, ys("rt"));
-    return yr(5, "src", rsrc, "imports", rimports, "origin", origin,
-              "std", std, "pkgs", res_used);
+    /* ogen is EMPTY for a unit with no blocks, which is what tells lint there is
+     * no generator whose top level is this one (see lint_meta_top): a file with
+     * blocks whose pieces happen to add no lines is still such a file. */
+    Yv *og = yav(0);
+    if (mg_n > 0) { og = yr_get(r, "ogen"); };
+    return yr(6, "src", rsrc, "imports", rimports, "origin", origin,
+              "std", std, "pkgs", res_used, "ogen", og);
 }
 
 /* Which file line `ln` of the spliced program came from (0, the program
@@ -864,6 +880,7 @@ Yv *words_seen(Yv *code, Yv *names) {
  * an f-string are code: lexer.y fstr_walk finds them as the lexer does,
  * and each is scanned on its own. */
 long words_scan(Yv *code, long lo, long n, Yv *names, Yv *seen) {
+    long ignored = 0;
     long i = lo;
     /* the first byte of the last token of code (blanks and comments skip),
      * and a name just seen after a `.`, waiting for its `(` */
@@ -907,25 +924,10 @@ long words_scan(Yv *code, long lo, long n, Yv *names, Yv *seen) {
                 ;
             }
             if (c == 34 || c == 39) {
-                /* A string literal: past its closing quote */
-                i = i + 1;
-                int open = 1;
-                while (open && i < n) {
-                    long d = ys_byte_at(code, i);
-                    if (d == 92) {
-                        i = i + 2;
-                        ;
-                    } else if (d == c) {
-                        open = 0;
-                        i = i + 1;
-                        ;
-                    } else {
-                        i = i + 1;
-                        ;
-                    }
-                    ;
-                }
-                ;
+                /* a string literal: past its closing quote (lit_end, the
+                 * lexer.c scanner -- one scanner, so the lexer and this
+                 * cannot disagree about where a literal ends) */
+                i = lit_end(code, i, &ignored);
             } else if (word_byte(c)) {
                 long j = i + 1;
                 while (j < n && word_byte(ys_byte_at(code, j))) {
@@ -1087,6 +1089,257 @@ int seen_has(Yv *seen, Yv *full) {
     return found;
 }
 
+/* ── the meta pass ──────────────────────────────────────────────────────
+ * One resolve, in three steps, when the program has blocks (meta.c):
+ *
+ *   1. a COLLECTING resolve with the pass on: every file is scanned, the
+ *      blocks are found and G is built, and the result is thrown away;
+ *   2. G is compiled (pass off) and run in a forked child (meta.c
+ *      run_image), and the pieces come back over a pipe;
+ *   3. the ordinary resolve again, with the pass on and the pieces known, so
+ *      each file's scanner splices them into P as it goes and the splicer's
+ *      line loop -- which is where imports, `export` and `embed` are handled --
+ *      never sees a block.
+ *
+ * The two resolves are why the pass lives in its own module with its own
+ * driver: native_resolve_seen is recursive and its return value is consumed
+ * by this function, so there is nowhere else the two-step could go without
+ * threading the piece table through the recursion.
+ *
+ * Step 1 and step 3 walk the imports with the SAME code, so the block order --
+ * and therefore the slot a piece is matched by -- is the same in both. The cost
+ * is one extra resolve, and only for a program that HAS blocks: meta_scan
+ * finds nothing and mg_n stays 0, which skips step 2 and, when the pass was
+ * never on, step 1 as well.
+ *
+ * Everything the generator's own compile touches is saved and put back: it is
+ * a full compile of another program inside this one, and the globals below
+ * (native.c's, so only native.c can do it) are the outer compile's state. */
+
+static int gen_at(Yv *g, long i) {
+    if (i < yv_len(g)) { return yv_truth(ya_get(g, i)); }
+    else { return 0; }
+}
+
+/* The scan for one file: meta.c's when the pass is on, and the file's own
+ * lines when it is off. The off case is not a special case anywhere else: P is
+ * then the file verbatim and a line's origin is its own line number, which is
+ * what meta.c's scan_none produces. */
+static Yv *meta_meta_scan(Yv *src, Yv *base_dir, long fid) {
+    if (!mg_on) {
+        return scan_none(src, fid);
+    } else {
+        return meta_scan(src, fid, base_dir);
+    }
+}
+
+static Yv *meta_prepare(Yv *src, Yv *base_dir, long depth, int allow_exec,
+                        Yv *root) {
+    if (!mg_on) {
+        return native_resolve_seen(src, base_dir, depth, yav(0), yav(0), 0);
+    };
+    /* step 1: find the blocks. The result is thrown away; only the scanner's
+     * accumulators survive. */
+    Yv *first = native_resolve_seen(src, base_dir, depth, yav(0), yav(0), 0);
+    if (mg_n == 0) {
+        /* no blocks: the collecting pass's own result is the real one, and it
+         * is byte for byte what the pass-off path returns */
+        return first;
+    } else {
+        return meta_resolve(src, base_dir, depth, allow_exec, root, first);
+    }
+}
+
+/* Steps 2 and 3 as a loop, which is the whole cost of nesting. A nested block's
+ * text is spliced into the source of the block AROUND it (meta.c sg_splice),
+ * and a source has to be compiled before it can run -- so the enclosing block
+ * cannot produce its text until the nested one has produced its, and that is one
+ * more compile and run of G per level.
+ *
+ * So: run the generator, and while any block is still without its text
+ * (mg_pending) do it again. The round that resolves a nested block finds its
+ * enclosing block waiting; the round after that finds the enclosing one. A chain
+ * of depth d costs d+1 rounds and a program with NO nesting costs exactly one,
+ * because nothing is ever pending when there is no nesting.
+ *
+ * A round is a whole extra compile of the program-as-generator, which is the
+ * reason MG_NEST is 8 rather than the parser's ~333 -- see the cap's diagnostic.
+ *
+ * (meta.y keeps this inline in meta_prepare: the C twin's forward declarations
+ * are a flat list, and this is the only thing that needs the second one.) */
+static Yv *meta_resolve(Yv *src, Yv *base_dir, long depth, int allow_exec,
+                        Yv *root, Yv *first) {
+    if (mg_nest > 0) {
+        /* A round in which a block cannot produce its text leaves a stand-in
+         * where its call goes, so a statement naming something that block was
+         * going to define would not compile. The reduction leaves those
+         * statements out of G, and they declare nothing, so no name is lost. */
+        (void)mg_reduce_on();
+    };
+    /* The collecting pass found nesting, so its G is NOT the one to compile: it
+     * was built before anything was known, with every block's call in place where
+     * the block stood, and for a nested block that source does not compile (the
+     * inner text is missing). Start the rounds from a fresh pass, which holds
+     * what it may have to give up and reduces. */
+    (void)mg_pass();
+    (void)native_resolve_seen(src, base_dir, depth, yav(0), yav(0), 0);
+    long rounds = 0;
+    int done = 0;
+    while (!done) {
+        (void)meta_run_generator(src, base_dir, allow_exec, root, first);
+        rounds = rounds + 1;
+        if (!mg_pending()) {
+            done = 1;
+        } else if (rounds >= MG_ROUND_LIMIT) {
+            (void)mg_report(ys_cat(
+                ys_cat(ys("the meta generator still had a block without its text after "),
+                       ys_tostring(yv_long(rounds))),
+                ys(" rounds, more than the nesting depth allows: this is the pass's own bookkeeping and is a bug")));
+        } else {
+            /* another round: the block table starts over, so the next resolve
+             * hands out the same slots (mg_pass) and finds the pieces */
+            (void)mg_pass();
+            (void)native_resolve_seen(src, base_dir, depth, yav(0), yav(0), 0);
+        };
+    };
+    /* step 3: the ordinary resolve, with every piece known. Its G is built and
+     * not run -- nothing is pending, so there is nothing left to compute. */
+    (void)mg_pass();
+    return native_resolve_seen(src, base_dir, depth, yav(0), yav(0), 0);
+}
+
+/* `dst += src` for a Y array (meta.y's `[root] + first.seen`): the elements of
+ * src appended to dst. Arrays are reference values here (rule 1). */
+static Yv *yadd_strs(Yv *dst, Yv *src) {
+    long i = 0;
+    while (i < yv_len(src)) { dst = ya_push(dst, ya_get(src, i)); i = i + 1; };
+    return dst;
+}
+
+/* Compile and run G, with every global it disturbs saved and put back. */
+static long meta_run_generator(Yv *src, Yv *base_dir, int allow_exec,
+                               Yv *root, Yv *first) {
+    (void)src;  /* the twin takes it and does not read it: G is built from the
+                 * block table, not from the source */
+    Yv *spk = res_pkgs;
+    Yv *sro = res_roots;
+    Yv *su = res_used;
+    long sdl = dbg_lines;
+    Yv *sdf = dbg_file;
+    Yv *sdn = dbg_line;
+    Yv *sns = pkg_ns;
+    Yv *mf = yav(1, root);
+    mf = yadd_strs(mf, yr_get(first, "seen"));
+    (void)mg_setup(root, mf, base_dir, allow_exec, spk, sro);
+    Yv *img = meta_compile_gen();
+    Yv *av = yav(1, ys_cat(root, ys(".meta")));
+    Yv *rr = run_image(img, av, 1);
+    if (!yv_truth(yr_get(rr, "ok"))) {
+        (void)mg_report(ys_cat(ys("cannot run the meta generator: "),
+                               yr_get(rr, "err")));
+    };
+    (void)mg_take_pieces(yv_l(yr_get(rr, "status")), yv_l(yr_get(rr, "sig")),
+                         yr_get(rr, "out"));
+    res_pkgs = spk;
+    res_roots = sro;
+    res_used = su;
+    dbg_lines = sdl;
+    dbg_file = sdf;
+    dbg_line = sdn;
+    pkg_ns = sns;
+    return 0;
+}
+
+static int dup_at(Yv *seen, Yv *at) {
+    int hit = 0;
+    long i = 0;
+    while (i < yv_len(seen)) {
+        if (ys_eq(ya_get(seen, i), at)) { hit = 1; };
+        i = i + 1;
+    };
+    return hit;
+}
+
+/* G's origin map: one file, `<root>.meta`, so a diagnostic in G is visibly not
+ * the user's; each line carries the SOURCE line its text came from, which the
+ * line map already knows. Line numbers in G are MAPPED, not preserved -- the
+ * helpers and the hoisted imports shift everything below them. */
+static Yv *meta_gorigin(long nbody) {
+    long hs = mg_ghead();
+    long n = hs + nbody;
+    Yv *f = yav(0);
+    Yv *l = yav(0);
+    Yv *m = yav(0);
+    long i = 0;
+    while (i < n) {
+        f = ya_push(f, yv_long(0));
+        l = ya_push(l, yv_long(1));
+        m = ya_push(m, ys(""));
+        i = i + 1;
+    };
+    Yv *gol = mg_gol;
+    long k = 0;
+    while (k < nbody) {
+        long ln = 1;
+        if (k < yv_len(gol)) { ln = yv_l(ya_get(gol, k)); };
+        ya_set(l, hs + k, yv_long(ln));
+        k = k + 1;
+    };
+    return yr(6, "files", yav(1, ys_cat(mg_root, ys(".meta"))), "nuser",
+              yv_long(1), "file", f, "line", l, "mods", m);
+}
+
+static Yv *meta_gorigin(long nbody);
+
+/* Compile G the way ycc compiles a program, with the pass OFF, and hand back
+ * its image. G's errors are reported with G's own origin map, so they read
+ * `<file>.meta:<source line>` -- visibly about the synthesized text and not
+ * about the user's file, and still carrying a line through the line map. */
+static Yv *meta_compile_gen(void) {
+    Yv *gt = meta_gtext();
+    long nbody = mg_glines();
+    Yv *go = meta_gorigin(nbody);
+    (void)mg_set(0);
+    Yv *nr = native_resolve_pk(gt, mg_gbase, mg_gexec, ys_cat(mg_root, ys(".meta")),
+                               mg_pkgs, mg_roots);
+    if (mg_probe(yr_get(nr, "src"), mg_gbase)) {
+        (void)mg_report(ys("a meta block cannot appear in a module imported into the meta generator: the generator's text is compiled with the pass off, so nothing in it is scanned"));
+    };
+    Yv *su = std_units(yr_get(nr, "std"), ys(""));
+    /* nr.src, not gt: the hoisted imports were spliced in by the resolve above,
+     * and tokenizing gt would hand the parser a literal `import` line */
+    Yv *toks = tokenize(yr_get(nr, "src"));
+    Yv *ast = parse_program(toks);
+    Yv *r = emit_program(ast, nr, 0, 0, su, yav(0));
+    if (!yv_truth(yr_get(r, "ok"))) {
+        Yv *seen = yav(0);
+        Yv *errs = yr_get(r, "errors");
+        long i = 0;
+        while (i < yv_len(errs)) {
+            Yv *e = ya_get(errs, i);
+            Yv *at = ys_cat(ys_cat(ys_tostring(origin_at(go, yv_l(yr_get(e, "line")), 0)),
+                                   ys(":")),
+                            ys_tostring(yv_long(yv_l(yr_get(e, "col")))));
+            if (!dup_at(seen, at)) {
+                seen = ya_push(seen, at);
+                puts_(ys_cat(ys_cat(ys_cat(at, ys(": error: ")),
+                                      yr_get(e, "msg")), ys("\n")));
+            };
+            i = i + 1;
+        };
+        (void)mg_set(1);
+        (void)mg_report(ys("the meta generator did not compile"));
+    };
+    Yv *ab = ycc_assemble(yr_get(r, "asm"), 0);
+    (void)mg_set(1);
+    if (!yv_truth(yr_get(ab, "ok"))) {
+        puts_(ys_cat(ys("error: the meta generator does not assemble: "),
+                     ys_cat(yr_get(ab, "error"), ys("\n"))));
+        exit_(1);
+    };
+    return yr_get(ab, "bytes");
+}
+
 /* ── optional std modules ─────────────────────────────────────────────── */
 /* `import net;` (no `from`) pulls in a module by NAME instead of by path:
  * an optional std library (net, ui, ...) or a project-local one. A file
@@ -1175,6 +1428,13 @@ Yv *std_resolve(Yv *name, Yv *base_dir) {
     return found;
 }
 
+/* What the program text of file `fid` is, with its imports spliced in, as
+ * lines, and where each of those lines came from (see native_resolve_seen).
+ * ofile/oline are the origins this function emits; the pass's own scan maps
+ * its INPUT lines back (sc.pf/sc.pol), which is a different map once a block
+ * has added lines.
+ * Type SrcLines = { lines, imports, seen, smods, ofile, oline, ogen }. */
+
 /* The program text `src` of file `fid` (its index in the origin map's
  * files: 0 for the program itself, k for seen[k - 1]) with its imports
  * spliced in, as lines; ofile/oline map each one back (see the origin map
@@ -1187,18 +1447,52 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen,
         // without the rest of the chain and exited 0.
         puts_(ys("error: native import depth exceeded (cycle?)\n"));
         exit_(1);
-        return yr(6, "lines", yav(0), "imports", yav(0), "seen", seen,
-                  "smods", smods, "ofile", yav(0), "oline", yav(0));
+        return yr(7, "lines", yav(0), "imports", yav(0), "seen", seen,
+                  "smods", smods, "ofile", yav(0), "oline", yav(0),
+                  "ogen", yav(0));
     } else {
-        Yv *lines = ys_split(src, ys("\n"));
+        /* The meta pass's scan, BEFORE the line loop: `embed` is expanded
+         * inside that loop, so a file with blocks has its embedded bytes
+         * already inside a string literal by then and nothing in them can be
+         * read as a block; each file's own base_dir is in scope here, so a
+         * hoisted import path normalizes against the file the block came from;
+         * and the whole thing runs before words_seen (resolve_unit), so
+         * std-unit selection sees the GENERATED text. */
+        Yv *sc = meta_meta_scan(src, base_dir, fid);
+        if (!yv_truth(yr_get(sc, "ok"))) {
+            /* Fatal, like every other diagnostic the resolve raises: a pass
+             * error with no message is a program compiled from nothing and
+             * exited 0. */
+            Yv *where = ys_cat(ys_cat(ys_tostring(yv_long(yv_l(yr_get(sc, "eline")))),
+                                      ys(":")),
+                                ys_tostring(yv_long(yv_l(yr_get(sc, "ecol")))));
+            if (fid > 0 && fid - 1 < yv_len(seen)) {
+                where = ys_cat(ys_cat(ya_get(seen, fid - 1), ys(":")), where);
+            };
+            puts_(ys_cat(ys_cat(ys_cat(where, ys(": error: ")), yr_get(sc, "err")),
+                         ys("\n")));
+            exit_(1);
+        };
+        Yv *lines = yr_get(sc, "p");
+        /* The scan's OWN origins, read by input line number (a block's piece
+         * may add lines, so they are not the output's), and the origins this
+         * function emits, one per output line. */
+        Yv *inf = yr_get(sc, "pf");
+        Yv *inl = yr_get(sc, "pol");
+        Yv *inf_gen = yr_get(sc, "gen");
         Yv *out_lines = yav(0);
         Yv *ofile = yav(0);
         Yv *oline = yav(0);
+        Yv *ogen = yav(0);
         Yv *imports = yav(0);
         long i = 0;
         long n = yv_len(lines);
         while (i < n) {
             Yv *line = ya_get(lines, i);
+            long lf = 0;
+            if (i < yv_len(inf)) { lf = yv_l(ya_get(inf, i)); };
+            long ln = 0;
+            if (i < yv_len(inl)) { ln = yv_l(ya_get(inl, i)); };
             Yv *trimmed = ys_trim(line);
             if (ys_eq_lit(ys_slice(trimmed, 0, 7), "import ")) {
                 Yv *rest = ys_slice_from(trimmed, 7);
@@ -1251,8 +1545,9 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen,
                     ;
                 } else if (yv_len(name) == 0) {
                     out_lines = ya_push(out_lines, line);
-                    ofile = ya_push(ofile, yv_long(fid));
-                    oline = ya_push(oline, yv_long(i + 1));
+                    ofile = ya_push(ofile, yv_long(lf));
+                    oline = ya_push(oline, yv_long(ln));
+                    ogen = ya_push(ogen, yv_bool(gen_at(inf_gen, i)));
                     ;
                 } else if (yv_len(full) == 0) {
                     puts_(ys_cat(
@@ -1325,6 +1620,12 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen,
                             oline = ya_push(oline, ya_get(sub_oline, k));
                             k = k + 1;
                         }
+                        Yv *sub_ogen = yr_get(sub, "ogen");
+                        k = 0;
+                        while (k < yv_len(sub_ogen)) {
+                            ogen = ya_push(ogen, ya_get(sub_ogen, k));
+                            k = k + 1;
+                        }
                         long m = 0;
                         while (m < yv_len(subns)) {
                             imports = ya_push(imports, ya_get(subns, m));
@@ -1342,8 +1643,9 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen,
                 ;
             } else if (is_embed_decl(trimmed)) {
                 out_lines = ya_push(out_lines, embed_decl(trimmed, base_dir));
-                ofile = ya_push(ofile, yv_long(fid));
-                oline = ya_push(oline, yv_long(i + 1));
+                ofile = ya_push(ofile, yv_long(lf));
+                oline = ya_push(oline, yv_long(ln));
+                ogen = ya_push(ogen, yv_bool(0));
                 ;
             } else {
                 /* NOTE: no empty if-arms here — keep the `;` filler.
@@ -1351,8 +1653,9 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen,
                  * rewritten by strip_namespaces). */
                 if (!ys_eq_lit(ys_slice(trimmed, 0, 7), "export ")) {
                     out_lines = ya_push(out_lines, line);
-                    ofile = ya_push(ofile, yv_long(fid));
-                    oline = ya_push(oline, yv_long(i + 1));
+                    ofile = ya_push(ofile, yv_long(lf));
+                    oline = ya_push(oline, yv_long(ln));
+                    ogen = ya_push(ogen, yv_bool(gen_at(inf_gen, i)));
                     ;
                 } else {
                     if (ys_index_of(line, ys("{")) >= 0) {
@@ -1368,8 +1671,9 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen,
             }
             i = i + 1;
         }
-        return yr(6, "lines", out_lines, "imports", imports, "seen", seen,
-                  "smods", smods, "ofile", ofile, "oline", oline);
+        return yr(7, "lines", out_lines, "imports", imports, "seen", seen,
+                  "smods", smods, "ofile", ofile, "oline", oline,
+                  "ogen", ogen);
     }
 }
 
@@ -3827,7 +4131,7 @@ static Yv *INTRINSICS;
 static Yv *intrinsics(void) {
     if (INTRINSICS == NULL) {
         INTRINSICS =
-            yav(47, ys("print"), ys("syscall"), ys("len"), ys("push"), ys("some"),
+            yav(48, ys("print"), ys("syscall"), ys("len"), ys("push"), ys("some"),
                 ys("is_some"), ys("unwrap"), ys("opt$test"), ys("opt$val"), ys("trim"), ys("ord"),
                 ys("byte_at"), ys("chr"), ys("tonum"), ys("tostring"),
                 ys("index_of"), ys("prepend"), ys("last_index_of"), ys("join"),
@@ -3836,6 +4140,7 @@ static Yv *intrinsics(void) {
                 ys("mutex"), ys("sem"), ys("lock"), ys("try_lock"), ys("post"), ys("wait"),
                 ys("exit"), ys("argv"), ys("range"), ys("typeof"),
                 ys("bytes"), ys("from_bytes"), ys("ptr_addr"), ys("os_call"),
+                ys("jmp_at"),
                 ys("self"),
                 ys("none"), ys("#fmt"));
     }
@@ -6325,6 +6630,12 @@ Yv *gen_call(Yv *st, Yv *node) {
             return emit_insn(st, F_CALL_L,
                               yv_l(lbl_new(ys_cat(ys("y_"), name))), 0, 0, 0, 0,
                               0, 0);
+        } else if (ys_eq_lit(name, "jmp_at")) {
+            /* jmp_at(addr): `jmp *%rax`, so the stack is exactly as it was --
+             * which is what a process entry point needs, since it reads argc
+             * from [rsp] (see meta.c run_image). */
+            st = gen(st, ya_get(yr_get(node, "args"), 0));
+            return emit_insn(st, F_JMP_IND, R_RAX, 64, 0, 0, 0, 0, 0);
         } else if (ys_eq_lit(name, "wait_pid")) {
             st = gen(st, ya_get(yr_get(node, "args"), 0));
             return gen_helper1(st, ys("y_wait_pid"));
@@ -11850,7 +12161,18 @@ Yv *std_units(Yv *names, Yv *pack) {
  * as one, and the run ends. */
 Yv *std_compile(Yv *name, Yv *ext) {
     Yv *path = ys_cat(ys_cat(ys("std/"), name), ys(".y"));
-    Yv *toks = tokenize(std_text(std_unit_src(name)));
+    Yv *ssrc = std_text(std_unit_src(name));
+    /* A std unit is tokenized straight from its embedded bytes, so it never
+     * goes through meta_scan: a `#{` here would reach the lexer as a bare `#`
+     * and be reported as an expression error. A block in a std source is a
+     * diagnostic (ideas/meta.md, "std sources"): it would run after the
+     * program's own pass, with no origin to point at. */
+    if (mg_on && ys_index_of(ssrc, ys("#{")) >= 0) {
+        puts_(ys("error: "));
+        puts_(ys_cat(path, ys(": a meta block cannot appear in a std source: std units are compiled from their embedded text after the program's own pass, so a block there has no generator to run in\n")));
+        exit_(1);
+    };
+    Yv *toks = tokenize(ssrc);
     Yv *ast = parse_program(toks);
     Yv *noimports = yav(0);
     Yv *nolines = yav(0);
@@ -11859,7 +12181,7 @@ Yv *std_compile(Yv *name, Yv *ext) {
     Yv *xt = externs_none();
     yr_set(xt, "ext", ext);
     Yv *r = compile_unit(ast, noimports, origin, 1, 0, name,
-                         std_unit_base(name), xt);
+                         std_unit_base(name), xt, yav(0));
     if (!yv_b(yr_get(r, "ok"))) {
         Yv *errs = yr_get(r, "errors");
         long k = 0;
@@ -11948,7 +12270,7 @@ Yv *unit_exports(Yv *stmts, Yv *hdefs, Yv *fns) {
  * imported package namespaces, init labels and the argv-use flag. */
 
 Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, long wlevel,
-                 Yv *name, long base, Yv *xt) {
+                 Yv *name, long base, Yv *xt, Yv *ogen) {
     tyset_reset();
     dbg_lines = debug;
     dbg_file = yr_get(origin, "file");
@@ -12000,7 +12322,7 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, long wlevel,
          * never a std unit's. */
         if (yv_len(name) == 0 || pkg_base(base)) {
             warnings = lint_unit(ast, ast3, yr_get(origin, "file"),
-                                yr_get(origin, "mods"), wlevel);
+                                yr_get(origin, "mods"), wlevel, ogen);
             pr = phase_end(times, ys("lint"), pt, ph);
             times = yr_get(pr, "times");
             pt = yv_l(yr_get(pr, "t"));
@@ -13896,7 +14218,7 @@ Yv *compile_package(Yv *ast, Yv *nr, Yv *name, long base, long wlevel,
                     Yv *std, Yv *deps) {
     Yv *xt = unit_externs(std, yr_get(nr, "std"), deps, yr_get(nr, "pkgs"));
     return compile_unit(ast, yr_get(nr, "imports"), yr_get(nr, "origin"), 1,
-                        wlevel, name, base, xt);
+                        wlevel, name, base, xt, yr_get(nr, "ogen"));
 }
 
 /* ── entry points ──────────────────────────────────────────────────────
@@ -13942,7 +14264,7 @@ Yv *emit_program(Yv *ast, Yv *nr, int debug, long wlevel, Yv *std, Yv *deps) {
     }
     yr_set(xt, "argv", yv_bool(wargv));
     Yv *r = compile_unit(ast, yr_get(nr, "imports"), yr_get(nr, "origin"),
-                         debug, wlevel, ys(""), 0, xt);
+                         debug, wlevel, ys(""), 0, xt, yr_get(nr, "ogen"));
     Yv *times = yr_get(r, "times");
     if (yv_b(yr_get(r, "ok"))) {
         dup_y_label(deps, yr_get(r, "unit"));

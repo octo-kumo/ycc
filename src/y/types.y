@@ -3978,6 +3978,23 @@ def typeof_call_go(st: TcSt, node: Call) -> TcRes {
                 };
                 tc_res(type_node({ k: K.tlong }), st)
             }
+        } else if (name == "jmp_at") {
+            // jmp_at(addr): jump to the code at that address, leaving %rsp
+            // alone (a `call` would push a return address where a process
+            // entry point reads its argc). Nothing after it in the enclosing
+            // function runs, and it only returns if the target does.
+            if (len(cargs) != 1) {
+                st = fail(st, "jmp_at needs 1 argument (the address)", node.line, node.col);
+                tc_res(type_node({ k: K.tvoid }), st)
+            } else {
+                let r = typeof_expr(st, cargs[0]);
+                st = r.st;
+                let ak: long = r.typ.k;
+                if (ak != K.tlong && ak != K.tunk && ak != K.tptr) {
+                    st = fail(st, "jmp_at needs an address, got " + tstr(r.typ), node.line, node.col);
+                };
+                tc_res(type_node({ k: K.tvoid }), st)
+            }
         } else {
             // resolve the callee to a function type: `self`, then scope
             let fterr = "";

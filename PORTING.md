@@ -91,6 +91,17 @@ requires byte-identical binaries).
    place), `len(x)` → `yv_len(x)`. (`push` is not a language function any
    more; `+=` is what pushes.)
 
+   `yav`'s count is **not checked against its arguments**, in either
+   direction. Too few and the missing slots are uninitialised pointers; too
+   many and the tail is silently dropped. Same trap as `yr` in rule 6, but
+   the symptom differs — a dropped `ys(...)` reads as an array that is
+   mysteriously shorter than the Y literal, and it surfaces far from the
+   edit. One hit us exactly this way: adding `jmp_at` to
+   `is_intrinsic_name` without bumping `46` → `47` stopped `#fmt` being a
+   builtin, and the only symptom was `error: assemble: L1357: unexpected
+   comment (backend bug)` from a checker that no longer recognised a name.
+   gcc says nothing.
+
 5. **Strings**: `"x"` (as a value) → `ys("x")`; `a + b` → `ys_cat(a, b)`;
    `s == "lit"` → `ys_eq_lit(s, "lit")`; `s == t` → `ys_eq(s, t)`;
    `s[a:b]` → `ys_slice(s, a, b)`, `s[a:]` → `ys_slice_from(s, a)`,
@@ -186,8 +197,9 @@ requires byte-identical binaries).
        emits. For a native that is the declared `y_`-prefixed label, reached
        through `runtime_base`, which strips a trailing `$<digits>` suffix so a
        generated `y_foo$3` calls `y_foo`.
-     - **The shaker** (`native.y`'s `plabels`, ~line 10600; `native.c`) keeps
-       every `y_`-prefixed label a reachable function refers to, since nothing
+     - **The shaker** (`native.y`'s `plabels`, ~line 10990; `native.c`
+       ~12899) keeps every `y_`-prefixed label a reachable function refers
+       to, since nothing
        in the AST names the instruction that defines it. Drop one and the link
        reports `undefined label '<x>'` (`asm_link`, `asm.y`/`asm.c`) — which is
        also what a native with no assembly on the target backend gets, by
@@ -205,6 +217,28 @@ requires byte-identical binaries).
      The diagnostics above, and `native` being a reserved keyword, are what
      `test/y/native/e3*.y` pins; the bit-identity that matters for the port is
      `make ycc`, which compiles the compiler with both copies and compares.
+
+13. **`syscall` is an instruction in Y and a function call in C.** The Y
+    builtin compiles to a bare `syscall` instruction; libc's `syscall()` is a
+    *call*. That is fine for everything rule 8's table describes — `openat`,
+    `mkdir`, a write that returns a value — and wrong for any ported code that
+    relies on the syscall **changing the machine's state for the instructions
+    that follow it**:
+
+    - a `clone`/`fork` that sets the child's `%rsp`. With a helper function,
+      or with libc's wrapper, the child's `ret` pops a return address off the
+      *new* stack and jumps into the compiler's BSS.
+    - a jump that must leave `%rsp` exactly where it found it. `jmp_at` was
+      first a `static` function, so at `-O0` gcc emitted `call`, dropping
+      `%rsp` by eight and making the image's entry read the return address as
+      its `argc`. It is now a macro expanding to `jmp *%reg` at the call site
+      (`mg_jmp_at`, `src/c/meta.c:507`).
+
+    So such a syscall must be inline asm at the point of use, not wrapped in a
+    helper. This is the one place `src/c/` reaches for inline asm, and the
+    reason is in the comment at `run_image_fork` in `src/c/meta.c`. Rule 8's
+    "`pkg.c` uses libc calls" is right for everything else and silent about
+    this.
 
 ## What the port must NOT do
 

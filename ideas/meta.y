@@ -126,21 +126,26 @@ const FRAG = "assembled";
 //     mid-token 99
 //     
 
-// A block's value is a `str`, and it is spliced in as TEXT -- so a string
-// value has to be a LITERAL before it lands, or it lands as bare code and the
-// program's own parser sees `let count = let names = …`. `lit` is that step
-// (one level up from the bug in emit_table), and it has to escape: `quoted`
-// alone wraps the quotes and leaves the inner ones and the newlines to be
-// parsed as code, which reports `expected ';', got 'a'`. And a block whose
-// value is not a `str` at all is refused by the existing checker, not by the
-// pass: `#{ 1 + 1 }#` gives "'ycc_meta_expr' arg 1: expected str, got long".
+// A block's text is the RENDERING of its value (`tostring`), spliced in as
+// TEXT -- so a string value has to be a LITERAL before it lands, or it lands as
+// bare code and the program's own parser sees `let count = let names = …`.
+// `lit` is that step (one level up from the bug in emit_table), and it has to
+// escape: `quoted` alone wraps the quotes and leaves the inner ones and the
+// newlines to be parsed as code, which reports `expected ';', got 'a'`.
+//
+// The value need not be a `str`: every type `tostring` takes is rendered, so
+// `#{ 1 + 1 }#` yields the two characters `2`, not a type error. Only `void`
+// is refused, and by the existing checker rather than by the pass.
 let count = #{ lit(emit_names(NAMES)) }#;
 // resolves to: let count = "…the 65 characters emit_names generates, escaped…";
 
 
 // ---------------------------------------------------------------------------
-// Nesting is DATA, not splicing: the inner block's text becomes a `str` the
-// outer block uses. It does not inject code into the outer block.
+// Nesting is SPLICING, at every level: the inner block's text is substituted
+// into the SOURCE OF THE BLOCK AROUND IT, that source is compiled and run, and
+// the outer block's own text is substituted in turn -- innermost first. Each
+// level costs one more compile and one more run of the generator inside the
+// compiler, which is what the depth cap of 8 is for.
 // ---------------------------------------------------------------------------
 
 // The outer block is a top-level `let`, so this is legal; note that putting the
@@ -153,6 +158,10 @@ let thrice = #{ lit(repeat(3, #{ lit(emit_names(["x"])) }# + "print(\\\"tick\\\\
 //     print(names.length, " names\n");
 //     print("tick\n");
 //     … × 3
+//
+// which is exactly the `2` of the manual's example: the outer block's value is
+// what lands, so `#{ let a = #{ "1+1" }#; a }#` resolves to `2`, and not to
+// `let a = 1+1; a`. `t201_meta_nest_expr.y` is that case as a fixture.
 
 
 // ---------------------------------------------------------------------------
@@ -170,7 +179,7 @@ def gen#{FRAG}#() -> long { 99 };
 // resolves to: def genassembled() -> long { 99 };
 //
 // and in the generator program, the block's call is hoisted one statement up:
-//     ycc_meta_stmt(<slot>, { FRAG });
+//     ycc_meta_stmt(<slot>, tostring({ FRAG }));
 //     def gen() -> long { 99 };
 //
 // The full name appears in NO source line: the generator's own copy of the def

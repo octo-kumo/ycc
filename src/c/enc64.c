@@ -1088,7 +1088,15 @@ static Yv *enc_unary_mem(Yv *buf, long at, Yv *op, Yv *o) {
    asm_relax). `code` is the long form's condition byte (0x84 for je, 0x85 for
    jne, ...), which setcc shares. */
 static Yv *enc_jmp(Yv *buf, long at, Yv *o, int lng) {
-    if (yv_l(yr_get(o, "k")) != K_lbl) {
+    if (yv_l(yr_get(o, "k")) == K_ind) {
+        /* jmp *%reg -- FF /4. The one jump through a register the backend
+         * emits: the `jmp_at` builtin's, which a forked child uses to enter a
+         * compiled image it mapped at a scratch address (meta.c run_image).
+         * enc_ok's empty fixups keep asm_relax off it: a jump through a
+         * register has no label to shorten to. */
+        long n = put_rex(buf, at, rex(0, 0, -1, yv_l(yr_get(o, "n"))));
+        return enc_ok(put2(buf, n, 255, modrm(3, 4, yv_l(yr_get(o, "n")))), yav(0));
+    } else if (yv_l(yr_get(o, "k")) != K_lbl) {
         return enc_err(at, ys("jmp target"));
     } else if (lng) {
         long n = put(buf, at, 233);
@@ -1497,6 +1505,7 @@ Yv *enc_form(Yv *buf, long at, long f, Yv *mn, Yv *ops, int lng) {
     else if (f == 94) { return enc_sse_arith(buf, at, mn, ya_get(ops, 1), ya_get(ops, 0)); }  // addsd O_REG O_REG
     else if (f == 95) { return enc_sse_arith(buf, at, mn, ya_get(ops, 1), ya_get(ops, 0)); }  // subsd O_REG O_REG
     else if (f == 96) { return enc_ucomisd(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // ucomisd O_REG O_REG
+    else if (f == 97) { return enc_jmp(buf, at, ya_get(ops, 0), lng); }  // jmp O_IND
     else {
         return enc_err(at, ys_cat(ys_cat(ys("unknown form '"), mn), ys("'")));
     }

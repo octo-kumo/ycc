@@ -23,12 +23,13 @@ import lexer from "./lexer.y";
 import parser from "./parser.y";
 import nasm from "./asm.y";
 import nativelib from "./native.y";
+import meta from "./meta.y";
 import pkg from "./pkg.y";
 import fs;
 
 // ── argument parsing ─────────────────────────────────────────────────────
 
-def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, timing: bool, allow_exec: bool, debug: bool, nowarn: bool, wlevel: long, std_src: bool, std_pack: str } {
+def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, timing: bool, allow_exec: bool, debug: bool, nowarn: bool, wlevel: long, std_src: bool, std_pack: str, run: bool, dump: bool } {
     let out = "";
     let files: [str] = [];
     let asm_only = false;
@@ -39,6 +40,8 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
     let wlevel = 0;
     let std_src = false;
     let std_pack = "";
+    let run = false;
+    let dump = false;
     let i = 1;  // skip argv[0]
     let n = len(argv);
     while (i < n) {
@@ -70,6 +73,12 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
                 puts("ycc: --target needs a name (linux, windows)\n");
                 exit(1);
             };
+        } else if (a == "-E") {
+            // dump the source the lexer would see, with origin markers, and
+            // stop: no tokens, no check, no output file.
+            dump = true;
+        } else if (a == "run") {
+            run = true;
         } else if (a == "--time" || a == "-t") {
             timing = true;
         } else if (a == "--no-exec") {
@@ -92,7 +101,10 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
                 exit(1);
             };
         } else if (a == "--help" || a == "-h") {
-            puts("Usage: ycc [-o OUTPUT] [-S] [-t] [-g] [-w] [-W N] [--no-exec] [-h] FILE\n");
+            puts("Usage: ycc [-o OUTPUT] [-S] [-E] [-t] [-g] [-w] [-W N] [--no-exec] [-h] FILE\n");
+            puts("       ycc run [-g] [--no-exec] FILE     compile FILE and run it in a\n");
+            puts("                                           child; ycc's exit status is\n");
+            puts("                                           the program's\n");
             puts("       ycc build [-g] [-w] [-W N] [--no-exec] [--std-src] [DIR]\n");
             puts("       ycc vendor [DIR]\n");
             puts("  (no flags)   compile FILE to a native executable (default: a.out)\n");
@@ -100,6 +112,10 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
             puts("  -S           emit assembly only (stdout, or the -o file)\n");
             puts("  --target=NAME  emit for NAME: linux (the default, an ELF)\n");
             puts("               or windows (a PE32+ executable, x64)\n");
+            puts("  -E           dump the source the lexer sees, each line tagged with\n");
+            puts("               the file and line it came from, and stop\n");
+            puts("  run FILE     compile FILE and run it in a forked child: no output\n");
+            puts("               file, and ycc exits with the program's status\n");
             puts("  -t, --time   print per-phase time and heap use to stderr\n");
             puts("  -g           add section headers, a symbol table (functions,\n");
             puts("               globals) and DWARF line info, so perf, gdb,\n");
@@ -132,7 +148,7 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
         };
         i = i + 1;
     };
-    { out: out, files: files, asm_only: asm_only, timing: timing, allow_exec: allow_exec, debug: debug, nowarn: nowarn, wlevel: wlevel, std_src: std_src, std_pack: std_pack }
+    { out: out, files: files, asm_only: asm_only, timing: timing, allow_exec: allow_exec, debug: debug, nowarn: nowarn, wlevel: wlevel, std_src: std_src, std_pack: std_pack, run: run, dump: dump }
 };
 
 // --target NAME: the one place a target name becomes the global every other
@@ -373,6 +389,9 @@ def build_resolve(path: str, allow_exec: bool, pkgs: [str], roots: [str]) -> Res
         puts("error: cannot read file '" + path + "'\n");
         exit(1);
     }
+    // A meta pass per unit: a block in package A cannot see package B, so each
+    // unit gets its own generator (ideas/meta.md, "The pass").
+    meta.meta_begin();
     nativelib.native_resolve_pk(unwrap(src), pkg.pk_dir_of(path), allow_exec, path, pkgs, roots)
 };
 
@@ -836,6 +855,29 @@ def build_project(dir: str, debug: bool, nowarn: bool, wlevel: long, allow_exec:
     0
 };
 
+// `ycc -E`: the resolved text, each line tagged with the file and line it came
+// from. The tag is a trailing comment on the FIRST line of each run of lines
+// from one file, so line numbers survive the round trip and the markers do not
+// move anything: comments never reach the lexer, so compiling a dump gives the
+// same bytes as compiling the file it came from.
+def dump_source(src: str, origin: Origin) -> long {
+    let lines = split(src, "\n");
+    let prev = "\x01none";
+    let i = 0;
+    while (i < len(lines)) {
+        let l = lines[i];
+        let at = nativelib.origin_at(origin, i + 1, false);
+        if (at == prev) {
+            puts(l + "\n");
+        } else {
+            puts(l + "\t// " + at + "\n");
+            prev = at;
+        };
+        i = i + 1;
+    };
+    0
+};
+
 def main(cmdline: [str]) -> long {
     // tags.y writes its tag numbers out twice (K for the code, KTAGS for
     // diagnostics); ~4k instructions to prove the two still agree, once.
@@ -894,6 +936,11 @@ def main(cmdline: [str]) -> long {
             // src is str? (read_file returns none on missing file); the
             // none case exited above, so unwrap here (loud on none).
             let src2 = unwrap(src);
+            // One meta pass per program: the pass is ON for the program's own
+            // resolve and OFF for the generator's (meta_compile_gen), so
+            // meta_begin here and nothing else -- resolve_unit's meta_prepare
+            // is what runs the generator.
+            meta.meta_begin();
             // get base dir from file path (use last slash, like C compiler's strrchr)
             let last_slash = last_index_of(file, "/");
             let base_dir = ".";
@@ -913,6 +960,11 @@ def main(cmdline: [str]) -> long {
             dt = ph.times; t0 = ph.t; h0 = ph.h;
             let nrsrc = nr.src;
             let nrorigin = nr.origin;
+            if (pargs.dump) {
+                dump_source(nrsrc, nrorigin);
+                exit(0);
+                0
+            };
             let toks = lexer.tokenize(nrsrc);
             ph = nativelib.phase_end(dt, "tokenize", t0, h0);
             dt = ph.times; t0 = ph.t; h0 = ph.h;
@@ -1006,6 +1058,18 @@ def main(cmdline: [str]) -> long {
                     exit(1);
                     1
                 } else {
+                    if (pargs.run) {
+                        let av: [str] = [file];
+                        let rr = meta.run_image(ab.bytes, av, false);
+                        if (!rr.ok) {
+                            puts("error: " + rr.err + "\n");
+                            exit(1);
+                            1
+                        } else {
+                            if (rr.sig > 0) { exit(128 + rr.sig); } else { exit(rr.status); };
+                            0
+                        }
+                    };
                     let out_path = out;
                     if (len(out_path) == 0) { out_path = "a.out"; 0; }
                     let abbytes = ab.bytes;

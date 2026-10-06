@@ -23,9 +23,9 @@
 
 /* not instructions (see the header) */
 #define IR_W      8
-#define IR_LABEL 97
-#define IR_LOC 98
-#define IR_TEXT 99
+#define IR_LABEL 98
+#define IR_LOC 99
+#define IR_TEXT 100
 
 /* register numbers, x86 encoding order */
 #define R_RAX  0
@@ -147,6 +147,10 @@
 #define F_ADDSD_R_R 94
 #define F_SUBSD_R_R 95
 #define F_UCOMISD_R_R 96
+/* jmp *%reg: a jump through a register. Only the `jmp_at` builtin's, which a
+ * forked child uses to enter a compiled image it mapped at a scratch address
+ * (meta.c run_image) -- Y cannot spell a jump to an address it computed. */
+#define F_JMP_IND 97
 
 Yv *ir_push(Yv *ir, long f, long a, long b, long c, long d, long e, long g,
             long h);

@@ -24,6 +24,7 @@
 
 #include "asm.h"
 #include "lexer.h"
+#include "meta.h"
 #include "native.h"
 #include "parser.h"
 #include "pkg.h"
@@ -50,6 +51,8 @@ Yv *parse_cli_args(Yv *argv) {
     long wlevel = 0;
     int std_src = 0;
     Yv *std_pack_path = ys("");
+    int run = 0;
+    int dump = 0;
     long i = 1; /* skip argv[0] */
     long n = yv_len(argv);
     while (i < n) {
@@ -73,6 +76,14 @@ Yv *parse_cli_args(Yv *argv) {
             }
         } else if (ys_eq_lit(a, "-S")) {
             asm_only = 1;
+            ;
+        } else if (ys_eq_lit(a, "-E")) {
+            /* dump the source the lexer would see, with origin markers, and
+             * stop: no tokens, no check, no output file. */
+            dump = 1;
+            ;
+        } else if (ys_eq_lit(a, "run")) {
+            run = 1;
             ;
         } else if (ys_eq_lit(a, "--time") || ys_eq_lit(a, "-t")) {
             timing = 1;
@@ -117,15 +128,22 @@ Yv *parse_cli_args(Yv *argv) {
                 ;
             }
         } else if (ys_eq_lit(a, "--help") || ys_eq_lit(a, "-h")) {
-            puts_(ys("Usage: ycc [-o OUTPUT] [-S] [-t] [-g] [-w] [-W N] [--no-exec] [-h] FILE\n"));
+            puts_(ys("Usage: ycc [-o OUTPUT] [-S] [-E] [-t] [-g] [-w] [-W N] [--no-exec] [-h] FILE\n"));
+            puts_(ys("       ycc run [-g] [--no-exec] FILE     compile FILE and run it in a\n"));
+            puts_(ys("                                           child; ycc's exit status is\n"));
+            puts_(ys("                                           the program's\n"));
             puts_(ys("       ycc build [-g] [-w] [-W N] [--no-exec] [--std-src] [DIR]\n"));
             puts_(ys("       ycc vendor [DIR]\n"));
             puts_(ys("  (no flags)   compile FILE to a native executable (default: "
                      "a.out)\n"));
             puts_(ys("  -o OUTPUT    output path (executable, or .s file with -S)\n"));
             puts_(ys("  -S           emit assembly only (stdout, or the -o file)\n"));
-            puts_(ys("  --target=NAME  emit for NAME: linux (the default, an ELF)\n"));
-            puts_(ys("               or windows (a PE32+ executable, x64)\n"));
+puts_(ys("  --target=NAME  emit for NAME: linux (the default, an ELF)\n"));
+puts_(ys("               or windows (a PE32+ executable, x64)\n"));
+puts_(ys("  -E           dump the source the lexer sees, each line tagged with\n"));
+puts_(ys("               the file and line it came from, and stop\n"));
+puts_(ys("  run FILE     compile FILE and run it in a forked child: no output\n"));
+puts_(ys("               file, and ycc exits with the program's status\n"));
             puts_(ys("  -t, --time   print per-phase time and heap use to stderr\n"));
             puts_(ys("  -g           add section headers, a symbol table (functions,\n"));
             puts_(ys("               globals) and DWARF line info, so perf, gdb,\n"));
@@ -162,11 +180,11 @@ Yv *parse_cli_args(Yv *argv) {
         }
         i = i + 1;
     }
-    return yr(10, "out", out, "files", files, "asm_only", yv_bool(asm_only),
+    return yr(12, "out", out, "files", files, "asm_only", yv_bool(asm_only),
               "timing", yv_bool(timing), "allow_exec", yv_bool(allow_exec),
               "debug", yv_bool(debug), "nowarn", yv_bool(nowarn), "wlevel",
               yv_long(wlevel), "std_src", yv_bool(std_src), "std_pack",
-              std_pack_path);
+              std_pack_path, "run", yv_bool(run), "dump", yv_bool(dump));
 }
 
 /* --target=NAME: object format and OS. One global (target.c's res_target),
@@ -492,6 +510,9 @@ Yv *build_resolve(Yv *path, int allow_exec, Yv *pkgs, Yv *roots) {
         exit_(1);
         return 0;
     }
+    /* A meta pass per unit: a block in package A cannot see package B, so each
+     * unit gets its own generator (ideas/meta.md, "The pass"). */
+    (void)meta_begin();
     return native_resolve_pk(yv_unwrap(src), pk_dir_of(path), allow_exec,
                              path, pkgs, roots);
 }
@@ -1047,6 +1068,29 @@ long build_project(Yv *dir, int debug, int nowarn, long wlevel,
     return 0;
 }
 
+/* `ycc -E`: the resolved text, each line tagged with the file and line it came
+ * from. The tag is a trailing comment on the FIRST line of each run of lines
+ * from one file, so line numbers survive the round trip and the markers do not
+ * move anything: comments never reach the lexer, so compiling a dump gives the
+ * same bytes as compiling the file it came from. */
+static long dump_source(Yv *src, Yv *origin) {
+    Yv *lines = ys_split(src, ys("\n"));
+    Yv *prev = ys("\x01none");
+    long i = 0;
+    while (i < yv_len(lines)) {
+        Yv *l = ya_get(lines, i);
+        Yv *at = origin_at(origin, i + 1, 0);
+        if (ys_eq(at, prev)) {
+            puts_(ys_cat(l, ys("\n")));
+        } else {
+            puts_(ys_cat(ys_cat(ys_cat(l, ys("\t// ")), at), ys("\n")));
+            prev = at;
+        };
+        i = i + 1;
+    };
+    return 0;
+}
+
 long y_main(Yv *cmdline) {
     /* tags.y writes its tag numbers out twice (K for the code, KTAGS for
      * diagnostics); ~4k instructions to prove the two still agree, once. */
@@ -1111,6 +1155,11 @@ long y_main(Yv *cmdline) {
             /* src is str? (read_file returns none on missing file); the
              * none case exited above, so unwrap here (loud on none). */
             Yv *src2 = yv_unwrap(src);
+            /* One meta pass per program: the pass is ON for the program's own
+             * resolve and OFF for the generator's (meta_compile_gen), so
+             * meta_begin here and nothing else -- resolve_unit's meta_prepare
+             * is what runs the generator. */
+            (void)meta_begin();
             /* get base dir from file path (use last slash, like C compiler's
              * strrchr) */
             long last_slash = ys_last_index_of(file, ys("/"));
@@ -1135,6 +1184,11 @@ long y_main(Yv *cmdline) {
             Yv *nrsrc = yr_get(nr, "src");
             Yv *nrorigin = yr_get(nr, "origin");
             Yv *nrstd = yr_get(nr, "std");
+            if (yv_b(yr_get(pargs, "dump"))) {
+                dump_source(nrsrc, nrorigin);
+                exit_(0);
+                return 0;
+            };
             Yv *toks = tokenize(nrsrc);
             ph = phase_end(dt, ys("tokenize"), t0, h0);
             dt = yr_get(ph, "times");
@@ -1248,6 +1302,23 @@ long y_main(Yv *cmdline) {
                     exit_(1);
                     return 1;
                 } else {
+                    if (yv_b(yr_get(pargs, "run"))) {
+                        Yv *av = yav(1, file);
+                        Yv *rr = run_image(yr_get(ab, "bytes"), av, 0);
+                        if (!yv_truth(yr_get(rr, "ok"))) {
+                            puts_(ys_cat(ys("error: "),
+                                         ys_cat(yr_get(rr, "err"), ys("\n"))));
+                            exit_(1);
+                            return 1;
+                        } else {
+                            if (yv_l(yr_get(rr, "sig")) > 0) {
+                                exit_(128 + yv_l(yr_get(rr, "sig")));
+                            } else {
+                                exit_(yv_l(yr_get(rr, "status")));
+                            };
+                            return 0;
+                        }
+                    };
                     Yv *out_path = out;
                     if (yv_len(out_path) == 0) {
                         out_path = ys("a.out");

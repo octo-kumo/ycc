@@ -17,6 +17,132 @@ in diagnostics are 1-based line and column, the column counted in bytes.
 
 \noindent Comments are whitespace: they separate tokens and nothing more.
 
+\subsection{Meta blocks}
+
+A \emph{meta block} is compile-time code whose value becomes source text.
+There are two forms, and they differ only in where the text lands:
+
+\begin{lstlisting}
+let count = #{ tally(n) }#;   // expression position: where the block was
+#{ emit_table(); }#           // alone on a line: there, as statements
+\end{lstlisting}
+
+\noindent A block is \emph{not} a token and \ic{\#} is \emph{not} an escape
+character. It is read before the lexer runs, in one pass over the file's bytes,
+and only in \emph{code} position --- so inside a string literal, an f-string, a
+byte string, a character literal, a line comment or a block comment, a
+\ic{\#\{} is plain text and needs no escaping anywhere, and a generator may
+emit literals holding \ic{\#\{} freely. A \ic{\#} in code position that is not
+followed by \ic{\{} is an error, as is a \ic{\}\#} with no block open, a block
+that never closes, and an unterminated string literal; each names its line.
+
+The block's body is ordinary \textsf{Y}, compiled and run while the compiler
+runs; what lands in the program's source is the \emph{rendering} of the body's
+value --- what \ic{tostring} makes of it --- so the value need not be a \ty{str}
+itself. A \ty{str} is its own rendering, so a value that is \emph{source text}
+still has to be spelled as a literal before it lands: \ic{\#\{ quoted(name) \}\#},
+not \ic{\#\{ name \}\#}, or the program sees a bare name where it expected code.
+A body whose value is \ic{void} is an ordinary type error, because \ic{tostring}
+has no case for it.
+
+\paragraph{Where a block may sit.} A block may be at the top level or inside
+another block. It may \emph{not} be in a \ic{def} or \ic{type} \emph{body}: in a
+body, in-place emission would give compile-time-fixed values --- one call site
+for every runtime caller --- and a silent ``never ran'' mode when nothing calls
+it during generation.
+
+A block inside a block is \emph{splicing}, at every level and with no second
+meaning: the inner block's text is substituted into the \emph{source of the block
+around it}, that source is compiled and run, and the outer block's own text is
+substituted in turn --- innermost first. So \ic{\#\{ let a = \#\{ "1+1" \}\#; a
+\}\#} resolves to \ic{2}: the inner block yields the text \ic{1+1}, the outer
+block is then \ic{let a = 1+1; a}, and its \emph{value} --- not its source --- is
+the \ic{a} it names, which is why the answer is \ic{2} and not \ic{let a = 1+1;
+a}. A generator that generates a generator is ordinary nesting, and there is no
+second dialect for it. Each level costs one more compile and one more run of the
+generator inside the compiler, so nesting is capped at \textbf{8} and one level
+over that is an error naming the cost.
+
+\paragraph{Where the call goes.} Two cases, decided by the byte before the
+\ic{\#\{}.
+
+\emph{An operand position} --- the preceding non-space byte is \ic{(}, \ic{,},
+\ic{=}, \ic{[}, \ic{\{}, \ic{;}, \ic{:}, \ic{?}, an operator, or the block starts
+a line or follows a keyword such as \ic{return} --- keeps the call \emph{in
+place}: the expression is \ic{\#\{ \ldots \}\#} itself, so the call yields a
+\ty{str} and the surrounding position must want a \ty{str}. That is why
+\ic{f(\#\{ quoted(s) \}\#, 2)} wants an \ic{s: str} parameter, and why
+\ic{a[\#\{ i \}\#]} does not work at all: an index is a \ty{long}.
+
+\emph{Mid-token} --- the preceding byte ends a token (a word character, \ic{)},
+\ic{]}, \ic{.} or a literal's quote), so there is no operand position and a call
+cannot go there --- the block's bytes are \emph{dropped} from the generator
+program and the call is emitted as a statement immediately before the top-level
+statement the block is in. This is safe precisely because it is mid-token: the
+block is an adjunct between two adjacent tokens, and dropping an adjunct leaves
+them adjacent. So \ic{def helper\#\{nm\}\#() -> long \{ 7 \}} becomes
+\ic{def helper() -> long \{ 7 \}} in the generator, with \ic{nm} already
+evaluated in the statement above it; \ic{obj\#\{i\}\#.field} becomes
+\ic{obj.field}; \ic{1\#\{i\}\#} becomes \ic{1}.
+
+\paragraph{An \ic{import} inside a block} is hoisted to the top of the generator
+program, so the module is resolved exactly as an import at the top of a file
+would be. It must come \emph{first} in its block, and it must end with a
+semicolon; a block is not a file scope, and both mistakes are errors naming the
+line. A block that emits an \ic{import} as text lands in the program if it lands
+as a whole line, and nowhere at all if it lands mid-line.
+
+\paragraph{Generated text is never re-scanned.} The pass reads the file once,
+before the lexer; the text a block renders is spliced into the program and
+nothing looks at it again. So a block may emit half a statement, and it may
+\emph{not} emit a \ic{\#\{ \ldots \}\#} block --- generated text is not code
+position, there is no generator to run it, and it is an error naming the
+block. Nesting is therefore written, never generated: a block inside a block is
+in the source, which is where the pass finds it. Unbalanced brackets in
+generated text are the parser's problem, and the line map below points the error
+at the block.
+
+\paragraph{Lines.} Every line the pass generates carries the line of the
+\ic{\#\{} it came from, because that is the honest origin --- the text has no
+line of its own. A block's own text may be many lines: the piece is inserted at
+the byte offset its \ic{\#\{} was scanned at, and the line map is rebuilt around
+it, so the lines after it shift by however many it added. A diagnostic in
+generated text therefore names the block's line, and one in the generator names
+the source line the block's text came from.
+
+\paragraph{The top level runs once per round.} A file's top level is the
+generator's program --- the generator \emph{is} the file with each block replaced
+by a call --- so with blocks in the file every top-level statement runs once to
+build the generator and once in the program. A declaration is fine (\ic{def} and
+\ic{type} hoist, and a \ic{let} a block reads should be pure), and so is text a
+block generated, which the program runs once and the generator never ran at all;
+any other top-level statement is a warning naming its line. Prefer a declaration
+when the file holds a block.
+
+Nesting adds rounds, so the count is once per round rather than twice. Where a
+round cannot yet produce a block's text --- the inner block's, which is only known
+a round later --- the pass leaves a stand-in there and leaves every top-level
+statement that is neither a declaration nor carries a block out of that round's
+generator program, so such a statement does not run in it. A top-level \ic{let}
+is a declaration and so is kept, which is the sharp edge: an initializer that
+reads a name a block \emph{generates} still fails in a stand-in round. Keep such
+an initializer not merely pure but independent of what a block emits.
+
+A thread or process primitive (\ic{spawn}, \ic{fork}, \ic{join}, \ic{mutex},
+\ic{lock}, \ic{try\_lock}, \ic{sem}, \ic{post}, \ic{wait}) cannot be used in a
+block --- it runs in a forked child, so it would be almost always a mistake ---
+and neither can a name the pass injects (\ic{ycc\_meta\_expr},
+\ic{ycc\_meta\_stmt}, \ic{ycc\_meta\_emit}).
+
+\paragraph{Three limits, measured.} A name fragment needs a character of the
+name beside it: \ic{def \#\{nm\}\#()} is not mid-token (nothing ends a token
+there), a call cannot go in a header, and dropping its bytes would leave
+\ic{def () -> long}, so it is an error. The generator holds the \ic{def} under
+the \emph{short} name, so a generated name and its call sites have to be
+generated together --- the source may not mention the full name. And a block
+cannot be adjacent to another block: \ic{\}\#\#\{} is two blocks but
+\ic{\}\#\{} is one block and then a brace, so write \ic{\#\{x\}\#b\#\{y\}\#}.
+
 \subsection{Identifiers and keywords}
 
 A \emph{word character} is a letter (\ic{A}--\ic{Z}, \ic{a}--\ic{z}), a
