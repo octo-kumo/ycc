@@ -521,8 +521,15 @@ computed by squaring).
     one ulp out. Five compensations left those five bit for bit unchanged, and the
     fourth proves why --- the terms are exact to far below the last bit, so the
     residual is the rounding of the final sum, which no compensation of a term
-    reaches. It wants the pieces held apart across the sum, in one
-    extra-precision accumulator, which is a different algorithm rather than a
+    reaches. Reordering the sum does not fix it either, and the reason is worth
+    the space: sorting the four corrections smallest-first takes the sweep from
+    \num{288} to \num{467} (and a partial sort, to \num{619}), because for
+    every argument with a non-zero exponent the term that needs to go first is
+    \emph{already} first --- it is the residual of the \ic{two\_sum}, and
+    \ic{two\_sum} puts it last in the expression and first in the sum. The two
+    orders cannot both be had, because the answer's dominant term is absent exactly
+    where the order is wrong. It wants the pieces held apart across the sum, in
+    one extra-precision accumulator, which is a different algorithm rather than a
     sixth compensation of this one. Recorded in t322 and
     pinned by t327, which also carries the six \emph{non-negative} powers of ten
     (exact integers) and why no negative one is: \ic{1e-323} is $2^{-1073}$, not

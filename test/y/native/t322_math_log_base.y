@@ -130,8 +130,37 @@
 // term reaches that. Closing it needs the pieces held apart across the sum, which
 // is one extra-precision accumulator rather than a compensated expression tree.
 //
-// Five measured attempts that did not work, and a measurement that says why a
-// sixth would not either, are worth more in this file than a sixth.
+// THE SUM'S ORDER, tested, and the ORIGINAL ORDER WINS
+//
+// The objective names "a behaviour decided by an accident of expression order" as
+// the class to keep hunting, and this sum's order is the module's last
+// uncompensated choice: (ts_lo + ae) + be, then + l*log10e_lo, then + s, each a
+// plain rounded add. Summing smallest-first is the textbook remedy, so it was
+// tried twice:
+//
+//   - a PARTIAL sort, which ordered two of the four corrections and summed the
+//     other two in their original order. log10 at e == 0 improved, 5 of 14 to 3
+//     of 14 -- and the whole decade-uniform sweep went from 288 to 619.
+//   - a COMPLETE five-comparator network over all four. 288 to 467.
+//
+// Both worse than the 288 the module had. And the reason is visible once the
+// bound is written down: at e != 0, a = ef*log10_2_hi carries the whole answer
+// and ts_lo is ALREADY the residual of two_sum(a, bq), which is already the
+// smallest of the four terms -- so the original order is already smallest-first
+// for every argument with a non-zero exponent, and sorting can only disturb it.
+//
+// So the order is not an accident here. It is the right order for 99% of
+// arguments and the wrong one for the 1.4% at e == 0, and the two cannot both be
+// had by reordering: at e == 0 the first term is absent rather than dominant, so
+// there the term that is smallest by construction is not the one that needs to go
+// first.
+//
+// Which is the argument that ends this thread. It is not "compensation did not
+// help" -- it is that the one choice which would help helps only where the sum is
+// degenerate, and costs everywhere else. A single expression cannot have both.
+//
+// Six measured attempts, and a measurement that says a seventh would not either,
+// are worth more in this file than a seventh.
 //
 // It also cost 5.5x the instructions: log through assembly plus a multiply is
 // 149 a call, and this is 817. That is a deliberate trade and it is worth naming
