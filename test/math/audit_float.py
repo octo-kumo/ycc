@@ -49,6 +49,26 @@ THE REFERENCE, AND WHY IT IS NOT LIBM
     from the argument: enough digits that the leading cancellation cannot reach
     the last one, plus a margin.
 
+WHAT IT DELIBERATELY DOES NOT COVER, AND WHY
+
+    atan, asin, acos, tanh, sinh and cosh. They are the six whose exact
+    references need a series of this file's own -- Decimal has exp, ln, log10,
+    sqrt and the powers, and no atan -- and every one of those series was wrong
+    when first written: pi by Machin came out as 3.22698 because the alternation
+    was applied twice, and an atan's took a different form again. A reference
+    that is wrong reports the MODULE as wrong, and it does so confidently; that
+    has already happened six times in this table, so a seventh is not a risk
+    worth taking for coverage the table and t303/t308/t319/t320 already provide.
+    The lesson from `log(3)` and from pi is in this docstring and the fix is the
+    same in both cases: derive the constant, then CHECK IT against libm before
+    anything depends on it.
+
+    Worth recording from the attempt: over 300 ordinary arguments, libm's own
+    asin and acos are more than one ulp from the exact answer on two and one of
+    them. So a reference for those two must be exact, not libm -- which is why
+    the table's 60-digit tanh reference exists and why the same treatment would
+    be needed here.
+
 WHAT IT DOES NOT COVER, AND WHY
 
     Two-argument functions, and the assembly kernels. hypot, atan2 and the rest
