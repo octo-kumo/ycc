@@ -172,7 +172,8 @@ def asn1_time(b: [byte], e: Tlv) -> long {
 type Cert = {
     ok: bool, der: [byte], tbs: [byte], sig_alg: str, sig: [byte],
     issuer: [byte], subject: [byte], not_before: long, not_after: long,
-    key_alg: str, key_curve: str, key: [byte], is_ca: bool, dns: [str]
+    key_alg: str, key_curve: str, key: [byte], is_ca: bool, dns: [str],
+    ips: [[byte]]
 };
 
 let OID_RSA = "2a864886f70d010101";
@@ -183,7 +184,8 @@ let OID_P384 = "2b81040022";
 def bad_cert(der: [byte]) -> Cert {
     {
         ok: false, der: der, tbs: [], sig_alg: "", sig: [], issuer: [], subject: [],
-        not_before: 0, not_after: -1, key_alg: "", key_curve: "", key: [], is_ca: false, dns: []
+        not_before: 0, not_after: -1, key_alg: "", key_curve: "", key: [], is_ca: false, dns: [],
+        ips: []
     }
 };
 
@@ -212,6 +214,7 @@ def parse_cert(b: [byte]) -> Cert {
     if (len(keybits) < 1) { return bad_cert(b); };
     let is_ca = false;
     let dns: [str] = [];
+    let ips: [[byte]] = [];
     let j = i + 6;
     while (j < len(t)) {
         if (t[j].tag == 0xa3) {
@@ -229,7 +232,10 @@ def parse_cert(b: [byte]) -> Cert {
                                 if (len(bc) > 0 && bc[0].tag == 0x01 && bc[0].end > bc[0].at && b[bc[0].at] != 0) { is_ca = true; };
                             } else if (id == "551d11" && inner.tag == 0x30) {
                                 foreach (gn in kids(b, inner)) {
-                                    if (gn.tag == 0x82) { dns += from_bytes(content(b, gn)); };
+                                    if (gn.tag == 0x82) { dns += from_bytes(content(b, gn)); }
+                                    // GeneralName 7 is iPAddress: 4 bytes for
+                                    // IPv4, 16 for IPv6 (RFC 5280 4.2.1.6).
+                                    else if (gn.tag == 0x87) { ips += content(b, gn); };
                                 };
                             };
                         };
@@ -244,7 +250,7 @@ def parse_cert(b: [byte]) -> Cert {
         sig: sigbits[1:len(sigbits)], issuer: element(b, t[i + 2]), subject: element(b, t[i + 4]),
         not_before: asn1_time(b, validity[0]), not_after: asn1_time(b, validity[1]),
         key_alg: crypto.hex(content(b, ka[0])), key_curve: curve, key: keybits[1:len(keybits)],
-        is_ca: is_ca, dns: dns
+        is_ca: is_ca, dns: dns, ips: ips
     }
 };
 
@@ -381,10 +387,55 @@ def name_matches(pattern: str, host: str) -> bool {
     } else { false }
 };
 
+// The four bytes of a dotted-quad host, or none when host is not one. Only the
+// canonical decimal form is accepted (four parts, 0..255, no leading zero, no
+// spaces), because a host string that is not an address must never accidentally
+// compare equal to a SAN's bytes.
+def ipv4_bytes(host: str) -> [byte]? {
+    let n = len(host);
+    let out: [byte] = [];
+    let v = 0;
+    let digits = 0;
+    let i = 0;
+    let ok = true;
+    while (i < n) {
+        let c = host[i];
+        if (c == 46) {
+            if (digits == 0) { ok = false; } else { out += v; };
+            v = 0;
+            digits = 0;
+        } else if (c >= 48 && c <= 57) {
+            if (digits == 1 && v == 0) { ok = false; };
+            v = v * 10 + (c - 48);
+            digits = digits + 1;
+            if (v > 255 || digits > 3) { ok = false; };
+        } else {
+            ok = false;
+        };
+        if (ok) { i = i + 1; } else { i = n; };
+    };
+    if (!ok || digits == 0 || len(out) != 3) { none } else { out += v; some(out) }
+};
+
 def names_host(c: Cert, host: str) -> bool {
     let ok = false;
     foreach (d in c.dns) {
         if (name_matches(d, host)) { ok = true; };
+    };
+    // An iPAddress SAN names an IP literal, and a certificate that serves one
+    // says so there rather than in a dNSName. This check used to read only
+    // c.dns, so a certificate with `IP:127.0.0.1` alone was refused while the
+    // same certificate with `DNS:127.0.0.1` added was accepted -- and OpenSSL's
+    // s_client verifies the same certificate (SUGGESTIONS.md 14, whose
+    // reproduction is now a fixture). Only IPv4 literals are matched here; a
+    // 16-byte (IPv6) SAN is left for whoever adds an IPv6 host parser.
+    if (!ok) {
+        let want = ipv4_bytes(host);
+        if (want != none) {
+            foreach (a in c.ips) {
+                if (len(a) == 4 && crypto.bytes_eq(a, want!)) { ok = true; };
+            };
+        };
     };
     ok
 };

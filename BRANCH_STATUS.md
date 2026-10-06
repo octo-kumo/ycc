@@ -285,6 +285,22 @@ branch-disjointness false positive.
   harness has no tty for wine, so a console handle (as opposed to a pipe) is
   unverified, and `test_std_suites.sh`'s `term_test` needs a pty and only runs
   against ELF.
+- **x509 READS iPAddress SANs NOW (round 64), and the entry is gone from
+  SUGGESTIONS.md.** `names_host` consulted only `c.dns`, so a certificate
+  naming the address in an iPAddress SAN was refused while the SAME certificate
+  with `DNS:127.0.0.1` added was accepted -- and OpenSSL's `s_client -CAfile`
+  verifies it. `Cert` now carries `ips: [[byte]]`, the SAN walker reads
+  GeneralName 7 (4 bytes IPv4, 16 IPv6), and `names_host` compares an IPv4 host
+  literal against a 4-byte SAN. Measured with the entry's own recipe
+  (`openssl req -x509 ... -addext "subjectAltName=IP:127.0.0.1"`):
+  `dns 0 ips 1`, `verify_chain_with(..., "127.0.0.1")` = `[]` where it used to
+  be `certificate is not valid for 127.0.0.1`, and `127.0.0.2` is still
+  refused. `test_net.sh` gained the positive case; the pre-existing case that
+  refuses a DNS-only certificate for an address stays, because that refusal is
+  still correct.
+  SUGGESTIONS.md items 4 (round 63) and 14 (this round) are DELETED, as that
+  file's own protocol requires ("remove the SUGGESTION item from this file when
+  it has been completed"); 13 numbered entries remain.
 - **THE NEXT PE BUG IS A RUNAWAY RECORD WALK IN `y_os_list` (round 60),
   with a four-line reproducer.** After round 59's absolute-path fix, this
   fails on PE and passes on Linux:

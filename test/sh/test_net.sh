@@ -492,6 +492,15 @@ if command -v openssl >/dev/null 2>&1; then
             "suite 4867 alpn [] HTTP/1.0 200 ok true err []"
         tls_case TLS_AES_256_GCM_SHA384 "$WORK/ec.pem" "$WORK/ec_key.pem" 127.0.0.1 \
             "ERROR certificate is not valid for 127.0.0.1"
+        # A certificate that names the address in an iPAddress SAN. It used to be
+        # refused -- names_host read only c.dns -- while the SAME certificate with
+        # DNS:127.0.0.1 added was accepted, and `openssl s_client -CAfile` verifies
+        # it (SUGGESTIONS.md 14). The case above stays: that certificate has no IP
+        # SAN, so refusing it for an address is still right.
+        openssl req -x509 -newkey rsa:2048 -keyout "$WORK/ip_key.pem" -out "$WORK/ip.pem" -days 2 -nodes \
+            -subj "/CN=127.0.0.1" -addext "subjectAltName=IP:127.0.0.1" >/dev/null 2>&1
+        tls_case TLS_AES_128_GCM_SHA256 "$WORK/ip.pem" "$WORK/ip_key.pem" 127.0.0.1 \
+            "suite 4865 alpn [] HTTP/1.0 200 ok true err []"
         # https: the http client against `openssl s_server -WWW`
         if [ -x "$WORK/http_cli.copy" ]; then
             echo "hello over tls" > "$WORK/hello.txt"
