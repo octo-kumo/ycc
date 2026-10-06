@@ -49,8 +49,11 @@
 #include "yv.h"
 
 /* the Y twin's `export` list, one C prototype per def */
+Yv *pe_import_dll(void);
+Yv *pe_import_funcs(void);
 Yv *pe_build(Yv *code, Yv *rodata, ylong entry_off, ylong bss_len, Yv *pdata,
-             Yv *xdata, Yv *dsecs, Yv *ddata, Yv *symtab);
+             Yv *xdata, Yv *dsecs, Yv *ddata, Yv *symtab, Yv *imp_dll,
+             Yv *imp_funcs);
 ylong pe_bss_from_ro(ylong code_len, ylong ro_len, ylong bss_len);
 ylong pe_text_base(void);
 ylong pe_align(ylong v, ylong a);

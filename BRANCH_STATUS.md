@@ -122,6 +122,35 @@ bit patterns, `cmp` clean):
 The `find_repeats.py` ratchet now carries only the documented `atan`
 branch-disjointness false positive.
 
+- **The PE now has an import table**, which is the prerequisite for three of
+  the Windows items at once: Windows has no syscall for randomness
+  (`BCryptGenRandom`), for sockets (Winsock) or for the console API, so BCrypt,
+  `std/net` and console `readline` all arrive as **DLL imports** and the writer
+  had none. `pe.y` emits a well-formed `IMAGE_IMPORT_DESCRIPTOR` for
+  `KERNEL32.dll!GetCurrentProcessId` -- ILT, IAT, hint/name entries and the DLL
+  name in a writable `.idata`, every pointer an RVA so the image stays
+  RELOCS_STRIPPED -- and the loader resolves it at load. `objdump -p` reads it
+  (`DLL Name: KERNEL32.dll` / `Member-Name: GetCurrentProcessId`), the PE still
+  runs under wine, and `pe-gate.sh` now asserts both, because nothing else
+  looked at an import at all.
+  The function itself is scaffolding: nothing calls it yet. It is there so the
+  loader's resolution path is exercised end to end *before* a BCrypt body
+  depends on it, which is the order that turns a missing import into a
+  "DLL Name" line rather than a mystery.
+- **A latent PE bug found while doing that, and fixed**: `pe_build` looked each
+  extra section up in the record list it had just built rather than in the
+  placed one, so every `.debug_*` section of a `-g` PE was written from file
+  offset 0 with `SizeOfRawData` 0 -- `objdump` printed the section and then
+  "file truncated". The Y compiler's `-g` PE carries its debug bytes now and
+  `pe-gate.sh` checks that too.
+- **And one that is still open, C-only**: `./cycc --target=windows -g` traps
+  with `runtime error: index out of bounds` while the Y compiler's `-g` PE
+  builds fine. It PRE-DATES the work above (checked by stashing the change and
+  rebuilding `cycc`), and no gate covers it -- `pe-fixtures.sh` runs the plain
+  build and `cycc-win.sh` deliberately does not compare `-g` across hosts, so
+  this divergence has been invisible. It is a real port-gate hole: a `-g` PE
+  case belongs in `cycc-win.sh` once the C path works.
+
 ### Yet to do
 
 - **A compiler CSE pass for `prod_err` in general.** The targeted manual

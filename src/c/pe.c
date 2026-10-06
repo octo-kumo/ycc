@@ -51,6 +51,11 @@
 #define PE_CHARS 291LL
 #define PE_CH_TEXT 1610612768LL         /* 0x60000020 */
 #define PE_CH_BSS 3221225600LL          /* 0xC0000080 */
+/* INITIALIZED_DATA|MEM_READ|MEM_WRITE (0xC0000040): the import section. It has
+   file bytes (the ILT, which is what a loader that does not resolve an import
+   leaves behind) and the loader WRITES the resolved addresses over the IAT in
+   the same pages, so it cannot be read-only. */
+#define PE_CH_RW 3221225536LL           /* 0xC0000040 */
 #define PE_CH_R 1073741888LL            /* 0x40000040 */
 #define PE_STACK_RESERVE 8388608LL
 #define PE_STACK_COMMIT 65536LL
@@ -319,7 +324,13 @@ static Yv *pe_optional(Yv *out, Yv *secs, ylong size_headers, ylong size_image,
     Yv *zero8 = yav(8, yv_long(0), yv_long(0), yv_long(0), yv_long(0),
                     yv_long(0), yv_long(0), yv_long(0), yv_long(0));
     out = push_bytes(out, zero8);       /* 0: Export */
-    out = push_bytes(out, zero8);       /* 1: Import -- none, no library at all */
+    Yv *id = pe_find(secs, ys(".idata"));
+    if (ys_eq_lit(yr_get(id, "name"), ".idata")) {
+        out = push_le32(out, yv_l(yr_get(id, "rva")));   /* 1: Import -- .idata */
+        out = push_le32(out, yv_l(yr_get(id, "vsz")));   /*   a loader that */
+    } else {                                             /*   cannot resolve it */
+        out = push_bytes(out, zero8);                    /*   refuses the image */
+    }
     out = push_bytes(out, zero8);       /* 2: Resource */
     out = push_le32(out, yv_l(yr_get(pd, "rva")));   /* 3: Exception -- .pdata. A loader */
     out = push_le32(out, yv_l(yr_get(pd, "vsz")));   /*   that cannot read this refuses the */
@@ -365,14 +376,117 @@ static Yv *pe_shdr(Yv *out, Yv *s) {
     return push_le32(out, yv_l(yr_get(s, "chars")));
 }
 
+/* ── the import table ───────────────────────────────────────────────────
+   One DLL and one function, for now, and it is scaffolding with a purpose:
+   Windows has no syscall for randomness (BCryptGenRandom), for sockets
+   (Winsock) or for the console API, so the WINDOWS.md items that need those
+   come in through PE imports -- and until this existed the writer had none at
+   all. This emits a well-formed IMAGE_IMPORT_DESCRIPTOR for KERNEL32.dll's
+   GetCurrentProcessId, so the loader's resolution path is exercised end to end
+   (objdump -p reads the table, and wine refuses an image whose table is
+   malformed) before anything depends on it. */
+Yv *pe_import_dll(void) { return ys("KERNEL32.dll"); }
+Yv *pe_import_funcs(void) { return yav(1, ys("GetCurrentProcessId")); }
+
+/* Four little-endian bytes of `v` at `at`, in place. */
+static void pe_put32(Yv *b, ylong at, ylong v) {
+    ya_set(b, at, yv_long(v % 256));
+    ya_set(b, at + 1, yv_long(v / 256 % 256));
+    ya_set(b, at + 2, yv_long(v / 65536 % 256));
+    ya_set(b, at + 3, yv_long(v / 16777216 % 256));
+}
+
+/* Eight, the low half first: every value here is an RVA, so the high half is
+   zero and the second store is what makes the entry 8 bytes rather than 4. */
+static void pe_put64(Yv *b, ylong at, ylong v) {
+    pe_put32(b, at, v % 4294967296LL);
+    pe_put32(b, at + 4, v / 4294967296LL);
+}
+
+static void pe_put_str(Yv *b, ylong at, Yv *s) {
+    ylong i = 0;
+    while (i < yv_len(s)) { ya_set(b, at + i, yv_long(ys_byte_at(s, i))); i = i + 1; }
+    ya_set(b, at + yv_len(s), yv_long(0));
+}
+
+/* The .idata image. The layout, all offsets from the section's start:
+
+     0   IMAGE_IMPORT_DESCRIPTOR     OriginalFirstThunk -> ILT
+                                      Name               -> the DLL name
+                                      FirstThunk         -> IAT
+     20  a zero descriptor           the terminator
+     40  the ILT                     one 8-byte RVA per function, then 0
+         the IAT                     the same shape; the loader overwrites it
+         hint/name entries           a 2-byte hint then the name, NUL, even
+         the DLL name, NUL
+
+   `rva` is the section's own RVA when the bytes are real, and 0 when only the
+   LENGTH is wanted -- the size has to be known before placement (the section
+   headers depend on it) and the RVAs are not known until after, which is why
+   this is called twice. Every pointer is an RVA, which survives wherever the
+   image loads, and that is what lets the image stay RELOCS_STRIPPED. */
+static Yv *pe_import_bytes(Yv *dll, Yv *funcs, ylong rva) {
+    ylong n = yv_len(funcs);
+    ylong ilt = 40;
+    ylong iat = ilt + 8 * (n + 1);
+    ylong hn = iat + 8 * (n + 1);
+    Yv *offs = yav(0);
+    ylong at = hn;
+    ylong i = 0;
+    while (i < n) {
+        offs = ya_push(offs, yv_long(at));
+        at = at + 2 + yv_len(ya_get(funcs, i)) + 1;
+        if (at % 2 != 0) { at = at + 1; }
+        i = i + 1;
+    }
+    ylong names_at = at;
+    ylong total = names_at + yv_len(dll) + 1;
+    Yv *out = yav(0);
+    ylong z = 0;
+    while (z < total) { out = ya_push(out, yv_long(0)); z = z + 1; }
+    pe_put32(out, 0, rva + ilt);
+    pe_put32(out, 12, rva + names_at);
+    pe_put32(out, 16, rva + iat);
+    i = 0;
+    while (i < n) {
+        pe_put64(out, ilt + 8 * i, rva + yv_l(ya_get(offs, i)));
+        pe_put64(out, iat + 8 * i, rva + yv_l(ya_get(offs, i)));
+        i = i + 1;
+    }
+    i = 0;
+    while (i < n) {
+        pe_put_str(out, yv_l(ya_get(offs, i)) + 2, ya_get(funcs, i));
+        i = i + 1;
+    }
+    pe_put_str(out, names_at, dll);
+    return out;
+}
+
 Yv *pe_build(Yv *code, Yv *rodata, ylong entry_off, ylong bss_len, Yv *pdata,
-             Yv *xdata, Yv *dsecs, Yv *ddata, Yv *symtab) {
+             Yv *xdata, Yv *dsecs, Yv *ddata, Yv *symtab, Yv *imp_dll,
+             Yv *imp_funcs) {
     ylong codesz = yv_len(code);
     ylong ro_len = yv_len(rodata);
     Yv *trailer = yav(8, yv_long(0), yv_long(0), yv_long(0), yv_long(0),
                       yv_long(0), yv_long(0), yv_long(0), yv_long(0));
     ylong textlen = codesz + ro_len + yv_len(trailer);
-    Yv *secs = pe_sections(textlen, bss_len, pdata, xdata, dsecs);
+    /* The import section is placed with the rest, sized before its bytes can
+       be built (an RVA is only known after pe_place) and rebuilt after it. */
+    Yv *dsecs2 = yav(0);
+    Yv *ddata2 = yav(0);
+    ylong di = 0;
+    while (di < yv_len(dsecs)) {
+        dsecs2 = ya_push(dsecs2, ya_get(dsecs, di));
+        ddata2 = ya_push(ddata2, ya_get(ddata, di));
+        di = di + 1;
+    }
+    ylong imp_sz = 0;
+    if (yv_len(imp_funcs) > 0) {
+        imp_sz = yv_len(pe_import_bytes(imp_dll, imp_funcs, 0));
+        dsecs2 = ya_push(dsecs2, pe_sec(ys(".idata"), imp_sz, 0, 0, PE_CH_RW));
+        ddata2 = ya_push(ddata2, pe_import_bytes(imp_dll, imp_funcs, 0));
+    }
+    Yv *secs = pe_sections(textlen, bss_len, pdata, xdata, dsecs2);
     /* A RUNTIME_FUNCTION's UnwindData is an RVA, and the .xdata section's
        address is only known once pe_place has laid the sections out -- so the
        field is patched here, from the offsets within .xdata that asm.c
@@ -380,6 +494,16 @@ Yv *pe_build(Yv *code, Yv *rodata, ylong entry_off, ylong bss_len, Yv *pdata,
        headers (the Exception directory itself is still right) and fatal at the
        first unwind, which is the worst place to find out. */
     Yv *pdata2 = pe_fix_pdata(pdata, yv_l(yr_get(pe_find(secs, ys(".xdata")), "rva")));
+    if (imp_sz > 0) {
+        ylong idr = yv_l(yr_get(pe_find(secs, ys(".idata")), "rva"));
+        ylong dj = 0;
+        while (dj < yv_len(dsecs2)) {
+            if (ys_eq_lit(yr_get(ya_get(dsecs2, dj), "name"), ".idata")) {
+                ya_set(ddata2, dj, pe_import_bytes(imp_dll, imp_funcs, idr));
+            }
+            dj = dj + 1;
+        }
+    }
     ylong size_headers = pe_align(pe_headers_size(secs), PE_FILE_ALIGN);
     ylong size_image = pe_align(pe_text_rva(secs) + textlen, PE_SECT_ALIGN);
     Yv *last = ya_get(secs, yv_len(secs) - 1);
@@ -410,10 +534,15 @@ Yv *pe_build(Yv *code, Yv *rodata, ylong entry_off, ylong bss_len, Yv *pdata,
     out = pe_pad(out, yv_l(yr_get(pd, "rawptr")) + yv_l(yr_get(pd, "rawsz")));
     out = pe_payload(out, xd, xdata);
     out = pe_pad(out, yv_l(yr_get(xd, "rawptr")) + yv_l(yr_get(xd, "rawsz")));
+    /* The PLACED record, not the one this function built: pe_sections hands
+       back a new list, so `dsecs2` still holds rawptr 0 and rawsz 0 -- writing
+       with those appends nothing at all (and pads to nothing), which is how
+       the -g debug sections of a PE came out empty and misplaced. Match by
+       name; every name here is unique. */
     i = 0;
-    while (i < yv_len(dsecs)) {
-        Yv *d = ya_get(dsecs, i);
-        Yv *dd = ya_get(ddata, i);
+    while (i < yv_len(dsecs2)) {
+        Yv *d = pe_find(secs, yr_get(ya_get(dsecs2, i), "name"));
+        Yv *dd = ya_get(ddata2, i);
         out = pe_payload(out, d, dd);
         out = pe_pad(out, yv_l(yr_get(d, "rawptr")) + yv_l(yr_get(d, "rawsz")));
         i = i + 1;

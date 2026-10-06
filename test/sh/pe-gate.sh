@@ -104,3 +104,35 @@ else
     echo "pe-gate: FAIL (the PE's file-path output differs from the Linux one)"; exit 1
 fi
 rm -f "$OUT/peg_fs.txt"
+
+# The import table, and the debug sections of a -g PE. Both are checked here
+# because nothing else looks at either: pe-fixtures runs the plain build, and
+# cycc-win.sh does not compare -g across hosts. The import table is the
+# scaffolding the NT bodies need (Windows has no syscall for randomness,
+# sockets or the console), and objdump resolves it by name -- so this asserts
+# the DLL and the function, not just that a directory entry is nonzero.
+echo "pe-gate: checking the import table and -g sections"
+if ! (cd "$ROOT" && "$YCC" --target=windows "$FSSRC" -o "$OUT/imp.exe" >/dev/null 2>&1); then
+    echo "pe-gate: FAIL (the compiler refused the import program)"; exit 1
+fi
+if ! objdump -p "$OUT/imp.exe" 2>/dev/null | grep -q 'DLL Name: KERNEL32.dll'; then
+    echo "pe-gate: FAIL (the PE imports no KERNEL32.dll)"; exit 1
+fi
+if ! objdump -p "$OUT/imp.exe" 2>/dev/null | grep -q 'GetCurrentProcessId'; then
+    echo "pe-gate: FAIL (the PE does not import GetCurrentProcessId)"; exit 1
+fi
+echo "pe-gate: import table ok (KERNEL32.dll!GetCurrentProcessId)"
+# A -g PE must carry its debug sections WITH their bytes: pe_build used to look
+# up the section records it built rather than the placed ones, so every
+# .debug_* of a PE was written from file offset 0 with SizeOfRawData 0 -- an
+# objdump that reads them reports the section and then "file truncated".
+if ! (cd "$ROOT" && "$YCC" --target=windows -g "$FSSRC" -o "$OUT/gimp.exe" >/dev/null 2>&1); then
+    echo "pe-gate: FAIL (the compiler refused the -g program)"; exit 1
+fi
+if ! objdump -h "$OUT/gimp.exe" 2>/dev/null | grep -q '\.debug_l'; then
+    echo "pe-gate: FAIL (a -g PE has no .debug_l section)"; exit 1
+fi
+if ! objdump -s -j .debug_l "$OUT/gimp.exe" 2>/dev/null | grep -q 'Contents of section'; then
+    echo "pe-gate: FAIL (a -g PE's .debug_l has no bytes in the file)"; exit 1
+fi
+echo "pe-gate: -g sections ok (.debug_l has its bytes)"

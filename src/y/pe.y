@@ -61,6 +61,11 @@ let PE_CHARS = 291;
 let PE_CH_TEXT = 1610612768;         // 0x60000020
 let PE_CH_BSS = 3221225600;          // 0xC0000080
 let PE_CH_R = 1073741888;            // 0x40000040
+// INITIALIZED_DATA|MEM_READ|MEM_WRITE (0xC0000040): the import section. It has
+// file bytes (the ILT, which is what a loader that does not resolve an import
+// leaves behind) and the loader WRITES the resolved addresses over the IAT in
+// the same pages, so it cannot be read-only.
+let PE_CH_RW = 3221225536;
 // The main stack: 8 MB reserved, 64 KB committed.  Linux leaves the stack to
 // the kernel default (8 MB); a program that spawns a thread asks for its own
 // 8 MB mapping (arch/wthreads.s), so the main thread gets the same reserve
@@ -168,12 +173,112 @@ def pe_pad(out: [byte], upto: long) -> [byte] {
     push_zeros(out, upto - len(out))
 };
 
-def pe_build(code: [byte], rodata: [byte], entry_off: long, bss_len: long, pdata: [byte], xdata: [byte], dsecs: [PeSecHdr], ddata: [[byte]], symtab: [byte]) -> [byte] {
+// ── the import table ─────────────────────────────────────────────────────
+// One DLL and one function, for now, and it is scaffolding with a purpose:
+// Windows has no syscall for randomness (BCryptGenRandom), for sockets
+// (Winsock) or for the console API, so the WINDOWS.md items that need those
+// come in through PE imports -- and until this existed the writer had none at
+// all ("no import table, no relocation section", the header above said). This
+// emits a well-formed IMAGE_IMPORT_DESCRIPTOR for KERNEL32.dll's
+// GetCurrentProcessId, so the loader's resolution path is exercised end to end
+// (objdump -p reads the table, and wine refuses an image whose table is
+// malformed) before anything depends on it.
+def pe_import_dll() -> str { "KERNEL32.dll" };
+def pe_import_funcs() -> [str] { ["GetCurrentProcessId"] };
+
+// Four little-endian bytes of `v` at `at`, in place.
+def pe_put32(b: [byte], at: long, v: long) -> void {
+    b[at] = v % 256;
+    b[at + 1] = v / 256 % 256;
+    b[at + 2] = v / 65536 % 256;
+    b[at + 3] = v / 16777216 % 256;
+};
+
+// Eight, the low half first: every value here is an RVA, so the high half is
+// zero and the second store is what makes the entry 8 bytes rather than 4.
+def pe_put64(b: [byte], at: long, v: long) -> void {
+    pe_put32(b, at, v % 4294967296);
+    pe_put32(b, at + 4, v / 4294967296);
+};
+
+def pe_put_str(b: [byte], at: long, s: str) -> void {
+    let i = 0;
+    while (i < len(s)) { b[at + i] = byte_at(s, i); i = i + 1; };
+    b[at + len(s)] = 0;
+};
+
+// The .idata image. The layout, all offsets from the section's start:
+//
+//   0   IMAGE_IMPORT_DESCRIPTOR     OriginalFirstThunk -> ILT
+//                                   Name               -> the DLL name
+//                                   FirstThunk         -> IAT
+//   20  a zero descriptor          the terminator
+//   40  the ILT                    one 8-byte RVA per function, then 0
+//       the IAT                    the same shape; the loader overwrites it
+//       hint/name entries          a 2-byte hint then the name, NUL, even
+//       the DLL name, NUL
+//
+// `rva` is the section's own RVA when the bytes are real, and 0 when only the
+// LENGTH is wanted -- the size has to be known before placement (the section
+// headers depend on it) and the RVAs are not known until after, which is why
+// this is called twice. Every pointer is an RVA, which survives wherever the
+// image loads; nothing here is a virtual address, which is the property that
+// lets the image stay RELOCS_STRIPPED.
+def pe_import_bytes(dll: str, funcs: [str], rva: long) -> [byte] {
+    let n = len(funcs);
+    let ilt = 40;
+    let iat = ilt + 8 * (n + 1);
+    let hn = iat + 8 * (n + 1);
+    let offs: [long] = [];
+    let at = hn;
+    let i = 0;
+    while (i < n) {
+        offs += at;
+        at = at + 2 + len(funcs[i]) + 1;
+        if (at % 2 != 0) { at = at + 1; };
+        i = i + 1;
+    };
+    let names_at = at;
+    let total = names_at + len(dll) + 1;
+    let out: [byte] = [];
+    let z = 0;
+    while (z < total) { out += 0; z = z + 1; };
+    pe_put32(out, 0, rva + ilt);            // OriginalFirstThunk
+    pe_put32(out, 12, rva + names_at);      // Name
+    pe_put32(out, 16, rva + iat);           // FirstThunk
+    i = 0;
+    while (i < n) {
+        pe_put64(out, ilt + 8 * i, rva + offs[i]);
+        pe_put64(out, iat + 8 * i, rva + offs[i]);
+        i = i + 1;
+    };
+    i = 0;
+    while (i < n) {
+        pe_put_str(out, offs[i] + 2, funcs[i]);
+        i = i + 1;
+    };
+    pe_put_str(out, names_at, dll);
+    out
+};
+
+def pe_build(code: [byte], rodata: [byte], entry_off: long, bss_len: long, pdata: [byte], xdata: [byte], dsecs: [PeSecHdr], ddata: [[byte]], symtab: [byte], imp_dll: str, imp_funcs: [str]) -> [byte] {
     let codesz = len(code);
     let ro_len = len(rodata);
     let trailer: [byte] = [0, 0, 0, 0, 0, 0, 0, 0];
     let textlen = codesz + ro_len + len(trailer);
-    let secs = pe_sections(textlen, bss_len, pdata, xdata, dsecs);
+    // The import section is placed with the rest, sized before its bytes can
+    // be built (an RVA is only known after pe_place) and rebuilt after it.
+    let dsecs2: [PeSecHdr] = [];
+    let ddata2: [[byte]] = [];
+    let di = 0;
+    while (di < len(dsecs)) { dsecs2 += dsecs[di]; ddata2 += ddata[di]; di = di + 1; };
+    let imp_sz = 0;
+    if (len(imp_funcs) > 0) {
+        imp_sz = len(pe_import_bytes(imp_dll, imp_funcs, 0));
+        dsecs2 += pe_sec(".idata", imp_sz, 0, 0, PE_CH_RW);
+        ddata2 += pe_import_bytes(imp_dll, imp_funcs, 0);
+    };
+    let secs = pe_sections(textlen, bss_len, pdata, xdata, dsecs2);
     // A RUNTIME_FUNCTION's UnwindData is an RVA, and the .xdata section's
     // address is only known once pe_place has laid the sections out -- so the
     // field is patched here, from the offsets within .xdata that
@@ -181,6 +286,16 @@ def pe_build(code: [byte], rodata: [byte], entry_off: long, bss_len: long, pdata
     // headers (the Exception directory itself is still right) and fatal at the
     // first unwind, which is the worst place to find out.
     let pdata2 = pe_fix_pdata(pdata, pe_find(secs, ".xdata").rva);
+    if (imp_sz > 0) {
+        let idr = pe_find(secs, ".idata").rva;
+        let dj = 0;
+        while (dj < len(dsecs2)) {
+            if (dsecs2[dj].name == ".idata") {
+                ddata2[dj] = pe_import_bytes(imp_dll, imp_funcs, idr);
+            };
+            dj = dj + 1;
+        };
+    };
     let size_headers = pe_align(pe_headers_size(secs), PE_FILE_ALIGN);
     let size_image = pe_align(pe_text_rva(secs) + textlen, PE_SECT_ALIGN);
     let last = secs[len(secs) - 1];
@@ -210,10 +325,15 @@ def pe_build(code: [byte], rodata: [byte], entry_off: long, bss_len: long, pdata
     out = pe_pad(out, pd.rawptr + pd.rawsz);
     out = pe_payload(out, xd, xdata);
     out = pe_pad(out, xd.rawptr + xd.rawsz);
+    // The PLACED record, not the one this function built: pe_sections hands
+    // back a new list, so `dsecs2` still holds rawptr 0 and rawsz 0 -- writing
+    // with those appends nothing at all (and pads to nothing), which is how
+    // the -g debug sections of a PE came out empty and misplaced. Match by
+    // name; every name here is unique.
     i = 0;
-    while (i < len(dsecs)) {
-        let d = dsecs[i];
-        let dd = ddata[i];
+    while (i < len(dsecs2)) {
+        let d = pe_find(secs, dsecs2[i].name);
+        let dd = ddata2[i];
         out = pe_payload(out, d, dd);
         out = pe_pad(out, d.rawptr + d.rawsz);
         i = i + 1;
@@ -354,7 +474,13 @@ def pe_optional(out: [byte], secs: [PeSecHdr], size_headers: long, size_image: l
     let pd = pe_find(secs, ".pdata");
     let zero8: [byte] = [0, 0, 0, 0, 0, 0, 0, 0];
     out = push_bytes(out, zero8);       // 0: Export
-    out = push_bytes(out, zero8);       // 1: Import -- none, no library at all
+    let id = pe_find(secs, ".idata");
+    if (id.name == ".idata") {
+        out = push_le32(out, id.rva);   // 1: Import -- the .idata section.
+        out = push_le32(out, id.vsz);   //   A loader that cannot resolve it
+    } else {                            //   refuses the image.
+        out = push_bytes(out, zero8);
+    };
     out = push_bytes(out, zero8);       // 2: Resource
     out = push_le32(out, pd.rva);       // 3: Exception -- .pdata.  A loader
     out = push_le32(out, pd.vsz);       //   that cannot read this refuses the
