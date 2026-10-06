@@ -355,6 +355,22 @@ branch-disjointness false positive.
   the SECOND call -- `first = 0`, the one that says "the directory is finished"
   -- is still unmeasured. The next probe should write the 32 IOSB bytes with
   plain 64-bit stores and no byte loops, and capture both calls in one open.
+  **And saving `NextEntryOffset` was RE-APPLIED, BUILT AND REVERTED A SECOND
+  TIME (round 62), now on the measured mechanism rather than a guess. It still
+  reports 32758 / 30055 / 28670.** So the first record's header is not the whole
+  story either. What the numbers do fit: a call that writes NOTHING (an empty
+  directory) leaves the SHARED `y_fs_listbuf` holding the PREVIOUS listing --
+  `ls60.y` calls `fs.remove_all(d)` first, which lists `/tmp` -- and the body
+  then walks that leftover as if it were records. That explains a count in the
+  tens of thousands, why the three calls differ, and why a "clean" directory
+  still fails. The body therefore needs a signal for "the kernel wrote nothing"
+  that does not depend on the walk: `%eax`'s status is one candidate, and
+  `Information` being 32758 for a `/tmp` listing (i.e. the TRUNCATED BYTE COUNT,
+  not the capacity as round 61 first read it) suggests it is a real byte count
+  after all -- which makes round 61's failure a puzzle again rather than a
+  refutation, and is the thing to re-examine with a correct probe.
+  Three attempts, three reverts. The reproducer is in this file; the next
+  attempt should start by dumping the second call's status and IOSB.
   Two more things measured on the way, both absolute-path-only on PE:
   `fs.remove_all(<an absolute path that does not exist>)` returns false where
   Linux returns true, and the fixture corpus's `t150_fs` now matches its first
