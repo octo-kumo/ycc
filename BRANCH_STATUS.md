@@ -285,8 +285,34 @@ branch-disjointness false positive.
   harness has no tty for wine, so a console handle (as opposed to a pipe) is
   unverified, and `test_std_suites.sh`'s `term_test` needs a pty and only runs
   against ELF.
-- **A REAL PORT DIVERGENCE, found by accident and reproducible in one line
-  (round 51): `./cycc --target=windows -g FILE` TRAPS where `./ycc` succeeds.**
+- **THE PORT DIVERGENCE IS FIXED (round 52), and pe-gate.sh now catches it.**
+  `asm.c`'s `pe_prologue_insn` read `b[0]` BEFORE its own `n < 1` guard:
+
+      ylong b0 = yv_l(ya_get(b, 0));      /* <- empty array: a trap */
+      if (n < 1) { return no; }
+
+  so a ZERO-BYTE item -- a line marker, which is exactly what `-g` introduces --
+  trapped in `ya_get` and `cycc --target=windows -g` failed on every program
+  while the Y copy was fine. The Y has always had the guard first
+  (`src/y/asm.y`, `pe_prologue_insn`: `if (n < 1) { no } else if (b[0] == ...`).
+  The guard now comes first in the C too, with the reason in a comment.
+  Found with gdb in four steps that are worth repeating, because the first three
+  were wrong: a conditional breakpoint on the *bounds* condition never fired, so
+  the trap was not an overrun; one on `i < 0` never fired either; instrumenting
+  `ys_byte_at`'s message changed NOTHING, which proved the failing check was not
+  there at all -- and `strings cycc` then showed TWO "index out of bounds"
+  messages, the second in `ya_get`/`ya_set`, the ARRAY one. Breaking there gave
+  the real backtrace: `pe_prologue_insn` <- `pe_prologue` <- `pe_frame_prologues`
+  <- `pe_frames` <- `pe_unwind` <- `pe_image` <- `asm_link`.
+  pe-gate.sh now builds the same `-g` program with `./cycc` and requires the two
+  PEs to be BYTE-IDENTICAL (they are), which is the check that would have caught
+  it at any point in the last ten rounds. It is skipped when `./cycc` is absent.
+  Verified: make ycc byte-identical; make port-check green; all 20 suites; the
+  gate green with the new line. (A C-only change does not move bench-ir, whose
+  two sides are both Y binaries; `make ycc`'s identical output is the evidence
+  that nothing else shifted.)
+- **The round-51 description of the same bug, kept because the trail is the
+  lesson:** `./cycc --target=windows -g FILE` TRAPS where `./ycc` succeeds.**
 
       $ ./cycc --target=windows -g hello.y -o /tmp/g.exe
       runtime error: index out of bounds

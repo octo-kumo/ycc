@@ -2677,10 +2677,19 @@ static Yv *pe_prologue_insn(Yv *it, ylong off, int fp, ylong fp_off, ylong alloc
     Yv *no = yr(7, "go", yv_bool(0), "fp", yv_bool(fp), "fp_off", yv_long(fp_off),
                 "alloc", yv_long(alloc), "alloc_off", yv_long(alloc_off),
                 "pushes", pushes, "prolog", yv_long(prolog));
-    ylong b0 = yv_l(ya_get(b, 0));
+    /* b[0] is read AFTER the length guard, not before it. Reading it first is
+       what made `cycc --target=windows -g` trap with "index out of bounds" on
+       any program: a zero-byte item (a line marker, which -g introduces) is
+       walked by pe_frame_prologues, and ya_get on an empty array is a trap.
+       The Y twin has always had the guard first -- src/y/asm.y's
+       pe_prologue_insn reads b[0] inside the else -- so this is a PORT
+       divergence, and the port gate could not see it because it compiles the
+       corpus for Linux only and the walker is the PE one. */
     if (n < 1) {
         return no;
-    } else if (b0 == 0x55 || (b0 >= 0x50 && b0 <= 0x57)) {
+    }
+    ylong b0 = yv_l(ya_get(b, 0));
+    if (b0 == 0x55 || (b0 >= 0x50 && b0 <= 0x57)) {
         /* push %reg (no REX: rax..rdi) */
         return pe_prologue_push(b0 - 0x50, done, fp, fp_off, alloc, done, pushes, prolog);
     } else if (b0 == 0x41 && n >= 2 && yv_l(ya_get(b, 1)) >= 0x50 && yv_l(ya_get(b, 1)) <= 0x57) {

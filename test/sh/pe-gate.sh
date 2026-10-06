@@ -203,3 +203,21 @@ if ! objdump -s -j .debug_l "$OUT/gimp.exe" 2>/dev/null | grep -q 'Contents of s
     echo "pe-gate: FAIL (a -g PE's .debug_l has no bytes in the file)"; exit 1
 fi
 echo "pe-gate: -g sections ok (.debug_l has its bytes)"
+# And the C copy must build THE SAME -g PE, byte for byte. This is the check
+# that would have caught the port divergence fixed in round 52: asm.c's
+# pe_prologue_insn read b[0] BEFORE its `n < 1` guard, so a zero-byte item -- a
+# line marker, which is exactly what -g introduces -- trapped in ya_get and
+# `cycc --target=windows -g` failed on every program while the Y copy was fine.
+# The port suite compiles the corpus for LINUX only and this walker is the PE
+# one, so nothing else in the tree could see it. Skipped when ./cycc is absent
+# (the gate is also run with a compiler built elsewhere).
+if [ -x "$ROOT/cycc" ]; then
+    if ! (cd "$ROOT" && ./cycc --target=windows -g "$FSSRC" -o "$OUT/cgimp.exe" >/dev/null 2>&1); then
+        echo "pe-gate: FAIL (the C copy refused the -g program)"; exit 1
+    fi
+    if ! cmp -s "$OUT/gimp.exe" "$OUT/cgimp.exe"; then
+        echo "pe-gate: FAIL (the C copy's -g PE differs from the Y compiler's)"
+        exit 1
+    fi
+    echo "pe-gate: the C copy's -g PE is byte-identical"
+fi
