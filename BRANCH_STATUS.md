@@ -285,6 +285,30 @@ branch-disjointness false positive.
   harness has no tty for wine, so a console handle (as opposed to a pipe) is
   unverified, and `test_std_suites.sh`'s `term_test` needs a pty and only runs
   against ELF.
+- **NEXT, AND REQUESTED: `tolong`/`tofloat` MUST RETURN `T?` (round 64, planned
+  from a survey rather than started).** The requirement: a fully valid input is
+  required, whitespace is fine, and anything else is `none`; today
+  `tolong("12abc")` is 12, `tolong("")` is 0, `tolong(" 12 ")` is 0,
+  `tolong("0x10")` is 0 and a 21-digit number wraps silently -- and
+  `tolong(nan)`/`tolong(huge_float)` TRAP where the option form should answer
+  none.
+  Where the builtins live, found by grep so the next round does not re-find it:
+  `types.y:2884-2885` (`str_method`: `"x".tolong()`), `types.y:3671` (the
+  builtin call's type rule -- the return type is the change),
+  `native.y:3190/3192` (call arity) and `native.y:5832/5834` (the *constant
+  folder*, which folds a literal call at compile time and is easy to miss),
+  plus whichever prelude label the string scanners live behind.
+  THE SIZE, COUNTED: **141 `tolong(` call sites and 28 `tofloat(`** across
+  src/, test/ and tools/ (the 248 figure includes docs). Each needs `!`, a
+  `none` check, or a rewrite -- and some of them RELY on the guessing, so this
+  is 169 judgements, not a sed. `test/y/native/t352_parse_long.y` prints the
+  old `tolong` column and must be rewritten with the change, and the manual
+  (`docs/src/`) documents the current behaviour.
+  Order that keeps the tree buildable: (1) the type rule and the option
+  representation in the emitter; (2) the string scanner, whitespace-padded and
+  end-anchored; (3) the C twin; (4) the 169 sites; (5) the docs, the fixtures
+  and the loop. A half-done version is worse than none, because the checker
+  change alone breaks every one of the 169.
 - **x509 READS iPAddress SANs NOW (round 64), and the entry is gone from
   SUGGESTIONS.md.** `names_host` consulted only `c.dns`, so a certificate
   naming the address in an iPAddress SAN was refused while the SAME certificate
