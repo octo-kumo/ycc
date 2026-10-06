@@ -793,7 +793,12 @@ computed by squaring).
   \ic{y += k * x}, in place.
 \item[\ic{math.fmean(a)}, \ic{math.fvariance(a)}] The arithmetic mean and the
   sample variance (dividing by $n-1$), the latter by the two-pass method; NaN
-  for an empty array, and NaN for a variance of fewer than two elements.
+  for an empty array, and NaN for a variance of fewer than two elements --- which
+  is a \emph{single} element as much as none is, since $n-1$ is zero there too.
+  \ic{fsum} of an empty array is $+0$ rather than NaN: there is nothing to be
+  inaccurate about, and a one-element sum is that element
+  (\ic{t332\_bulk\_empty.y}, which pins the empty and one-element cases together
+  for exactly that reason).
 
   \ic{fvariance} scales by a power of two before the two passes and multiplies
   the answer back by its square, because the plain two-pass takes the mean
