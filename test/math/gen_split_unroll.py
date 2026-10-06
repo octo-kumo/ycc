@@ -24,6 +24,27 @@ the programs no smaller. The ones a program actually runs are
 
 and those are the three generated here.
 
+TWO MORE ARE STILL ON A RUNTIME PATH, and this list was wrong about it. atan and
+asin are NOT assembly -- `sin` and `cos` are, through sin_asm and cos_asm, but
+`atan` folds the argument and then calls `atan_kernel` in Y, and `asin` calls
+`asin_half` in Y:
+
+    atan_k    atan            -- atan -> atan_kernel -> poly_split
+    asin_k    asin_half       -- asin  -> asin_half    -> poly_split
+
+Measured with callgrind, poly_split is 814 instructions a call and 68% of that is
+loading the coefficients -- two array reads of twelve instructions each, per term,
+against two multiply-adds that cost about eight between them. Literals would cost
+nothing. So the prize for the two remaining kernels is roughly two thirds of
+poly_split's cost in atan and asin, and it is the same prize the three generated
+forms already took.
+
+Not done here, and the reason is worth stating rather than leaving it implied: it
+means generating two more forms and re-verifying each against its loop form over
+the 8002 arguments below, which is a piece of work with its own gate rather than
+one to start at the end of a session. `sin_cos_k` IS oracle-only (sin and cos go
+through assembly), so it stays in the loop deliberately.
+
 The coefficients are READ OUT of src/y/std/math.y rather than retyped, because
 a coefficient's low half lives in its sixteenth digit: pasting the values here
 would be a second copy to keep in step, and the file this writes is checked
