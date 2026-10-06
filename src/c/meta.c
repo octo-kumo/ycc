@@ -2640,8 +2640,8 @@ static long mg_unframe(Yv *data) {
             if (sp < 0) {
                 bad = 1;
             } else {
-                long slot = ys_tonum(ys_slice(head, 0, sp));
-                long take = ys_tonum(ys_slice_from(head, sp + 1));
+                long slot = ys_tolong(ys_slice(head, 0, sp));
+                long take = ys_tolong(ys_slice_from(head, sp + 1));
                 Yv *body = ys_slice(data, j + 1, j + 1 + take);
                 if (take < 0 || yv_len(body) != take || slot < 0 || slot >= mg_next) {
                     bad = 1;

@@ -2352,8 +2352,8 @@ def mg_unframe(data: str) -> long {
             if (sp < 0) {
                 bad = true;
             } else {
-                let slot = tonum(head[:sp]);
-                let take = tonum(head[sp + 1:]);
+                let slot = tolong(head[:sp]);
+                let take = tolong(head[sp + 1:]);
                 let body = data[j + 1:j + 1 + take];
                 if (take < 0 || len(body) != take || slot < 0 || slot >= mg_next) {
                     bad = true;
