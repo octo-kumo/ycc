@@ -308,11 +308,25 @@ branch-disjointness false positive.
   before any name is copied; a first record that is NOT `.` or `..` has its own
   `NextEntryOffset` overwritten by the name written at offset 0, so the next
   offset is read out of name bytes and the walk runs to the capacity.
-  An attempted fix -- saving `NextEntryOffset` in a stack slot before copying
-  the name -- was written, built and REVERTED: it changed the failure to a write
-  to 0x0 at 0x1400016A2 without making the reproducer pass, so it was not a fix
-  and no unverified change to the emitted compiler is being kept. The next
-  attempt should start from that reproducer, not from the analysis.
+  Two attempted fixes were written, built and REVERTED, and what each ruled out
+  is worth more than the patch:
+    1. saving `NextEntryOffset` in a stack slot before copying the name.
+       Changed the failure to a write to 0x0 at 0x1400016A2 and did not make the
+       reproducer pass. Rules out the "the name copy clobbers the record header"
+       mechanism.
+    2. bounding the walk by the IOSB's `Information` (the 8 bytes at -24(%rbp);
+       the IOSB is the 32 bytes at -32(%rbp), and its address is what arg 5 of
+       the syscall points at). THE COUNT CAME BACK STILL IN THE TENS OF
+       THOUSANDS AND MOVED (32734 -> 32758, 29989 -> 30055) -- i.e. it read
+       whatever the stack held, so the kernel is NOT writing a usable byte count
+       where this code passes the IOSB. That is the thing to establish next
+       before touching the walk again: dump the syscall's return status and the
+       IOSB's two words for a one-file directory, and see whether the records
+       were written at all.
+  So the walk runs long because nothing in this body knows how many bytes the
+  kernel wrote; the capacity is wrong and the IOSB is not the answer either.
+  Both attempts cost their build; neither is kept, because no unverified change
+  to the emitted compiler is being committed.
   Two more things measured on the way, both absolute-path-only on PE:
   `fs.remove_all(<an absolute path that does not exist>)` returns false where
   Linux returns true, and the fixture corpus's `t150_fs` now matches its first
