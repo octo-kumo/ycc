@@ -173,10 +173,15 @@ Return types are optional (inferred from the body,
 Section~\ref{sec:annotations}). A \ic{const} name cannot be rebound: \ic{=},
 the compound assignments and \ic{++}/\ic{--} on it are rejected
 (\ic{cannot assign to constant 'n'}, with the operator in parentheses
-for the compound forms). The binding is constant, not the value: a
-\ic{const} array or record is still a reference, so \ic{a[i] = v},
-\ic{r.x = v} and the in-place \ic{+=}/\ic{*=} on a \ic{const} array
-change its contents.
+for the compound forms). The \emph{value} is constant too: a store that
+reaches it through the name is refused as well, so \ic{a[i] = v},
+\ic{r.x = v}, \ic{m["k"] = v}, \ic{a[lo:hi] = v} and the in-place
+\ic{+=}/\ic{*=} on a \ic{const} array are all errors
+(\ic{cannot modify 'a': it is a constant}) --- a \ic{const} array, record
+or map is a value to read, not a shared buffer to hand out and keep
+patching. A pointer is the way to hand one out knowingly: \ic{\&a[0]} is a
+\ic{*long} and \ic{*p = 1} stores through it, which the checker does not
+follow.
 
 A parameter may be \emph{optional}, written \ic{name?: T}: its type
 becomes \ty{T?} and a caller may leave the argument out, which is

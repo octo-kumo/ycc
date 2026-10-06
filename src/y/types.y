@@ -2411,6 +2411,7 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
         }
     } else if (k == K.dotassign) {
         let assign: DotAssign = node;
+        st = const_store(st, assign.obj, assign.line, assign.col);
         // s.f = v — in-place record field write. The object may be a plain
         // variable (`id` arm) or any record-valued expression (`a[0].f`,
         // `x.y.f` — else arm); the field must exist in its static shape
@@ -2464,6 +2465,7 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
         }
     } else if (k == K.idxassign) {
         let assign: IdxAssign = node;
+        st = const_store(st, assign.arr, assign.line, assign.col);
         if (assign.arr.k == K.id) {
             let id: Leaf = assign.arr;
             let got = lookup(st.bindings, id.v);
@@ -2717,6 +2719,7 @@ def covered(m: Type, cover: [Type]) -> bool {
 
 // a[lo:hi] = src: a is an array, src an array of the same element type.
 def typeof_sliceassign(st: TcSt, node: SliceAssign) -> TcRes {
+    st = const_store(st, node.arr, node.line, node.col);
     let ar = typeof_expr(st, node.arr);
     st = ar.st;
     let slo = node.lo;
@@ -2959,20 +2962,54 @@ def sm_accepts(got: Type, want: Type) -> bool {
     }
 };
 
-// `const` fixes the BINDING, not the value (as in JS): `=`, `++`/`--` and
-// the `op=` forms that rebind (numbers, strings) are errors on a const name,
-// while the in-place array forms (`arr += v`, `arr *= v`) and element or
-// field writes (`a[i] = v`, `r.f = v`) still mutate the shared value. Plain
-// `=` is refused in the `assign` arm itself; this covers the other two.
-def const_check(st: TcSt, tgt: Node, tt: Type, op: str, line: long, col: long) -> TcSt {
-    if (tgt.k == K.id) {
+// `const` fixes the VALUE as well as the binding: `A[0] = v`, `R.f = v`,
+// `M["k"] = v`, `A += v` and `A[lo:hi] = src` are all refused when the name
+// they reach the value through is a const. It used to be the JS rule -- the
+// binding was const and the array or record behind it was not -- which made
+// `const` useless for exactly the thing it is written for here: a program
+// that hands out a buffer, a table or a record and wants the copy it keeps to
+// stop changing. (A pointer can still launder it: `&A[0]` is a *long and
+// `*p = 1` is a store through it. That is what a pointer IS, and the checker
+// does not track what one points at.)
+//
+// The root of the place chain is what is looked up, so `A[0].f = v` is about
+// `A`. It returns the root's name, or "" when nothing const is in the chain.
+def const_root(st: TcSt, tgt: Node) -> str {
+    let k: long = tgt.k;
+    if (k == K.id) {
         let id: Leaf = tgt;
         let got = lookup(st.bindings, id.v);
-        let inplace = tt.k == K.tarr || tt.k == K.tarrfix || tt.k == K.tunk || tt.k == K.tnone;
-        if (got.kind == "const" && !inplace) {
-            fail(st, "cannot assign to constant '" + disp(id.v) + "' ('" + op + "')", line, col)
-        } else { st }
+        if (got.kind == "const") { id.v } else { "" }
+    } else if (k == K.index) {
+        let index: Index = tgt;
+        const_root(st, index.arr)
+    } else if (k == K.dot) {
+        let dot: Dot = tgt;
+        const_root(st, dot.obj)
+    } else { "" }
+};
+
+// A store through a const name, refused where the store happens.
+def const_store(st: TcSt, tgt: Node, line: long, col: long) -> TcSt {
+    let root = const_root(st, tgt);
+    if (len(root) > 0) {
+        fail(st, "cannot modify '" + disp(root) + "': it is a constant", line, col)
     } else { st }
+};
+
+// `++`/`--` and `op=` store back into their target. A plain const name keeps
+// the message it always had (a package's globals are consts, and
+// test_pkg.sh pins all three forms); a name reached through a place says
+// which name it was.
+def const_check(st: TcSt, tgt: Node, tt: Type, op: str, line: long, col: long) -> TcSt {
+    let root = const_root(st, tgt);
+    if (len(root) == 0) {
+        st
+    } else if (tgt.k == K.id) {
+        fail(st, "cannot assign to constant '" + disp(root) + "' ('" + op + "')", line, col)
+    } else {
+        fail(st, "cannot modify '" + disp(root) + "': it is a constant ('" + op + "')", line, col)
+    }
 };
 
 // `++`/`--` and `op=` store back into their target, so it must be a place

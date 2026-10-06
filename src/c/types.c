@@ -216,6 +216,8 @@ static int fmt_digit(ylong c);
 static int fmt_type(ylong c);
 static ylong fmt_number(Yv *spec, ylong a, ylong b);
 static Yv *fmt_check(Yv *f, ylong kind, Yv *tname);
+static Yv *const_root(Yv *st, Yv *tgt);
+static Yv *const_store(Yv *st, Yv *tgt, ylong line, ylong col);
 static Yv *const_check(Yv *st, Yv *tgt, Yv *tt, Yv *op, ylong line, ylong col);
 static Yv *place_check(Yv *st, Yv *tgt, Yv *tt, Yv *op, ylong line, ylong col);
 static Yv *base_type(Yv *st, Yv *e);
@@ -3137,6 +3139,8 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
             return yr(2, "typ", t_unk(), "st", st);
         }
     } else if (yv_l(k) == K_dotassign) {
+        st = const_store(st, yr_get(node, "obj"), yv_l(yr_get(node, "line")),
+                         yv_l(yr_get(node, "col")));
         // s.f = v — in-place record field write. The object may be a plain
         // variable (`id` arm) or any record-valued expression (`a[0].f`,
         // `x.y.f` — else arm); the field must exist in its static shape
@@ -3225,6 +3229,8 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
             }
         }
     } else if (yv_l(k) == K_idxassign) {
+        st = const_store(st, yr_get(node, "arr"), yv_l(yr_get(node, "line")),
+                         yv_l(yr_get(node, "col")));
         if (yv_l(yr_get(yr_get(node, "arr"), "k")) == K_id) {
             Yv *got = lookup(yr_get(st, "bindings"),
                              yr_get(yr_get(node, "arr"), "v"));
@@ -3551,6 +3557,8 @@ static int covered(Yv *m, Yv *cover) {
 
 // a[lo:hi] = src: a is an array, src an array of the same element type.
 static Yv *typeof_sliceassign(Yv *st, Yv *node) {
+    st = const_store(st, yr_get(node, "arr"), yv_l(yr_get(node, "line")),
+                     yv_l(yr_get(node, "col")));
     Yv *ar = typeof_expr(st, yr_get(node, "arr"));
     st = yr_get(ar, "st");
     Yv *slo = yr_get(node, "lo");
@@ -3873,32 +3881,73 @@ static int sm_accepts(Yv *got, Yv *want) {
     }
 }
 
-/* `const` fixes the BINDING, not the value (as in JS): `=`, `++`/`--` and
- * the `op=` forms that rebind (numbers, strings) are errors on a const name,
- * while the in-place array forms (`arr += v`, `arr *= v`) and element or
- * field writes (`a[i] = v`, `r.f = v`) still mutate the shared value. Plain
- * `=` is refused in the `assign` arm itself; this covers the other two. */
-static Yv *const_check(Yv *st, Yv *tgt, Yv *tt, Yv *op, ylong line, ylong col) {
-    if (yv_l(yr_get(tgt, "k")) == K_id) {
+/* `const` fixes the VALUE as well as the binding: `A[0] = v`, `R.f = v`,
+ * `M["k"] = v`, `A += v` and `A[lo:hi] = src` are all refused when the name
+ * they reach the value through is a const. It used to be the JS rule -- the
+ * binding was const and the array or record behind it was not -- which made
+ * `const` useless for exactly the thing it is written for here: a program
+ * that hands out a buffer, a table or a record and wants the copy it keeps to
+ * stop changing. (A pointer can still launder it: `&A[0]` is a *long and
+ * `*p = 1` is a store through it. That is what a pointer IS, and the checker
+ * does not track what one points at.)
+ *
+ * The root of the place chain is what is looked up, so `A[0].f = v` is about
+ * `A`. It returns the root's name, or "" when nothing const is in the chain. */
+static Yv *const_root(Yv *st, Yv *tgt) {
+    ylong k = yv_l(yr_get(tgt, "k"));
+    if (k == K_id) {
         Yv *got = lookup(yr_get(st, "bindings"), yr_get(tgt, "v"));
-        int inplace = yv_l(yr_get(tt, "k")) == K_tarr ||
-                      yv_l(yr_get(tt, "k")) == K_tarrfix ||
-                      yv_l(yr_get(tt, "k")) == K_tunk ||
-                      yv_l(yr_get(tt, "k")) == K_tnone;
-        if (ys_eq_lit(yr_get(got, "kind"), "const") && !inplace) {
-            return fail(st,
-                        ys_cat(ys_cat(ys_cat(ys_cat(
-                                                   ys("cannot assign to constant '"),
-                                                   disp(yr_get(tgt, "v"))),
-                                             ys("' ('")),
-                                      op),
-                               ys("')")),
-                        line, col);
+        if (ys_eq_lit(yr_get(got, "kind"), "const")) {
+            return yr_get(tgt, "v");
         } else {
-            return st;
+            return ys("");
         }
+    } else if (k == K_index) {
+        return const_root(st, yr_get(tgt, "arr"));
+    } else if (k == K_dot) {
+        return const_root(st, yr_get(tgt, "obj"));
+    } else {
+        return ys("");
+    }
+}
+
+/* A store through a const name, refused where the store happens. */
+static Yv *const_store(Yv *st, Yv *tgt, ylong line, ylong col) {
+    Yv *root = const_root(st, tgt);
+    if (yv_len(root) > 0) {
+        return fail(st,
+                    ys_cat(ys_cat(ys("cannot modify '"), disp(root)),
+                           ys("': it is a constant")),
+                    line, col);
     } else {
         return st;
+    }
+}
+
+/* `++`/`--` and `op=` store back into their target. A plain const name keeps
+ * the message it always had (a package's globals are consts, and
+ * test_pkg.sh pins all three forms); a name reached through a place says
+ * which name it was. */
+static Yv *const_check(Yv *st, Yv *tgt, Yv *tt, Yv *op, ylong line, ylong col) {
+    (void)tt;   /* the target's type; kept so the signature matches the Y side */
+    Yv *root = const_root(st, tgt);
+    if (yv_len(root) == 0) {
+        return st;
+    } else if (yv_l(yr_get(tgt, "k")) == K_id) {
+        return fail(st,
+                    ys_cat(ys_cat(ys_cat(ys_cat(ys("cannot assign to constant '"),
+                                                disp(root)),
+                                          ys("' ('")),
+                                    op),
+                           ys("')")),
+                    line, col);
+    } else {
+        return fail(st,
+                    ys_cat(ys_cat(ys_cat(ys_cat(ys("cannot modify '"), disp(root)),
+                                        ys("': it is a constant ('")),
+                                  op),
+                           ys("')")),
+                    line, col);
     }
 }
 

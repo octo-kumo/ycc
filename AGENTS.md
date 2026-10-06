@@ -603,9 +603,15 @@ replaces the std one at link time).
   `s.pad_left(5, "0")`, `", ".join(xs)`): one table, `str_method` in
   types.y, feeds the checker and the emitter (NATIVE.md, "String
   methods"). Method names are not reserved words.
-- `const x = v` cannot be rebound (`=`, `op=`, `++`/`--` are type
-  errors), but what it refers to stays mutable: `+=`/`*=` on a const
-  array, element and field stores all work (JS `const`).
+- `const x = v` fixes the value as well as the binding: `=`, `op=`,
+  `++`/`--`, element/field/map stores (`a[i] = v`, `r.f = v`, `m[k] = v`),
+  whole-slice writes and the in-place `+=`/`*=` on a const array are all
+  type errors -- `cannot modify 'a': it is a constant` for the ones that
+  reach it through a place, `cannot assign to constant 'a'` for the ones
+  that name it (which is what a package's globals are, and `test_pkg.sh`
+  pins). Not the JS rule: a shared buffer is what `const` is for here. A
+  pointer still launders it (`&a[0]`, `*p = 1`), which the checker does not
+  follow.
 - A **fixed** `[T; N]` cannot grow: `+=` / `*=` on it is a type error
   ("its length is part of its type; use `[T]` instead").
 - `x++`, `++x`, `x--`, `--x` and `x op= e` (`+= -= *= /= %=`, and
