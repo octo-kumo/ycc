@@ -104,11 +104,21 @@
 // (ratio 4e-4 at e = 831) and it is wrong about the mechanism: the failures are
 // not where the terms are comparable but where ONE of them is absent.
 //
-// Not resolved. What would settle the rest is ln(m) and the SUM in one
-// extra-precision accumulator, which is a different algorithm from a compensated
-// expression tree and is not attempted here. Three measured attempts that did
-// not work, and one measurement that says where to look, are worth more in this
-// file than a fourth guess.
+// A FOURTH attempt, and what its failure proves. The e == 0 answer is
+// `bq + be + l*log10e_lo`, and `be` is prod_err(l, log10e_hi, bq) -- the product's
+// exact residual -- so that sum is already a compensated product of ln(m) by
+// log10(e). Adding a THIRD part to the constant (1.66e-29, what hi + lo leaves
+// over) changes nothing: still 5 of 14, bit for bit.
+//
+// Which is informative rather than merely negative. The three parts together are
+// ln(m)*log10(e) to far below the last bit, so nothing in the TERMS can be the
+// error. It is the rounding of the final sum, and the only way past that is to
+// keep the pieces apart longer -- ln(m) and the SUM in one extra-precision
+// accumulator -- which is a different algorithm from a compensated expression
+// tree and is not attempted here.
+//
+// Four measured attempts that did not work, and one measurement that says where
+// to look, are worth more in this file than a fifth guess.
 //
 // It also cost 5.5x the instructions: log through assembly plus a multiply is
 // 149 a call, and this is 817. That is a deliberate trade and it is worth naming
