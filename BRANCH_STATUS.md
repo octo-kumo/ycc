@@ -277,6 +277,39 @@ branch-disjointness false positive.
   2000, where stat's own layout has exactly 2000. `y_os_close` (NtClose, 15) was
   written the same round and reverted with it, untested, for the same reason:
   it is only reachable through a file handle that openat has to produce first.
+- **`y_os_openat`: what round 40 measured, and the one thing still unexplained.**
+  The round-39 statuses (NAME_INVALID etc.) came from calling `os_call`
+  DIRECTLY from a plain program, and that channel is NOT reliable: a direct
+  `os_call("y_os_stat", ...)` returns -1 while the identical call made from
+  inside fs.y succeeds. Every conclusion has to come through the real API
+  instead, which is how these were taken (by returning the raw NTSTATUS from
+  the body's failure path, since `fs.open_file` passes a positive value through
+  as if it were an fd):
+    * opening an EXISTING file works -- `fs.open_file("src/y/std/fs.y", "r")`
+      returns a handle
+    * a missing directory answers STATUS_OBJECT_PATH_NOT_FOUND (0xC000003A),
+      correctly
+    * CREATING fails, with STATUS_OBJECT_NAME_NOT_FOUND (0xC0000034), for BOTH
+      FILE_OPEN_IF (3) and FILE_OVERWRITE_IF (5) -- and this is the finding:
+      **wine's NtCreateFile treats both as open-only.** Forcing FILE_CREATE (2)
+      on the identical call CREATED the file, so the disposition does arrive and
+      the object layout, the access mask and the path are all right.
+    * the file that FILE_CREATE created was ZERO BYTES, so the write half of the
+      round trip also does not work on a file handle. The handle is asynchronous
+      unless FILE_SYNCHRONOUS_IO_NONALERT (32) is in CreateOptions, and
+      NtWriteFile on an asynchronous handle answers STATUS_PENDING rather than
+      writing.
+  The fix those facts imply -- FILE_CREATE (2) for the O_CREAT cases with a
+  fallback to FILE_OPEN (1), or FILE_OVERWRITE (4) when O_TRUNC, only on
+  STATUS_OBJECT_NAME_COLLISION (0xC0000035), plus FILE_SYNCHRONOUS_IO_NONALERT
+  in CreateOptions -- was written and DID NOT WORK: every open, including the
+  one that worked before, came back -1, and that regression is the thing to
+  explain first next time rather than rebuilding the same patch. The candidate
+  is the line-surgery that applied it (the O_CREAT tail and the O_EXCL arm were
+  rewritten by hand); the facts above are independent of it and stand.
+  This is also why the direct-call channel matters: with it, the same symptom
+  reads as a body bug, and through the real API it reads as a wine disposition
+  quirk. The first reading cost a round.
 - **The same helper is what the other ten need**: `y_os_openat`, `y_os_close`,
   `y_os_lseek`, `y_os_mkdir`, `y_os_unlink`, `y_os_rename`, `y_os_getcwd`,
   `y_os_chdir`, `y_os_list`, `y_os_set_mode`. The path-building half is now
