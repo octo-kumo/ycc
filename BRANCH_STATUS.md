@@ -285,6 +285,46 @@ branch-disjointness false positive.
   harness has no tty for wine, so a console handle (as opposed to a pipe) is
   unverified, and `test_std_suites.sh`'s `term_test` needs a pty and only runs
   against ELF.
+- **THE PE-FIXTURE HARNESS COULD NOT FINISH, and now it can (round 55).**
+  `test/sh/pe-fixtures.sh` had NO TIMEOUT ON EITHER RUN -- not on the ELF side
+  and not on the wine one -- so a single fixture that hangs wedged the whole
+  run. That is what the round-54 attempt was: still going after 40 minutes with
+  an empty table and no symptom but silence. Every run is wrapped in `timeout`
+  now (`YTIMEOUT`, `YTIMEOUT_PE`, both scaled by `YTIMEOUT_SCALE` as in lib.sh),
+  a timeout is reported as a result (`... no exit within 20s (HUNG)`), and each
+  failure prints as it happens instead of at the end. THE FIRST THING IT CAUGHT
+  IS `t199_std_tui`, WHICH HANGS: that one fixture is what made the whole
+  corpus unmeasurable.
+  **The measurement, at last: 236 fixtures -- 190 PASS both targets, 41 PE-only
+  failures, 5 baseline failures.** The 41 cluster into work, not noise:
+    * the META fixtures (7: t197-t202 and friends) fail with "cannot run the
+      meta generator: the image is not an ELF file". That is structural: a meta
+      block's generator is EXECUTED (meta.y forks and runs it), the host can
+      only run an ELF, and `--target=windows` makes the generated image a PE.
+      Fixing it means building the meta child for the HOST target whatever the
+      program's target is -- bounded, and worth more than it looks, because
+      every meta fixture is unmeasurable on PE until then.
+    * threads (4: t341-t344) -- the `%fs`/clone/futex runtime, mapped below.
+    * net (5), exec (3), fork (2), crypto (3), and a long tail of fs/std ones.
+    * `t199_std_tui` HANGS (above), which is its own kind of failure.
+  One of the long tail does NOT reproduce by hand: `t345_list_dir_twice` passes
+  when its directory is reproduced outside the harness, on both targets, so its
+  PE-only failure depends on the harness's own directory state (it lists ".").
+  Worth a second look rather than a second guess.
+- **What a Windows thread runtime has to replace (round 55, mapped not
+  guessed).** `src/y/arch/threads.s` is built on three things with no NT
+  equivalent:
+    * `%fs:24` is the PER-THREAD HEAP BLOCK, used by `threads.s` (5 sites) AND
+      by `prelude.s` (4) -- so it is not the thread runtime that needs a twin,
+      it is the ALLOCATOR's per-thread state too. On NT that state lives at
+      `%gs:0x30` (the TEB).
+    * `clone(2)` for creation, which is what `spawn` reaches today and why
+      `t341_threads_slices` page-faults on a NULL read: NT needs
+      `NtCreateThreadEx`.
+    * futexes for `join`/`mutex`/`sem`, where NT has waitable objects
+      (`NtWaitForSingleObject` and friends).
+  That is why the item is not a body: it is a second runtime plus the
+  allocator's half of it.
 - **Y'S OWN TEST FRAMEWORK WAS NEVER IN THE REPOSITORY (round 54).**
   `.gitignore` listed the build artifact `ytest` as a BARE pattern, and in
   gitignore syntax a bare name matches a path component at ANY depth -- so it

@@ -27,6 +27,9 @@ T=$(mktemp -d "${TMPDIR:-/tmp}/pefix.XXXXXX")
 trap 'rm -rf "$T"' EXIT
 MEM=3670016
 
+# YTIMEOUT / YTIMEOUT_PE are per-run seconds (YTIMEOUT_SCALE multiplies both, as
+# in lib.sh); a hang is reported, never waited on.
+YTIMEOUT_SCALE=${YTIMEOUT_SCALE:-1}
 pass=0; pe_fail=0; base_fail=0; skip=0
 : > "$T/table"
 
@@ -50,7 +53,16 @@ for src in $files; do
   if ! (ulimit -v $MEM; "$YCC" "$src" -o "$T/e") >"$T/ce" 2>&1; then
     echo "$base|ELF-COMPILE-FAIL|$(head -1 "$T/ce" | tr -d '\r')" >> "$T/table"; base_fail=$((base_fail+1)); continue
   fi
-  ( cd "$T" && ulimit -v $MEM; ./e <"$inf" >"$T/e.out" 2>/dev/null ); eec=$?
+  # A TIMEOUT ON EVERY RUN. This harness had none, on either side, so a single
+  # fixture that hangs under wine wedges the WHOLE run -- which is what
+  # happened: the round-54 run was still going after 40 minutes with an empty
+  # table, and the only symptom was silence. A hanging fixture is a result.
+  eto=$(( ${YTIMEOUT:-20} * YTIMEOUT_SCALE ))
+  pto=$(( ${YTIMEOUT_PE:-20} * YTIMEOUT_SCALE ))
+  ( cd "$T" && ulimit -v $MEM; timeout "$eto" ./e <"$inf" >"$T/e.out" 2>/dev/null ); eec=$?
+  if [ "$eec" = 124 ]; then
+    echo "$base|ELF-TIMEOUT|no exit within ${eto}s" >> "$T/table"; base_fail=$((base_fail+1)); continue
+  fi
   if [ -f "$exp" ] && ! diff -q "$exp" "$T/e.out" >/dev/null 2>&1; then
     echo "$base|ELF-OUTPUT-DIFF|mismatch vs .expected" >> "$T/table"; base_fail=$((base_fail+1)); continue
   fi
@@ -62,18 +74,22 @@ for src in $files; do
   if ! (ulimit -v $MEM; "$YCC" --target=windows "$src" -o "$T/p.exe") >"$T/cp" 2>&1; then
     echo "$base|PE-COMPILE-FAIL|$(head -1 "$T/cp" | tr -d '\r')" >> "$T/table"; pe_fail=$((pe_fail+1)); continue
   fi
-  ( cd "$T" && ulimit -v $MEM; WINEARCH=win64 WINEDEBUG=-all wine ./p.exe <"$inf" >"$T/p.out" 2>"$T/p.err" ); pec=$?
+  ( cd "$T" && ulimit -v $MEM; WINEARCH=win64 WINEDEBUG=-all \
+      timeout "$pto" wine ./p.exe <"$inf" >"$T/p.out" 2>"$T/p.err" ); pec=$?
   # stdout and exit status only -- the same contract test_native.sh checks.
   # stderr is deliberately NOT a criterion: wine emits MESA-EGL and winediag
   # noise there on a perfectly successful run.
   why=""
-  if [ -f "$exp" ] && ! diff -q "$exp" "$T/p.out" >/dev/null 2>&1; then why="output differs from .expected"
+  if [ "$pec" = 124 ]; then why="no exit within ${pto}s (HUNG)"
+  elif [ -f "$exp" ] && ! diff -q "$exp" "$T/p.out" >/dev/null 2>&1; then why="output differs from .expected"
   elif [ "$pec" != "$ec" ]; then why="exit $pec, want $ec"
   fi
   if [ -n "$why" ]; then
     echo "$base|PE-RUN-DIFF|$why" >> "$T/table"; pe_fail=$((pe_fail+1))
+    printf 'FAIL %-34s %s\n' "$base" "$why"
   else
     echo "$base|PASS|" >> "$T/table"; pass=$((pass+1))
+    [ -n "${PE_FIXTURES_VERBOSE:-}" ] && printf 'ok   %s\n' "$base"
   fi
 done
 
