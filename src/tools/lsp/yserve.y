@@ -219,6 +219,33 @@ def handle_one(st: State, raw: str) -> [str] {
 }
 
 
+// `HH:MM:SS.mmm`, wall clock. Without it the timing lines are unusable for the only
+// question they are asked: the numbers are small (a whole-file token request is tens
+// of milliseconds) and the editor is still frozen, so the time has to be BETWEEN the
+// lines, not in them. A wall-clock prefix makes an idle gap impossible to miss.
+//
+// `time_us`, not `clock_us`: this is for a person reading a log, and the wall clock
+// is what they compare against the clock in the corner of the screen. The deltas
+// that matter are milliseconds, so monotonic-vs-wall is not worth thinking about here.
+def stamp() -> str {
+    let us = time_us();
+    let secs = us / 1000000;
+    let ms = (us % 1000000) / 1000;
+    let tod = secs % 86400;
+    let h = tod / 3600;
+    let mi = (tod % 3600) / 60;
+    let se = tod % 60;
+    let hh = tostring(h);
+    let mm = tostring(mi);
+    let ss = tostring(se);
+    let m3 = tostring(ms);
+    if (len(hh) < 2) { hh = "0" + hh; };
+    if (len(mm) < 2) { mm = "0" + mm; };
+    if (len(ss) < 2) { ss = "0" + ss; };
+    while (len(m3) < 3) { m3 = "0" + m3; };
+    hh + ":" + mm + ":" + ss + "." + m3
+}
+
 // The method name out of the raw frame, for the timing line. A substring search
 // rather than a second json.parse: the message has already been parsed twice (once
 // in the parent by apply_state, once in the child by handle_one), and a log line is
@@ -253,7 +280,8 @@ def method_of_raw(raw: str) -> str {
 // anywhere yet. The delay a client actually sees is spent AFTER that, in the
 // parent's wait_pid on the handlers ahead of it.
 def log_work(method: str, work_us: long) {
-    fs.write_text(FD_OUT, "yserve  " + method + "  work " + tostring(work_us / 1000) + "ms\n");
+    fs.write_text(FD_OUT, stamp() + "  yserve  " + method + "  work "
+        + tostring(work_us / 1000) + "ms\n");
 }
 
 // The parent's half, and the number that explains a freeze. This loop runs one
@@ -266,8 +294,21 @@ def log_work(method: str, work_us: long) {
 // a log line into it would corrupt the stream. Only the child dup2s its stdout onto
 // the log, which is why log_work can use FD_OUT.
 def log_blocked(us: long) {
-    fs.write_text(FD_LOG, "yserve  [parent] blocked " + tostring(us / 1000)
+    fs.write_text(FD_LOG, stamp() + "  yserve  [parent] blocked " + tostring(us / 1000)
         + "ms waiting for a handler\n");
+}
+
+// How long the parent sat in read_frame with nothing to do.
+//
+// This is the number that decides WHERE a freeze is. `blocked` only counts time the
+// parent spends waiting for a handler it already has. If the editor is frozen and
+// `blocked` is small, the parent is not the busy one -- it is sitting in this call,
+// and the time is going to work that never reached the server at all: the client, the
+// extension host, or the disk. Without this line that is a guess; with it, the log
+// says which side of the socket is behind.
+def log_idle(us: long) {
+    fs.write_text(FD_LOG, stamp() + "  yserve  [parent] idle " + tostring(us / 1000)
+        + "ms waiting for a message\n");
 }
 
 // Claim the reply fd, once, before the first fork so every child inherits it.
@@ -296,8 +337,14 @@ def serve_loop(st: State, fd_in: long) -> long {
     let r = rpc.in_new();
     let go = true;
     let code = 0;
+    let idle_since = clock_us();
     while (go) {
         let got = rpc.read_frame(r, fd_in);
+        let idle_us = clock_us() - idle_since;
+        idle_since = clock_us();
+        // A gap under 200 ms is ordinary -- a person thinking -- and logging every
+        // one would bury the lines that matter. A gap this size IS the freeze.
+        if (idle_us > 200000) { log_idle(idle_us); };
         if (!is_some(got)) {
             // Clean end of input: the client closed the connection. Exiting 0
             // here is right -- this is how a client says "I am done", and the
