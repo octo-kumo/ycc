@@ -115,15 +115,21 @@ def y_str_scan(s: str, p: str, f: [long], from: long) -> long {
 // (index_of, split and trim are assembly: arch_x64.y y_str_index,
 // y_str_split, y_str_trim -- this one lives here, next to the scan it is
 // built on, and native.y reaches it by label.)
-def y_str_lastidx(s: str, p: str) -> long {
+def y_str_lastidx(s: str, p: str, from: long) -> long {
     let n = len(s);
     let m = len(p);
     let found = 0 - 1;
     if (m > 0 && m <= n) {
+        // `from` past the last place a match can begin (which is what the
+        // two-argument caller passes: LONG_MAX) means the whole string, so
+        // the one-argument method is exactly the old scan.
+        let lim = from;
+        if (lim > n - m) { lim = n - m; };
         let f = y_str_fail(p);
         let k = 0;
         let i = 0;
-        while (i < n) {
+        let stop = lim + m;
+        while (i < stop) {
             let c = byte_at(s, i);
             while (k > 0 && c != byte_at(p, k)) { k = f[k - 1]; };
             if (c == byte_at(p, k)) { k = k + 1; };

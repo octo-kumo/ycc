@@ -6887,10 +6887,23 @@ Yv *gen_method(Yv *st, Yv *node) {
         i = i + 1;
     }
     if (yv_len(margs) < yv_len(yr_get(sm, "params"))) {
-        args = ya_push(args,
-                       n_str(yr_get(sm, "dflt"),
-                             yv_l(yr_get(node, "line")),
-                             yv_l(yr_get(node, "col"))));
+        /* The left-out optional argument's default: the table carries its
+         * TEXT, and the parameter's type says what kind of literal to make.
+         * A str default (`s.pad_left(n)` -> " ") is a string literal; a long
+         * one (`s.index_of(p)` -> 0) is a numeric literal, and a string
+         * literal holding "0" would be a type error. */
+        Yv *want = ya_get(yr_get(sm, "params"), yv_len(margs));
+        if (yv_l(yr_get(want, "k")) == K_tlong) {
+            args = ya_push(args,
+                           n_num(yr_get(sm, "dflt"),
+                                 yv_l(yr_get(node, "line")),
+                                 yv_l(yr_get(node, "col"))));
+        } else {
+            args = ya_push(args,
+                           n_str(yr_get(sm, "dflt"),
+                                 yv_l(yr_get(node, "line")),
+                                 yv_l(yr_get(node, "col"))));
+        }
         ;
     }
     if (yv_b(yr_get(sm, "last"))) {
@@ -11305,14 +11318,31 @@ Yv *fmt_push(Yv *st, ylong v) {
 }
 
 Yv *gen_index_of(Yv *st, Yv *node, int last) {
+    /* The runtime helper always takes (string, sub, offset): 2-argument calls
+     * synthesize the offset they mean, so there is ONE helper per direction
+     * rather than a duplicate with an offset (SUGGESTIONS.md #18: "the next
+     * ) from here" without slicing the tail, which allocates a copy and
+     * returns an index into the copy). */
     st = gen_push_args(st, yr_get(node, "args"));
+    if (yv_len(yr_get(node, "args")) < 3) {
+        /* ys() is a MACRO that takes sizeof(lit): its argument must be a
+         * string LITERAL, never an expression. `ys(last ? "A" : "0")` sizes
+         * the TERNARY (a pointer, 8) and yields seven bytes of whatever the
+         * first arm holds -- which is what made cycc pass 0 where ycc passed
+         * LONG_MAX, and what the port gate caught as a 3-byte binary
+         * difference in t19_strings.y. One ys() per literal. */
+        Yv *off = last ? ys("9223372036854775807") : ys("0");
+        st = gen(st, n_num(off,
+                           yv_l(yr_get(node, "line")),
+                           yv_l(yr_get(node, "col"))));
+        st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+    }
     if (last) {
         st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_str_lastidx"))), 0, 0, 0, 0, 0, 0);
-        return emit_insn(st, F_ADD_I_R, 16, R_RSP, 64, 0, 0, 0, 0);
     } else {
         st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_str_index"))), 0, 0, 0, 0, 0, 0);
-        return emit_insn(st, F_ADD_I_R, 16, R_RSP, 64, 0, 0, 0, 0);
     }
+    return emit_insn(st, F_ADD_I_R, 24, R_RSP, 64, 0, 0, 0, 0);
 }
 
 /* join(arr, sep). y_str_join walks string HEADERS, so an array of longs,

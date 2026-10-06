@@ -141,6 +141,16 @@ behavior or diagnostics), `make bench`, `make bench-ir` (see
   no variables), `nm`/`addr2line`/`objdump -dl`, `strace -c`.
 - Always feed `</dev/null` in scripts (some programs read stdin).
 
+**`ycc run` is not a faster test driver**, and was measured rather than
+assumed: on `bench/y/hello.y` it is 1.44 ms a run against 1.46 ms for
+`-o /tmp/x` plus executing it (50 runs each: 0.072 s against 0.073 s;
+compile+write alone is 1.06 ms and the exec 0.40 ms). It still assembles the
+image and forks, and the ELF write lands in the page cache, so there is
+nothing to win — and the suites cannot use it anyway: they compare **two**
+compilers' binaries (`cmp`) and then run both, which one compile-and-run
+cannot do. What it IS good for is leaving no file behind and passing argv
+(`ycc run p.y -- -x`), which is why the examples campaign uses it.
+
 ## Test suites (`test/sh/`)
 
 Nineteen suites, run by `test/sh/run_all.sh` (named below in brackets).

@@ -58,9 +58,17 @@ a record still calls the field. \ic{s.length} is a property, so
 
 \begin{description}[style=nextline,leftmargin=5.2em]
 \item[Builtins as methods] \ic{s.split(sep)}, \ic{s.trim()} (also
-  \ic{s.strip()}), \ic{s.index\_of(sub)}, \ic{s.last\_index\_of(sub)},
+  \ic{s.strip()}), \ic{s.index\_of(sub, start)}, \ic{s.last\_index\_of(sub, from)},
   \ic{s.ord()}, \ic{s.byte\_at(i)}, \ic{s.tolong()} and \ic{s.bytes()} are
   the builtins of the same name with \ic{s} as the first argument.
+\item[\ic{s.index\_of(sub, start)}, \ic{s.last\_index\_of(sub, from)}] The
+  byte index of \ic{sub}, or \ic{-1}: the first one \emph{at or after}
+  \ic{start} (default \ic{0}), or the last one \emph{at or before}
+  \ic{from} (default: anywhere, which is also what an offset past the end
+  means). An empty \ic{sub} never matches. A scanner that wants ``the next
+  \ic{)} from here'' passes the offset rather than slicing the tail --- a
+  slice allocates a copy \emph{and} an index into the copy, which is the
+  wrong number in the caller's frame.
 \item[\ic{sep.join(xs)}] \ic{join(xs, sep)}: the receiver is the
   separator.
 \item[\ic{s.trim\_start()}, \ic{s.trim\_end()}] Strip space, tab, CR and

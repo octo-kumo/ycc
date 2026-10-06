@@ -3724,9 +3724,16 @@ Yv *str_method(Yv *m) {
     } else if (ys_eq_lit(m, "contains")) {
         return sm_mk(ys("y_str_contains"), yav(1, s), 1, b, ys(""), 0);
     } else if (ys_eq_lit(m, "index_of")) {
-        return sm_mk(ys("index_of"), yav(1, s), 1, l, ys(""), 0);
+        /* index_of/p searches from `start` at or after it; last_index_of/p
+         * from `from` backwards. Both take the offset optionally: index_of's
+         * default is 0, and last_index_of's is LONG_MAX, which the runtime
+         * clamps to the last place a match can begin -- so the one-argument
+         * form searches the whole string, which is what it always did
+         * (SUGGESTIONS.md #18). */
+        return sm_mk(ys("index_of"), yav(2, s, l), 1, l, ys("0"), 0);
     } else if (ys_eq_lit(m, "last_index_of")) {
-        return sm_mk(ys("last_index_of"), yav(1, s), 1, l, ys(""), 0);
+        return sm_mk(ys("last_index_of"), yav(2, s, l), 1, l,
+                     ys("9223372036854775807"), 0);
     } else if (ys_eq_lit(m, "count")) {
         return sm_mk(ys("y_str_count"), yav(1, s), 1, l, ys(""), 0);
     } else if (ys_eq_lit(m, "replace")) {
@@ -4824,9 +4831,9 @@ static Yv *typeof_call_go(Yv *st, Yv *node) {
             }
         } else if (ys_eq_lit(name, "index_of") ||
                    ys_eq_lit(name, "last_index_of")) {
-            if (yv_len(cargs) != 2) {
+            if (yv_len(cargs) < 2 || yv_len(cargs) > 3) {
                 st = fail(st,
-                          ys_cat(name, ys(" takes exactly 2 arguments (string, sub)")),
+                          ys_cat(name, ys(" takes 2 or 3 arguments (string, sub, start)")),
                           yv_l(yr_get(node, "line")),
                           yv_l(yr_get(node, "col")));
                 return yr(2, "typ", t_unk(), "st", st);
@@ -4843,6 +4850,14 @@ static Yv *typeof_call_go(Yv *st, Yv *node) {
                                  ys_cat(name, ys(" sub")),
                                  yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
+                if (yv_len(cargs) == 3) {
+                    Yv *r2 = typeof_expr(st, ya_get(cargs, 2));
+                    st = yr_get(r2, "st");
+                    st = expect_type(st, yr_get(r2, "typ"), yr(1, "k", yv_long(K_tlong)),
+                                     ys_cat(name, ys(" start")),
+                                     yv_l(yr_get(node, "line")),
+                                     yv_l(yr_get(node, "col")));
+                }
                 return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
             }
         } else if (ys_eq_lit(name, "join") && yv_len(cargs) == 1) {

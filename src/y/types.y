@@ -2864,8 +2864,13 @@ def str_method(m: str) -> StrMethod {
     else if (m == "starts_with") { sm_mk("y_str_starts_with", [s], 1, b, "", false) }
     else if (m == "ends_with") { sm_mk("y_str_ends_with", [s], 1, b, "", false) }
     else if (m == "contains") { sm_mk("y_str_contains", [s], 1, b, "", false) }
-    else if (m == "index_of") { sm_mk("index_of", [s], 1, l, "", false) }
-    else if (m == "last_index_of") { sm_mk("last_index_of", [s], 1, l, "", false) }
+    // index_of/p search from `start` at or after it; last_index_of/p from
+    // `from` backwards. Both take the offset optionally: index_of's default
+    // is 0, and last_index_of's is LONG_MAX, which the runtime clamps to the
+    // last place a match can begin -- so the one-argument form searches the
+    // whole string, which is what it always did (SUGGESTIONS.md #18).
+    else if (m == "index_of") { sm_mk("index_of", [s, l], 1, l, "0", false) }
+    else if (m == "last_index_of") { sm_mk("last_index_of", [s, l], 1, l, "9223372036854775807", false) }
     else if (m == "count") { sm_mk("y_str_count", [s], 1, l, "", false) }
     else if (m == "replace") { sm_mk("y_str_replace", [s, s], 2, s, "", false) }
     else if (m == "upper") { sm_mk("y_str_upper", no, 0, s, "", false) }
@@ -3684,8 +3689,8 @@ def typeof_call_go(st: TcSt, node: Call) -> TcRes {
                 tc_res(type_node({ k: K.tstr }), st)
             }
         } else if (name == "index_of" || name == "last_index_of") {
-            if (len(cargs) != 2) {
-                st = fail(st, name + " takes exactly 2 arguments (string, sub)", node.line, node.col);
+            if (len(cargs) < 2 || len(cargs) > 3) {
+                st = fail(st, name + " takes 2 or 3 arguments (string, sub, start)", node.line, node.col);
                 tc_res(t_unk(), st)
             } else {
                 let r0 = typeof_expr(st, cargs[0]);
@@ -3694,6 +3699,11 @@ def typeof_call_go(st: TcSt, node: Call) -> TcRes {
                 st = r1.st;
                 st = expect_type(st, r0.typ, { k: K.tstr }, name + " string", node.line, node.col);
                 st = expect_type(st, r1.typ, { k: K.tstr }, name + " sub", node.line, node.col);
+                if (len(cargs) == 3) {
+                    let r2 = typeof_expr(st, cargs[2]);
+                    st = r2.st;
+                    st = expect_type(st, r2.typ, { k: K.tlong }, name + " start", node.line, node.col);
+                };
                 tc_res(type_node({ k: K.tlong }), st)
             }
         } else if (name == "join" && len(cargs) == 1) {

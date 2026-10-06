@@ -57,6 +57,14 @@ Yv *yv_float(double v);
  * included; ys_cstr() is for NUL-terminated dynamic text. A literal's value
  * is made once where it is written and shared by every evaluation (values
  * are immutable: nothing writes into one after its constructor). */
+/* `ys("literal")` -- a str from a string LITERAL, made once per call site.
+ * It is a MACRO and its argument must be a literal: the length is
+ * sizeof(lit) - 1, so an EXPRESSION argument sizes the pointer instead (8)
+ * and truncates to seven bytes of whatever it points at. `ys(last ? "long"
+ * : "short")` is that mistake; write one ys() per literal, or ys_cstr(expr)
+ * for a NUL-terminated string that is not a literal. (Found by the port
+ * gate: ycc passed LONG_MAX where cycc passed 0, and the compiler cycc built
+ * could not resolve its own imports.) */
 #define ys(lit) (__extension__({ static Yv *ys_lit_; \
     ys_lit_ ? ys_lit_ : (ys_lit_ = ys_n((lit), sizeof(lit) - 1)); }))
 Yv *ys_cstr(const char *s);           /* string from NUL-terminated text */

@@ -1085,18 +1085,26 @@ ysb_done:
     pop %rbx
     pop %rbp
     ret
-# y_str_index(hay, needle) -> the first i at which needle occurs in
-# hay, or -1 (an empty needle never matches): a scan for the needle's
-# first byte, the rest compared where it is found. Assembly, as the
-# scan cost ~40 instructions a byte in Y (the assembler searches each
-# of its lines).
+# y_str_index(hay, needle, start) -> the first i >= start at which needle
+# occurs in hay, or -1 (an empty needle never matches): a scan for the
+# needle's first byte, the rest compared where it is found. Assembly, as the
+# scan cost ~40 instructions a byte in Y (the assembler searches each of its
+# lines). The `start` is what a hand-written scanner wants -- "the next )
+# from here" -- and it is a PARAMETER rather than a slice of the tail,
+# because a slice allocates a copy and returns an index into the copy. The
+# two-argument callers pass 0 (native.y's gen_index_of).
 y_str_index:
     push %rbp
     mov %rsp, %rbp
     push %rbx
     push %r12
-    mov 24(%rbp), %rsi
-    mov 16(%rbp), %rdi
+    mov 32(%rbp), %rsi
+    mov 24(%rbp), %rdi
+    mov 16(%rbp), %rcx
+    cmp $0, %rcx
+    jge ysi_start
+    xor %ecx, %ecx
+ysi_start:
     mov $-1, %rax
     mov (%rdi), %r9
     test %r9, %r9
@@ -1105,7 +1113,6 @@ y_str_index:
     sub %r9, %r10
     js ysi_done
     movzbq 8(%rdi), %r11
-    xor %ecx, %ecx
 ysi_scan:
     cmp %r10, %rcx
     jg ysi_done

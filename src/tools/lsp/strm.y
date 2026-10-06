@@ -93,9 +93,11 @@ def names() -> [str] {
 //   * Parameter NAMES. The table records types, not names -- `split` is `[str]`
 //     here and `split(sep: str)` in the manual -- so none are invented here.
 //     `tstr` of the recorded type is the whole of what is known.
-//   * `dflt` is the VALUE of the trailing default, not source text: the emitter
-//     hands it straight to `n_str`, so it is rendered as the string literal it
-//     is, and `pad_left` reads `pad_left(long, str = " ") -> str`.
+//   * `dflt` is the VALUE of the trailing default, not source text, and the
+//     parameter's TYPE says how to write it: the emitter makes a string
+//     literal for a str parameter and a numeric one for a long, so `pad_left`
+//     reads `pad_left(long, str = " ") -> str` and `index_of` reads
+//     `index_of(str, long = 0) -> long`.
 //   * `last` is NOT variadic, which is what a first pass here rendered it as. It
 //     says the receiver goes AFTER the arguments (`sep.join(xs)` is
 //     `join(xs, sep)`), which is the emitter's argument order and not part of
@@ -113,7 +115,13 @@ def sig(name: str) -> str {
     while (i < len(sm.params)) {
         if (i > 0) { out = out + ", "; };
         out = out + tstr(sm.params[i]);
-        if (i >= req) { out = out + " = \"" + sm.dflt + "\""; };
+        if (i >= req) {
+            if (tstr(sm.params[i]) == "long") {
+                out = out + " = " + sm.dflt;
+            } else {
+                out = out + " = \"" + sm.dflt + "\"";
+            };
+        };
         i = i + 1;
     };
     out = out + ") -> " + tstr(sm.ret);

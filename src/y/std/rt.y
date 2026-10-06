@@ -239,13 +239,17 @@ def y_f2l(x: float) -> long {
 // last_index_of: the last match of needle in hay, -1 when absent; an
 // empty needle never matches. (index_of, split and trim are assembly:
 // arch_x64.y y_str_index, y_str_split, y_str_trim.)
-def y_str_lastidx(hay: str, needle: str) -> long {
+def y_str_lastidx(hay: str, needle: str, from: long) -> long {
     let n = len(hay);
     let m = len(needle);
     let found = 0 - 1;
     if (m > 0) {
         if (n >= m) {
-            let i = n - m;
+            // a `from` past the end means the whole string (the two-argument
+            // caller passes LONG_MAX); see str.y's twin
+            let lim = from;
+            if (lim > n - m) { lim = n - m; };
+            let i = lim;
             let go = true;
             while (go) {
                 if (i >= 0) {

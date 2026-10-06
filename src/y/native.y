@@ -5805,7 +5805,17 @@ def gen_method(st: EmitSt, node: Call) -> EmitSt {
         i = i + 1;
     };
     if (len(margs) < len(sm.params)) {
-        args += n_str(sm.dflt, node.line, node.col);
+        // The left-out optional argument's default: the table carries its
+        // TEXT, and the parameter's type says what kind of literal to make.
+        // A str default (`s.pad_left(n)` -> " ") is a string literal; a long
+        // one (`s.index_of(p)` -> 0) is a numeric literal, and a string
+        // literal holding "0" would be a type error.
+        let want: Type = sm.params[len(margs)];
+        if (want.k == K.tlong) {
+            args += n_num(sm.dflt, node.line, node.col);
+        } else {
+            args += n_str(sm.dflt, node.line, node.col);
+        };
     };
     if (sm.last) { args += mobj; };
     let fname = sm.fn;
@@ -9799,14 +9809,29 @@ def fmt_push(st: EmitSt, v: long) -> EmitSt {
 };
 
 def gen_index_of(st: EmitSt, node: Call, last: bool) -> EmitSt {
+    // The runtime helper always takes (string, sub, offset): 2-argument calls
+    // synthesize the offset they mean, so there is ONE helper per direction
+    // rather than a duplicate with an offset (SUGGESTIONS.md #18: "the next
+    // ) from here" without slicing the tail, which allocates a copy and
+    // returns an index into the copy).
     st = gen_push_args(st, node.args);
+    if (len(node.args) < 3) {
+        st = gen(st, n_num(default_offset(last), node.line, node.col));
+        st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    };
     if (last) {
         st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_lastidx"), 0, 0, 0, 0, 0, 0);
-        emit_insn(st, insn.F_ADD_I_R, 16, insn.R_RSP, 64, 0, 0, 0, 0)
     } else {
         st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_index"), 0, 0, 0, 0, 0, 0);
-        emit_insn(st, insn.F_ADD_I_R, 16, insn.R_RSP, 64, 0, 0, 0, 0)
-    }
+    };
+    emit_insn(st, insn.F_ADD_I_R, 24, insn.R_RSP, 64, 0, 0, 0, 0)
+};
+
+// The offset a two-argument index_of/last_index_of means: 0 for the forward
+// scan (at or after the start) and LONG_MAX for the backward one, which the
+// runtime clamps to the last place a match can begin -- "search anywhere".
+def default_offset(last: bool) -> str {
+    if (last) { "9223372036854775807" } else { "0" }
 };
 
 // join(arr, sep). y_str_join walks string HEADERS, so an array of longs,
