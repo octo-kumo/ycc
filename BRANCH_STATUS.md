@@ -285,6 +285,20 @@ branch-disjointness false positive.
   harness has no tty for wine, so a console handle (as opposed to a pipe) is
   unverified, and `test_std_suites.sh`'s `term_test` needs a pty and only runs
   against ELF.
+- **Where the PE target stands, and what is left (round 54).** Measured, not
+  guessed:
+    * the four thread fixtures (`t341_threads_slices`, `t342_threads_barrier`,
+      `t343_threads_queue`, `t344_threads_transfers`) do not merely "fail on
+      PE": `t341` PAGE-FAULTS ON A NULL READ at address 0x14000110F, because
+      `spawn` reaches `clone(2)` -- a LINUX syscall number -- through
+      `src/y/arch/threads.s`, which has no Windows twin at all. That is the
+      round-36 class of accident (a raw Linux number in a file both targets
+      use) and it is the whole of the "fork/spawn/threads on NT" item: NT needs
+      `NtCreateThreadEx`, a TEB-based per-thread heap (`%gs:0x30`, not `%fs`),
+      and waitable objects for `join`/`mutex`/`sem`. Nothing small.
+    * `t349` was used by TWO fixtures (`t349_fs_stat` from round 38 and
+      `t349_random_bytes` from round 50). Basenames are what the native suite
+      keys on, so nothing broke, but `random_bytes` is `t350` now.
 - **THE PORT GATE HAS A WINDOWS HALF NOW (round 53)**, which is the general
   fix for the hole round 52 fell through: `test/sh/pe-port.sh` compiles the
   whole `test/y/**.y` corpus with BOTH compilers for `--target=windows`, with
