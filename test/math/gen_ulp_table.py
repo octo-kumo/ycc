@@ -333,7 +333,11 @@ TWO = {
             (float("inf"), 3.0), (float("-inf"), 2.0), (float("-inf"), 3.0),
             (float("inf"), 0.0), (float("nan"), 0.0), (2.0, float("nan"))],
     # atan2: every quadrant, both axes, and the infinities
+    # the four ZERO pairs, which are C99 7.12.7.4's cases and which the table
+    # did not carry at all -- and Python spells -0.0 as -0.0, so they can
     "atan2": [(0.0, 1.0), (1.0, 0.0), (0.0, -1.0), (-1.0, 0.0), (1.0, 1.0),
+              (0.0, 0.0), (-0.0, 0.0), (0.0, -0.0), (-0.0, -0.0),
+              (0.0, math.inf), (-0.0, math.inf), (math.inf, 0.0),
               (1.0, -1.0), (-1.0, -1.0), (-1.0, 1.0), (0.0, 0.0), (-0.0, -1.0),
               (0.0, -0.0), (1e300, -1e300), (-1e300, 1e300), (1.0, 1e-300),
               (1e-300, 1.0), (0.5, 0.5), (3.0, 4.0), (-3.0, 4.0), (3.0, -4.0),
@@ -580,12 +584,28 @@ def atan2_ref(y, x):
         return math.pi if x < 0 else 0.0
     if math.isinf(y):
         return pi2 if y > 0 else -pi2
+    # Both zeros: C99 7.12.7.4, and the sign of x picks the SHAPE while the sign
+    # of y carries through.
+    #
+    # This reference had the same ladder the module had -- `y > 0` / `y < 0` /
+    # else 0.0 -- and +0 is neither greater nor less than zero, so it answered
+    # 0.0 for all four zero pairs. A reference that shares a SHAPE with the code
+    # under test certifies the shape rather than the answer: the table agreed with
+    # the module on atan2(-0, +0) and atan2(-0, -0), and disagreed on
+    # atan2(+0, -0), where it reported a 4.6e18-ulp failure on what turned out to
+    # be a one-line defect in the reference.
+    #
+    # It also has to come before the `x == 0.0` case, for the reason the module's
+    # does: -0.0 == 0.0 is true in Python as it is in Y, so a `y == 0.0` test
+    # placed below an `x == 0.0` test never runs.
+    if x == 0.0 and y == 0.0:
+        neg_x = math.copysign(1.0, x) < 0
+        neg_y = math.copysign(1.0, y) < 0
+        if neg_x:
+            return -math.pi if neg_y else math.pi
+        return -0.0 if neg_y else 0.0
     if x == 0.0:
-        if y > 0:
-            return pi2
-        if y < 0:
-            return -pi2
-        return 0.0
+        return pi2 if y > 0 else -pi2
     if y == 0.0:
         # the sign of the zero decides: atan2(-0.0, -1.0) is -pi
         if x > 0:

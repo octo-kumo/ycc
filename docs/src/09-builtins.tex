@@ -408,7 +408,12 @@ computed by squaring).
   the obvious seed --- a fourth root --- is off by a factor of $a^{1/12}$, which
   is \num{1e27} for a subnormal.
 \item[\ic{math.hypot(x, y)}] $\sqrt{x^2+y^2}$ without the overflow: the larger
-  magnitude divides both out first, and that is exact.
+  magnitude divides both out first, and that is exact. An infinity is the larger
+  of the two whatever else is beside it, so \ic{hypot(inf, nan)} is
+  $+\infty$ --- found by looking for one, not by taking a maximum, since every
+  comparison against a \ic{nan} is false. The scaled form rounds where a plain
+  \ic{sqrt} would not, so \ic{hypot(2.0, 3.0)} is one ulp above the correctly
+  rounded $\sqrt{13}$ while the Pythagorean triples are exact; recorded in t325.
 \item[\ic{math.ldexp(x, e)}] $x\cdot 2^e$, exactly. Scaling by a power of two
   is exact while the result stays normal, so this is the one scaling that never
   rounds --- and it has to be checked where it stops being exact, which is when
@@ -552,8 +557,13 @@ computed by squaring).
     is lost however close $x$ is to 1; \ic{acos} is $\pi/2 - \arcsin x$ with the
     subtraction corrected afterwards, because $\pi/2$ minus something an ulp off
     is an ulp off. \ic{atan2} is the quadrant of $(y,x)$, with every zero and
-    infinity spelled out --- and the sign of a \emph{zero} is a direction:
-    \ic{math.atan2(-0.0, -1.0)} is $-\pi$.
+    infinity spelled out --- and the sign of a \emph{zero} is a direction, which
+    is the whole of the four cases where both arguments are a zero
+    (C99~7.12.7.4): a negative \ic{x} means the negative axis and a signed
+    $\pi$, a positive one means the positive axis and a signed zero, and the
+    sign of \ic{y} carries through either way. So \ic{math.atan2(-0.0, -1.0)}
+    is $-\pi$, and \ic{math.atan2(0.0, -0.0)} is $\pi$ where it used to be
+    \ic{0.0}.
   \item[\ic{math.sinh(x)}, \ic{math.cosh(x)}, \ic{math.tanh(x)}] One formula
     each, out of \ic{expm1}:
     $\cosh x = 1 + (\operatorname{expm1} x + \operatorname{expm1}(-x))/2$ and

@@ -332,6 +332,12 @@ let phi: float = 1.618033988749895;
 // is quiet, so no trap and no builtin. (Integer division by zero DOES trap.)
 let nan: float = 0.0 / 0.0;
 let inf: float = 1.0 / 0.0;
+// -0.0, which no literal spells (Y writes -1.0 as a unary minus, and
+// 0.0 - 0.0 is +0.0 by IEEE). Declared HERE rather than beside fmin/fmax,
+// which is where it was, because atan2's both-zeros arm needs it and Y's
+// names are not hoisted: a binding declared later is an undefined variable
+// where it is written.
+let neg_zero: float = 0.0 * (0.0 - 1.0);
 
 // ── the machine primitives, and the exact layer built on them ────────────────
 //
@@ -725,15 +731,68 @@ def cbrt(x: float) -> float {
 // hypot(x, y): sqrt(x^2 + y^2) without the overflow. Scaling by the larger
 // magnitude first keeps both squares inside the double range (a square overflows
 // from 1.3e154), and dividing it back is exact.
+// C99 7.12.7.3 and IEEE 754-2019 both give hypot(+-inf, NaN) = +inf, and glibc
+// agrees: an infinity is the larger of the two and the other operand cannot
+// matter. `m` is the larger magnitude and a NaN never wins that comparison, so
+// the check for an infinity has to come BEFORE the NaN arm rather than beside it
+// -- hypot(inf, nan) answered nan where the answer is inf.
 def hypot(x: float, y: float) -> float {
     let a = fabs(x);
     let b = fabs(y);
-    let m = if (a > b) { a } else { b };
-    if (m == 0.0 || m != m || is_inf(m)) {
-        if (is_inf(m)) { inf } else { m }
+    // The infinity has to be found by looking for one, not by taking the larger
+    // of the two: every comparison against a NaN is false, so `if (a > b) a else
+    // b` hands back the NaN whenever one operand is one, and the infinity it was
+    // supposed to be dominated is never seen. That is why hypot(inf, nan) came
+    // out nan -- and why the check below had nothing to find.
+    if (is_inf(a) || is_inf(b)) {
+        inf
+    } else if (a != a || b != b) {
+        nan
+    } else if (a > b) {
+        // Scaling by the larger magnitude is what keeps this from overflowing
+        // where a plain sqrt(x*x + y*y) would, so the comparison has to be a real
+        // one -- which it is, the NaN having been ruled out two arms above.
+        hypot_scaled(a, b)
     } else {
-        let p = x / m;
-        let q = y / m;
+        hypot_scaled(b, a)
+    }
+};
+
+// The body of hypot, with the larger magnitude named `m` and the other `s`.
+//
+// Two arguments and not three, deliberately: my first attempt passed the
+// maximum in as well, to keep a branch from needing it -- and then took the
+// maximum from the WRONG place in one of the two calls, so hypot(3.5, 0)
+// answered 0.0 where the answer is 3.5. A name that is passed in separately from
+// the one it is derived from can disagree with it; one that is not cannot.
+def hypot_scaled(m: float, s: float) -> float {
+    if (m == 0.0) {
+        // both operands are zeros, and the answer is +0: hypot is never
+        // negative, so hypot(0.0, -0.0) is +0 whichever zero came second.
+        0.0
+    } else {
+        let p = s / m;
+        // BOTH squares, not 1.0 + p*p. The one-square form is the same identity
+        // and a different number: with m = 3 and s = 2, p = 2/3 and 1 + p*p
+        // rounds once BEFORE the sqrt, so the two forms differ by up to an ulp
+        // and disagree on which side.
+        //
+        // This is worth being exact about, because I "simplified" it to
+        // 1.0 + p*p, checked the two Pythagorean triples that are exact (3,4,5
+        // and 5,12,13), saw them pass, and almost committed it. hypot(2.0, 3.0)
+        // is not one of those: p = 2/3 does not square-and-add back to 1
+        // exactly, so the 1.0 form rounds it. Both forms give the same answer for
+        // 3,4 and for 1,1 -- which is what a form that is only SOMETIMES wrong
+        // looks like, and is why the check has to be on an argument where the two
+        // forms disagree.
+        //
+        // Neither form is correctly rounded in general: hypot(2.0, 3.0) is one
+        // ulp above the correctly rounded sqrt(13) in both, and so it was before
+        // any of this. That is a known limit of the scaled form rather than a
+        // defect of it -- the table pins what hypot does, and making it correctly
+        // rounded would mean a second-pass correction, which is a different piece
+        // of work from the two corner cases here. Recorded in t325.
+        let q = m / m;
         m * sqrt(p * p + q * q)
     }
 };
@@ -2058,7 +2117,41 @@ def atan2(y: float, x: float) -> float {
     if (y != y || x != x) {
         nan
     } else if (x == 0.0) {
-        if (y > 0.0) { pi_over_2 } else if (y < 0.0) { 0.0 - pi_over_2 } else { 0.0 }
+        // Both zeros at once is the whole of the interesting case, and neither
+        // comparison can see it: -0.0 < 0.0 is false and +0.0 < 0.0 is also
+        // false, so a `y > 0.0` / `y < 0.0` / else ladder answers +0 for all four
+        // combinations and puts atan2(+0, -0) at 0 where the answer is +pi.
+        // It answers +0 for atan2(+0, -0) because -0.0 == 0.0 is TRUE, so the arm
+        // above was never even reached -- and the `y == 0.0` arm's care about the
+        // sign of the zero was dead code for the same reason.
+        //
+        // So the order is the sign of x first, and only then y: on the y axis
+        // (x is a zero, whatever its sign) atan2 is +-pi/2 by the sign of y, and
+        // +-pi when y is a zero too, by the sign of y again.
+        if (y == 0.0) {
+            // BOTH are zeros, and here the SIGN OF X is what decides the shape:
+            // a negative zero means the point is on the negative x axis, so the
+            // answer is +-pi, and a positive zero means it is on the positive
+            // one, so the answer is a zero. The sign of y then carries through
+            // either way -- which is the whole of C99 7.12.7.4's four cases for
+            // this corner, and the reason a `y > 0.0` / `y < 0.0` / else ladder
+            // cannot express it: both comparisons are false for +0.
+            //
+            // My first attempt tested is_signed_zero(y) and read the sign of x
+            // inside it, which answers +pi for atan2(+0, -0) but +-pi_over_2
+            // for atan2(+0, +0) -- because +0 is not a signed zero and so fell
+            // through to the sign-of-y ladder, where +0 is neither > 0 nor < 0.
+            // The test has to be `y == 0.0`, which is true of both zeros.
+            if (is_signed_zero(x)) {
+                if (is_signed_zero(y)) { 0.0 - pi } else { pi }
+            } else {
+                if (is_signed_zero(y)) { neg_zero } else { 0.0 }
+            }
+        } else if (y > 0.0) {
+            pi_over_2
+        } else {
+            0.0 - pi_over_2
+        }
     } else if (y == 0.0) {
         // atan2(+-0, x < 0) is +-pi, and the sign is the sign OF THE ZERO: a
         // negative zero has a direction, and that is the whole difference
@@ -2094,7 +2187,6 @@ def atan2(y: float, x: float) -> float {
 
 // -0.0. Multiplied into being rather than subtracted: 0.0 - 0.0 is +0.0 in
 // IEEE, which is exactly why a signed zero needs its own spelling.
-let neg_zero: float = 0.0 * (0.0 - 1.0);
 
 // ── pow's logarithm, in two parts ───────────────────────────────────────────
 //
