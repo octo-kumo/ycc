@@ -38,7 +38,7 @@ The prefix \ic{y\_} is \emph{reserved} for the compiler's own generated
 code, which calls its runtime helpers by those fixed names. A program may
 nevertheless define one: that is the override hook, and the program's own
 definition replaces the standard library's helper of that name for the
-whole program (Section~\ref{sec:builtin-pointers}).
+whole program, and it is the only way to reach the runtime's own copies.
 
 The keywords are:
 \begin{center}

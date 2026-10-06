@@ -111,7 +111,9 @@ a record still calls the field. \ic{s.length} is a property, so
   different thing: a record prints as \ic{\{a: 1\}} with its contents,
   a function has no printable contents and prints its signature as
   \ic{<function (long, long) -> long>}, and a type that refers to
-  itself prints as \ic{<T>} in place of the cycle.
+  itself prints as \ic{<T?>} in place of the cycle --- the alias as the
+  program wrote it, so the option marker is part of it. A bare \ic{<T>} is not
+  reachable: a self-reference with no \ic{?} cannot be given a base value.
 \end{description}
 
 \subsection{Format specifications}
@@ -230,7 +232,7 @@ unsigned as its name says, and an offset past the end of the array
 
 \begin{lstlisting}
 let hdr = struct.pack("u32be,i16le,pad,fill", [0x01020304, -2, 3, 65]);
-print(hdr);                 // b'\bs x01\bs x02\bs x03\bs x04\bs xfe\bs xff\bs x00\bs x00\bs x00A'
+print(hdr);                 // b'\x01\x02\x03\x04\xfe\xff\x00\x00\x00A'
 print(struct.unpack("u32be,i16le", hdr));      // [16909060, -2]
 print(struct.get_u8(hdr, 9));                  // 65 -- the fill's byte, by offset
 \end{lstlisting}
@@ -295,7 +297,7 @@ module exports had \emph{no cases at all} --- \ic{ldexp}, \ic{fmin}, \ic{fmax},
 \ic{fabs}, \ic{fsign}, \ic{lerp}, and the three predicates --- because the table
 only ever carried the ones with rounding in them. \ic{fmin} and \ic{fmax} were
 the ones that mattered. Their zeros' signs were decided by whichever operand came
-last, so \ic{fmax(0.0, -0.0)} answered \ic{-0.0} and \ic{1.0/fmax(0.0, -0.0)}
+last, so \ic{math.fmax(0.0, -0.0)} answered \ic{-0.0} and \ic{1.0/math.fmax(0.0, -0.0)}
 came out \ic{-inf}; C99 does allow either sign there, and IEEE~754-2019's
 \ic{maxNum}, this platform's libm and any caller dividing by the answer do not.
 The tie now goes to the positive-signed operand for \ic{fmax} and the
@@ -307,7 +309,7 @@ fixes, and all three were the same mistake in different clothes: the question is
 never \emph{which} line rounds, it is \emph{at what size}. \ic{cosh} summed two
 exponentials where one exponential and its reciprocal is enough (for
 \ic{a >= 0.5}, \ic{$e^{-a}$} is \num{1.2}\% of the answer, so its own rounding is a
-hundredth of an ulp, while a second \ic{exp()} call brings a whole kernel's
+hundredth of an ulp, while a second \ic{math.exp()} call brings a whole kernel's
 error along). \ic{pow} was three and two ulps out because its logarithm formed
 \ic{z*(2 + w*P)}, whose brackets round \emph{at the size of \num{2.0}} --- a whole
 ulp of the logarithm, which \ic{pow} then multiplies by the exponent; as a
@@ -320,7 +322,7 @@ answer; it has its own \num{24}-term kernel on the Taylor values
 root's own residual put back and \ic{two} carried in two parts \emph{through} the
 subtraction. \ic{acos} was the same cancellation seen from the other side: it
 was \ic{pi/2 - asin(x)}, and near \ic{x = 1} that answer is \num{3e-8} against a
-\ic{pi/2}, so \ic{acos(1 - 4e-17)} was forty ulps out. Its large half now takes
+\ic{pi/2}, so \ic{math.acos(1 - 4e-17)} was forty ulps out. Its large half now takes
 the half-angle \ic{2*asin(sqrt((1-x)/2))} \ic{asin}'s kernel already computes, and
 forms the small answer directly. \ic{pow} is still the one to know about: its accuracy degrades with
 the \emph{exponent}, not the base, so \ic{math.pow(x, 0.5)} for a large \ic{x} is
@@ -404,7 +406,7 @@ computed by squaring).
     so \ic{two\_sum} takes its residual out and one more divide turns it into the
     low part of the quotient. \ic{log1p} is \ic{log}'s kernel with $m = 1+x$ and
     $z = x/(2+x)$, so a tiny \ic{x} comes out as itself instead of as
-    \ic{log(1.0)} $-$ \ic{0}.
+    \ic{math.log(1.0)} $-$ \ic{0}.
     \ic{log} is machine code (\texttt{src/y/arch/math.s}), reached through
     \ic{native def} and \emph{bit-identical} to the loop it replaced ---
     \texttt{test/y/native/t312\_math\_log\_asm.y} says so over
@@ -436,7 +438,7 @@ computed by squaring).
     the loops, kept as the oracle, and \texttt{test/math/gen\_sin.py} generates
     the routine from the module's own constants. The negation is
     \ic{0.0} $- x$ and not a sign-bit flip, which is the difference in
-    \ic{sin(-0.0)}.
+    \ic{math.sin(-0.0)}.
   \item[\ic{math.asin(x)}, \ic{math.acos(x)}, \ic{math.atan(x)},
     \ic{math.atan2(y, x)}] The inverse trigonometry. \ic{atan} folds until its
     argument is inside the kernel's range --- the reciprocal above 1, then the
@@ -563,7 +565,7 @@ computed by squaring).
 
 \begin{lstlisting}
 def add(a: long, b: long) -> long { return a + b; };
-print(add);      // <function (long, long)->(long)>
+print(add);      // <function (long, long) -> long>
 \end{lstlisting}
 \item[\ic{print(a, b, ...)}] Several arguments are allowed: each is
   written as \ic{tostring} would and they are concatenated with no
@@ -842,8 +844,11 @@ reference against a base URL the way a browser would.
 \label{sec:builtin-crypto}
 
 \ic{import crypto;} has what TLS uses, in plain Y over \ic{[byte]}:
-\ic{sha256}, \ic{sha384}, \ic{sha512}; \ic{hmac} and \ic{hkdf\_extract}/\ic{hkdf\_expand}
-over \ic{crypto.hash\_sha256()} or \ic{hash\_sha384()};
+\ic{sha256}, \ic{sha384}, \ic{sha512}, and \ic{hmac}.
+The hashes are \ic{crypto.hash\_sha256()},
+\ic{crypto.hash\_sha384()} and \ic{crypto.hash\_sha512()}, and
+\ic{crypto.hkdf\_extract} with \ic{crypto.hkdf\_expand} is the
+key derivation TLS 1.3 asks for;
 \ic{chacha\_seal}/\ic{chacha\_open} (ChaCha20-Poly1305) and
 \ic{gcm\_seal}/\ic{gcm\_open} (AES-GCM), each \ic{(key, nonce, aad,
 data)}, an open giving \ic{none} for a forged message; the AES key is 16,
@@ -855,7 +860,7 @@ implemented); \ic{x25519} and \ic{x25519\_base}, each a 32-byte scalar
 and a 32-byte point, where a peer point of low order --- one that would
 make the shared secret all zeros --- stops the program, as RFC 8446
 \S7.4.2 requires; \ic{rsa\_verify\_pkcs1}, \ic{rsa\_verify\_pss} and
-\ic{ecdsa\_verify} (over \ic{crypto.p256()} or \ic{p384()});
+\ic{ecdsa\_verify} (over \ic{crypto.p256()} or \ic{crypto.p384()});
 \ic{random\_bytes(n)}, \ic{hex} and \ic{unhex}. The primitives those
 use are exported too, for building something the above does not cover:
 \ic{bytes\_eq} (a constant-time compare of two \ic{[byte]}), the
@@ -865,14 +870,17 @@ raw ciphers \ic{chacha20} and \ic{aes\_encrypt} under \ic{aes\_key}.
 \ic{import x509;} reads certificates: \ic{x509.verify\_chain(chain,
 host, now)} is \ic{""} when the DER certificates \ty{chain} (the
 server's first) reach a system trust anchor and name \ty{host} at
-\ty{now} (Unix seconds), else why not. \ic{verify\_chain\_with} takes
+\ty{now} (Unix seconds), else why not. \ic{x509.verify\_chain\_with} takes
 the anchors (\ic{x509.anchors\_pem(text)}), and \ic{x509.pem\_certs(text)}
 splits a PEM file while \ic{x509.system\_roots()} gives the system's own
-as PEM. A single certificate is \ic{parse\_cert(der)}, checked with
-\ic{verify\_signed(cert, signature, key)} and matched to a name with
-\ic{name\_matches(cert, host)}; \ic{days\_from\_civil(y, m, d)} is the
-date arithmetic \ic{verify\_chain} uses, and \ic{b64\_decode} the
-Base64 one.
+as PEM.
+
+A single certificate is \ic{x509.parse\_cert(der)},
+\ic{x509.verify\_signed(cert, signature, key)}
+checks it and \ic{x509.name\_matches(cert, host)} matches it to a
+name. \ic{x509.days\_from\_civil(y, m, d)} is the date arithmetic
+\ic{x509.verify\_chain} uses, and
+\ic{x509.b64\_decode} the Base64 one it needs to read a PEM file.
 
 \subsection{The terminal (the tui module)}
 \label{sec:builtin-tui}
@@ -890,7 +898,7 @@ Four types come with it. \ic{Size} is a record of \ic{rows} and \ic{cols}. A
 frame clock and the frame meter.
 
 \begin{description}[style=nextline,leftmargin=5.2em]
-\item[\ic{tui.is\_tty()}] \ty{bool}: whether the output is a terminal. Every
+\item[\ic{tui.is\_tty(fd)}] \ty{bool}: whether the output is a terminal. Every
   drawing program asks this first, because the answer decides whether to animate
   or to print something a diff can check.
 \item[\ic{tui.size()}] The terminal's size as \ic{Size}, from
@@ -939,16 +947,16 @@ frame clock and the frame meter.
   instead. Cells above \ic{rows * cols} are never flushed.
 \item[\ic{tui.resize(s, rows, cols)}] The same surface at another size, without a
   second allocation, and \ic{tui.rows(s)} / \ic{tui.cols(s)} read its size back.
-\item[\ic{tui.clear(s)}, \ic{tui.fill(s, ch, fg, bg)}] Every cell to a space, or to
+\item[\ic{tui.clear(s, bg)}, \ic{tui.fill(s, cp, fg, bg)}] Every cell to a space, or to
   a code point with a foreground and a background.
-\item[\ic{tui.put(s, r, c, ch, fg, bg)}] One cell; \ic{tui.put\_skip(s, r, c, ch,
-  fg, bg)} the same for a character that is a \emph{continuation} of a wide glyph
-  to its left, and \ic{tui.put\_at(s, r, c, ch, fg, bg)} an absolute write that
+\item[\ic{tui.put(s, row, col, cp, fg, bg)}] One cell; \ic{tui.put\_skip(s, row, col, fg, bg)} the same for a character that is a \emph{continuation} of a wide glyph
+  to its left, and \ic{tui.put\_at(s, i, cp, fg, bg)} an absolute write by cell index that
   does no continuation bookkeeping.
 \item[\ic{tui.get(s, r, c)}] The code point in a cell, \ic{tui.key\_at(s, r, c)}
-  its colour packed as one integer, and \ic{tui.text(s, r, c, n)} a run of cells
-  read back as a string.
-\item[\ic{tui.hline(s, r, c, n, fg, bg)}, \ic{tui.vline(...)}, \ic{tui.rect(...)},
+  its colour packed as one integer, and \ic{tui.text(s, row, col, t, fg, bg)} a run of cells
+  written from a \ic{str} and read back as one.
+\item[\ic{tui.hline(s, row, col, n, cp, fg, bg)},
+  \ic{tui.vline(...)}, \ic{tui.rect(...)},
   \ic{tui.fill\_rect(...)}] Straight runs and boxes --- the primitives a chart or
   a frame border is made of.
 \item[\ic{tui.blit(dst, src, dr, dc, sr, sc, rows, cols)}] A rectangle of one
@@ -957,14 +965,14 @@ frame clock and the frame meter.
   \ic{tui.clamp255(v)}] Colour, and \ic{tui.r\_of(c)}, \ic{tui.g\_of(c)},
   \ic{tui.b\_of(c)} to take one apart. A colour is one integer, so a frame buffer
   of them is an array of integers.
-\item[\ic{tui.begin\_frame(s)}, \ic{tui.cell\_same(s, r, c, ch, fg, bg)},
-  \ic{tui.cell\_commit(s, r, c, ch, fg, bg)}] The diff's three steps: start a
+\item[\ic{tui.begin\_frame()}, \ic{tui.cell\_same(s, i)},
+  \ic{tui.cell\_commit(s, i)}] The diff's three steps: start a
   frame, ask whether a cell already holds what you want, and write it if not.
 \item[\ic{tui.flush(s)}] Every changed cell as escape sequences, and
   \ic{tui.flush\_diff(s)} the same but only for the rows that changed ---
-  \ic{tui.row\_count()} rows in the worst case, \ic{tui.row\_bytes(s, r)} the
-  size of one, \ic{tui.frame\_bytes(s)} the whole frame.
-\item[\ic{tui.end\_frame(s)}, \ic{tui.spill(s)}] Finish a frame, and what to do
+  \ic{tui.row\_count()} rows in the worst case, \ic{tui.row\_bytes()} the
+  size of one, \ic{tui.frame\_bytes()} the whole frame.
+\item[\ic{tui.end\_frame(s)}, \ic{tui.spill()}] Finish a frame, and what to do
   when one row's worth of output overflows the buffer: the cursor is positioned
   absolutely, so a spill is a row boundary, not a corruption.
 \item[\ic{tui.set\_fd(n)}, \ic{tui.fd()}] Draw to a descriptor other than 1, which
@@ -996,11 +1004,14 @@ frame clock and the frame meter.
   colour change moves one and not the other.
 \item[\ic{tui.grid\_text(s)}] The grid as plain text, no escapes. This is what a
   golden file holds.
-\item[\ic{tui.shade(c)}] A colour mapped to a glyph by luminance.
-  \ic{shade\_ascii}, \ic{shade\_blocks}, \ic{shade\_half} and \ic{shade\_braille}
+\ic{tui.shade(v, n)}] A colour mapped to a glyph by luminance, \ic{v} against ramp
+  entry \ic{n}.
+\ic{shade\_ascii}, \ic{shade\_blocks}, \ic{shade\_half} and \ic{shade\_braille}
   are the ramps for each, and \ic{tui.shade\_len(ramp)} with
-  \ic{tui.ramp\_index(v, n, k)} index one. \ic{tui.braille(cp)}, \ic{tui.braille\_cp(mask)}, \ic{tui.braille\_mask(sub)} and \ic{tui.braille\_put(s, r, c,
-  mask)} address one braille dot pattern directly.
+  \ic{tui.ramp\_index(v, n, k)} index one. A braille dot pattern is \ic{tui.braille(vs, thresh)}, which names the cell,
+  \ic{tui.braille\_cp(mask)}, which names the code point; \ic{tui.braille\_mask(sub)} is the mask,
+  and \ic{tui.braille\_put(s, row, col, vs, thresh, fg, bg)}
+  writes one into a cell.
 \item[\ic{tui.utf8\_len(cp)}, \ic{tui.utf8\_byte(cp, i)}, \ic{tui.width\_of(cp)}] A
   code point's UTF-8 length and bytes, and how many terminal columns it occupies
   --- 2 for a wide CJK or emoji glyph, 0 for a combining mark.
@@ -1024,8 +1035,9 @@ frame clock and the frame meter.
 \label{sec:builtin-args}
 
 \ic{import args;} parses \ic{argv} against a table you declare, so a program does
-not hand-roll \ic{index\_of} loops over \ic{--} and \ic{=} and an \ic{args.exit(2)}
-convention. The table is \ic{[args.Opt]}, one entry per flag, and each
+not hand-roll \ic{index\_of} loops over \ic{--} and \ic{=}, and need not
+invent an exit-code convention: \ic{args.parse\_or\_exit(toks)} leaves on the
+usage error itself. The table is \ic{[args.Opt]}, one entry per flag, and each
 \ic{Opt}'s \ic{kind} is \ic{args.BOOL}, \ic{args.STR} or \ic{args.NUM} --- a flag
 with no value, a flag taking one of any shape, or a flag whose value must parse
 as a whole number.
@@ -1036,14 +1048,15 @@ as a whole number.
   table, and \ic{tail} the argument summary after the flags --- \ic{"[file...]"},
   say. Any \ic{Opt} with a non-empty \ic{help} makes \ic{--help} an ordinary flag
   rather than a special case.
-\item[\ic{args.parse()}] Read \ic{argv}: \ic{args.OK} when every flag was
-  understood, \ic{args.HELP} for \ic{--help}, and \ic{args.USAGE} for a usage
-  error --- after which \ic{args.errmsg()} says what was wrong and
-  \ic{args.print\_usage()} writes the usage text.
-\item[\ic{args.parse\_or\_exit()}] The same, but it prints the diagnostic and
-  exits \textbf{2} itself. A program wanting a different exit code calls
-  \ic{args.parse()} and decides --- which is why one example exits 1 on an unknown
-  flag rather than \ic{args}' own 2.
+\item[\ic{args.parse(toks)}] Read \ic{toks}, normally \ic{argv()}: \ic{args.OK} when
+  every flag was understood, \ic{args.HELP} for \ic{--help}, and \ic{args.USAGE}
+  for a usage error --- after which \ic{args.errmsg()} says what was wrong and
+  \ic{args.print\_usage()} writes the usage text. Entry 0 is the program
+  name and is skipped.
+\item[\ic{args.parse\_or\_exit(toks)}] The same, but it prints the
+  diagnostic and exits \textbf{2} itself. A program wanting a different exit code calls
+  \ic{args.parse(toks)} and decides --- which is why one example exits 1 on an
+  unknown flag rather than \ic{args}' own 2.
 \item[\ic{args.nopts()}] How many entries the table has, and
   \ic{args.positional()} the arguments that were not flags, as \ic{[str]}.
 \item[\ic{args.has(long)}] \ty{bool}, \ic{args.get\_str(long, default)} a
@@ -1092,7 +1105,7 @@ teardown. A self-test needing either is a program, not a check list.
 \label{sec:builtin-random}
 
 \ic{import random;} is one stream, and it is deliberately \emph{not}
-thread-local: \ic{random.state()} and \ic{random.set\_state()} are there so a caller needing a
+thread-local: \ic{random.state()} and \ic{random.set\_state(v)} are there so a caller needing a
 private stream can make one.
 
 \begin{description}[style=nextline,leftmargin=5.2em]
