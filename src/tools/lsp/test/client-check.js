@@ -306,6 +306,32 @@ function main() {
         });
         await settle();
 
+        // `range: true` makes a client send `textDocument/semanticTokens/range`,
+        // which is a DIFFERENT request from `/full` carrying a range. Advertising
+        // the capability without routing the method answers every viewport change
+        // with -32601, the client falls back to the whole document, and the 400KB
+        // response arrives anyway -- which reads as "the range had no effect".
+        // Asserted as a request because that is how a client learns it is refused.
+        const rangeAnswer = await request('textDocument/semanticTokens/range', {
+            textDocument: { uri: mainUri },
+            range: { start: { line: 0, character: 0 }, end: { line: 4, character: 0 } },
+        });
+        check(
+            'textDocument/semanticTokens/range is answered, not refused',
+            !!rangeAnswer && Array.isArray(rangeAnswer.data) && rangeAnswer.data.length > 0,
+            JSON.stringify(rangeAnswer).slice(0, 120),
+        );
+        const fullAnswer = await request('textDocument/semanticTokens/full', {
+            textDocument: { uri: mainUri },
+            range: { start: { line: 0, character: 0 }, end: { line: 4, character: 0 } },
+        });
+        check(
+            'the range method and /full-with-a-range give the same tokens',
+            !!rangeAnswer && !!fullAnswer && rangeAnswer.data.length === fullAnswer.data.length,
+            'range=' + (rangeAnswer ? rangeAnswer.data.length : null)
+                + ' full=' + (fullAnswer ? fullAnswer.data.length : null),
+        );
+
         const mine = diagnosticsFor(mainUri);
         check('didOpen: diagnostics arrived for the document', mine.length > 0, JSON.stringify(mine));
         check(

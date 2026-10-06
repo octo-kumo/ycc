@@ -89,7 +89,11 @@ def rng(from_line: long, to_line: long) -> json.Val {
 }
 
 def ask(st: State, id: long, p: json.Val) -> json.Val {
-    let raw = dispatch.doc_request(st, json.num(id), "textDocument/semanticTokens/full", serve.params_of(p));
+    ask_method(st, id, "textDocument/semanticTokens/full", p)
+}
+
+def ask_method(st: State, id: long, method: str, p: json.Val) -> json.Val {
+    let raw = dispatch.doc_request(st, json.num(id), method, serve.params_of(p));
     let got = json.parse(raw);
     let out = json.nul();
     if is_some(got) { out = json.jobj(got!); };
@@ -202,6 +206,40 @@ while (i < len(part)) {
 };
 print("every ranged token is in the whole-document answer: " + tostring(absent == 0));
 print("identical, not merely present: " + tostring(absent == 0));
+
+// ── the OTHER method ─────────────────────────────────────────────────────
+//
+// `range: true` is not "full, with an optional range". There are two methods --
+// `semanticTokens/full` and `semanticTokens/range` -- and advertising `range`
+// is what makes a client send the second one. Implementing only the first half and
+// not routing the method meant every viewport request answered `-32601
+// unsupported request`, the client fell back to the whole document, and the 400KB
+// response came back anyway. A real editor log showed it once per viewport change:
+//
+//     Request textDocument/semanticTokens/range failed.
+//       Message: unsupported request: textDocument/semanticTokens/range
+//
+// So the method is named here, not the parameter, and it must give the SAME answer
+// as /full carrying the same range -- one implementation behind two names.
+let by_range_method = decode(data_of(ask_method(st, 6, "textDocument/semanticTokens/range", rng(lo, hi))));
+print("semanticTokens/range is routed: " + tostring(len(by_range_method) == len(part)));
+print("and answers identically: " + tostring(len(by_range_method) > 0 && same(by_range_method[0], part[0])));
+
+// And the whole-document call with a range must still agree with it, since a
+// client that only knows /full is allowed to send the range as an argument.
+let same_shape = 0;
+let k2 = 0;
+while (k2 < len(by_range_method)) {
+    let j = 0;
+    let hit = false;
+    while (j < len(part)) {
+        if (same(by_range_method[k2], part[j])) { hit = true; j = len(part); } else { j = j + 1; };
+    };
+    if (hit) { same_shape = same_shape + 1; };
+    k2 = k2 + 1;
+};
+print("every token matches across both methods: "
+    + tostring(same_shape == len(by_range_method)));
 
 // A one-line range, because the edges are where a bounds mistake shows up.
 let one = decode(data_of(ask(st, 4, rng(hi, hi))));
