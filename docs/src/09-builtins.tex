@@ -514,11 +514,17 @@ computed by squaring).
     comparable size --- $e\log_{10}2$ beside $\ln(m)\log_{10}e$ --- so
     \ic{ln(m)}'s own error is not diluted, where in \ic{log2} the integer part is
     a thousand times the small one and no error in the small one can move the
-    rounding. Recorded in t322, which also carries two fixes that were tried
-    and \emph{disproved} by measurement --- compensating the add inside
-    $\ln(m)$ leaves all 379 exactly where they were and makes \ic{log2} one
-    argument worse, and so does capturing the division's own rounding, which
-    is what made the hunt for the cause harder than the arithmetic.
+    rounding --- and the measurement says something sharper than that. Swept by
+    binary exponent, all 62 arguments with a non-zero exponent are exact and the
+    failures sit entirely at exponent \emph{zero}, where the first term vanishes
+    and the answer is $\ln(m)\log_{10}e$ alone: 5 of 14 arguments in $[1,2)$ are
+    one ulp out. Four compensations left those five bit for bit unchanged, and the
+    fourth proves why --- the terms are exact to far below the last bit, so the
+    residual is the rounding of the final sum, which wants the pieces kept apart
+    in one accumulator rather than a fifth compensation. Recorded in t322 and
+    pinned by t327, which also carries the six \emph{non-negative} powers of ten
+    (exact integers) and why no negative one is: \ic{1e-323} is $2^{-1073}$, not
+    $10^{-323}$.
 
     What replaced it keeps \ic{log}'s reduction and scales the \emph{exact}
     integer part:
