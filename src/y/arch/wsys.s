@@ -1490,7 +1490,18 @@ yoa_acc_set:
       lea -16(%rbp), %r9
       mov $7, %rcx
       mov %rcx, 40(%rsp)
+# FILE_SYNCHRONOUS_IO_NONALERT (0x20) is required with SYNCHRONIZE; the other
+# half is FILE_NON_DIRECTORY_FILE (0x40) for an ordinary open, or
+# FILE_DIRECTORY_FILE (0x1) when the caller asked for a directory (Linux
+# O_DIRECTORY = 65536). y_os_stat's second attempt and fs.list_dir's open
+# arrive here that way; without this a stat of a directory always failed.
       mov $96, %rcx
+      mov %rbx, %rax
+      and $65536, %rax
+      cmp $0, %rax
+      je yoa_opt_set
+      mov $33, %rcx
+yoa_opt_set:
       mov %rcx, 48(%rsp)
       mov $51, %eax
       syscall
@@ -1532,6 +1543,12 @@ yoa_diag:
 # NULL offset (which is what y_os_read and y_os_write pass) is an error, and
 # the handle has no shared position for lseek to move.
       mov $96, %rax
+      mov %rbx, %rcx
+      and $65536, %rcx
+      cmp $0, %rcx
+      je yoa_copt_set
+      mov $33, %rax
+yoa_copt_set:
       mov %rax, 72(%rsp)
       mov $0, %rax
       mov %rax, 80(%rsp)
@@ -1548,6 +1565,101 @@ yoa_diag:
       mov %rbp, %rsp
       pop %rbp
       ret
+# y_os_stat(dirfd, path, len, out, flags) -> 0, or -1. Three NT calls: open
+# the path -- once as a FILE, once as a DIRECTORY, because NtOpenFile's options
+# admit one or the other and not both, and only the caller knows which it is
+# asking about -- ask FileStandardInformation for the size and the directory
+# bit, and close. fs.y reads st_mode at long 3 and st_size at long 6 (the Linux
+# struct stat's offsets), so this fills exactly those two: S_IFDIR|0755
+# (16877 = 0o40755) or S_IFREG|0644 (33188 = 0o100644), and EndOfFile.
+#=== replace: y_os_stat ===
+y_os_stat:
+    push %rbp
+    mov %rsp, %rbp
+    sub $128, %rsp
+# FIVE arguments, so param1 (dirfd) is at 48(%rbp) and the rest follow: path at
+# 40, len at 32, out at 24, flags at 16. (The first cut read them 8/16/24/32/40,
+# the FOUR-argument layout, so the path arrived as the dirfd and the flags as
+# the return address -- and nothing called a kernel at all.)
+    mov 48(%rbp), %rax
+    mov %rax, -8(%rbp)
+    mov 40(%rbp), %rax
+    mov %rax, -16(%rbp)
+    mov 32(%rbp), %rax
+    mov %rax, -24(%rbp)
+    mov 24(%rbp), %rax
+    mov %rax, -32(%rbp)
+    mov 16(%rbp), %rax
+    mov %rax, -40(%rbp)
+    mov -8(%rbp), %rax
+    push %rax
+    mov -16(%rbp), %rax
+    push %rax
+    mov -24(%rbp), %rax
+    push %rax
+    mov $524288, %rax
+    push %rax
+    mov $0, %rax
+    push %rax
+    call y_os_openat
+    add $40, %rsp
+    cmp $0, %rax
+    jge yostat_got
+    mov -8(%rbp), %rax
+    push %rax
+    mov -16(%rbp), %rax
+    push %rax
+    mov -24(%rbp), %rax
+    push %rax
+    mov $589824, %rax
+    push %rax
+    mov $0, %rax
+    push %rax
+    call y_os_openat
+    add $40, %rsp
+    cmp $0, %rax
+    jl yostat_fail
+yostat_got:
+    mov %rax, -48(%rbp)
+    mov -48(%rbp), %r10
+    lea -80(%rbp), %rdx
+    lea -112(%rbp), %r8
+    mov $24, %r9d
+    mov $5, 40(%rsp)
+    mov $17, %eax
+    syscall
+    test %eax, %eax
+    js yostat_qfail
+    mov -32(%rbp), %rcx
+    mov -104(%rbp), %rax
+    mov %rax, 48(%rcx)
+# FILE_STANDARD_INFORMATION: EndOfFile at +8, NumberOfLinks +16, DeletePending
+# +20, Directory +21 -- reading +20 reported every directory as a file.
+    movzbq -91(%rbp), %rax
+    cmp $0, %rax
+    je yostat_reg
+    mov $16877, %rax
+    jmp yostat_mode
+yostat_reg:
+    mov $33188, %rax
+yostat_mode:
+    mov -32(%rbp), %rcx
+    mov %rax, 24(%rcx)
+    mov -48(%rbp), %r10
+    mov $15, %eax
+    syscall
+    mov $0, %rax
+    jmp yostat_out
+yostat_qfail:
+    mov -48(%rbp), %r10
+    mov $15, %eax
+    syscall
+yostat_fail:
+    mov $-1, %rax
+yostat_out:
+    mov %rbp, %rsp
+    pop %rbp
+    ret
 # y_os_close(fd) -> 0, or -1. The other half of the shared close above.
 #=== replace: y_os_close ===
 # A POSIX close(2) returns 0 and leaves errno for the failure; NtClose answers

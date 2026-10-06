@@ -77,3 +77,30 @@ if grep -q 'runtime error: NT syscall self-test failed (a w_sysno number does no
     exit 1
 fi
 echo "pe-gate: ok"
+# 3. the file path, which the hello-world above cannot reach: open, read,
+#    write, append, seek, close and the stat half, with RELATIVE paths (the
+#    PEB's CurrentDirectory). `pe-fs.expected` is the same program's output on
+#    Linux, so a Windows-only divergence shows as a diff rather than as a
+#    number nobody checks. This is the regression test for the file-I/O bugs
+#    (the UTF-16 name, the NtOpenFile/NtCreateFile argument slots, the
+#    SYNCHRONIZE requirement, the handle and close conventions).
+FSSRC="$ROOT/test/sh/pe-fs.y"
+FSEXP="$ROOT/test/sh/pe-fs.expected"
+echo "pe-gate: $YCC --target=windows $FSSRC"
+if ! (cd "$ROOT" && "$YCC" --target=windows "$FSSRC" -o "$OUT/fs.exe"); then
+    echo "pe-gate: FAIL (the compiler refused the file-path program)"; exit 1
+fi
+( cd "$OUT" && rm -f peg_fs.txt; ulimit -v 3670016 2>/dev/null; WINEARCH=win64 WINEDEBUG=-all \
+    timeout 60 wine ./fs.exe >fs.out 2>fs.err )
+frc=$?
+if [ $frc -ne 0 ]; then
+    grep -v '^$' "$OUT/fs.err" | head -5 | sed 's/^/    ! /'
+    echo "pe-gate: FAIL (the file-path program exited $frc)"; exit 1
+fi
+if diff -u "$FSEXP" "$OUT/fs.out" >"$OUT/fs.diff"; then
+    echo "pe-gate: file path ok ($(wc -l <"$FSEXP") lines, PE == the Linux output)"
+else
+    sed 's/^/    /' "$OUT/fs.diff" | head -20
+    echo "pe-gate: FAIL (the PE's file-path output differs from the Linux one)"; exit 1
+fi
+rm -f "$OUT/peg_fs.txt"

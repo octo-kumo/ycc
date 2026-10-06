@@ -1717,15 +1717,29 @@ type PShake = { text: str, refs: [str] };
 // on one target only, and only in a program whose std units happen to call it:
 // the most expensive kind of bug to find and the easiest to make. A name in the
 // list with no block behind it is a compile error with a message naming it.
+// Every name in types.y's os_call_names must be a label of the arch lines this
+// target assembles. ONE pass: collect the column-0 labels, then look each name
+// up in them. The first cut was names x lines -- every name scanned every line
+// with a string compare -- and when y_os_stat made that 13 names over a
+// ~1900-line prelude it cost 2.59% of a small compile (bench-ir, hello.y) for a
+// check that runs once. The C copy did not have the check at all; PORTING.md
+// says it must, so it is here twice now.
 def check_os_call_names(lines: [str]) -> [str] {
+    let labels: [str] = [];
+    let j = 0;
+    while (j < len(lines)) {
+        let nm = arch_label_name(lines[j]);
+        if (nm != "") { labels += nm; };
+        j = j + 1;
+    };
     let names = types.os_call_names();
     let i = 0;
     while (i < len(names)) {
         let found = false;
-        let j = 0;
-        while (j < len(lines)) {
-            if (arch_label_is(lines[j], names[i])) { found = true; };
-            j = j + 1;
+        let k = 0;
+        while (k < len(labels)) {
+            if (labels[k] == names[i]) { found = true; };
+            k = k + 1;
         };
         if (!found) {
             puts("error: os_call_names lists '" + names[i]
@@ -1739,14 +1753,26 @@ def check_os_call_names(lines: [str]) -> [str] {
     lines
 };
 
-// A column-0 `name:` line. The arch module's own marker (arch_is_label_line)
-// is the same test; this is a second copy because native.y cannot reach into
-// arch_x64.y's non-exported defs, and a whole-line '#' comment has already
-// been dropped by then so there is nothing else to confuse it with.
-def arch_label_is(l: str, nm: str) -> bool {
-    if (len(l) < len(nm) + 1) { false }
-    else if (byte_at(l, len(l) - 1) != 58) { false }
-    else { l[0:len(nm)] == nm && (len(l) == len(nm) + 1 || byte_at(l, len(nm)) == 58) }
+// The name of a column-0 `label:` line and NOTHING else, or "" -- an indented
+// label (wsys.s has several), a line with data after the label
+// (`ystr_divzero: .ascii "..."`), and a line that does not end in a colon are
+// all "". The arch module's own marker (arch_is_label_line) is a different,
+// laxer test; native.y cannot reach into arch_x64.y's non-exported defs, and a
+// whole-line '#' comment has already been dropped by then.
+def arch_label_name(l: str) -> str {
+    if (len(l) < 2) { "" }
+    else if (byte_at(l, len(l) - 1) != 58) { "" }
+    else {
+        let nm = l[0:len(l) - 1];
+        let ok = true;
+        let i = 0;
+        while (i < len(nm)) {
+            let c = byte_at(nm, i);
+            if (c == c'_' || (c >= c'a' && c <= c'z') || (c >= c'A' && c <= c'Z') || (c >= c'0' && c <= c'9')) { } else { ok = false; };
+            i = i + 1;
+        };
+        if (ok) { nm } else { "" }
+    }
 };
 
 def prelude_blocks(lines: [str]) -> PBlocks {

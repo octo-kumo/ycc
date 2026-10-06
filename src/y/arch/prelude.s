@@ -1850,6 +1850,23 @@ y_os_openat:
     mov $257, %eax
     syscall
     ret
+# y_os_stat(dirfd, path, len, out, flags) -> 0, or -1. `out` is the caller's
+# struct-stat-sized buffer and this half lets newfstatat(2) fill it whole;
+# fs.y reads st_mode at long 3 and st_size at long 6, and the Windows half
+# synthesizes exactly those two fields, which is the contract (see wsys.s).
+# Frameless, five arguments: flags at 8(%rsp), out at 16, path at 32.
+y_os_stat:
+    mov 8(%rsp), %r10
+    mov 16(%rsp), %rdx
+    mov 32(%rsp), %rsi
+    mov 40(%rsp), %rdi
+    mov $262, %eax
+    syscall
+    test %rax, %rax
+    jns yostat_ret
+    mov $-1, %rax
+yostat_ret:
+    ret
 # y_os_close(fd) -> 0, or -1. One contract on both kernels: zero for success,
 # negative for failure, which is what fs.close_file's `== 0` asks for and what
 # close(2) already returns. NtClose answers an NTSTATUS instead, so the Windows

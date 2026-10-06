@@ -1,0 +1,15 @@
+w=true
+r=one
+
+a=true
+r2=one
+two
+
+exists=true
+file=true
+dir=false
+size=8
+opened=true
+seek=0
+close=true
+missing=false

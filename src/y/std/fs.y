@@ -176,7 +176,7 @@ def copy_file(from: str, to: str) -> bool {
 // which does not.
 def mode_of(path: str, flags: long) -> long {
     let st: [long; 18] = [0; 18];
-    if (syscall(262, fs_at_cwd(), path, &st[0], flags) != 0) { -1 } else { st[3] & 4294967295 }
+    if (os_call("y_os_stat", fs_at_cwd(), path, len(path), &st[0], flags) != 0) { -1 } else { st[3] & 4294967295 }
 };
 
 // The st_mode of path (stat follows a symlink), -1 when there is no such
@@ -196,7 +196,7 @@ def is_dir_itself(path: str) -> bool { (path_mode_itself(path) & 61440) == 16384
 // The size of path in bytes.
 def file_size(path: str) -> long? {
     let st: [long; 18] = [0; 18];
-    if (syscall(262, fs_at_cwd(), path, &st[0], 0) != 0) { none } else { some(st[6]) }
+    if (os_call("y_os_stat", fs_at_cwd(), path, len(path), &st[0], 0) != 0) { none } else { some(st[6]) }
 };
 
 def rename(from: str, to: str) -> bool { syscall(264, fs_at_cwd(), from, fs_at_cwd(), to) == 0 };

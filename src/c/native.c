@@ -64,6 +64,7 @@ Yv *arch_math_lines(void);
 Yv *w_self_test_lines(void);
 Yv *arch_consts(void);
 /* src/y/types.y */
+Yv *os_call_names(void);
 Yv *tstr(Yv *t);
 Yv *check_program(Yv *ast, Yv *ext);
 Yv *field_merge(Yv *fields, Yv *name, Yv *typ);
@@ -574,6 +575,8 @@ Yv *lit_decode(Yv *c);
 Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, ylong wlevel,
                  Yv *name, ylong base, Yv *xt, Yv *ogen);
 Yv *link_locs(Yv *body, ylong file);
+Yv *check_os_call_names(Yv *lines);
+Yv *arch_label_name(Yv *l);
 Yv *rodata_intern(Yv *pieces, Yv *allrod, Yv *refs);
 Yv *relabel_dups(Yv *body, Yv *m, Yv *dup_new);
 Yv *link_units(Yv *std, Yv *deps, Yv *prog);
@@ -13036,6 +13039,59 @@ Yv *link_locs(Yv *body, ylong off) {
    because labmap probes linearly and a full table makes every insert walk half
    the slots -- and ONE map for all the units' rodata, because five or six
    builds of a 40,000-entry set at load factor 1 cost 4% of a self-compile. */
+/* Every name in types.c's os_call_names must be a label of the arch lines this
+   target assembles. One pass, like native.y (see there for why). */
+Yv *arch_label_name(Yv *l) {
+    ylong n = yv_len(l);
+    if (n < 2) { return ys(""); }
+    if (ys_byte_at(l, n - 1) != ':') { return ys(""); }
+    Yv *nm = ys_slice(l, 0, n - 1);
+    ylong i = 0;
+    while (i < yv_len(nm)) {
+        ylong c = ys_byte_at(nm, i);
+        if (c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9')) {
+            ;
+        } else {
+            return ys("");
+        }
+        i = i + 1;
+    }
+    return nm;
+}
+
+Yv *check_os_call_names(Yv *lines) {
+    Yv *labels = yav(0);
+    ylong j = 0;
+    while (j < yv_len(lines)) {
+        Yv *nm = arch_label_name(ya_get(lines, j));
+        if (!ys_eq_lit(nm, "")) { labels = ya_push(labels, nm); }
+        j = j + 1;
+    }
+    Yv *names = os_call_names();
+    ylong i = 0;
+    while (i < yv_len(names)) {
+        Yv *nm = ya_get(names, i);
+        int found = 0;
+        ylong k = 0;
+        while (k < yv_len(labels)) {
+            if (ys_eq(ya_get(labels, k), nm)) { found = 1; }
+            k = k + 1;
+        }
+        if (!found) {
+            puts_(ys_cat(ys_cat(ys_cat(ys("error: os_call_names lists '"), nm),
+                                ys("', which the arch lines do not define (")),
+                         ys_cat(ys_cat(target_is_windows() ? ys("src/y/arch/wsys.s")
+                                                           : ys("src/y/arch/prelude.s"),
+                                       ys(")\n")),
+                                ys(""))));
+            exit_(1);
+        }
+        i = i + 1;
+    }
+    return lines;
+}
+
 Yv *rodata_intern(Yv *pieces, Yv *allrod, Yv *refs) {
     Yv *m = labmap_new(yv_len(refs) * 2 + 64);
     ylong ri = 0;
@@ -13327,7 +13383,7 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
     Yv *shaken = prune_bodies(labels, refs, extra);
     Yv *keep = yr_get(shaken, "keep");
     Yv *body_refs = yr_get(shaken, "refs");
-    Yv *core_lines = arch_prelude_lines();
+    Yv *core_lines = check_os_call_names(arch_prelude_lines());
     /* The Windows syscall self-test (arch/wselftest.s): no lines off Windows,
        and on Windows the _start prologue below calls the label it defines. It
        goes through the prelude so the shaker sees what it references. */

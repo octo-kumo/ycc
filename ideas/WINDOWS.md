@@ -879,6 +879,14 @@ reason this section exists:
   failure` to `1 PASS both targets, 0 PE-only`, and the ELF still prints the
   message and exits 1. The rule for every future `src/y/arch/*.s`: name a label,
   never a number.
+- **`native.c` never had `check_os_call_names`.** The Y copy verified that
+  every `os_call_names` entry is a label the target's arch lines define; the C
+  copy called `arch_prelude_lines()` alone, so a name with no body would have
+  been a silent undefined label on the C path. It is ported now (PORTING.md's
+  rule: same functions), and BOTH copies do it in ONE pass over the prelude
+  instead of one scan per name -- the old names x lines shape cost 2.59% of a
+  small compile (bench-ir, hello.y) once the list reached 13 names over a
+  ~1900-line prelude, which is what adding a named call had just made visible.
 - **The NT file path works now (B2, in progress).** `fs.open_file` /
   `read_some` / `write_text` / `close_file` / `seek` are `os_call`s into
   `wsys.s` and they now do the right Nt calls. Getting there meant fixing
@@ -905,10 +913,18 @@ reason this section exists:
   `RTL_USER_PROCESS_PARAMETERS.CurrentDirectory.DosPath` (a byte copy; it is
   already UTF-16 and already DOS), which is what the block's own comment had
   asked for and what kept every `fs` fixture PE-only.
-  **Still raw `syscall(` in `fs.y`**:
-  `path_mode`/`exists`/`file_size` (262), `list_dir` (217/257), `make_dir`
-  (258), `remove_file`/`remove_dir` (263), `rename` (264), `set_mode` (268),
-  `cwd` (79), `chdir` (80) -- the rest of the B2 slice.
+  `mode_of`/`exists`/`is_file`/`is_dir`/`file_size` now go through
+  `y_os_stat`: open the path (once as a FILE, once as a DIRECTORY -- the
+  `NtOpenFile` options admit one or the other, so `O_DIRECTORY` maps to
+  `FILE_DIRECTORY_FILE` there now), then `NtQueryInformationFile`
+  FileStandardInformation for `EndOfFile` (+8) and the `Directory` byte (+21,
+  not +20 -- that is `DeletePending`, and reading it called every directory a
+  file). `pe-gate.sh` now compiles and runs a second program
+  (`test/sh/pe-fs.y`) under wine and diffs its output against the same
+  program's Linux output, so the file path is a checked gate rather than a
+  manual test. **Still raw `syscall(` in `fs.y`**: `list_dir` (217/257),
+  `make_dir` (258), `remove_file`/`remove_dir` (263), `rename` (264),
+  `set_mode` (268), `cwd` (79), `chdir` (80) -- the rest of the B2 slice.
 - **`std/math.y` is not embedded, and that is correct.** Only the four packed units
   (`rt`, `prelude`, `exec`, `str`) are in `STD_EMBEDS`; `std/math.y` is spliced
   from source per target like `fs.y`/`net.y`, so the pack never carries it and
