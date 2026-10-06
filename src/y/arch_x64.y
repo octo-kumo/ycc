@@ -170,6 +170,42 @@ def w_iat_label(fn: str) -> str { "y_iat_" + fn };
 // entry plus that zero). One per DLL, named after it so two DLLs cannot share.
 def w_iat_term_label(dll: str) -> str { "y_iatz_" + dll };
 
+// The .bss block the Windows imports need: one 8-byte cell per imported
+// function, then one zeroed terminator per DLL, in w_imports()' order. It is
+// emitted as the FIRST thing in .bss, which is what makes each cell's offset a
+// constant (0, 8, 16, ...) rather than something the writer has to ask the
+// assembler's label map for -- and a wrong offset there is an image whose
+// FirstThunk points outside .bss, so the loader writes the resolved addresses
+// over whatever does live there.
+def w_iat_bss_lines() -> [str] {
+    let out: [str] = [];
+    let imps = w_imports();
+    let i = 0;
+    while (i < len(imps)) {
+        let f = 0;
+        while (f < len(imps[i].funcs)) {
+            out += w_iat_label(imps[i].funcs[f]) + ":\n.zero 8\n";
+            f = f + 1;
+        };
+        out += w_iat_term_label(imps[i].dll) + ":\n.zero 8\n";
+        i = i + 1;
+    };
+    out
+};
+
+// The .bss offset of function `f` of DLL index `d`: the block above is first in
+// the section, so this is arithmetic on the spec rather than a lookup.
+def w_iat_offset(d: long, f: long) -> long {
+    let imps = w_imports();
+    let at = 0;
+    let i = 0;
+    while (i < d) {
+        at = at + 8 * (len(imps[i].funcs) + 1);
+        i = i + 1;
+    };
+    at + 8 * f
+};
+
 def arch_bss() -> str {
     ".section .bss\n"
 };
@@ -479,4 +515,4 @@ def arch_consts() -> str {
     ], "\n") + "\n"
 };
 
-export { WImport, w_imports, w_iat_label, w_iat_term_label, arch_id, arch_word, arch_sysno, arch_fn_label, arch_global_label, arch_loc_label, arch_str_label, arch_header, arch_rodata, arch_text, arch_bss, arch_global_cell, arch_heap_cells, arch_prelude_lines, arch_prelude_threads_lines, arch_math_lines, w_self_test_lines, arch_consts, arch_frame, arch_exit };
+export { WImport, w_imports, w_iat_label, w_iat_term_label, w_iat_bss_lines, w_iat_offset, arch_id, arch_word, arch_sysno, arch_fn_label, arch_global_label, arch_loc_label, arch_str_label, arch_header, arch_rodata, arch_text, arch_bss, arch_global_cell, arch_heap_cells, arch_prelude_lines, arch_prelude_threads_lines, arch_math_lines, w_self_test_lines, arch_consts, arch_frame, arch_exit };

@@ -132,6 +132,23 @@ if ! objdump -p "$OUT/imp.exe" 2>/dev/null | grep -q 'BCryptGenRandom'; then
     echo "pe-gate: FAIL (the PE does not import BCryptGenRandom)"; exit 1
 fi
 echo "pe-gate: import table ok (KERNEL32.dll!GetCurrentProcessId, bcrypt.dll!BCryptGenRandom)"
+# The IAT must be the .bss block the CODE calls through, not the copy inside
+# .idata: the loader writes the resolved addresses there, and an image whose
+# FirstThunk points at the .idata copy leaves the code calling through a cell
+# nobody filled. The .bss block is the first thing in the section and its
+# offsets are fixed by the import list, so FirstThunk is exactly .bss's RVA.
+fts=$(objdump -p "$OUT/imp.exe" 2>/dev/null | awk '/Thunk/{getline; print $NF; exit}')
+# objdump -h prints the VMA; FirstThunk is an RVA, and the image base is
+# 0x140000000, so the RVA is the low eight hex digits.
+bssva=$(objdump -h "$OUT/imp.exe" 2>/dev/null | awk '$2==".bss"{print $4; exit}')
+bss=${bssva: -8}
+if [ -z "$fts" ] || [ -z "$bss" ]; then
+    echo "pe-gate: FAIL (no FirstThunk or no .bss to compare)"; exit 1
+fi
+if [ $((16#$fts)) -ne $((16#$bss)) ]; then
+    echo "pe-gate: FAIL (FirstThunk $fts is not .bss $bss -- the IAT is not the cell block)"; exit 1
+fi
+echo "pe-gate: IAT at .bss $bss ok"
 # A -g PE must carry its debug sections WITH their bytes: pe_build used to look
 # up the section records it built rather than the placed ones, so every
 # .debug_* of a PE was written from file offset 0 with SizeOfRawData 0 -- an

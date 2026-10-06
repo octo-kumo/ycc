@@ -11876,9 +11876,20 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
     // .bss: the allocator's cells when the kept prelude still uses
     // them, then one cell per global.
     let heap_text = shake_refs(arch.arch_heap_cells(), const_refs);
-    if (len(gls) > 0 || len(heap_text) > 0) {
+    if (len(gls) > 0 || len(heap_text) > 0 || target_is_windows()) {
         let gpieces: [str] = [];
         gpieces += arch.arch_bss();
+        // The Windows import cells come FIRST in .bss, so their offsets are
+        // 0, 8, 16, ... in the import table's order and the PE writer computes
+        // FirstThunk from the spec rather than asking the assembler's label
+        // map. That matters: an offset that is merely WRONG (rather than
+        // obviously absent) makes the loader write the resolved addresses over
+        // whatever is at that address instead -- .pdata, or code.
+        if (target_is_windows()) {
+            let wl = arch.w_iat_bss_lines();
+            let wj = 0;
+            while (wj < len(wl)) { gpieces += wl[wj]; wj = wj + 1; };
+        };
         gpieces += heap_text;
         let gk = 0;
         while (gk < len(gls)) {

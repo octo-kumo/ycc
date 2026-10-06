@@ -146,8 +146,26 @@ branch-disjointness false positive.
   `WImport` directly -- `src/y` must compile without one.)
   **What is left for BCrypt is one piece, and it has to land as one piece**,
   because the cells are inert until something references them:
-  **The plumbing for (1) and (2) was built, measured, and REVERTED -- and that
-  negative result is the finding.** Two things it established:
+  **The plumbing is now IN and verified, and the crash that forced round 34's
+  revert is fixed.** The difference is where the cells live: they are no longer
+  appended to the globals list (where their `.bss` offsets had to be asked of
+  the assembler's label map, and came back wrong for a program with std units --
+  the fallback left the code pointing at an unfilled cell while the loader wrote
+  the resolved addresses somewhere else, which is what a PE dying in its own
+  startup self-test looks like). `w_iat_bss_lines()` emits them as the FIRST
+  thing in `.bss`, so a cell's offset is arithmetic on the import list
+  (`w_iat_offset(d, f)` = 0, 8, 16, ...) and the writer, the assembler and the
+  loader agree by construction. Measured: `FirstThunk` equals `.bss`'s RVA for
+  both a one-function program and `test/sh/pe-fs.y`, which imports std units and
+  now runs correctly under wine. `pe-gate.sh` asserts that equality.
+  **The BCrypt body itself is still ENOSYS**, with every finding from the
+  attempt recorded in `wsys.s` next to it, and ONE open question:
+  `BCryptOpenAlgorithmProvider` returned 0 (success) while the slot it was
+  handed stayed unwritten, and the next call faulted on a handle of -1 -- which
+  says the call that ran was not the function the label names. So the next step
+  is to prove or disprove that the cells and the offsets agree (dump the cell's
+  contents, or the address objdump resolves) before rewriting the body.
+  Round 34's two observations, for the record:
   * the CALL PATH WORKS: the linker reserved the cells, `asm.y` resolved each
     one's `.bss` offset from its label map, `FirstThunk` became `.bss` + that
     offset (measured 00002030 and 00002040 for a program with no imports of its
@@ -201,6 +219,24 @@ branch-disjointness false positive.
   build and `cycc-win.sh` deliberately does not compare `-g` across hosts, so
   this divergence has been invisible. It is a real port-gate hole: a `-g` PE
   case belongs in `cycc-win.sh` once the C path works.
+
+- **`pe-gate.sh` cannot pass on this machine right now, and it is NOT the
+  tree.** Its file-path program (and every PE, at startup) dies in the W3
+  self-test with
+
+      wine: Call from 0000000140001A9B to unimplemented function
+      ntdll.NtMapUserPhysicalPagesScatter, aborting
+
+  which is the self-test doing exactly what it was built for: it calls one Nt
+  function per class to prove the pinned `w_sysno` numbers, and this wine's
+  ntdll does not implement that one. Proven environmental by rebuilding the
+  file-path program with `refs/ycc.ref` -- the ROUND-33 reference, before any
+  of the import work -- which crashes at the same address 0000000140001A9B.
+  The gate passed in rounds 31--33 on this same host, so something outside the
+  repository (a wine update, or the prefix the `winetricks` experiment left
+  behind) changed between then and now. It is worth fixing before the next PE
+  work: either the pinned number is stale for this ntdll or wine regressed, and
+  the self-test is the only thing that can tell us which.
 
 ### Yet to do
 

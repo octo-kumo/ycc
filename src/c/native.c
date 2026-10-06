@@ -22,6 +22,7 @@
 #include <unistd.h>
 #include "ir.h"
 #include "native.h"
+#include "arch_x64.h"
 
 #include "lexer.h"
 #include "meta.h"
@@ -13850,9 +13851,23 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
     parts = ya_push(parts, part_text(ys_cat(arch_rodata(), consts_text)));
     parts = ya_push(parts, part_text(ys_join(rodpieces, ys(""))));
     Yv *heap_text = shake_refs(arch_heap_cells(), const_refs);
-    if (yv_len(gls) > 0 || yv_len(heap_text) > 0) {
+    if (yv_len(gls) > 0 || yv_len(heap_text) > 0 || target_is_windows()) {
         Yv *gpieces = yav(0);
         gpieces = ya_push(gpieces, arch_bss());
+        /* The Windows import cells come FIRST in .bss, so their offsets are
+           0, 8, 16, ... in the import table's order and the PE writer computes
+           FirstThunk from the spec rather than asking the assembler's label
+           map. That matters: an offset that is merely WRONG (rather than
+           obviously absent) makes the loader write the resolved addresses over
+           whatever is at that address instead -- .pdata, or code. */
+        if (target_is_windows()) {
+            Yv *wl = w_iat_bss_lines();
+            ylong wj = 0;
+            while (wj < yv_len(wl)) {
+                gpieces = ya_push(gpieces, ya_get(wl, wj));
+                wj = wj + 1;
+            }
+        }
         gpieces = ya_push(gpieces, heap_text);
         ylong gk = 0;
         while (gk < yv_len(gls)) {

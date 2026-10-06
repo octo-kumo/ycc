@@ -27,6 +27,8 @@ Yv *arch_global_cell(Yv *label);
 Yv *w_imports(void);
 Yv *w_iat_label(Yv *fn);
 Yv *w_iat_term_label(Yv *dll);
+Yv *w_iat_bss_lines(void);
+ylong w_iat_offset(ylong d, ylong f);
 Yv *arch_heap_cells(void);
 Yv *arch_prelude_lines(void);
 Yv *arch_prelude_threads_lines(void);

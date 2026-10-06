@@ -245,7 +245,7 @@ def pe_put_str(b: [byte], at: long, s: str) -> void {
 // headers depend on it) and the RVAs are not known until after, which is why
 // this is called twice. Every pointer is an RVA, which survives wherever the
 // image loads, and that is what lets the image stay RELOCS_STRIPPED.
-def pe_import_bytes(spec: [WImport], rva: long) -> [byte] {
+def pe_import_bytes(spec: [WImport], rva: long, bss_rva: long) -> [byte] {
     let nd = len(spec);
     let descs = 20 * (nd + 1);
     // One ILT and one IAT per DLL, in DLL order.
@@ -295,7 +295,11 @@ def pe_import_bytes(spec: [WImport], rva: long) -> [byte] {
         let d = 20 * i;
         pe_put32(out, d, rva + ilt[i]);         // OriginalFirstThunk
         pe_put32(out, d + 12, rva + noff[i]);   // Name
-        pe_put32(out, d + 16, rva + iat[i]);    // FirstThunk
+        // FirstThunk is where the loader WRITES the resolved addresses: the
+        // .bss cells w_iat_offset names (the block that starts .bss, so the
+        // code's `mov y_iat_X(%rip), %rax` and this agree by construction),
+        // with a zeroed terminator cell after each DLL's functions.
+        pe_put32(out, d + 16, bss_rva + arch.w_iat_offset(i, 0));
         let k = 0;
         while (k < len(spec[i].funcs)) {
             pe_put64(out, ilt[i] + 8 * k, rva + hoff[i][k]);
@@ -322,9 +326,9 @@ def pe_build(code: [byte], rodata: [byte], entry_off: long, bss_len: long, pdata
     while (di < len(dsecs)) { dsecs2 += dsecs[di]; ddata2 += ddata[di]; di = di + 1; };
     let imp_sz = 0;
     if (len(imp) > 0) {
-        imp_sz = len(pe_import_bytes(imp, 0));
+        imp_sz = len(pe_import_bytes(imp, 0, 0));
         dsecs2 += pe_sec(".idata", imp_sz, 0, 0, PE_CH_RW);
-        ddata2 += pe_import_bytes(imp, 0);
+        ddata2 += pe_import_bytes(imp, 0, 0);
     };
     let secs = pe_sections(textlen, bss_len, pdata, xdata, dsecs2);
     // A RUNTIME_FUNCTION's UnwindData is an RVA, and the .xdata section's
@@ -336,10 +340,11 @@ def pe_build(code: [byte], rodata: [byte], entry_off: long, bss_len: long, pdata
     let pdata2 = pe_fix_pdata(pdata, pe_find(secs, ".xdata").rva);
     if (imp_sz > 0) {
         let idr = pe_find(secs, ".idata").rva;
+        let bss_rva = pe_find(secs, ".bss").rva;
         let dj = 0;
         while (dj < len(dsecs2)) {
             if (dsecs2[dj].name == ".idata") {
-                ddata2[dj] = pe_import_bytes(imp, idr);
+                ddata2[dj] = pe_import_bytes(imp, idr, bss_rva);
             };
             dj = dj + 1;
         };

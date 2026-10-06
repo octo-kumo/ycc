@@ -440,7 +440,7 @@ static void pe_put_str(Yv *b, ylong at, Yv *s) {
    headers depend on it) and the RVAs are not known until after, which is why
    this is called twice. Every pointer is an RVA, which survives wherever the
    image loads, and that is what lets the image stay RELOCS_STRIPPED. */
-static Yv *pe_import_bytes(Yv *spec, ylong rva) {
+static Yv *pe_import_bytes(Yv *spec, ylong rva, ylong bss_rva) {
     ylong nd = yv_len(spec);
     ylong descs = 20 * (nd + 1);
     Yv *ilt = yav(0);
@@ -491,7 +491,11 @@ static Yv *pe_import_bytes(Yv *spec, ylong rva) {
         Yv *row = ya_get(hoff, i);
         pe_put32(out, d, rva + yv_l(ya_get(ilt, i)));
         pe_put32(out, d + 12, rva + yv_l(ya_get(noff, i)));
-        pe_put32(out, d + 16, rva + yv_l(ya_get(iat, i)));
+        /* FirstThunk is where the loader WRITES the resolved addresses: the
+           .bss cells w_iat_offset names (the block that starts .bss, so the
+           code's `mov y_iat_X(%rip), %rax` and this agree by construction),
+           with a zeroed terminator cell after each DLL's functions. */
+        pe_put32(out, d + 16, bss_rva + w_iat_offset(i, 0));
         ylong k = 0;
         while (k < yv_len(fs)) {
             pe_put64(out, yv_l(ya_get(ilt, i)) + 8 * k, rva + yv_l(ya_get(row, k)));
@@ -523,9 +527,9 @@ Yv *pe_build(Yv *code, Yv *rodata, ylong entry_off, ylong bss_len, Yv *pdata,
     }
     ylong imp_sz = 0;
     if (yv_len(imp) > 0) {
-        imp_sz = yv_len(pe_import_bytes(imp, 0));
+        imp_sz = yv_len(pe_import_bytes(imp, 0, 0));
         dsecs2 = ya_push(dsecs2, pe_sec(ys(".idata"), imp_sz, 0, 0, PE_CH_RW));
-        ddata2 = ya_push(ddata2, pe_import_bytes(imp, 0));
+        ddata2 = ya_push(ddata2, pe_import_bytes(imp, 0, 0));
     }
     Yv *secs = pe_sections(textlen, bss_len, pdata, xdata, dsecs2);
     /* A RUNTIME_FUNCTION's UnwindData is an RVA, and the .xdata section's
@@ -537,10 +541,11 @@ Yv *pe_build(Yv *code, Yv *rodata, ylong entry_off, ylong bss_len, Yv *pdata,
     Yv *pdata2 = pe_fix_pdata(pdata, yv_l(yr_get(pe_find(secs, ys(".xdata")), "rva")));
     if (imp_sz > 0) {
         ylong idr = yv_l(yr_get(pe_find(secs, ys(".idata")), "rva"));
+        ylong bss_rva = yv_l(yr_get(pe_find(secs, ys(".bss")), "rva"));
         ylong dj = 0;
         while (dj < yv_len(dsecs2)) {
             if (ys_eq_lit(yr_get(ya_get(dsecs2, dj), "name"), ".idata")) {
-                ya_set(ddata2, dj, pe_import_bytes(imp, idr));
+                ya_set(ddata2, dj, pe_import_bytes(imp, idr, bss_rva));
             }
             dj = dj + 1;
         }

@@ -166,6 +166,45 @@ Yv *arch_text(void) {
 }
 
 /* One zeroed 8-byte cell per global (see emit_program in native.y). */
+/* The .bss block the Windows imports need: one 8-byte cell per imported
+   function, then one zeroed terminator per DLL, in w_imports()' order. It is
+   emitted as the FIRST thing in .bss, which is what makes each cell's offset a
+   constant (0, 8, 16, ...) rather than something the writer has to ask the
+   assembler's label map for -- and a wrong offset there is an image whose
+   FirstThunk points outside .bss, so the loader writes the resolved addresses
+   over whatever does live there. */
+Yv *w_iat_bss_lines(void) {
+    Yv *out = yav(0);
+    Yv *imps = w_imports();
+    ylong i = 0;
+    while (i < yv_len(imps)) {
+        Yv *funcs = yr_get(ya_get(imps, i), "funcs");
+        ylong f = 0;
+        while (f < yv_len(funcs)) {
+            out = ya_push(out, ys_cat(ys_cat(w_iat_label(ya_get(funcs, f)),
+                                             ys(":\n.zero 8\n")), ys("")));
+            f = f + 1;
+        }
+        out = ya_push(out, ys_cat(w_iat_term_label(yr_get(ya_get(imps, i), "dll")),
+                                  ys(":\n.zero 8\n")));
+        i = i + 1;
+    }
+    return out;
+}
+
+/* The .bss offset of function `f` of DLL index `d`: the block above is first in
+   the section, so this is arithmetic on the spec rather than a lookup. */
+ylong w_iat_offset(ylong d, ylong f) {
+    Yv *imps = w_imports();
+    ylong at = 0;
+    ylong i = 0;
+    while (i < d) {
+        at = at + 8 * (yv_len(yr_get(ya_get(imps, i), "funcs")) + 1);
+        i = i + 1;
+    }
+    return at + 8 * f;
+}
+
 Yv *arch_bss(void) {
     return ys(".section .bss\n");
 }
