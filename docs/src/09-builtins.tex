@@ -932,6 +932,16 @@ frame clock and the frame meter.
 \item[\ic{tui.read\_key()}] The next key, decoded: arrows, function keys,
   \ic{Esc}, \ic{Ctrl-C} and the rest as their own constants, printable keys as
   their code point, and \ic{KEY\_NONE} when nothing is waiting.
+  The constants are in this module, \ic{KEY\_NONE} at $-1$ for nothing
+  waiting --- also what \ic{tui.read\_key\_timeout} and \ic{tui.pop\_key()} answer --- and
+  then twenty-four specials, contiguous from 4096 to 4119:
+  \ic{KEY\_ESC}, \ic{KEY\_UNKNOWN}, \ic{KEY\_UP}, \ic{KEY\_DOWN},
+  \ic{KEY\_RIGHT}, \ic{KEY\_LEFT}, \ic{KEY\_HOME}, \ic{KEY\_END},
+  \ic{KEY\_PGUP}, \ic{KEY\_PGDN}, \ic{KEY\_INSERT}, \ic{KEY\_DELETE}, and
+  \ic{KEY\_F1} through \ic{KEY\_F12}. Every one of them sits at or
+  above 4096, where a key press cannot deliver a character --- a key arrives as
+  one byte or as a decoded escape sequence --- so a value in that range is a
+  named special and not a code point.
 \item[\ic{tui.read\_key\_timeout(ms)}] The same, but it gives up after \ic{ms} and
   answers \ic{KEY\_NONE}. Note the unit --- the code is \ic{let ds = (ms + 99) /
   100;} because \ic{VTIME} counts \emph{deciseconds}, so a request under 10 ms
