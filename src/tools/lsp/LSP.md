@@ -2109,8 +2109,11 @@ found by running something rather than by reading it.
    blank line between an `import` and a `def` returned the function's own
    signature. The first fixture had no imports, and the offset is 0 for those, so
    it passed; `client-check.js`, whose buffer does import, is what caught it. The
-   map is now two line counts — `spliced - buffer + k` for every line at or after
-   the first non-import line, and 0 before it (`xref.own_lines`).
+   map was then rebuilt as two line counts — `spliced - buffer + k` for every line
+   at or after the first non-import line, and 0 before it — which was itself wrong
+   in the next way: it holds only when the imports are the file's **very first**
+   lines. A header comment above them makes "first non-import line" line 1, and
+   every line after the imports then maps to the wrong spliced line. See §11.9.
 3. **A completion list after a `.` offered `print`.** The member branch set a flag
    and the name branch tested it, so a `str` — whose fields are none, so the flag
    stayed false — got the string methods *and* every name in scope: 77 items where
@@ -2352,41 +2355,138 @@ different shapes.
 definition **and** that the hover carries `helper(n: long) -> long`, since a type
 alone is what the report was.
 
-### 11.8 A compiler bug this found, and did not fix
+### 11.8 The compiler bug the first report found, and the second fixed
 
 `asm.y` also shows errors that are not real: `undefined variable 'O_REG'` and 31
-more. **They are the compiler's own.** `./ycc src/y/asm.y` reports the same class
-from the command line:
+more. **They were the compiler's own.** `./ycc src/y/asm.y` reported the same
+class from the command line:
 
 ```
 80:1: error: duplicate definition 'is_digit_ch': src/y/asm.y:80 defines it too
 ```
 
-and `type 'AsmLabel' is declared more than once`, which `ycc ycc.y` has never said.
-The cause is `native.resolve_unit`: `native_resolve_seen` de-duplicates spliced
-modules through a `seen` list, and **`seen` starts empty — the program itself is
-never in it**. `asm.y` imports `ir.y`, and `ir.y` imports `asm.y` back, which is
-legal (they are separate units) and which put asm.y into the flat splice **twice**:
-1878 lines as the program and 1879 again as `ir.y`'s import. Every declaration then
-existed twice and every member reference lost its namespace.
+and `type 'AsmLabel' is declared more than once`, which `ycc ycc.y` has never
+said. The cause was in `native.resolve_unit`: `native_resolve_seen`
+de-duplicates spliced modules through a `seen` list, and **the program itself
+was never in it**. `asm.y` imports `ir.y`, and `ir.y` imports `asm.y` back,
+which is legal — they are separate units, and a unit may be imported by more
+than one — so asm.y landed in the flat splice **twice**: 1878 lines as the
+program and 1879 again as `ir.y`'s import. Every declaration then existed twice,
+and every module-member reference lost its namespace (`strip_ns` had nothing to
+strip, since the second copy carried no `insn` import).
 
-asm.y is never compiled on its own in practice — it is a unit of `ycc.y` — so
-nothing caught it until the language server checked the file a user had open.
+asm.y is never compiled on its own — it is a unit of `ycc.y` — so nothing caught
+it until the language server checked the file a user had open.
 
-The fix is to seed `seen` with the normalised program path before the walk. **It is
-written, it works for the case it targets, and it is not landed**: seeding shifts
-every nested module's file id by one, and `origin.file` then mis-attributed whole
-modules — `ycc src/y/ycc.y` and `ycc examples/bignum/bignum.y` both stopped
-compiling, with `bn.y` contributing zero lines at file id 1 and its content
-attributed to ids past the end of `files`. That off-by-one was not isolated before
-the change was reverted, and shipping a change that stops the compiler compiling
-itself is a far worse trade than a documented limitation.
+**The first attempt did not work, and why is the interesting part.** The obvious
+fix is to seed `seen` with the program's own path. It makes `ycc src/y/asm.y`
+clean and it stops the duplicate splice — and it breaks the compiler. `seen` is
+*also* the file-id counter: a nested call is handed `len(seen)` as its file id,
+and `origin.file` is parallel to it. Seeding `seen` therefore shifted every
+module's id by one, and the origin map then mis-attributed whole files —
+`bn.y` contributed zero lines at id 1 while its text landed past the end of
+`files`, and both `ycc src/y/ycc.y` and `ycc examples/bignum/bignum.y` stopped
+compiling with `undefined function 'bn.bn_eq_dec'` reported in `src/y/std/fs.y`.
+That change was reverted.
 
-Until it is fixed, **`src/y/asm.y` cannot be opened in the editor without 32 false
-errors** — and they are now at the right lines, so what the editor shows is
-exactly what `ycc src/y/asm.y` prints. That is the honest state: the server is
-faithful and the compiler is wrong, which is the opposite of the shape §11.5 and
-§11.6 kept finding. It also makes hover and completion on a **parameter used as a
-member's object** (`it.fix`, `it.`) answer nothing *in that file only* — the same
-code in a file with no back-import works, which `t020`-shaped minimal cases and
-the fixtures both show.
+The fix that works passes the program's normalised path down as a **separate
+`self_path` parameter**, consulted beside `seen` rather than inside it. It costs
+one string comparison per import and shifts nothing:
+
+```
+} else if (seen_has(seen, full) || (self_path != "" && full == self_path)) {
+```
+
+The normalised spelling is what makes it match: `ycc src/y/asm.y` passes
+`src/y/asm.y`, and `std_resolve("./asm.y", "src/y")` answers `src/y/asm.y`
+after dropping the `.` — comparing the raw argv would never match.
+
+The de-duplicated branch still records the namespace name, because a module
+reaching the program by name keeps its qualifier and `strip_ns` has to flatten
+it — the same as for any other already-spliced module.
+
+**What the user sees changed as a consequence.** Hover on a parameter used as a
+member's object (`it.fix`, and `it.` completion) answers nothing *in asm.y*,
+because the checker was looking at a tree where `ir.y`'s names did not exist. The
+identical code in a file with no back-import hovers
+`{ sec: long, fix: [long], br: long }` and completes `fix`. With the fix, asm.y
+has **zero** diagnostics, and both work there too.
+
+`test/y/native/t316_circ_import.y` and the module it imports back are the
+regression test, compiled by the port gate from **both** ends — as the program,
+where the cycle reaches `self_path`, and as the module, where it reaches `seen`.
+It fails on the previous compiler (`duplicate definition 'VALUE'`) and passes
+now. One property of the splice had to be designed around, and is worth knowing:
+a module can name a `def` of the program wherever that `def` sits, but a
+top-level `let` only if it came *earlier* in the file, because the splice is a
+flat text and the module's lines land where the import line was.
+
+### 11.9 A right type, asked for at the wrong line
+
+> "i hover over it: AsmItem and i dont get the type. also it. (no auto complete)"
+
+The hover returned `null` and `it.` offered **string methods** — `split`, `trim`,
+`pad_left`. Not "no answer": the wrong answer, from somewhere else in the file.
+§11.8's fix cleared the diagnostics; this was underneath it and independent.
+
+Every type hover is `expr_type(line, col)`, and the checker indexed that at the
+**spliced** line. The server has a buffer line, so it translates — `xref.own_lines`
+maps each buffer line to the spliced line it became. The map was a constant shift:
+
+```
+mine[k] = spliced_lines - buffer_lines + k        for every k at or after the
+                                                    first non-import line
+```
+
+which assumes the file's own text is spliced as one contiguous **suffix**. That
+holds only when the imports are the file's very first lines. `src/y/asm.y` opens
+with a sixteen-line header comment, and a comment is not an import, so
+`first_own_line` answered 1, the shift was applied from line 1, and every line
+after the imports pointed at the wrong spliced line:
+
+| | |
+|---|---|
+| `mine[1623]` — the shift's answer | 4283 |
+| the truth: the program's own text starts at spliced 2743 | 4365 |
+
+82 lines high. `expr_type` was asked about a different expression, and the answer
+came back confidently — which is why it read as a *type* bug rather than a
+position bug, and why the fixture had to pin the map itself.
+
+**Nothing else in the file looked wrong**, and that is the part worth recording.
+A declaration site — `c: byte` at its parameter — is answered from the buffer's
+own single-file index (`nav`), never touching the type table. So the shallow
+hovers in asm.y worked, the ones that need the checker did not, and a spot check
+of the first few hundred lines said the file was fine. The failure needs a file
+whose header precedes its imports — which is how people write files.
+
+`own_lines` now inverts the origin map instead, which has no such assumption:
+per spliced line it records the file it came from and the line it was in, file id
+0 is the program by construction, and `origin.line[i]` **is** the buffer line:
+
+```
+if (o.file[i - 1] == 0) {
+    let ln = o.line[i - 1];
+    if (ln >= 1 && ln <= buffer_lines) { out[ln] = i; };
+};
+```
+
+One walk, and it also gets the two off-by-ones the shift could not: the origin map
+still holds an entry for an import statement's own *replaced* line (whose recorded
+buffer line is real, so it maps to itself), and there is no dependence on which side
+counted the trailing newline.
+
+`first_own_line` is deleted — it existed only to feed the shift.
+
+`t021_ownlines` is the fixture: three comment lines, an import, a record parameter
+used as a member's object. It checks the map through `xref_for` as well as through
+the editor, because the editor's symptom is indirect — a bad map shows up as a bad
+type, and a test that only reads types cannot tell the two apart. Its columns come
+from `past(SRC, needle)`, never written by hand: a hand-written column one word
+early answers about a different identifier and passes for the wrong reason, which
+is the mistake this fixture exists to make impossible (and which I made twice
+while writing the sibling test for §11.7.4).
+
+In `src/y/asm.y`, after: hover on `it` gives `AsmItem` in full, `it.` completes
+`sec, off, len, kind, bytes, fix, br`, hover on `st` gives `AsmSt` and `st.`
+completes `sec, offs, items, labels, err, lno`.

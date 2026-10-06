@@ -181,7 +181,7 @@ int seen_has(Yv *seen, Yv *full);
 Yv *dir_of(Yv *p);
 Yv *std_resolve(Yv *name, Yv *base_dir);
 Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen,
-                        Yv *smods, long fid);
+                        Yv *smods, long fid, Yv *self_path);
 int is_embed_decl(Yv *trimmed);
 Yv *embed_decl(Yv *trimmed, Yv *base_dir);
 Yv *quote_text(Yv *s);
@@ -634,10 +634,27 @@ Yv *native_resolve_pk(Yv *src, Yv *base_dir, int allow_exec, Yv *root,
 Yv *resolve_unit(Yv *src, Yv *base_dir, long depth, int allow_exec,
                  Yv *root) {
     res_used = yav(0);
+    /* The program itself is de-duplicated by `self_path` and NOT by putting it in
+     * `seen`. `seen` is also the file-id counter -- a nested call is handed
+     * `len(seen)` -- so seeding it would shift every module's id in
+     * `origin.file` by one and mis-attribute whole files. It was done that way
+     * first and `origin.file` then gave `bn.y` zero lines at id 1 while its text
+     * landed past the end of `files`, which stopped ycc.y and bignum.y compiling.
+     * `self_path` costs one string comparison per import and shifts nothing.
+     *
+     * Normalised, because the comparison is against what `std_resolve` returns and
+     * that is `norm_path`ed: `ycc src/y/asm.y` passes `src/y/asm.y`, and
+     * `std_resolve("./asm.y", "src/y")` answers `src/y/asm.y` after dropping the
+     * `.`. Comparing the raw spelling would simply never match. */
+    Yv *self_path = ys("");
+    if (!ys_eq(root, ys(""))) {
+        self_path = norm_path(root);
+    }
     /* NOTE: seen-threading wrapper (see native_resolve_seen): asm.y imports
      * enc64 as `enc` AND elf.y imports enc64 as `elfenc`; without dedup the
      * encoder splices twice and every enc64 def collides (find_dup). */
-    Yv *r = native_resolve_seen(src, base_dir, depth, yav(0), yav(0), 0);
+    Yv *r = native_resolve_seen(src, base_dir, depth, yav(0), yav(0), 0,
+                                self_path);
     Yv *rsrc = ys_join(yr_get(r, "lines"), ys("\n"));
     Yv *rimports = yr_get(r, "imports");
     Yv *files = yav(1, root);
@@ -1176,7 +1193,7 @@ Yv *std_resolve(Yv *name, Yv *base_dir) {
  * above native_resolve), and smods[k] is the module seen[k] was imported
  * as by name ("" by path). */
 Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen,
-                        Yv *smods, long fid) {
+                        Yv *smods, long fid, Yv *self_path) {
     if (depth > 32) {
         // Fatal, like a missing module: carrying on compiled the program
         // without the rest of the chain and exited 0.
@@ -1266,12 +1283,37 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen,
                             ys("')\n")));
                         exit_(1);
                         ;
-                    } else if (seen_has(seen, full)) {
+                    } else if (seen_has(seen, full)
+                               || (!ys_eq(self_path, ys(""))
+                                   && ys_eq(full, self_path))) {
                         /* NOTE: already spliced (see native_resolve note):
                          * record the namespace name (strip_ns needs it,
                          * unless the file is a module with its own scope)
-                         * but do NOT splice the text a second time. */
-                        if (ys_eq_lit(ya_get(smods, seen_index(seen, full)), "")) {
+                         * but do NOT splice the text a second time.
+                         *
+                         * The program itself counts as already spliced: it is, by
+                         * the line above this walk started. asm.y imports ir.y and
+                         * ir.y imports asm.y back, which is legal -- they are
+                         * separate units, and a unit may be imported by more than
+                         * one -- and before this test existed the program was
+                         * spliced a second time inside its own module. Every one
+                         * of its declarations then stood in the tree twice, so
+                         * `ycc src/y/asm.y` reported "duplicate definition
+                         * 'is_digit_ch' ... defines it too" for each, and the
+                         * checker reported `type 'AsmLabel' is declared more than
+                         * once` -- thirty-two errors that `ycc ycc.y` never
+                         * produced, because there the program is ycc.y and nothing
+                         * imports ycc.y back.
+                         *
+                         * `smods` has no entry for the program -- it is not a
+                         * spliced module -- so its smod is "", which is right: the
+                         * program's own copy IS the flattened one, so strip_ns
+                         * must strip whatever qualifier a module used. */
+                        Yv *smod = ys("");
+                        if (!ys_eq(full, self_path)) {
+                            smod = ya_get(smods, seen_index(seen, full));
+                        }
+                        if (ys_eq_lit(smod, "")) {
                             imports = ya_push(imports, name);
                         }
                         ;
@@ -1294,7 +1336,8 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen,
                         Yv *mod_src2 = yv_unwrap(mod_src);
                         Yv *sub =
                             native_resolve_seen(mod_src2, mod_dir, depth + 1,
-                                                seen, smods, yv_len(seen));
+                                                seen, smods, yv_len(seen),
+                                                self_path);
                         Yv *subns = yr_get(sub, "imports");
                         Yv *subseen = yr_get(sub, "seen");
                         seen = subseen;
