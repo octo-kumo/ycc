@@ -146,6 +146,29 @@ branch-disjointness false positive.
   `WImport` directly -- `src/y` must compile without one.)
   **What is left for BCrypt is one piece, and it has to land as one piece**,
   because the cells are inert until something references them:
+  **The plumbing for (1) and (2) was built, measured, and REVERTED -- and that
+  negative result is the finding.** Two things it established:
+  * the CALL PATH WORKS: the linker reserved the cells, `asm.y` resolved each
+    one's `.bss` offset from its label map, `FirstThunk` became `.bss` + that
+    offset (measured 00002030 and 00002040 for a program with no imports of its
+    own, with the ILTs and name tables still at 00005000 in `.idata`), and with
+    a temporary body calling `y_iat_GetCurrentProcessId` a PE returned the
+    process id under wine with no fault -- so the loader fills the cell, the
+    `mov ...(%rip), %rax` reads it and `call *%rax` lands.
+  * and it is NOT SHIPPABLE AS WRITTEN: for the gate's own program (`pe-fs.y`,
+    which imports std units) `FirstThunk` stayed 0000905c -- the copy inside
+    `.idata`, i.e. the fallback -- so one of the two paths is wrong for one
+    shape of program; and worse, with the cells reserved a PE's W3 startup
+    self-test died on `wine: Unimplemented function
+    ntdll.NtMapUserPhysicalPagesScatter called at 0000000140001A9B`, which is
+    the shape of a wrong syscall number OR of code and data overlapping. The
+    self-test is the program's first instruction, so that is a startup crash,
+    not a late one: the render was reverted and `pe-gate.sh` is green again.
+  **So the next attempt starts by explaining those two observations**, not by
+  rewriting the plumbing: where `bss_len` comes from for a program with std
+  units (`asm.y` sums the section's items, so the reserved cells should be in
+  it), and why the self-test in particular notices. The pieces to re-add are
+  the three edits described below, unchanged.
   (1) `native.y`'s link: for a Windows target, `gls += w_iat_label(fn)` for
   every function in `w_imports()` and one `w_iat_term_label(dll)` per DLL --
   the cells then exist in `.bss`, in that order, which is what makes the
