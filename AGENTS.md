@@ -308,8 +308,25 @@ base build (normally the blessed `refs/ycc.ref`) with the new one
 
 Keep both binaries on the same filesystem. Under WSL, a binary run from
 `/mnt/c` pages in through drvfs and measured ~30% slower in every phase,
-which is easy to mistake for a regression. `bench/y/*.y` are benchmarks,
-**not tests**. Times are wall clock on a shared machine:
+which is easy to mistake for a regression.
+
+**And run both from the same tree.** The std pack carries only the four units
+`make` embeds — `rt`, `prelude`, `exec`, `str` (`STD_EMBEDS`) — and every other
+std unit is read from the filesystem at compile time: `std_units` unpacks what
+the pack has and, for anything else, `std_compile` asks `std_unit_src` for
+`std/<name>.y` under **the directory the compiler is running in**. So a compiler
+built in one tree and run from another silently compiles the *other* tree's
+`math.y`. Two consequences worth knowing before a measurement surprises you:
+- a cross-build comparison run from one tree compiles the *same* std sources
+  with both compilers, so a `std/` change shows up in no `compile_ir` delta —
+  only the emitter change does;
+- and a base compiler built in a worktree, measured from the main tree, answers
+  with the main tree's behaviour and looks like it already had the fix. This
+  cost an hour of chasing a phantom: a "before" binary produced the corrected
+  answers, which is only explicable by the pack not carrying `math.y`.
+
+`bench/y/*.y` are benchmarks, **not tests**. Times are wall clock on a shared
+machine:
 - a SCORE within 100 ± 2.5 is no change (two copies of one build scored
   99.7–100.6 in six runs; one real pair scored 99.8 and 102.3);
 - a row of 40 ms or more agrees to ~8%;
