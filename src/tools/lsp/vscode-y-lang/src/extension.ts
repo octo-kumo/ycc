@@ -177,17 +177,32 @@ async function start(context: vscode.ExtensionContext, why: string): Promise<voi
         // stopped" in the status bar for the moment before "running". Only
         // report it once we have actually been running -- otherwise a successful
         // start begins by showing the user an error.
+        // vscode-languageclient's State enum, from lib/common/client.d.ts:
+        // Stopped = 1, Starting = 2, Running = 3. The enum is not re-exported from
+        // the package root, so it is written out here -- and it was written out
+        // WRONG before this: `3 /* Stopped */` and `3 - 1 /* Running */`. Those are
+        // Running and Starting. So the branch that reports a dead server was keyed
+        // on Running (where `everStarted` is false, so it did nothing) and the real
+        // Stopped, 1, matched neither: the status bar NEVER said the server had
+        // stopped. A user log caught it -- `client state: 3` followed by
+        // `client state: 2` reads as backwards, and it was.
+        const LSTATE_STOPPED = 1;
+        const LSTATE_RUNNING = 3;
+        const stateName = (n: number) =>
+            n === 1 ? 'Stopped' : n === 2 ? 'Starting' : n === 3 ? 'Running' : `${n}?`;
+
         let everStarted = false;
         c.onDidChangeState((e) => {
-            // With the elapsed time, because a slow start is the thing worth seeing
-            // and the state names alone ("Running") do not say how long it took.
-            log(`client state: ${e.newState}  (+${sinceActivation()}ms since activation)`);
-            if (e.newState === 3 /* Stopped */) {
-                if (everStarted) {
-                    setStatus('$(error) Y: server stopped', 'the language server is not running');
-                }
-            } else if (e.newState === 3 - 1 /* Running */) {
+            // With the elapsed time, because a slow start is the thing worth seeing,
+            // and with the NAME: a bare integer is what made the wrong constants
+            // above survive this long.
+            log(`client state: ${stateName(e.newState)} (${e.newState})`
+                + `  (+${sinceActivation()}ms since activation)`);
+            if (e.newState === LSTATE_RUNNING) {
                 everStarted = true;
+            } else if (e.newState === LSTATE_STOPPED && everStarted) {
+                setStatus('$(error) Y: server stopped', 'the language server is not running');
+                log('the server stopped after running -- the status bar now says so');
             }
         });
         log('handing the server process to the language client');
