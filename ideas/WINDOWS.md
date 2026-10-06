@@ -343,6 +343,15 @@ Windows names are private (`w_*`), so they never collide, and both preludes coex
 in one binary — which is what makes cross-compilation work from the Linux build.
 Cost: ~100 lines in `arch_x64.y`, and its C twin (R1).
 
+**A fourth `src/y/arch/*.s` file arrived with the master merge and is not
+covered by this dispatch.** `math.s` (the float primitives `std/math.y`'s kernels
+reach for) is appended unconditionally by `native.y`'s `prelude_with`, and it
+carries Linux syscall numbers in its two trap blocks. It is the same class of
+work as `wsys.s` — the file needs a Windows half, or the label list needs the
+blocks routed through `y_os_*` — and it is now the *only* thing a PE can emit that
+reaches the kernel the ELF way. See
+[the merge section](#the-master-merge-2026-10-05-and-what-it-cost).
+
 Rejected: making the target a *build-time* choice (`make ycc` resolves
 `arch_x64.y`, `make ycc.exe` resolves `arch_win_x64.y`). Cheaper, but the Linux build
 then has no Windows prelude in it, so there is no cross-compiler and W2 becomes
@@ -423,6 +432,122 @@ tested `syscall(8, 0, 0 - unread, 1) >= 0`), `src/y/std/rt.y:210` (`r < 0`, `wai
 `http.y` whose result is compared. Under the named-syscall layer all of those
 comparisons move into one layer, which is the single place the polarity then has to
 be right; a `js`→`jns` sweep is not enough, because a reversed check is silent.
+
+### File I/O is Y, not assembly: the design, proven
+
+`std/fs.y` is the only std unit that never adopted the named-syscall layer
+(18 raw `syscall(` sites), and it is what stops `ycc.exe`. The obvious port is
+thirteen hand-written assembly entry points. **That is not necessary**, and
+knowing why changes the size of the phase.
+
+A Y program can build the NT structures itself and call the kernel with the
+`syscall` intrinsic, because `gen_syscall` already implements the Win64
+register layout (arg1 `%r10`, arg2 `%rdx`, arg3 `%r8`, arg4 `%r9`, arg5+
+at `40(%rsp)` upwards). So the whole of NT file I/O is:
+
+* `UNICODE_STRING` {Length u16, MaximumLength u16, pad, PWSTR at +8} — 16 bytes
+* `OBJECT_ATTRIBUTES` {Length=48, RootDirectory, ObjectName, Attributes,
+  SecurityDescriptor, SecurityQualityOfService} — 48 bytes
+* `IO_STATUS_BLOCK` {Status, Information} — 16 bytes, and `Information` is
+  where `NtReadFile`/`NtWriteFile` return the byte count
+
+all written into one `[byte]` buffer with `put16`/`put32`/`put64` helpers
+(`&b[0]` is the pointer; note `[byte; N]` does NOT pass as `[byte]`, so the
+buffer must be built dynamically).
+
+**Measured, under wine, from a program compiled by `ycc --target=windows`:**
+
+```
+  \??\Z:\home\yun\...\Makefile
+  NtOpenFile   status = 0x0000000000000000    handle = 0x0000000000000038
+  NtReadFile   status = 0x0000000000000000    bytes read = 64
+  first line: def main(args: [str]) ->
+```
+
+and a missing file gives `0xC0000034` STATUS_OBJECT_NAME_NOT_FOUND with the
+read then failing `0xC0000008` STATUS_INVALID_HANDLE on the handle that was
+never filled. So open-then-read works end to end from Y, and the failure path
+is a real NTSTATUS rather than a fabricated error.
+
+**A finding that changes the size of the port: argv hands over WINDOWS paths.**
+The object name above arrived at `NtOpenFile` as `Z:\home\yun\...`, which is
+`args[1]` after exactly two steps: the loader rewrote the Unix path in the
+command line into DOS form, and the code prefixed `\??\`. In other words a
+user's path arguments -- the ones `ycc` is actually invoked with -- need no
+`/`-to-`\` conversion on a PE at all, because by the time `argv` returns them
+they are already Windows paths. That is most of the work `fs.y`'s path handling
+would otherwise carry, and it is why the probe handles the two forms
+separately instead of assuming one.
+
+The consequence for `fs_at_cwd()` is the same shape as on Linux: `-100` means
+"resolve against the process's current directory" there, and here it means
+"resolve against `RTL_USER_PROCESS_PARAMETERS.CurrentDirectory`" -- which is
+what a relative object name does by default. **Measured:** a *relative*
+`\??\ideas\ntfile_probe.y` returns `0xC000003A`
+STATUS_OBJECT_NAME_INVALID, so a relative path does need its directory made
+absolute first (from the PEB's `CurrentDirectory`, which is the answer to the
+"chdir/getcwd have no NT equivalent" problem) -- or an
+`OBJECT_ATTRIBUTES.RootDirectory` handle. That is the one place the
+`fs_at_cwd()` design is not free.
+
+Four things cost a cycle each and are worth writing down, because each one
+looks like a bug in the port rather than in the caller:
+
+* **The access mask must be computed, not recalled.** `FILE_GENERIC_READ` is
+  `0x120089` = **1179785**. A mask typed from memory (1183881) produced
+  `STATUS_INVALID_PARAMETER` and looked like a structural bug.
+* **The NT namespace prefix is `\??\`** -- one backslash before `??`. Two
+  gives STATUS_OBJECT_PATH_NOT_FOUND (0xC0000033), none at all gives
+  STATUS_OBJECT_NAME_INVALID (0xC000003A), and `Z:` needs its own trailing
+  separator or the same invalid-name status. Build all of it with `chr(92)`:
+  a shell passing the path through eats `\t` and `\n`.
+* **`FILE_DIRECTORY_FILE` (0x1) is NOT "not a directory".** Passing options
+  `33` (which includes it) gives `0xC0000103` STATUS_NOT_A_DIRECTORY for a
+  perfectly good file. A regular file wants
+  `FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE` = `0x20|0x40` = 96.
+* **`NtCreateFile` cannot be called from Y at all.** It takes 11 arguments,
+  and the intrinsic's Windows ceiling is 10 (`maxargs` in types.y:3955,
+  already target-dependent). So the ceiling has to rise to 12, OR every create
+  path goes through an assembly wrapper. `NtOpenFile` takes 6 and is inside
+  the ceiling today, which is why the proof above could use it -- and read-only
+  paths (which is most of what `ycc.exe` needs to compile one file) do not
+  need `NtCreateFile` at all.
+
+**What this means for the layer.** `os_call` does not have to be the *only*
+mechanism, but the discipline it enforces is the right one: a `y_os_*` label
+whose two halves are (Linux) a syscall stub and (Windows) a Y-visible helper
+with the NT number baked in. `wsys.s` already proves a block can call a `y_`
+def by its bare label, so the Windows half can be Y with the number resolved
+at link time -- which is what keeps the number out of std and the std pack
+target-free, and it is what makes `pe-packinv` stay at 210/210.
+
+**The numbers, verified rather than written from memory.** Read out of a real
+ntdll's export table (1479 names, 1202 code RVAs), each one's syscall stub
+decoded; the eight already in `w_sysno` are all confirmed, which is the check
+that the method is sound:
+
+| | | | |
+|---|---|---|---|
+| 6 NtReadFile | 8 NtWriteFile | 15 NtClose | 17 NtQueryInformationFile |
+| 24 NtAllocateVirtualMemory | 30 NtFreeVirtualMemory | 39 NtSetInformationFile | 44 NtTerminateProcess |
+| 49 NtQueryPerformanceCounter | 51 **NtOpenFile** | 52 NtDelayExecution | 53 NtQueryDirectoryFile |
+| 57 NtFsControlFile | 61 NtQueryAttributesFile | 73 NtQueryVolumeInformationFile | 75 NtFlushBuffersFile |
+| 80 NtProtectVirtualMemory | 85 **NtCreateFile** | 88 NtOpenDirectoryObject | 90 NtQuerySystemTime |
+| 125 NtCreateDirectoryObject | 147 NtDeleteFile | 196 NtQueryFullAttributesFile | |
+
+The thirteen in bold-adjacent set that `w_sysno` does not yet carry:
+NtOpenFile 51, NtCreateFile 85, NtQueryInformationFile 17, NtSetInformationFile
+39, NtQueryDirectoryFile 53, NtQueryAttributesFile 61,
+NtQueryFullAttributesFile 196, NtDeleteFile 147, NtFsControlFile 57,
+NtFlushBuffersFile 75, NtQueryVolumeInformationFile 73,
+NtCreateDirectoryObject 125, NtOpenDirectoryObject 88.
+
+`RtlDosPathNameToNtPathName_U` and the other Rtl helpers are **exported but
+have no syscall stub** in this ntdll, so they are not reachable by number --
+another reason the `\??\` prefix is built by hand above.
+
+The working proof is kept as `ideas/ntfile_probe.y`: a self-contained program
+that opens and reads a file with no imports and no new arch code.
 
 ### The per-thread block pointer moves out of TLS
 
@@ -676,11 +801,129 @@ of which an earlier draft called unsolvable and is not:
 | **NT syscall numbers drift between Windows versions, and the failure mode is silent-wrong, not loud.** An earlier draft claimed a wrong number yields `STATUS_INVALID_SYSCALL`; it is worse than that. The Windows x64 syscall index range is dense and live, so a leftover Linux number does not land on "no such syscall" — it lands on a *different, real* `Nt*` function, and the symptom is wrong memory or wrong I/O much later, with nothing at the call site to say so. | Pin a documented target version (Windows 10 1607+ / 11) and record it in the manual; keep every number in **one** table in `arch_x64.y`'s dispatch (`arch_sysno`) so a future version is a small diff and a review can see the whole surface at once; and add the **startup self-test** of W3 — one `Nt*` call per class (memory, file, thread, process) with its status checked — so a bad table fails loudly at `ycc` startup on a Windows build instead of misbehaving later. Consider resolving a handful of names through `LdrGetProcedureAddress` if a specific call proves unstable. |
 | **`src/c` doubles every line** of W2–W5. | Inherent (R1). The arch half is string data, so its twin is mechanical and `make port-check` is low-risk. |
 | **The ABI estimate may be low.** An earlier draft said "7 emitter sites"; the measured set is 90 `F_CALL_L`/`F_CALL_IND` sites, and while only `gen_syscall`'s 5+-argument path has arguments that move, the hand-written `src/y/arch/*.s` routines make their own calls (`call y_alloc`, `call y_arr_push`, …) and are in no count at all. | Do W2 first and hand-inspect a real 4-argument call, a closure call and a 6-argument `syscall` under `--target=windows` before committing to W3's size. |
-| **`refs/ycc.ref` must be reblessed per phase**; the tree is red in between. | One phase → `make check` → `make rebless` → commit with numbers (R3). Do not stack. |
+| **`refs/ycc.ref` must be reblessed per phase**; the tree is red in between. | One phase → `make check` → `make rebless` → commit with numbers (R3). Do not stack. **Not done on this branch**: `refs/ycc.ref` stays the original bootstrap compiler so that `make ynew`'s three-generation fixpoint still means something, and the gate is "the C copy and `./ynew` agree with each other", not "either matches the reference". The measured cost is larger than it was in Phase A and that is upstream's doing, not this branch's: the reference predates `native def` and `std/math.y`, so after the merge it **cannot build the tree at all** and every suite run with the default `YREF` is red on the reference side (87 of 127 port cases, all of `examples`, 59 of 65 `audit`, …). `run_all.sh` therefore has to be given `YREF=$PWD/ynew` for a meaningful run on this branch, and `make ycc` still stops at `cmp ycc refs/ycc.ref`. `refs/` is a real copy in each worktree, not a symlink, so a stray rebless cannot overwrite the main checkout's blessed binary. |
 | **`argv()` on PE needs a command-line splitter, not a UTF-16 fixup**, and the W2 gate cannot see any of it (a hello-world that never calls `argv()` exercises none of it). | Build the parser in W4 — `RtlCommandLineToArgvW` or the MSVC rules, plus the UTF-16→UTF-8 policy for `y_cstr_to_str` — assert it in W5, and size W4 for it rather than leaving it as a footnote. |
 | **`ulimit -v` has no equivalent** (W6). | Decided, and cheaper than the exemption it replaces: `JOB_OBJECT_LIMIT_JOB_VM_SIZE` reproduces the fixture, because every mapping here is read-write committed. It costs a ~40-line job-object launcher, not a rule change. |
 | **Wine is not Windows.** Good enough to prove a PE loads and runs; not good enough to trust `CreateProcess`, console handles, or the TLS-free thread scheme. | W6 on a real runner; Wine only as a fast inner loop. |
 | **The no-`.reloc` claim is load-bearing and silent if violated.** | See the deferred encoder guard. |
+| **SETTLED — the std pack bakes ONE target into every program built from it, and no flag on the consuming compiler can undo it.** `ycc --std-pack` never passes a target, so a target test compiled into `rt.y`/`fs.y`/`net.y`/… is baked into the pack and served to every program that links it. Measured both ways: with a conditional in `rt.y`, a PE built from the pack carried the ELF inline `write(2)` and printed nothing, while `--std-src` (which recompiles the units) worked. | **Hard rule, no exceptions: a std entry point names a label and none branches on the target.** `os_write` calls `y_os_write`, `exit` calls `y_os_exit`; the Windows bodies live in `src/y/arch/wsys.s` and the ELF bodies in `src/y/arch/prelude.s`, so the pack carries text correct for whichever compiler wrote it. The corollary for the port: `cycc` carries **no** pack at all, so it compiles the std units from source with its own `res_target` — which is why on the Windows path `cycc` and a pack-carrying `ynew` can differ byte-for-byte on fixtures whose std code still has raw `syscall(` sites, and `cycc` is the correct one of the two. Those raw sites are the W5 work; the divergence disappears when they are gone. **Done for the four packed units** (rt, prelude, exec, str): the named syscall layer B1 replaced every `syscall(` in them, and `test/sh/pe-packinv.sh` measures the invariant — a PE built from the pack and a PE built with `--std-src`, over every fixture, **210 identical and 0 different** (177 before the master merge; master added fixtures). The other std files (fs, net, tls, crypto, http, **math**, tui, test, args, json, random) are compiled per target from source, so they were never at risk from the pack; they are still raw-`syscall` sites, which is B2's `std/win/*` split. |
+
+## What the Windows assembly halves cost, measured
+
+Nine blocks in `wsys.s`, and four of the nine revisions of them were wrong in ways
+`make asm-check` cannot see (GNU as accepts all four). Every one is written down
+in the file next to the code with the symptom it produced, because in every case
+the symptom was further from the cause than the cause was from the code:
+
+| mistake | symptom |
+|---|---|
+| argument two in `%rsi` (the SysV order) instead of `%rdx` | the call still returns `STATUS_SUCCESS`; the out-parameter keeps whatever the stack held, so `CLOCK_MONOTONIC` froze at zero while `CLOCK_REALTIME` worked |
+| parameter *k* of *n* read at the wrong `16+8*(n-k)(%rbp)` | silent -- `8(%rbp)` is the return address, and the block runs |
+| `neg %eax` | "unary form in 'neg'" from the in-tree assembler, on one target only, in a block the ELF path never assembles |
+| `div` is unsigned, and a normalised timespec went in as `nsec - sec*10^9` | every sub-second sleep worked and every one-second sleep hung, for 54 years |
+| an `add:` marker in `wsys.s` for a name `prelude.s` also defines | the Linux block wins silently -- both reach the program and the label map keeps the wrong one |
+
+The last one is the most interesting, and it is a property of the substitution
+rather than of any block: `add:` and `replace:` are not interchangeable, and the
+distinction has to be re-derived for each new name.
+
+## The master merge (2026-10-05), and what it cost
+
+`master` (`b556e58`) merged in whole: 100 commits, including `native def`, the
+`native` keyword, `break`/`continue`, **`src/y/arch/math.s` and `src/y/std/math.y`**,
+the LSP, `test_math.sh`, and a path import that flattens *types* as well as
+expressions. Thirteen files conflicted. Four of the resolutions are the whole
+reason this section exists:
+
+- **`INTRINSICS` lost `os_call`.** Master hoisted `is_intrinsic_name`'s name list
+  out of the function into a `let` so the language server could enumerate it, and
+  the hoist **silently dropped** the branch's `os_call` — the merged `git` said
+  CONFLICT, and taking master's side wholesale would have compiled. `os_call` is
+  back in the list (47 names), and the C twin's `yav(47, …)` counts match. The
+  proof that it survived is `src/tools/lsp/test/t013_m4.expected`: it pins the
+  completion list, and it now reads `…,ptr_addr,os_call,self,none` — the server
+  enumerates the same array `is_intrinsic_name` tests, so the fixture would have
+  caught the loss on its own if anyone had looked at the diff instead of at the
+  conflict count.
+- **Every registration had to be re-derived, not trusted.** A `make cycc && make
+  ynew` after an auto-merge is not evidence: a green build proves the code
+  compiles, not that a name is still *registered*. The checks that matter are in
+  the list above (the `yav` count against its values, the two copies'
+  `INTRINSICS` matching name-for-name and in order, every `os_call_names` entry
+  being a label some `src/y/arch/*.s` defines) and they are all cheap.
+- **`src/y/arch/math.s` is a FOURTH arch file with no Windows half.** It is new
+  from master, it is embedded like the other three (so `ARCH_EMBEDS` — a wildcard
+  over `src/y/arch/*.s` — picked it up with no Makefile edit), and it is
+  **target-blind**: `y_int_trap` and `y_len_stop` write with Linux `syscall`
+  numbers (`mov $1, %rax` = `write(2)`, `mov $231, %rax` = `exit_group(2)`).
+  On a PE those numbers mean different `Nt*` calls, so `math.to_int(1.0/0.0)`
+  returns instead of trapping: `test/y/native/t307_math_trap` prints `0` and exits
+  0 where ELF prints `runtime error: a float with no integer part a long holds`
+  and exits 1. Verified in the `-S` output, where the block is byte-identical on
+  both targets. This is B2's `std/win/*` work, not a merge defect — but it is the
+  first thing that is *newly reachable* because of the merge, and it is the shape
+  every future `src/y/arch/*.s` must not have.
+- **`std/math.y` is not embedded, and that is correct.** Only the four packed units
+  (`rt`, `prelude`, `exec`, `str`) are in `STD_EMBEDS`; `std/math.y` is spliced
+  from source per target like `fs.y`/`net.y`, so the pack never carries it and
+  `--target` cannot be defeated by it. Worth stating because the intuition from
+  `math.s` is the opposite.
+
+`ideas/meta.md` and `ideas/meta.y` were taken from master wholesale: master's copies
+are a later revision of the same documents (M2 landed, mid-token blocks work, the
+coverage numbers are current), and the branch's copies were the state it forked with.
+
+## Windows gate numbers, 2026-10-05
+
+| gate | before the merge | after |
+|---|---|---|
+| `test/sh/pe-gate.sh` | ok (4100 bytes, wine exit 0) | ok (4100 bytes, wine exit 0) |
+| `test/sh/pe-packinv.sh` | 177 identical, 0 differ | **210 identical, 0 differ** |
+| `test/sh/pe-fixtures.sh ./ynew` | 133/162 pass, 28 PE-only, 1 baseline | **161/195 pass, 32 PE-only, 2 baseline** |
+| `make port-check` | 904/904 | **1010/1010** |
+
+The pass rate moves the right way (133/162 = 82% → 161/195 = 83%) and the four
+extra PE failures are all fixtures **master added**, not regressions: `t198`
+(`argv()`), `t199` (`std/tui`), `t203` (one POSIX path) and `t307` (`math.s`, above).
+Every remaining PE failure has one of these causes, and none of them is a Windows
+*writer* or *runtime* defect — the pe-gate hello-world passes:
+
+- **no `argv()` materialisation in the Windows prologue** — `t20_files_argv`,
+  `t198_argv_only_length` (which page-faults on a NULL read, because `%r15` was
+  never set). B6, as `wsys.s` says about `y_os_execve`.
+- **raw `syscall(` in a spliced std unit** — `std/tui.y` alone has `write`(1),
+  `ioctl`(16), `pipe`(22), `fork`(57), `setsid`(112); on a PE those numbers are
+  different `Nt*` calls. `t199_std_tui` (its captured control bytes come back
+  empty), `t30_net`, `t102_io_roundtrip`, `t167_read_dir_errors`,
+  `t177_fs_symlink_remove_all`.
+- **the raw `syscall()` builtin itself has no Windows half** — `t08_syscall`
+  returns `3221225474` (`STATUS_ACCESS_DENIED`) where ELF gets 0, and
+  `t72_match_fail` never traps because the Linux `read(0, …)` that zeroes the
+  record did not happen, so the match *succeeds*.
+- **`std/fs.y` paths** — `t10_filewrite`, `t12_cat`, `t150_fs`, `t151_module_scope`,
+  `t203_redeclared_global`: an absolute POSIX path has no meaning to the Windows
+  calls, so `fs.exists("/tmp")` is false.
+- **`std/net.y`** — `t30_net`, `t108`, `t109`, `t110`, `t185_listen_busy`.
+- **`std/crypto.y`** — `t158`, `t174`, `t175`, `t176` (no BCrypt).
+- **`exec()` / `readline`** — `t38_exec`, `t58_readline_exec`.
+- **threads and `fork`** — `t160_threads`, `t183_fork_lock`, `t184_fork_join`,
+  `t89`, `t90` (their thread halves).
+- **no memory cap on a PE** — `t71_out_of_memory` and `t186_pad_overflow` expect
+  `runtime error: out of memory`, which `ulimit -v` produces on ELF and nothing
+  produces on a PE. W6.
+
+Two **baseline** failures are *not* ELF defects: `t200_std_args` and
+`t73_builtins_misc` write their `args.parse` / `eputs` diagnostics to **stderr**,
+`test_native.sh` merges stderr into what it diffs (`2>&1`), and `pe-fixtures.sh`
+deliberately compares stdout only — it has to, because wine fills stderr with
+MESA noise. With stderr merged, both match `.expected` byte for byte.
+
+**What wine cannot validate here**, and this is the honest limit of the numbers
+above: it reproduces neither Windows commit-charge accounting nor its memory
+manager, so **the Job Object memory cap of W6 cannot be tested in wine at all** —
+`t71`/`t186` will stay red here for that reason alone. It also does not reproduce
+`CreateProcess`, console handle inheritance, or the commit-charge model the
+allocator's growth policy is tuned against.
 
 ## Open questions
 

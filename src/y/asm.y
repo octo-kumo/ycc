@@ -19,6 +19,7 @@
 import tags from "./tags.y";
 import enc from "./enc64.y";
 import elf from "./elf.y";
+import pe from "./pe.y";
 import dwarf from "./dwarf.y";
 import insn from "./ir.y";
 import lbl from "./labels.y";
@@ -190,14 +191,22 @@ def parse_operand_ind(t: str) -> OpRes {
     }
 };
 
-// `%fs:N`: the thread-local word at N (a thread's heap block, its word 3
-// its own address; arch_x64.y). Tried only once no register matches.
+// `%fs:N` and `%gs:N`: the segment-relative word at N. `%fs:24` is a thread's
+// heap block (its own address, in word 3; arch_x64.y); `%gs:0x60` is the PEB
+// on x64 Windows, which is where the standard I/O handles live. The segment
+// rides in `n` (0 = %fs, 1 = %gs) because the operand has no other use for
+// it -- enc64.y turns that into the 0x64/0x65 prefix byte. Tried only once no
+// register matches.
 def parse_operand_fs(t: str) -> OpRes {
+    parse_operand_seg(t, 0)
+};
+
+def parse_operand_seg(t: str, seg: long) -> OpRes {
     let r = parse_num(t[4:]);
     if (!r.ok) {
-        { ok: false, op: { k: K.bad, n: 0, size: 0, v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "bad fs operand '" + t + "'" }
+        { ok: false, op: { k: K.bad, n: 0, size: 0, v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "bad segment operand '" + t + "'" }
     } else {
-        { ok: true, op: { k: K.fs, n: 0, size: 64, v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: r.v, rip: false, lbl: "" }, error: "" }
+        { ok: true, op: { k: K.fs, n: seg, size: 64, v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: r.v, rip: false, lbl: "" }, error: "" }
     }
 };
 
@@ -208,6 +217,8 @@ def parse_operand_reg(t: str) -> OpRes {
     if (n < 0) {
         if (t[0:4] == "%fs:") {
             parse_operand_fs(t)
+        } else if (t[0:4] == "%gs:") {
+            parse_operand_seg(t, 1)
         } else {
             { ok: false, op: { k: K.bad, n: 0, size: 0, v: 0, a: "", b: "", name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "unknown register '" + t + "'" }
         }
@@ -1531,7 +1542,7 @@ def asm_link(items: [AsmItem], labels: [AsmLabel], debug: bool) -> AsmOut {
     // elf_bss_from_ro), so the fixups below only know two sections.
     let labs: [AsmLabel] = labels;
     if (bss_len > 0) {
-        let bshift = elf.elf_bss_from_ro(code_len, ro_len);
+        let bshift = asm_bss_shift(code_len, ro_len, bss_len);
         labs = [];
         foreach (lb in labels) {
             if (lb.sec == 2) { labs += { name: lb.name, sec: 1, off: bshift + lb.off, at_item: lb.at_item }; }
@@ -1593,17 +1604,76 @@ def asm_link(items: [AsmItem], labels: [AsmLabel], debug: bool) -> AsmOut {
             let dsecs: [ElfSec] = [];
             if (debug) {
                 syms = debug_syms(labels, code_len, bss_len);
-                dsecs = debug_lines(items, code_len, elf.elf_code_off(bss_len));
+                dsecs = debug_lines(items, code_len, asm_image_base(bss_len));
             };
-            let eb = elf.elf_build(code, ro, start.off, bss_len, syms, dsecs);
+            let eb = asm_image(code, ro, start.off, bss_len, syms, dsecs, items, labels);
             let lt3 = clock_us();
             let lh3 = heap_used();
             { ok: true, bytes: eb, error: "",
               times: [ { name: "l:labmap", us: lt1 - lt0, heap: lh1 - lh0 },
                        { name: "l:patch", us: lt2 - lt1, heap: lh2 - lh1 },
-                       { name: "l:elf", us: lt3 - lt2, heap: lh3 - lh2 } ] }
+                       { name: asm_link_row(), us: lt3 - lt2, heap: lh3 - lh2 } ] }
         }
     }
+};
+
+// ── the object writer ───────────────────────────────────────────────────
+// One assembler, two object formats, chosen at link time (ideas/WINDOWS.md,
+// "The target reaches three places", item 1): elf_build and pe_build have
+// distinct names and distinct types, so both are linked in and nothing in
+// the splicer has to know a target exists.  Everything above them is
+// format-agnostic: parse, labels, relax, fixups, and the segment-offset
+// label_addr that is why a PE needs no .reloc.
+
+// Where the code sits in the image, which the DWARF line table hangs off: on
+// ELF the base plus the header size the ELF writer chose (the code's file
+// offset, since the first segment is mapped at the base), on PE the image
+// base plus the .text section's RVA.
+def asm_image_base(bss_len: long) -> long {
+    if (target_is_windows()) { pe.pe_text_base() } else { 4194304 + elf.elf_code_off(bss_len) }
+};
+
+// Where the .bss section starts, as an offset from the rodata's start.  The
+// two writers round it differently (a page plus a page on ELF, the section
+// alignment on PE), so the fixups must measure against the one that will
+// place the bytes.  elf_bss_from_ro takes TWO lengths -- upstream dropped its
+// third, since .bss has no bytes of its own to place and the loader zeroes it
+// -- while pe_bss_from_ro still needs bss_len to round the section up.
+def asm_bss_shift(code_len: long, ro_len: long, bss_len: long) -> long {
+    if (target_is_windows()) { pe.pe_bss_from_ro(code_len, ro_len, bss_len) } else { elf.elf_bss_from_ro(code_len, ro_len) }
+};
+
+// The `ycc --time` row name for the writer, so the table names the format it
+// actually ran.
+def asm_link_row() -> str {
+    if (target_is_windows()) { "l:pe" } else { "l:elf" }
+};
+
+def asm_image(code: [byte], ro: [byte], entry_off: long, bss_len: long, syms: [ElfSym], dsecs: [ElfSec], items: [AsmItem], labels: [AsmLabel]) -> [byte] {
+    if (target_is_windows()) {
+        pe_image(code, ro, entry_off, bss_len, syms, dsecs, items, labels)
+    } else {
+        elf.elf_build(code, ro, entry_off, bss_len, syms, dsecs)
+    }
+};
+
+// The PE writer, fed what it needs in its own shapes.  `syms`/`dsecs` are the
+// ELF-shaped records the -g pass above builds (debug_syms, dwarf.y's
+// dwarf_sections): the same facts re-typed, because Y records are exact and a
+// record goes only where its own type is expected.
+def pe_image(code: [byte], ro: [byte], entry_off: long, bss_len: long, syms: [ElfSym], dsecs: [ElfSec], items: [AsmItem], labels: [AsmLabel]) -> [byte] {
+    let un = pe_unwind(items, labels);
+    let dsecs2: [PeSecHdr] = [];
+    let ddata: [[byte]] = [];
+    let i = 0;
+    while (i < len(dsecs)) {
+        let ds = dsecs[i];
+        dsecs2 += pe.pe_sec(ds.name, len(ds.data), 0, 0, 1073741888);
+        ddata += ds.data;
+        i = i + 1;
+    };
+    let coff = pe_coff_syms(syms);
+    pe.pe_build(code, ro, entry_off, bss_len, un.pdata, un.xdata, dsecs2, ddata, coff)
 };
 
 def patch_item(code: [byte], it: AsmItem, lmap: [AsmLabel], code_len: long, pad: long) -> AsmBytes {
@@ -1739,6 +1809,346 @@ def patch8(bytes: [byte], at: long, v: long) -> [byte] {
     bytes
 };
 
+// ── PE unwind data (.pdata and .xdata) ──────────────────────────────────
+// Both are required output, not a -g extra: a PE without them steps under a
+// DWARF debugger but cannot backtrace, which is worse than not shipping -g
+// at all (ideas/WINDOWS.md, open question 1).  So this runs on every PE.
+//
+// The shapes (Microsoft's PE format, "x64 exception handling"):
+//   .pdata: RUNTIME_FUNCTION records -- BeginAddress, EndAddress and the RVA
+//     of the function's UNWIND_INFO, 12 bytes each, sorted by begin address.
+//     The emitted order already is, so no sort is needed: labels arrive in
+//     definition order, so a function's end is the next one's begin.
+//   .xdata: UNWIND_INFO -- version 1, the prolog's length in bytes, the code
+//     count, the frame register (low nibble) with its offset scaled by 16
+//     (high nibble), then the unwind codes SORTED BY DESCENDING PROLOG
+//     OFFSET -- the order the epilog undoes them -- padded to an even number
+//     of 2-byte slots.  With no flags there is no trailing handler or
+//     chained-info DWORD, so a function with no codes is exactly 4 bytes.
+//
+// One UNWIND_CODE is two bytes: CodeOffset, then UnwindOp in the second
+// byte's LOW nibble and OpInfo in its HIGH nibble.  The MSVC struct declares
+// `UBYTE UnwindOp : 4; UBYTE OpInfo : 4;`, and a little-endian bitfield pack
+// puts the first declared field in the low bits.  Verified against a real
+// ntdll's .xdata rather than taken from memory, because the other order
+// decodes every record into nonsense.
+
+// What one function's prologue turned out to be: its extent, whether it
+// establishes a frame pointer, the total bytes it takes off the stack and
+// where that is in effect from, and one (prolog offset, register number) per
+// callee-saved register it pushed.
+type PeFrame = { start: long, end: long, first: long, last: long, fp: bool, fp_off: long, alloc: long, alloc_off: long, pushes: [long], prolog: long };
+// What pe_unwind hands back, and what pe_prologue_insn threads the prologue
+// scan through (go: false ends the prologue at that instruction).
+type PeUnwind = { pdata: [byte], xdata: [byte] };
+type PePro = { go: bool, fp: bool, fp_off: long, alloc: long, alloc_off: long, pushes: [long], prolog: long };
+
+// The two unwind sections, or two empty arrays when there is nothing to say.
+def pe_unwind(items: [AsmItem], labels: [AsmLabel]) -> PeUnwind {
+    pe_unwind_bytes(pe_frames(items, labels), 0)
+};
+
+// Every function's extent, from the labels: a function starts at a label
+// debug_syms would give a symbol to (`_start`, a `y_*` runtime helper, a
+// `yfn_*` compiled def) and runs to the next such label, or to the end of
+// .text.  Jump targets (yL_*) and the arch prelude's internal labels belong
+// to the function before them.
+def pe_frames(items: [AsmItem], labels: [AsmLabel]) -> [PeFrame] {
+    let out: [PeFrame] = [];
+    let i = 0;
+    while (i < len(labels)) {
+        let lb = labels[i];
+        if (lb.sec == 0 && is_sym_label(lb.name, 0)) {
+            out += { start: lb.off, end: 0, first: lb.at_item, last: 0, fp: false, fp_off: 0, alloc: 0, alloc_off: 0, pushes: [], prolog: 0 };
+        };
+        i = i + 1;
+    };
+    pe_frame_prologues(items, out)
+};
+
+// Win64 nonvolatile integer registers (RBX, RBP, RSI, RDI, R12..R15 -- RSI
+// and RDI are volatile on SysV, which is one of the two ABI deltas that is
+// vacuous here: no live value ever crosses a call, so the emitted code is
+// free to treat them as scratch, and only the unwind record has to say they
+// were saved).
+def pe_nonvol(reg: long) -> bool {
+    reg == 3 || reg == 5 || reg == 6 || reg == 7 || (reg >= 12 && reg <= 15)
+};
+
+// Read one function's prologue off its items: a run of pushes, an optional
+// `mov %rsp,%rbp`, and an optional `sub $N,%rsp`.  Any other instruction ends
+// it -- so a routine whose prologue this file has never seen records only the
+// prefix it did recognise, which is exactly right for that prefix, rather
+// than a guess.  (A wrong unwind record makes a debugger walk into the middle
+// of a frame; a short one makes it stop unwinding early, which is visible and
+// harmless.)
+// A frame's extent is its label to the next one's, and its ITEMS run from the
+// item index its label sits at to the next one's. Item offsets cannot be used
+// for this: relax_place only rewrites an item's `off` under -g, so without it
+// `off` is still pass 1's, before the branch relaxation that moved everything
+// (relax_place's own note). Counting items from `at_item` and adding lengths
+// is the one position that is right either way.
+def pe_frame_prologues(items: [AsmItem], frames: [PeFrame]) -> [PeFrame] {
+    let n = len(frames);
+    let i = 0;
+    while (i < n) {
+        let stop = 0;
+        let last = len(items);
+        if (i + 1 < n) {
+            stop = frames[i + 1].start;
+            last = frames[i + 1].first;
+        };
+        frames[i] = pe_prologue(items, frames[i], stop, last);
+        i = i + 1;
+    };
+    frames
+};
+
+def pe_prologue(items: [AsmItem], f: PeFrame, stop: long, last: long) -> PeFrame {
+    let alloc = 0;
+    let alloc_off = 0;
+    let pushes: [long] = [];
+    let prolog = 0;
+    let fp = false;
+    let fp_off = 0;
+    let at = 0;
+    let k = f.first;
+    let open = true;
+    while (open && k < last) {
+        let it = items[k];
+        k = k + 1;
+        if (it.sec == 0) {
+            let r = pe_prologue_insn(it, at, fp, fp_off, alloc, alloc_off, pushes, prolog);
+            if (r.go) {
+                fp = r.fp;
+                fp_off = r.fp_off;
+                alloc = r.alloc;
+                alloc_off = r.alloc_off;
+                pushes = r.pushes;
+                prolog = r.prolog;
+                at = r.prolog;
+            } else {
+                open = false;
+            };
+        };
+    };
+    f.end = stop;
+    f.fp = fp;
+    f.fp_off = fp_off;
+    f.alloc = alloc;
+    f.alloc_off = alloc_off;
+    f.pushes = pushes;
+    f.prolog = prolog;
+    f
+};
+
+// One prologue instruction, as {go} (it belonged to the prologue) or {go:
+// false, ...} (it did not).  `off` is the instruction's offset within the
+// function; the CodeOffset a code carries is that instruction's last byte
+// plus one, which is where the effect is in force.
+def pe_prologue_insn(it: AsmItem, off: long, fp: bool, fp_off: long, alloc: long, alloc_off: long, pushes: [long], prolog: long) -> PePro {
+    let b = it.bytes;
+    let n = len(b);
+    let done = off + it.len;
+    let no = { go: false, fp: fp, fp_off: fp_off, alloc: alloc, alloc_off: alloc_off, pushes: pushes, prolog: prolog };
+    if (n < 1) {
+        no
+    } else if (b[0] == 0x55 || (b[0] >= 0x50 && b[0] <= 0x57)) {
+        // push %reg (no REX: rax..rdi)
+        pe_prologue_push(b[0] - 0x50, done, fp, fp_off, alloc, done, pushes, prolog)
+    } else if (b[0] == 0x41 && n >= 2 && b[1] >= 0x50 && b[1] <= 0x57) {
+        // push %r8..%r15
+        pe_prologue_push(b[1] - 0x50 + 8, done, fp, fp_off, alloc, done, pushes, prolog)
+    } else if (n >= 3 && b[0] == 0x48 && b[1] == 0x89 && b[2] == 0xe5) {
+        // mov %rsp,%rbp: the frame register, established HERE -- so its code
+        // carries this instruction's offset, not the prologue's end, which
+        // may be several pushes and a `sub` later.
+        { go: true, fp: true, fp_off: done, alloc: alloc, alloc_off: alloc_off, pushes: pushes, prolog: done }
+    } else if (n == 4 && b[0] == 0x48 && b[1] == 0x83 && b[2] == 0xec) {
+        // sub $imm8,%rsp
+        { go: true, fp: fp, fp_off: fp_off, alloc: alloc + b[3], alloc_off: done, pushes: pushes, prolog: done }
+    } else if (n == 7 && b[0] == 0x48 && b[1] == 0x81 && b[2] == 0xec) {
+        // sub $imm32,%rsp
+        let sz = enc.le32(b[3]);
+        let v = sz[0] + 256 * sz[1] + 65536 * sz[2] + 16777216 * sz[3];
+        if (v < 0) { no } else { { go: true, fp: fp, fp_off: fp_off, alloc: alloc + v, alloc_off: done, pushes: pushes, prolog: done } }
+    } else {
+        no
+    }
+};
+
+// A push: 8 bytes off the stack either way, and -- for a register Win64
+// considers nonvolatile -- a UWOP_PUSH_NONVOL whose CodeOffset is where that
+// register becomes unreadable.  The pack is offset * 16 + register, which
+// keeps a frame's whole code list flat.
+def pe_prologue_push(reg: long, done: long, fp: bool, fp_off: long, alloc: long, alloc_off: long, pushes: [long], prolog: long) -> PePro {
+    let np = pushes;
+    let na = alloc;
+    if (pe_nonvol(reg)) {
+        // A nonvolatile push gets UWOP_PUSH_NONVOL, which ALREADY says RSP
+        // went down by eight; counting it in the allocation as well would
+        // describe the same eight bytes twice and unwind 8 bytes too far.
+        np = pushes + [(done + 1) * 16 + reg];
+    } else {
+        // A volatile push has no code of its own (that is what MASM's
+        // .allocstack 8 is for), so the allocation is what covers it.
+        na = alloc + 8;
+    };
+    { go: true, fp: fp, fp_off: fp_off, alloc: na, alloc_off: done, pushes: np, prolog: done }
+};
+
+// One RUNTIME_FUNCTION per frame and one UNWIND_INFO per frame, the .pdata
+// entry naming the .xdata offset.  With no frames both sections are empty and
+// pe_build leaves them out.
+def pe_unwind_bytes(frames: [PeFrame], xbase: long) -> PeUnwind {
+    let pdata: [byte] = [];
+    let xdata: [byte] = [];
+    let i = 0;
+    while (i < len(frames)) {
+        let f = frames[i];
+        pdata = push_le32(pdata, f.start);
+        pdata = push_le32(pdata, f.end);
+        pdata = push_le32(pdata, xbase + len(xdata));
+        xdata = pe_unwind_info(xdata, f);
+        i = i + 1;
+    };
+    { pdata: pdata, xdata: xdata }
+};
+
+// The codes of one frame, each a two-slot group packed into one long per
+// slot, SORTED BY DESCENDING PROLOG OFFSET -- the order the epilog undoes
+// them, and the order the unwinder scans (it walks the array for the first
+// entry whose offset is <= the RIP offset, then undoes the rest).
+//
+// The packing: byte 0 of a slot is its CodeOffset, byte 1 is UnwindOp in the
+// LOW nibble and OpInfo in the HIGH one. So a slot is
+//     offset + (op + info * 16) * 256
+// and the writer below splits it back into two bytes. Note that the groups
+// are sorted as UNITS, not slot by slot: UWOP_ALLOC_LARGE's second slot holds
+// the allocation size, not an offset, and it must stay glued to its first.
+def pe_codes(f: PeFrame) -> [long] {
+    let g: [[long]] = [];
+    let i = 0;
+    while (i < len(f.pushes)) {
+        // the push is packed as offset*16 + register (pe_prologue_push), and
+        // the register is OpInfo, i.e. the HIGH nibble: multiply by 16.
+        let packed = f.pushes[i];
+        g += [[(packed / 16) + (packed % 16) * 4096]];
+        i = i + 1;
+    };
+    if (f.fp) { g += [[f.fp_off + 1 + 3 * 256]]; };
+    if (f.alloc > 0) { g += pe_alloc(f.alloc, f.alloc_off); };
+    pe_codes_sorted(g, 0)
+};
+
+// One allocation's group. CodeOffset is "the end of the instruction that did
+// it, plus one" -- the start of the next one -- which is what makes the
+// unwinder's scan for the first code with offset <= rip-offset work.
+// UWOP_ALLOC_SMALL covers 8..128 bytes (info = size/8 - 1); above that it is
+// UWOP_ALLOC_LARGE with info 0 and size/8 in the next slot.
+def pe_alloc(size: long, off: long) -> [[long]] {
+    if (size >= 8 && size <= 128) {
+        [[off + 1 + (2 + (size / 8 - 1) * 16) * 256]]
+    } else if (size > 128) {
+        [[off + 1 + 1 * 256, size / 8]]
+    } else {
+        []
+    }
+};
+
+// Insertion sort by descending CodeOffset (the low byte of a group's first
+// slot). A frame has at most nine groups.
+def pe_codes_sorted(g: [[long]], i: long) -> [long] {
+    let out: [[long]] = [];
+    let at = i;
+    while (at < len(g)) {
+        let cur = g[at];
+        let j = len(out);
+        out += cur;                       // the slot to insert into
+        while (j > 0 && (out[j - 1][0] % 256) < (cur[0] % 256)) {
+            out[j] = out[j - 1];
+            j = j - 1;
+        };
+        out[j] = cur;
+        at = at + 1;
+    };
+    let slots: [long] = [];
+    let k = 0;
+    while (k < len(out)) {
+        let q = 0;
+        while (q < len(out[k])) { slots += out[k][q]; q = q + 1; };
+        k = k + 1;
+    };
+    slots
+};
+
+// One UNWIND_INFO: the 4-byte header, the codes, then the padding to an even
+// slot count. With no flags there is no trailing handler or chained-info
+// DWORD, so a function with no codes is exactly 4 bytes.
+def pe_unwind_info(xdata: [byte], f: PeFrame) -> [byte] {
+    let c = pe_codes(f);
+    let n = len(c);
+    xdata += 1;                          // Version 1, no flags
+    xdata += f.prolog % 256;
+    xdata += n % 256;
+    // FrameRegister RBP (5) in the low nibble, the scaled offset (0 for
+    // `mov %rsp,%rbp`) in the high one.
+    if (f.fp) { xdata += 5; } else { xdata += 0; };
+    let i = 0;
+    while (i < n) {
+        xdata += c[i] % 256;
+        xdata += c[i] / 256 % 256;
+        i = i + 1;
+    };
+    if (n % 2 == 1) {
+        xdata += 0;
+        xdata += 0;
+    };
+    xdata
+};
+
+// ── PE -g: the COFF symbol table ────────────────────────────────────────
+// debug_syms already knows every function and global and its size; PE wants
+// the same facts as 18-byte COFF records (section numbers 1-based, Value an
+// RVA, no st_info byte as ELF has).  The table and its string table are
+// appended to the file by pe_build and mapped by nothing.
+def pe_coff_syms(syms: [ElfSym]) -> [byte] {
+    let out: [byte] = [];
+    let strtab: [byte] = [];
+    let i = 0;
+    while (i < len(syms)) {
+        let s = syms[i];
+        out = pe_coff_sym(out, s.name, s.off, pe_coff_secnum(s.sec));
+        i = i + 1;
+    };
+    let tail: [byte] = [];
+    tail = push_le32(tail, len(strtab) + len(out));
+    tail = push_bytes(tail, strtab);
+    push_bytes(out, tail)
+};
+
+def pe_coff_secnum(sec: long) -> long {
+    if (sec == 2) { 2 } else { 1 }
+};
+
+// The 8-byte name field, zero-padded.  A name of 8 bytes or more goes in the
+// string table behind a zero field, and none of ours is that long -- the
+// renamed `yfn_<uid>_<name>` symbols are shortened by sym_name first, which
+// is what keeps them short.
+def pe_coff_sym(out: [byte], nm: str, val: long, secnum: long) -> [byte] {
+    let i = 0;
+    let n = len(nm);
+    while (i < 8) {
+        if (i < n) { out += byte_at(nm, i); } else { out += 0; };
+        i = i + 1;
+    };
+    out = push_le32(out, val);
+    out = push_le16(out, secnum);
+    out = push_le16(out, 32);            // Type: IMAGE_SYM_DTYPE_FUNCTION << 4
+    out += 3;                            // StorageClass: STATIC
+    out += 0;                            // NumberOfAuxSymbols
+    out
+};
 // ── -g: the symbol table ───────────────────────────────────────────────
 // A function symbol starts at every label a body begins with: `_start`,
 // a runtime helper (`y_*`) or a compiled def (`yfn_<uid>_<name>`). Jump
@@ -1828,7 +2238,16 @@ def after_uid(s: str, k: long) -> str {
 // sections. Rows are flat (offset, file, line) triples in text order; a
 // `.file N` fills slot N-1 of the table ("?" stands in for a number never
 // named). No row -- a text without markers -- means no sections at all.
-def debug_lines(items: [AsmItem], code_len: long, code_off: long) -> [ElfSec] {
+// `code_addr` is the ABSOLUTE address the first code byte is loaded at --
+// asm_image_base's answer, which is the ELF base plus the header size or the
+// PE's ImageBase plus .text's RVA. It was a segment OFFSET and this function
+// added 4194304 to it, which is right for exactly one target and wrong by
+// 4194304 for the other -- and since asm_image_base returns an absolute
+// address, even the ELF side got it twice: every .debug_line address under -g
+// read 0x800000-something where the code actually sits at 0x401000. The port
+// gate is what surfaced it: the C twin's shape (an offset, +4194304 here)
+// produced 0x401xxx and the two copies disagreed on every -g binary.
+def debug_lines(items: [AsmItem], code_len: long, code_addr: long) -> [ElfSec] {
     let files: [str] = [];
     let rows: [long] = [];
     foreach (it in items) {
@@ -1848,7 +2267,7 @@ def debug_lines(items: [AsmItem], code_len: long, code_off: long) -> [ElfSec] {
         let none_s: [ElfSec] = [];
         none_s
     } else {
-        dwarf.dwarf_sections(files, rows, 4194304 + code_off, code_len, asm_cwd())
+        dwarf.dwarf_sections(files, rows, code_addr, code_len, asm_cwd())
     }
 };
 

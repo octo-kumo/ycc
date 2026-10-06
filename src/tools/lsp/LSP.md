@@ -1666,7 +1666,7 @@ Reusable as-is, no compiler change:
 | `lexer.tokenize(src) -> [Tok]` (its export list) | the parser's lexer. Not usable for spans (R2.2). |
 | `parser.parse_program(toks) -> Block` (`parser.parse_program`'s export list) | error-recovering; plants `err` nodes, syncs at `;` and `}` (`parser.sync_stmt`). |
 | `types.check_program(ast, ext) -> [Diag]` (`types.check_program`) | all errors at once, via the `tunk` poison (`types.t_unk`, `teq` `:209`). |
-| `lint.lint_unit(ast, ast3, ofile, fmods, wlevel) -> [Diag]` | all warnings, sorted and deduped. |
+| `lint.lint_unit(ast, ast3, ofile, fmods, wlevel, ogen) -> [Diag]` | all warnings, sorted and deduped. `ogen` is the meta pass's "this file has a block" flag, so `lint_meta_top` can warn about a top-level statement that runs twice. |
 | `types.inferred_ret(line, col)` (`types.inferred_ret`) | exported already; function return types free. |
 | `native.native_resolve_x(src, base_dir, …)` (`native.native_resolve_x`) | takes **text**; the unsaved-buffer seam. |
 | `native.origin_file` / `origin_at` | spliced line → file + line. |

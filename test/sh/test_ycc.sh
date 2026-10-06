@@ -207,6 +207,17 @@ expect_cli_error "-W above 1" "ycc: -W needs a warning level (0, or 1), got '2'"
 expect_cli_error "-W that would wrap the scan" \
     "ycc: -W needs a warning level (0, or 1), got '99999999999999999999'" \
     -W 99999999999999999999 -o /tmp/ycc_wlevel.out "$ROOT/test/y/native/t01_arith.y"
+# --target: the one global the whole compiler branches on (target.y), written
+# before anything reads it. Both spellings are accepted and both are checked,
+# because a flag that works in one form and not the other is a flag nobody can
+# rely on.
+# ...with the flag LAST, which is the only way to reach the "needs a name"
+# branch: anything after --target is its name, so `--target -o out` is an
+# unknown TARGET called -o, not a missing one.
+expect_cli_error "--target without a name" "ycc: --target needs a name (linux, windows)" \
+    -o /tmp/ycc_target.out "$ROOT/test/y/native/t01_arith.y" --target
+expect_cli_error "--target with an unknown name" "ycc: unknown target 'plan9' (linux, windows)" \
+    --target=plan9 -o /tmp/ycc_target.out "$ROOT/test/y/native/t01_arith.y"
 expect_cli_error "no input file" "error: no input file (see ycc -h)"
 expect_cli_error "multiple input files" "error: ycc compiles one program; use imports to combine files" \
     "$ROOT/test/y/native/t01_arith.y" "$ROOT/test/y/native/t02_recursion.y"
@@ -291,6 +302,54 @@ if [ "$fifo_ec" -eq 2 ] && cmp -s "/tmp/ycc_fifo_$(basename "$YCC_BIN").s" \
     pass "fifo read identical from both copies"
 fi
 rm -f /tmp/ycc_fifo_*.s
+
+# `ycc -E` (ideas/meta.md, "Debuggability") dumps the source the lexer sees,
+# with origin markers as comments. It has to be usable: re-compiling the dump
+# gives the same binary, and a dump of a file with a meta block holds the
+# GENERATED text -- including any `#{` inside a literal, which the pass never
+# rescans.
+meta_dump() {
+    local prog="$1" tag="$2" dir ec
+    dir=$(mktemp -d /tmp/ycc_meta_XXXXXX)
+    timeout $(( 120 * YTIMEOUT_SCALE )) "$YCC_BIN" "$prog" -o "$dir/a" \
+        >"$dir/a.err" 2>&1 </dev/null
+    if [ $? -ne 0 ]; then
+        fail "$tag compile" "$(head -c 200 "$dir/a.err" | tr '\n' '|')"
+        rm -rf "$dir"
+        return
+    fi
+    timeout $(( 120 * YTIMEOUT_SCALE )) "$YCC_BIN" -E "$prog" >"$dir/dump.y" 2>/dev/null </dev/null
+    ec=$?
+    if [ $ec -ne 0 ]; then
+        fail "$tag -E" "exit $ec"
+        rm -rf "$dir"
+        return
+    fi
+    timeout $(( 120 * YTIMEOUT_SCALE )) "$YCC_BIN" "$dir/dump.y" -o "$dir/b" \
+        >"$dir/b.err" 2>&1 </dev/null
+    ec=$?
+    if [ $ec -ne 0 ]; then
+        fail "$tag recompile the dump" "$(head -c 200 "$dir/b.err" | tr '\n' '|')"
+        rm -rf "$dir"
+        return
+    fi
+    if cmp -s "$dir/a" "$dir/b"; then
+        pass "$tag: recompiling the -E dump gives the same bytes"
+    else
+        fail "$tag roundtrip" "the binary from the dump differs"
+    fi
+    rm -rf "$dir"
+}
+meta_dump "$ROOT/test/y/native/t01_arith.y" "-E dump"
+# A meta file whose TOP LEVEL PRINTS NOTHING, and that is the point: the
+# generator is the file's own top level, so a top-level print in a meta file
+# writes to ycc's stdout before the dump (the "top level runs twice" of
+# ideas/meta.md, which lint warns about and t199 checks). t197 has only
+# declarations and one block.
+meta_dump "$ROOT/test/y/native/t197_meta_field_name_ok.y" "-E dump of a meta file"
+# and one with a MID-TOKEN block, where the dump holds generated text the
+# scanner must never read again (ideas/meta.md, "the two cases")
+meta_dump "$ROOT/test/y/native/t200_meta_mid_token.y" "-E dump of a mid-token meta file"
 
 echo ""
 echo "═══════════════════════════════════════════"

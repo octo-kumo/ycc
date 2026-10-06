@@ -33,7 +33,9 @@ Yv *strip_seps(Yv *s);               /* (s: str) -> str */
 int isspace(long c);                 /* (c: byte) -> bool */
 int ispunct(long c);                 /* (c: byte) -> bool */
 Yv *lex_quoted(Yv *src, long i, long line, long col, Yv *what);
-                                     /* -> { text: str, end: long, line: long, col: long } */
+                                     /* -> { text: str, end: long, line: long, col: long, err: str } */
+long lit_end(Yv *src, long q, long *closed);
+                                     /* (src: str, q: long, closed: [long]) -> long */
 Yv *mktok(Yv *t, Yv *v, long line, long col);
                                      /* -> { t: str, v: str, line: long, col: long } */
 long hexvalx(Yv *c);                 /* (c: str) -> long */

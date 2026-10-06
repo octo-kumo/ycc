@@ -502,9 +502,10 @@ static Yv *enc_mov(Yv *buf, long at, Yv *dst, Yv *src) {
         if (r < 0) { off = 2; }
         return enc_ok(q, yav(1, fixup(at + off, ys("imm32diff"), yr_get(src, "a"), yr_get(src, "b"))));
     } else if (yv_l(yr_get(dst, "k")) == K_reg && yv_l(yr_get(src, "k")) == K_fs && op_size(dst) == 64) {
-        /* mov %fs:disp32, r64: the fs prefix, REX.W, 8B, a SIB with no
-           base and no index (an absolute disp32) */
-        long n = put(buf, at, 100);
+        /* mov %seg:disp32, r64: the segment prefix (0x64 %fs, 0x65 %gs --
+           the operand's `n`), REX.W, 8B, a SIB with no base and no index (an
+           absolute disp32) */
+        long n = put(buf, at, 100 + yv_l(yr_get(src, "n")));
         long m = put(buf, n, rex(1, yv_l(yr_get(dst, "n")), -1, -1));
         long q = put2(buf, m, 139, modrm(0, yv_l(yr_get(dst, "n")), 4));
         long p = put(buf, q, 37);
@@ -652,6 +653,7 @@ static Yv *enc_lea(Yv *buf, long at, Yv *dst, Yv *src) {
     }
 }
 
+static Yv *enc_test32(Yv *buf, long at, Yv *dst, Yv *src);
 static Yv *enc_arith(Yv *buf, long at, Yv *op, Yv *dst, Yv *src) {
     /* op: add/sub/xor/and/or/cmp/test; r64,r64 only here */
     if (yv_l(yr_get(dst, "k")) == K_reg && op_size(dst) == 64
@@ -677,6 +679,21 @@ static Yv *enc_xor32(Yv *buf, long at, Yv *dst, Yv *src) {
         return enc_ok(put2(buf, n, 49, modrm(3, yv_l(yr_get(src, "n")), yv_l(yr_get(dst, "n")))), yav(0));
     } else {
         return enc_err(at, ys("xor32 form"));
+    }
+}
+
+/* 32-bit `test r32, r32` -- base 0x85 with NO REX.W. 32-bit registers are r32
+   names (%eax not %rax), so the size is in the name rather than a prefix, and
+   `test %eax, %eax` on an NTSTATUS is exactly this. The Windows prelude
+   branches on NTSTATUS that way: `test %eax, %eax; js` is the failure test
+   (NTSTATUS is signed and negative means failure), and carrying a SysV
+   `js` over would read failure as success. */
+static Yv *enc_test32(Yv *buf, long at, Yv *dst, Yv *src) {
+    if (op_size(dst) == 32 && op_size(src) == 32) {
+        long n = put_rex(buf, at, rex(0, yv_l(yr_get(src, "n")), -1, yv_l(yr_get(dst, "n"))));
+        return enc_ok(put2(buf, n, 133, modrm(3, yv_l(yr_get(src, "n")), yv_l(yr_get(dst, "n")))), yav(0));
+    } else {
+        return enc_err(at, ys("test32 form"));
     }
 }
 
@@ -1071,7 +1088,15 @@ static Yv *enc_unary_mem(Yv *buf, long at, Yv *op, Yv *o) {
    asm_relax). `code` is the long form's condition byte (0x84 for je, 0x85 for
    jne, ...), which setcc shares. */
 static Yv *enc_jmp(Yv *buf, long at, Yv *o, int lng) {
-    if (yv_l(yr_get(o, "k")) != K_lbl) {
+    if (yv_l(yr_get(o, "k")) == K_ind) {
+        /* jmp *%reg -- FF /4. The one jump through a register the backend
+         * emits: the `jmp_at` builtin's, which a forked child uses to enter a
+         * compiled image it mapped at a scratch address (meta.c run_image).
+         * enc_ok's empty fixups keep asm_relax off it: a jump through a
+         * register has no label to shorten to. */
+        long n = put_rex(buf, at, rex(0, 0, -1, yv_l(yr_get(o, "n"))));
+        return enc_ok(put2(buf, n, 255, modrm(3, 4, yv_l(yr_get(o, "n")))), yav(0));
+    } else if (yv_l(yr_get(o, "k")) != K_lbl) {
         return enc_err(at, ys("jmp target"));
     } else if (lng) {
         long n = put(buf, at, 233);
@@ -1220,6 +1245,9 @@ Yv *enc_insn(Yv *buf, long at, Yv *mn, Yv *ops, int lng) {
             } else if (yv_l(yr_get(dst, "k")) == K_reg && yv_l(yr_get(src, "k")) == K_reg
                        && ys_eq_lit(mn, "xor") && op_size(dst) == 32 && op_size(src) == 32) {
                 return enc_xor32(buf, at, dst, src);
+            } else if (yv_l(yr_get(dst, "k")) == K_reg && yv_l(yr_get(src, "k")) == K_reg
+                       && ys_eq_lit(mn, "test") && op_size(dst) == 32 && op_size(src) == 32) {
+                return enc_test32(buf, at, dst, src);
             } else {
                 return enc_arith(buf, at, mn, dst, src);
             }
@@ -1477,6 +1505,7 @@ Yv *enc_form(Yv *buf, long at, long f, Yv *mn, Yv *ops, int lng) {
     else if (f == 94) { return enc_sse_arith(buf, at, mn, ya_get(ops, 1), ya_get(ops, 0)); }  // addsd O_REG O_REG
     else if (f == 95) { return enc_sse_arith(buf, at, mn, ya_get(ops, 1), ya_get(ops, 0)); }  // subsd O_REG O_REG
     else if (f == 96) { return enc_ucomisd(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // ucomisd O_REG O_REG
+    else if (f == 97) { return enc_jmp(buf, at, ya_get(ops, 0), lng); }  // jmp O_IND
     else {
         return enc_err(at, ys_cat(ys_cat(ys("unknown form '"), mn), ys("'")));
     }

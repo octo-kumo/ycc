@@ -395,6 +395,136 @@ y_alloc_map:
     test %rax, %rax
     js y_alloc_fail
     ret
+# y_os_exit(status) -- exit_group(status), and it does NOT return. Called from
+# the emitter's `exit(N)` rather than inlined, because rt.y's own error paths
+# call exit(1): rt.y is compiled into the std pack, and the pack is written by
+# ONE compiler with ONE res_target, so any target test the emitter makes while
+# compiling rt.y is baked into every program built from that pack. Naming a
+# label instead puts the choice where it belongs -- the arch module -- and makes
+# rt.y's compiled body identical for both targets. Status in %rdi, the calling
+# convention every function here uses.
+y_os_exit:
+    push %rbp
+    mov %rsp, %rbp
+    mov 16(%rbp), %rdi
+    mov $231, %rax
+    syscall
+    mov %rbp, %rsp
+    pop %rbp
+    ret
+# y_os_write(fd, buf, len) -> bytes written, or -1. The named-syscall-layer
+# entry point rt.y's y_put_hstr reaches (os_write in the checker): write(2)
+# here, NtWriteFile on Windows (src/y/arch/wsys.s). One label, one calling
+# convention, so shared std code does not have to know which target it is
+# compiled for -- which is the whole point, since the four embedded std units
+# are shared by both and serialized into one pack.
+#
+# It reads its three arguments off the stack -- 24(%rsp) for the descriptor,
+# 16 for the bytes, 8 for the count -- rather than out of %rdi/%rsi/%rdx.
+# Arguments are pushed left to right by gen_push_args, so the LAST one pushed
+# is the first parameter and sits lowest, just above the return address the
+# `call` pushed; that is the same rbp+16+8*(n-1-k) layout every Y function
+# uses, and the reason a `call` cannot leave them in registers.
+y_os_write:
+    mov 24(%rsp), %rdi
+    mov 16(%rsp), %rsi
+    mov 8(%rsp), %rdx
+    mov $1, %eax
+    syscall
+    test %rax, %rax
+    js yosw_fail
+    ret
+yosw_fail:
+    mov $-1, %rax
+    ret
+# The named syscall layer: the blocks std code reaches the kernel through, by
+# name, so that rt.y/prelude.y/exec.y compile to the same bytes on every
+# target and the std pack stays target-independent (types.y os_call_names has
+# the argument for why that is not a simplification).
+#
+# Every one of these is frameless and reads its arguments off the stack, the
+# way y_os_write above does: pushed left to right, so the LAST parameter sits
+# lowest, just above the return address the `call` pushed. `ret` and nothing
+# else -- the block's result is in %rax, and a negative return is the kernel's
+# own errno-negative convention, which is what the caller's `>= 0` checks want.
+#
+# Each name here needs a Windows body in wsys.s, and types.y's os_call_names is
+# the list of the names both halves must define: adding a name to one and not
+# the other is a link error on the target that is missing it, and native.y
+# check_os_call_names turns that into a compile error here instead.
+#
+# These three read and fill a struct timespec { i64 sec; i64 nsec; }, which is
+# the Linux layout and is also what rt.y allocates. The Windows halves CONVERT
+# -- a FILETIME is two 32-bit fields and a QPC tick is not a nanosecond -- so
+# nothing above the arch module has to know either.
+#
+# y_os_read(fd, buf, len) -> bytes read, or a negative errno. read(2).
+# y_os_lseek(fd, off, whence) -> the new offset, or a negative errno. lseek(2).
+# prelude.y's readline uses it to push back what it read too much of: whence 1
+# (SEEK_CUR) with a negative offset. The Windows half is not a transliteration
+# of this one -- Windows has no lseek at all -- and says so.
+y_os_lseek:
+    mov 24(%rsp), %rdi
+    mov 16(%rsp), %rsi
+    mov 8(%rsp), %rdx
+    mov $8, %eax
+    syscall
+    ret
+# y_os_clock_gettime(clock, ts) -> 0, or a negative errno. clock is 0 for
+# CLOCK_REALTIME (microseconds since the epoch) and 1 for CLOCK_MONOTONIC.
+# clock_gettime(2) is ONE syscall number for every clock, hence one entry in
+# arch_x64.y's table rather than two.
+y_os_clock_gettime:
+    mov 16(%rsp), %rdi
+    mov 8(%rsp), %rsi
+    mov $228, %eax
+    syscall
+    ret
+# y_os_nanosleep(ts) -> 0, or a negative errno (a negative EINTR means the sleep
+# was cut short, which rt.y's sleep ignores). nanosleep(2). The second argument
+# stays 0: `rem` is the remaining time and nothing here wants it.
+y_os_nanosleep:
+    mov 8(%rsp), %rdi
+    xor %esi, %esi
+    mov $35, %eax
+    syscall
+    ret
+y_os_read:
+    mov 24(%rsp), %rdi
+    mov 16(%rsp), %rsi
+    mov 8(%rsp), %rdx
+    xor %eax, %eax
+    syscall
+    ret
+# y_os_wait4(pid, status) -> the pid that changed state, or a negative errno.
+# wait4(2) with options 0, so the wait is not WNOHANG and not __WCLONE. The
+# status word is written as a plain 32-bit int, which is what rt.y's
+# `status[0] & 65535` reads.
+y_os_wait4:
+    mov 16(%rsp), %rdi
+    mov 8(%rsp), %rsi
+    xor %edx, %edx
+    xor %r10d, %r10d
+    mov $61, %eax
+    syscall
+    ret
+# y_os_fork() -> 0 in the child, the child's pid in the parent, or a negative
+# errno. fork(2). Only one argument register is live here, so the ABI delta
+# this block would otherwise carry is nothing at all.
+y_os_fork:
+    mov $57, %eax
+    syscall
+    ret
+# y_os_execve(path, argv, envp) -> does not return on success; a negative errno
+# on failure. execve(2). `path` and `argv` are NUL-terminated C strings and
+# `envp` is an array of them, all made by exec.y.
+y_os_execve:
+    mov 24(%rsp), %rdi
+    mov 16(%rsp), %rsi
+    mov 8(%rsp), %rdx
+    mov $59, %eax
+    syscall
+    ret
 y_heap_used:
     lea y_heap(%rip), %rcx
     mov 24(%rcx), %rdx
@@ -1679,4 +1809,38 @@ y_bytes_to_str:
     pop %r13
     pop %rbx
     pop %rbp
+    ret
+# y_os_openat(dirfd, path, plen, flags, mode) -> the fd, or -1.
+# The shared std code names ONE entry point for both kernels (ideas/WINDOWS.md):
+# here it is openat(2) with dirfd AT_FDCWD (-100) and the Linux O_* flags fs.y
+# already computes. plen is passed and IGNORED -- openat(2) takes a NUL-
+# terminated path, so the byte is already there. The Windows half needs the
+# length to widen the path into UTF-16, so the shared signature carries it and
+# only one target has a use for it.
+# Arguments arrive cdecl-style, pushed right to left, so argN is the closest to
+# the return address and arg1 is the furthest: for five arguments that is 8, 16,
+# 24, 32 and 40 (%rsp) for args five down to one. y_os_read's three arguments at
+# 24, 16 and 8 are the same rule seen from the other end. openat(2) wants four
+# of the five in rdi, rsi, rdx and r10, so arg3 (plen) is stepped over.
+y_os_openat:
+    mov 8(%rsp), %r10
+    mov 16(%rsp), %rdx
+    mov 32(%rsp), %rsi
+    mov 40(%rsp), %rdi
+    mov $257, %eax
+    syscall
+    ret
+# y_os_close(fd) -> 0, or -1. One contract on both kernels: zero for success,
+# negative for failure, which is what fs.close_file's `== 0` asks for and what
+# close(2) already returns. NtClose answers an NTSTATUS instead, so the Windows
+# half folds "not a success" into -1 rather than handing a 0xC00000xx back as
+# if it were a descriptor.
+y_os_close:
+    mov 8(%rsp), %rdi
+    mov $3, %eax
+    syscall
+    test %rax, %rax
+    jns yosc_ret
+    mov $-1, %rax
+yosc_ret:
     ret

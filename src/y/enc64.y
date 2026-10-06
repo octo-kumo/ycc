@@ -412,9 +412,10 @@ def enc_mov(buf: [byte], at: long, dst: Operand, src: Operand) -> Encoded {
         if (r < 0) { off = 2; };
         enc_ok(q, [fixup(at + off, "imm32diff", src.a, src.b)])
     } else if (dst.k == K.reg && src.k == K.fs && op_size(dst) == 64) {
-        // mov %fs:disp32, r64: the fs prefix, REX.W, 8B, a SIB with no
-        // base and no index (an absolute disp32)
-        let n = put(buf, at, 100);
+        // mov %seg:disp32, r64: the segment prefix (0x64 %fs, 0x65 %gs -- the
+        // operand's `n`), REX.W, 8B, a SIB with no base and no index (an
+        // absolute disp32)
+        let n = put(buf, at, 100 + src.n);
         let m = put(buf, n, rex(true, dst.n, -1, -1));
         let q = put2(buf, m, 139, modrm(0, dst.n, 4));
         let p = put(buf, q, 37);
@@ -573,6 +574,21 @@ def enc_arith(buf: [byte], at: long, op: str, dst: Operand, src: Operand) -> Enc
         enc_ok(put2(buf, n, base, modrm(3, src.n, dst.n)), [])
     } else {
         enc_err(at, "arith reg form")
+    }
+};
+
+// test r32, r32: the same two bytes as xor r32, r32 with the /r field 0
+// instead of 1. The 32-bit form is what a WINDOWS NTSTATUS test needs: the
+// status is a 32-bit value and only its bit 31 says failure, while a 64-bit
+// test would read bit 63 -- which is set on a sign-extended status and clear
+// on a zero-extended one, so the same program would pass or fail the check
+// depending on how the kernel left RAX's high half.
+def enc_test32(buf: [byte], at: long, dst: Operand, src: Operand) -> Encoded {
+    if (op_size(dst) == 32 && op_size(src) == 32) {
+        let n = put_rex(buf, at, rex(false, src.n, -1, dst.n));
+        enc_ok(put2(buf, n, 133, modrm(3, src.n, dst.n)), [])
+    } else {
+        enc_err(at, "test32 form")
     }
 };
 
@@ -974,7 +990,15 @@ def enc_unary_mem(buf: [byte], at: long, op: str, o: Operand) -> Encoded {
 // asm_relax). `code` is the long form's condition byte (0x84 for je, 0x85 for
 // jne, ...), which setcc shares.
 def enc_jmp(buf: [byte], at: long, o: Operand, lng: bool) -> Encoded {
-    if (o.k != K.lbl) {
+    if (o.k == K.ind) {
+        // jmp *%reg -- FF /4. The one jump through a register the backend
+        // emits: the `jmp_at` builtin's, which a forked child uses to enter a
+        // compiled image it mapped at a scratch address (meta.y run_image).
+        // enc_ok's `br: -1` keeps asm_relax off it: a jump through a register
+        // has no label to shorten to.
+        let n = put_rex(buf, at, rex(false, 0, -1, o.n));
+        enc_ok(put2(buf, n, 255, modrm(3, 4, o.n)), [])
+    } else if (o.k != K.lbl) {
         enc_err(at, "jmp target")
     } else if (lng) {
         let n = put(buf, at, 233);
@@ -1124,6 +1148,8 @@ def enc_insn(buf: [byte], at: long, mn: str, ops: [Operand], lng: bool) -> Encod
                 }
             } else if (dst.k == K.reg && src.k == K.reg && mn == "xor" && op_size(dst) == 32 && op_size(src) == 32) {
                 enc_xor32(buf, at, dst, src)
+            } else if (dst.k == K.reg && src.k == K.reg && mn == "test" && op_size(dst) == 32 && op_size(src) == 32) {
+                enc_test32(buf, at, dst, src)
             } else {
                 enc_arith(buf, at, mn, dst, src)
             }
@@ -1387,6 +1413,7 @@ def enc_form(buf: [byte], at: long, f: long, mn: str, ops: [Operand], lng: bool)
     else if (f == 94) { enc_sse_arith(buf, at, mn, ops[1], ops[0]) }  // addsd O_REG O_REG
     else if (f == 95) { enc_sse_arith(buf, at, mn, ops[1], ops[0]) }  // subsd O_REG O_REG
     else if (f == 96) { enc_ucomisd(buf, at, ops[1], ops[0]) }  // ucomisd O_REG O_REG
+    else if (f == 97) { enc_jmp(buf, at, ops[0], lng) }  // jmp O_IND
     else { enc_err(at, "unknown form '" + mn + "'") }
 };
 

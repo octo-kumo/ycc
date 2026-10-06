@@ -2,22 +2,50 @@
 // 1:1 port of src/y/arch_x64.y (see PORTING.md): same defs in the same
 // order, same control flow, character-identical asm text.
 #include "arch_x64.h"
+#include "target.h"
 
 Y_EMBED(PRELUDE_ASM, "src/y/arch/prelude.s")
 Y_EMBED(THREADS_ASM, "src/y/arch/threads.s")
+/* The Windows half of the arch prelude: the blocks of prelude.s that reach
+   the kernel, replaced whole (see arch_windows_lines). It is DATA here, not a
+   second arch module — a path import is flattened into its importer, so a
+   second arch_x64.y could not coexist (arch_frame would be defined twice and
+   the second would win). */
+Y_EMBED(W_SYS_ASM, "src/y/arch/wsys.s")
+/* The float primitives std/math.y's kernels reach for (`native def`s with no
+   body -- see NATIVE.md, "Backend"), one embedded copy like the rest. */
 Y_EMBED(MATH_ASM, "src/y/arch/math.s")
 
 /* imported */
-/* none — arch_x64.y calls no other module's defs. The only builtins used
-   are tostring(x) of a long -> ys_long(x) and join(a, sep) -> ys_join(a,
-   sep); both come from yv.h. */
+/* target.c's res_target / target_is_windows (target.y), the one other module
+   this one calls. The rest of the builtins used are tostring(x) of a long ->
+   ys_long(x) and join(a, sep) -> ys_join(a, sep); both come from yv.h. */
+
+/* The Windows half of the prelude (arch_x64.y's "── the Windows half ──"
+   section). Every one of these is a `def` the Y module does not export, so
+   each is static here; arch_windows_lines is forward-declared because
+   arch_prelude_lines above calls it, exactly as the Y module's own order has
+   it. */
+static long l_sysno(Yv *name);
+static long w_sysno(Yv *name);
+static Yv *arch_windows_lines(void);
+static Yv *arch_win_blocks(Yv *lines);
+static long arch_win_check(Yv *lines, Yv *blocks);
+static int arch_win_labeled(Yv *lines, Yv *nm);
+static Yv *arch_win_marker(Yv *l);
+static Yv *arch_win_tail(Yv *mode, Yv *name);
+static Yv *arch_win_head(Yv *nm);
+static int arch_is_label_line(Yv *l);
+static Yv *arch_win_sub(Yv *lines, Yv *blocks);
+static Yv *arch_win_split(Yv *out);
+static long arch_win_find(Yv *blocks, Yv *nm);
+static Yv *arch_win_push(Yv *out, Yv *l);
 
 /* the twin of arch_x64.y's arch_asm_lines: the embedded text as prelude
    lines, one per line, indentation kept. Dropped: a whole-line '#' comment
    (the in-tree assembler treats a comment as a backend bug and must never see
-   one — every comment line in the .s files under src/y/arch starts at column 0
-   for exactly
-   this reason) and the empty tail a trailing newline leaves behind. The two
+   one — every comment line in the arch .s files starts at column 0
+   for exactly that reason) and the empty tail a trailing newline leaves behind. The two
    costs are accounted for in the Y comment: split() materialising the lines
    (+374K instructions once per process, the price of one copy of the asm), and
    no trim per line, which cost ~630 instructions a line (+37% on hello.y). Byte
@@ -37,7 +65,8 @@ static Yv *arch_asm_lines(Yv *text) {
 }
 
 Yv *arch_id(void) {
-    return ys("x86_64-linux");
+    if (target_is_windows()) { return ys("x86_64-windows"); }
+    else { return ys("x86_64-linux"); }
 }
 
 long arch_word(void) {
@@ -45,14 +74,67 @@ long arch_word(void) {
 }
 
 // syscall number table. NOTE: one arm per syscall (ladder style, see the
-// master note in asm.y's is_digit_ch — not a language restriction).
+// master note in asm.c's is_digit_ch — not a language restriction).
+// The Windows half is w_sysno: the numbers there are the NT syscall index
+// range, which is dense and live, so a Linux number left behind does not
+// fail loudly — it calls a different, real Nt function. That is why they are
+// one table here, read off the stubs in a real ntdll rather than written from
+// memory, and why w_self_test probes one call per class at program start.
 long arch_sysno(Yv *name) {
+    if (target_is_windows()) { return w_sysno(name); }
+    else { return l_sysno(name); }
+}
+
+static long l_sysno(Yv *name) {
     if (ys_eq_lit(name, "read")) { return 0; }
     else if (ys_eq_lit(name, "write")) { return 1; }
     else if (ys_eq_lit(name, "close")) { return 3; }
     else if (ys_eq_lit(name, "openat")) { return 257; }
     else if (ys_eq_lit(name, "exit")) { return 60; }
     else { return -1; }
+}
+
+// The NT syscall index of each Windows call, pinned to Windows 10 1607 / 11
+// x64. Measured, not remembered: each number was read out of the `mov $N,%eax`
+// of the corresponding stub in a real ntdll.dll's .text (a leftover Linux
+// number silently calls a real, different Nt function, which is exactly why
+// this is one table a review can read at once).
+static long w_sysno(Yv *name) {
+    if (ys_eq_lit(name, "write")) { return 8; }              /* NtWriteFile */
+    else if (ys_eq_lit(name, "read")) { return 6; }          /* NtReadFile */
+    else if (ys_eq_lit(name, "close")) { return 15; }        /* NtClose */
+    else if (ys_eq_lit(name, "exit")) { return 44; }         /* NtTerminateProcess */
+    else if (ys_eq_lit(name, "alloc")) { return 24; }        /* NtAllocateVirtualMemory */
+    else if (ys_eq_lit(name, "free")) { return 30; }         /* NtFreeVirtualMemory */
+    else if (ys_eq_lit(name, "protect")) { return 80; }      /* NtProtectVirtualMemory */
+    else if (ys_eq_lit(name, "perf_counter")) { return 49; } /* NtQueryPerformanceCounter */
+    else if (ys_eq_lit(name, "delay")) { return 52; }        /* NtDelayExecution */
+    else if (ys_eq_lit(name, "system_time")) { return 90; }  /* NtQuerySystemTime */
+    else { return -1; }
+}
+
+/* The Windows syscall self-test (ideas/WINDOWS.md, Risks): one Nt call per
+   class, its NTSTATUS checked, run once at program start when the target is
+   Windows. A number that drifted calls some other Nt function, and the honest
+   failure for that is a program that says so at startup rather than one that
+   misbehaves hours later. Memory (NtAllocateVirtualMemory), a file handle
+   (NtClose on the standard output), time (NtQueryPerformanceCounter) and a
+   thread (NtCreateThreadEx, whose failure path is "already probed": a real
+   thread is not started, the call is only made when a program uses threads).
+   Returns "" when every probe passed, else the name of the one that did not.
+
+   UNIMPLEMENTED, and the comment above is the specification it does not yet
+   meet: this returns nothing, so no program checks its syscall table at
+   startup. See the B9 item in the work report — do not read the paragraph
+   above as a claim about current behaviour.
+
+   Not `static`, and not in arch_x64.h either: a Y `def` is callable from
+   anywhere in its module and nothing warns when nothing calls it, whereas an
+   unused static is a -Wunused-function warning. Leaving the definition with
+   external linkage keeps the twin honest; leaving it out of the header keeps
+   the header matching the Y export list exactly. */
+Yv *w_self_test_lines(void) {
+    return yav(0);
 }
 
 Yv *arch_fn_label(long uid, Yv *name) {
@@ -118,7 +200,10 @@ long arch_frame(long slots) {
 }
 
 Yv *arch_exit(void) {
-    return ys("    mov $231, %rax\n    xor %edi, %edi\n    syscall\n");
+    if (target_is_windows()) {
+        return ys("    mov $44, %rax\n    mov $-1, %r10\n    xor %edi, %edi\n    mov %edi, %r9\n    syscall\n");
+    }
+    else { return ys("    mov $231, %rax\n    xor %edi, %edi\n    syscall\n"); }
 }
 
 // The prelude as its lines: labels alone at column 0, everything else
@@ -134,7 +219,8 @@ Yv *arch_prelude_lines(void) {
     // string/array cores
     // (eq/cmp/cat/join/slice, arr push/prepend/slice/cat/eq), long and
     // float formatting, str<->[byte] conversion and argv materialization.
-    return arch_asm_lines(PRELUDE_ASM());
+    if (target_is_windows()) { return arch_windows_lines(); }
+    else { return arch_asm_lines(PRELUDE_ASM()); }
 }
 
 // The thread runtime (CHOICES_MADE.md 33), linked only when a program's
@@ -178,4 +264,217 @@ Yv *arch_consts(void) {
     lines = ya_push(lines, ys("ystr_int: .ascii \"runtime error: a float with no integer part a long holds\\n\""));
     lines = ya_push(lines, ys("ystr_int_end:"));
     return ys_cat(ys_join(lines, ys("\n")), ys("\n"));
+}
+
+// ── the Windows half of the prelude ─────────────────────────────────────
+// Everything in prelude.s that reaches the kernel carries a SysV `syscall`
+// inline, so those blocks are wrong on Windows and everything else in the
+// prelude is not. Rather than a second copy of 1682 lines of assembly, the
+// target-specific blocks are replaced WHOLE: arch_windows_lines walks the
+// prelude's lines and, at each block wsys.s claims, emits that block's lines
+// instead and skips the Linux one.
+//
+// wsys.s delimits its blocks with a `#=== ... ===` marker line, because
+// splitting on every column-0 label would tear a block in half at a label
+// only the Windows block has (y_alloc_map_fail) and drop the rest of it. The
+// marker says which it is:
+//   `#=== replace: NAME ===`  this block replaces prelude.s's block NAME
+//   `#=== add: NAME ===`      a new block, emitted after the last replaced
+//                              one; the tree shaker prunes it unless a kept
+//                              block calls it, so y_os_write costs a program
+//                              that never writes nothing
+// A `replace:` name the prelude does not define is a hard error (see
+// arch_win_find): it means the Windows half was written against a block that
+// moved, and the substitution would silently do nothing. `make asm-check`
+// gives GNU as a second opinion on wsys.s as well.
+static Yv *arch_windows_lines(void) {
+    Yv *blocks = arch_win_blocks(ys_split(W_SYS_ASM(), ys("\n")));
+    long i = 0;
+    while (i < yv_len(blocks)) {
+        if (ys_eq_lit(ya_get(ya_get(blocks, i), 1), "2")) {
+            puts_(ys_cat(ys_cat(ys("error: arch/wsys.s: bad block marker ('"),
+                                  ya_get(ya_get(blocks, i), 0)),
+                         ys("'): want '#=== replace: NAME ===' or '#=== add: NAME ==='\n")));
+            exit_(1);
+        }
+        i = i + 1;
+    }
+    Yv *lines = arch_asm_lines(PRELUDE_ASM());
+    arch_win_check(lines, blocks);
+    return arch_win_sub(lines, blocks);
+}
+
+// Every `replace:` name must be a block the prelude really has. This is the
+// check that keeps the substitution honest: a marker naming a block that
+// moved (or one whose marker line lost its leading "#", which drops the
+// marker and silently substitutes nothing) would otherwise leave the SysV
+// code in a Windows binary -- the failure mode with no symptom until the
+// program calls the wrong syscall. It cost one whole debugging session to
+// earn, which is why it is a hard error rather than a comment.
+static long arch_win_check(Yv *lines, Yv *blocks) {
+    long i = 0;
+    while (i < yv_len(blocks)) {
+        if (ys_eq_lit(ya_get(ya_get(blocks, i), 1), "0")) {
+            if (arch_win_labeled(lines, ya_get(ya_get(blocks, i), 0))) { /* found */ }
+            else {
+                puts_(ys_cat(ys_cat(ys("error: arch/wsys.s replaces '"),
+                                      ya_get(ya_get(blocks, i), 0)),
+                             ys("', which src/y/arch/prelude.s does not define\n")));
+                exit_(1);
+            }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+static int arch_win_labeled(Yv *lines, Yv *nm) {
+    long i = 0;
+    int found = 0;
+    while (i < yv_len(lines)) {
+        Yv *l = ya_get(lines, i);
+        if (arch_is_label_line(l)
+            && ys_eq(ys_trim(ys_slice(l, 0, yv_len(l) - 1)), nm)) { found = 1; }
+        i = i + 1;
+    }
+    return found;
+}
+
+// wsys.s's blocks as [name, mode, line, line, ...] records, in the order the
+// file gives them: mode 0 replaces the same-named prelude block, 1 is new.
+static Yv *arch_win_blocks(Yv *lines) {
+    Yv *out = yav(0);
+    Yv *cur = yav(0);
+    long i = 0;
+    while (i < yv_len(lines)) {
+        Yv *l = ya_get(lines, i);
+        Yv *mk = arch_win_marker(l);
+        if (yv_len(mk) != 0) {
+            if (yv_len(cur) > 0) { out = ya_push(out, cur); }
+            cur = arch_win_head(mk);
+            i = i + 1;
+        } else {
+            // Comments are documentation here (GNU as reads them too) and
+            // must not reach the assembler, which calls one a backend bug.
+            if (yv_len(l) == 0 || ys_byte_at(l, 0) != 35) {
+                cur = ya_push(cur, l);
+            }
+            i = i + 1;
+        }
+    }
+    if (yv_len(cur) > 0) { out = ya_push(out, cur); }
+    return out;
+}
+
+// "#=== replace: NAME ===" -> "replace: NAME", or "" when the line is not a
+// marker. A line that starts with "#===" but does not parse comes back as "?"
+// and arch_windows_lines makes it a hard error: a silently ignored marker is
+// the one failure this substitution cannot be allowed to have, because the
+// symptom -- a Linux block sitting in a Windows binary -- appears far away.
+static Yv *arch_win_marker(Yv *l) {
+    if (!ys_eq(ys_slice(l, 0, 4), ys("#==="))) {
+        return ys("");
+    }
+    Yv *body = ys_slice_from(l, 4);
+    long colon = ys_index_of(body, ys(":"));
+    if (colon < 0) { return ys("?"); }
+    else {
+        return arch_win_tail(ys_trim(ys_slice(body, 0, colon)),
+                             ys_trim(ys_slice_from(body, colon + 1)));
+    }
+}
+
+// "replace: y_alloc_map ===" -> "replace: y_alloc_map". The closing "==="
+// goes by SUFFIX: index_of would find the marker line's OWN leading "===".
+static Yv *arch_win_tail(Yv *mode, Yv *name) {
+    long k = yv_len(name) - 3;
+    if (k >= 0 && ys_eq(ys_slice_from(name, k), ys("==="))) {
+        return ys_cat(ys_cat(mode, ys(": ")), ys_trim(ys_slice(name, 0, k)));
+    } else { return ys("?"); }
+}
+
+// The [name, mode] head of a block: 0 replaces the same-named prelude block,
+// 1 is new, 2 is a malformed marker.
+static Yv *arch_win_head(Yv *nm) {
+    if (ys_eq(ys_slice(nm, 0, 9), ys("replace: "))) {
+        return yav(2, ys_slice_from(nm, 9), ys("0"));
+    } else if (ys_eq(ys_slice(nm, 0, 5), ys("add: "))) {
+        return yav(2, ys_slice_from(nm, 5), ys("1"));
+    } else {
+        return yav(2, ys("?"), ys("2"));
+    }
+}
+
+static int arch_is_label_line(Yv *l) {
+    if (yv_len(l) == 0) { return 0; }
+    else if (ys_byte_at(l, 0) == 32 || ys_byte_at(l, 0) == 9) { return 0; }
+    else if (!ys_eq(ys_slice_from(l, yv_len(l) - 1), ys(":"))) { return 0; }
+    else { return ys_index_of(l, ys(" ")) < 0; }
+}
+
+// `lines` walked; at a label a replacing block claims, that block's lines and
+// not the prelude's. The new blocks go after the last replaced one.
+static Yv *arch_win_sub(Yv *lines, Yv *blocks) {
+    Yv *out = yav(0);
+    long i = 0;
+    while (i < yv_len(lines)) {
+        Yv *l = ya_get(lines, i);
+        long b = -1;
+        if (arch_is_label_line(l)) {
+            b = arch_win_find(blocks, ys_trim(ys_slice(l, 0, yv_len(l) - 1)));
+        }
+        if (b >= 0) {
+            Yv *blk = ya_get(blocks, b);
+            out = arch_win_push(out, ys_join(ya_slice(blk, 2, yv_len(blk)), ys("\n")));
+            i = i + 1;
+            while (i < yv_len(lines) && !arch_is_label_line(ya_get(lines, i))) { i = i + 1; }
+        } else {
+            out = arch_win_push(out, l);
+            i = i + 1;
+        }
+    }
+    i = 0;
+    while (i < yv_len(blocks)) {
+        Yv *blk = ya_get(blocks, i);
+        if (ys_eq_lit(ya_get(blk, 1), "1")) {
+            out = arch_win_push(out, ys_join(ya_slice(blk, 2, yv_len(blk)), ys("\n")));
+        }
+        i = i + 1;
+    }
+    // one line per list element: arch_prelude_lines' contract with
+    // native.c's prelude_blocks and shake_prelude.
+    return arch_win_split(out);
+}
+
+static Yv *arch_win_split(Yv *out) {
+    Yv *res = yav(0);
+    long i = 0;
+    while (i < yv_len(out)) {
+        Yv *parts = ys_split(ya_get(out, i), ys("\n"));
+        long j = 0;
+        while (j < yv_len(parts)) {
+            if (yv_len(ya_get(parts, j)) > 0) { res = ya_push(res, ya_get(parts, j)); }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    return res;
+}
+
+// The block that replaces `nm`, or -1 when wsys.s does not define one (mode
+// "0", name `nm`).
+static long arch_win_find(Yv *blocks, Yv *nm) {
+    long at = -1;
+    long i = 0;
+    while (i < yv_len(blocks)) {
+        Yv *blk = ya_get(blocks, i);
+        if (ys_eq_lit(ya_get(blk, 1), "0") && ys_eq(ya_get(blk, 0), nm)) { at = i; }
+        i = i + 1;
+    }
+    return at;
+}
+
+static Yv *arch_win_push(Yv *out, Yv *l) {
+    if (yv_len(l) > 0) { out = ya_push(out, l); }
+    return out;
 }

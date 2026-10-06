@@ -52,7 +52,7 @@ def readline() -> str? {
                 let fresh: [byte; 16384] = [0; 16384];
                 y_rl_buf = fresh[0:16384];
             };
-            let n = syscall(0, 0, &y_rl_buf[0], len(y_rl_buf));
+            let n = os_call("y_os_read", 0, &y_rl_buf[0], len(y_rl_buf));
             if (n <= 0) {
                 go = false;
             } else {
@@ -74,7 +74,7 @@ def readline() -> str? {
 def y_stdin_sync() -> long {
     let unread = y_rl_end - y_rl_pos;
     if (unread > 0) {
-        if (syscall(8, 0, 0 - unread, 1) >= 0) {
+        if (os_call("y_os_lseek", 0, 0 - unread, 1) >= 0) {
             y_rl_pos = 0;
             y_rl_end = 0;
         };

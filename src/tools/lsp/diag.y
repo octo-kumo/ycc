@@ -12,6 +12,11 @@
 // behavioural, and test-diag.sh checks them against real programs rather than
 // taking the reconstruction on trust.
 
+// target.y FIRST, before any module that reads it: it holds `res_target`, and
+// types.y, arch_x64.y, asm.y and native.y all call target_is_windows(). ycc.y
+// imports it in the same place, for the same reason -- a path import is
+// flattened, so the binding has to exist before the reader is compiled.
+import wintgt from "../../y/target.y";
 import tags from "../../y/tags.y";
 import lexer from "../../y/lexer.y";
 import parser from "../../y/parser.y";
@@ -208,7 +213,13 @@ def diagnose(text: str, dir: str, path: str, pack: str, wlevel: long) -> [Findin
 
     let ext = externs_for(su, nr.std);
     let errors = types.check_program(ast3, ext);
-    let warnings = lint.lint_unit(ast, ast3, nr.origin.file, nr.origin.mods, wlevel);
+    // `ogen` says which lines a meta block generated, and it is EMPTY unless
+    // the meta pass ran: the pass is switched on by meta.meta_begin(), which
+    // the DRIVER calls before its own resolve and nothing else does -- so a
+    // buffer checked here never has generated lines. Passing nr.ogen rather
+    // than a literal [] is what keeps this honest if the server is ever taught
+    // to run the pass: it is exactly what native.compile_unit does with it.
+    let warnings = lint.lint_unit(ast, ast3, nr.origin.file, nr.origin.mods, wlevel, nr.ogen);
 
     // The checker's and the linter's lines are SPLICED lines; a Finding's are the
     // line in the file it names. See line_in_file.

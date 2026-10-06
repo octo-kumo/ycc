@@ -480,6 +480,18 @@ replaces the std one at link time).
 - `&&` / `||` short-circuit, in both forms. Operands need not be `bool` —
   any non-zero value is true (`typeof_logic` in `types.y`).
 - Recursion uses `self`, not the function's own name.
+- **`#{ … }#` is a meta block**: its body is compiled and *run* at compile time,
+  and what it prints is spliced into the source in place of the block. Top level
+  only — a block inside a `def` or `type` body is a diagnostic — and a block
+  whose text ends mid-token drops those bytes and hoists the call to the
+  enclosing top-level statement (`docs/src/02-lexical.tex`, "Meta blocks";
+  `ideas/meta.md` for the design). The generator runs in a **forked child**, so
+  a trap in a block is a diagnostic naming it rather than a dead compiler.
+  Because the generator's top level runs too, a top-level statement in a file
+  with a block must be a declaration — `lint.y` warns when it is not.
+- **`ycc run FILE`** compiles and runs in one step; **`ycc -E FILE`** dumps the
+  source the pass actually saw (blocks expanded), which is the way to see what a
+  block generated.
 - **`native def f(params) -> T [= "label"];`** is a declaration with no body
   whose implementation is an assembly label (docs `03-grammar.tex`, NATIVE.md
   "Backend"). It is the way std modules reach raw machine primitives: the
@@ -577,7 +589,8 @@ replaces the std one at link time).
 - `src/y/` — the Y compiler: `ycc.y` (driver), `pkg.y` (`ycc build`:
   `y.toml`, the dependency graph, git, `y.lock`), `lexer.y`, `parser.y`,
   `rename.y`, `types.y` (checker), `lint.y` (warnings), `native.y`
-  (emitter), `arch_x64.y`
+  (emitter), `meta.y` (the compile-time pass: `#{ … }#` blocks, run in a
+  forked child over an in-RAM image), `arch_x64.y`
   (asm + prelude), `enc64.y`, `asm.y`, `elf.y`, `dwarf.y` (`-g` line
   info); `std/` (`rt.y` runtime
   in Y, `prelude.y` (`readline`), `exec.y` (`exec`), `str.y` (string

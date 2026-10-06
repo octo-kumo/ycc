@@ -3282,6 +3282,47 @@ def typeof_fmt(st: TcSt, node: Call) -> TcRes {
     tc_res(type_node({ k: K.tstr }), st)
 };
 
+// ── the named syscall layer ─────────────────────────────────────────────
+// The names std code may reach the kernel through, and the only list of them.
+// `os_call` (the checker arm below, native.y's emit arm) resolves a call
+// against this list and emits a `call` to the label; the bodies live in
+// src/y/arch/prelude.s on Linux and in src/y/arch/wsys.s on Windows.
+//
+// ONE list, with no target branch, and that is the load-bearing property
+// rather than a simplification. The four embedded std units (rt, prelude, exec,
+// str) are compiled ONCE per compiler and serialized into a single std pack,
+// so anything a std unit resolves at COMPILE time -- a syscall number, a struct
+// layout, a branch on the target -- is baked for whichever target wrote that
+// pack, and --target on the consuming compiler cannot undo it. A NAME is the one
+// thing that survives: rt.y saying os_call("y_os_write", fd, s, len(s))
+// compiles to the same bytes for both targets, and the arch module decides
+// which kernel call that label is. Measured both ways, with a conditional in
+// rt.y instead: a PE built from the pack carried the ELF inline write(2) and
+// printed nothing, while --std-src (which recompiles the units) worked.
+//
+// The list lives here, beside the checker that enforces it, because types.y is
+// the one module that must not import arch_x64.y: a path import is flattened
+// into its importer, so both would define the same names and the second would
+// win. native.y, which sees both, checks that every name here is a label the
+// emitted arch lines actually define (native.y check_os_call_names).
+def os_call_name(nm: str) -> bool {
+    let names = os_call_names();
+    let i = 0;
+    let found = false;
+    while (i < len(names)) {
+        if (names[i] == nm) { found = true; };
+        i = i + 1;
+    };
+    found
+};
+
+def os_call_names() -> [str] {
+    ["y_os_write", "y_os_read", "y_os_lseek", "y_os_clock_gettime",
+     "y_os_nanosleep", "y_os_wait4", "y_os_fork", "y_os_execve",
+     "y_os_openat", "y_os_close"]
+};
+
+
 // The call's own type, recorded at the CALLEE's position when the index is on.
 //
 // An intrinsic is matched by name inside the body below, so its callee identifier
@@ -3900,9 +3941,77 @@ def typeof_call_go(st: TcSt, node: Call) -> TcRes {
                     tc_res(type_node({ k: K.tlong }), st)
                 }
             }
-        } else if (name == "syscall") {
+        } else if (name == "os_call") {
+            // os_call("y_os_read", fd, buf, len) -> long: the NAMED syscall
+            // layer. The first argument is a name from os_call_names (the only
+            // list of them), the rest are the
+            // arguments the named block takes -- at most six, pushed on the
+            // stack in order, so the block reads them the way every Y function
+            // does (the last pushed is the first parameter, lowest).
+            //
+            // Why a NAME and not a syscall number: the four embedded std units
+            // are compiled once per compiler and serialized into one std pack,
+            // so anything they resolve at compile time is baked for whichever
+            // target wrote that pack and --target on the consuming compiler
+            // cannot undo it. A number, a struct layout or a branch on the
+            // target are all baked; a name is not, because `call y_os_read` is
+            // the same instruction on both and the arch module decides what
+            // that label is (read(2) on Linux, NtReadFile on Windows).
+            // Measured, both ways, with a conditional in rt.y instead: a PE
+            // built from the pack carried the ELF inline write(2) and printed
+            // nothing, while --std-src (which recompiles) worked.
             if (len(cargs) < 1 || len(cargs) > 7) {
-                st = fail(st, "syscall needs 1-7 arguments (number + up to 6 args)", node.line, node.col);
+                st = fail(st, "os_call takes a name and 0-6 arguments",
+                          node.line, node.col);
+                tc_res(type_node({ k: K.tlong }), st)
+            } else if (cargs[0].k != K.str) {
+                st = fail(st, "os_call needs a literal call name",
+                          node.line, node.col);
+                tc_res(type_node({ k: K.tlong }), st)
+            } else {
+                // The name is a str LITERAL, matched after a cast to the
+                // literal's own member (`Leaf`, which is exactly this record):
+                // `.v` is not a field every Node has, and reading it through
+                // one is what the union layout rules forbid.
+                let nm: Leaf = cargs[0];
+                let r0 = typeof_expr(st, cargs[0]);
+                st = r0.st;
+                if (!os_call_name(nm.v)) {
+                    st = fail(st, "os_call: '" + nm.v + "' is not a call name (see os_call_names)",
+                              node.line, node.col);
+                };
+                let i = 1;
+                while (i < len(cargs)) {
+                    let r = typeof_expr(st, cargs[i]);
+                    st = r.st;
+                    // The same argument types `syscall` takes after its
+                    // number: a long, a bool, a str (whose +8 header adjustment
+                    // the emitter does), or a *T for a buffer the block fills
+                    // (rt.y's and prelude.y's timespec and status words).
+                    if (r.typ.k != K.tlong && r.typ.k != K.tbool && r.typ.k != K.tstr
+                        && r.typ.k != K.tptr && r.typ.k != K.tunk) {
+                        st = fail(st, "os_call arg " + tostring(i) + " must be long/bool/str/*T, got " + tstr(r.typ),
+                                  node.line, node.col);
+                    };
+                    i = i + 1;
+                };
+                tc_res(type_node({ k: K.tlong }), st)
+            }
+        } else if (name == "syscall") {
+            // Up to six arguments on SysV (rdi..r9), up to NINE on Win64:
+            // its `syscall` takes FOUR in registers (r10, rdx, r8, r9) and
+            // the fifth and after at 40(%rsp), 48(%rsp), ... -- and
+            // NtWriteFile, the only way to put a byte on the standard output,
+            // takes nine. gen_syscall reserves that room itself on the
+            // Windows side. (An earlier version of this comment said six in
+            // registers and 32(%rsp); both were wrong -- see w_syscall_reg in
+            // native.y for the proof that four registers at 40(%rsp) is the
+            // real layout.)
+            let maxargs = 7;
+            if (target_is_windows()) { maxargs = 10; };
+            if (len(cargs) < 1 || len(cargs) > maxargs) {
+                let m = tostring(maxargs - 1);
+                st = fail(st, "syscall needs 1-" + tostring(maxargs) + " arguments (number + up to " + m + " args)", node.line, node.col);
                 tc_res(type_node({ k: K.tlong }), st)
             } else {
                 let i = 0;
@@ -3923,6 +4032,23 @@ def typeof_call_go(st: TcSt, node: Call) -> TcRes {
                     i = i + 1;
                 };
                 tc_res(type_node({ k: K.tlong }), st)
+            }
+        } else if (name == "jmp_at") {
+            // jmp_at(addr): jump to the code at that address, leaving %rsp
+            // alone (a `call` would push a return address where a process
+            // entry point reads its argc). Nothing after it in the enclosing
+            // function runs, and it only returns if the target does.
+            if (len(cargs) != 1) {
+                st = fail(st, "jmp_at needs 1 argument (the address)", node.line, node.col);
+                tc_res(type_node({ k: K.tvoid }), st)
+            } else {
+                let r = typeof_expr(st, cargs[0]);
+                st = r.st;
+                let ak: long = r.typ.k;
+                if (ak != K.tlong && ak != K.tunk && ak != K.tptr) {
+                    st = fail(st, "jmp_at needs an address, got " + tstr(r.typ), node.line, node.col);
+                };
+                tc_res(type_node({ k: K.tvoid }), st)
             }
         } else {
             // resolve the callee to a function type: `self`, then scope
@@ -4592,11 +4718,16 @@ def check_program(ast: Block, ext: [Sym]) -> [Diag] {
     let st: TcSt = { bindings: [], errors: [], ret: type_node({ k: K.tnone }), self: type_node({ k: K.tnone }), fdepth: 0, loops: 0, loop_fd: -1 };
     // top-level defs are visible at top level
     let print_type: Type = type_node({ k: K.tfunc, args: [type_node({ k: K.tlong })], ret: type_node({ k: K.tvoid }) });
-    // The intrinsics and the externs below have no position: the first two are the
+// The intrinsics and the externs below have no position: the first two are the
     // language's own, the rest are names the program links against from another
     // unit. -1 is the honest answer and no consumer may read it as line 1.
     st = st_bind(st, "print", print_type, "intrinsic", 0 - 1, 0 - 1);
     st = st_bind(st, "syscall", type_node({ k: K.tlong }), "intrinsic", 0 - 1, 0 - 1);
+    // (name: str, args...) -> long. The binding exists only so `os_call` reads
+    // as defined when it appears as a value; typeof_call matches it by name and
+    // checks the arity and the argument types itself (os_call takes a varying
+    // number of arguments, so there is no single function type to bind).
+    st = st_bind(st, "os_call", type_node({ k: K.tlong }), "intrinsic", 0 - 1, 0 - 1);
     // Every intrinsic is matched BY NAME in typeof_call (print, len, some,
     // ... syscall), so these two bindings are never consulted by a call; they
     // exist only so `print`/`syscall` read as defined when they appear as
@@ -4637,14 +4768,4 @@ def def_sig(name: str, func: Func) -> Field {
     { name: name, opt: false, typ: type_node({ k: K.tfunc, args: args, ret: ret }) }
 };
 
-// `Sym` is here because a unit's `exports` is a `[Sym]` and a caller that wants to
-// offer a module's members needs each one's TYPE as well as its name -- the language
-// server's completion items carry it as `detail`. Without the export the shape is
-// invisible across a path import, and a caller has to either take the names and lose
-// the types or rebuild the record itself.
-//
-// The C twin needs nothing for this: a `Sym` is a Y record, so it is a `Yv *` there
-// and `Unit.exports` is already a `Yv *` in `native.h`. An export list is a
-// source-level concept; the port gate compares compiled bytes, which this does not
-// move.
-export { check_program, tstr, teq, leaf_of, field_pos, field_merge, narrow_type, union_member, unfold, members, union_parts, pat_members, lit_target, opt_wraps, t_mutex, t_sem, tcanon, tsig, inferred_ret, str_sorted, rec_names, type_names, str_method, fmt_spec, fmt_kind , expr_type, type_index_on, type_index_off, Sym };
+export { check_program, os_call_names, tstr, teq, leaf_of, field_pos, field_merge, narrow_type, union_member, unfold, members, union_parts, pat_members, lit_target, opt_wraps, t_mutex, t_sem, tcanon, tsig, inferred_ret, str_sorted, rec_names, type_names, str_method, fmt_spec, fmt_kind, expr_type, type_index_on, type_index_off, Sym };

@@ -68,7 +68,9 @@ matrix_rows "Untested diagnostics" | awk -F'\t' '{ gsub(/`/, "", $1); gsub(/`/, 
 awk -v EXCF="$TMP/excused" -v EXPF="$TMP/expect" -f "$ROOT/test/sh/coverage_diag.awk" \
     "$TMP/excused" "$TMP/expect" \
     "$SRC/lexer.y" "$SRC/parser.y" "$SRC/rename.y" "$SRC/types.y" "$SRC/native.y" \
-    "$SRC/ycc.y" "$SRC/pkg.y" "$SRC/lint.y" "$SRC/arch_x64.y" "$SRC"/std/*.y > "$TMP/sites"
+    "$SRC/ycc.y" "$SRC/pkg.y" "$SRC/lint.y" "$SRC/meta.y" "$SRC/arch_x64.y" "$SRC/tags.y" "$SRC/labels.y" \
+    "$SRC/ir.y" "$SRC/elf.y" "$SRC/pe.y" "$SRC/target.y" "$SRC/asm.y" "$SRC/enc64.y" \
+    "$SRC/dwarf.y" "$SRC"/std/*.y > "$TMP/sites"
 nsites=$(grep -c -v '^stale' "$TMP/sites")
 nmiss=0
 while IFS=$'\t' read -r status loc what; do

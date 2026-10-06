@@ -35,6 +35,10 @@
 // The names come from types.y's own str_method chain, aliases included
 // (`trim`/`strip`, `lstrip`/`trim_start`, `rstrip`/`trim_end`): those are real
 // spellings a program may use, and they belong in a completion list.
+// target.y before types.y, for the reason diag.y's header spells out: types.y
+// calls target_is_windows(), and a path import is flattened, so the binding
+// must be declared before the reader that needs it is compiled.
+import wintgt from "../../y/target.y";
 import types from "../../y/types.y";
 
 // This file's copy of the names. See the header: filtered through str_method on

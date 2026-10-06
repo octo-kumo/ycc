@@ -31,12 +31,20 @@
 //     not allowed (the checker would call them undefined), so every
 //     bridge into the primitives goes through an intrinsic or an operator.
 
-// One write(2) of a string's bytes to fd 1 / fd 2 (no newline).
+// One write of a string's bytes to fd 1 / fd 2 (no newline). Through the named
+// syscall layer -- os_call("y_os_write", ...) -- rather than a raw
+// `syscall(1, fd, ...)`: 1 is write(2) on Linux and some unrelated Nt function
+// on Windows, so a raw Linux number here printed nothing at all under
+// --target=windows while the program still exited 0. The number and the
+// argument shape belong to the arch module (y_os_write), which is the only
+// thing that works here: rt.y is one of the four std units serialized into the
+// std pack, so anything resolved while COMPILING it is baked for whichever
+// target wrote the pack and --target on the consuming compiler cannot undo it.
 def y_put_hstr(s: str) -> long {
-    syscall(1, 1, s, len(s))
+    os_call("y_os_write", 1, s, len(s))
 };
 def y_eput_hstr(s: str) -> long {
-    syscall(1, 2, s, len(s))
+    os_call("y_os_write", 2, s, len(s))
 };
 def y_print_hstr(s: str) -> long {
     y_put_hstr(s);
@@ -271,8 +279,10 @@ def y_range(n: long) -> [long] {
     out
 };
 
-// Time: clock_gettime / nanosleep, straight through the syscall
-// intrinsic. clock_us is CLOCK_MONOTONIC microseconds, time_us
+// Time: clock_gettime / nanosleep, through the named syscall layer like every
+// other call in this unit -- the Windows halves convert a FILETIME and a QPC
+// tick into the same struct timespec, so the code above the arch module is the
+// same bytes on both targets. clock_us is CLOCK_MONOTONIC microseconds, time_us
 // CLOCK_REALTIME's: the wall clock, since the Unix epoch. (heap_used
 // reads the allocator's own counter: y_heap_used in arch_x64.y.)
 // ONE timespec for the whole runtime, not one per call.
@@ -286,18 +296,18 @@ def y_range(n: long) -> [long] {
 // a time within a syscall of the right one, which is what clock_gettime is for.
 let CLK_TS: [long; 2] = [0; 2];
 def y_clock_us() -> long {
-    syscall(228, 1, &CLK_TS[0]);
+    os_call("y_os_clock_gettime", 1, &CLK_TS[0]);
     CLK_TS[0] * 1000000 + CLK_TS[1] / 1000
 };
 def y_time_us() -> long {
-    syscall(228, 0, &CLK_TS[0]);
+    os_call("y_os_clock_gettime", 0, &CLK_TS[0]);
     CLK_TS[0] * 1000000 + CLK_TS[1] / 1000
 };
 // wait_pid(pid): wait4 for a child (fork) -> its exit code, 128 + the
 // signal that ended it, or -1 when there is no such child.
 def y_wait_pid(pid: long) -> long {
     let status: [long; 1] = [0; 1];
-    let r = syscall(61, pid, &status[0], 0, 0);
+    let r = os_call("y_os_wait4", pid, &status[0]);
     let s = status[0] & 65535;
     if (r < 0) { -1 } else if ((s & 127) == 0) { (s >> 8) & 255 } else { 128 + (s & 127) }
 };
@@ -307,7 +317,7 @@ def y_sleep(ms: long) -> long {
     let ts: [long; 2] = [0; 2];
     ts[0] = m / 1000;
     ts[1] = (m % 1000) * 1000000;
-    syscall(35, &ts[0], 0)
+    os_call("y_os_nanosleep", &ts[0])
 };
 // y_sleep_us(us): nanosleep in MICROSECONDS, where y_sleep takes whole
 // milliseconds.  The two differ by a factor of 1000 and there is no way to
@@ -329,7 +339,7 @@ def y_sleep_us(us: long) -> long {
     // pointer before anything else can run on this thread.
     CLK_TS[0] = u / 1000000;
     CLK_TS[1] = (u % 1000000) * 1000;
-    syscall(35, &CLK_TS[0], 0)
+    os_call("y_os_nanosleep", &CLK_TS[0])
 };
 
 // b'...' -- Python-style byte-string repr: printable ASCII verbatim,

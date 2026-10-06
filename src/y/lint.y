@@ -62,8 +62,9 @@ let lint_fmods: [str] = [];
 
 // The warnings for one unit: `ast` as parsed, `ast3` renamed (and
 // checked), sorted by position; ofile and fmods say which lines are a
-// module's.
-def lint_unit(ast: Block, ast3: Block, ofile: [long], fmods: [str], wlevel: long) -> [Diag] {
+// module's. `ogen` says which lines a meta block generated (see lint_meta_top);
+// it is empty when the unit has no blocks.
+def lint_unit(ast: Block, ast3: Block, ofile: [long], fmods: [str], wlevel: long, ogen: [bool]) -> [Diag] {
     lint_ofile = ofile;
     lint_fmods = fmods;
     let warns: [Diag] = [];
@@ -75,9 +76,43 @@ def lint_unit(ast: Block, ast3: Block, ofile: [long], fmods: [str], wlevel: long
         lint_rets(st, ast3.stmts)
     };
     lint_stmts(st, ast3.stmts, false, true);
+    if (len(ogen) > 0) { lint_meta_top(st, ast3.stmts, ogen) };
     lint_vars(st);
     lint_types(st, ast.stmts);
     lint_sorted(st.warns)
+};
+
+// With blocks in the file, the top level IS the generator's program, so every
+// top-level statement there runs once in the generator and once in the program.
+// That is fine for a declaration -- a `def` hoists, and a `let` a block reads
+// should be pure (the manual says so) -- and for the text a block GENERATED,
+// which the program runs once and the generator never ran at all: `ogen`
+// (indexed by the statement's line) says which lines those are. Anything else
+// is a statement with side effects the reader cannot see running twice.
+def lint_meta_top(st: LintSt, stmts: [Node], ogen: [bool]) -> long {
+    let i = 0;
+    while (i < len(stmts)) {
+        let s = stmts[i];
+        if (s.k != K.decl && s.k != K.void && !meta_gen(s, ogen)) {
+            lint_warn_start(st, "a top-level statement runs once in the meta generator and once in the program, so with a meta block in the file it must be a declaration (a def, type, const or let) -- keep a top-level let initializer pure", s);
+        };
+        i = i + 1;
+    };
+    0
+};
+
+// `ogen` is EMPTY for a unit with no meta blocks (see resolve_unit), so its
+// length is the answer to "is this file's top level also a generator's?", and
+// its entries say which lines a block generated.
+
+// A statement starting on a line a meta block generated. Its line is the
+// `#{` line (every generated line carries it, see mg_splice), and the ORIGIN
+// map is what turns a program line back into a source line -- so `ogen` is
+// indexed by the source line, and lint's own map says which source line a
+// statement sits on.
+def meta_gen(s: Node, ogen: [bool]) -> bool {
+    let ln = s.line - 1;
+    if (ln < 0 || ln >= len(ogen)) { false } else { ogen[ln] }
 };
 
 // ── what each def returns (level 1 only) ──────────────────────────────────

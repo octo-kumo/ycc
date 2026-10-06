@@ -12,6 +12,11 @@
 #include "yv.h"
 
 Yv *check_program(Yv *ast, Yv *ext); /* -> [{ msg, line, col }] ([] means OK) */
+/* os_call_names(): the names std code may reach the kernel through -- the named
+   syscall layer. Exported because native.c's check_os_call_names verifies that
+   the arch lines really define each one, and that check has to see the list. */
+Yv *os_call_names(void);
+
 Yv *tstr(Yv *t);              /* the one rendering of a type: diagnostics,
                                 * typeof, "<function (params) -> ret>" */
 int teq(Yv *a, Yv *b);        /* strict type equality (branch agreement) */
