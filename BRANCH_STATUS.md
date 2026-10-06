@@ -182,6 +182,21 @@ generation (`meta`), and Windows support (`win`), plus LSP and docs work.
   this target` and exits 1.
   (`fs.y` reads 0 raw sites now, not 11 -- that count was stale.)
 
+  **A correction to that commit's number, because the first explanation was
+  wrong.** `bench-ir` after the change reads `hello.y +0.37%` (5 907 794 ->
+  5 929 909 exact compile instructions), and the commit message attributed it
+  to "the crypto unit's error path". It cannot be: `bench/y/hello.y` is
+  `print("hello");` and imports nothing, so no line of `std/crypto.y` is in
+  that compile. The delta is real (instruction counts are exact, not noisy)
+  and it is NOT yet attributed -- the candidates are the compiler's own
+  allowlist change (`os_call_names` gained an entry) and the larger embedded
+  arch text (`prelude.s` and `wsys.s` both grew a block), neither of which has
+  been measured apart. What is measured is the shape: `ycc.y` -0.01% (a
+  5.6-billion-instruction self-compile), so it is a small fixed cost, not a
+  per-input one. The lesson is the one this file keeps teaching: a number from
+  `bench-ir` is a fact, and the sentence explaining it is a hypothesis until it
+  is attributed to a phase.
+
 ### Yet to do
 
 | item | why it is open |
