@@ -2,9 +2,11 @@
 
 Meta code that runs while the compiler runs, and whose output becomes the source
 that gets compiled. **v1 is two constructs**: a block `#{ … }#` that produces text, and
-plain `import` inside a block. Nothing else. `#if`, `#meta` and the layering model are
-cut and parked in [Deferred](#deferred-if-meta-and-layering) — with the findings that
-killed them, so the reasoning is not lost.
+plain `import` inside a block. Nothing else. A block nested inside another block is
+**not** a third construct — it is the same one, splicing, at every level
+([why](#nesting-is-splicing-at-every-level)). `#if` and `#meta` are cut and parked in
+[Deferred](#deferred-if-and-meta) — with the findings that killed them, so the reasoning
+is not lost.
 
 This is **not** a prerequisite for [`WINDOWS.md`](WINDOWS.md). It was thought to be,
 because W4 wanted `#if` for one diagnostic and W5 wanted it for std sources; both turn
@@ -170,8 +172,8 @@ no scope reconstruction and no second opinion about what a name means.
 **A block must not be lexically inside a `def` or `type` body.** Anywhere else counts:
 expression position, statement position, mid-expression, inside another block.
 
-The call goes **where the block was**, not hoisted. Both halves matter, and the audit
-forced each one.
+A block at the **top level** puts its call **where the block was**. Both halves matter,
+and the audit forced each one.
 
 *Not hoisted* — an earlier draft hoisted every call to the top of the generator, which is
 outside any enclosing `def`, so a block saw no locals at all:
@@ -212,11 +214,13 @@ with the data itself a top-level `let`, which the generator's run initialises li
 other. That is the whole parameter story, and unlike the function-body version it has no
 surprise in it.
 
-### The cost: the top level runs twice
+### The cost: the top level runs once per round
 
 `G` is `T`, so **the program's top-level statements execute in the generator as well as
 in the program.** With in-place emission this is unavoidable, and it is the one real
-hazard in the design.
+hazard in the design. With nesting there is more than one round, so the count is
+*once per round*: twice for a file whose blocks contain no block, and `d+1` times for a
+nest of depth `d` ([Nesting is splicing](#nesting-is-splicing-at-every-level)).
 
 With blocks restricted to the top level, what is left is small and is bounded by making
 it explicit rather than clever:
@@ -227,7 +231,12 @@ it explicit rather than clever:
 > declaration*.
 
 Checkable from the AST, not textually — the top level of a `Block` *is* the list of
-top-level statements, so this is an emitter/lint check, not a pass-level guess. The
+top-level statements, so this is an emitter/lint check, not a pass-level guess.
+
+With nesting, the same statement runs in every round. That is the reduction's job where
+it can be: a round that cannot yet produce a block's text leaves out the statements that
+are neither declarations nor block-bearing, so they cannot double-run there
+([the reduction](#the-reduction-and-the-one-shape-it-costs)). The
 alternative designs were both rejected:
 
 | design | why not |
@@ -239,39 +248,135 @@ The residual after both rules: a top-level `let` initializer runs in both. If it
 impure *and* a block reads it, the block sees the generator's value. Say so in the
 warning text and the manual: **keep top-level `let` initializers pure.**
 
-Every block runs exactly once, because every block is at the top level and the top level
-runs. There is no "slot never filled" case to detect.
+Every block runs in **every** round it is live in, because a live block's call is in `G`
+and the top level runs. There is no "slot never filled" case to detect: a round either
+produces a block's text or leaves the stand-in that keeps its call compiling
+([the reduction](#the-reduction-and-the-one-shape-it-costs)).
 
-### Nesting is data, and that is forced — not chosen
+### Nesting is splicing, at every level
 
-The two candidate semantics for a nested block differ the moment it emits anything
-that is not a string *literal*:
+A block nested inside a block contributes **text to the enclosing block's source**, and
+that is the whole of it — there is no second dialect and no case where nesting means
+something else. Resolve innermost first, run it, splice what it emitted into the source
+of the block around it, compile *that*, and run it. Repeat to a fixed point.
 
 ```
-#{ let a = #{ "1 + 1" }#; a }#
+#{ let a = #{ "1+1" }#; a }#
 ```
 
-| | the block's source becomes | the outer block's output |
+| step | what runs | what the enclosing source becomes |
 |---|---|---|
-| textual splice | `let a = 1 + 1; a` | `2` |
-| runtime call | `let a = ycc_meta_expr(…); a` | `1 + 1` |
+| 1 | `#{ "1+1" }#`, whose value is the three characters `1+1` | `let a = 1+1; a` |
+| 2 | that: `a` binds 2, and the block's text is the rendering of `a` | — |
 
-Textual splicing injects **code** — the outer block *executes* what the inner
-generated. A runtime call injects **data**.
+so the block resolves to `2`. Measured: `./ynew -E` on that file prints `2`.
 
-Splicing is not merely harder, it is **impossible here**: `G` is compiled before it
-runs, so the inner block's text cannot be in it. The cost of splicing would be a second
-compile per level, which is a layering model — cut to [Deferred](#deferred-if-meta-and-layering).
+This section used to argue the opposite — that splicing was *impossible*, because `G` is
+compiled before it runs, and that the cost would be a second compile per level, which it
+called a layering model and cut to [Deferred](#deferred-if-and-meta). The
+argument about `G` was right and the conclusion was wrong: the inner text does have to be
+in `G` before `G` is compiled, so the pass **runs `G` again**, once per level, and the
+second compile per level is simply the price. The layering model is what got built.
 
-What survives: a block can still contribute arbitrary code to the **final program**. It
-just cannot inject code into another block's own computation.
+#### What a block's text *is*
 
-**Nesting depth** is bounded by the parser's `MAX_NEST = 1000` (`tags.y:79`, message
-from `too_deep` at `tags.y:97-102`), counted in five walks — three in `parser.y`, one in
-`rename.y`, one in `types.y`. Each nested block costs ~3 `nest` units, so the effective
-cap is **~333** — measured: 332 nested `ycc_meta_expr({ … })` compile, 333 fails. The
-pass gets its own lower cap so a runaway nest is a diagnostic pointing at the block,
-not `too_deep` firing inside a file that does not exist.
+The rendering of the block's **own value**, and that is the rule the acceptance case
+forces: the enclosing block above ends by *naming* `a`, and the answer is `2`, not
+`let a = 1+1; a`. So the pass writes every block's value through `tostring(...)` when it
+builds the call (`mg_helpers`), and a block whose value is a `long` is the ordinary case
+for a nested one — which is also why the helpers' parameter can stay `str`. A `str` value
+is its own rendering, so `tostring` changes nothing for it and `lit`-style quoting is
+still what a string needs before it lands as source.
+
+The consequence worth stating, because it is the one place the request and the semantics
+pull apart: a block emits its **value**, not its **source**. So
+
+```
+#{ let var1=1; let var2=2; var#{ 1+1}# }#      // splices to var2; emits "2"
+print(var2);
+```
+
+compiles and prints nothing, because the enclosing block's value is the long `2` and
+`print(var2)` in the *program* has no `var2`. The nearest working form is for the
+enclosing block to return the text the program should get, with the generated name in
+it — `t202_meta_nest_mid_token.y`:
+
+```
+#{ let var1 = 1; let var2 = 2;
+   "let var1 = 1;\nlet var2 = 2;\nprint(var" + tostring(var#{ 1+1}#) + ");\n" }#
+```
+
+which emits exactly the three statements and whose program prints `2`.
+
+#### The rounds, and what they cost
+
+A nested block's text is spliced into a source that has to be compiled before it can run,
+so the enclosing block cannot produce its text until the nested one has produced its. The
+pass therefore runs `G` **once per level** (`mg_pending`, driven by `meta_resolve` in
+`native.y`), and a chain of depth `d` costs `d+1` generator compiles and runs.
+
+A block with **no nested block pays nothing**: the loop is only entered when the
+collecting scan found nesting (`mg_nest`), a block with nothing inside it is never even
+*held* (its text is written straight into `G`, `sg_hold` is for a block that may have to
+give its text up), and its `G` is byte for byte the one the pass has always built —
+`test/sh/meta-identity.py` checks the weaker, sharper claim that the pass is the identity
+on a file with no blocks at all (381/381), and `make test` checks the rest.
+
+MEASURED, `ynew` on a generated program of 400 declarations (24 KB) with a nest of depth
+`d` appended, 8 runs each:
+
+| depth | blocks | generator rounds | ms/run | peak RSS |
+|---|---|---|---|---|
+| 0 | 1 | 1 | 25.5 | 61 MB |
+| 1 | 2 | 2 | 40.2 | 95 MB |
+| 3 | 4 | 4 | 68.7 | 161 MB |
+| 5 | 6 | 6 | 95.8 | 227 MB |
+| 7 | 8 | 8 | 122.3 | 293 MB |
+
+so **a level costs one compile and one run of the program-as-generator: 13.8 ms and 34 MB
+there**, and both scale with the program: the same measurement on 1600 declarations
+(122 KB, the compiler's own size class) is **43 ms and 103 MB per level** (0.09 s / 202 MB
+at depth 0, 0.39 s / 924 MB at depth 7). The same program with no block at all compiles
+in 11.0 ms — the block itself, not the nesting, is what costs the 14 ms baseline.
+
+#### Why the cap is 8
+
+**Nesting depth** is bounded by cost, not by the parser. The parser's own limit is
+`MAX_NEST = 1000` (`tags.y:79`, message from `too_deep` at `tags.y:97-102`), counted in
+five walks — three in `parser.y`, one in `rename.y`, one in `types.y` — so it is ~333
+effective (measured: 332 nested `ycc_meta_expr({ … })` compile, 333 fails). A round is a
+whole extra compile **inside** the compiler's own process, and ycc never frees, so the
+memory is the binding constraint: at 103 MB a level, 8 levels of a compiler-sized program
+is 824 MB and 16 would be 1.6 GB, which a program twice that size could not afford at
+all. `MG_NEST = 8` keeps a compiler-sized program with the deepest legal nest under 1 GB
+of the 3.5 GB budget (`e188_meta_nest_too_deep.y` is one over), and the diagnostic says
+what the limit costs rather than leaving `too_deep` to fire inside a file that does not
+exist.
+
+#### The reduction, and the one shape it costs
+
+A round in which a block cannot produce its text leaves a **stand-in** where its call
+goes (`mg_stub`: the real call's helper, position and `;`, with the body `0`), because
+its own source wants text that does not exist yet. A stand-in declares nothing, so a
+top-level statement naming something that block was going to define would not compile —
+`#{ let v = #{ "1+1" }#; let x = v; }#` followed by `print(x);`. So in a round with
+nesting, the reduction leaves out of `G` every top-level statement that is **neither a
+declaration nor carries a block** (`sg_region_*`). The extent is exact and needs no
+parser: a top-level statement in Y ends at a `;` or at the `}` that closes it (measured:
+`print(1)` with no `;` is *expected ';'*), so the regions are exactly the statements.
+
+That costs the generator no **name** — the only statements dropped begin with `print(`,
+`f(`, an operator, and none of them declares anything, so every binding `G` needs is
+still there. It costs a block the **side effect** of such a statement, which is what the
+pass's own warning about top-level statements already says to avoid, and it has one sharp
+edge: a top-level `let` is a declaration and so is **kept**, so a `let` whose initializer
+reads a name a block generates still fails in a stand-in round
+(`e189_meta_toplevel_let_reads_block.y`). The rule is the "keep top-level let
+initializers pure" rule one step sharper: pure is not enough, the initializer must not
+depend on what a block generates.
+
+The reduction is off for a program with no nesting, which is what keeps every other
+program's `G` — and its emitted binary — exactly as it was.
 
 ### Mid-token blocks: two cases, and the call does not have to be in place
 
@@ -288,22 +393,49 @@ So the rule is two cases, decided by the byte before the `#{`:
 1. **An operand position.** The preceding non-space, non-comment byte is one of
    `(` `,` `=` `[` `{` `;` `:` `?`, or a binary or unary operator, or the block is at the
    start of a line, or after a keyword such as `return`. The call stays **in place** as
-   `ycc_meta_expr(SLOT, { T })`. This is `let count = #{ … }#`, `f(#{ … }#, 2)`,
+   `ycc_meta_expr(SLOT, tostring({ T }))`. This is `let count = #{ … }#`, `f(#{ … }#, 2)`,
    `#{ T }#` alone on a line, and anything else already sitting where an operand goes.
 2. **Mid-token.** The preceding byte is an identifier character, `)`, `]`, or a literal,
    so there is no operand position and a call cannot go there. The block's **bytes are
-   dropped from `G` entirely** and `ycc_meta_stmt(SLOT, { T });` is emitted as a
+   dropped from `G` entirely** and `ycc_meta_stmt(SLOT, tostring({ T }));` is emitted as a
    statement **immediately before the top-level statement that contains the block**.
 
 Case 2 is safe precisely because it is mid-token: the block is an adjunct between two
 adjacent tokens, and dropping it leaves them adjacent.
 
+**Case 2 survives the splicing, and it has to.** Splicing subsumes the *nested*
+mid-token case's bookkeeping -- once the table has the nested block's text it is
+spliced and no call is emitted at all -- but it does not subsume the rule, for two
+reasons that are each necessary on their own:
+
+- **A mid-token block at the top level has no enclosing source to splice into.**
+  `def as#{nm}#() -> long { 7 }` is a top-level block: its text goes into `P`, and to
+  *run* it its bytes must come out of `G` and its call must go somewhere a call can go.
+  That is case 2, and nothing about splicing changes it.
+- **A nested mid-token block's text is unknown in the round that needs it.** The rounds
+  run innermost-first, so the round that compiles the enclosing block's source is the
+  round in which the nested block has *just* produced its text -- and in the round
+  before it the nested block has none, so its call must be hoisted exactly as case 2
+  says. Splice and hoist are not alternatives: a nested mid-token block hoists in the
+  rounds and splices in the last one, and each of those is one of the two rules above.
+
+So the two cases are how nesting is dispatched too, not a third rule: **a mid-token
+block and a nested block share case 2 verbatim** (`sg_open`:
+`else if (mid || nested)`), and a nested block in an operand position is the only case
+whose *meaning* changed -- it used to put an in-place call inside the enclosing block's
+source and it now splices.
+
 | | `G` becomes | `P` becomes |
 |---|---|---|
-| `def helper#{nm}#() -> long { 7 }` | `ycc_meta_stmt(0, { nm });`<br>`def helper() -> long { 7 }` | `def helpergen() -> long { 7 }` |
-| `obj#{i}#.field` | `ycc_meta_stmt(1, { i });`<br>`obj.field` | `obj.field` |
-| `tag#{i}#` (whole tail) | `ycc_meta_stmt(1, { i });`<br>`tag` | `tag` |
-| `f(#{x}#, 2)` (case 1) | `f(ycc_meta_expr(2, { x }), 2)` | `f(<the piece>, 2)` |
+| `def helper#{nm}#() -> long { 7 }` | `ycc_meta_stmt(0, tostring({ nm }));`<br>`def helper() -> long { 7 }` | `def helpergen() -> long { 7 }` |
+| `obj#{i}#.field` | `ycc_meta_stmt(1, tostring({ i }));`<br>`obj.field` | `obj.field` |
+| `tag#{i}#` (whole tail) | `ycc_meta_stmt(1, tostring({ i }));`<br>`tag` | `tag` |
+| `f(#{x}#, 2)` (case 1) | `f(ycc_meta_expr(2, tostring({ x })), 2)` | `f(<the piece>, 2)` |
+| `let a = #{ "1+1" }#; a`, round 1 (nothing known) | the inner block's call hoisted, the outer one a stand-in:<br>`ycc_meta_stmt(0, tostring({ 0 }));` | nothing usable yet |
+| the same, round 2 | the inner text is spliced into the enclosing source and the enclosing block's own call runs on it:<br>`ycc_meta_stmt(0, tostring({ let a = 1+1; a }));` | `2` |
+
+(The `tostring` wrapper is in every call because a block's text is the rendering of its
+value -- see [What a block's text *is*](#what-a-blocks-text-is).)
 
 **The statement start is a byproduct of the state machine**: the position of the first
 byte that is neither a blank nor a comment since the last depth-0 `;`, `{` or `}`. That
@@ -395,8 +527,11 @@ belongs to.
 
 | source | in `G` | in `P` |
 |---|---|---|
-| `#{ T }#` in **expression** position | `ycc_meta_expr(SLOT, { T })` | the piece's text |
-| `#{ T }#` in **statement** position | `ycc_meta_stmt(SLOT, { T })` | the piece's text |
+| `#{ T }#` in **expression** position | `ycc_meta_expr(SLOT, tostring({ T }))` | the piece's text |
+| `#{ T }#` in **statement** position | `ycc_meta_stmt(SLOT, tostring({ T }))` | the piece's text |
+| `#{ T }#` **nested inside another block** | hoisted out to the level that can hold it, innermost first — the same hoisted-call path a mid-token block takes | the piece's text, inside the *enclosing* block's text |
+| a **mid-token** block | the call is always `ycc_meta_stmt`, hoisted to a statement of its own | the piece's text, inline |
+| a block that cannot produce its text **yet** (a stand-in round) | the same call with the body `tostring({ 0 })` (`mg_stub`) | unchanged that round |
 | `import` inside a block | hoisted to the top of `G` | gone |
 | a block inside a `def`/`type` body | — | **a diagnostic**; it is not in `G` at all |
 | everything else | verbatim | verbatim, shifted by the line map |
@@ -404,8 +539,8 @@ belongs to.
 **Three injected helpers, and the top-level split is forced.** `ycc_meta_expr` returns
 `str` because expression position needs a value. `ycc_meta_stmt` is **void** because
 statement position must not warn: a statement whose value nobody reads warns at `-W 1`
-(*"the value of 'f()' is not used"*, measured). Both take the block's value as a `str`, so
-a non-`str` block is an existing type error, not a new diagnostic.
+(*"the value of 'f()' is not used"*, measured). Both take the block's **value**, so a
+non-`str` block is an existing type error, not a new diagnostic.
 
 The third, `ycc_meta_emit(slot, body)`, is **void** and is what the other two call — it
 is the one place a piece is written, so the two forms cannot drift apart in how a piece is
@@ -413,6 +548,14 @@ recorded. This doc said "two helpers" until the code was read: `ycc_meta_emit` w
 during M2 and is invisible from the call sites, which is exactly the kind of helper a
 counting-the-call-sites approach misses. All three are in the reserved-name set, so a
 program that defines one is a diagnostic rather than a silent shadow.
+
+Nesting changed one thing here and left the rest alone. The **body argument stays a
+`str`**, because the pass does not need a union: it wraps every block body in
+`tostring(...)` when it writes the call (`sg_open`, `sg_m_open`, `mg_stub`), so the
+rendering rule is in one place and a `long`-valued block — the ordinary case once a block
+can be nested — arrives as text without a `match`. What the change did *not* do is invent
+a fourth helper for the outer rounds: the enclosing block is spliced into its own source
+and re-run by exactly the same three, in a later round. The helper set is the v1 set.
 
 **`SLOT` is load-bearing.** An append-only accumulator cannot insert text at a source
 position, and generated text is unconstrained — it may be half a statement, a whole
@@ -472,11 +615,12 @@ reach the same pass. One module, two callers, one implementation.
 
 **Both halves of that are now done rather than intended.** `meta.y` is in the scanned
 list, and `test_coverage.sh` passes with **all 488 diagnostic sites tested or excused**,
-175 builtins called, 15 keywords used, 85 manual sections with rows and 497 test
+175 builtins called, 15 keywords used, 85 manual sections with rows and 502 test
 references resolving — so the R11 chain (code → fixture → `COVERAGE.md` row) holds for
-the 19 new fixtures. (Those counts moved when master merged: it brought diagnostics,
+all 23 meta fixtures. (Those counts moved when master merged: it brought diagnostics,
 std modules and a language server of its own. At this branch's own tip, before the
-merge, they were 409 / 113 / 12 / 84 / 454.)
+merge, they were 409 / 113 / 12 / 84 / 454, and the nesting work moved the last one to
+502 with three more rows.)
 
 The gap this paragraph used to call pre-existing is **closed**.
 `test_coverage.sh:70-73` scans `ir.y`, `asm.y`, `enc64.y`, `elf.y` and `dwarf.y`
@@ -510,7 +654,10 @@ declaration in package B.
    **pass-level diagnostic carrying the offending line**, never a hand-off to the lexer.
    Checkable statically: `rg '#\{' src/y/lexer.y src/y/parser.y` stays empty, **and**
    the callers of `lexer.tokenize` stay enumerable (`rg -n 'lexer.tokenize' src/y`).
-2. **One compile and one run**, for programs with blocks. A program with none skips both.
+2. **One compile and one run per level of nesting**, for programs with blocks: a chain of
+   depth `d` costs `d+1` generator compiles and runs. A program whose blocks contain no
+   block pays exactly one, and a program with none skips every round — its `G` and its
+   binary are byte for byte what they were before the pass existed.
 3. **No blocks means no generator** — one scan finding nothing, and the common case
    costs one `index_of(line, "#")` per line (`index_of` is a builtin; there is no
    `memchr` in the runtime).
@@ -583,7 +730,7 @@ byte offsets:
 | `}#` inside a string in a block | string state; does not terminate (legal, and the output keeps the text — so **not** a fixture) |
 | `}#` inside a `//` or `/* */` comment in a block | comment state; does not terminate — so the pass needs a **block-comment** state, which none of the three existing scanners factors out |
 | `#{` inside a comment or an `f"…"` | inert |
-| `#{` in code position inside a block | **the normal nested case**, not an error |
+| `#{` in code position inside a block | **the normal nested case**, not an error: the scanner counts it, the call is hoisted, and the piece is spliced into the enclosing block's text |
 | a string spanning newlines | scanner state crosses lines — legal, and strings are **not** newline-terminated (`lexer.y:89-100`) |
 | `'` char literals | same state machine as `"` |
 | `}#` in code position with no open block | **an error** — the one stray-delimiter diagnostic |
@@ -757,8 +904,8 @@ inside a string, and re-compiling that dump gives the same bytes.
 
 | risk | mitigation |
 |---|---|
-| **The program's top level runs twice** — the price of emitting the call in place. | A warning naming any non-declaration top-level statement in a file with blocks, plus the manual's "keep top-level `let` initializers pure". AST-checked, not guessed. |
-| **A block inside a function body** would have compile-time-fixed values and could silently never run. | A diagnostic. Blocks are the top level and other blocks, so every block runs exactly once. |
+| **The program's top level runs once per round** — the price of emitting the call in place. With no nesting that is twice; with nesting, once per level. | A warning naming any non-declaration top-level statement in a file with blocks, plus the manual's "keep top-level `let` initializers pure" — and, where a round cannot yet produce a block's text, a stand-in round in which non-declaration statements are left out of `G` entirely (see [the reduction](#the-reduction-and-the-one-shape-it-costs)). AST-checked, not guessed. |
+| **A block inside a function body** would have compile-time-fixed values and could silently never run. | A diagnostic. Blocks are the top level and other blocks, so every live block's call is in a `G` that runs. |
 | **The `#{`/`}#` scanner is the fuzzer's main target** — `#{ "a}#b" }#`, `#{` at EOF, `/* }# */`, a string spanning lines. | One shared literal scanner, four states plus block comments, an own depth cap, a dedicated fuzz mutation set. |
 | **A generator that traps or exits** used to kill the compiler. | Fixed by the fork: the child's death is a diagnostic naming the block. M1 is gated on exactly this. |
 | **A block that grows without bound** (a generator in a loop) can exhaust the cap. | A size cap on emitted text with the block's line in the diagnostic. R8 is not negotiable. |
@@ -791,15 +938,26 @@ inside a string, and re-compiling that dump gives the same bytes.
 - **The read-back channel is a pipe, not a `.bss` array.** Forking makes the child's
   memory unreachable, so an array would have to be copied out anyway; a pipe is simpler
   and gives the exit status for free.
-- **The effective nesting cap is ~333**, not 1000 (measured).
+- **The effective nesting cap is ~333**, not 1000 (measured) — that is the *parser's*,
+  counted across five walks. The **pass's own** cap is **8**, and it is a cost limit, not
+  a syntax one: see [Why the cap is 8](#why-the-cap-is-8).
+- **Nesting is splicing, at every level, with no second dialect.** A nested block
+  contributes text to the enclosing block's source, the enclosing source is recompiled,
+  and the pass repeats to a fixed point — which is what [Deferred](#deferred-if-and-meta)
+  called a layering model and cut. The round count is the nesting depth, and the pieces
+  are spliced all at once, at the end, from the slot table.
 - **The emitted-text size cap is an error**, not a warning — a resource limit the author
   cannot fix in place, and R8 makes exceeding it fatal.
 - **The pass lives in `src/y/meta.y`.** Forced by the LSP being a second checker.
 
 ## Open questions
 
-1. What the pass's own nesting cap should be. It has to sit well below the ~333 the
-   parser allows, so a runaway nest is a diagnostic pointing at the block.
+1. ~~What the pass's own nesting cap should be.~~ **Answered: 8** (`MG_NEST`), on measured
+   cost, with a diagnostic that names the cost rather than leaving `too_deep` to fire
+   inside a file that does not exist — [Why the cap is 8](#why-the-cap-is-8), and
+   `e188_meta_nest_too_deep.y`. The open part is not the number but whether it should be
+   a flag, and whether a deeper program should be allowed to spend more compile time
+   deliberately; both are for the manual, not the pass.
 2. Whether the top-level-statement warning should be an error when the statement is
    obviously impure (a call at top level) rather than a warning in every case.
 3. Whether `-E` should also dump `G`, which is the text whose *diagnostics* are the ones
@@ -809,10 +967,10 @@ inside a string, and re-compiling that dump gives the same bytes.
 
 ## Corrections
 
-This document was wrong twice while being written, and eight more times while being
-built. All ten are recorded, because a design that hides its corrections is a design you
+This document was wrong twice while being written, and nine more times while being
+built. All eleven are recorded, because a design that hides its corrections is a design you
 cannot check. The first two are [found by designing it](#found-by-designing-it-two-that-changed-the-design);
-the other eight are [found by building it](#found-by-building-it-eight-measured).
+the other nine are [found by building it](#found-by-building-it-nine-measured).
 
 ### Found by designing it: two that changed the design
 
@@ -843,18 +1001,23 @@ a warned-about rule instead of an unstated hazard.
 
 ---
 
-## Deferred: `#if`, `#meta`, and layering
+## Deferred: `#if` and `#meta`
 
-Cut from v1 because everything past M1 bought **nesting**, and nesting had one artefact:
-a demo. The honest baseline is `ycc build` plus a code-generation package in `y.toml`,
-which already expresses "generate a file, then compile it" with a dependency graph and
-an object cache. The delta over that is *"don't write a temp file"* — **which is M1,
-and is in v1.** What the cut code would have added on top is a second compile per level.
+**Layering is no longer here — it is in v1.** This section used to be the home of the
+"second compile per level" model, cut on the grounds that nesting had one artefact, a
+demo, and that the price was a layering model. The price turned out to be exactly one
+extra compile **and run per level, inside the compiler's own process**, which is
+affordable: 13.8 ms and 34 MB per level on a 24 KB program, 43 ms and 103 MB per level at
+the compiler's own size class ([Why the cap is 8](#why-the-cap-is-8)). So
+[Nesting is splicing](#nesting-is-splicing-at-every-level) got built, and what is left
+deferred is the *region* form — `#meta` — and `#if`.
 
-Kept here so the reasoning survives, and so a future phase starts from measurements
-rather than from scratch.
+What is still true of the cut: the honest baseline for "generate a file, then compile it"
+is `ycc build` plus a code-generation package in `y.toml`, which has a dependency graph
+and an object cache. The delta over that is *"don't write a temp file"* — **which is M1,
+and is in v1.**
 
-### What the layering model was
+### What the layering model was, and what it turned into
 
 `P₀` = the program's source. `P_d` = the text at depth *d*, with that depth's block
 outputs substituted. A block at depth *d* is a **statement of `P_{d+1}`**, and its
@@ -867,29 +1030,26 @@ P_{d+1} = the text at depths d+1 and d, as code, with the depth-d blocks as call
 Execution is **inside-out**: `P_{d+1}` runs to produce `P_d`'s source, down to `P₁`
 producing `P₀`'s, then the program is compiled. One compile + one run per `#meta` depth.
 
-Depth 4 was `ideas/meta.y` as it stood before the cut; that example is now the
-[Deferred](#deferred-if-meta-and-layering) section's, not v1's.
+**That is what shipped, minus the per-depth texts.** The prediction that forced the cut
+was structural: each depth wanted its own `lines` list with its own `ofile`/`oline`,
+threaded `native_resolve_seen` → `resolve_unit` → `compile_unit` → `emit_program`, which
+are typed on one list each. The built version needs none of it, because a round is *one*
+text: the pass rebuilds `G` from the post-run source of the previous round and re-compiles
+it, so the only thing a depth adds is another trip round `meta_resolve`. `compile_unit`
+and `emit_program` still take one `lines` list, because there is still exactly one final
+program. The regions do exist internally — `sg_region_*` is where the reduction finds the
+statements it leaves out of a stand-in round — but they are a pass-local detail, not a
+parameter threaded through the pipeline.
 
-### Why it is worth having eventually
+### What is still cut: the `#meta` region
 
-- **A block sees declarations at depth *d* and *d+1*** — so a generator can be written
-  inline at file top level (`#meta`), inline, with no extra file, instead of as a module.
-- **A `#meta` region's text is at file top level**, so a `def` in it is an ordinary
-  top-level function — not a closure, with no capture question to get wrong, and no
-  `{}` to scope it. That is the piece that lifting a block's `def`s out could not do
-  safely.
-- It is the only route to **a generator that generates a generator**, since a block's
-  output may not contain a block.
-
-### What it costs, measured
-
-| | |
+| | why it is still cut |
 |---|---|
-| `native_resolve_seen` must return **per-depth texts** — `{lines: [[str]], …}`, each with its own `ofile`/`oline` — threaded `native_resolve_seen` → `resolve_unit` → `compile_unit` → `emit_program`. `compile_unit` and `emit_program` are typed on a single `lines` list today. | **the one structural change the layering forces**, ×2 copies under R1 |
-| Each depth's top-level statements **execute twice** — `T_d` appears live in `P_{d+1}` and substituted in `P_d` — so a file append, a counter, an `exec` or a progress print doubles with no diagnostic. | needs its own accounting rule; not the same problem as v1's top level, because a region's statements are *meant* to run |
-| Nesting costs a real compile per level and the arenas coexist. Measured: one compiler-scale compile is `840407 KB`, `cycc` needs ~1.9 GB for `ycc.y`, and the cap is 3.5 GiB. | the depth cap bounds the *count*; the thing that actually costs is region *size* × coexisting arenas |
-| Depth 8 is not the problem — it is ~8 small compiles. Nobody writes depth-8 nesting; the demo is depth 4. | the feature would ship for one artefact |
-| A `#if` condition needs a name for `os`/`target`, and `lint.y` needs the top-level-execution rule for regions. | small, but they only make sense with the layer |
+| **A block sees declarations at depth *d* and *d+1*** — so a generator can be written inline at file top level (`#meta`), with no extra file, instead of as a module. | A nested block already gets a version of this: `#{ … #{ … }# … }#` runs inside the enclosing text, so it sees the enclosing block's declarations. What `#meta` adds is seeing the **program's** top-level declarations, and that is what a generator *module* (`import gen;`) is for — already implemented, already tested. |
+| **A `#meta` region's text is at file top level**, so a `def` in it is an ordinary top-level function — not a closure, with no capture question to get wrong, and no `{}` to scope it. That is the piece that lifting a block's `def`s out could not do safely. | A nested block still gets *its own* `def`s into the enclosing text, one level down per depth, which is enough for the composition case; a region would put them at depth 0, where a `let` from an enclosing block is out of scope. Cheap to add on top of a pass that already has regions and rounds, and it is not needed by anything measured. |
+| It is the only route to **a generator that generates a generator**. | No longer true — nesting *is* that route, and it is what `t201_meta_nest_expr.y` tests. |
+| Each depth's top-level statements **execute once per round** — a file append, a counter, an `exec` or a progress print repeats with no diagnostic. | Real, and already paid: the [reduction](#the-reduction-and-the-one-shape-it-costs) drops the statements that cannot compile in a stand-in round, and the warned-about rule covers the rest. A region would need its own accounting on top. |
+| A `#if` condition needs a name for `os`/`target`, and `lint.y` needs the top-level-execution rule for regions. | Small, but both only make sense with the region. |
 
 ### The `#if` that was cut is not needed by `WINDOWS.md`
 
@@ -912,7 +1072,7 @@ deferred region is the sharing route, not a rewrite of block scoping.
 
 ---
 
-### Found by building it: eight, measured
+### Found by building it: nine, measured
 
 Written after the fact, so the design above can be read against what the code
 actually does. Each is a place this document was wrong, with the measurement.
@@ -974,6 +1134,21 @@ the table, so a monotonic counter hands the second pass slots 4,5,6 for blocks
 that asked for 0,1,2 and the pieces are matched to nothing. The counter resets per
 pass (`mg_pass`), which is the one piece of state the second resolve has to reset.
 
+**9. "Nesting is data, not splicing" was the wrong answer to a right question.**
+The document argued that a block nested in a block could not be spliced, because
+`G` is compiled before it runs — a nested block's text has to be *in* `G`. Both
+halves of that are right and together they imply the opposite conclusion: the pass
+compiles and **runs `G` again**, once per nesting level, and splices the outer text
+last. No per-depth `lines` list is needed, so the "one structural change" the
+[Deferred](#deferred-if-and-meta) section costed never existed. What the argument
+did get right is the acceptance case it was written for: it is not a block's
+*source* that is spliced but the rendering of its **value**, and that is why the
+helpers still take a `str` and the pass wraps each body in `tostring(...)`
+([What a block's text *is*](#what-a-blocks-text-is)). The cost, measured twice at
+two program sizes, is 13.8 ms / 34 MB per level and 43 ms / 103 MB per level
+([What the measurements cost](#what-the-measurements-cost)) — affordable, and the
+depth cap is set from it rather than from the parser's limit.
+
 Corrected in `ideas/meta.y` itself, twice: the `let count` block wanted the number
 65 and got 65 as the *length* of the text the block generates (so it now yields
 the text), and a `str` value spliced as text needs `lit` — which escapes — not
@@ -1001,6 +1176,22 @@ it at all — so the scanner itself is not in that number; the extra is the
 per-output-line `ogen` map and the resolve indirection, which is why the self-
 compile's resolve phase is the honest one to quote: **+5.1 ms and +15 MB on a
 1.3 MB self-compile**, and both are only paid by a program that *has* blocks.
+
+**Nesting is the second-order number, and it is the one the depth cap is set from.**
+Measured on a generated program of 400 declarations (24 KB) with a nest of depth `d`
+appended, 8 runs each, so the differences are the per-level cost rather than the
+one-block baseline:
+
+| | depth 0 | depth 7 | per level |
+|---|---|---|---|
+| 400 decls, 24 KB | 25.5 ms / 61 MB | 122.3 ms / 293 MB | **13.8 ms / 34 MB** |
+| 1600 decls, 122 KB (compiler size class) | 0.09 s / 202 MB | 0.39 s / 924 MB | **43 ms / 103 MB** |
+
+The same 400-decl program with **no block at all** compiles in 11.0 ms, so the block
+itself — not the nesting — is the 14 ms baseline, and both columns above are
+linear in the depth with no cliff and no super-linear term at 7. Memory is the
+binding constraint, which is why `MG_NEST` is 8 and not 16:
+[Why the cap is 8](#why-the-cap-is-8).
 
 ---
 

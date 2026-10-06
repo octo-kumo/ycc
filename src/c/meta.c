@@ -115,16 +115,73 @@ static Yv *mg_bpo = 0;
 /* The imports hoisted out of blocks, and the line each is reported at. */
 static Yv *mg_imp = 0;
 static Yv *mg_iol = 0;
+/* One piece per slot, and whether it arrived. The pieces come back over the pipe
+ * framed as `<slot> <len>\n<body>`, so a piece is matched to its block by SLOT
+ * and not by the order the generator happened to evaluate blocks in. That
+ * matters: a nested block's text is produced BEFORE its parent's, so source order
+ * and execution order differ.
+ *
+ * They are here rather than with the driver because the SCANNER reads them: a
+ * nested block whose piece has arrived contributes that text to the source of the
+ * block around it instead of a call (sg_open), which is the whole of nesting.
+ * And they SURVIVE mg_pass, which is what makes the rounds work -- the piece
+ * table is the one thing that carries from a round to the next, and a block's
+ * slot is the same in every round because the block table is built the same way
+ * every round. */
+static Yv *mg_piece = 0;
+static Yv *mg_have = 0;
 /* How many blocks the whole resolve found, and whether any. */
 long mg_n = 0;
+/* How many of them sit inside another block. A program with none is the common
+ * case and costs exactly one compile of the generator, whatever else changes
+ * here (native.c meta_prepare: mg_nest is what decides whether the rounds run at
+ * all). */
+long mg_nest = 0;
+/* Did each block's CHILDREN all have their text when it opened? A block whose
+ * own source wanted a nested block's text cannot produce its text until it has
+ * it, so the answer says whether the piece this round produced is the real one
+ * (mg_commit keeps it) or a stand-in to throw away. */
+static Yv *mg_bok = 0;
+/* Did each block's call go into this round's G? A block that did not is one
+ * whose text was already in the table and was spliced into the block around it,
+ * or one inside such text, so it neither runs nor owes the table anything. */
+static Yv *mg_live = 0;
+/* Does each block's text have to exist at all? Always for a top-level one -- it
+ * goes into the program. For a nested one, only while the block around it is
+ * being compiled: inside text that was spliced whole, the text is already there. */
+static Yv *mg_need = 0;
+/* Whether each block has ever had a block open inside it. It is structural --
+ * the same every round, and the block table is built the same way every round --
+ * so it is never cleared, and it is what a round knows about a block's children
+ * BEFORE it has scanned them: a block that may hold a nested block holds its
+ * text (sg_hold), because a nested block's text goes into the enclosing block's
+ * source and has to be known before that source is compiled. */
+static Yv *mg_bkids = 0;
 /* The emitted-text size cap (R8 is not negotiable). The piece table is read
  * into memory, so this is what bounds it. */
 #define MG_MAX 33554432L
-/* The pass's own nesting cap, well below the parser's ~333 effective limit
- * (tags.h MAX_NEST is 1000 and each nested block costs ~3 nest units), so a
- * runaway nest is a diagnostic naming the block rather than `too_deep` firing
- * inside a file that does not exist. */
-#define MG_NEST 100L
+/* The pass's own nesting cap. It is a COST bound and not a parser bound: a level
+ * of nesting costs one more compile and one more run of the generator, because
+ * a nested block's text has to be known before the source of the block around it
+ * can be compiled (mg_pending). The parser's own limit is ~333 effective (tags.h
+ * MAX_NEST is 1000 and each nested block costs ~3 nest units), so 8 is far below
+ * both, and MEASURED per level: see ideas/meta.md, "Nesting". */
+#define MG_NEST 8L
+/* How many rounds native.c meta_resolve will do before it calls the round logic
+ * broken. One round per level of nesting plus one for a program that has none,
+ * so a program the scanner accepted cannot reach it. */
+#define MG_ROUND (MG_NEST + 2)
+/* The reduction: on for a program that HAS nesting (mg_reduce), and off
+ * otherwise. A round in which a block could not produce its text leaves a stub
+ * where its call goes (sg_top_close), so a statement reading a name that block
+ * was going to define would not compile -- and the statements in question bind
+ * nothing, so dropping them costs the generator no name at all
+ * (sg_region_close). */
+static int mg_reduce = 0;
+/* The collecting scan: the one that finds the blocks, before anything is known.
+ * It never holds a block's text and never reduces, so the G it builds for a
+ * program with no nesting is the G the pass has always built. */
+static int mg_collect = 1;
 
 Yv *mg_gol = 0;
 Yv *mg_gbase = 0;
@@ -134,8 +191,6 @@ Yv *mg_roots = 0;
 Yv *mg_root = 0;
 static Yv *mg_files = 0;
 static int mg_ready = 0;
-static Yv *mg_piece = 0;
-static Yv *mg_have = 0;
 static long mg_first = 0;
 static long mg_p_at = -1;
 
@@ -760,21 +815,36 @@ static long sg_gat = 0;
  * in one is hoisted out of it -- in close order, which is the order the calls
  * have to run in.
  *
- * sg_mmid says the innermost open block is mid-token, so sg_gadd and the
- * writes below go here; sg_mbuf is the text and sg_mol the source line each of
- * its lines started at (its lines move, so their origins travel with them). */
+ * The same machinery HOLDS the text of a block that has to give it up: a nested
+ * block whose text is already in the table contributes TEXT to the block around
+ * it, and a block that cannot produce its text this round contributes a stub --
+ * so in both cases its own bytes are scanned (the slots of the blocks inside it
+ * have to be the same every round) and then dropped, and sg_hold/sg_drop is how
+ * that is said. Nothing is written to the live buffer while a block is held, so
+ * the text before the block, the line it is on and the statement it belongs to
+ * are all still exactly where they were.
+ *
+ * sg_mmid says a block is held, so sg_gadd and the writes below go here;
+ * sg_mbuf is the text and sg_mol the source line each of its lines started at
+ * (its lines move, so their origins travel with them). */
 static int sg_mmid = 0;
 static Yv *sg_mbuf = 0;
 static Yv *sg_mol = 0;
 static int sg_molast = 0;
 static long sg_mline = 1;
-/* The buffer of an enclosing mid-token block, saved while a nested one is open
- * and restored when it closes (so the nested call is hoisted out of it, not
- * written into it). */
+/* The buffer of an enclosing block, saved while a nested one is held and
+ * restored when it closes (so the nested call is hoisted out of it, not written
+ * into it). */
 static Yv *sg_midsave = 0;
 static Yv *sg_molsave = 0;
 static Yv *sg_mlastsave = 0;
 static Yv *sg_mlinesave = 0;
+/* The G line each held buffer started at, and the one for the file's own buffer.
+ * sg_restore needs it to name the line the text after a held block continues,
+ * and sg_drop to put it back where it was -- a dropped block's lines are gone,
+ * so nothing may carry on counting from them. */
+static Yv *sg_glsave = 0;
+static long sg_glsaved = 1;
 /* The hoisted calls, in CLOSE order: innermost first, then siblings in source
  * order -- which is exactly the order they have to run in. Each carries the
  * top-level statement it belongs to, so the move can order them per statement.
@@ -785,10 +855,9 @@ static Yv *sg_mids = 0;
 static long sg_tsline = 1;
 static long sg_tsoff = 0;
 static int sg_tsp = 0;
-/* The depth of the innermost open mid-token block, 0 for none, recomputed by
- * sg_m_live whenever a block closes. A top-level `;` or `}` only ends a
- * statement when no mid-token block is open, so the anchor cannot land inside
- * one of these hoisted calls. */
+/* The depth of the innermost held block, 0 for none, recomputed by sg_m_live
+ * whenever a block closes. A top-level `;` or `}` only ends a statement when no
+ * block is held, so the anchor cannot land inside one of these hoisted calls. */
 static long sg_mdepth = 0;
 static long sg_line = 1;
 static long sg_col = 1;
@@ -814,7 +883,30 @@ static Yv *sg_bclean = 0;
 static Yv *sg_bbrace = 0;
 static Yv *sg_bstmt = 0;
 static Yv *sg_bmid = 0;
+/* Per open block, for the nesting: its slot (mg_have is indexed by it), whether
+ * every block opened inside it had its text when it opened, whether its text
+ * was already in the table -- in which case it contributes TEXT to the block
+ * around it and never runs -- whether it sits inside text that is not compiled
+ * at all, and whether its own text is held rather than written into the live
+ * buffer as it is scanned. */
+static Yv *sg_bslot = 0;
+static Yv *sg_bok = 0;
+static Yv *sg_bsplice = 0;
+static Yv *sg_bdead = 0;
+static Yv *sg_bhold = 0;
 static long sg_depth = 0;
+/* The top-level statement in progress, for the reduction (mg_reduce): the line
+ * of G it starts on, the text of the line in progress when it started and the
+ * source line that line began at -- so a drop can put both back -- whether it is
+ * a declaration, whether a block is inside it, and whether its first word has
+ * not been read yet. */
+static long sg_rfrom = 0;
+static Yv *sg_rtext = 0;
+static long sg_rgline = 1;
+static long sg_rbrace = 0;
+static int sg_rkeep = 0;
+static int sg_rblk = 0;
+static int sg_rpend = 1;
 /* The first diagnostic, and where. The rest of the text is not scanned. */
 static Yv *sg_err = 0;
 static long sg_eline = 0;
@@ -837,9 +929,124 @@ static long sg_fail(Yv *msg, long line, long col) {
 /* Append text to whichever G buffer is live: the file's own, or a mid-token
  * block's (its call is written there and hoisted afterwards, so it does not
  * sit where the block stood). Blocks nest, so `mid` is the innermost block's. */
+/* Defined further down (with the mid-token machinery): mg_lines splits text on
+ * its newlines, sg_region_open opens the reduction's statement region,
+ * sg_region_word reads the region's first word, mg_directive says whether that
+ * word is one the reduction keeps, mg_stub is the stand-in a block runs when it
+ * cannot produce its text, and mg_commit throws the stand-ins' pieces away. */
+static Yv *mg_lines(Yv *text);
+static long sg_region_open(void);
+static long sg_region_word(Yv *w);
+static int mg_directive(Yv *w);
+static Yv *mg_stub(long slot, int stmt);
+static long mg_commit(void);
+
 static long sg_gadd(Yv *t, int mid) {
     if (mid) { sg_mbuf = ys_cat(sg_mbuf, t); }
     else { sg_gbuf = ys_cat(sg_gbuf, t); };
+    return 0;
+}
+
+/* Hold this block's text: from here to its `}#` it goes to a buffer of its own
+ * and nowhere else. sg_restore puts it back where it came from; sg_drop throws
+ * it away. Nothing is written to the live buffer meanwhile, which is what makes
+ * both safe. */
+static long sg_hold(void) {
+    sg_midsave = ya_push(sg_midsave, sg_mbuf);
+    sg_molsave = ya_push(sg_molsave, sg_mol);
+    sg_mlastsave = ya_push(sg_mlastsave, yv_bool(sg_molast));
+    sg_mlinesave = ya_push(sg_mlinesave, yv_long(sg_mline));
+    sg_glsave = ya_push(sg_glsave, yv_long(sg_glsaved));
+    sg_mmid = 1;
+    sg_mdepth = sg_depth;
+    sg_glsaved = sg_gline;
+    sg_mbuf = ys("");
+    sg_mol = yav(0);
+    sg_molast = 0;
+    sg_mline = sg_gline;
+    return 0;
+}
+
+/* The enclosing block's buffer back, whatever this one did with its own. */
+static long sg_m_pop(void) {
+    sg_mbuf = ya_get(sg_midsave, yv_len(sg_midsave) - 1);
+    sg_midsave = ya_slice(sg_midsave, 0, yv_len(sg_midsave) - 1);
+    sg_mol = ya_get(sg_molsave, yv_len(sg_molsave) - 1);
+    sg_molsave = ya_slice(sg_molsave, 0, yv_len(sg_molsave) - 1);
+    sg_molast = yv_truth(ya_get(sg_mlastsave, yv_len(sg_mlastsave) - 1));
+    sg_mlastsave = ya_slice(sg_mlastsave, 0, yv_len(sg_mlastsave) - 1);
+    sg_mline = yv_l(ya_get(sg_mlinesave, yv_len(sg_mlinesave) - 1));
+    sg_mlinesave = ya_slice(sg_mlinesave, 0, yv_len(sg_mlinesave) - 1);
+    sg_glsaved = yv_l(ya_get(sg_glsave, yv_len(sg_glsave) - 1));
+    sg_glsave = ya_slice(sg_glsave, 0, yv_len(sg_glsave) - 1);
+    return 0;
+}
+
+/* The held text, back in the buffer it came from, in place, between `pre` and
+ * `post`. The live buffer has not moved -- nothing was written to it while the
+ * block was held -- so this is an append, and each line goes back with the origin
+ * it was scanned under. The line the text after the block continues is the one
+ * the held text's last line started at, so that is what the G line counter goes
+ * back to.
+ *
+ * `pre`/`post` are the block's own call: the prefix cannot be written at the
+ * `#{` any more, because whether this round has the text of every block inside
+ * is only known at the `}#` (see sg_top_close). */
+static long sg_restore(Yv *pre, Yv *post) {
+    Yv *segs = mg_lines(sg_mbuf);
+    long last = yv_len(segs) - 1;
+    long i = 0;
+    if (!ys_eq_lit(pre, "")) { sg_gbuf = ys_cat(sg_gbuf, pre); };
+    while (i < yv_len(segs)) {
+        if (i < last) {
+            sg_gbuf = ys_cat(sg_gbuf, ya_get(segs, i));
+            sg_g = ya_push(sg_g, sg_gbuf);
+            sg_gf = ya_push(sg_gf, yv_long(sg_fid));
+            if (i < yv_len(sg_mol)) { sg_gol = ya_push(sg_gol, ya_get(sg_mol, i)); }
+            else { sg_gol = ya_push(sg_gol, yv_long(sg_gline)); };
+            sg_gbuf = ys("");
+        } else {
+            sg_gbuf = ys_cat(sg_gbuf, ya_get(segs, i));
+        };
+        i = i + 1;
+    };
+    if (!ys_eq_lit(post, "")) { sg_gbuf = ys_cat(sg_gbuf, post); };
+    if (sg_molast) { sg_gline = sg_mline; };
+    sg_gat = 0;
+    return sg_m_pop();
+}
+
+/* The held text, thrown away: the block's lines are not in G and not in P, so
+ * the line counter goes back to where the buffer began -- the text that follows
+ * the block continues the line the block started on, not one of its own. */
+static long sg_drop(void) {
+    sg_gline = sg_glsaved;
+    return sg_m_pop();
+}
+
+/* A block's own text, spliced into the source of the block AROUND it where the
+ * block stood: this is what a nested block contributes once the table has its
+ * text (sg_splice is the nesting, not a call in the enclosing block's source).
+ * `at` is the line of its `#{` and every generated line takes it, for the same
+ * reason the pieces spliced into P do (mg_splice): the text is this block's, so
+ * the lines are its line, whatever line of G they land on.
+ *
+ * The block around it is always held, so the text goes to sg_mbuf; called
+ * BEFORE sg_hold, because the text belongs to the enclosing block. */
+static long sg_splice(long slot, long at) {
+    Yv *lines = mg_lines(ya_get(mg_piece, slot));
+    long last = yv_len(lines) - 1;
+    long i = 0;
+    while (i < yv_len(lines)) {
+        sg_mbuf = ys_cat(sg_mbuf, ya_get(lines, i));
+        if (i < last) {
+            sg_mol = ya_push(sg_mol, yv_long(at));
+            sg_mbuf = ys_cat(sg_mbuf, ys("\n"));
+            sg_molast = 0;
+            sg_gline = at;
+        };
+        i = i + 1;
+    };
     return 0;
 }
 
@@ -1009,7 +1216,11 @@ static long sg_reset(Yv *src, long fid, Yv *dir) {
     sg_bclean = yav(0);
     sg_bbrace = yav(0);
     sg_bstmt = yav(0);
-    sg_bmid = yav(0);
+    sg_bslot = yav(0);
+    sg_bok = yav(0);
+    sg_bsplice = yav(0);
+    sg_bdead = yav(0);
+    sg_bhold = yav(0);
     sg_depth = 0;
     sg_err = ys("");
     sg_eline = 0;
@@ -1024,7 +1235,9 @@ static long sg_reset(Yv *src, long fid, Yv *dir) {
     sg_tsoff = 0;
     sg_tsp = 1;
     sg_mdepth = 0;
-    return 0;
+    sg_glsaved = 1;
+    sg_glsave = yav(0);
+    return sg_region_open();
 }
 
 /* Any brace on the stack a `def`/`type` BODY opened? A `type` body is marked
@@ -1187,6 +1400,8 @@ static long sg_check_name(Yv *w, int called) {
 }
 
 static long sg_word_go(Yv *w, long after, long n) {
+    /* the first word of the statement in progress is what the reduction reads */
+    if (mg_reduce && sg_depth == 0) { (void)sg_region_word(w); };
     long j = after;
     int go = 1;
     while (go && j < n && (ys_byte_at(sg_src, j) == 32 ||
@@ -1244,18 +1459,160 @@ static long sg_word(long i, long n) {
 /* ── the mid-token machinery ───────────────────────────────────────────── */
 
 /* Which G buffer is live now that the block has closed and the per-block
- * stacks have been popped: a mid-token block's own if one is still open, and
+ * stacks have been popped: a held block's own if one is still open, and
  * sg_mdepth says at what depth (0 = the file's own buffer). */
 static long sg_m_live(void) {
     sg_mmid = 0;
     sg_mdepth = 0;
     long k = sg_depth - 1;
     while (k >= 0) {
-        if (yv_truth(ya_get(sg_bmid, k))) { sg_mmid = 1; sg_mdepth = k + 1; };
+        if (yv_truth(ya_get(sg_bhold, k))) { sg_mmid = 1; sg_mdepth = k + 1; };
         k = k - 1;
     };
     return 0;
 }
+
+/* Whether a block has ever had a block open inside it. Structural, so the table
+ * is the same in every round and is never cleared; a slot nobody has reached yet
+ * reads false. sg_open needs it BEFORE it has scanned the block's own body, to
+ * know whether to hold that body. */
+static int mg_bkids_had(long slot) {
+    while (yv_len(mg_bkids) <= slot) { mg_bkids = ya_push(mg_bkids, yv_bool(0)); };
+    return yv_truth(ya_get(mg_bkids, slot));
+}
+
+/* Record the nesting shape: a block that opens inside another one. */
+static long mg_kid_note(long par) {
+    while (yv_len(mg_bkids) <= par) { mg_bkids = ya_push(mg_bkids, yv_bool(0)); };
+    ya_set(mg_bkids, par, yv_bool(1));
+    return 0;
+}
+
+/* ── the reduction ────────────────────────────────────────────────────────
+ * On for a program that HAS nesting (mg_reduce). A round in which a block could
+ * not produce its text leaves a STUB where its call goes (sg_top_close), so a
+ * statement reading a name that block was going to define would not compile:
+ * `#{ let v = #{ "1+1" }#; let x = v; }#` then `print(x);` names `x` in a program
+ * that has not been generated yet. So in such a round a top-level statement that
+ * is neither a declaration nor carries a block is left out of G altogether.
+ *
+ * That costs the generator no name: the only statements dropped are ones that
+ * begin with `print(`, `f(`, an operator -- none of which declares anything -- so
+ * every binding G needs is still there, and a block reads exactly the same names.
+ * It does cost a block the SIDE EFFECT of such a statement, which is what the
+ * pass's own warning about top-level statements already says to avoid.
+ *
+ * The extent is exact and needs no parser. A top-level statement in Y ends at a
+ * `;` or at the `}` that closes it (MEASURED: `print(1)` with no `;` is
+ * "expected ';'"), so the regions here are exactly the statements. A block
+ * statement has no terminator of its own and so runs on to the next one -- which
+ * is harmless, because a region holding a block is never dropped. */
+static long sg_region_open(void) {
+    /* The line in progress when a region starts belongs to the region that ENDS
+     * here, not to this one: so it is kept aside, and dropping this region puts
+     * it back. Everything else this region adds is whole G lines, so a drop is a
+     * truncation of those plus this one string.
+     *
+     * The line counter goes back with them: the dropped lines were not in G, so
+     * nothing may carry on counting from them -- the same reason sg_drop rewinds
+     * it for a dropped block. */
+    sg_rtext = sg_gbuf;
+    sg_rgline = sg_gline;
+    sg_rbrace = yv_len(sg_bkind);
+    sg_rfrom = yv_len(sg_g);
+    sg_rkeep = 0;
+    sg_rblk = 0;
+    sg_rpend = 1;
+    return 0;
+}
+
+/* The first word of the region in progress, if it has one yet: a declaration or
+ * a splicer directive is kept, anything else is the statement the reduction is
+ * about. A region whose first token is not a word (`#{`, a digit, `(`) leaves
+ * sg_rpend set, which costs nothing -- the region is over at the next `;`. */
+static long sg_region_word(Yv *w) {
+    if (sg_rpend) {
+        sg_rpend = 0;
+        if (mg_directive(w)) { sg_rkeep = 1; };
+    };
+    return 0;
+}
+
+/* The words the reduction keeps: the four declarations, plus the splicer's own
+ * whole-line directives (`import`, `export`, `embed`), which are consumed by the
+ * resolve and never reach the lexer. */
+static int mg_directive(Yv *w) {
+    return ys_eq_lit(w, "def") || ys_eq_lit(w, "type") || ys_eq_lit(w, "let") ||
+           ys_eq_lit(w, "const") || ys_eq_lit(w, "import") ||
+           ys_eq_lit(w, "export") || ys_eq_lit(w, "embed");
+}
+
+/* The region is over. Drop it whole unless it is a declaration or holds a block:
+ * its G lines go back to where it began. No hoisted call can point into a
+ * dropped region -- a hoist belongs to a mid-token block, and a mid-token block
+ * makes its region one that holds a block. */
+static long sg_region_close(void) {
+    if (!sg_rkeep && !sg_rblk) {
+        sg_g = ya_slice(sg_g, 0, sg_rfrom);
+        sg_gf = ya_slice(sg_gf, 0, sg_rfrom);
+        sg_gol = ya_slice(sg_gol, 0, sg_rfrom);
+        sg_gbuf = sg_rtext;
+        sg_gline = sg_rgline;
+        sg_gat = 0;
+    };
+    return sg_region_open();
+}
+
+/* `}#` of a top-level block that HELD its text: the call goes where the block
+ * stood, wrapping either the block's own body or a stand-in for it.
+ *
+ * The stand-in is the whole of what a block that cannot produce its text this
+ * round contributes. Its shape is the real call's -- same helper, same position,
+ * same `;` -- with the body `0`, so the statement around it still compiles and
+ * still type-checks the way it did when the block was a call. Its piece is "0",
+ * and mg_commit throws that away with everything else.
+ *
+ * Which of the two it is cannot be decided at the `#{`, and is not: this is the
+ * first point where every block opened inside this one has closed and said
+ * whether its text was in the table. A block with nothing inside is never held
+ * and never comes through here, which is what keeps a program with no nesting on
+ * the path the pass has always taken. */
+static long sg_top_close(long k) {
+    long slot = yv_l(ya_get(sg_bslot, k));
+    int stmt = yv_truth(ya_get(sg_bstmt, k));
+    Yv *helper = ys("ycc_meta_expr");
+    if (stmt) { helper = ys("ycc_meta_stmt"); };
+    if (yv_truth(ya_get(sg_bok, k))) {
+        Yv *post = ys("}))");
+        if (stmt) { post = ys("}));"); };
+        return sg_restore(scat3(helper, ys("("),
+                                ys_cat(ys_tostring(yv_long(slot)),
+                                       ys(", tostring({"))), post);
+    } else {
+        /* the stand-in: the held text is what cannot be compiled, so it goes
+         * nowhere at all. The line counter goes back with it (sg_drop), and the
+         * call goes where the block stood -- into the live buffer, which still
+         * holds only the text from BEFORE the block, so the call lands in the
+         * right place and the text after the block follows it. */
+        (void)sg_drop();
+        sg_gbuf = ys_cat(sg_gbuf, mg_stub(slot, stmt));
+        return 0;
+    };
+}
+
+/* The stand-in a block runs when it cannot produce its text this round. Same
+ * helper and same position as the real call, with the body `0`: the statement
+ * around it still compiles and still type-checks exactly as it did. Its piece is
+ * "0", and mg_commit throws that away with everything else. */
+static Yv *mg_stub(long slot, int stmt) {
+    Yv *helper = ys("ycc_meta_expr");
+    if (stmt) { helper = ys("ycc_meta_stmt"); };
+    Yv *s = scat3(helper, ys("("),
+                  ys_cat(ys_tostring(yv_long(slot)), ys(", tostring({ 0 }))")));
+    if (stmt) { s = ys_cat(s, ys(";")); };
+    return s;
+}
+
 
 /* text's physical lines, and NOT ys_split(): split drops ONE trailing empty
  * element, so split("a\n", "\n") is ["a"] and the line break a piece ends on
@@ -1276,37 +1633,44 @@ static Yv *mg_lines(Yv *text) {
     return out;
 }
 
-/* A mid-token block: the call goes to a buffer of its own, and sg_mids_move
- * puts it at the top-level statement that contains the block. The buffer of an
- * enclosing mid-token block is saved and restored, so a nested one is hoisted
- * out of it -- and since the moves are applied in close order, it runs first.
+/* A mid-token block, and any nested block that has not got its text yet: the
+ * call goes to a buffer of its own, and sg_mids_move puts it at the top-level
+ * statement that contains the block. The buffer of an enclosing block is saved
+ * and restored, so a nested one is hoisted out of it -- and since the moves are
+ * applied in close order, it runs first.
  *
  * The call is ALWAYS a statement (`ycc_meta_stmt`, with its `;`): a mid-token
- * block is one that could not be an operand where it stands, so it is a
- * statement by construction, whatever the text around it looks like. */
+ * block is one that could not be an operand where it stands, and a nested block
+ * is one whose enclosing block cannot compile this round -- so neither is an
+ * expression by construction, whatever the text around it looks like. */
 static long sg_m_open(long slot) {
-    sg_midsave = ya_push(sg_midsave, sg_mbuf);
-    sg_molsave = ya_push(sg_molsave, sg_mol);
-    sg_mlastsave = ya_push(sg_mlastsave, yv_bool(sg_molast));
-    sg_mlinesave = ya_push(sg_mlinesave, yv_long(sg_mline));
-    sg_mmid = 1;
-    sg_mdepth = sg_depth;
-    sg_mbuf = ys("");
-    sg_mol = yav(0);
-    sg_molast = 0;
-    sg_mline = sg_gline;
+    (void)sg_hold();
     sg_mbuf = ys_cat(sg_mbuf, scat3(ys("ycc_meta_stmt("),
-                                    ys_tostring(yv_long(slot)), ys(", {")));
+                                    ys_tostring(yv_long(slot)),
+                                    ys(", tostring({")));
     sg_col = sg_col + 2;
     return 0;
 }
 
-/* `}#` of a mid-token block: close the call, record it with the statement to
- * hoist it to, and restore whatever buffer was live (the enclosing block's own,
- * or an enclosing mid-token block's). Recorded in CLOSE order, which is the
- * order the calls have to run in. */
-static long sg_m_close(void) {
-    sg_mbuf = ys_cat(sg_mbuf, ys("});"));
+/* `}#` of a held block whose call is hoisted -- a mid-token one, or any nested
+ * one: close the call, record it with the statement to hoist it to, and give the
+ * enclosing block its buffer back. Recorded in CLOSE order, which is the order
+ * the calls have to run in. */
+static long sg_m_close(long k) {
+    /* A block that is hoisted is not compiled where it stands, so nothing about
+     * its source is checked until the round that has its text -- and if one of
+     * the blocks inside it has no text this round, its own source cannot compile
+     * either, and it runs the stand-in too (mg_stub). Its body then contributes
+     * nothing, which is what keeps a hole out of the text around it: the
+     * enclosing block is stubbed for the same reason. */
+    if (yv_truth(ya_get(sg_bok, k))) {
+        sg_mbuf = ys_cat(sg_mbuf, ys("}));"));
+    } else {
+        sg_mbuf = mg_stub(yv_l(ya_get(sg_bslot, k)), 1);
+        sg_mol = yav(0);
+        sg_molast = 0;
+        sg_mline = sg_gline;
+    };
     Yv *lines = mg_lines(sg_mbuf);
     Yv *ol = yav(0);
     long i = 0;
@@ -1322,15 +1686,7 @@ static long sg_m_close(void) {
     if (off < 0) { off = 0; };
     sg_mids = ya_push(sg_mids, yr(4, "line", yv_long(line), "off", yv_long(off),
                                   "text", lines, "ol", ol));
-    sg_mbuf = ya_get(sg_midsave, yv_len(sg_midsave) - 1);
-    sg_midsave = ya_slice(sg_midsave, 0, yv_len(sg_midsave) - 1);
-    sg_mol = ya_get(sg_molsave, yv_len(sg_molsave) - 1);
-    sg_molsave = ya_slice(sg_molsave, 0, yv_len(sg_molsave) - 1);
-    sg_molast = yv_truth(ya_get(sg_mlastsave, yv_len(sg_mlastsave) - 1));
-    sg_mlastsave = ya_slice(sg_mlastsave, 0, yv_len(sg_mlastsave) - 1);
-    sg_mline = yv_l(ya_get(sg_mlinesave, yv_len(sg_mlinesave) - 1));
-    sg_mlinesave = ya_slice(sg_mlinesave, 0, yv_len(sg_mlinesave) - 1);
-    return 0;
+    return sg_m_pop();
 }
 
 /* One call, into sg_g at its statement: the statement's line is split at the
@@ -1450,21 +1806,54 @@ static long sg_open(long i, long n) {
         (void)sg_fail(ys("a meta block in a def or type header must be part of a name, with a character of the name beside it: a call cannot go in a header, and dropping the block's bytes would leave nothing behind"), sg_line, sg_col);
         return n;
     } else if (sg_depth + 1 > MG_NEST) {
+        /* A COST bound, not the parser's: a level of nesting is a round, and a
+         * round is a compile and a run of the generator (mg_pending). Naming the
+         * cost here is the point -- the number is small because each step is a
+         * whole program compiled again, not because the parser minds. */
         (void)sg_fail(scat3(ys("meta blocks nest deeper than "),
                            ys_tostring(yv_long(MG_NEST)),
-                           ys(", the pass's limit")), sg_line, sg_col);
+                           ys(": each level of nesting costs another compile and run of the meta generator, so this is a cost limit, not the parser's")), sg_line, sg_col);
         return n;
     } else {
+        int nested = sg_depth > 0;
         long slot = mg_next;
         mg_next = slot + 1;
+        /* What the block around this one (if any) does with it. A parent whose
+         * text was already in the table is not compiled this round -- its text
+         * went into ITS parent as text -- so nothing inside it runs, needs a
+         * text, or is even looked at beyond keeping its slot stable. That is the
+         * DEAD chain, and it is what stops a block from being asked for a piece
+         * it can never produce. */
+        int pdead = 0;
+        if (nested) {
+            mg_nest = mg_nest + 1;
+            pdead = yv_truth(ya_get(sg_bdead, sg_depth - 1));
+            (void)mg_kid_note(yv_l(ya_get(sg_bslot, sg_depth - 1)));
+        } else {
+            /* a block at the top level keeps the reduction's region: it has one */
+            sg_rblk = 1;
+        };
+        int dead = pdead || (nested && yv_truth(ya_get(sg_bsplice, sg_depth - 1)));
+        int have = slot < yv_len(mg_have) && yv_truth(ya_get(mg_have, slot));
+        /* A nested block whose text is already in the table contributes that TEXT
+         * to the source of the block around it -- that is the whole of nesting --
+         * so it never runs and its own bytes are only scanned, for the slots of
+         * the blocks inside it, and then dropped. */
+        int spliced = !dead && nested && have;
         mg_bfile = ya_push(mg_bfile, yv_long(sg_fid));
         mg_bline = ya_push(mg_bline, yv_long(sg_line));
         mg_p_at = -1;
-        if (sg_depth == 0) { mg_p_at = yv_len(sg_p); };
+        if (!nested) { mg_p_at = yv_len(sg_p); };
         mg_bslot = ya_push(mg_bslot, yv_long(slot));
         mg_bp = ya_push(mg_bp, yv_long(mg_p_at));
         mg_bpo = ya_push(mg_bpo, yv_long(yv_len(sg_pbuf)));
         mg_n = mg_n + 1;
+        mg_live = ya_push(mg_live, yv_bool(!dead && !spliced));
+        /* Does this block's text have to exist? A top-level block's does: it goes
+         * into the program. A nested one's does only while the block around it is
+         * being compiled -- inside spliced text it is already there. */
+        mg_need = ya_push(mg_need, yv_bool(nested ? !dead : 1));
+        mg_bok = ya_push(mg_bok, yv_bool(0));
         sg_bmid = ya_push(sg_bmid, yv_bool(mid));
         /* A statement-position block is one that held only blanks before it, and
          * a mid-token one is a statement by construction (it could not be an
@@ -1473,15 +1862,78 @@ static long sg_open(long i, long n) {
         sg_bstmt = ya_push(sg_bstmt, yv_bool(stmt));
         sg_bclean = ya_push(sg_bclean, yv_bool(1));
         sg_bbrace = ya_push(sg_bbrace, yv_long(yv_len(sg_bkind)));
+        sg_bslot = ya_push(sg_bslot, yv_long(slot));
+        /* this block starts out able to produce its text; a child without its own
+         * takes that away (there is exactly one child-fold per open block) */
+        sg_bok = ya_push(sg_bok, yv_bool(1));
+        if (nested && !dead && !have) {
+            ya_set(sg_bok, sg_depth - 1, yv_bool(0));
+        };
+        sg_bsplice = ya_push(sg_bsplice, yv_bool(spliced));
+        sg_bdead = ya_push(sg_bdead, yv_bool(dead));
+        /* A top-level block holds its text only when it MAY hold another block,
+         * because then this round can find it cannot produce its text and put a
+         * stand-in in its place (sg_top_close). The collecting scan, which knows
+         * nothing yet, never holds -- so the G it builds for a program with no
+         * nesting is the one the pass has always built, and a program with no
+         * nesting never pays for any of this. */
+        int hold = !mg_collect && !nested && !dead && mg_bkids_had(slot);
+        sg_bhold = ya_push(sg_bhold, yv_bool(hold));
         sg_depth = sg_depth + 1;
         sg_bound = 1;
-        if (mid) {
+        /* the `#{` is a token like any other, so a block that starts a statement
+         * starts it here: the anchor of a hoisted call is this position, and the
+         * call lands immediately before the block's own */
+        if (!sg_tsp) {
+            sg_tsline = sg_gline;
+            sg_tsoff = yv_len(sg_gbuf);
+            sg_tsp = 1;
+        };
+        if (dead) {
+            /* inside text that is not compiled: scan the bytes for the slots and
+             * put them nowhere */
+            ya_set(mg_live, slot, yv_bool(0));
+            ya_set(mg_need, slot, yv_bool(0));
+            (void)sg_hold();
+        } else if (spliced) {
+            /* its text goes into the enclosing source where the block stood, and
+             * its own bytes are held out of it */
+            (void)sg_splice(slot, sg_line);
+            (void)sg_hold();
+        } else if (mid || nested) {
+            /* The call is hoisted, which is the SAME rule for both reasons it
+             * happens -- and that they are the same rule is the point:
+             *
+             *   mid-token: the bytes here cannot hold a call.
+             *   nested:    the block around this one is not this block's own
+             *              source to compile. Its text goes there (sg_splice) or
+             *              it does not compile there at all.
+             *
+             * So a nested block's call goes to a buffer of its own and
+             * sg_mids_move puts it at the top-level statement that contains it,
+             * which is the statement the enclosing block is in. The enclosing
+             * block is stubbed this round (its sg_bok is false, since this block
+             * had no text), and a stub drops the enclosing source whole -- so
+             * the hole this block leaves in it goes with it, and the two stay
+             * consistent. When the text IS known the splice happens instead and
+             * no call is emitted, so a nested block's call never runs twice. */
             (void)sg_m_open(slot);
+        } else if (hold) {
+            /* the prefix waits for the `}#`: only then is it known whether this
+             * round has the text of every block inside (sg_top_close) */
+            (void)sg_hold();
         } else {
+            /* An ordinary call where the block stood. A NESTED one lands inside
+             * the enclosing block's own source, which is exactly how a nested
+             * block's round works: the enclosing source compiles this round and
+             * its output is a stand-in to be thrown away (sg_bok), because the
+             * enclosing block cannot produce its real text until the nested one
+             * has. The round after, the nested block splices. */
             Yv *helper = ys("ycc_meta_expr");
             if (stmt) { helper = ys("ycc_meta_stmt"); };
             (void)sg_gadd(scat3(helper, ys("("),
-                                ys_cat(ys_tostring(yv_long(slot)), ys(", {"))),
+                                ys_cat(ys_tostring(yv_long(slot)),
+                                       ys(", tostring({"))),
                           sg_mmid);
             sg_col = sg_col + 2;
         };
@@ -1599,17 +2051,34 @@ static long sg_close_brace(long j, long n) {
             (void)sg_stray(j);
             return n;
         } else {
-            int was_mid = yv_truth(ya_get(sg_bmid, sg_depth - 1));
-            if (was_mid) {
-                /* the call is not here: sg_m_close hoists it to the statement */
-                (void)sg_m_close();
+            long k = sg_depth - 1;
+            ya_set(mg_bok, yv_l(ya_get(sg_bslot, k)), ya_get(sg_bok, k));
+            int stmt = yv_truth(ya_get(sg_bstmt, k));
+            int ismid = yv_truth(ya_get(sg_bmid, k));
+            if (yv_truth(ya_get(sg_bdead, k))) {
+                /* inside text that is not compiled: nothing of this block's is in
+                 * G, not even a call */
+                (void)sg_drop();
+            } else if (yv_truth(ya_get(sg_bsplice, k))) {
+                /* its text went into the enclosing source; its own bytes are
+                 * scanned (for the slots inside) and dropped */
+                (void)sg_drop();
+            } else if (ismid || sg_depth > 1) {
+                /* mid-token, or nested: the call is not here, it is hoisted to the
+                 * statement that contains the block */
+                (void)sg_m_close(k);
+            } else if (yv_truth(ya_get(sg_bhold, k))) {
+                /* a top-level block that may hold another block: the call goes
+                 * here, and whether the body it wraps is this block's own or a
+                 * stand-in is known only now */
+                (void)sg_top_close(k);
             } else {
                 /* a statement-position call is a statement, and a statement
                  * wants its ';'; in expression position the call is the
                  * expression and a ';' there would be a syntax error */
-                (void)sg_gadd(ys("})"), sg_mmid);
+                (void)sg_gadd(ys("}))"), sg_mmid);
                 sg_col = sg_col + 2;
-                if (yv_truth(ya_get(sg_bstmt, sg_depth - 1))) {
+                if (stmt) {
                     (void)sg_gadd(ys(";"), sg_mmid);
                     sg_col = sg_col + 1;
                 };
@@ -1621,8 +2090,22 @@ static long sg_close_brace(long j, long n) {
             sg_bmid = ya_slice(sg_bmid, 0, yv_len(sg_bmid) - 1);
             sg_bclean = ya_slice(sg_bclean, 0, yv_len(sg_bclean) - 1);
             sg_bbrace = ya_slice(sg_bbrace, 0, yv_len(sg_bbrace) - 1);
+            sg_bslot = ya_slice(sg_bslot, 0, yv_len(sg_bslot) - 1);
+            sg_bok = ya_slice(sg_bok, 0, yv_len(sg_bok) - 1);
+            sg_bsplice = ya_slice(sg_bsplice, 0, yv_len(sg_bsplice) - 1);
+            sg_bdead = ya_slice(sg_bdead, 0, yv_len(sg_bdead) - 1);
+            sg_bhold = ya_slice(sg_bhold, 0, yv_len(sg_bhold) - 1);
             sg_depth = sg_depth - 1;
-            if (was_mid) { (void)sg_m_live(); };
+            (void)sg_m_live();
+            /* A block STATEMENT ends at its own `}#` -- there is no `;` after it
+             * to end the region -- so the reduction treats it as a statement that
+             * has finished. Not a mid-token one (`def as#{nm}#()` is inside a
+             * statement that goes on) and not a block in expression position
+             * (`let x = #{ … }#;`): both end at the `;` like any other. */
+            if (mg_reduce && sg_depth == 0 && stmt && !ismid &&
+                yv_len(sg_bkind) == sg_rbrace) {
+                (void)sg_region_close();
+            };
             return j + 2;
         }
     } else {
@@ -1632,8 +2115,15 @@ static long sg_close_brace(long j, long n) {
         sg_bound = 1;
         (void)sg_put1(ys("}"));
         /* a top-level `}` closes whatever construct it was in, and the next
-         * statement starts after it */
-        if (sg_depth == 0 && sg_mdepth < 1) { (void)sg_ts_end(); };
+         * statement starts after it -- and the statement is over for the
+         * reduction, since a top-level statement ends at a `;` or at the `}`
+         * that closes it */
+        if (sg_depth == 0 && sg_mdepth < 1) {
+            (void)sg_ts_end();
+            if (mg_reduce && yv_len(sg_bkind) == sg_rbrace) {
+                (void)sg_region_close();
+            };
+        };
         return j + 1;
     }
 }
@@ -1711,8 +2201,13 @@ static long sg_code(long i, long n) {
         sg_bound = 1;
         (void)sg_put1(ys(";"));
         /* a top-level `;` ends the statement in progress, so the next one starts
-         * after it (see sg_ts_go) */
-        if (sg_depth == 0 && sg_mdepth < 1) { (void)sg_ts_end(); };
+         * after it (see sg_ts_go) and the statement is over for the reduction */
+        if (sg_depth == 0 && sg_mdepth < 1) {
+            (void)sg_ts_end();
+            if (mg_reduce && yv_len(sg_bkind) == sg_rbrace) {
+                (void)sg_region_close();
+            };
+        };
         return j + 1;
     } else {
         return j;
@@ -1926,7 +2421,9 @@ Yv *meta_scan(Yv *src, long fid, Yv *dir) {
  * The pieces come back over the pipe framed as `<slot> <len>\n<body>`, so a
  * piece is matched to its block by SLOT and not by the order the generator
  * happened to evaluate blocks in. That matters: a nested block's text is
- * produced BEFORE its parent's, so source order and execution order differ.
+ * produced BEFORE its parent's, so source order and execution order differ --
+ * which is why the piece table (mg_piece, mg_have) lives up with the scanner's
+ * state, which is where it is read.
  */
 
 /* A new PASS over the same files -- and the block table, G's body and the
@@ -1947,8 +2444,30 @@ long mg_pass(void) {
     mg_bpo = yav(0);
     mg_imp = yav(0);
     mg_iol = yav(0);
+    mg_bok = yav(0);
+    mg_live = yav(0);
+    mg_need = yav(0);
     mg_n = 0;
+    mg_nest = 0;
+    mg_collect = 0;
     return 0;
+}
+
+/* Is any block still without its text? That is the loop condition of the rounds,
+ * and it is the same question as "did this round's generator leave a block out
+ * of G": a block whose source wanted the text of a nested block inside it cannot
+ * produce its own text until it has it, so it is stubbed, runs as a stand-in, and
+ * its piece is discarded (mg_take_pieces) -- leaving it here, and so asking for
+ * another round. False means every piece is in and the pass is done. */
+int mg_pending(void) {
+    long i = 0;
+    int go = 0;
+    while (i < mg_next) {
+        if (yv_truth(ya_get(mg_need, i)) &&
+            (i >= yv_len(mg_have) || !yv_truth(ya_get(mg_have, i)))) { go = 1; };
+        i = i + 1;
+    };
+    return go;
 }
 
 long meta_begin(void) {
@@ -1962,7 +2481,23 @@ long meta_begin(void) {
     mg_gexec = 1;
     mg_pkgs = yav(0);
     mg_roots = yav(0);
-    return mg_pass();
+    /* mg_bkids is NOT reset here: it is structural, so every pass learns the same
+     * thing from it (sg_open) -- which is what makes it usable at the `#{`, before
+     * the children have been seen. Only the FIRST pass is the collecting one, and
+     * only meta_begin says so. */
+    mg_bkids = yav(0);
+    mg_reduce = 0;
+    (void)mg_pass();
+    mg_collect = 1;
+    return 0;
+}
+
+/* The reduction, turned on once a pass has found nesting. The collecting pass
+ * never turns it on: it does not know yet, and a program with no nesting must
+ * compile to exactly what it always did. */
+long mg_reduce_on(void) {
+    mg_reduce = 1;
+    return 0;
 }
 
 /* native.c hands the generator its resolution over this, because
@@ -2199,9 +2734,19 @@ int mg_take_pieces(long status, long sig, Yv *out) {
                               ys_tostring(yv_long(MG_MAX)), ys(" bytes")));
     };
     (void)mg_unframe(from_bytes(out));
+    /* A block that could not produce its text this round ran something whose
+     * output is not its text -- a stand-in with the body `0`. Throw those away
+     * first, so what is left in the table is this block's real text and nothing
+     * downstream can mistake the rest for it. mg_pending is what asks for the
+     * next round. */
+    (void)mg_commit();
     long i = 0;
     while (i < mg_next) {
-        if (!yv_truth(ya_get(mg_have, i))) {
+        /* A block that ran for real owes the table a piece, and one that did not
+         * run does not: a nested block whose text was spliced into the block
+         * around it already has its piece from the round that produced it. */
+        if (yv_truth(ya_get(mg_live, i)) && yv_truth(ya_get(mg_bok, i)) &&
+            !yv_truth(ya_get(mg_have, i))) {
             (void)mg_report(scat3(ys("the block at "), mg_where(i),
                 ys(" produced no output: every meta block runs once, in the generator's top level, so reaching it is not optional")));
         };
@@ -2210,6 +2755,26 @@ int mg_take_pieces(long status, long sig, Yv *out) {
     };
     mg_ready = 1;
     return r;
+}
+
+/* Keep only the pieces that are really this block's text. A block that could not
+ * produce its text this round ran a stand-in (sg_top_close) whose piece is "0";
+ * it has to keep waiting (mg_pending), and so does everything around it.
+ *
+ * The rest is already true of the table mg_unframe writes: a piece is marked
+ * present only when it is framed, so a slot holding its piece from an earlier
+ * round is not disturbed by a round that stubbed the block. */
+static long mg_commit(void) {
+    long i = 0;
+    while (i < mg_next) {
+        if (i < yv_len(mg_have) && yv_truth(ya_get(mg_have, i)) &&
+            !yv_truth(ya_get(mg_bok, i))) {
+            ya_set(mg_have, i, yv_bool(0));
+            ya_set(mg_piece, i, ys(""));
+        };
+        i = i + 1;
+    };
+    return 0;
 }
 
 /* A `#{` in the text the generator resolved -- which is to say in a module the
@@ -2225,6 +2790,10 @@ int mg_probe(Yv *src, Yv *dir) {
     Yv *bl = mg_bline;
     Yv *bp = mg_bp;
     Yv *bo = mg_bpo;
+    long bn = mg_nest;
+    Yv *bok = mg_bok;
+    Yv *bli = mg_live;
+    Yv *bne = mg_need;
     long gn = mg_n;
     long gi = yv_len(mg_imp);
     long gl = yv_len(mg_g);
@@ -2239,6 +2808,10 @@ int mg_probe(Yv *src, Yv *dir) {
     mg_bline = bl;
     mg_bp = bp;
     mg_bpo = bo;
+    mg_nest = bn;
+    mg_bok = bok;
+    mg_live = bli;
+    mg_need = bne;
     mg_n = gn;
     mg_imp = ya_slice(mg_imp, 0, gi);
     mg_iol = ya_slice(mg_iol, 0, gi);

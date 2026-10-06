@@ -188,6 +188,8 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen,
  * above it, and meta_run_generator from meta_prepare, which is above that. */
 static Yv *meta_prepare(Yv *src, Yv *base_dir, long depth, int allow_exec,
                         Yv *root);
+static Yv *meta_resolve(Yv *src, Yv *base_dir, long depth, int allow_exec,
+                        Yv *root, Yv *first);
 static long meta_run_generator(Yv *src, Yv *base_dir, int allow_exec,
                                Yv *root, Yv *first);
 static Yv *meta_compile_gen(void);
@@ -1123,12 +1125,66 @@ static Yv *meta_prepare(Yv *src, Yv *base_dir, long depth, int allow_exec,
          * is byte for byte what the pass-off path returns */
         return first;
     } else {
-        meta_run_generator(src, base_dir, allow_exec, root, first);
-        /* step 3: the block table starts over, so the second pass hands the
-         * same slots the first one did (mg_pass) */
-        (void)mg_pass();
-        return native_resolve_seen(src, base_dir, depth, yav(0), yav(0), 0);
+        return meta_resolve(src, base_dir, depth, allow_exec, root, first);
     }
+}
+
+/* Steps 2 and 3 as a loop, which is the whole cost of nesting. A nested block's
+ * text is spliced into the source of the block AROUND it (meta.c sg_splice),
+ * and a source has to be compiled before it can run -- so the enclosing block
+ * cannot produce its text until the nested one has produced its, and that is one
+ * more compile and run of G per level.
+ *
+ * So: run the generator, and while any block is still without its text
+ * (mg_pending) do it again. The round that resolves a nested block finds its
+ * enclosing block waiting; the round after that finds the enclosing one. A chain
+ * of depth d costs d+1 rounds and a program with NO nesting costs exactly one,
+ * because nothing is ever pending when there is no nesting.
+ *
+ * A round is a whole extra compile of the program-as-generator, which is the
+ * reason MG_NEST is 8 rather than the parser's ~333 -- see the cap's diagnostic.
+ *
+ * (meta.y keeps this inline in meta_prepare: the C twin's forward declarations
+ * are a flat list, and this is the only thing that needs the second one.) */
+static Yv *meta_resolve(Yv *src, Yv *base_dir, long depth, int allow_exec,
+                        Yv *root, Yv *first) {
+    if (mg_nest > 0) {
+        /* A round in which a block cannot produce its text leaves a stand-in
+         * where its call goes, so a statement naming something that block was
+         * going to define would not compile. The reduction leaves those
+         * statements out of G, and they declare nothing, so no name is lost. */
+        (void)mg_reduce_on();
+    };
+    /* The collecting pass found nesting, so its G is NOT the one to compile: it
+     * was built before anything was known, with every block's call in place where
+     * the block stood, and for a nested block that source does not compile (the
+     * inner text is missing). Start the rounds from a fresh pass, which holds
+     * what it may have to give up and reduces. */
+    (void)mg_pass();
+    (void)native_resolve_seen(src, base_dir, depth, yav(0), yav(0), 0);
+    long rounds = 0;
+    int done = 0;
+    while (!done) {
+        (void)meta_run_generator(src, base_dir, allow_exec, root, first);
+        rounds = rounds + 1;
+        if (!mg_pending()) {
+            done = 1;
+        } else if (rounds >= MG_ROUND_LIMIT) {
+            (void)mg_report(ys_cat(
+                ys_cat(ys("the meta generator still had a block without its text after "),
+                       ys_tostring(yv_long(rounds))),
+                ys(" rounds, more than the nesting depth allows: this is the pass's own bookkeeping and is a bug")));
+        } else {
+            /* another round: the block table starts over, so the next resolve
+             * hands out the same slots (mg_pass) and finds the pieces */
+            (void)mg_pass();
+            (void)native_resolve_seen(src, base_dir, depth, yav(0), yav(0), 0);
+        };
+    };
+    /* step 3: the ordinary resolve, with every piece known. Its G is built and
+     * not run -- nothing is pending, so there is nothing left to compute. */
+    (void)mg_pass();
+    return native_resolve_seen(src, base_dir, depth, yav(0), yav(0), 0);
 }
 
 /* `dst += src` for a Y array (meta.y's `[root] + first.seen`): the elements of

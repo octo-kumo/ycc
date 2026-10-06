@@ -124,16 +124,71 @@ let mg_bpo: [long] = [];
 // The imports hoisted out of blocks, and the line each is reported at.
 let mg_imp: [str] = [];
 let mg_iol: [long] = [];
+// One piece per slot, and whether it arrived. The pieces come back over the pipe
+// framed as `<slot> <len>\n<body>`, so a piece is matched to its block by SLOT
+// and not by the order the generator happened to evaluate blocks in. That
+// matters: a nested block's text is produced BEFORE its parent's, so source order
+// and execution order differ.
+//
+// They are here rather than with the driver because the SCANNER reads them: a
+// nested block whose piece has arrived contributes that text to the source of the
+// block around it instead of a call (sg_open), which is the whole of nesting.
+// And they SURVIVE mg_pass, which is what makes the rounds work -- the piece
+// table is the one thing that carries from a round to the next, and a block's
+// slot is the same in every round because the block table is built the same way
+// every round.
+let mg_piece: [str] = [];
+let mg_have: [bool] = [];
 // How many blocks the whole resolve found, and whether any.
 let mg_n = 0;
+// How many of them sit inside another block. A program with none is the common
+// case and costs exactly one compile of the generator, whatever else changes
+// here (meta_prepare: mg_nest is what decides whether the rounds run at all).
+let mg_nest = 0;
+// Did each block's CHILDREN all have their text when it opened? A block whose
+// own source wanted a nested block's text cannot produce its text until it has
+// it, so the answer says whether the piece this round produced is the real one
+// (mg_commit keeps it) or a stand-in to throw away.
+let mg_bok: [bool] = [];
+// Did each block's call go into this round's G? A block that did not is one
+// whose text was already in the table and was spliced into the block around it,
+// or one inside such text, so it neither runs nor owes the table anything.
+let mg_live: [bool] = [];
+// Does each block's text have to exist at all? Always for a top-level one -- it
+// goes into the program. For a nested one, only while the block around it is
+// being compiled: inside text that was spliced whole, the text is already there.
+let mg_need: [bool] = [];
+// Whether each block has ever had a block open inside it. It is structural --
+// the same every round, and the block table is built the same way every round --
+// so it is never cleared, and it is what a round knows about a block's children
+// BEFORE it has scanned them: a block that may hold a nested block holds its
+// text (sg_hold), because a nested block's text goes into the enclosing block's
+// source and has to be known before that source is compiled.
+let mg_bkids: [bool] = [];
 // The emitted-text size cap (R8 is not negotiable). The piece table is read
 // into memory, so this is what bounds it.
 const MG_MAX = 33554432;
-// The pass's own nesting cap, well below the parser's ~333 effective limit
-// (tags.y MAX_NEST is 1000 and each nested block costs ~3 nest units), so a
-// runaway nest is a diagnostic naming the block rather than `too_deep` firing
-// inside a file that does not exist.
-const MG_NEST = 100;
+// The pass's own nesting cap. It is a COST bound and not a parser bound: a level
+// of nesting costs one more compile and one more run of the generator, because
+// a nested block's text has to be known before the source of the block around it
+// can be compiled (mg_pending). The parser's own limit is ~333 effective (tags.y
+// MAX_NEST is 1000 and each nested block costs ~3 nest units), so 8 is far below
+// both, and MEASURED per level: see ideas/meta.md, "Nesting".
+const MG_NEST = 8;
+// How many rounds meta_prepare will do before it calls the round logic broken.
+// One round per level of nesting plus one for a program that has none, so a
+// program the scanner accepted cannot reach it.
+const MG_ROUND = MG_NEST + 2;
+// The reduction: on for a program that HAS nesting, and off otherwise. A round
+// in which a block could not produce its text leaves a stub where its call goes
+// (sg_top_close), so a statement reading a name that block was going to define
+// would not compile -- and the statements in question bind nothing, so dropping
+// them costs the generator no name at all (sg_region_close).
+let mg_reduce = false;
+// The collecting scan: the one that finds the blocks, before anything is known.
+// It never holds a block's text and never reduces, so the G it builds for a
+// program with no nesting is the G the pass has always built.
+let mg_collect = true;
 
 // One file's scan: P's lines with their origins, G's lines for this file, and
 // the imports hoisted out of its blocks.
@@ -673,21 +728,36 @@ let sg_gat = 0;
 // in one is hoisted out of it -- in close order, which is the order the calls
 // have to run in.
 //
-// sg_mmid says the innermost open block is mid-token, so sg_gadd and the
-// writes below go here; sg_mbuf is the text and sg_mol the source line each of
-// its lines started at (its lines move, so their origins travel with them).
+// The same machinery HOLDS the text of a block that has to give it up: a nested
+// block whose text is already in the table contributes TEXT to the block around
+// it, and a block that cannot produce its text this round contributes a stub --
+// so in both cases its own bytes are scanned (the slots of the blocks inside it
+// have to be the same every round) and then dropped, and sg_hold/sg_drop is how
+// that is said. Nothing is written to the live buffer while a block is held, so
+// the text before the block, the line it is on and the statement it belongs to
+// are all still exactly where they were.
+//
+// sg_mmid says a block is held, so sg_gadd and the writes below go here;
+// sg_mbuf is the text and sg_mol the source line each of its lines started at
+// (its lines move, so their origins travel with them).
 let sg_mmid = false;
 let sg_mbuf = "";
 let sg_mol: [long] = [];
 let sg_molast = false;
 let sg_mline = 1;
-// The buffer of an enclosing mid-token block, saved while a nested one is open
-// and restored when it closes (so the nested call is hoisted out of it, not
-// written into it).
+// The buffer of an enclosing block, saved while a nested one is held and
+// restored when it closes (so the nested call is hoisted out of it, not written
+// into it).
 let sg_midsave: [str] = [];
 let sg_molsave: [[long]] = [];
 let sg_mlastsave: [bool] = [];
 let sg_mlinesave: [long] = [];
+// The G line each held buffer started at, and the one for the file's own buffer.
+// sg_restore needs it to name the line the text after a held block continues,
+// and sg_drop to put it back where it was -- a dropped block's lines are gone,
+// so nothing may carry on counting from them.
+let sg_glsave: [long] = [];
+let sg_glsaved = 1;
 // The hoisted calls, in CLOSE order: innermost first, then siblings in source
 // order -- which is exactly the order they have to run in. Each carries the
 // top-level statement it belongs to, so the move can order them per statement.
@@ -698,10 +768,9 @@ let sg_mids: [MidMove] = [];
 let sg_tsline = 1;
 let sg_tsoff = 0;
 let sg_tsp = false;
-// The depth of the innermost open mid-token block, 0 for none, recomputed by
-// sg_m_live whenever a block closes. A top-level `;` or `}` only ends a
-// statement when no mid-token block is open, so the anchor cannot land inside
-// one of these hoisted calls.
+// The depth of the innermost held block, 0 for none, recomputed by sg_m_live
+// whenever a block closes. A top-level `;` or `}` only ends a statement when no
+// block is held, so the anchor cannot land inside one of these hoisted calls.
 let sg_mdepth = 0;
 let sg_line = 1;
 let sg_col = 1;
@@ -727,7 +796,29 @@ let sg_bclean: [bool] = [];
 let sg_bbrace: [long] = [];
 let sg_bstmt: [bool] = [];
 let sg_bmid: [bool] = [];
+// Per open block, for the nesting: its slot (mg_have is indexed by it), whether
+// every block opened inside it had its text when it closed, whether its text
+// was already in the table -- in which case it contributes TEXT to the block
+// around it and never runs -- and whether its own text is held rather than
+// written into the live buffer as it is scanned.
+let sg_bslot: [long] = [];
+let sg_bok: [bool] = [];
+let sg_bsplice: [bool] = [];
+let sg_bdead: [bool] = [];
+let sg_bhold: [bool] = [];
 let sg_depth = 0;
+// The top-level statement in progress, for the reduction (mg_reduce): the line
+// of G it starts on, the text of the line in progress when it started and the
+// source line that line began at -- so a drop can put both back -- whether it is
+// a declaration, whether a block is inside it, and whether its first word has
+// not been read yet.
+let sg_rfrom = 0;
+let sg_rtext = "";
+let sg_rgline = 1;
+let sg_rbrace = 0;
+let sg_rkeep = false;
+let sg_rblk = false;
+let sg_rpend = true;
 // The block array index this file's first block takes, and the P line a block
 // being opened sits on (-1 for a nested one, whose text P does not hold).
 let mg_first = 0;
@@ -764,6 +855,11 @@ def sg_reset(src: str, fid: long, dir: str) -> long {
     sg_bclean = [];
     sg_bbrace = [];
     sg_bstmt = [];
+    sg_bslot = [];
+    sg_bok = [];
+    sg_bsplice = [];
+    sg_bdead = [];
+    sg_bhold = [];
     sg_depth = 0;
     sg_err = "";
     sg_eline = 0;
@@ -778,14 +874,118 @@ def sg_reset(src: str, fid: long, dir: str) -> long {
     sg_tsoff = 0;
     sg_tsp = true;
     sg_mdepth = 0;
+    sg_glsaved = 1;
+    sg_glsave = [];
+    sg_region_open()
+};
+
+// Append text to whichever G buffer is live: the file's own, or a held block's
+// (its call is written there and hoisted afterwards, so it does not sit where
+// the block stood). Blocks nest, so `mid` is the innermost block's.
+def sg_gadd(t: str, mid: bool) -> long {
+    if (mid) { sg_mbuf += t } else { sg_gbuf += t };
     0
 };
 
-// Append text to whichever G buffer is live: the file's own, or a mid-token
-// block's (its call is written there and hoisted afterwards, so it does not
-// sit where the block stood). Blocks nest, so `mid` is the innermost block's.
-def sg_gadd(t: str, mid: bool) -> long {
-    if (mid) { sg_mbuf += t } else { sg_gbuf += t };
+// Hold this block's text: from here to its `}#` it goes to a buffer of its own
+// and nowhere else. sg_restore puts it back where it came from; sg_drop throws
+// it away. Nothing is written to the live buffer meanwhile, which is what makes
+// both safe.
+def sg_hold() -> long {
+    sg_midsave += sg_mbuf;
+    sg_molsave += sg_mol;
+    sg_mlastsave += sg_molast;
+    sg_mlinesave += sg_mline;
+    sg_glsave += sg_glsaved;
+    sg_mmid = true;
+    sg_mdepth = sg_depth;
+    sg_glsaved = sg_gline;
+    sg_mbuf = "";
+    sg_mol = [];
+    sg_molast = false;
+    sg_mline = sg_gline;
+    0
+};
+
+// The enclosing block's buffer back, whatever this one did with its own.
+def sg_m_pop() -> long {
+    sg_mbuf = sg_midsave[len(sg_midsave) - 1];
+    sg_midsave = sg_midsave[0:len(sg_midsave) - 1];
+    sg_mol = sg_molsave[len(sg_molsave) - 1];
+    sg_molsave = sg_molsave[0:len(sg_molsave) - 1];
+    sg_molast = sg_mlastsave[len(sg_mlastsave) - 1];
+    sg_mlastsave = sg_mlastsave[0:len(sg_mlastsave) - 1];
+    sg_mline = sg_mlinesave[len(sg_mlinesave) - 1];
+    sg_mlinesave = sg_mlinesave[0:len(sg_mlinesave) - 1];
+    sg_glsaved = sg_glsave[len(sg_glsave) - 1];
+    sg_glsave = sg_glsave[0:len(sg_glsave) - 1];
+    0
+};
+
+// The held text, back in the buffer it came from, in place, between `pre` and
+// `post`. The live buffer has not moved -- nothing was written to it while the
+// block was held -- so this is an append, and each line goes back with the origin
+// it was scanned under. The line the text after the block continues is the one
+// the held text's last line started at, so that is what the G line counter goes
+// back to.
+//
+// `pre`/`post` are the block's own call: the prefix cannot be written at the
+// `#{` any more, because whether this round has the text of every block inside
+// is only known at the `}#` (see sg_top_close).
+def sg_restore(pre: str, post: str) -> long {
+    let segs = mg_lines(sg_mbuf);
+    let last = len(segs) - 1;
+    let i = 0;
+    if (pre != "") { sg_gbuf += pre };
+    while (i < len(segs)) {
+        if (i < last) {
+            sg_gbuf += segs[i];
+            sg_g += sg_gbuf;
+            sg_gf += sg_fid;
+            if (i < len(sg_mol)) { sg_gol += sg_mol[i] } else { sg_gol += sg_gline };
+            sg_gbuf = "";
+        } else {
+            sg_gbuf += segs[i];
+        };
+        i = i + 1;
+    };
+    if (post != "") { sg_gbuf += post };
+    if (sg_molast) { sg_gline = sg_mline };
+    sg_gat = 0;
+    sg_m_pop()
+};
+
+// The held text, thrown away: the block's lines are not in G and not in P, so
+// the line counter goes back to where the buffer began -- the text that follows
+// the block continues the line the block started on, not one of its own.
+def sg_drop() -> long {
+    sg_gline = sg_glsaved;
+    sg_m_pop()
+};
+
+// A block's own text, spliced into the source of the block AROUND it where the
+// block stood: this is what a nested block contributes once the table has its
+// text (sg_splice is the nesting, not a call in the enclosing block's source).
+// `at` is the line of its `#{` and every generated line takes it, for the same
+// reason the pieces spliced into P do (mg_splice): the text is this block's, so
+// the lines are its line, whatever line of G they land on.
+//
+// The block around it is always held, so the text goes to sg_mbuf; called
+// BEFORE sg_hold, because the text belongs to the enclosing block.
+def sg_splice(slot: long, at: long) -> long {
+    let lines = mg_lines(mg_piece[slot]);
+    let last = len(lines) - 1;
+    let i = 0;
+    while (i < len(lines)) {
+        sg_mbuf += lines[i];
+        if (i < last) {
+            sg_mol += at;
+            sg_mbuf += "\n";
+            sg_molast = false;
+            sg_gline = at;
+        };
+        i = i + 1;
+    };
     0
 };
 
@@ -1031,6 +1231,8 @@ def sg_word(i: long, n: long) -> long {
 };
 
 def sg_word_go(w: str, after: long, n: long) -> long {
+    // the first word of the statement in progress is what the reduction reads
+    if (mg_reduce && sg_depth == 0) { sg_region_word(w) };
     let j = after;
     let go = true;
     while (go && j < n && (byte_at(sg_src, j) == 32 || byte_at(sg_src, j) == 9)) {
@@ -1125,6 +1327,97 @@ def mg_import_line(rest: str, dir: str) -> str {
     }
 };
 
+// Whether a block has ever had a block open inside it. Structural, so the table
+// is the same in every round and is never cleared; a slot nobody has reached yet
+// reads false. sg_open needs it BEFORE it has scanned the block's own body, to
+// know whether to hold that body.
+def mg_bkids_had(slot: long) -> bool {
+    while (len(mg_bkids) <= slot) { mg_bkids += false };
+    mg_bkids[slot]
+};
+
+// Record the nesting shape: a block that opens inside another one.
+def mg_kid_note(par: long) -> long {
+    while (len(mg_bkids) <= par) { mg_bkids += false };
+    mg_bkids[par] = true;
+    0
+};
+
+// ── the reduction ─────────────────────────────────────────────────────────
+// On for a program that HAS nesting (mg_reduce). A round in which a block could
+// not produce its text leaves a STUB where its call goes (sg_top_close), so a
+// statement reading a name that block was going to define would not compile:
+// `#{ let v = #{ "1+1" }#; let x = v; }#` then `print(x);` names `x` in a program
+// that has not been generated yet. So in such a round a top-level statement that
+// is neither a declaration nor carries a block is left out of G altogether.
+//
+// That costs the generator no name: the only statements dropped are ones that
+// begin with `print(`, `f(`, an operator -- none of which declares anything -- so
+// every binding G needs is still there, and a block reads exactly the same names.
+// It does cost a block the SIDE EFFECT of such a statement, which is what the
+// pass's own warning about top-level statements already says to avoid.
+//
+// The extent is exact and needs no parser. A top-level statement in Y ends at a
+// `;` or at the `}` that closes it (MEASURED: `print(1)` with no `;` is
+// "expected ';'"), so the regions here are exactly the statements. A block
+// statement has no terminator of its own and so runs on to the next one -- which
+// is harmless, because a region holding a block is never dropped.
+def sg_region_open() -> long {
+    // The line in progress when a region starts belongs to the region that ENDS
+    // here, not to this one: so it is kept aside, and dropping this region puts
+    // it back. Everything else this region adds is whole G lines, so a drop is a
+    // truncation of those plus this one string.
+    //
+    // The line counter goes back with them: the dropped lines were not in G, so
+    // nothing may carry on counting from them -- the same reason sg_drop rewinds
+    // it for a dropped block.
+    sg_rtext = sg_gbuf;
+    sg_rgline = sg_gline;
+    sg_rbrace = len(sg_bkind);
+    sg_rfrom = len(sg_g);
+    sg_rkeep = false;
+    sg_rblk = false;
+    sg_rpend = true;
+    0
+};
+
+// The first word of the region in progress, if it has one yet: a declaration or
+// a splicer directive is kept, anything else is the statement the reduction is
+// about. A region whose first token is not a word (`#{`, a digit, `(`) leaves
+// sg_rpend set, which costs nothing -- the region is over at the next `;`.
+def sg_region_word(w: str) -> long {
+    if (sg_rpend) {
+        sg_rpend = false;
+        if (mg_directive(w)) { sg_rkeep = true };
+    };
+    0
+};
+
+// The words the reduction keeps: the four declarations, plus the splicer's own
+// whole-line directives (`import`, `export`, `embed`), which are consumed by the
+// resolve and never reach the lexer.
+def mg_directive(w: str) -> bool {
+    w == "def" || w == "type" || w == "let" || w == "const" ||
+    w == "import" || w == "export" || w == "embed"
+};
+
+// The region is over. Drop it whole unless it is a declaration or holds a block:
+// its G lines go back to where it began and the line being built is cut back to
+// what it held then. No hoisted call can point into a dropped region -- a hoist
+// belongs to a mid-token block, and a mid-token block makes its region one that
+// holds a block.
+def sg_region_close() -> long {
+    if (!sg_rkeep && !sg_rblk) {
+        sg_g = sg_g[0:sg_rfrom];
+        sg_gf = sg_gf[0:sg_rfrom];
+        sg_gol = sg_gol[0:sg_rfrom];
+        sg_gbuf = sg_rtext;
+        sg_gline = sg_rgline;
+        sg_gat = 0;
+    };
+    sg_region_open()
+};
+
 // Whether the byte before src[i] ends a token -- a name, a number, a literal
 // or a closing bracket. Then the block has no operand position at its own byte
 // offset, and it is a MID-TOKEN block: the call cannot go there
@@ -1164,19 +1457,52 @@ def sg_open(i: long, n: long) -> long {
         sg_fail("a meta block in a def or type header must be part of a name, with a character of the name beside it: a call cannot go in a header, and dropping the block's bytes would leave nothing behind", sg_line, sg_col);
         n
     } else if (sg_depth + 1 > MG_NEST) {
-        sg_fail("meta blocks nest deeper than " + tostring(MG_NEST) + ", the pass's limit", sg_line, sg_col);
+        // A COST bound, not the parser's: a level of nesting is a round, and a
+        // round is a compile and a run of the generator (mg_pending). Naming the
+        // cost here is the point -- the number is small because each step is a
+        // whole program compiled again, not because the parser minds.
+        sg_fail("meta blocks nest deeper than " + tostring(MG_NEST) + ": each level of nesting costs another compile and run of the meta generator, so this is a cost limit, not the parser's", sg_line, sg_col);
         n
     } else {
+        let nested = sg_depth > 0;
         let slot = mg_next;
         mg_next = slot + 1;
+        // What the block around this one (if any) does with it. A parent whose
+        // text was already in the table is not compiled this round -- its text
+        // went into ITS parent as text -- so nothing inside it runs, needs a
+        // text, or is even looked at beyond keeping its slot stable. That is the
+        // DEAD chain, and it is what stops a block from being asked for a piece
+        // it can never produce.
+        let pdead = false;
+        if (nested) {
+            mg_nest = mg_nest + 1;
+            pdead = sg_bdead[sg_depth - 1];
+            mg_kid_note(sg_bslot[sg_depth - 1])
+        } else {
+            // a block at the top level keeps the reduction's region: it has one
+            sg_rblk = true;
+        };
+        let dead = pdead || (nested && sg_bsplice[sg_depth - 1]);
+        let have = slot < len(mg_have) && mg_have[slot];
+        // A nested block whose text is already in the table contributes that TEXT
+        // to the source of the block around it -- that is the whole of nesting --
+        // so it never runs and its own bytes are only scanned, for the slots of
+        // the blocks inside it, and then dropped.
+        let spliced = !dead && nested && have;
         mg_bfile += sg_fid;
         mg_bline += sg_line;
         mg_p_at = 0 - 1;
-        if (sg_depth == 0) { mg_p_at = len(sg_p); };
+        if (!nested) { mg_p_at = len(sg_p); };
         mg_bslot += slot;
         mg_bp += mg_p_at;
         mg_bpo += len(sg_pbuf);
         mg_n = mg_n + 1;
+        mg_live += !dead && !spliced;
+        // Does this block's text have to exist? A top-level block's does: it goes
+        // into the program. A nested one's does only while the block around it is
+        // being compiled -- inside spliced text it is already there.
+        mg_need += nested ? !dead : true;
+        mg_bok += false;
         sg_bmid += mid;
         // A statement-position block is one that held only blanks before it, and
         // a mid-token one is a statement by construction (it could not be an
@@ -1185,14 +1511,74 @@ def sg_open(i: long, n: long) -> long {
         sg_bstmt += stmt;
         sg_bclean += true;
         sg_bbrace += len(sg_bkind);
+        sg_bslot += slot;
+        // this block starts out able to produce its text; a child without its own
+        // takes that away (there is exactly one child-fold per open block)
+        sg_bok += true;
+        if (nested && !dead && !have) { sg_bok[sg_depth - 1] = false };
+        sg_bsplice += spliced;
+        sg_bdead += dead;
+        // A top-level block holds its text only when it MAY hold another block,
+        // because then this round can find it cannot produce its text and put a
+        // stand-in in its place (sg_top_close). The collecting scan, which knows
+        // nothing yet, never holds -- so the G it builds for a program with no
+        // nesting is the one the pass has always built, and a program with no
+        // nesting never pays for any of this.
+        let hold = !mg_collect && !nested && !dead && mg_bkids_had(slot);
+        sg_bhold += hold;
         sg_depth = sg_depth + 1;
         sg_bound = true;
-        if (mid) {
+        // the `#{` is a token like any other, so a block that starts a statement
+        // starts it here: the anchor of a hoisted call is this position, and the
+        // call lands immediately before the block's own
+        if (!sg_tsp) {
+            sg_tsline = sg_gline;
+            sg_tsoff = len(sg_gbuf);
+            sg_tsp = true;
+        };
+        if (dead) {
+            // inside text that is not compiled: scan the bytes for the slots and
+            // put them nowhere
+            mg_live[slot] = false;
+            mg_need[slot] = false;
+            sg_hold()
+        } else if (spliced) {
+            // its text goes into the enclosing source where the block stood, and
+            // its own bytes are held out of it
+            sg_splice(slot, sg_line);
+            sg_hold()
+        } else if (mid || nested) {
+            // The call is hoisted, which is the SAME rule for both reasons it
+            // happens -- and that they are the same rule is the point:
+            //
+            //   mid-token: the bytes here cannot hold a call.
+            //   nested:    the block around this one is not this block's own
+            //              source to compile. Its text goes there (sg_splice) or
+            //              it does not compile there at all.
+            //
+            // So a nested block's call goes to a buffer of its own and
+            // sg_mids_move puts it at the top-level statement that contains it,
+            // which is the statement the enclosing block is in. The enclosing
+            // block is stubbed this round (its sg_bok is false, since this block
+            // had no text), and a stub drops the enclosing source whole -- so
+            // the hole this block leaves in it goes with it, and the two stay
+            // consistent. When the text IS known the splice happens instead and
+            // no call is emitted, so a nested block's call never runs twice.
             sg_m_open(slot)
+        } else if (hold) {
+            // the prefix waits for the `}#`: only then is it known whether this
+            // round has the text of every block inside (sg_top_close)
+            sg_hold()
         } else {
+            // An ordinary call where the block stood. A NESTED one lands inside
+            // the enclosing block's own source, which is exactly how a nested
+            // block's round works: the enclosing source compiles this round and
+            // its output is a stand-in to be thrown away (sg_bok), because the
+            // enclosing block cannot produce its real text until the nested one
+            // has. The round after, the nested block splices.
             let helper = "ycc_meta_expr";
             if (stmt) { helper = "ycc_meta_stmt" };
-            sg_gadd(helper + "(" + tostring(slot) + ", {", sg_mmid);
+            sg_gadd(helper + "(" + tostring(slot) + ", tostring({", sg_mmid);
             sg_col = sg_col + 2;
         };
         let k = sg_word(i + 2, n);
@@ -1201,36 +1587,78 @@ def sg_open(i: long, n: long) -> long {
     }
 };
 
-// A mid-token block: the call goes to a buffer of its own, and sg_mids_move
-// puts it at the top-level statement that contains the block. The buffer of an
-// enclosing mid-token block is saved and restored, so a nested one is hoisted
-// out of it -- and since the moves are applied in close order, it runs first.
+// A mid-token block, and any nested block that has not got its text yet: the
+// call goes to a buffer of its own, and sg_mids_move puts it at the top-level
+// statement that contains the block. The buffer of an enclosing block is saved
+// and restored, so a nested one is hoisted out of it -- and since the moves are
+// applied in close order, it runs first.
 //
 // The call is ALWAYS a statement (`ycc_meta_stmt`, with its `;`): a mid-token
-// block is one that could not be an operand where it stands, so it is a
-// statement by construction, whatever the text around it looks like.
+// block is one that could not be an operand where it stands, and a nested block
+// is one whose enclosing block cannot compile this round -- so neither is an
+// expression by construction, whatever the text around it looks like.
 def sg_m_open(slot: long) -> long {
-    sg_midsave += sg_mbuf;
-    sg_molsave += sg_mol;
-    sg_mlastsave += sg_molast;
-    sg_mlinesave += sg_mline;
-    sg_mmid = true;
-    sg_mdepth = sg_depth;
-    sg_mbuf = "";
-    sg_mol = [];
-    sg_molast = false;
-    sg_mline = sg_gline;
-    sg_mbuf += "ycc_meta_stmt(" + tostring(slot) + ", {";
+    sg_hold();
+    sg_mbuf += "ycc_meta_stmt(" + tostring(slot) + ", tostring({";
     sg_col = sg_col + 2;
     0
 };
 
-// `}#` of a mid-token block: close the call, record it with the statement to
-// hoist it to, and restore whatever buffer was live (the enclosing block's own,
-// or an enclosing mid-token block's). Recorded in CLOSE order, which is the
-// order the calls have to run in.
-def sg_m_close() -> long {
-    sg_mbuf += "});";
+// `}#` of a top-level block that HELD its text: the call goes where the block
+// stood, wrapping either the block's own body or a stand-in for it.
+//
+// The stand-in is the whole of what a block that cannot produce its text this
+// round contributes. Its shape is the real call's -- same helper, same position,
+// same `;` -- with an empty body, so the statement around it still compiles and
+// still type-checks the way it did when the block was a call. Its piece is the
+// empty string and mg_take_pieces throws it away (mg_bok is false), so nothing
+// downstream ever sees it.
+//
+// Which of the two it is cannot be decided at the `#{`, and is not: this is the
+// first point where every block opened inside this one has closed and said
+// whether its text was in the table. A block with nothing inside is never held
+// and never comes through here, which is what keeps a program with no nesting on
+// the path the pass has always taken.
+def sg_top_close(k: long) -> long {
+    let slot = sg_bslot[k];
+    let stmt = sg_bstmt[k];
+    if (sg_bok[k]) {
+        let helper = "ycc_meta_expr";
+        if (stmt) { helper = "ycc_meta_stmt" };
+        let post = "}))";
+        if (stmt) { post = "}));" };
+        sg_restore(helper + "(" + tostring(slot) + ", tostring({", post)
+    } else {
+        // the stand-in: the held text is what cannot be compiled, so it goes
+        // nowhere at all. The line counter goes back with it (sg_drop), and the
+        // call goes where the block stood -- into the live buffer, which still
+        // holds only the text from BEFORE the block, so the call lands in the
+        // right place and the text after the block follows it.
+        sg_drop();
+        sg_gbuf += mg_stub(slot, stmt);
+        0
+    }
+};
+
+// `}#` of a held block whose call is hoisted -- a mid-token one, or any nested
+// one: close the call, record it with the statement to hoist it to, and give the
+// enclosing block its buffer back. Recorded in CLOSE order, which is the order
+// the calls have to run in.
+def sg_m_close(k: long) -> long {
+    // A block that is hoisted is not compiled where it stands, so nothing about
+    // its source is checked until the round that has its text -- and if one of
+    // the blocks inside it has no text this round, its own source cannot compile
+    // either, and it runs the stand-in too (mg_stub). Its body then contributes
+    // nothing, which is what keeps a hole out of the text around it: the
+    // enclosing block is stubbed for the same reason.
+    if (sg_bok[k]) {
+        sg_mbuf += "}));"
+    } else {
+        sg_mbuf = mg_stub(sg_bslot[k], true);
+        sg_mol = [];
+        sg_molast = false;
+        sg_mline = sg_gline;
+    };
     let lines = mg_lines(sg_mbuf);
     let ol: [long] = [];
     let i = 0;
@@ -1245,26 +1673,18 @@ def sg_m_close() -> long {
     if (line < 1) { line = 1 };
     if (off < 0) { off = 0 };
     sg_mids += { line: line, off: off, text: lines, ol: ol };
-    sg_mbuf = sg_midsave[len(sg_midsave) - 1];
-    sg_midsave = sg_midsave[0:len(sg_midsave) - 1];
-    sg_mol = sg_molsave[len(sg_molsave) - 1];
-    sg_molsave = sg_molsave[0:len(sg_molsave) - 1];
-    sg_molast = sg_mlastsave[len(sg_mlastsave) - 1];
-    sg_mlastsave = sg_mlastsave[0:len(sg_mlastsave) - 1];
-    sg_mline = sg_mlinesave[len(sg_mlinesave) - 1];
-    sg_mlinesave = sg_mlinesave[0:len(sg_mlinesave) - 1];
-    0
+    sg_m_pop()
 };
 
 // Which G buffer is live now that the block has closed and the per-block
-// stacks have been popped: a mid-token block's own if one is still open, and
+// stacks have been popped: a held block's own if one is still open, and
 // sg_mdepth says at what depth (0 = the file's own buffer).
 def sg_m_live() -> long {
     sg_mmid = false;
     sg_mdepth = 0;
     let k = sg_depth - 1;
     while (k >= 0) {
-        if (sg_bmid[k]) { sg_mmid = true; sg_mdepth = k + 1 };
+        if (sg_bhold[k]) { sg_mmid = true; sg_mdepth = k + 1 };
         k = k - 1;
     };
     0
@@ -1465,8 +1885,11 @@ def sg_code(i: long, n: long) -> long {
         sg_bound = true;
         sg_put1(";");
         // a top-level `;` ends the statement in progress, so the next one starts
-        // after it (see sg_ts_go)
-        if (sg_depth == 0 && sg_mdepth < 1) { sg_ts_end() };
+        // after it (see sg_ts_go) and the statement is over for the reduction
+        if (sg_depth == 0 && sg_mdepth < 1) {
+            sg_ts_end();
+            if (mg_reduce && len(sg_bkind) == sg_rbrace) { sg_region_close() }
+        };
         j + 1
     } else {
         j
@@ -1515,17 +1938,34 @@ def sg_close_brace(j: long, n: long) -> long {
             sg_stray(j);
             n
         } else {
-            let was_mid = sg_bmid[sg_depth - 1];
-            if (was_mid) {
-                // the call is not here: sg_m_close hoists it to the statement
-                sg_m_close()
+            let k = sg_depth - 1;
+            mg_bok[sg_bslot[k]] = sg_bok[k];
+            let stmt = sg_bstmt[k];
+            let mid = sg_bmid[k];
+            if (sg_bdead[k]) {
+                // inside text that is not compiled: nothing of this block's is in
+                // G, not even a call
+                sg_drop()
+            } else if (sg_bsplice[k]) {
+                // its text went into the enclosing source; its own bytes are
+                // scanned (for the slots inside) and dropped
+                sg_drop()
+            } else if (mid || sg_depth > 1) {
+                // mid-token, or nested: the call is not here, it is hoisted to the
+                // statement that contains the block
+                sg_m_close(k)
+            } else if (sg_bhold[k]) {
+                // a top-level block that may hold another block: the call goes
+                // here, and whether the body it wraps is this block's own or a
+                // stand-in is known only now
+                sg_top_close(k)
             } else {
                 // a statement-position call is a statement, and a statement
                 // wants its ';'; in expression position the call is the
                 // expression and a ';' there would be a syntax error
-                sg_gadd("})", sg_mmid);
+                sg_gadd("}))", sg_mmid);
                 sg_col = sg_col + 2;
-                if (sg_bstmt[sg_depth - 1]) { sg_gadd(";", sg_mmid); sg_col = sg_col + 1; };
+                if (stmt) { sg_gadd(";", sg_mmid); sg_col = sg_col + 1; };
             };
             // the per-block stacks are popped here, so `sg_depth - 1` is always
             // this block's entry and never one left over from a block that has
@@ -1534,8 +1974,22 @@ def sg_close_brace(j: long, n: long) -> long {
             sg_bmid = sg_bmid[0:len(sg_bmid) - 1];
             sg_bclean = sg_bclean[0:len(sg_bclean) - 1];
             sg_bbrace = sg_bbrace[0:len(sg_bbrace) - 1];
+            sg_bslot = sg_bslot[0:len(sg_bslot) - 1];
+            sg_bok = sg_bok[0:len(sg_bok) - 1];
+            sg_bsplice = sg_bsplice[0:len(sg_bsplice) - 1];
+            sg_bdead = sg_bdead[0:len(sg_bdead) - 1];
+            sg_bhold = sg_bhold[0:len(sg_bhold) - 1];
             sg_depth = sg_depth - 1;
-            if (was_mid) { sg_m_live() };
+            sg_m_live();
+            // A block STATEMENT ends at its own `}#` -- there is no `;` after it
+            // to end the region -- so the reduction treats it as a statement that
+            // has finished. Not a mid-token one (`def as#{nm}#()` is inside a
+            // statement that goes on) and not a block in expression position
+            // (`let x = #{ … }#;`): both end at the `;` like any other.
+            if (mg_reduce && sg_depth == 0 && stmt && !mid &&
+                len(sg_bkind) == sg_rbrace) {
+                sg_region_close()
+            };
             j + 2
         }
     } else {
@@ -1545,8 +1999,13 @@ def sg_close_brace(j: long, n: long) -> long {
         sg_bound = true;
         sg_put1("}");
         // a top-level `}` closes whatever construct it was in, and the next
-        // statement starts after it
-        if (sg_depth == 0 && sg_mdepth < 1) { sg_ts_end() };
+        // statement starts after it -- and the statement is over for the
+        // reduction, since a top-level statement ends at a `;` or at the `}`
+        // that closes it
+        if (sg_depth == 0 && sg_mdepth < 1) {
+            sg_ts_end();
+            if (mg_reduce && len(sg_bkind) == sg_rbrace) { sg_region_close() }
+        };
         j + 1
     }
 };
@@ -1652,17 +2111,11 @@ def sg_fstring(i: long) -> bool {
 // position, meta.y the pass itself) and Y's splicer does not survive a cycle:
 // it dedups on the way down, so the file on the way back up is spliced a second
 // time and every def collides.
-//
-// The pieces come back over the pipe framed as `<slot> <len>\n<body>`, so a
-// piece is matched to its block by SLOT and not by the order the generator
-// happened to evaluate blocks in. That matters: a nested block's text is
-// produced BEFORE its parent's, so source order and execution order differ.
 
-// One piece per slot, and whether it arrived.
-let mg_piece: [str] = [];
-let mg_have: [bool] = [];
-// Whether the pieces are known: false while scanning to collect the blocks,
-// true on the second pass, when the scanner can splice.
+// The piece table (mg_piece, mg_have) is up with the scanner's state, which is
+// where it is read. Whether the pieces are known: false while scanning to
+// collect the blocks, true from the round after the generator's first run, when
+// the scanner can splice.
 let mg_ready = false;
 // The program file's path and the origin map's file list, so a diagnostic can
 // name the file and line a block came from. native.y fills these in after the
@@ -1688,7 +2141,23 @@ def meta_begin() -> long {
     mg_gexec = true;
     mg_pkgs = [];
     mg_roots = [];
-    mg_pass()
+    // mg_bkids is NOT reset here: it is structural, so every pass learns the same
+    // thing from it (sg_open) -- which is what makes it usable at the `#{`, before
+    // the children have been seen. Only the FIRST pass is the collecting one, and
+    // only meta_begin says so.
+    mg_bkids = [];
+    mg_reduce = false;
+    mg_pass();
+    mg_collect = true;
+    0
+};
+
+// The reduction, turned on once a pass has found nesting. The collecting pass
+// never turns it on: it does not know yet, and a program with no nesting must
+// compile to exactly what it always did.
+def mg_reduce_on() -> long {
+    mg_reduce = true;
+    0
 };
 
 // A new PASS over the same files -- and the block table, G's body and the
@@ -1697,6 +2166,11 @@ def meta_begin() -> long {
 // over the same files in the same order hands out the SAME slots: that is how
 // a piece the generator wrote is matched to the block that asked for it. The
 // pieces themselves survive -- they are what the second pass splices.
+//
+// So do the pieces a ROUND produced, and the round's own verdicts: mg_bok (was
+// every block inside this one known when it closed), mg_live (did this block's
+// call go into this round's G) and mg_nest. Everything a pass produces is about
+// this round, and mg_reset_rounds is what separates the two lifetimes.
 def mg_pass() -> long {
     sg_quiet = false;
     mg_next = 0;
@@ -1709,8 +2183,30 @@ def mg_pass() -> long {
     mg_bpo = [];
     mg_imp = [];
     mg_iol = [];
+    mg_bok = [];
+    mg_live = [];
+    mg_need = [];
     mg_n = 0;
+    mg_nest = 0;
+    mg_collect = false;
     0
+};
+
+// Is any block still without its text? That is the loop condition of the rounds,
+// and it is the same question as "did this round's generator leave a block out
+// of G": a block whose source wanted the text of a nested block inside it cannot
+// produce its own text until it has it, so it is stubbed, runs as an empty
+// stand-in, and its piece is discarded (mg_take_pieces) -- leaving it here, and
+// so asking for another round. False means every piece is in and the pass is
+// done.
+def mg_pending() -> bool {
+    let i = 0;
+    let go = false;
+    while (i < mg_next) {
+        if (mg_need[i] && (i >= len(mg_have) || !mg_have[i])) { go = true };
+        i = i + 1;
+    };
+    go
 };
 
 // native.y hands the generator its resolution over this, because
@@ -1763,6 +2259,22 @@ def mg_report(msg: str) -> long {
 // Each writes its piece to fd 3 framed as `<slot> <len>\n<body>`, which is what
 // lets the parent read a piece back in any order and with any bytes in it --
 // including newlines, which most of them have.
+//
+// The body each one takes is ALREADY a str: the pass wraps every block's own
+// text in `tostring(...)` when it writes the call (sg_open, sg_m_open). That is
+// not a detail of the wrapper -- it is what makes the pass's own round work. A
+// nested block's text goes into the source of the block AROUND it, where it
+// usually stands where an expression stood, so a block whose value is a `long`
+// is the ordinary case (`#{ let a = #{ 1 + 1 }#; a }#`), and a wrapper typed
+// `str` would reject exactly the blocks nesting is for.
+//
+// `ycc_meta_expr` and `ycc_meta_stmt` are the two shapes a block's call can take
+// where the block stood: a value and a void statement. Both are load bearing --
+// a top-level block in expression position needs the str the first returns and a
+// statement-position one needs the `;` the second has -- and a nested block's
+// call is always `ycc_meta_stmt`, because it is always hoisted out of the block
+// around it (sg_open). `ycc_meta_emit` is what they share: the framing and the
+// one write.
 def mg_helpers() -> [str] {
     [
 "def ycc_meta_emit(slot: long, body: str) -> void {",
@@ -1904,9 +2416,19 @@ def mg_take_pieces(status: long, sig: long, out: [byte]) -> bool {
         mg_report("the meta generator emitted more than " + tostring(MG_MAX) + " bytes");
     };
     mg_unframe(from_bytes(out));
+    // A block that could not produce its text this round ran something whose
+    // output is not its text -- a stand-in with an empty body, or (for a nested
+    // block on the collecting round) a call whose value is the inner text as a
+    // string. Throw those away first, so what is left in the table is this
+    // block's real text and nothing downstream can mistake the rest for it.
+    // mg_pending is what asks for the next round.
+    mg_commit();
     let i = 0;
     while (i < mg_next) {
-        if (!mg_have[i]) {
+        // A block that ran for real owes the table a piece, and one that did not
+        // run does not: a nested block whose text was spliced into the block
+        // around it already has its piece from the round that produced it.
+        if (mg_live[i] && mg_bok[i] && !mg_have[i]) {
             mg_report("the block at " + mg_where(i) + " produced no output: every meta block runs once, in the generator's top level, so reaching it is not optional");
         };
         mg_check(i);
@@ -1914,6 +2436,38 @@ def mg_take_pieces(status: long, sig: long, out: [byte]) -> bool {
     };
     mg_ready = true;
     r
+};
+
+// Keep only the pieces that are really this block's text. A block that could not
+// produce its text this round ran a stand-in (sg_top_close) whose piece is the
+// empty string; it has to keep waiting (mg_pending), and so does everything
+// around it.
+//
+// The rest is already true of the table mg_unframe writes: a piece is marked
+// present only when it is framed, so a slot holding its piece from an earlier
+// round is not disturbed by a round that stubbed the block.
+def mg_commit() -> long {
+    let i = 0;
+    while (i < mg_next) {
+        if (i < len(mg_have) && mg_have[i] && !mg_bok[i]) {
+            mg_have[i] = false;
+            mg_piece[i] = "";
+        };
+        i = i + 1;
+    };
+    0
+};
+
+// The stand-in a block runs when it cannot produce its text this round. Same
+// helper and same position as the real call, with the body `0`: the statement
+// around it still compiles and still type-checks exactly as it did. Its piece is
+// "0", and mg_commit throws that away with everything else.
+def mg_stub(slot: long, stmt: bool) -> str {
+    let helper = "ycc_meta_expr";
+    if (stmt) { helper = "ycc_meta_stmt" };
+    let s = helper + "(" + tostring(slot) + ", tostring({ 0 }))";
+    if (stmt) { s += ";" };
+    s
 };
 
 // ", and the first block that produced nothing was at ..." when there is one.
@@ -1950,6 +2504,9 @@ def mg_probe(src: str, dir: str) -> bool {
     let bl = mg_bline;
     let bp = mg_bp;
     let bo = mg_bpo;
+    let bn = mg_nest;
+    let bok = mg_bok;
+    let bli = mg_live;
     let gn = mg_n;
     let gi = len(mg_imp);
     let gl = len(mg_g);
@@ -1964,6 +2521,9 @@ def mg_probe(src: str, dir: str) -> bool {
     mg_bline = bl;
     mg_bp = bp;
     mg_bpo = bo;
+    mg_nest = bn;
+    mg_bok = bok;
+    mg_live = bli;
     mg_n = gn;
     mg_imp = mg_imp[0:gi];
     mg_iol = mg_iol[0:gi];
@@ -2124,7 +2684,8 @@ def mg_splice_line(line: str, ol: long, at: long, lo: long, hi: long,
     mg_emit(segs, sego, segp, sg_fid, nl, nf, nll, ngen)
 };
 export { run_image, RunRes, Img, elf_img,
-         meta_begin, mg_pass, mg_set, mg_setup, mg_on, mg_check, mg_report,
+         meta_begin, mg_pass, mg_pending, mg_reduce_on, mg_nest,
+         mg_set, mg_setup, mg_on, mg_check, mg_report,
          mg_probe, mg_take_pieces, meta_scan, Scan, scan_none,
          meta_gtext, mg_ghead, mg_glines, mg_gol, mg_gbase, mg_gexec, mg_pkgs, mg_roots,
-         mg_root };
+         mg_root, MG_NEST, MG_ROUND };

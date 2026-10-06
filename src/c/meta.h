@@ -37,9 +37,18 @@ extern Yv *mg_pkgs;        /* the package names G's bare imports resolve against
 extern Yv *mg_roots;       /* and their source roots */
 extern Yv *mg_root;        /* the program file's path */
 extern long mg_n;          /* how many blocks the whole resolve found */
+extern long mg_nest;       /* how many of them sit inside another block */
+
+/* The pass's own nesting cap, and the round bound that goes with it (MG_ROUND is
+ * MG_NEST + 2): native.c's meta_resolve loops on mg_pending, and a level of
+ * nesting is a round. */
+#define MG_NEST_LIMIT 8L
+#define MG_ROUND_LIMIT (MG_NEST_LIMIT + 2)
 
 long meta_begin(void);
 long mg_pass(void);
+int mg_pending(void);
+long mg_reduce_on(void);
 long mg_set(int on);
 long mg_setup(Yv *root, Yv *files, Yv *base, int exec, Yv *pkgs, Yv *roots);
 long mg_check(long s);

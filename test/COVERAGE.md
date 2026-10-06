@@ -39,7 +39,9 @@ reason.
 | 02-lexical | Source text | User-source positions survive import/embed splicing | `native/e14_prelude_lineno.y`, `native/e57_embed_lines.y`, `native/t66_embed.y`, `native/e133_import_error_positions.y` |
 | 02-lexical | Source text | CRLF source-line endings | none: LF-only fixtures cannot directly exercise CRLF source bytes |
 | 02-lexical | Comments | Line and block comments separate tokens; comment-like string text stays literal | `native/t68_splice_scan.y`, `native/t74_lexical_operators.y` |
-| 02-lexical | Meta blocks | `#{ … }#` in statement and expression position, mid-token (in a def's name, in an identifier, before a field, at the end of a statement), and a nested block's text as data | `native/t198_meta_basic.y`, `native/t200_meta_mid_token.y` |
+| 02-lexical | Meta blocks | `#{ … }#` in statement and expression position, mid-token (in a def's name, in an identifier, before a field, at the end of a statement) | `native/t198_meta_basic.y`, `native/t200_meta_mid_token.y` |
+| 02-lexical | Meta blocks | A block inside a block splices into the enclosing block's SOURCE, at every level: the enclosing source is recompiled and rerun, and the enclosing block's own value is what lands | `native/t201_meta_nest_expr.y`, `native/t202_meta_nest_mid_token.y` |
+| 02-lexical | Meta blocks | A block's text is the rendering of its OWN value, so a `long` is the ordinary nested case, and a `str` value is its own rendering | `native/t201_meta_nest_expr.y` |
 | 02-lexical | Meta blocks | `#{` and `}#` are plain text inside a literal or a comment; a `#` or a `}#` in code position is an error, as is a block that never closes | `native/t198_meta_basic.y`, `native/e169_meta_unterminated_block.y`, `native/e170_meta_stray_close.y`, `native/e171_meta_hash_code.y` |
 | 02-lexical | Meta blocks | A block not in a def or type body: in-place emission there would give compile-time-fixed values, while a mid-token one in a def's HEADER is the supported way to generate a name | `native/e173_meta_in_def.y`, `native/e174_meta_in_type.y`, `native/t200_meta_mid_token.y` |
 | 02-lexical | Meta blocks | A block in a def or type header that is not part of a name -- a call cannot go in a header, and dropping its bytes would leave nothing behind | `native/e187_meta_header_whole_name.y` |
@@ -47,7 +49,9 @@ reason.
 | 02-lexical | Meta blocks | A thread or process primitive in a block is refused; as a variable, a field or a def it is not | `native/e176_meta_thread.y`, `native/t197_meta_field_name_ok.y` |
 | 02-lexical | Meta blocks | `import` inside a block is hoisted to the generator; it must come first in the block and end with `;` | `native/e177_meta_import_late.y`, `native/e178_meta_import_no_semi.y` |
 | 02-lexical | Meta blocks | An injected helper's name cannot be defined by the program | `native/e175_meta_reserved.y` |
-| 02-lexical | Meta blocks | With blocks in the file the top level runs twice: a non-declaration top-level statement warns | `native/t199_meta_top_twice.y` |
+| 02-lexical | Meta blocks | With blocks in the file the top level runs once per round: a non-declaration top-level statement warns | `native/t199_meta_top_twice.y` |
+| 02-lexical | Meta blocks | In a round that cannot yet produce a nested block's text, the statements that are neither declarations nor block-bearing are left out of that round's generator, so they cannot double-run; a top-level `let` is kept, and one that reads a generated name still fails | `native/e189_meta_toplevel_let_reads_block.y` |
+| 02-lexical | Meta blocks | Nesting is capped by cost: each level is a compile and a run of the generator inside the compiler, and one past the cap of 8 is an error naming that | `native/e188_meta_nest_too_deep.y` |
 | 02-lexical | Meta blocks | A piece may not hold a NUL byte, and the whole generator's output is capped | `native/e183_meta_emits_nul.y`, `native/e184_meta_emits_too_much.y` |
 | 02-lexical | Meta blocks | A generator that traps or exits is a diagnostic naming the block, not a failure of ycc | `native/e185_meta_gen_dies.y` |
 | 02-lexical | Meta blocks | A block cannot be emitted by another block, and cannot sit in a module the generator imported | `native/e186_meta_emits_block.y` |
