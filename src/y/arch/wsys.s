@@ -728,3 +728,461 @@ yon_out:
     mov %rbp, %rsp
     pop %rbp
     ret
+
+#=== replace: y_argv_init ===
+# y_argv_init on Windows: the PEB's command line, not the kernel stack.
+#
+# _start's prologue (native.y, emit_one_fn) is the SysV shape: it pushes the
+# register it uses for the array, pushes what Linux reads as argv (rsp+8 at
+# the call), and calls here. A PE entry point gets none of that. Windows
+# passes ONE WIDE COMMAND LINE in %r8 at entry -- not an argv, and not even an
+# argc -- and by the time _start runs, every register that held it has been
+# overwritten. So the two words on the stack are dead here and are not read;
+# the command line is read where Win64 keeps it:
+#
+#   %gs:96                     the PEB (x64; the same read y_os_handle makes)
+#   PEB+32                     -> ProcessParameters
+#                +112          CommandLine.Length, a USHORT in BYTES
+#                +120          CommandLine.Buffer, the whole line
+#
+# (Displacements are DECIMAL because the in-tree number reader is -- see the
+# note above y_os_handle. 112 is 0x70 and 120 is 0x78.)
+#
+# CommandLine.Buffer holds the PROGRAM NAME FIRST, exactly as Linux's argv[0]
+# does, so nothing has to be synthesized: this one read is a correct argv[0]
+# on Windows, and there is no lpCmdLine the program name would have to be
+# prepended to. The read is a load, not a syscall -- the PEB is mapped in
+# every process -- so there is no status to check and this cannot fail.
+#
+# The split is CommandLineToArgvW's, reimplemented below: 2n backslashes
+# before a quote are n backslashes and a REAL quote (which toggles quoting);
+# 2n+1 are n backslashes and a LITERAL quote; space and tab split only
+# outside quotes. These are MSVC's rules, not a shell's -- `"a b"` is one
+# argument -- and they are re-derived here rather than transliterated from a
+# C parser, which is why a backslash run is counted before the quote that
+# ends it is classified.
+#
+# Each argument becomes the same [str] the Linux half makes: a UTF-8 copy
+# carrying a header {len, bytes...}, the array header {len, cap, data} left in
+# %r15 and returned in %rax. UTF-16 is converted properly -- 1, 2 or 3 bytes,
+# and surrogate PAIRS to 4 -- because the first non-ASCII path on a command
+# line would otherwise be silently wrong, and a compiler that cannot open a
+# file should say so rather than mis-spell the name. A lone surrogate becomes
+# 3 bytes (WTF-8) rather than U+FFFD, so it round-trips.
+#
+# The argument count is bounded by the line itself: every argument needs at
+# least one character and arguments are separated by at least one separator,
+# so at most n/2+2 can exist for n wide characters. The data block is
+# allocated at that bound and the header's len is the real count.
+#
+# NOTHING HERE CALLS y_cstr_to_str: that is the SysV char** walker, and it has
+# no Windows replacement because this block does not need one. The named call
+# is y_alloc, and on Windows that resolves to NtAllocateVirtualMemory.
+y_argv_init:
+    push %rbp
+    mov %rsp, %rbp
+    push %rbx
+    push %r12
+    push %r13
+    push %r14
+    push %r15
+    sub $88, %rsp
+# Locals, all %rbp-relative (the frame pointer is stable across the calls
+# below; %rsp is not):
+#   -48 argc      -56 cap        -64 arg_start   -72 in_quotes
+#   -80 nchars    -88 str        -96 cursor      -104 k (backslash run)
+#   -112 emit     -120 quote action (0 none, 1 real, 2 literal)
+    xor %eax, %eax
+    mov %rax, -48(%rbp)
+    mov %rax, -72(%rbp)
+    mov %rax, -80(%rbp)
+    mov %gs:96, %rax
+    mov 32(%rax), %rax
+    mov 112(%rax), %rcx
+    mov 120(%rax), %rbx
+    and $65535, %rcx
+    shr $1, %rcx
+    mov %rcx, %r13
+    mov $0, %r12
+# The data block: one word per possible argument.
+    mov %r13, %rdi
+    shr $1, %rdi
+    add $2, %rdi
+    mov %rdi, -56(%rbp)
+    shl $3, %rdi
+    call y_alloc
+    mov %rax, %r14
+    mov $24, %rdi
+    call y_alloc
+    mov %rax, %r15
+    xor %ecx, %ecx
+    mov %rcx, (%r15)
+    mov -56(%rbp), %rcx
+    mov %rcx, 8(%r15)
+    mov %r14, 16(%r15)
+
+# ── skip separators: the next argument, or the end ──────────────────────
+yai_outer:
+    cmp %r13, %r12
+    jge yai_done
+    call yai_char
+    cmp $32, %rax
+    je yai_sep
+    cmp $9, %rax
+    jne yai_arg
+yai_sep:
+    inc %r12
+    jmp yai_outer
+
+# ── pass 1: this argument's character span and its character count ──────
+yai_arg:
+    mov %r12, -64(%rbp)
+    xor %eax, %eax
+    mov %rax, -80(%rbp)
+    mov %rax, -72(%rbp)
+yai_a:
+    cmp %r13, %r12
+    jge yai_a_end
+    call yai_char
+    cmp $92, %rax
+    je yai_a_run
+    cmp $34, %rax
+    je yai_a_quote
+    cmp $32, %rax
+    je yai_a_space
+    cmp $9, %rax
+    je yai_a_space
+yai_a_take:
+    mov -80(%rbp), %rcx
+    inc %rcx
+    mov %rcx, -80(%rbp)
+    inc %r12
+    jmp yai_a
+yai_a_space:
+    mov -72(%rbp), %rcx
+    cmp $0, %rcx
+    jne yai_a_take
+    jmp yai_a_end
+yai_a_quote:
+    mov -72(%rbp), %rcx
+    xor $1, %rcx
+    mov %rcx, -72(%rbp)
+    jmp yai_a_take
+# A run of backslashes: count it, then classify the quote (if any) that ends
+# it. Only a quote changes what the run means, so a run with nothing after it
+# copies itself whole.
+yai_a_run:
+    xor %ecx, %ecx
+yai_a_runl:
+    cmp %r13, %r12
+    jge yai_a_kdone
+    call yai_char
+    cmp $92, %rax
+    jne yai_a_kdone
+    inc %rcx
+    inc %r12
+    jmp yai_a_runl
+yai_a_kdone:
+    mov %rcx, -104(%rbp)
+    mov %rcx, %rdx
+    xor %ecx, %ecx
+    mov %rcx, -120(%rbp)
+    cmp %r13, %r12
+    jge yai_a_radd
+    call yai_char
+    cmp $34, %rax
+    jne yai_a_radd
+    shr $1, %rdx
+    mov -104(%rbp), %rcx
+    and $1, %rcx
+    cmp $1, %rcx
+    je yai_a_rlit
+    mov $1, %rcx
+    mov %rcx, -120(%rbp)
+    jmp yai_a_radd
+yai_a_rlit:
+    mov $2, %rcx
+    mov %rcx, -120(%rbp)
+    inc %rdx
+yai_a_radd:
+    mov -80(%rbp), %rcx
+    add %rdx, %rcx
+    mov %rcx, -80(%rbp)
+# a real quote toggles and is consumed; a literal one is just counted
+    mov -120(%rbp), %rcx
+    cmp $1, %rcx
+    je yai_a_rtog
+    cmp $2, %rcx
+    jne yai_a_end
+    inc %r12
+    jmp yai_a
+yai_a_rtog:
+    mov -72(%rbp), %rcx
+    xor $1, %rcx
+    mov %rcx, -72(%rbp)
+    inc %r12
+    jmp yai_a
+yai_a_end:
+# UTF-8 never exceeds 3 bytes per UTF-16 character (a surrogate pair is
+# two characters and four bytes), so this over-allocates and never
+# under-allocates. The str's own len is set from what was written.
+    mov -80(%rbp), %rdi
+    mov %rdi, %rax
+    add %rax, %rdi
+    add %rax, %rdi
+    add $9, %rdi
+    call y_alloc
+    mov %rax, -88(%rbp)
+    xor %ecx, %ecx
+    mov %rcx, (%rax)
+    mov %rcx, -96(%rbp)
+    mov %rcx, -72(%rbp)
+    mov -64(%rbp), %r12
+
+# ── pass 2: build the argument, converting UTF-16 to UTF-8 ──────────────
+yai_b:
+    cmp %r13, %r12
+    jge yai_b_end
+    call yai_char
+    cmp $92, %rax
+    je yai_b_run
+    cmp $34, %rax
+    je yai_b_quote
+    cmp $32, %rax
+    je yai_b_space
+    cmp $9, %rax
+    je yai_b_space
+# a data character: yai_emit advances %r12 by 1 or by 2 (a surrogate pair)
+    call yai_emit
+    jmp yai_b
+yai_b_space:
+    mov -72(%rbp), %rcx
+    cmp $0, %rcx
+    jne yai_b_data
+    jmp yai_b_end
+yai_b_data:
+    call yai_emit
+    jmp yai_b
+yai_b_quote:
+    mov -72(%rbp), %rcx
+    xor $1, %rcx
+    mov %rcx, -72(%rbp)
+    inc %r12
+    jmp yai_b
+yai_b_run:
+    xor %ecx, %ecx
+yai_b_runl:
+    cmp %r13, %r12
+    jge yai_b_kdone
+    call yai_char
+    cmp $92, %rax
+    jne yai_b_kdone
+    inc %rcx
+    inc %r12
+    jmp yai_b_runl
+yai_b_kdone:
+    mov %rcx, -104(%rbp)
+    mov %rcx, -112(%rbp)
+    xor %ecx, %ecx
+    mov %rcx, -120(%rbp)
+    cmp %r13, %r12
+    jge yai_b_emit
+    call yai_char
+    cmp $34, %rax
+    jne yai_b_emit
+    mov -104(%rbp), %rdx
+    shr $1, %rdx
+    mov %rdx, -112(%rbp)
+    mov -104(%rbp), %rdx
+    and $1, %rdx
+    cmp $1, %rdx
+    je yai_b_lit
+    mov $1, %rcx
+    mov %rcx, -120(%rbp)
+    jmp yai_b_emit
+yai_b_lit:
+    mov $2, %rcx
+    mov %rcx, -120(%rbp)
+yai_b_emit:
+    mov -112(%rbp), %rcx
+yai_b_emitl:
+    cmp $0, %rcx
+    jle yai_b_act
+    push %rcx
+    mov $92, %rax
+    call yai_put
+    pop %rcx
+    dec %rcx
+    jmp yai_b_emitl
+yai_b_act:
+    mov -120(%rbp), %rcx
+    cmp $1, %rcx
+    je yai_b_actr
+    cmp $2, %rcx
+    jne yai_b
+    mov $34, %rax
+    call yai_put
+    inc %r12
+    jmp yai_b
+yai_b_actr:
+    mov -72(%rbp), %rcx
+    xor $1, %rcx
+    mov %rcx, -72(%rbp)
+    inc %r12
+    jmp yai_b
+yai_b_end:
+    mov -88(%rbp), %rcx
+    mov -96(%rbp), %rdx
+    mov %rdx, (%rcx)
+    mov -48(%rbp), %rcx
+    shl $3, %rcx
+    add %r14, %rcx
+    mov -88(%rbp), %rdx
+    mov %rdx, (%rcx)
+    mov -48(%rbp), %rcx
+    inc %rcx
+    mov %rcx, -48(%rbp)
+    jmp yai_outer
+
+yai_done:
+    mov -48(%rbp), %rcx
+    mov %rcx, (%r15)
+    mov %r15, %rax
+# r15 is NOT restored: y_argv reads it, exactly as on Linux, which is why
+# the Linux block leaves it set too.
+    mov -32(%rbp), %r14
+    mov -24(%rbp), %r13
+    mov -16(%rbp), %r12
+    mov -8(%rbp), %rbx
+    mov %rbp, %rsp
+    pop %rbp
+    ret
+
+# yai_char: the UTF-16 character at %r12 of the line in %rbx, in %rax.
+# Clobbers %rsi only. It is read one BYTE at a time on purpose: a 16-bit load
+# is not a form the encoder has, and a 4- or 8-byte load at the LAST character
+# would read past a buffer whose MaximumLength is exactly Length+2.
+yai_char:
+    lea (%rbx,%r12,2), %rsi
+    movzbq (%rsi), %rax
+    movzbq 1(%rsi), %rsi
+    shl $8, %rsi
+    add %rsi, %rax
+    ret
+
+# yai_put: append the byte in %al to the argument being built. Clobbers %rsi
+# and %rcx. The cursor is -96(%rbp) and the str's header -88(%rbp).
+yai_put:
+    mov -88(%rbp), %rsi
+    mov -96(%rbp), %rcx
+    movb %al, 8(%rsi,%rcx,1)
+    inc %rcx
+    mov %rcx, -96(%rbp)
+    ret
+
+# yai_emit: convert the character in %rax to UTF-8 and append it, advancing
+# %r12 by the UTF-16 units it consumed -- one, or two for a surrogate pair. A
+# high surrogate followed by a low one becomes one 4-byte sequence; any other
+# surrogate becomes 3 bytes so a lone one round-trips. The `add` where an `or`
+# would read better is deliberate: the encoder has no `or $imm, %reg`, and
+# every one of them sets bits the range guard above has already cleared.
+# Clobbers %rax, %rcx, %rdx, %rsi, %r11.
+yai_emit:
+    cmp $128, %rax
+    jl yai_emit1
+    cmp $2048, %rax
+    jl yai_emit2
+    mov %rax, %rcx
+    and $63488, %rcx
+    cmp $55296, %rcx
+    jne yai_emit3
+    cmp $56320, %rax
+    jge yai_emit3
+# a high surrogate: pair it when a low one follows
+    mov %r12, %rcx
+    inc %rcx
+    cmp %r13, %rcx
+    jge yai_emit3
+    mov %rax, %r11
+    inc %r12
+    push %rax
+    call yai_char
+    mov %rax, %rdx
+    pop %rax
+    dec %r12
+    cmp $56320, %rdx
+    jl yai_emit3
+    cmp $57344, %rdx
+    jge yai_emit3
+# cp = 0x10000 + ((hi - 0xD800) << 10) + (lo - 0xDC00): a 4-byte sequence
+    sub $55296, %rax
+    shl $10, %rax
+    sub $56320, %rdx
+    add %rdx, %rax
+    add $65536, %rax
+    mov %rax, %rcx
+    shr $18, %rcx
+    add $240, %rcx
+    push %rax
+    mov %rcx, %rax
+    call yai_put
+    pop %rax
+    mov %rax, %rcx
+    shr $12, %rcx
+    and $63, %rcx
+    add $128, %rcx
+    push %rax
+    mov %rcx, %rax
+    call yai_put
+    pop %rax
+    mov %rax, %rcx
+    shr $6, %rcx
+    and $63, %rcx
+    add $128, %rcx
+    push %rax
+    mov %rcx, %rax
+    call yai_put
+    pop %rax
+    and $63, %rax
+    add $128, %rax
+    call yai_put
+    add $2, %r12
+    ret
+yai_emit1:
+    call yai_put
+    inc %r12
+    ret
+yai_emit2:
+    mov %rax, %rcx
+    shr $6, %rcx
+    add $192, %rcx
+    push %rax
+    mov %rcx, %rax
+    call yai_put
+    pop %rax
+    and $63, %rax
+    add $128, %rax
+    call yai_put
+    inc %r12
+    ret
+yai_emit3:
+    mov %rax, %rcx
+    shr $12, %rcx
+    add $224, %rcx
+    push %rax
+    mov %rcx, %rax
+    call yai_put
+    pop %rax
+    mov %rax, %rcx
+    shr $6, %rcx
+    and $63, %rcx
+    add $128, %rcx
+    push %rax
+    mov %rcx, %rax
+    call yai_put
+    pop %rax
+    and $63, %rax
+    add $128, %rax
+    call yai_put
+    inc %r12
+    ret
