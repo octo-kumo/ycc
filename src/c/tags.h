@@ -10,9 +10,10 @@
 #ifndef TAGS_H
 #define TAGS_H
 
+#include "ylong.h"
 #include "yv.h"
 
-Yv *ktag(long n);    /* the name of a tag, for a diagnostic */
+Yv *ktag(ylong n);    /* the name of a tag, for a diagnostic */
 int tags_agree(void); /* K and KTAGS have not drifted */
 
 /* How deep the recursive walks may nest (MAX_NEST in src/y/tags.y, and
@@ -20,7 +21,7 @@ int tags_agree(void); /* K and KTAGS have not drifted */
  * counts it and its one return path counts it back -- the count and the test
  * are written out there, per node, rather than called. */
 #define MAX_NEST 1000
-extern long yv_nest;   /* `nest`: a top-level long in src/y/tags.y */
+extern ylong yv_nest;   /* `nest`: a top-level long in src/y/tags.y */
 Yv *too_deep(Yv *what, Yv *line, Yv *col);
 Yv *nest_reset(void);
 int max_nest_agree(void);

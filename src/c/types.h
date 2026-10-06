@@ -9,6 +9,7 @@
 #ifndef TYPES_H
 #define TYPES_H
 
+#include "ylong.h"
 #include "yv.h"
 
 Yv *check_program(Yv *ast, Yv *ext); /* -> [{ msg, line, col }] ([] means OK) */
@@ -20,7 +21,7 @@ Yv *os_call_names(void);
 Yv *tstr(Yv *t);              /* the one rendering of a type: diagnostics,
                                 * typeof, "<function (params) -> ret>" */
 int teq(Yv *a, Yv *b);        /* strict type equality (branch agreement) */
-long field_pos(Yv *fs, Yv *name, long hint); /* a field's index by name */
+ylong field_pos(Yv *fs, Yv *name, ylong hint); /* a field's index by name */
 Yv *field_merge(Yv *fields, Yv *name, Yv *typ);  /* record-literal upsert */
 Yv *str_method(Yv *m);        /* string-method lowering/type table */
 Yv *narrow_type(Yv *s, Yv *t); /* static type of a match `narrow` node */
@@ -35,14 +36,14 @@ Yv *t_mutex(void);                   /* the type `mutex` */
 Yv *t_sem(void);                     /* the type `sem` */
 Yv *tcanon(Yv *t);            /* a type's canonical form */
 Yv *tsig(Yv *t);              /* its signature: recursive aliases by name */
-Yv *expr_type(long line, long col);
+Yv *expr_type(ylong line, ylong col);
 void type_index_on(void);
 void type_index_off(void);
-Yv *inferred_ret(long line, long col); /* typeof_def's inferred return type */
+Yv *inferred_ret(ylong line, ylong col); /* typeof_def's inferred return type */
 Yv *str_sorted(Yv *xs);       /* [str] sorted */
 Yv *rec_names(Yv *fs);        /* a record's field names, sorted */
 Yv *type_names(Yv *t);        /* field names a record type / pattern tests */
 Yv *fmt_spec(Yv *spec);       /* parsed f-string format specification */
-long fmt_kind(Yv *t);          /* integer=1, float=2, other=0 */
+ylong fmt_kind(Yv *t);          /* integer=1, float=2, other=0 */
 
 #endif /* TYPES_H */

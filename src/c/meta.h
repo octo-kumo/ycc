@@ -26,6 +26,7 @@
 #ifndef META_H
 #define META_H
 
+#include "ylong.h"
 #include "yv.h"
 
 /* ── the pass's globals the other modules read ──────────────────────────── */
@@ -36,8 +37,8 @@ extern int mg_gexec;       /* whether exec() is allowed in G */
 extern Yv *mg_pkgs;        /* the package names G's bare imports resolve against */
 extern Yv *mg_roots;       /* and their source roots */
 extern Yv *mg_root;        /* the program file's path */
-extern long mg_n;          /* how many blocks the whole resolve found */
-extern long mg_nest;       /* how many of them sit inside another block */
+extern ylong mg_n;          /* how many blocks the whole resolve found */
+extern ylong mg_nest;       /* how many of them sit inside another block */
 
 /* The pass's own nesting cap, and the round bound that goes with it (MG_ROUND is
  * MG_NEST + 2): native.c's meta_resolve loops on mg_pending, and a level of
@@ -45,21 +46,21 @@ extern long mg_nest;       /* how many of them sit inside another block */
 #define MG_NEST_LIMIT 8L
 #define MG_ROUND_LIMIT (MG_NEST_LIMIT + 2)
 
-long meta_begin(void);
-long mg_pass(void);
+ylong meta_begin(void);
+ylong mg_pass(void);
 int mg_pending(void);
-long mg_reduce_on(void);
-long mg_set(int on);
-long mg_setup(Yv *root, Yv *files, Yv *base, int exec, Yv *pkgs, Yv *roots);
-long mg_check(long s);
-long mg_report(Yv *msg);
+ylong mg_reduce_on(void);
+ylong mg_set(int on);
+ylong mg_setup(Yv *root, Yv *files, Yv *base, int exec, Yv *pkgs, Yv *roots);
+ylong mg_check(ylong s);
+ylong mg_report(Yv *msg);
 int mg_probe(Yv *src, Yv *dir);
-int mg_take_pieces(long status, long sig, Yv *out);
-Yv *meta_scan(Yv *src, long fid, Yv *dir);
-Yv *scan_none(Yv *src, long fid);
+int mg_take_pieces(ylong status, ylong sig, Yv *out);
+Yv *meta_scan(Yv *src, ylong fid, Yv *dir);
+Yv *scan_none(Yv *src, ylong fid);
 Yv *meta_gtext(void);
-long mg_ghead(void);
-long mg_glines(void);
+ylong mg_ghead(void);
+ylong mg_glines(void);
 
 /* ── the image runner ──────────────────────────────────────────────────── */
 Yv *run_image(Yv *b, Yv *av, int want_out);

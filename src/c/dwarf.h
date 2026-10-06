@@ -2,9 +2,10 @@
 #ifndef DWARF_H
 #define DWARF_H
 
+#include "ylong.h"
 #include "yv.h"
 
-Yv *dwarf_sections(Yv *files, Yv *rows, long text_addr, long text_len,
+Yv *dwarf_sections(Yv *files, Yv *rows, ylong text_addr, ylong text_len,
                    Yv *comp_dir);
 
 #endif /* DWARF_H */

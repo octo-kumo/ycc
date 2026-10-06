@@ -18,6 +18,7 @@
  *   ycc build [-g] [-w] [--no-exec] [--std-src] [DIR]   build its programs
  *   ycc vendor [DIR]   copy its git dependencies into vendor/
  */
+#include "ylong.h"
 #include "ycc.h"
 #include "target.h"
 #include "tags.h"
@@ -38,8 +39,8 @@
 
 /* ── argument parsing ────────────────────────────────────────────────── */
 
-static long wlevel_arg(Yv *argv, long i, long n);
-static long parse_target(Yv *name);
+static ylong wlevel_arg(Yv *argv, ylong i, ylong n);
+static ylong parse_target(Yv *name);
 
 Yv *parse_cli_args(Yv *argv) {
     Yv *out = ys("");
@@ -49,13 +50,13 @@ Yv *parse_cli_args(Yv *argv) {
     int allow_exec = 1;
     int debug = 0;
     int nowarn = 0;
-    long wlevel = 0;
+    ylong wlevel = 0;
     int std_src = 0;
     Yv *std_pack_path = ys("");
     int run = 0;
     int dump = 0;
-    long i = 1; /* skip argv[0] */
-    long n = yv_len(argv);
+    ylong i = 1; /* skip argv[0] */
+    ylong n = yv_len(argv);
     while (i < n) {
         Yv *a = ya_get(argv, i);
         if (ys_eq_lit(a, "-o")) {
@@ -194,7 +195,7 @@ puts_(ys("               file, and ycc exits with the program's status\n"));
  * `res_target = "..."`; the value is a Yv * because every comparison in the
  * Y code is a string compare, and NULL here means the default (linux), which
  * is what the Y top-level initialiser says. */
-static long parse_target(Yv *name) {
+static ylong parse_target(Yv *name) {
     if (ys_eq_lit(name, "linux")) {
         target_set(ys("linux"));
     } else if (ys_eq_lit(name, "windows")) {
@@ -221,7 +222,7 @@ Yv *self_pack(void) {
         return ys("");
     }
     Yv *pack = ys("");
-    long size = (long)lseek(fd, 0, SEEK_END);
+    ylong size = (ylong)lseek(fd, 0, SEEK_END);
     if (size >= 16) {
         char buf[65536];
         char tailbuf[16];
@@ -229,14 +230,14 @@ Yv *self_pack(void) {
         ssize_t k = read(fd, tailbuf, 16);
         if (k == 16) {
             Yv *tail = ys_n(tailbuf, 16);
-            long n = ys_tolong(ys_slice(tail, 0, 8));
+            ylong n = ys_tolong(ys_slice(tail, 0, 8));
             if (ys_eq(ys_slice(tail, 8, 16), pack_magic()) &&
                 n > 0 && n <= size - 16) {
                 lseek(fd, (off_t)(size - 16 - n), SEEK_SET);
                 Yv *pieces = yav(0);
-                long left = n;
+                ylong left = n;
                 while (left > 0) {
-                    long want = left;
+                    ylong want = left;
                     if (want > 65536) {
                         want = 65536;
                         ;
@@ -267,7 +268,7 @@ Yv *self_pack(void) {
 
 /* --std-pack FILE: every std unit, compiled from source, framed for
  * attaching (see self_pack). */
-long write_std_pack(Yv *path) {
+ylong write_std_pack(Yv *path) {
     Yv *pack = std_pack(std_units(std_unit_names(), ys("")));
     Yv *nd = ys_long(yv_len(pack));
     while (yv_len(nd) < 8) {
@@ -292,7 +293,7 @@ long write_std_pack(Yv *path) {
  * Everything goes to stderr via eputs: stdout carries program output and
  * `-S` assembly, and must stay clean enough to diff. */
 
-Yv *padr(Yv *s, long w) {
+Yv *padr(Yv *s, ylong w) {
     Yv *r = s;
     while (yv_len(r) < w) {
         r = ys_cat(r, ys(" "));
@@ -300,7 +301,7 @@ Yv *padr(Yv *s, long w) {
     return r;
 }
 
-Yv *padl(Yv *s, long w) {
+Yv *padl(Yv *s, ylong w) {
     Yv *r = s;
     while (yv_len(r) < w) {
         r = ys_cat(ys(" "), r);
@@ -310,9 +311,9 @@ Yv *padl(Yv *s, long w) {
 
 /* Microseconds as fixed-point milliseconds, integer arithmetic only: the C
  * twin formats the same way, so both copies print the same string. */
-Yv *fmt_ms(long us) {
-    long ms = us / 1000;
-    long fr = us % 1000;
+Yv *fmt_ms(ylong us) {
+    ylong ms = us / 1000;
+    ylong fr = us % 1000;
     Yv *fs = ys_long(fr);
     while (yv_len(fs) < 3) {
         fs = ys_cat(ys("0"), fs);
@@ -320,14 +321,14 @@ Yv *fmt_ms(long us) {
     return ys_cat(ys_cat(ys_long(ms), ys(".")), fs);
 }
 
-Yv *fmt_kb(long b) { return ys_long(b / 1024); }
+Yv *fmt_kb(ylong b) { return ys_long(b / 1024); }
 
-long print_phase_rows(Yv *times) {
+ylong print_phase_rows(Yv *times) {
     /* NOTE: vestigial alias — `times[i]` parses and typechecks in both
      * copies today; the binding stays only because the compiled compiler
      * is byte-gated against refs/ycc.ref. */
     Yv *all = times;
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(all)) {
         Yv *e = ya_get(all, i);
         eputs_(ys_cat(
@@ -341,7 +342,7 @@ long print_phase_rows(Yv *times) {
     return 0;
 }
 
-long print_counter(Yv *name, long v) {
+ylong print_counter(Yv *name, ylong v) {
     eputs_(ys_cat(ys_cat(ys_cat(ys("  "), padr(name, 12)), padl(ys_long(v), 12)),
                   ys("\n")));
     return 0;
@@ -349,7 +350,7 @@ long print_counter(Yv *name, long v) {
 
 /* ── main ──────────────────────────────────────────────────────────────── */
 
-long print_native_errors(Yv *errors, Yv *origin, int bare) {
+ylong print_native_errors(Yv *errors, Yv *origin, int bare) {
     /* NOTE: vestigial alias (see print_phase_rows) — `errors[i]` works.
      * Positions are lines of the spliced program (std chunks and imported
      * modules included); the origin map turns each back into the file it
@@ -360,14 +361,14 @@ long print_native_errors(Yv *errors, Yv *origin, int bare) {
      * construct it broke, then the statement it ended), and the second
      * message only repeats the first. */
     Yv *seen = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(all)) {
         Yv *e = ya_get(all, i);
         Yv *at = ys_cat(ys_cat(origin_at(origin, yv_l(yr_get(e, "line")), bare),
                                ys(":")),
                         ys_long(yv_l(yr_get(e, "col"))));
         int dup = 0;
-        long j = 0;
+        ylong j = 0;
         while (j < yv_len(seen)) {
             if (ys_eq(ya_get(seen, j), at)) {
                 dup = 1;
@@ -395,7 +396,7 @@ long print_native_errors(Yv *errors, Yv *origin, int bare) {
  * (lint_unit sorted them and dropped repeats). */
 Yv *warning_text(Yv *warnings, Yv *origin, int bare) {
     Yv *out = ys("");
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(warnings)) {
         Yv *w = ya_get(warnings, i);
         Yv *at = origin_at(origin, yv_l(yr_get(w, "line")), bare);
@@ -410,7 +411,7 @@ Yv *warning_text(Yv *warnings, Yv *origin, int bare) {
 
 /* What lint.c found in a unit that compiled, as `at: warning: msg` on
  * stderr (a -S listing on stdout stays clean). */
-long print_native_warnings(Yv *warnings, Yv *origin, int bare) {
+ylong print_native_warnings(Yv *warnings, Yv *origin, int bare) {
     eputs_(warning_text(warnings, origin, bare));
     return 0;
 }
@@ -421,7 +422,7 @@ long print_native_warnings(Yv *warnings, Yv *origin, int bare) {
  * so anything else is rejected -- and the scan saturates, because a long enough
  * digit run wraps the accumulator and "-W 99999999999999999999" would come back
  * as an accepted level (ycc.y). */
-static long wlevel_arg(Yv *argv, long i, long n) {
+static ylong wlevel_arg(Yv *argv, ylong i, ylong n) {
     if (i + 1 >= n) {
         puts_(ys("ycc: -W needs a warning level (0, or 1)\n"));
         exit_(1);
@@ -429,10 +430,10 @@ static long wlevel_arg(Yv *argv, long i, long n) {
     } else {
         Yv *a = ya_get(argv, i + 1);
         int ok = yv_len(a) > 0 && !ys_eq_lit(ys_slice(a, 0, 1), "-");
-        long v = 0;
-        long d = 0;
+        ylong v = 0;
+        ylong d = 0;
         while (ok && d < yv_len(a)) {
-            long c = ys_byte_at(a, d);
+            ylong c = ys_byte_at(a, d);
             ok = c >= '0' && c <= '9';
             if (ok && v <= 1) { v = v * 10 + (c - '0'); }
             d = d + 1;
@@ -452,11 +453,11 @@ Yv *build_args(Yv *cmdline) {
     Yv *dir = ys("");
     int debug = 0;
     int nowarn = 0;
-    long wlevel = 0;
+    ylong wlevel = 0;
     int allow_exec = 1;
     int std_src = 0;
     Yv *one = ys("");
-    long i = 2;
+    ylong i = 2;
     while (i < yv_len(cmdline)) {
         Yv *a = ya_get(cmdline, i);
         if (ys_eq_lit(a, "-g")) {
@@ -521,7 +522,7 @@ Yv *build_resolve(Yv *path, int allow_exec, Yv *pkgs, Yv *roots) {
 Yv *std_order(Yv *names) {
     Yv *all = std_unit_names();
     Yv *out = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(all)) {
         Yv *nm = ya_get(all, i);
         if (pk_has(names, nm)) {
@@ -535,7 +536,7 @@ Yv *std_order(Yv *names) {
 
 Yv *longs_text(Yv *xs) {
     Yv *out = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(xs)) {
         out = ya_push(out, ys_long(yv_l(ya_get(xs, i))));
         i = i + 1;
@@ -543,7 +544,7 @@ Yv *longs_text(Yv *xs) {
     return ys_join(out, ys(""));
 }
 
-Yv *build_key(Yv *cid, Yv *name, long base, int allow_exec, Yv *nr,
+Yv *build_key(Yv *cid, Yv *name, ylong base, int allow_exec, Yv *nr,
               Yv *units) {
     Yv *h = pk_hash_new();
     pk_hash_str(h, cid);
@@ -573,7 +574,7 @@ Yv *build_key(Yv *cid, Yv *name, long base, int allow_exec, Yv *nr,
     pk_hash_str(h, ys_join(yr_get(nr, "std"), ys(",")));
     Yv *pkgs = yr_get(nr, "pkgs");
     pk_hash_str(h, ys_join(pkgs, ys(",")));
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(units)) {
         Yv *u = ya_get(units, i);
         if (pk_has(pkgs, yr_get(u, "name"))) {
@@ -587,13 +588,13 @@ Yv *build_key(Yv *cid, Yv *name, long base, int allow_exec, Yv *nr,
 
 Yv *build_reach(Yv *direct, Yv *pkgs, Yv *nrs) {
     Yv *want = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(direct)) {
         want = ya_push(want, ya_get(direct, i));
         i = i + 1;
     }
     Yv *reach = yav(0);
-    long k = 0;
+    ylong k = 0;
     while (k < yv_len(pkgs)) {
         reach = ya_push(reach, yv_bool(0));
         k = k + 1;
@@ -605,7 +606,7 @@ Yv *build_reach(Yv *direct, Yv *pkgs, Yv *nrs) {
             ya_set(reach, k, yv_bool(1));
             Yv *nr = ya_get(nrs, k);
             Yv *imports = yr_get(nr, "pkgs");
-            long j = 0;
+            ylong j = 0;
             while (j < yv_len(imports)) {
                 want = ya_push(want, ya_get(imports, j));
                 j = j + 1;
@@ -678,7 +679,7 @@ static Yv *warn_path(Yv *odir, Yv *name, Yv *key) {
  * opening that path gives the binary itself, a megabyte of it. */
 static Yv *self_exe(void) {
     char buf[4096];
-    long n = (long)readlink("/proc/self/exe", buf, sizeof(buf));
+    ylong n = (ylong)readlink("/proc/self/exe", buf, sizeof(buf));
     if (n <= 0) {
         return ys("");
     } else {
@@ -687,7 +688,7 @@ static Yv *self_exe(void) {
 }
 
 /* The flags a child needs to compile its package exactly as this run would. */
-static Yv *build_child_flags(int debug, int nowarn, long wlevel, int allow_exec) {
+static Yv *build_child_flags(int debug, int nowarn, ylong wlevel, int allow_exec) {
     Yv *out = ys("");
     if (debug) { out = ys_cat(out, ys(" -g")); }
     if (nowarn) { out = ys_cat(out, ys(" -w")); }
@@ -703,9 +704,9 @@ static Yv *build_child_flags(int debug, int nowarn, long wlevel, int allow_exec)
 }
 
 /* Where `name` sits in the package order, or -1. */
-static long pkg_index(Yv *pkgs, Yv *name) {
-    long at = -1;
-    long i = 0;
+static ylong pkg_index(Yv *pkgs, Yv *name) {
+    ylong at = -1;
+    ylong i = 0;
     while (i < yv_len(pkgs)) {
         if (ys_eq(yr_get(ya_get(pkgs, i), "name"), name)) { at = i; }
         i = i + 1;
@@ -719,7 +720,7 @@ static long pkg_index(Yv *pkgs, Yv *name) {
  * so those units are the ones the loop would have compiled. The unit order is
  * the topological one, so each dependency's own key hashes the same
  * interfaces the loop gave it. */
-long build_one(Yv *dir, Yv *one, int debug, int nowarn, long wlevel,
+ylong build_one(Yv *dir, Yv *one, int debug, int nowarn, ylong wlevel,
                int allow_exec, int std_src) {
     /* `debug` and `nowarn` are part of the driver's one uniform build
      * signature, and neither applies to a single package's object: a package
@@ -732,7 +733,7 @@ long build_one(Yv *dir, Yv *one, int debug, int nowarn, long wlevel,
     Yv *g = pk_load(dir);
     Yv *pkgs = yr_get(g, "pkgs");
     Yv *odir = ys_cat(pk_join(dir, ys("build")), ys("/obj"));
-    long target = pkg_index(pkgs, one);
+    ylong target = pkg_index(pkgs, one);
     if (target < 0) {
         puts_(ys_cat(ys_cat(ys_cat(ys("error: no package '"), one),
                            ys("' in ")),
@@ -748,13 +749,13 @@ long build_one(Yv *dir, Yv *one, int debug, int nowarn, long wlevel,
     }
     Yv *want = yr_get(ya_get(pkgs, target), "deps");
     Yv *units = yav(0);
-    long k = 0;
+    ylong k = 0;
     while (k < target) {
         Yv *p = ya_get(pkgs, k);
         if (pk_has(want, yr_get(p, "name"))) {
             Yv *nr = build_resolve(yr_get(p, "lib"), allow_exec,
                                    yr_get(p, "deps"), yr_get(p, "roots"));
-            long base = 5000000000L + k * 1000000000L;
+            ylong base = 5000000000L + k * 1000000000L;
             Yv *key = build_key(cid, yr_get(p, "name"), base, allow_exec, nr,
                                 units);
             Yv *ot = read_file(ys_cat(ys_cat(ys_cat(odir, ys("/")),
@@ -781,7 +782,7 @@ long build_one(Yv *dir, Yv *one, int debug, int nowarn, long wlevel,
     Yv *p = ya_get(pkgs, target);
     Yv *nr = build_resolve(yr_get(p, "lib"), allow_exec, yr_get(p, "deps"),
                            yr_get(p, "roots"));
-    long base = 5000000000L + target * 1000000000L;
+    ylong base = 5000000000L + target * 1000000000L;
     Yv *key = build_key(cid, yr_get(p, "name"), base, allow_exec, nr, units);
     Yv *su = std_units(std_order(yr_get(nr, "std")), pack);
     Yv *ast = parse_program(tokenize(yr_get(nr, "src")));
@@ -812,10 +813,10 @@ long build_one(Yv *dir, Yv *one, int debug, int nowarn, long wlevel,
  * more than the count). A
  * package whose object file is already there is left to the loop, so a
  * rebuild that compiles nothing spawns nothing either. */
-static long build_dispatch_level(Yv *dir, Yv *pkgs, Yv *odir, long lo, long hi,
-                                 int debug, int nowarn, long wlevel,
+static ylong build_dispatch_level(Yv *dir, Yv *pkgs, Yv *odir, ylong lo, ylong hi,
+                                 int debug, int nowarn, ylong wlevel,
                                  int allow_exec, int std_src) {
-    long n = 0;
+    ylong n = 0;
     /* --std-src has no pack, so a child would compile the std units from
      * source before its own package: far more than the package costs. */
     if (!std_src && hi - lo > 1) {
@@ -824,8 +825,8 @@ static long build_dispatch_level(Yv *dir, Yv *pkgs, Yv *odir, long lo, long hi,
             Yv *flags = build_child_flags(debug, nowarn, wlevel, allow_exec);
             Yv *dirarg = ys("");
             Yv *wave = yav(0);
-            long k = lo;
-            long w;
+            ylong k = lo;
+            ylong w;
             if (!ys_eq_lit(dir, ".")) {
                 dirarg = ys_cat(ys(" "), build_q(dir));
             }
@@ -839,8 +840,8 @@ static long build_dispatch_level(Yv *dir, Yv *pkgs, Yv *odir, long lo, long hi,
             }
             w = 0;
             while (w < yv_len(wave)) {
-                long take = yv_len(wave) - w;
-                long c = 0;
+                ylong take = yv_len(wave) - w;
+                ylong c = 0;
                 Yv *cmd = ys("");
                 if (take > BUILD_JOBS) { take = BUILD_JOBS; }
                 while (c < take) {
@@ -861,7 +862,7 @@ static long build_dispatch_level(Yv *dir, Yv *pkgs, Yv *odir, long lo, long hi,
     }
     return n;
 }
-long build_project(Yv *dir, int debug, int nowarn, long wlevel,
+ylong build_project(Yv *dir, int debug, int nowarn, ylong wlevel,
                    int allow_exec, int std_src) {
     Yv *g = pk_load(dir);
     Yv *bins = yr_get(g, "bins");
@@ -878,7 +879,7 @@ long build_project(Yv *dir, int debug, int nowarn, long wlevel,
     pk_mkdir(odir);
 
     Yv *nrs = yav(0);
-    long k = 0;
+    ylong k = 0;
     while (k < yv_len(pkgs)) {
         Yv *p = ya_get(pkgs, k);
         nrs = ya_push(nrs, build_resolve(yr_get(p, "lib"), allow_exec,
@@ -887,7 +888,7 @@ long build_project(Yv *dir, int debug, int nowarn, long wlevel,
     }
     Yv *bdeps = yav(0);
     Yv *gdeps = yr_get(g, "deps");
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(gdeps)) {
         bdeps = ya_push(bdeps, ya_get(gdeps, i));
         i = i + 1;
@@ -930,11 +931,11 @@ long build_project(Yv *dir, int debug, int nowarn, long wlevel,
          * what is already compiled (every dependency has the lower index). A
          * level wider than one package goes out to child compilers, and the
          * loop below then reads their objects (build_dispatch_level). */
-        long hi = k;
+        ylong hi = k;
         int scanning = 1;
         while (scanning && hi < yv_len(pkgs)) {
             Yv *deps = yr_get(ya_get(pkgs, hi), "deps");
-            long d = 0;
+            ylong d = 0;
             int ready = 1;
             while (d < yv_len(deps)) {
                 if (pkg_index(pkgs, ya_get(deps, d)) >= k) { ready = 0; }
@@ -951,7 +952,7 @@ long build_project(Yv *dir, int debug, int nowarn, long wlevel,
         while (k < hi) {
         Yv *p = ya_get(pkgs, k);
         Yv *nr = ya_get(nrs, k);
-        long base = 5000000000L + k * 1000000000L;
+        ylong base = 5000000000L + k * 1000000000L;
         Yv *key = build_key(cid, yr_get(p, "name"), base, allow_exec, nr, units);
         Yv *opath = ys_cat(ys_cat(odir, ys("/")),
                            ys_cat(yr_get(p, "name"), ys(".yo")));
@@ -1019,7 +1020,7 @@ long build_project(Yv *dir, int debug, int nowarn, long wlevel,
                 linked = ya_push(linked, ya_get(units, k));
                 Yv *pn = ya_get(nrs, k);
                 Yv *pstd = yr_get(pn, "std");
-                long j = 0;
+                ylong j = 0;
                 while (j < yv_len(pstd)) {
                     lneeds = ya_push(lneeds, ya_get(pstd, j));
                     j = j + 1;
@@ -1074,10 +1075,10 @@ long build_project(Yv *dir, int debug, int nowarn, long wlevel,
  * from one file, so line numbers survive the round trip and the markers do not
  * move anything: comments never reach the lexer, so compiling a dump gives the
  * same bytes as compiling the file it came from. */
-static long dump_source(Yv *src, Yv *origin) {
+static ylong dump_source(Yv *src, Yv *origin) {
     Yv *lines = ys_split(src, ys("\n"));
     Yv *prev = ys("\x01none");
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(lines)) {
         Yv *l = ya_get(lines, i);
         Yv *at = origin_at(origin, i + 1, 0);
@@ -1092,7 +1093,7 @@ static long dump_source(Yv *src, Yv *origin) {
     return 0;
 }
 
-long y_main(Yv *cmdline) {
+ylong y_main(Yv *cmdline) {
     /* tags.y writes its tag numbers out twice (K for the code, KTAGS for
      * diagnostics); ~4k instructions to prove the two still agree, once. */
     if (!tags_agree()) {
@@ -1163,7 +1164,7 @@ long y_main(Yv *cmdline) {
             (void)meta_begin();
             /* get base dir from file path (use last slash, like C compiler's
              * strrchr) */
-            long last_slash = ys_last_index_of(file, ys("/"));
+            ylong last_slash = ys_last_index_of(file, ys("/"));
             Yv *base_dir = ys(".");
             if (last_slash >= 0) {
                 base_dir = ys_slice(file, 0, last_slash);
@@ -1171,10 +1172,10 @@ long y_main(Yv *cmdline) {
             }
 
             /* splice imports, tokenize, parse, compile to assembly */
-            long t0 = clock_us();
-            long h0 = heap_used();
-            long tstart = t0;
-            long hstart = h0;
+            ylong t0 = clock_us();
+            ylong h0 = heap_used();
+            ylong tstart = t0;
+            ylong hstart = h0;
             Yv *dt = yav(0);
             Yv *nr = native_resolve_x(src2, base_dir, 0,
                                       yv_b(yr_get(pargs, "allow_exec")), file);
@@ -1220,7 +1221,7 @@ long y_main(Yv *cmdline) {
              * typecheck, lint, emit_fns, emit_start, asm_text); splice them
              * in. */
             Yv *sub = yr_get(r, "times");
-            long si = 0;
+            ylong si = 0;
             while (si < yv_len(sub)) {
                 Yv *se = ya_get(sub, si);
                 dt = ya_push(dt, se);
@@ -1231,7 +1232,7 @@ long y_main(Yv *cmdline) {
             }
             t0 = clock_us();
             h0 = heap_used();
-            long rok = yv_b(yr_get(r, "ok"));
+            ylong rok = yv_b(yr_get(r, "ok"));
             if (!rok) {
                 print_native_errors(yr_get(r, "errors"), nrorigin, 1);
                 exit_(1);
@@ -1290,13 +1291,13 @@ long y_main(Yv *cmdline) {
                 /* ycc_assemble reports its own sub-phases: a:split,
                  * a:encode, a:link, then l:labmap, l:patch, l:elf. */
                 Yv *asub = yr_get(ab, "times");
-                long ai = 0;
+                ylong ai = 0;
                 while (ai < yv_len(asub)) {
                     Yv *ae = ya_get(asub, ai);
                     dt = ya_push(dt, ae);
                     ai = ai + 1;
                 }
-                long abok = yv_b(yr_get(ab, "ok"));
+                ylong abok = yv_b(yr_get(ab, "ok"));
                 if (!abok) {
                     puts_(ys_cat(ys("error: assemble: "),
                                  ys_cat(yr_get(ab, "error"), ys("\n"))));

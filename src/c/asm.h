@@ -17,6 +17,7 @@
 #ifndef ASM_H
 #define ASM_H
 
+#include "ylong.h"
 #include "yv.h"
 
 Yv *asm_assemble(Yv *parts, int debug);
@@ -25,12 +26,12 @@ Yv *ycc_assemble(Yv *parts, int debug);
  * lines its IR_TEXT items index in `txt`), or a piece of assembly text. A
  * record is a Yv* here, so LinkPart has no declaration of its own -- the
  * export in asm.y is for the Y side's callers. */
-Yv *part_ir(Yv *ir, Yv *txt, long fno, int loc);
+Yv *part_ir(Yv *ir, Yv *txt, ylong fno, int loc);
 Yv *part_text(Yv *text);
 
-Yv *labmap_new(long cap);
-long hash_str(Yv *s);   /* the name hash, and an object's checksum */
-Yv *labmap_put(Yv *m, Yv *name, long sec, long off);
+Yv *labmap_new(ylong cap);
+ylong hash_str(Yv *s);   /* the name hash, and an object's checksum */
+Yv *labmap_put(Yv *m, Yv *name, ylong sec, ylong off);
 Yv *labmap_get(Yv *m, Yv *name);
 
 #endif /* ASM_H */

@@ -24,12 +24,13 @@
  * The table is per process and never reset: a name's id only has to agree with
  * itself, and a unit compiled from the pack has names, not ids (see Unit). */
 
+#include "ylong.h"
 #include "labels.h"
 #include "asm.h"
 
 static Yv *lbl_names;
 static Yv *lbl_ix;
-static long lbl_next;
+static ylong lbl_next;
 
 /* Re-index every name at four times the old size. labmap_put does not grow (a
  * full table drops entries), so the caller refills before it is three quarters
@@ -37,9 +38,9 @@ static long lbl_next;
  * builds one record per slot, so a table sized for ycc.y costs every small
  * compile 1,024 of them (measured: +1.5% of a hello.y compile, half the cost
  * of stage 1). */
-static void lbl_reindex(long cap) {
+static void lbl_reindex(ylong cap) {
     Yv *m = labmap_new(cap);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(lbl_names)) {
         Yv *r = labmap_put(m, ya_get(lbl_names, i), 1, i);
         m = yr_get(r, "map");
@@ -62,7 +63,7 @@ Yv *lbl_new(Yv *name) {
     } else {
         Yv *r = labmap_put(lbl_ix, name, 1, lbl_next);
         lbl_ix = yr_get(r, "map");
-        long id = lbl_next;
+        ylong id = lbl_next;
         lbl_names = ya_push(lbl_names, name);
         lbl_next = lbl_next + 1;
         return yv_long(id);
@@ -75,7 +76,7 @@ Yv *lbl_new(Yv *name) {
  * again -- so it skips the table (measured: interning every label costs
  * +1.9% of a compile; skipping the locals' share of it is most of that). */
 Yv *lbl_fresh(Yv *name) {
-    long id = lbl_next;
+    ylong id = lbl_next;
     lbl_names = ya_push(lbl_names, name);
     lbl_next = lbl_next + 1;
     return yv_long(id);
@@ -84,6 +85,6 @@ Yv *lbl_fresh(Yv *name) {
 /* The name of a label; "" for -1, which is what a slot with no label (a local,
  * a mark) carries. */
 Yv *lname(Yv *id) {
-    long i = yv_l(id);
+    ylong i = yv_l(id);
     if (i < 0) { return ys(""); } else { return ya_get(lbl_names, i); }
 }

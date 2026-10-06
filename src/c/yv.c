@@ -7,6 +7,7 @@
  * maps are shared references. The two compilers must agree, so anything
  * changed here moves the reference semantics `make ycc` compares against.
  */
+#include "ylong.h"
 #include "yv.h"
 #include "tags.h"
 
@@ -19,7 +20,7 @@
 #include "host.h"
 #include <unistd.h>
 
-static long g_heap_used = 0;
+static ylong g_heap_used = 0;
 
 /* Nothing is ever freed, so a compile that runs out of memory says so and
    stops -- with the same text, on the same stream, and the same status as the
@@ -48,7 +49,7 @@ static size_t g_pool_left = 0;
 #endif
 
 static void *yalloc(size_t n) {
-    g_heap_used += (long)n;
+    g_heap_used += (ylong)n;
 #if YV_POOL
     size_t r = (n + 7) & ~(size_t)7;
     if (r == 0) r = 8;
@@ -118,7 +119,7 @@ Yv *yv_bool(int b) {
     return b ? &g_true : &g_false;
 }
 
-Yv *yv_long(long l) {
+Yv *yv_long(ylong l) {
     if (l >= YV_LONG_LO && l < YV_LONG_HI) {
         Yv **slot = &g_longs[l - YV_LONG_LO];
         if (!*slot) {
@@ -170,7 +171,7 @@ Yv *ys_fmt(const char *fmt, ...) {
     return ys_cstr(buf);
 }
 
-long yv_l(const Yv *v) { return v && v->tag == Y_LONG ? v->u.l : 0; }
+ylong yv_l(const Yv *v) { return v && v->tag == Y_LONG ? v->u.l : 0; }
 int yv_b(const Yv *v) { return v && v->tag == Y_BOOL ? v->u.b : 0; }
 double yv_f(const Yv *v) {
     if (!v) return 0.0;
@@ -202,12 +203,12 @@ Yv *yv_unwrap(const Yv *v) {
     return (Yv *)v;
 }
 
-long yv_len(const Yv *v) {
+ylong yv_len(const Yv *v) {
     if (!v) return 0;
     switch (v->tag) {
-    case Y_STR: return (long)v->u.s.n;
-    case Y_ARR: return (long)v->u.a.len;
-    case Y_REC: return (long)v->u.r.len;
+    case Y_STR: return (ylong)v->u.s.n;
+    case Y_ARR: return (ylong)v->u.a.len;
+    case Y_REC: return (ylong)v->u.r.len;
     default: return 0;
     }
 }
@@ -229,9 +230,9 @@ Yv *ys_cat(const Yv *a, const Yv *b) {
 
 /* s[lo:hi]: half-open and clamped, like the native y_str_slice — lo < 0
  * counts from 0, hi > len stops at len, hi <= lo is "". */
-Yv *ys_slice(const Yv *s, long lo, long hi) {
+Yv *ys_slice(const Yv *s, ylong lo, ylong hi) {
     if (!s || s->tag != Y_STR) { return ys(""); }
-    long n = (long)s->u.s.n;
+    ylong n = (ylong)s->u.s.n;
     if (lo < 0) lo = 0;
     if (hi > n) hi = n;
     if (hi <= lo) { return ys(""); }
@@ -239,8 +240,8 @@ Yv *ys_slice(const Yv *s, long lo, long hi) {
 }
 
 /* s[lo:] (the omitted bound is len(s)) */
-Yv *ys_slice_from(const Yv *s, long lo) {
-    return ys_slice(s, lo, (long)yv_len(s));
+Yv *ys_slice_from(const Yv *s, ylong lo) {
+    return ys_slice(s, lo, (ylong)yv_len(s));
 }
 
 int ys_eq(const Yv *a, const Yv *b) {
@@ -347,17 +348,17 @@ Yv *ys_split(const Yv *s, const Yv *delim) {
     return out;
 }
 
-long ys_index_of(const Yv *s, const Yv *sub) {
+ylong ys_index_of(const Yv *s, const Yv *sub) {
     if (!s || s->tag != Y_STR || !sub || sub->tag != Y_STR) { return -1; }
     size_t i = ymem_find(s->u.s.p, s->u.s.n, sub->u.s.p, sub->u.s.n, 0);
-    return i == (size_t)-1 ? -1 : (long)i;
+    return i == (size_t)-1 ? -1 : (ylong)i;
 }
 
-long ys_last_index_of(const Yv *s, const Yv *sub) {
+ylong ys_last_index_of(const Yv *s, const Yv *sub) {
     if (!s || s->tag != Y_STR || !sub || sub->tag != Y_STR) { return -1; }
     size_t n = s->u.s.n, m = sub->u.s.n;
     if (m == 0) { return -1; } /* an empty needle never matches (rt.y) */
-    for (long i = (long)(n - m); i >= 0; i--) {
+    for (ylong i = (ylong)(n - m); i >= 0; i--) {
         if (memcmp(s->u.s.p + i, sub->u.s.p, m) == 0) { return i; }
     }
     return -1;
@@ -366,7 +367,7 @@ long ys_last_index_of(const Yv *s, const Yv *sub) {
 /* std/str.y's y_str_at / y_str_starts_with / y_str_ends_with. `at` past the
  * end of s is false rather than a trap (str.y), so a shorter string simply
  * does not match -- the same answer as the s[lo:hi] == lit it replaces. */
-int ys_at(const Yv *s, const Yv *p, long at) {
+int ys_at(const Yv *s, const Yv *p, ylong at) {
     if (!s || s->tag != Y_STR || !p || p->tag != Y_STR) { return 0; }
     size_t m = p->u.s.n;
     if (at < 0 || (size_t)at + m > s->u.s.n) { return 0; }
@@ -377,49 +378,49 @@ int ys_starts_with(const Yv *s, const Yv *p) { return ys_at(s, p, 0); }
 
 int ys_ends_with(const Yv *s, const Yv *p) {
     if (!s || s->tag != Y_STR || !p || p->tag != Y_STR) { return 0; }
-    return ys_at(s, p, (long)(s->u.s.n - p->u.s.n));
+    return ys_at(s, p, (ylong)(s->u.s.n - p->u.s.n));
 }
 
-long ys_ord(const Yv *x) {
+ylong ys_ord(const Yv *x) {
     if (!x || x->tag != Y_STR || x->u.s.n == 0) { return -1; }
-    return (long)(unsigned char)x->u.s.p[0];
+    return (ylong)(unsigned char)x->u.s.p[0];
 }
 
-long ys_byte_at(const Yv *s, long i) {
+ylong ys_byte_at(const Yv *s, ylong i) {
     if (!s || s->tag != Y_STR || i < 0 || (size_t)i >= s->u.s.n) {
         fprintf(stderr, "runtime error: index out of bounds\n");
         exit(1);
     }
-    return (long)(unsigned char)s->u.s.p[i];
+    return (ylong)(unsigned char)s->u.s.p[i];
 }
 
-long ys_byte_peek(const Yv *s, long i) {
+ylong ys_byte_peek(const Yv *s, ylong i) {
     if (!s || s->tag != Y_STR || i < 0 || (size_t)i >= s->u.s.n) {
         return -1;
     }
-    return (long)(unsigned char)s->u.s.p[i];
+    return (ylong)(unsigned char)s->u.s.p[i];
 }
 
-Yv *ys_chr(long v) {
+Yv *ys_chr(ylong v) {
     char buf[2];
     buf[0] = (char)(v & 0xFF);
     buf[1] = '\0';
     return ys_n(buf, 1);
 }
 
-Yv *ys_long(long v) {
+Yv *ys_long(ylong v) {
     char buf[32];
-    snprintf(buf, sizeof(buf), "%ld", v);
+    snprintf(buf, sizeof(buf), "%lld", (long long)v);
     return ys_cstr(buf);
 }
 
-long ys_tolong(const Yv *x) {
+ylong ys_tolong(const Yv *x) {
     if (!x) return 0;
     if (x->tag == Y_LONG) return x->u.l;
-    if (x->tag == Y_FLOAT) return (long)x->u.f;
+    if (x->tag == Y_FLOAT) return (ylong)x->u.f;
     if (x->tag != Y_STR) return 0;
     char *end;
-    long v = strtol(x->u.s.p, &end, 10);
+    ylong v = strtoll(x->u.s.p, &end, 10);
     if (end == x->u.s.p) return 0;
     return v;
 }
@@ -560,17 +561,17 @@ Yv *yavs(Yv *first, ...) {
     return v;
 }
 
-Yv *ya_rep(Yv *x, long n) {
+Yv *ya_rep(Yv *x, ylong n) {
     Yv *v = yarr_new();
     if (n > 0) {
         ya_grow(v, (size_t)n);
-        for (long i = 0; i < n; i++) v->u.a.items[i] = x;
+        for (ylong i = 0; i < n; i++) v->u.a.items[i] = x;
         v->u.a.len = (size_t)n;
     }
     return v;
 }
 
-Yv *ya_get(const Yv *a, long i) {
+Yv *ya_get(const Yv *a, ylong i) {
     if (!a || a->tag != Y_ARR || i < 0 || (size_t)i >= a->u.a.len) {
         fprintf(stderr, "runtime error: index out of bounds\n");
         exit(1);
@@ -578,7 +579,7 @@ Yv *ya_get(const Yv *a, long i) {
     return a->u.a.items[i];
 }
 
-void ya_set(Yv *a, long i, Yv *v) {
+void ya_set(Yv *a, ylong i, Yv *v) {
     if (!a || a->tag != Y_ARR || i < 0 || (size_t)i >= a->u.a.len) {
         fprintf(stderr, "runtime error: index out of bounds\n");
         exit(1);
@@ -593,18 +594,18 @@ Yv *ya_push(Yv *a, Yv *v) {
     return a;
 }
 
-Yv *ya_slice(const Yv *a, long lo, long hi) {
+Yv *ya_slice(const Yv *a, ylong lo, ylong hi) {
     Yv *v = yarr_new();
     if (!a || a->tag != Y_ARR) return v;
-    long n = (long)a->u.a.len;
+    ylong n = (ylong)a->u.a.len;
     if (lo < 0) lo = 0;
     if (lo > n) lo = n;
     if (hi < 0 || hi > n) hi = n;
     if (hi < lo) hi = lo;
-    long cnt = hi - lo;
+    ylong cnt = hi - lo;
     if (cnt > 0) {
         ya_grow(v, (size_t)cnt);
-        for (long i = 0; i < cnt; i++) v->u.a.items[i] = a->u.a.items[lo + i];
+        for (ylong i = 0; i < cnt; i++) v->u.a.items[i] = a->u.a.items[lo + i];
         v->u.a.len = (size_t)cnt;
     }
     return v;
@@ -736,7 +737,7 @@ void eputs_(const Yv *s) {
     fflush(stderr);
 }
 
-void exit_(long code) { exit((int)code); }
+void exit_(ylong code) { exit((int)code); }
 
 /* The whole stream, for an input that cannot be seeked: a fifo, a pipe, or
    /dev/stdin. read(2) on one of those has no size to ask for, which is why
@@ -781,7 +782,7 @@ Yv *read_file(const Yv *path) {
             return yv_none();
         }
     }
-    long sz = 0;
+    ylong sz = 0;
     if (fseek(f, 0, SEEK_END) != 0 || (sz = ftell(f)) < 0) {
         Yv *v = read_stream(f);
         fclose(f);
@@ -810,7 +811,7 @@ int remove_file(const Yv *path) {
     return unlink(path->u.s.p) == 0;
 }
 
-int write_bytes(const Yv *path, const Yv *bytearr, long mode) {
+int write_bytes(const Yv *path, const Yv *bytearr, ylong mode) {
     if (!path || path->tag != Y_STR || !bytearr || bytearr->tag != Y_ARR) return 0;
     size_t n = bytearr->u.a.len;
     char *buf = yalloc(n ? n : 1);
@@ -839,13 +840,13 @@ void yv_set_argv(int argc, char **argv) {
 
 Yv *argv_(void) { return g_argv ? g_argv : yav(0); }
 
-long clock_us(void) {
+ylong clock_us(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (long)ts.tv_sec * 1000000L + ts.tv_nsec / 1000;
+    return (ylong)ts.tv_sec * 1000000L + ts.tv_nsec / 1000;
 }
 
-long heap_used(void) { return g_heap_used; }
+ylong heap_used(void) { return g_heap_used; }
 
 Yv *bytes_of(const Yv *s) {
     Yv *v = yarr_new();
@@ -853,7 +854,7 @@ Yv *bytes_of(const Yv *s) {
     if (n) {
         ya_grow(v, n);
         for (size_t i = 0; i < n; i++)
-            v->u.a.items[i] = yv_long((long)(unsigned char)s->u.s.p[i]);
+            v->u.a.items[i] = yv_long((ylong)(unsigned char)s->u.s.p[i]);
         v->u.a.len = n;
     }
     return v;
@@ -871,6 +872,6 @@ Yv *from_bytes(const Yv *a) {
     return ys_n(buf, n);
 }
 
-long byte_len(const Yv *s) {
-    return (s && s->tag == Y_STR) ? (long)s->u.s.n : 0;
+ylong byte_len(const Yv *s) {
+    return (s && s->tag == Y_STR) ? (ylong)s->u.s.n : 0;
 }

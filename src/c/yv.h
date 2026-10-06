@@ -18,6 +18,7 @@
 #ifndef YV_H
 #define YV_H
 
+#include "ylong.h"
 #include <stddef.h>
 
 typedef enum { Y_NONE, Y_BOOL, Y_LONG, Y_FLOAT, Y_STR, Y_ARR, Y_REC } YTag;
@@ -28,7 +29,7 @@ struct Yv {
     YTag tag;
     union {
         int b;
-        long l;
+        ylong l;
         double f;
         struct {
             char *p;   /* NUL-terminated bytes (convenience) */
@@ -49,7 +50,7 @@ struct Yv {
 /* ── constructors ────────────────────────────────────────────────────── */
 Yv *yv_none(void);
 Yv *yv_bool(int v);
-Yv *yv_long(long v);
+Yv *yv_long(ylong v);
 Yv *yv_float(double v);
 /* Strings are byte strings with a length (a Y `str` may contain NUL).
  * For LITERALS `ys("...")` is a macro that keeps every byte, embedded NUL
@@ -98,7 +99,7 @@ Yv *ys_fmt(const char *fmt, ...);     /* formatted string (printf-style) */
 #endif
 
 /* boxed scalar accessors (unchecked; used at typed boundaries) */
-long yv_l(const Yv *v);
+ylong yv_l(const Yv *v);
 int yv_b(const Yv *v);
 double yv_f(const Yv *v);
 
@@ -107,36 +108,36 @@ int yv_truth(const Yv *v);            /* the value in an `if`/`while` */
 int yv_eq(const Yv *a, const Yv *b);  /* value equality (str by content) */
 int yv_is_none(const Yv *v);          /* `x == none` */
 Yv *yv_unwrap(const Yv *v);           /* unwrap(v): trap on none */
-long yv_len(const Yv *v);             /* str chars / array count / record fields */
+ylong yv_len(const Yv *v);             /* str chars / array count / record fields */
 
 /* ── strings ─────────────────────────────────────────────────────────── */
 Yv *ys_cat(const Yv *a, const Yv *b);
-Yv *ys_slice(const Yv *s, long lo, long hi);       /* s[lo:hi], clamped */
-Yv *ys_slice_from(const Yv *s, long lo);           /* s[lo:] */
+Yv *ys_slice(const Yv *s, ylong lo, ylong hi);       /* s[lo:hi], clamped */
+Yv *ys_slice_from(const Yv *s, ylong lo);           /* s[lo:] */
 int ys_eq(const Yv *a, const Yv *b);
 int ys_eq_lit(const Yv *a, const char *lit);
 int ys_cmp(const Yv *a, const Yv *b); /* strcmp sign: <str lexicographic> */
 Yv *ys_trim(const Yv *s);
 Yv *ys_join(const Yv *arr, const Yv *sep);   /* [str] join */
 Yv *ys_split(const Yv *s, const Yv *sep);    /* -> [str] */
-long ys_index_of(const Yv *s, const Yv *sub);
-long ys_last_index_of(const Yv *s, const Yv *sub);
+ylong ys_index_of(const Yv *s, const Yv *sub);
+ylong ys_last_index_of(const Yv *s, const Yv *sub);
 /* std/str.y's y_str_at / y_str_starts_with, as the C twin uses them:
  * `p` occurs in `s` at byte offset `at` (false past the end of s). */
-int ys_at(const Yv *s, const Yv *p, long at);
+int ys_at(const Yv *s, const Yv *p, ylong at);
 int ys_starts_with(const Yv *s, const Yv *p);
 int ys_ends_with(const Yv *s, const Yv *p);
-long ys_ord(const Yv *s);             /* first byte */
-long ys_byte_at(const Yv *s, long i); /* byte i (0..255); traps out of bounds */
-long ys_byte_peek(const Yv *s, long i); /* byte i, or -1 past either end:
+ylong ys_ord(const Yv *s);             /* first byte */
+ylong ys_byte_at(const Yv *s, ylong i); /* byte i (0..255); traps out of bounds */
+ylong ys_byte_peek(const Yv *s, ylong i); /* byte i, or -1 past either end:
                                            the clamped read s[i:i + 1] gives
                                            in Y (an empty slice), for the
                                            places that peek at what may be
                                            the byte after the last */
-Yv *ys_chr(long v);
+Yv *ys_chr(ylong v);
 Yv *ys_tostring(const Yv *v);         /* the format the native tostring prints */
-Yv *ys_long(long v);                  /* tostring of a long */
-long ys_tolong(const Yv *s);          /* string -> long (0 on garbage) */
+Yv *ys_long(ylong v);                  /* tostring of a long */
+ylong ys_tolong(const Yv *s);          /* string -> long (0 on garbage) */
 
 /* ── arrays (reference values) ───────────────────────────────────────── */
 /* [v0, v1, ...] from n values (no sentinel). n is the count, and the values
@@ -155,11 +156,11 @@ long ys_tolong(const Yv *s);          /* string -> long (0 on garbage) */
  */
 Yv *yav(size_t n, ...);
 Yv *yavs(Yv *first, ...);             /* NULL-terminated; no count to state */
-Yv *ya_rep(Yv *v, long n);            /* [v; n] */
-Yv *ya_get(const Yv *a, long i);      /* bounds-checked (exit on OOB) */
-void ya_set(Yv *a, long i, Yv *v);    /* bounds-checked */
+Yv *ya_rep(Yv *v, ylong n);            /* [v; n] */
+Yv *ya_get(const Yv *a, ylong i);      /* bounds-checked (exit on OOB) */
+void ya_set(Yv *a, ylong i, Yv *v);    /* bounds-checked */
 Yv *ya_push(Yv *a, Yv *v);            /* in place, returns a (the Y rule) */
-Yv *ya_slice(const Yv *a, long lo, long hi); /* new [T]; clamped */
+Yv *ya_slice(const Yv *a, ylong lo, ylong hi); /* new [T]; clamped */
 
 /* ── records (reference values, insertion-ordered) ───────────────────── */
 Yv *yr(size_t n, ...);                /* n (key, value) pairs (no sentinel) */
@@ -175,17 +176,17 @@ int yr_has(const Yv *m, const char *key);
  * does not currently reach. */
 void puts_(const Yv *s);              /* puts(s) */
 void eputs_(const Yv *s);             /* eputs(s) */
-void exit_(long code);                /* exit(code) */
+void exit_(ylong code);                /* exit(code) */
 Yv *read_file(const Yv *path);        /* str contents, or none (str?) */
 int write_file(const Yv *path, const Yv *data);
-int write_bytes(const Yv *path, const Yv *bytearr, long mode);
+int write_bytes(const Yv *path, const Yv *bytearr, ylong mode);
 int remove_file(const Yv *path);        /* remove_file(path): unlink(2) */
 void yv_set_argv(int argc, char **argv); /* the driver feeds argv() */
 Yv *argv_(void);                      /* [str] program arguments */
-long clock_us(void);
-long heap_used(void);
+ylong clock_us(void);
+ylong heap_used(void);
 Yv *bytes_of(const Yv *s);            /* bytes(s): str -> [byte] */
 Yv *from_bytes(const Yv *a);          /* from_bytes(b): [byte] -> str */
-long byte_len(const Yv *s);           /* byte_len(s) */
+ylong byte_len(const Yv *s);           /* byte_len(s) */
 
 #endif /* YV_H */

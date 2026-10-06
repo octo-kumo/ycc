@@ -27,6 +27,7 @@
 #ifndef TARGET_H
 #define TARGET_H
 
+#include "ylong.h"
 #include "yv.h"
 
 /* the Y twin's `let res_target = "linux";` — a Yv * global, because every

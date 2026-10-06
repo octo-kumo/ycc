@@ -19,6 +19,7 @@
  *
  * Parameters, loop variables, top-level bindings and any name starting
  * with `_` are exempt from the unused-binding rules. */
+#include "ylong.h"
 #include "lint.h"
 #include "tags.h"
 
@@ -37,83 +38,83 @@ typedef Yv *LintTy;
 
 /* ── module-local defs (forward) ─────────────────────────────────────── */
 static Yv *lint_cat(size_t n, ...);
-static long lint_warn(LintSt st, Yv *msg, long line, long col);
+static ylong lint_warn(LintSt st, Yv *msg, ylong line, ylong col);
 static Yv *lint_disp(Yv *name);
-static long lint_num(Yv *name);
-static long lint_mark(LintSt st, Yv *name, long bit);
-static long lint_note(LintSt st, Yv *name, Yv *kind, long line, long col,
+static ylong lint_num(Yv *name);
+static ylong lint_mark(LintSt st, Yv *name, ylong bit);
+static ylong lint_note(LintSt st, Yv *name, Yv *kind, ylong line, ylong col,
                       int scal, int fresh, int strf);
-static long lint_note_top(LintSt st, Yv *node);
-static long lint_top_first(LintSt st, Yv *d, long fid);
-static long lint_file_of(long ln);
+static ylong lint_note_top(LintSt st, Yv *node);
+static ylong lint_top_first(LintSt st, Yv *d, ylong fid);
+static ylong lint_file_of(ylong ln);
 static int lint_strheld(Yv *typ, Yv *v);
 static int lint_var_str(LintSt st, Yv *name);
-static long lint_loop_body(LintSt st, Yv *body);
-static long lint_stmts(LintSt st, Yv *stmts, int used, int top);
-static long lint_warn_at(LintSt st, Yv *msg, Yv *node);
-static long lint_warn_start(LintSt st, Yv *msg, Yv *node);
-static long lint_meta_top(LintSt st, Yv *stmts, Yv *ogen);
+static ylong lint_loop_body(LintSt st, Yv *body);
+static ylong lint_stmts(LintSt st, Yv *stmts, int used, int top);
+static ylong lint_warn_at(LintSt st, Yv *msg, Yv *node);
+static ylong lint_warn_start(LintSt st, Yv *msg, Yv *node);
+static ylong lint_meta_top(LintSt st, Yv *stmts, Yv *ogen);
 static int meta_gen(Yv *s, Yv *ogen);
-static long lint_stmt(LintSt st, Yv *s, int used, int top);
+static ylong lint_stmt(LintSt st, Yv *s, int used, int top);
 static int lint_code(Yv *s);
 static int lint_diverges(Yv *s);
 static int lint_any_diverges(Yv *stmts);
-static long lint_rets(LintSt st, Yv *stmts);
-static long lint_rets_node(LintSt st, Yv *node);
+static ylong lint_rets(LintSt st, Yv *stmts);
+static ylong lint_rets_node(LintSt st, Yv *node);
 static Yv *lint_binding(LintSt st, Yv *callee);
 static int lint_returns(LintSt st, Yv *callee);
 static Yv *lint_self(LintSt st, Yv *name);
-static long lint_def_body(LintSt st, Yv *name, Yv *v);
-static long lint_unused_call(LintSt st, Yv *node, int used, Yv *call);
-static long lint_unused_expr(LintSt st, Yv *node, int used);
-static long lint_node(LintSt st, Yv *node, int used);
-static long lint_one(LintSt st, Yv *node, int used);
-static long lint_list(LintSt st, Yv *nodes);
-static long lint_two(LintSt st, Yv *a, Yv *b);
-static long lint_id(LintSt st, Yv *node, int used);
-static long lint_un(LintSt st, Yv *node, int used);
-static long lint_bin(LintSt st, Yv *node, int used);
+static ylong lint_def_body(LintSt st, Yv *name, Yv *v);
+static ylong lint_unused_call(LintSt st, Yv *node, int used, Yv *call);
+static ylong lint_unused_expr(LintSt st, Yv *node, int used);
+static ylong lint_node(LintSt st, Yv *node, int used);
+static ylong lint_one(LintSt st, Yv *node, int used);
+static ylong lint_list(LintSt st, Yv *nodes);
+static ylong lint_two(LintSt st, Yv *a, Yv *b);
+static ylong lint_id(LintSt st, Yv *node, int used);
+static ylong lint_un(LintSt st, Yv *node, int used);
+static ylong lint_bin(LintSt st, Yv *node, int used);
 static int lint_same_id(Yv *l, Yv *r);
 static int lint_effect(Yv *node);
 static int lint_effect_logic(Yv *node);
 static int lint_zero(Yv *node);
 static int lint_zero_text(Yv *s);
-static long lint_if(LintSt st, Yv *node, int used);
+static ylong lint_if(LintSt st, Yv *node, int used);
 static int lint_empty_arm(Yv *n);
-static long lint_for(LintSt st, Yv *node);
-static long lint_func(LintSt st, Yv *node);
-static long lint_decl(LintSt st, Yv *node);
+static ylong lint_for(LintSt st, Yv *node);
+static ylong lint_func(LintSt st, Yv *node);
+static ylong lint_decl(LintSt st, Yv *node);
 static int lint_scal(Yv *typ, Yv *v);
 static int lint_fresh(Yv *v);
-static long lint_assign(LintSt st, Yv *node);
-static long lint_incdec(LintSt st, Yv *node, int used);
-static long lint_opassign(LintSt st, Yv *node, int used);
-static long lint_lit(LintSt st, Yv *node, Yv *what, Yv *kind);
-static int lint_seen(Yv *keys, long i);
-static long lint_vars(LintSt st);
+static ylong lint_assign(LintSt st, Yv *node);
+static ylong lint_incdec(LintSt st, Yv *node, int used);
+static ylong lint_opassign(LintSt st, Yv *node, int used);
+static ylong lint_lit(LintSt st, Yv *node, Yv *what, Yv *kind);
+static int lint_seen(Yv *keys, ylong i);
+static ylong lint_vars(LintSt st);
 static Yv *lint_word(Yv *kind);
-static long lint_types(LintSt st, Yv *stmts);
-static long lint_tw_list(LintTy t, Yv *nodes);
-static long lint_tw(LintTy t, Yv *node);
-static long lint_tw_one(LintTy t, Yv *node);
-static long lint_tw_decl(LintTy t, Yv *node);
-static long lint_tw_func(LintTy t, Yv *node);
-static long lint_root(LintTy t, Yv *typ, long line, long col, Yv *alias);
-static Yv *lint_mod_of(long ln);
+static ylong lint_types(LintSt st, Yv *stmts);
+static ylong lint_tw_list(LintTy t, Yv *nodes);
+static ylong lint_tw(LintTy t, Yv *node);
+static ylong lint_tw_one(LintTy t, Yv *node);
+static ylong lint_tw_decl(LintTy t, Yv *node);
+static ylong lint_tw_func(LintTy t, Yv *node);
+static ylong lint_root(LintTy t, Yv *typ, ylong line, ylong col, Yv *alias);
+static Yv *lint_mod_of(ylong ln);
 static int lint_cand(Yv *ty);
-static Yv *lint_tk(LintTy t, Yv *ty, int rec, long parent);
-static Yv *lint_tk_list(LintTy t, Yv *ts, int rec, long parent);
+static Yv *lint_tk(LintTy t, Yv *ty, int rec, ylong parent);
+static Yv *lint_tk_list(LintTy t, Yv *ts, int rec, ylong parent);
 static Yv *lint_tk_name(LintTy t, Yv *name);
-static Yv *lint_tk_rec(LintTy t, Yv *ty, int rec, long parent);
-static Yv *lint_tk_union(LintTy t, Yv *ty, int rec, long parent);
-static long lint_tk_members(LintTy t, Yv *u, int rec, long me, Yv *parts);
-static long lint_union_alias(LintTy t, Yv *m);
+static Yv *lint_tk_rec(LintTy t, Yv *ty, int rec, ylong parent);
+static Yv *lint_tk_union(LintTy t, Yv *ty, int rec, ylong parent);
+static ylong lint_tk_members(LintTy t, Yv *u, int rec, ylong me, Yv *parts);
+static ylong lint_union_alias(LintTy t, Yv *m);
 static int lint_is_union(Yv *ty);
-static long lint_occ(LintTy t, Yv *ty, long parent);
-static long lint_occ_key(LintTy t, long i, Yv *key);
+static ylong lint_occ(LintTy t, Yv *ty, ylong parent);
+static ylong lint_occ_key(LintTy t, ylong i, Yv *key);
 static Yv *lint_sort_uniq(Yv *xs);
-static long lint_report(LintSt st, LintTy t);
-static int lint_rep(Yv *occs, long i);
+static ylong lint_report(LintSt st, LintTy t);
+static int lint_rep(Yv *occs, ylong i);
 static Yv *lint_sorted(Yv *ws);
 static Yv *lint_msort(Yv *ws);
 static int lint_before(Diag a, Diag b);
@@ -146,7 +147,7 @@ static Yv *lint_fmods;
  * checked), sorted by position; ofile and fmods say which lines are a
  * module's. `ogen` says which lines a meta block generated (see
  * lint_meta_top); it is empty when the unit has no blocks. */
-Yv *lint_unit(Yv *ast, Yv *ast3, Yv *ofile, Yv *fmods, long wlevel, Yv *ogen) {
+Yv *lint_unit(Yv *ast, Yv *ast3, Yv *ofile, Yv *fmods, ylong wlevel, Yv *ogen) {
     lint_ofile = ofile;
     lint_fmods = fmods;
     Yv *warns = yav(0);
@@ -176,7 +177,7 @@ Yv *lint_unit(Yv *ast, Yv *ast3, Yv *ofile, Yv *fmods, long wlevel, Yv *ogen) {
  * indexed by the source line, and lint's own map says which source line a
  * statement sits on. */
 static int meta_gen(Yv *s, Yv *ogen) {
-    long ln = yv_l(yr_get(s, "line")) - 1;
+    ylong ln = yv_l(yr_get(s, "line")) - 1;
     if (ln < 0 || ln >= yv_len(ogen)) { return 0; }
     else { return yv_truth(ya_get(ogen, ln)); }
 }
@@ -192,8 +193,8 @@ static int meta_gen(Yv *s, Yv *ogen) {
  * which the program runs once and the generator never ran at all: `ogen`
  * (indexed by the statement's line) says which lines those are. Anything else
  * is a statement with side effects the reader cannot see running twice. */
-static long lint_meta_top(LintSt st, Yv *stmts, Yv *ogen) {
-    long i = 0;
+static ylong lint_meta_top(LintSt st, Yv *stmts, Yv *ogen) {
+    ylong i = 0;
     while (i < yv_len(stmts)) {
         Yv *s = ya_get(stmts, i);
         if (yv_l(yr_get(s, "k")) != K_decl && yv_l(yr_get(s, "k")) != K_void &&
@@ -205,7 +206,7 @@ static long lint_meta_top(LintSt st, Yv *stmts, Yv *ogen) {
     return 0;
 }
 
-static long lint_warn(LintSt st, Yv *msg, long line, long col) {
+static ylong lint_warn(LintSt st, Yv *msg, ylong line, ylong col) {
     (void)ya_push(yr_get(st, "warns"), yr(3, "msg", msg, "line",
                                           yv_long(line), "col",
                                           yv_long(col)));
@@ -217,7 +218,7 @@ static long lint_warn(LintSt st, Yv *msg, long line, long col) {
 /* The name a binding was written with: `orig$N` less `$N` (and a shadowed
  * def's `$shadowI`); "" for one the parser made up (a match subject). */
 static Yv *lint_disp(Yv *name) {
-    long d = ys_index_of(name, ys("$"));
+    ylong d = ys_index_of(name, ys("$"));
     if (d < 0) {
         return name;
     } else {
@@ -227,13 +228,13 @@ static Yv *lint_disp(Yv *name) {
 
 /* N of a renamed binding `orig$N`, or 0 for a name rename.c left alone (a
  * builtin, `self`, a package's qualified name). N counts from 1. */
-static long lint_num(Yv *name) {
-    long i = yv_len(name) - 1;
-    long v = 0;
-    long m = 1;
+static ylong lint_num(Yv *name) {
+    ylong i = yv_len(name) - 1;
+    ylong v = 0;
+    ylong m = 1;
     int go = 1;
     while (go && i >= 0) {
-        long c = ys_byte_at(name, i);
+        ylong c = ys_byte_at(name, i);
         if (c >= 48 && c <= 57) {
             v = v + (c - '0') * m;
             m = m * 10;
@@ -251,8 +252,8 @@ static long lint_num(Yv *name) {
 
 /* What happened to a binding, by its N: 1 read, 2 assigned, 4 grown
  * (`+=`/`*=`, which on an array is visible through every alias). */
-static long lint_mark(LintSt st, Yv *name, long bit) {
-    long n = lint_num(name);
+static ylong lint_mark(LintSt st, Yv *name, ylong bit) {
+    ylong n = lint_num(name);
     if (n > 0) {
         Yv *fl = yr_get(st, "flags");
         while (yv_len(fl) <= n) {
@@ -266,7 +267,7 @@ static long lint_mark(LintSt st, Yv *name, long bit) {
 /* A local binding (let, const, nested def), checked for use at the end.
  * `scal`: it holds a number, string or bool, whose `+=` makes a new value
  * only it sees. `fresh`: it starts as an array literal no one else holds. */
-static long lint_note(LintSt st, Yv *name, Yv *kind, long line, long col,
+static ylong lint_note(LintSt st, Yv *name, Yv *kind, ylong line, ylong col,
                       int scal, int fresh, int strf) {
     Yv *d = lint_disp(name);
     if (!ys_eq_lit(d, "") && ys_byte_at(d, 0) != 95 &&
@@ -285,12 +286,12 @@ static long lint_note(LintSt st, Yv *name, Yv *kind, long line, long col,
  * check needs to know whether the name holds a string, and marked `top` so
  * lint_vars leaves it alone -- a global that nothing in this unit reads is
  * not an unused variable (another unit of the program may read it). */
-static long lint_note_top(LintSt st, Yv *node) {
+static ylong lint_note_top(LintSt st, Yv *node) {
     Yv *name = yr_get(node, "name");
     Yv *v = yr_get(node, "v");
     Yv *d = lint_disp(name);
-    long line = yv_l(yr_get(node, "line"));
-    long col = yv_l(yr_get(node, "col"));
+    ylong line = yv_l(yr_get(node, "line"));
+    ylong col = yv_l(yr_get(node, "col"));
     if (!ys_eq_lit(d, "") && ys_byte_at(d, 0) != 95) {
         /* A name bound twice at the top level is legal -- the later
          * declaration shadows the earlier one, which t14_shadow, t30 and
@@ -302,12 +303,12 @@ static long lint_note_top(LintSt st, Yv *node) {
          * not the one called. A warning is the whole of it (the same shape
          * the duplicate type alias gets); find_dup still rejects the
          * cross-file case outright, where there is no shadowing to mean. */
-        long fid = lint_file_of(line);
-        long first = lint_top_first(st, d, fid);
+        ylong fid = lint_file_of(line);
+        ylong first = lint_top_first(st, d, fid);
         if (first > 0) {
             Yv *m1 = ys_cat(ys_cat(ys("'"), d),
                             ys("' is declared more than once; the last declaration counts (the earlier one at line "));
-            Yv *m2 = ys_cat(m1, ys_fmt("%ld", first));
+            Yv *m2 = ys_cat(m1, ys_fmt("%lld", (long long)first));
             (void)lint_warn(st, ys_cat(m2, ys(")")), line, col);
         }
         /* recorded either way: the map holds where each name was declared
@@ -334,8 +335,8 @@ static long lint_note_top(LintSt st, Yv *node) {
  * program's namespace -- t134 pins that a module global may share the
  * program's name -- so only two declarations of one file are the
  * copy-paste this names. */
-static long lint_top_first(LintSt st, Yv *d, long fid) {
-    long prev = nameix_get(yr_get(st, "tops"), d);
+static ylong lint_top_first(LintSt st, Yv *d, ylong fid) {
+    ylong prev = nameix_get(yr_get(st, "tops"), d);
     if (prev > 0 && lint_file_of(prev) == fid) {
         return prev;
     }
@@ -344,7 +345,7 @@ static long lint_top_first(LintSt st, Yv *d, long fid) {
 
 /* The file the line ln is in, 0 for the program's own text and for a line
  * past the origin table. */
-static long lint_file_of(long ln) {
+static ylong lint_file_of(ylong ln) {
     if (ln >= 1 && ln <= yv_len(lint_ofile)) {
         return yv_l(ya_get(lint_ofile, ln - 1));
     }
@@ -372,10 +373,10 @@ static int lint_strheld(Yv *typ, Yv *v) {
  * is unique in the unit already, and lint_mark leaves globals alone for the
  * same reason: see the number), so those are matched on the name. */
 static int lint_var_str(LintSt st, Yv *name) {
-    long n = lint_num(name);
+    ylong n = lint_num(name);
     Yv *d = lint_disp(name);
     Yv *vars = yr_get(st, "vars");
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(vars)) {
         Yv *v = ya_get(vars, i);
         if (yv_b(yr_get(v, "strf")) &&
@@ -392,14 +393,14 @@ static int lint_var_str(LintSt st, Yv *name) {
  * last statement's value is used, and only when the list's is. The first
  * statement after one that always returns never runs (a def there still
  * does: defs hoist). */
-static long lint_stmts(LintSt st, Yv *stmts, int used, int top) {
-    long n = yv_len(stmts);
+static ylong lint_stmts(LintSt st, Yv *stmts, int used, int top) {
+    ylong n = yv_len(stmts);
     /* a flag for this list, if lint_loop_body marked it a dropped one */
     int drop = yv_b(yr_get(st, "dropnext"));
     (void)yr_set(st, "dropnext", yv_bool(0));
     int dead = 0;
     int told = 0;
-    long i = 0;
+    ylong i = 0;
     while (i < n) {
         Yv *s = ya_get(stmts, i);
         if (dead && !told && lint_code(s)) {
@@ -416,14 +417,14 @@ static long lint_stmts(LintSt st, Yv *stmts, int used, int top) {
     return 0;
 }
 
-static long lint_warn_at(LintSt st, Yv *msg, Yv *node) {
+static ylong lint_warn_at(LintSt st, Yv *msg, Yv *node) {
     return lint_warn(st, msg, yv_l(yr_get(node, "line")),
                      yv_l(yr_get(node, "col")));
 }
 
 /* At the first token of `node`: an operator's node sits at the operator,
  * a call's at its `(`. */
-static long lint_warn_start(LintSt st, Yv *msg, Yv *node) {
+static ylong lint_warn_start(LintSt st, Yv *msg, Yv *node) {
     Yv *k = yr_get(node, "k");
     if (yv_l(k) == K_call) {
         return lint_warn_start(st, msg, yr_get(node, "callee"));
@@ -442,7 +443,7 @@ static long lint_warn_start(LintSt st, Yv *msg, Yv *node) {
 }
 
 /* A top-level binding is a global: not checked for use. */
-static long lint_stmt(LintSt st, Yv *s, int used, int top) {
+static ylong lint_stmt(LintSt st, Yv *s, int used, int top) {
     if (top && yv_l(yr_get(s, "k")) == K_decl) {
         /* a top-level binding is a global: its value is walked, not its
          * use, but a def's body still reaches itself through `self` */
@@ -488,7 +489,7 @@ static int lint_diverges(Yv *s) {
 
 static int lint_any_diverges(Yv *stmts) {
     int found = 0;
-    long i = 0;
+    ylong i = 0;
     while (!found && i < yv_len(stmts)) {
         found = lint_diverges(ya_get(stmts, i));
         i = i + 1;
@@ -498,7 +499,7 @@ static int lint_any_diverges(Yv *stmts) {
 
 /* One node; `used`: its value is consumed. The kinds most nodes have
  * come first. */
-static long lint_node(LintSt st, Yv *node, int used) {
+static ylong lint_node(LintSt st, Yv *node, int used) {
     Yv *k = yr_get(node, "k");
     if (yv_l(k) == K_id) {
         return lint_id(st, node, used);
@@ -581,8 +582,8 @@ static long lint_node(LintSt st, Yv *node, int used) {
 /* ── what each def returns (level 1 only) ───────────────────────────────── */
 
 /* Every `def` in the tree, by its renamed name. */
-static long lint_rets(LintSt st, Yv *stmts) {
-    long i = 0;
+static ylong lint_rets(LintSt st, Yv *stmts) {
+    ylong i = 0;
     while (i < yv_len(stmts)) {
         (void)lint_rets_node(st, ya_get(stmts, i));
         i = i + 1;
@@ -590,14 +591,14 @@ static long lint_rets(LintSt st, Yv *stmts) {
     return 0;
 }
 
-static long lint_rets_node(LintSt st, Yv *node) {
+static ylong lint_rets_node(LintSt st, Yv *node) {
     Yv *k = yr_get(node, "k");
     if (yv_l(k) == K_decl) {
         Yv *v = yr_get(node, "v");
         if (ys_eq_lit(yr_get(node, "kind"), "def") &&
             yv_l(yr_get(v, "k")) == K_func) {
             Yv *name = yr_get(node, "name");
-            long n = lint_num(name);
+            ylong n = lint_num(name);
             if (n > 0 && nameix_get(yr_get(st, "ridx"), name) < 0) {
                 (void)nameix_put(yr_get(st, "ridx"), name,
                                  yv_len(yr_get(st, "rets")));
@@ -649,12 +650,12 @@ static int lint_returns(LintSt st, Yv *callee) {
     if (ys_eq_lit(nm, "")) {
         return 0;
     } else {
-        long i = nameix_get(yr_get(st, "ridx"), nm);
+        ylong i = nameix_get(yr_get(st, "ridx"), nm);
         if (i < 0) {
             return 0;
         } else {
             Yv *ret = yr_get(ya_get(yr_get(st, "rets"), i), "ret");
-            long rk = yv_l(yr_get(ret, "k"));
+            ylong rk = yv_l(yr_get(ret, "k"));
             return !(rk == K_tvoid || rk == K_tunk || rk == K_tnone);
         }
     }
@@ -670,7 +671,7 @@ static Yv *lint_self(LintSt st, Yv *name) {
 
 /* A def's value, walked with `self` bound to its name: a call to `self` is
  * a call to the def it is written in, so it is named for it. */
-static long lint_def_body(LintSt st, Yv *name, Yv *v) {
+static ylong lint_def_body(LintSt st, Yv *name, Yv *v) {
     Yv *was = lint_self(st, name);
     (void)lint_node(st, v, 1);
     (void)yr_set(st, "self", was);
@@ -679,7 +680,7 @@ static long lint_def_body(LintSt st, Yv *name, Yv *v) {
 
 /* Level 1: a call whose result nobody reads, when the callee hands one
  * back. The message names the function the way the source spells it. */
-static long lint_unused_call(LintSt st, Yv *node, int used, Yv *call) {
+static ylong lint_unused_call(LintSt st, Yv *node, int used, Yv *call) {
     if (yv_l(yr_get(st, "wlevel")) >= 1 && !used &&
         lint_returns(st, yr_get(call, "callee"))) {
         /* named for the def it calls: a recursive `self` is `f()` */
@@ -697,7 +698,7 @@ static long lint_unused_call(LintSt st, Yv *node, int used, Yv *call) {
  * `a[1:2]`, `&x`, `*p`, a record/array/map literal, `a is B`. Nothing
  * else can be meant by it, and the statement is easy to miss. The
  * position says which expression it is. */
-static long lint_unused_expr(LintSt st, Yv *node, int used) {
+static ylong lint_unused_expr(LintSt st, Yv *node, int used) {
     if (yv_l(yr_get(st, "wlevel")) >= 1 && !used) {
         (void)lint_warn_at(st, ys("the value computed here is not used"),
                            node);
@@ -714,7 +715,7 @@ static long lint_unused_expr(LintSt st, Yv *node, int used) {
  * only, at the `match` keyword. The port gate could not see it: it compares
  * the two compilers' warnings at the default level, where every level-1
  * check draws nothing (test/sh/test_port.sh now also runs a `-W 1` pass). */
-static long lint_one(LintSt st, Yv *node, int used) {
+static ylong lint_one(LintSt st, Yv *node, int used) {
     Yv *k = yr_get(node, "k");
     if (yv_l(k) == K_un) {
         return lint_un(st, node, used);
@@ -731,8 +732,8 @@ static long lint_one(LintSt st, Yv *node, int used) {
     }
 }
 
-static long lint_list(LintSt st, Yv *nodes) {
-    long i = 0;
+static ylong lint_list(LintSt st, Yv *nodes) {
+    ylong i = 0;
     while (i < yv_len(nodes)) {
         (void)lint_node(st, ya_get(nodes, i), 1);
         i = i + 1;
@@ -740,12 +741,12 @@ static long lint_list(LintSt st, Yv *nodes) {
     return 0;
 }
 
-static long lint_two(LintSt st, Yv *a, Yv *b) {
+static ylong lint_two(LintSt st, Yv *a, Yv *b) {
     (void)lint_node(st, a, 1);
     return lint_node(st, b, 1);
 }
 
-static long lint_id(LintSt st, Yv *node, int used) {
+static ylong lint_id(LintSt st, Yv *node, int used) {
     Yv *name = yr_get(node, "v");
     (void)lint_mark(st, name, 1);
     Yv *d = lint_disp(name);
@@ -757,7 +758,7 @@ static long lint_id(LintSt st, Yv *node, int used) {
     return 0;
 }
 
-static long lint_un(LintSt st, Yv *node, int used) {
+static ylong lint_un(LintSt st, Yv *node, int used) {
     Yv *e = yr_get(node, "e");
     (void)lint_node(st, e, 1);
     if (!used && yv_l(yr_get(e, "k")) != K_num) {
@@ -772,7 +773,7 @@ static long lint_un(LintSt st, Yv *node, int used) {
 
 /* `ok && f()` dropping its value is control flow: f runs only when ok.
  * Any other operator's dropped value is a mistake. */
-static long lint_bin(LintSt st, Yv *node, int used) {
+static ylong lint_bin(LintSt st, Yv *node, int used) {
     Yv *op = yr_get(node, "op");
     Yv *l = yr_get(node, "l");
     Yv *r = yr_get(node, "r");
@@ -864,9 +865,9 @@ static int lint_zero_text(Yv *s) {
         digits = ys("");
     }
     int ok = yv_len(digits) > 0;
-    long i = 0;
+    ylong i = 0;
     while (ok && i < yv_len(digits)) {
-        long c = ys_byte_at(digits, i);
+        ylong c = ys_byte_at(digits, i);
         ok = c == '0' || c == '_';
         i = i + 1;
     }
@@ -874,7 +875,7 @@ static int lint_zero_text(Yv *s) {
 }
 
 /* An `if` gives its arms' values only when it has both arms. */
-static long lint_if(LintSt st, Yv *node, int used) {
+static ylong lint_if(LintSt st, Yv *node, int used) {
     (void)lint_node(st, yr_get(node, "cond"), 1);
     int arms = used && yv_b(yr_get(node, "has_else"));
     (void)lint_node(st, yr_get(node, "then"), arms);
@@ -898,7 +899,7 @@ static int lint_empty_arm(Yv *n) {
     }
 }
 
-static long lint_for(LintSt st, Yv *node) {
+static ylong lint_for(LintSt st, Yv *node) {
     (void)lint_node(st, yr_get(node, "init"), 0);
     (void)lint_node(st, yr_get(node, "cond"), 1);
     (void)lint_node(st, yr_get(node, "step"), 0);
@@ -910,7 +911,7 @@ static long lint_for(LintSt st, Yv *node) {
  * bare statement through gen_stmt anyway -- and only that block's own list:
  * a block nested inside it (an if arm, say) is generated through gen, so
  * its last statement does produce a value. */
-static long lint_loop_body(LintSt st, Yv *body) {
+static ylong lint_loop_body(LintSt st, Yv *body) {
     Yv *was = yr_get(st, "dropnext");
     Yv *wv = yr_get(st, "vused");
     Yv *wl = yr_get(st, "loops");
@@ -924,15 +925,15 @@ static long lint_loop_body(LintSt st, Yv *body) {
     return 0;
 }
 
-static long lint_func(LintSt st, Yv *node) {
+static ylong lint_func(LintSt st, Yv *node) {
     Yv *body = yr_get(node, "body");
     return lint_stmts(st, yr_get(body, "stmts"), 1, 0);
 }
 
-static long lint_decl(LintSt st, Yv *node) {
+static ylong lint_decl(LintSt st, Yv *node) {
     Yv *v = yr_get(node, "v");
-    long line = yv_l(yr_get(node, "line"));
-    long col = yv_l(yr_get(node, "col"));
+    ylong line = yv_l(yr_get(node, "line"));
+    ylong col = yv_l(yr_get(node, "col"));
     if (ys_eq_lit(yr_get(node, "kind"), "def")) {
         (void)lint_note(st, yr_get(node, "name"), ys("def"), line, col, 0, 0,
                         0);
@@ -964,7 +965,7 @@ static int lint_fresh(Yv *v) {
     return yv_l(vk) == K_array || yv_l(vk) == K_arrrep;
 }
 
-static long lint_assign(LintSt st, Yv *node) {
+static ylong lint_assign(LintSt st, Yv *node) {
     Yv *name = yr_get(node, "name");
     Yv *v = yr_get(node, "v");
     (void)lint_mark(st, name, 2);
@@ -978,7 +979,7 @@ static long lint_assign(LintSt st, Yv *node) {
     return 0;
 }
 
-static long lint_incdec(LintSt st, Yv *node, int used) {
+static ylong lint_incdec(LintSt st, Yv *node, int used) {
     Yv *t = yr_get(node, "tgt");
     if (yv_l(yr_get(t, "k")) == K_id) {
         (void)lint_mark(st, yr_get(t, "v"), 2);
@@ -991,7 +992,7 @@ static long lint_incdec(LintSt st, Yv *node, int used) {
     }
 }
 
-static long lint_opassign(LintSt st, Yv *node, int used) {
+static ylong lint_opassign(LintSt st, Yv *node, int used) {
     Yv *t = yr_get(node, "tgt");
     Yv *op = yr_get(node, "op");
     Yv *v = yr_get(node, "v");
@@ -1034,10 +1035,10 @@ static long lint_opassign(LintSt st, Yv *node, int used) {
 
 /* A record or map literal giving a key twice keeps the last value; the
  * earlier one is computed for nothing. */
-static long lint_lit(LintSt st, Yv *node, Yv *what, Yv *kind) {
+static ylong lint_lit(LintSt st, Yv *node, Yv *what, Yv *kind) {
     Yv *keys = yr_get(node, "keys");
     (void)lint_list(st, yr_get(node, "vals"));
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(keys)) {
         Yv *key = ya_get(keys, i);
         if (!ys_eq_lit(key, "...") && lint_seen(keys, i)) {
@@ -1052,10 +1053,10 @@ static long lint_lit(LintSt st, Yv *node, Yv *what, Yv *kind) {
     return 0;
 }
 
-static int lint_seen(Yv *keys, long i) {
+static int lint_seen(Yv *keys, ylong i) {
     Yv *key = ya_get(keys, i);
     int found = 0;
-    long j = 0;
+    ylong j = 0;
     while (!found && j < i) {
         found = ys_eq(ya_get(keys, j), key);
         j = j + 1;
@@ -1065,18 +1066,18 @@ static int lint_seen(Yv *keys, long i) {
 
 /* Every noted binding: read is fine; grown is fine unless the growth is
  * only its own (a number's, or a fresh array's never reassigned). */
-static long lint_vars(LintSt st) {
+static ylong lint_vars(LintSt st) {
     Yv *flags = yr_get(st, "flags");
     Yv *vars = yr_get(st, "vars");
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(vars)) {
         LintVar v = ya_get(vars, i);
-        long num = yv_l(yr_get(v, "num"));
-        long f = 0;
+        ylong num = yv_l(yr_get(v, "num"));
+        ylong f = 0;
         Yv *word;
         Yv *name;
-        long line;
-        long col;
+        ylong line;
+        ylong col;
         if (yv_b(yr_get(v, "top"))) {
             i = i + 1;
             continue;
@@ -1127,7 +1128,7 @@ static Yv *lint_word(Yv *kind) {
  * and the unions in a root are its occurrences, outer before inner, each
  * at its root's position. */
 
-static long lint_types(LintSt st, Yv *stmts) {
+static ylong lint_types(LintSt st, Yv *stmts) {
     Yv *roots = yav(0);
     Yv *atyps = yav(0);
     Yv *amemo = yav(0);
@@ -1141,7 +1142,7 @@ static long lint_types(LintSt st, Yv *stmts) {
     (void)lint_tw_list(t, stmts);
     /* The aliases: a name declared again is the last declaration's. */
     Yv *rs = yr_get(t, "roots");
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(rs)) {
         LintRoot r = ya_get(rs, i);
         Yv *alias = yr_get(r, "alias");
@@ -1165,14 +1166,14 @@ static long lint_types(LintSt st, Yv *stmts) {
     }
     /* An alias's own type is its declaration, not a use; only the last
      * declaration of a name names a type. */
-    long tdi = 0;
+    ylong tdi = 0;
     i = 0;
     while (i < yv_len(rs)) {
         LintRoot r = ya_get(rs, i);
         (void)yr_set(t, "line", yv_long(yv_l(yr_get(r, "line"))));
         (void)yr_set(t, "col", yv_long(yv_l(yr_get(r, "col"))));
         (void)yr_set(t, "mod", yr_get(r, "mod"));
-        long first = yv_len(yr_get(t, "occs"));
+        ylong first = yv_len(yr_get(t, "occs"));
         (void)lint_tk(t, yr_get(r, "typ"), 1, -1);
         Yv *alias = yr_get(r, "alias");
         if (!ys_eq_lit(alias, "")) {
@@ -1191,8 +1192,8 @@ static long lint_types(LintSt st, Yv *stmts) {
     return lint_report(st, t);
 }
 
-static long lint_tw_list(LintTy t, Yv *nodes) {
-    long i = 0;
+static ylong lint_tw_list(LintTy t, Yv *nodes) {
+    ylong i = 0;
     while (i < yv_len(nodes)) {
         (void)lint_tw(t, ya_get(nodes, i));
         i = i + 1;
@@ -1200,7 +1201,7 @@ static long lint_tw_list(LintTy t, Yv *nodes) {
     return 0;
 }
 
-static long lint_tw(LintTy t, Yv *node) {
+static ylong lint_tw(LintTy t, Yv *node) {
     Yv *k = yr_get(node, "k");
     if (yv_l(k) == K_id || yv_l(k) == K_str || yv_l(k) == K_num) {
         return 0;
@@ -1283,11 +1284,11 @@ static long lint_tw(LintTy t, Yv *node) {
     }
 }
 
-static long lint_tw_one(LintTy t, Yv *node) {
+static ylong lint_tw_one(LintTy t, Yv *node) {
     return lint_tw(t, yr_get(node, "e"));
 }
 
-static long lint_tw_decl(LintTy t, Yv *node) {
+static ylong lint_tw_decl(LintTy t, Yv *node) {
     if (!ys_eq_lit(yr_get(node, "kind"), "def")) {
         (void)lint_root(t, yr_get(node, "typ"), yv_l(yr_get(node, "line")),
                         yv_l(yr_get(node, "col")), ys(""));
@@ -1295,11 +1296,11 @@ static long lint_tw_decl(LintTy t, Yv *node) {
     return lint_tw(t, yr_get(node, "v"));
 }
 
-static long lint_tw_func(LintTy t, Yv *node) {
-    long line = yv_l(yr_get(node, "line"));
-    long col = yv_l(yr_get(node, "col"));
+static ylong lint_tw_func(LintTy t, Yv *node) {
+    ylong line = yv_l(yr_get(node, "line"));
+    ylong col = yv_l(yr_get(node, "col"));
     Yv *ps = yr_get(node, "ptypes");
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(ps)) {
         (void)lint_root(t, ya_get(ps, i), line, col, ys(""));
         i = i + 1;
@@ -1308,7 +1309,7 @@ static long lint_tw_func(LintTy t, Yv *node) {
     return lint_tw(t, yr_get(node, "body"));
 }
 
-static long lint_root(LintTy t, Yv *typ, long line, long col, Yv *alias) {
+static ylong lint_root(LintTy t, Yv *typ, ylong line, ylong col, Yv *alias) {
     if (yv_l(yr_get(typ, "k")) != K_tnone) {
         /* a module's alias is its own: `m.T` (rename.c rn_prepass_one) */
         Yv *m = lint_mod_of(line);
@@ -1324,9 +1325,9 @@ static long lint_root(LintTy t, Yv *typ, long line, long col, Yv *alias) {
 }
 
 /* The module line ln is in ("" for none). */
-static Yv *lint_mod_of(long ln) {
+static Yv *lint_mod_of(ylong ln) {
     if (lint_ofile != NULL && ln >= 1 && ln <= yv_len(lint_ofile)) {
-        long f = yv_l(ya_get(lint_ofile, ln - 1));
+        ylong f = yv_l(ya_get(lint_ofile, ln - 1));
         if (f < yv_len(lint_fmods)) {
             return ya_get(lint_fmods, f);
         } else {
@@ -1351,7 +1352,7 @@ static int lint_cand(Yv *ty) {
 
 /* The key of `ty`; with `rec`, its occurrences are noted (`parent`: the
  * one it is in, or -1). */
-static Yv *lint_tk(LintTy t, Yv *ty, int rec, long parent) {
+static Yv *lint_tk(LintTy t, Yv *ty, int rec, ylong parent) {
     Yv *k = yr_get(ty, "k");
     if (yv_l(k) == K_tname) {
         return lint_tk_name(t, yr_get(ty, "name"));
@@ -1386,9 +1387,9 @@ static Yv *lint_tk(LintTy t, Yv *ty, int rec, long parent) {
     }
 }
 
-static Yv *lint_tk_list(LintTy t, Yv *ts, int rec, long parent) {
+static Yv *lint_tk_list(LintTy t, Yv *ts, int rec, ylong parent) {
     Yv *parts = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(ts)) {
         parts = ya_push(parts, lint_tk(t, ya_get(ts, i), rec, parent));
         i = i + 1;
@@ -1401,7 +1402,7 @@ static Yv *lint_tk_list(LintTy t, Yv *ts, int rec, long parent) {
  * name no alias declares. */
 static Yv *lint_tk_name(LintTy t, Yv *name) {
     /* in a module's code a bare name is the module's own alias first */
-    long ai = -1;
+    ylong ai = -1;
     Yv *tm = yr_get(t, "mod");
     if (!ys_eq_lit(tm, "") && ys_index_of(name, ys(".")) < 0) {
         ai = nameix_get(yr_get(t, "amap"), ys_cat(ys_cat(tm, ys(".")), name));
@@ -1428,14 +1429,14 @@ static Yv *lint_tk_name(LintTy t, Yv *name) {
     }
 }
 
-static Yv *lint_tk_rec(LintTy t, Yv *ty, int rec, long parent) {
+static Yv *lint_tk_rec(LintTy t, Yv *ty, int rec, ylong parent) {
     Yv *fs = yr_get(ty, "fields");
-    long me = parent;
+    ylong me = parent;
     if (rec && lint_cand(ty)) {
         me = lint_occ(t, ty, parent);
     }
     Yv *parts = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(fs)) {
         Yv *f = ya_get(fs, i);
         parts = ya_push(parts, lint_cat(3, yr_get(f, "name"), ys(":"),
@@ -1452,8 +1453,8 @@ static Yv *lint_tk_rec(LintTy t, Yv *ty, int rec, long parent) {
 
 /* A union's key lists its members sorted, without repeats, an alias of a
  * union replaced by its members: `A | B`, `B | A` and `AB | A` agree. */
-static Yv *lint_tk_union(LintTy t, Yv *ty, int rec, long parent) {
-    long me = parent;
+static Yv *lint_tk_union(LintTy t, Yv *ty, int rec, ylong parent) {
+    ylong me = parent;
     if (rec) {
         me = lint_occ(t, ty, parent);
     }
@@ -1467,12 +1468,12 @@ static Yv *lint_tk_union(LintTy t, Yv *ty, int rec, long parent) {
     return key;
 }
 
-static long lint_tk_members(LintTy t, Yv *u, int rec, long me, Yv *parts) {
+static ylong lint_tk_members(LintTy t, Yv *u, int rec, ylong me, Yv *parts) {
     Yv *ts = yr_get(u, "ts");
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(ts)) {
         Yv *m = ya_get(ts, i);
-        long ai = lint_union_alias(t, m);
+        ylong ai = lint_union_alias(t, m);
         if (ai >= 0) {
             ya_set(yr_get(t, "abusy"), ai, yv_bool(1));
             (void)lint_tk_members(t, ya_get(yr_get(t, "atyps"), ai), 0, me,
@@ -1488,9 +1489,9 @@ static long lint_tk_members(LintTy t, Yv *u, int rec, long me, Yv *parts) {
 
 /* The alias a union member names when it is a union (and not one being
  * expanded), or -1. */
-static long lint_union_alias(LintTy t, Yv *m) {
+static ylong lint_union_alias(LintTy t, Yv *m) {
     if (yv_l(yr_get(m, "k")) == K_tname) {
-        long ai = nameix_get(yr_get(t, "amap"), yr_get(m, "name"));
+        ylong ai = nameix_get(yr_get(t, "amap"), yr_get(m, "name"));
         if (ai < 0) {
             return -1;
         } else if (yv_b(ya_get(yr_get(t, "abusy"), ai))) {
@@ -1509,7 +1510,7 @@ static int lint_is_union(Yv *ty) {
     return yv_l(yr_get(ty, "k")) == K_tunion;
 }
 
-static long lint_occ(LintTy t, Yv *ty, long parent) {
+static ylong lint_occ(LintTy t, Yv *ty, ylong parent) {
     (void)ya_push(yr_get(t, "occs"),
                   yr(8, "key", ys(""), "typ", ty, "line",
                      yv_long(yv_l(yr_get(t, "line"))), "col",
@@ -1519,7 +1520,7 @@ static long lint_occ(LintTy t, Yv *ty, long parent) {
     return yv_len(yr_get(t, "occs")) - 1;
 }
 
-static long lint_occ_key(LintTy t, long i, Yv *key) {
+static ylong lint_occ_key(LintTy t, ylong i, Yv *key) {
     LintOcc o = ya_get(yr_get(t, "occs"), i);
     (void)yr_set(o, "key", key);
     return 0;
@@ -1527,10 +1528,10 @@ static long lint_occ_key(LintTy t, long i, Yv *key) {
 
 static Yv *lint_sort_uniq(Yv *xs) {
     Yv *out = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(xs)) {
         Yv *x = ya_get(xs, i);
-        long j = yv_len(out);
+        ylong j = yv_len(out);
         out = ya_push(out, x);
         while (j > 0 && ys_cmp(x, ya_get(out, j - 1)) < 0) {
             ya_set(out, j, ya_get(out, j - 1));
@@ -1540,7 +1541,7 @@ static Yv *lint_sort_uniq(Yv *xs) {
         i = i + 1;
     }
     Yv *res = yav(0);
-    long k = 0;
+    ylong k = 0;
     while (k < yv_len(out)) {
         if (k == 0 || !ys_eq(ya_get(out, k), ya_get(out, k - 1))) {
             res = ya_push(res, ya_get(out, k));
@@ -1556,17 +1557,17 @@ static Yv *lint_sort_uniq(Yv *xs) {
  * not reported again, and inside one an alias names it does not count:
  * the alias replaces it. So the counting comes first, and the reporting
  * goes outer before inner. */
-static long lint_report(LintSt st, LintTy t) {
+static ylong lint_report(LintSt st, LintTy t) {
     Yv *occs = yr_get(t, "occs");
     Yv *ids = nameix_new(64);
     Yv *counts = yav(0);
     Yv *alias_of = yav(0);
     Yv *told = yav(0);
     Yv *occ_id = yav(0);
-    long q = 0;
+    ylong q = 0;
     while (q < yv_len(occs)) {
         LintOcc o = ya_get(occs, q);
-        long id = nameix_get(ids, yr_get(o, "key"));
+        ylong id = nameix_get(ids, yr_get(o, "key"));
         if (id < 0) {
             id = yv_len(counts);
             nameix_put(ids, yr_get(o, "key"), id);
@@ -1593,11 +1594,11 @@ static long lint_report(LintSt st, LintTy t) {
     }
     /* `gone`: inside one an alias names (or a repeated declaration). */
     Yv *gone = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(occs)) {
         LintOcc o = ya_get(occs, i);
-        long id = yv_l(ya_get(occ_id, i));
-        long parent = yv_l(yr_get(o, "parent"));
+        ylong id = yv_l(ya_get(occ_id, i));
+        ylong parent = yv_l(yr_get(o, "parent"));
         int g = yv_b(yr_get(o, "rep")) ||
                 (parent >= 0 && yv_b(ya_get(gone, parent)));
         if (!g && !yv_b(yr_get(o, "decl"))) {
@@ -1613,8 +1614,8 @@ static long lint_report(LintSt st, LintTy t) {
     i = 0;
     while (i < yv_len(occs)) {
         LintOcc o = ya_get(occs, i);
-        long id = yv_l(ya_get(occ_id, i));
-        long parent = yv_l(yr_get(o, "parent"));
+        ylong id = yv_l(ya_get(occ_id, i));
+        ylong parent = yv_l(yr_get(o, "parent"));
         if (parent >= 0 && lint_rep(occs, parent)) {
             (void)yr_set(o, "rep", yv_bool(1));
         } else if (yv_b(yr_get(o, "decl"))) {
@@ -1647,7 +1648,7 @@ static long lint_report(LintSt st, LintTy t) {
     return 0;
 }
 
-static int lint_rep(Yv *occs, long i) {
+static int lint_rep(Yv *occs, ylong i) {
     LintOcc o = ya_get(occs, i);
     return yv_b(yr_get(o, "rep"));
 }
@@ -1658,10 +1659,10 @@ static int lint_rep(Yv *occs, long i) {
 static Yv *lint_sorted(Yv *ws) {
     Yv *all = lint_msort(ws);
     Yv *out = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(all)) {
         Diag w = ya_get(all, i);
-        long n = yv_len(out);
+        ylong n = yv_len(out);
         if (n == 0 || lint_before(ya_get(out, n - 1), w)) {
             out = ya_push(out, w);
         }
@@ -1671,15 +1672,15 @@ static Yv *lint_sorted(Yv *ws) {
 }
 
 static Yv *lint_msort(Yv *ws) {
-    long n = yv_len(ws);
+    ylong n = yv_len(ws);
     if (n < 2) {
         return ws;
     } else {
         Yv *a = lint_msort(ya_slice(ws, 0, n / 2));
         Yv *b = lint_msort(ya_slice(ws, n / 2, n));
         Yv *out = yav(0);
-        long i = 0;
-        long j = 0;
+        ylong i = 0;
+        ylong j = 0;
         while (i < yv_len(a) || j < yv_len(b)) {
             if (j >= yv_len(b) ||
                 (i < yv_len(a) && !lint_before(ya_get(b, j), ya_get(a, i)))) {

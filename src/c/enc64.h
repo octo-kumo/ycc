@@ -23,19 +23,20 @@
 #ifndef ENC64_H
 #define ENC64_H
 
+#include "ylong.h"
 #include "yv.h"
 
-Yv *r64(long n);
-long reg_num(Yv *name);
-long reg_size(Yv *name);
-Yv *enc_insn(Yv *buf, long at, Yv *mn, Yv *ops, int lng);
-Yv *enc_form(Yv *buf, long at, long f, Yv *mn, Yv *ops, int lng);
-Yv *enc_branch_long(Yv *buf, long at, long br, Yv *lbl);
-Yv *fixup(long at, Yv *kind, Yv *lbl, Yv *lbl2);
+Yv *r64(ylong n);
+ylong reg_num(Yv *name);
+ylong reg_size(Yv *name);
+Yv *enc_insn(Yv *buf, ylong at, Yv *mn, Yv *ops, int lng);
+Yv *enc_form(Yv *buf, ylong at, ylong f, Yv *mn, Yv *ops, int lng);
+Yv *enc_branch_long(Yv *buf, ylong at, ylong br, Yv *lbl);
+Yv *fixup(ylong at, Yv *kind, Yv *lbl, Yv *lbl2);
 Yv *scratch(void);
-long byte_of(long v, long i);
-Yv *le16(long v);
-Yv *le32(long v);
-Yv *le64(long v);
+ylong byte_of(ylong v, ylong i);
+Yv *le16(ylong v);
+Yv *le32(ylong v);
+Yv *le64(ylong v);
 
 #endif /* ENC64_H */

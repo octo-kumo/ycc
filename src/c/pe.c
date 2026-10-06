@@ -9,6 +9,7 @@
 // Assigning a whole record is `ya_set(secs, i, pe_sec(...))`, the twin of
 // `secs[i] = {...}`, which the Y copy also does in place (it shares records
 // too, so the two agree).
+#include "ylong.h"
 #include "pe.h"
 #include "elf.h"
 #include "enc64.h"
@@ -55,8 +56,8 @@
 #define PE_STACK_COMMIT 65536LL
 
 /* Round V up to a multiple of A (A a power of two). */
-long pe_align(long v, long a) {
-    long r = v % a;
+ylong pe_align(ylong v, ylong a) {
+    ylong r = v % a;
     if (r == 0) { return v; }
     else { return v + a - r; }
 }
@@ -65,23 +66,23 @@ long pe_align(long v, long a) {
    .bss label resolves through pe_bss_from_ro, so the plain and the -g build
    cannot each have their own formula for it -- the contract
    elf_bss_from_ro has for the ELF side. */
-long pe_bss_from_ro(long code_len, long ro_len, long bss_len) {
+ylong pe_bss_from_ro(ylong code_len, ylong ro_len, ylong bss_len) {
     return pe_align(code_len + ro_len + 8, PE_SECT_ALIGN) - code_len;
 }
 
 /* The address the DWARF line table's offsets hang off: ImageBase + .text. */
-long pe_text_base(void) {
+ylong pe_text_base(void) {
     return PE_IMAGE_BASE + PE_TEXT_RVA;
 }
 
 /* DOS header (64) + stub pad to 0x80, PE signature (4), COFF header (20),
    optional header (240), one 40-byte section header per section. */
-long pe_headers_size(Yv *secs) {
+ylong pe_headers_size(Yv *secs) {
     return 0x80 + 4 + 20 + 240 + 40 * yv_len(secs);
 }
 
 /* An unplaced section: rawsz and rawptr are zero until pe_place fills them. */
-Yv *pe_sec(Yv *name, long vsz, long rva, long rawptr, long chars) {
+Yv *pe_sec(Yv *name, ylong vsz, ylong rva, ylong rawptr, ylong chars) {
     return yr(6, "name", name, "vsz", yv_long(vsz), "rva", yv_long(rva),
               "rawsz", yv_long(0), "rawptr", yv_long(rawptr), "chars",
               yv_long(chars));
@@ -90,7 +91,7 @@ Yv *pe_sec(Yv *name, long vsz, long rva, long rawptr, long chars) {
 /* The section named `nm`, or an all-zero record when there is none (a data
    directory entry needs a zero, not a missing section). */
 Yv *pe_find(Yv *secs, Yv *nm) {
-    long i = 0;
+    ylong i = 0;
     Yv *found = pe_sec(ys(""), 0, 0, 0, 0);
     while (i < yv_len(secs)) {
         if (ys_eq(yr_get(ya_get(secs, i), "name"), nm)) {
@@ -107,16 +108,16 @@ Yv *pe_find(Yv *secs, Yv *nm) {
    the RVA pe_sections gave it; every other section follows, each on the next
    section-alignment boundary. */
 Yv *pe_place(Yv *secs) {
-    long raw = pe_align(pe_headers_size(secs), PE_FILE_ALIGN);
-    long rva = PE_TEXT_RVA;
-    long i = 0;
+    ylong raw = pe_align(pe_headers_size(secs), PE_FILE_ALIGN);
+    ylong rva = PE_TEXT_RVA;
+    ylong i = 0;
     while (i < yv_len(secs)) {
         Yv *s = ya_get(secs, i);
         Yv *nm = yr_get(s, "name");
-        long vsz = yv_l(yr_get(s, "vsz"));
-        long chars = yv_l(yr_get(s, "chars"));
+        ylong vsz = yv_l(yr_get(s, "vsz"));
+        ylong chars = yv_l(yr_get(s, "chars"));
         if (i > 0) { rva = pe_align(rva, PE_SECT_ALIGN); }
-        long rs = pe_align(vsz, PE_FILE_ALIGN);
+        ylong rs = pe_align(vsz, PE_FILE_ALIGN);
         if (chars == PE_CH_BSS) {
             ya_set(secs, i, pe_sec(nm, vsz, rva, raw, chars));
         } else {
@@ -143,7 +144,7 @@ Yv *pe_place(Yv *secs) {
    then one section per .debug_* under -g. Built as data first and given its
    RVA and file offset by pe_place, so every address is computed once, in one
    order. */
-static Yv *pe_sections(long textlen, long bss_len, Yv *pdata, Yv *xdata,
+static Yv *pe_sections(ylong textlen, ylong bss_len, Yv *pdata, Yv *xdata,
                        Yv *dsecs) {
     Yv *out = yav(0);
     out = ya_push(out, pe_sec(ys(".text"), textlen, PE_TEXT_RVA, 0, PE_CH_TEXT));
@@ -156,7 +157,7 @@ static Yv *pe_sections(long textlen, long bss_len, Yv *pdata, Yv *xdata,
     if (yv_len(xdata) > 0) {
         out = ya_push(out, pe_sec(ys(".xdata"), yv_len(xdata), 0, 0, PE_CH_R));
     }
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(dsecs)) {
         out = ya_push(out, ya_get(dsecs, i));
         i = i + 1;
@@ -171,18 +172,18 @@ static Yv *pe_payload(Yv *out, Yv *sec, Yv *data) {
     else { return push_bytes(out, data); }
 }
 
-static Yv *pe_pad(Yv *out, long upto) {
+static Yv *pe_pad(Yv *out, ylong upto) {
     return push_zeros(out, upto - yv_len(out));
 }
 
 /* The .text section's RVA, which pe_place may have left alone (it is the one
    section whose RVA is not derived from a predecessor's end). */
-static long pe_text_rva(Yv *secs) {
+static ylong pe_text_rva(Yv *secs) {
     return yv_l(yr_get(pe_find(secs, ys(".text")), "rva"));
 }
 
 /* Four little-endian bytes of a 32-bit value, as a [byte]. */
-static Yv *pe_le32(long v) {
+static Yv *pe_le32(ylong v) {
     Yv *out = yav(0);
     out = ya_push(out, yv_long(v % 256));
     out = ya_push(out, yv_long(v / 256 % 256));
@@ -194,9 +195,9 @@ static Yv *pe_le32(long v) {
 /* Add `rva` to the UnwindData field of every 12-byte RUNTIME_FUNCTION. The
    field is at offset 8; the other two are the function's begin and end
    addresses, which are already section-relative and stay as they are. */
-static Yv *pe_fix_pdata(Yv *pdata, long rva) {
+static Yv *pe_fix_pdata(Yv *pdata, ylong rva) {
     Yv *out = pdata;
-    long i = 0;
+    ylong i = 0;
     while (i + 11 < yv_len(out)) {
         Yv *b = pe_le32(yv_l(ya_get(out, i + 8)) + yv_l(ya_get(out, i + 9)) * 256
                         + yv_l(ya_get(out, i + 10)) * 65536
@@ -212,9 +213,9 @@ static Yv *pe_fix_pdata(Yv *pdata, long rva) {
 
 /* Where the COFF symbol table starts: past every section's file bytes. The
    table and its string table are in the file only -- nothing maps them. */
-static long pe_symptr(Yv *secs) {
-    long raw = pe_align(pe_headers_size(secs), PE_FILE_ALIGN);
-    long i = 0;
+static ylong pe_symptr(Yv *secs) {
+    ylong raw = pe_align(pe_headers_size(secs), PE_FILE_ALIGN);
+    ylong i = 0;
     while (i < yv_len(secs)) {
         raw = raw + yv_l(yr_get(ya_get(secs, i), "rawsz"));
         i = i + 1;
@@ -247,7 +248,7 @@ static Yv *pe_dos(Yv *out) {
     return pe_pad(out, 0x80);
 }
 
-static Yv *pe_coff(Yv *out, long nsec, Yv *symtab, long symptr) {
+static Yv *pe_coff(Yv *out, ylong nsec, Yv *symtab, ylong symptr) {
     out = push_le32(out, 0x4550);       /* "PE\0\0", at e_lfanew */
     out = push_le16(out, PE_MACHINE);
     out = push_le16(out, nsec);
@@ -268,14 +269,14 @@ static Yv *pe_coff(Yv *out, long nsec, Yv *symtab, long symptr) {
 /* The PE32+ optional header: the fixed fields, then 16 data directories of
    which exactly one is used (Exception -> .pdata). An image with no import
    table and no .reloc needs no other directory. */
-static Yv *pe_optional(Yv *out, Yv *secs, long size_headers, long size_image,
-                       long entry_off) {
-    long size_code = yv_l(yr_get(ya_get(secs, 0), "rawsz"));
-    long size_init = 0;
-    long i = 0;
+static Yv *pe_optional(Yv *out, Yv *secs, ylong size_headers, ylong size_image,
+                       ylong entry_off) {
+    ylong size_code = yv_l(yr_get(ya_get(secs, 0), "rawsz"));
+    ylong size_init = 0;
+    ylong i = 0;
     while (i < yv_len(secs)) {
         Yv *s = ya_get(secs, i);
-        long ch = yv_l(yr_get(s, "chars"));
+        ylong ch = yv_l(yr_get(s, "chars"));
         if (ch != PE_CH_TEXT && ch != PE_CH_BSS) {
             size_init = size_init + yv_l(yr_get(s, "rawsz"));
         }
@@ -341,7 +342,7 @@ static Yv *pe_optional(Yv *out, Yv *secs, long size_headers, long size_image,
    not a correctness problem here. */
 static Yv *pe_shdr(Yv *out, Yv *s) {
     Yv *nm = yr_get(s, "name");
-    long i = 0;
+    ylong i = 0;
     /* ys_byte_at, NOT ya_get: the field is a str and a str is not an array --
        in the Y twin `s.name[0:8]` is a byte slice of the string, which is
        exactly the C copy's ys_byte_at. ya_get on a str reads past the header
@@ -364,13 +365,13 @@ static Yv *pe_shdr(Yv *out, Yv *s) {
     return push_le32(out, yv_l(yr_get(s, "chars")));
 }
 
-Yv *pe_build(Yv *code, Yv *rodata, long entry_off, long bss_len, Yv *pdata,
+Yv *pe_build(Yv *code, Yv *rodata, ylong entry_off, ylong bss_len, Yv *pdata,
              Yv *xdata, Yv *dsecs, Yv *ddata, Yv *symtab) {
-    long codesz = yv_len(code);
-    long ro_len = yv_len(rodata);
+    ylong codesz = yv_len(code);
+    ylong ro_len = yv_len(rodata);
     Yv *trailer = yav(8, yv_long(0), yv_long(0), yv_long(0), yv_long(0),
                       yv_long(0), yv_long(0), yv_long(0), yv_long(0));
-    long textlen = codesz + ro_len + yv_len(trailer);
+    ylong textlen = codesz + ro_len + yv_len(trailer);
     Yv *secs = pe_sections(textlen, bss_len, pdata, xdata, dsecs);
     /* A RUNTIME_FUNCTION's UnwindData is an RVA, and the .xdata section's
        address is only known once pe_place has laid the sections out -- so the
@@ -379,11 +380,11 @@ Yv *pe_build(Yv *code, Yv *rodata, long entry_off, long bss_len, Yv *pdata,
        headers (the Exception directory itself is still right) and fatal at the
        first unwind, which is the worst place to find out. */
     Yv *pdata2 = pe_fix_pdata(pdata, yv_l(yr_get(pe_find(secs, ys(".xdata")), "rva")));
-    long size_headers = pe_align(pe_headers_size(secs), PE_FILE_ALIGN);
-    long size_image = pe_align(pe_text_rva(secs) + textlen, PE_SECT_ALIGN);
+    ylong size_headers = pe_align(pe_headers_size(secs), PE_FILE_ALIGN);
+    ylong size_image = pe_align(pe_text_rva(secs) + textlen, PE_SECT_ALIGN);
     Yv *last = ya_get(secs, yv_len(secs) - 1);
     if (yv_l(yr_get(last, "vsz")) > 0) {
-        long tail = pe_align(yv_l(yr_get(last, "rva"))
+        ylong tail = pe_align(yv_l(yr_get(last, "rva"))
                              + yv_l(yr_get(last, "vsz")), PE_SECT_ALIGN);
         if (tail > size_image) { size_image = tail; }
     }
@@ -391,7 +392,7 @@ Yv *pe_build(Yv *code, Yv *rodata, long entry_off, long bss_len, Yv *pdata,
     out = pe_dos(out);
     out = pe_coff(out, yv_len(secs), symtab, pe_symptr(secs));
     out = pe_optional(out, secs, size_headers, size_image, entry_off);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(secs)) {
         out = pe_shdr(out, ya_get(secs, i));
         i = i + 1;

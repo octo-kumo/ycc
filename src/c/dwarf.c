@@ -15,20 +15,21 @@
  * text_addr/text_len: where .text is loaded and its length (without the
  * page padding); comp_dir: the directory relative paths start from. */
 
+#include "ylong.h"
 #include "dwarf.h"
 
 /* imported: elf.y, for its alias ElfSec only (a record is a Yv * here). */
 
 static Yv *dw_abbrev(void);
-static Yv *dw_info(Yv *root, Yv *comp_dir, long text_addr, long text_len);
-static Yv *dw_line(Yv *files, Yv *rows, long text_addr, long text_len);
-static Yv *dw_program(Yv *rows, long text_addr, long text_len);
-static Yv *dw_le(Yv *out, long v, long n);
-static Yv *dw_uleb(Yv *out, long v);
-static Yv *dw_sleb(Yv *out, long v);
+static Yv *dw_info(Yv *root, Yv *comp_dir, ylong text_addr, ylong text_len);
+static Yv *dw_line(Yv *files, Yv *rows, ylong text_addr, ylong text_len);
+static Yv *dw_program(Yv *rows, ylong text_addr, ylong text_len);
+static Yv *dw_le(Yv *out, ylong v, ylong n);
+static Yv *dw_uleb(Yv *out, ylong v);
+static Yv *dw_sleb(Yv *out, ylong v);
 static Yv *dw_cstr(Yv *out, Yv *s);
 
-Yv *dwarf_sections(Yv *files, Yv *rows, long text_addr, long text_len,
+Yv *dwarf_sections(Yv *files, Yv *rows, ylong text_addr, ylong text_len,
                    Yv *comp_dir) {
     Yv *root = ys("?");
     if (yv_len(files) > 0) {
@@ -60,7 +61,7 @@ static Yv *dw_abbrev(void) {
 
 /* The compile unit: its header (DWARF 4, abbreviations at offset 0,
  * 8-byte addresses), then its one DIE in dw_abbrev's attribute order. */
-static Yv *dw_info(Yv *root, Yv *comp_dir, long text_addr, long text_len) {
+static Yv *dw_info(Yv *root, Yv *comp_dir, ylong text_addr, ylong text_len) {
     Yv *die = yav(1, yv_long(1));
     die = dw_cstr(die, ys("ycc"));
     die = dw_cstr(die, root);
@@ -75,7 +76,7 @@ static Yv *dw_info(Yv *root, Yv *comp_dir, long text_addr, long text_len) {
     b = dw_le(b, 4, 2);
     b = dw_le(b, 0, 4);
     b = ya_push(b, yv_long(8));
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(die)) {
         b = ya_push(b, ya_get(die, i));
         i = i + 1;
@@ -93,7 +94,7 @@ static Yv *dw_info(Yv *root, Yv *comp_dir, long text_addr, long text_len) {
  * directory 0 (the comp_dir); no mtimes or lengths, and a 0 ends each
  * list. (A name never carries a directory: valgrind prefixes even an
  * absolute name with its directory.) */
-static Yv *dw_line(Yv *files, Yv *rows, long text_addr, long text_len) {
+static Yv *dw_line(Yv *files, Yv *rows, ylong text_addr, ylong text_len) {
     Yv *hdr = yav(18,
                   yv_long(1), yv_long(1), yv_long(1), yv_long(251),
                   yv_long(14), yv_long(13), yv_long(0), yv_long(1),
@@ -103,10 +104,10 @@ static Yv *dw_line(Yv *files, Yv *rows, long text_addr, long text_len) {
     Yv *dirs = yav(0);
     Yv *fdir = yav(0);
     Yv *fbase = yav(0);
-    long fi = 0;
+    ylong fi = 0;
     while (fi < yv_len(files)) {
         Yv *fname = ya_get(files, fi);
-        long cut = yv_len(fname) - 1;
+        ylong cut = yv_len(fname) - 1;
         while (cut >= 0 && ys_byte_at(fname, cut) != 47) {
             cut = cut - 1;
         }
@@ -120,8 +121,8 @@ static Yv *dw_line(Yv *files, Yv *rows, long text_addr, long text_len) {
                 d = ys_slice(fname, 0, cut);
                 ;
             }
-            long di = 0;
-            long i = 0;
+            ylong di = 0;
+            ylong i = 0;
             while (i < yv_len(dirs)) {
                 if (di == 0 && ys_eq(ya_get(dirs, i), d)) {
                     di = i + 1;
@@ -140,7 +141,7 @@ static Yv *dw_line(Yv *files, Yv *rows, long text_addr, long text_len) {
         }
         fi = fi + 1;
     }
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(dirs)) {
         hdr = dw_cstr(hdr, ya_get(dirs, i));
         i = i + 1;
@@ -182,14 +183,14 @@ static Yv *dw_line(Yv *files, Yv *rows, long text_addr, long text_len) {
  * -5..8 and its address by little enough; otherwise DW_LNS_advance_line
  * and/or DW_LNS_advance_pc go first and the special opcode moves only
  * what is left. */
-static Yv *dw_program(Yv *rows, long text_addr, long text_len) {
+static Yv *dw_program(Yv *rows, ylong text_addr, ylong text_len) {
     Yv *keep = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i + 2 < yv_len(rows)) {
-        long ro = yv_l(ya_get(rows, i));
-        long rf = yv_l(ya_get(rows, i + 1));
-        long rl = yv_l(ya_get(rows, i + 2));
-        long n = yv_len(keep);
+        ylong ro = yv_l(ya_get(rows, i));
+        ylong rf = yv_l(ya_get(rows, i + 1));
+        ylong rl = yv_l(ya_get(rows, i + 2));
+        ylong n = yv_len(keep);
         if (n > 0 && yv_l(ya_get(keep, n - 3)) == ro) {
             ya_set(keep, n - 2, yv_long(rf));
             ya_set(keep, n - 1, yv_long(rl));
@@ -207,19 +208,19 @@ static Yv *dw_program(Yv *rows, long text_addr, long text_len) {
     }
     Yv *b = yav(0);
     if (yv_len(keep) > 0) {
-        long addr = yv_l(ya_get(keep, 0));
+        ylong addr = yv_l(ya_get(keep, 0));
         /* DW_LNE_set_address: extended opcode (0), 9 bytes, 2, the address */
         b = ya_push(b, yv_long(0));
         b = ya_push(b, yv_long(9));
         b = ya_push(b, yv_long(2));
         b = dw_le(b, text_addr + addr, 8);
-        long cur_file = 1;
-        long cur_line = 1;
-        long j = 0;
+        ylong cur_file = 1;
+        ylong cur_line = 1;
+        ylong j = 0;
         while (j < yv_len(keep)) {
-            long off = yv_l(ya_get(keep, j));
-            long f = yv_l(ya_get(keep, j + 1));
-            long l = yv_l(ya_get(keep, j + 2));
+            ylong off = yv_l(ya_get(keep, j));
+            ylong f = yv_l(ya_get(keep, j + 1));
+            ylong l = yv_l(ya_get(keep, j + 2));
             if (f != cur_file) {
                 /* DW_LNS_set_file */
                 b = ya_push(b, yv_long(4));
@@ -227,7 +228,7 @@ static Yv *dw_program(Yv *rows, long text_addr, long text_len) {
                 cur_file = f;
                 ;
             }
-            long dl = l - cur_line;
+            ylong dl = l - cur_line;
             if (dl < -5 || dl > 8) {
                 /* DW_LNS_advance_line */
                 b = ya_push(b, yv_long(3));
@@ -235,7 +236,7 @@ static Yv *dw_program(Yv *rows, long text_addr, long text_len) {
                 dl = 0;
                 ;
             }
-            long op = dl + 5 + 14 * (off - addr) + 13;
+            ylong op = dl + 5 + 14 * (off - addr) + 13;
             if (op > 255) {
                 /* DW_LNS_advance_pc */
                 b = ya_push(b, yv_long(2));
@@ -263,9 +264,9 @@ static Yv *dw_program(Yv *rows, long text_addr, long text_len) {
 }
 
 /* v's low n bytes, little-endian (v >= 0). */
-static Yv *dw_le(Yv *out, long v, long n) {
-    long x = v;
-    long i = 0;
+static Yv *dw_le(Yv *out, ylong v, ylong n) {
+    ylong x = v;
+    ylong i = 0;
     while (i < n) {
         out = ya_push(out, yv_long(x % 256));
         x = x / 256;
@@ -276,11 +277,11 @@ static Yv *dw_le(Yv *out, long v, long n) {
 
 /* Unsigned LEB128: 7 bits a byte, low first, the high bit set on every
  * byte but the last (v >= 0). */
-static Yv *dw_uleb(Yv *out, long v) {
-    long x = v;
+static Yv *dw_uleb(Yv *out, ylong v) {
+    ylong x = v;
     int more = 1;
     while (more) {
-        long lo = x % 128;
+        ylong lo = x % 128;
         x = x / 128;
         if (x == 0) {
             out = ya_push(out, yv_long(lo));
@@ -297,16 +298,16 @@ static Yv *dw_uleb(Yv *out, long v) {
 /* Signed LEB128: the same, until what is left is only sign -- 0 with bit
  * 6 of the last byte clear, or -1 with it set. `/` rounds toward zero, so
  * a negative x steps down by one to shift right arithmetically. */
-static Yv *dw_sleb(Yv *out, long v) {
-    long x = v;
+static Yv *dw_sleb(Yv *out, ylong v) {
+    ylong x = v;
     int more = 1;
     while (more) {
-        long q = x / 128;
+        ylong q = x / 128;
         if (x < 0 && q * 128 != x) {
             q = q - 1;
             ;
         }
-        long lo = x - q * 128;
+        ylong lo = x - q * 128;
         x = q;
         if ((x == 0 && lo < 64) || (x == -1 && lo >= 64)) {
             out = ya_push(out, yv_long(lo));
@@ -328,7 +329,7 @@ static Yv *dw_cstr(Yv *out, Yv *s) {
         ;
     } else {
         Yv *bs = bytes_of(s);
-        long i = 0;
+        ylong i = 0;
         while (i < yv_len(bs)) {
             out = ya_push(out, ya_get(bs, i));
             i = i + 1;

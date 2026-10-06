@@ -7,6 +7,7 @@
 #ifndef IR_H
 #define IR_H
 
+#include "ylong.h"
 #include "yv.h"
 
 #define IR_W 8
@@ -152,18 +153,18 @@
  * (meta.c run_image) -- Y cannot spell a jump to an address it computed. */
 #define F_JMP_IND 97
 
-Yv *ir_push(Yv *ir, long f, long a, long b, long c, long d, long e, long g,
-            long h);
+Yv *ir_push(Yv *ir, ylong f, ylong a, ylong b, ylong c, ylong d, ylong e, ylong g,
+            ylong h);
 Yv *ir_cat(Yv *a, Yv *b);        /* a + b, the array concat (yv.h has none) */
-Yv *ir_form(long f);
-Yv *ir_render(Yv *ir, Yv *txt, long at, long fno);
-Yv *ir_render_all(Yv *ir, Yv *txt, int locs, long fno);
-Yv *ir_render_op(long k, Yv *ir, long at);
-Yv *ir_render_mem(Yv *ir, long at, int nodisp);
-Yv *ir_reg(long n, long size);
-Yv *ir_reg64(long n);
-Yv *ir_reg32(long n);
-Yv *ir_reg8(long n);
-long ir_kind_words(long k);
+Yv *ir_form(ylong f);
+Yv *ir_render(Yv *ir, Yv *txt, ylong at, ylong fno);
+Yv *ir_render_all(Yv *ir, Yv *txt, int locs, ylong fno);
+Yv *ir_render_op(ylong k, Yv *ir, ylong at);
+Yv *ir_render_mem(Yv *ir, ylong at, int nodisp);
+Yv *ir_reg(ylong n, ylong size);
+Yv *ir_reg64(ylong n);
+Yv *ir_reg32(ylong n);
+Yv *ir_reg8(ylong n);
+ylong ir_kind_words(ylong k);
 
 #endif

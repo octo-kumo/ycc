@@ -87,6 +87,7 @@
  * this module needs it as a jump through a register of its own, which gcc
  * spells `jmp *%reg` — the same instruction the Y twin emits.
  */
+#include "ylong.h"
 #include <string.h>
 #include "host.h"
 #include <unistd.h>
@@ -99,7 +100,7 @@ int mg_on = 0;
 /* The next slot index. Slots are global and in RESOLVE order (the program's
  * own file first, then its modules as the splicer visits them), which is the
  * order the generator runs them in. */
-long mg_next = 0;
+ylong mg_next = 0;
 /* G's body: the files' lines with each block as a call, and the source line
  * each of those lines came from. */
 static Yv *mg_g = 0;
@@ -131,12 +132,12 @@ static Yv *mg_iol = 0;
 static Yv *mg_piece = 0;
 static Yv *mg_have = 0;
 /* How many blocks the whole resolve found, and whether any. */
-long mg_n = 0;
+ylong mg_n = 0;
 /* How many of them sit inside another block. A program with none is the common
  * case and costs exactly one compile of the generator, whatever else changes
  * here (native.c meta_prepare: mg_nest is what decides whether the rounds run at
  * all). */
-long mg_nest = 0;
+ylong mg_nest = 0;
 /* Did each block's CHILDREN all have their text when it opened? A block whose
  * own source wanted a nested block's text cannot produce its text until it has
  * it, so the answer says whether the piece this round produced is the real one
@@ -191,15 +192,15 @@ Yv *mg_roots = 0;
 Yv *mg_root = 0;
 static Yv *mg_files = 0;
 static int mg_ready = 0;
-static long mg_first = 0;
-static long mg_p_at = -1;
+static ylong mg_first = 0;
+static ylong mg_p_at = -1;
 
 /* `dst += src` for a Y array: the elements of src appended to dst. Arrays are
  * reference values here (rule 1), so this is ya_push per element -- which is
  * what the Y `+=` on an array already is, and what makes the `a[i:j]` slices
  * elsewhere copy (rule 4). */
 static Yv *yadd(Yv *dst, Yv *src) {
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(src)) { dst = ya_push(dst, ya_get(src, i)); i = i + 1; };
     return dst;
 }
@@ -216,7 +217,7 @@ static Yv *scat3(Yv *a, Yv *b, Yv *c) {
  * put there, so "a top-level statement runs twice" does not fire on them.
  * Type Scan = { ok, err, eline, ecol, p, pf, pol, gen, g, gf, gol }. */
 
-static Yv *scan_bad(Yv *err, long line, long col) {
+static Yv *scan_bad(Yv *err, ylong line, ylong col) {
     return yr(11, "ok", yv_bool(0), "err", err, "eline", yv_long(line),
               "ecol", yv_long(col), "p", yav(0), "pf", yav(0), "pol", yav(0),
               "gen", yav(0), "g", yav(0), "gf", yav(0), "gol", yav(0));
@@ -231,11 +232,11 @@ static Yv *scan_bad(Yv *err, long line, long col) {
  * below breaks on every newline INCLUDING the last, so its line count is one
  * more and its output rejoins to the source; scan_none does not, and must not,
  * or the two paths would disagree on a file with no blocks in it. */
-Yv *scan_none(Yv *src, long fid) {
+Yv *scan_none(Yv *src, ylong fid) {
     Yv *lines = ys_split(src, ys("\n"));
     Yv *f = yav(0);
     Yv *l = yav(0);
-    long i = 0;
+    ylong i = 0;
     Yv *gn = yav(0);
     while (i < yv_len(lines)) {
         f = ya_push(f, yv_long(fid));
@@ -251,18 +252,18 @@ Yv *scan_none(Yv *src, long fid) {
 /* ── byte classes (the lexer's own predicates, spelled here because they are
  * not exported, and they must agree with lexer.c's wordbyte/isspace) ────── */
 
-static int m_word(long c) {
+static int m_word(ylong c) {
     return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
            (c >= '0' && c <= '9');
 }
 
-static int m_blank(long c) {
+static int m_blank(ylong c) {
     return c == ' ' || c == '\t' || c == '\n' || c == '\r';
 }
 
 /* The word at src[i], i known to be a word byte. */
-static Yv *m_word_at(Yv *src, long i, long n) {
-    long j = i + 1;
+static Yv *m_word_at(Yv *src, ylong i, ylong n) {
+    ylong j = i + 1;
     while (j < n && m_word(ys_byte_at(src, j))) { j = j + 1; };
     return ys_slice(src, i, j);
 }
@@ -270,7 +271,7 @@ static Yv *m_word_at(Yv *src, long i, long n) {
 /* Whether every byte of s is a blank. */
 static int m_all_blank(Yv *s) {
     int ok = 1;
-    long i = 0;
+    ylong i = 0;
     while (ok && i < yv_len(s)) {
         if (!m_blank(ys_byte_at(s, i))) { ok = 0; };
         i = i + 1;
@@ -281,7 +282,7 @@ static int m_all_blank(Yv *s) {
 /* The byte before src[i] (i > 0), or 0. (Unused by the pass, kept because
  * meta.y has it: a Y module-level def the checker never calls is not a
  * warning, a C `static` one is.) */
-long m_prev(Yv *src, long i) {
+ylong m_prev(Yv *src, ylong i) {
     return i <= 0 ? 0 : ys_byte_at(src, i - 1);
 }
 
@@ -294,7 +295,7 @@ long m_prev(Yv *src, long i) {
  * "Immediately before" -- a space is enough to make it a separate token, and a
  * separate token that starts an operand is not mid-token: `return #{ … }#`,
  * `f(#{ … }#, 2)` and `a[#{ … }#]` all keep the call in place. */
-static int m_token_end(long c) {
+static int m_token_end(ylong c) {
     if (c == 0) { return 0; }
     else if (c == ')' || c == ']' || c == '}' || c == '.' || c == '\'' || c == '"') { return 1; }
     else { return m_word(c); }
@@ -304,33 +305,33 @@ static int m_token_end(long c) {
 
 /* One byte of a [byte] value: asm.c's `bytes` is an array of longs, so a read
  * goes through ya_get where the Y twin reads b[at] directly. */
-static long mbyte(const Yv *b, long at) {
+static ylong mbyte(const Yv *b, ylong at) {
     return yv_l(ya_get(b, at));
 }
 
-static long rd16(const Yv *b, long at) {
+static ylong rd16(const Yv *b, ylong at) {
     return mbyte(b, at) + mbyte(b, at + 1) * 256;
 }
 
-static long rd32(const Yv *b, long at) {
+static ylong rd32(const Yv *b, ylong at) {
     return mbyte(b, at) + mbyte(b, at + 1) * 256 +
            mbyte(b, at + 2) * 65536 + mbyte(b, at + 3) * 16777216;
 }
 
-static long rd64(const Yv *b, long at) {
-    long lo = rd32(b, at);
-    long hi = rd32(b, at + 4);
+static ylong rd64(const Yv *b, ylong at) {
+    ylong lo = rd32(b, at);
+    ylong hi = rd32(b, at + 4);
     return lo + hi * 4294967296L;
 }
 
 /* …and the same read over raw bytes, for the two places that hold a C array
  * rather than a [byte] value: pipe(2)'s fd pair and the wait status. */
-static long crd32(const unsigned char *b, long at) {
+static ylong crd32(const unsigned char *b, ylong at) {
     return b[at] + b[at + 1] * 256 + b[at + 2] * 65536 + b[at + 3] * 16777216;
 }
 
 /* One byte written into a byte array. (Kept for the same reason as m_prev.) */
-long putb(Yv *buf, long at, long v) {
+ylong putb(Yv *buf, ylong at, ylong v) {
     ya_set(buf, at, yv_long(v));
     return 0;
 }
@@ -350,22 +351,22 @@ static Yv *img_bad(Yv *e) {
               yv_long(0), "bss_len", yv_long(0));
 }
 
-static Yv *img_ok(long bss_delta, long bss_len, long entry, long filesz,
-                  long memsz) {
+static Yv *img_ok(ylong bss_delta, ylong bss_len, ylong entry, ylong filesz,
+                  ylong memsz) {
     return yr(7, "ok", yv_bool(1), "err", ys(""), "filesz", yv_long(filesz),
               "memsz", yv_long(memsz), "entry", yv_long(entry), "bss_delta",
               yv_long(bss_delta), "bss_len", yv_long(bss_len));
 }
 
-static Yv *elf_img_bss(Yv *b, long n, long phoff, long phentsize, long phnum,
-                       long base, long eoff, long filesz, long memsz) {
+static Yv *elf_img_bss(Yv *b, ylong n, ylong phoff, ylong phentsize, ylong phnum,
+                       ylong base, ylong eoff, ylong filesz, ylong memsz) {
     (void)n;  /* the twin keeps it for symmetry; the range check is the caller's */
-    long k = 1;
+    ylong k = 1;
     int found = 0;
-    long vaddr = 0;
-    long msize = 0;
+    ylong vaddr = 0;
+    ylong msize = 0;
     while (k < phnum && !found) {
-        long ph = phoff + k * phentsize;
+        ylong ph = phoff + k * phentsize;
         if (rd32(b, ph + 4) == 6) {
             found = 1;
             vaddr = rd64(b, ph + 16);
@@ -382,18 +383,18 @@ static Yv *elf_img_bss(Yv *b, long n, long phoff, long phentsize, long phnum,
     }
 }
 
-static Yv *elf_img_ph(Yv *b, long n) {
-    long entry = rd64(b, 24);
-    long phoff = rd64(b, 32);
-    long phentsize = rd16(b, 54);
-    long phnum = rd16(b, 56);
+static Yv *elf_img_ph(Yv *b, ylong n) {
+    ylong entry = rd64(b, 24);
+    ylong phoff = rd64(b, 32);
+    ylong phentsize = rd16(b, 54);
+    ylong phnum = rd16(b, 56);
     if (phentsize < 56 || phoff + phentsize * phnum > n || phnum < 1) {
         return img_bad(ys("the image's program headers are out of range"));
     } else {
-        long base = rd64(b, phoff + 16);
-        long filesz = rd64(b, phoff + 32);
-        long memsz = rd64(b, phoff + 40);
-        long eoff = entry - base;
+        ylong base = rd64(b, phoff + 16);
+        ylong filesz = rd64(b, phoff + 32);
+        ylong memsz = rd64(b, phoff + 40);
+        ylong eoff = entry - base;
         if (filesz > n || memsz < filesz || eoff < 0 || eoff >= filesz) {
             return img_bad(ys("the image's entry point is outside its own code"));
         } else if (phnum < 2) {
@@ -406,7 +407,7 @@ static Yv *elf_img_ph(Yv *b, long n) {
 }
 
 Yv *elf_img(Yv *b) {
-    long n = yv_len(b);
+    ylong n = yv_len(b);
     if (n < 120) {
         return img_bad(ys("the image is too small to be an ELF file"));
     } else if (mbyte(b, 0) != 127 || mbyte(b, 1) != 69 || mbyte(b, 2) != 76 ||
@@ -427,35 +428,35 @@ Yv *elf_img(Yv *b) {
  * %rsp = S, so it reads argc at [S] and argv[0] at [S+8]. */
 #define MG_STACK 131072
 
-static long fab_stack(char *stk, Yv *av) {
+static ylong fab_stack(char *stk, Yv *av) {
     char *base = stk;
     char *p = base + MG_STACK;
-    long m = yv_len(av);
+    ylong m = yv_len(av);
     Yv *ptrs = yav(0);
-    long k = 0;
+    ylong k = 0;
     while (k < m) {
         Yv *s = ya_get(av, k);
-        long n = yv_len(s);
+        ylong n = yv_len(s);
         p = p - n - 1;
-        long at = p - base;
-        long j = 0;
+        ylong at = p - base;
+        ylong j = 0;
         while (j < n) { stk[at + j] = (char)(unsigned char)ys_byte_at(s, j); j = j + 1; };
         stk[at + n] = 0;
-        ptrs = ya_push(ptrs, yv_long((long)p));
+        ptrs = ya_push(ptrs, yv_long((ylong)p));
         k = k + 1;
     };
     p = p - 8 * (m + 1);
-    p = p - ((long)p % 8);
+    p = p - ((ylong)p % 8);
     k = 0;
     while (k < m) {
-        long v = yv_l(ya_get(ptrs, k));
+        ylong v = yv_l(ya_get(ptrs, k));
         memcpy(p + 8 * k, &v, 8);
         k = k + 1;
     };
     memset(p + 8 * m, 0, 8);
     p = p - 8;
     memcpy(p, &m, 8);
-    return (long)p;
+    return (ylong)p;
 }
 
 /* ── run_image ───────────────────────────────────────────────────────────
@@ -506,7 +507,7 @@ static long fab_stack(char *stk, Yv *av) {
  * garbage argc. */
 #define mg_jmp_at(addr) __asm__ volatile ("jmp *%0" : : "r"(addr) : "memory")
 
-static long page_up(long n) {
+static ylong page_up(ylong n) {
     return (n + 4095) / 4096 * 4096;
 }
 
@@ -515,15 +516,15 @@ static Yv *run_fail(Yv *e) {
               "out", yav(0), "err", e);
 }
 
-static long map_release(Yv *m);
+static ylong map_release(Yv *m);
 
 /* Put fd 3 back and unmap everything the run needed. ycc never frees, so this
  * is not about the heap: the mappings are outside it, and R8 counts them. */
-static long map_release(Yv *m) {
-    long keep = yv_l(yr_get(m, "keep"));
-    long rfd = yv_l(yr_get(m, "rfd"));
-    long img = yv_l(yr_get(m, "img"));
-    long span = yv_l(yr_get(m, "span"));
+static ylong map_release(Yv *m) {
+    ylong keep = yv_l(yr_get(m, "keep"));
+    ylong rfd = yv_l(yr_get(m, "rfd"));
+    ylong img = yv_l(yr_get(m, "img"));
+    ylong span = yv_l(yr_get(m, "span"));
     if (keep >= 0) {
         (void)syscall(MG_SYS_DUP2, keep, GUEST_FD, 0L);
         (void)syscall(MG_SYS_CLOSE, keep, 0L);
@@ -537,28 +538,28 @@ static long map_release(Yv *m) {
 
 /* Drain the pipe BEFORE the wait: a child writing more than a pipe buffer
  * would block forever with nobody reading. */
-static Yv *run_image_read(Yv *m, long pid) {
+static Yv *run_image_read(Yv *m, ylong pid) {
     Yv *out = yav(0);
-    long rfd = yv_l(yr_get(m, "rfd"));
+    ylong rfd = yv_l(yr_get(m, "rfd"));
     if (rfd >= 0) {
         unsigned char buf[65536];
         int more = 1;
         while (more) {
-            long k = (long)syscall(MG_SYS_READ, rfd, buf, 65536L);
+            ylong k = (ylong)syscall(MG_SYS_READ, rfd, buf, 65536L);
             if (k <= 0) {
                 more = 0;
             } else {
-                long i = 0;
+                ylong i = 0;
                 while (i < k) { out = ya_push(out, yv_long(buf[i])); i = i + 1; };
             };
         };
     };
     unsigned char ws[8];
     (void)syscall(MG_SYS_WAIT4, pid, ws, 0L, 0L);
-    long st = crd32(ws, 0);
-    long low = st % 128;
-    long status = 0;
-    long sig = 0;
+    ylong st = crd32(ws, 0);
+    ylong low = st % 128;
+    ylong status = 0;
+    ylong sig = 0;
     if (low == 0) { status = (st / 256) % 256; }
     else if (low != 127) { sig = low; };
     (void)map_release(m);
@@ -571,7 +572,7 @@ static Yv *run_image_read(Yv *m, long pid) {
  * child comes back from the syscall with %rax = 0 and %rsp = `sp`, still
  * running THIS code, one instruction later; jmp_at then hands it to the
  * image with %rsp exactly where fab_stack put it. */
-static Yv *run_image_fork(long sp, Yv *m, long wfd) {
+static Yv *run_image_fork(ylong sp, Yv *m, ylong wfd) {
     /* The clone(2) itself, in RAW asm and INLINE HERE -- not in a helper
      * function, and not through libc's syscall(). Both matter, and for the
      * same reason: the kernel sets the child's %rsp to the stack pointer we
@@ -584,7 +585,7 @@ static Yv *run_image_fork(long sp, Yv *m, long wfd) {
      *
      * Registers are the kernel's: %rax the number, then %rdi %rsi %rdx %r10
      * %r8 %r9; %rcx and %r11 are clobbered. */
-    long pid;
+    ylong pid;
     __asm__ volatile ("syscall"
                       : "=a"(pid)
                       : "a"(MG_SYS_CLONE), "D"(MG_SIGCHLD), "S"(sp), "d"(0L),
@@ -603,9 +604,9 @@ static Yv *run_image_fork(long sp, Yv *m, long wfd) {
     }
 }
 
-static Yv *run_image_clone(Yv *av, Yv *m, long wfd) {
+static Yv *run_image_clone(Yv *av, Yv *m, ylong wfd) {
     static char stk[MG_STACK];
-    long sp = fab_stack(stk, av);
+    ylong sp = fab_stack(stk, av);
     Yv *m2 = yr(6, "img", yr_get(m, "img"), "memsz", yr_get(m, "memsz"),
                 "entry", yr_get(m, "entry"), "span", yr_get(m, "span"),
                 "rfd", yr_get(m, "rfd"), "keep", yr_get(m, "keep"));
@@ -613,7 +614,7 @@ static Yv *run_image_clone(Yv *av, Yv *m, long wfd) {
         /* fd 3 is the child's way back: the injected helpers write pieces
          * there. fd 3 is saved and put back afterwards, so the compiler's own
          * fd 3 (if it had one) survives the run. */
-        yr_set(m2, "keep", yv_long((long)syscall(MG_SYS_DUP, GUEST_FD, 0L)));
+        yr_set(m2, "keep", yv_long((ylong)syscall(MG_SYS_DUP, GUEST_FD, 0L)));
         (void)syscall(MG_SYS_DUP2, wfd, GUEST_FD, 0L);
         (void)syscall(MG_SYS_CLOSE, wfd, 0L);
     };
@@ -624,17 +625,17 @@ static Yv *run_image_clone(Yv *av, Yv *m, long wfd) {
  * the ELF's own bytes, then the .bss at its own offset (elf_bss_from_ro puts
  * it a page past the image's last page, and that gap page is simply part of
  * the file's zeros). */
-static long image_fd_write(Yv *b, long fd, long span) {
-    long n = yv_len(b);
-    long off = 0;
+static ylong image_fd_write(Yv *b, ylong fd, ylong span) {
+    ylong n = yv_len(b);
+    ylong off = 0;
     unsigned char buf[65536];
     while (off < n) {
         /* the packed copy the Y twin gets from &b[0] (see the header note) */
-        long take = n - off;
-        long i = 0;
+        ylong take = n - off;
+        ylong i = 0;
         if (take > 65536) { take = 65536; };
         while (i < take) { buf[i] = (unsigned char)(mbyte(b, off + i) & 0xFF); i = i + 1; };
-        long k = (long)syscall(MG_SYS_WRITE, fd, buf, take);
+        ylong k = (ylong)syscall(MG_SYS_WRITE, fd, buf, take);
         if (k <= 0) {
             (void)syscall(MG_SYS_CLOSE, fd, 0L);
             fd = -1;
@@ -647,7 +648,7 @@ static long image_fd_write(Yv *b, long fd, long span) {
      * file gives SIGBUS rather than zeros, so the .bss needs the file to be
      * as long as the span. */
     if (fd >= 0) {
-        if ((long)syscall(MG_SYS_FTRUNCATE, fd, span, 0L, 0L, 0L) != 0) {
+        if ((ylong)syscall(MG_SYS_FTRUNCATE, fd, span, 0L, 0L, 0L) != 0) {
             (void)syscall(MG_SYS_CLOSE, fd, 0L);
             fd = -1;
         };
@@ -655,8 +656,8 @@ static long image_fd_write(Yv *b, long fd, long span) {
     return fd;
 }
 
-static long image_fd(Yv *b, long span) {
-    long fd = (long)syscall(MG_SYS_MEMFD, "ycc-image", 0L);
+static ylong image_fd(Yv *b, ylong span) {
+    ylong fd = (ylong)syscall(MG_SYS_MEMFD, "ycc-image", 0L);
     if (fd < 3) {
         return -1;
     } else {
@@ -664,22 +665,22 @@ static long image_fd(Yv *b, long span) {
     }
 }
 
-static Yv *run_image_fd(Yv *b, Yv *av, Yv *im, Yv *m0, long wfd) {
-    long span = yv_l(yr_get(m0, "span"));
-    long memsz = yv_l(yr_get(im, "memsz"));
-    long fd = image_fd(b, span);
+static Yv *run_image_fd(Yv *b, Yv *av, Yv *im, Yv *m0, ylong wfd) {
+    ylong span = yv_l(yr_get(m0, "span"));
+    ylong memsz = yv_l(yr_get(im, "memsz"));
+    ylong fd = image_fd(b, span);
     if (fd < 0) {
         return run_fail(ys("cannot make an anonymous file for the image"));
     } else {
         /* Writable to start with, so the .bss (which the file zeroes) is
          * usable; the code part is then narrowed to R|X. */
-        long img = (long)syscall(MG_SYS_MMAP, 0L, span, MG_PROT_RW,
+        ylong img = (ylong)syscall(MG_SYS_MMAP, 0L, span, MG_PROT_RW,
                                  MG_MAP_PRIVATE, fd, 0L);
         (void)syscall(MG_SYS_CLOSE, fd, 0L);
         if (img < 0) {
             return run_fail(scat3(ys("cannot map the image ("),
                                   ys_tostring(yv_long(img)), ys(")")));
-        } else if ((long)syscall(MG_SYS_MPROTECT, (void *)img, memsz,
+        } else if ((ylong)syscall(MG_SYS_MPROTECT, (void *)img, memsz,
                                  MG_PROT_RX, 0L, 0L) != 0) {
             (void)syscall(MG_SYS_MUNMAP, (void *)img, span, 0L);
             return run_fail(ys("cannot make the image's code read+execute"));
@@ -695,7 +696,7 @@ static Yv *run_image_fd(Yv *b, Yv *av, Yv *im, Yv *m0, long wfd) {
 /* The bytes the child needs addressable: the ELF's own image, plus the .bss at
  * the offset past it the ELF header says. The mapping covers the whole span in
  * one go, so nothing needs MAP_FIXED. */
-static long img_span(Yv *im) {
+static ylong img_span(Yv *im) {
     if (yv_l(yr_get(im, "bss_len")) == 0) {
         return page_up(yv_l(yr_get(im, "memsz")));
     } else {
@@ -715,13 +716,13 @@ static long img_span(Yv *im) {
  * hands out the lowest free number again. */
 static Yv *pipe_fds(void) {
     unsigned char pf[8];
-    if ((long)syscall(MG_SYS_PIPE, pf, pf + 4, 0L, 0L) != 0) {
+    if ((ylong)syscall(MG_SYS_PIPE, pf, pf + 4, 0L, 0L) != 0) {
         return yr(3, "ok", yv_bool(0), "rfd", yv_long(-1), "wfd", yv_long(-1));
     } else {
-        long r = crd32(pf, 0);
-        long w = crd32(pf, 4);
-        long r2 = (long)syscall(MG_SYS_FCNTL, r, MG_F_DUPFD, GUEST_FD + 1, 0L);
-        long w2 = (long)syscall(MG_SYS_FCNTL, w, MG_F_DUPFD, GUEST_FD + 1, 0L);
+        ylong r = crd32(pf, 0);
+        ylong w = crd32(pf, 4);
+        ylong r2 = (ylong)syscall(MG_SYS_FCNTL, r, MG_F_DUPFD, GUEST_FD + 1, 0L);
+        ylong w2 = (ylong)syscall(MG_SYS_FCNTL, w, MG_F_DUPFD, GUEST_FD + 1, 0L);
         (void)syscall(MG_SYS_CLOSE, r, 0L);
         (void)syscall(MG_SYS_CLOSE, w, 0L);
         if (r2 < 0 || w2 < 0) {
@@ -782,7 +783,7 @@ Yv *run_image(Yv *b, Yv *av, int want_out) {
  * one it STARTED at -- the honest origin for generated text. */
 
 static Yv *sg_src = 0;
-static long sg_fid = 0;
+static ylong sg_fid = 0;
 /* The dir of the file being scanned: a hoisted import path normalizes against
  * it, not against G's own dir. */
 static Yv *sg_dir = 0;
@@ -802,11 +803,11 @@ static Yv *sg_gol = 0;
  * hold all four -- so sg_pline is where the line STARTED, not where it ended. */
 static Yv *sg_pbuf = 0;
 static Yv *sg_gbuf = 0;
-static long sg_pline = 1;
-static long sg_gline = 1;
+static ylong sg_pline = 1;
+static ylong sg_gline = 1;
 /* Where the current G line starts inside sg_gbuf: what is between it and the
  * end is the code since the last newline, and that decides statement position. */
-static long sg_gat = 0;
+static ylong sg_gat = 0;
 /* ── the mid-token buffers ────────────────────────────────────────────────
  * A block that has no operand position at its own byte offset cannot put its
  * call there (see sg_open), so its call is written HERE instead of into
@@ -831,7 +832,7 @@ static int sg_mmid = 0;
 static Yv *sg_mbuf = 0;
 static Yv *sg_mol = 0;
 static int sg_molast = 0;
-static long sg_mline = 1;
+static ylong sg_mline = 1;
 /* The buffer of an enclosing block, saved while a nested one is held and
  * restored when it closes (so the nested call is hoisted out of it, not written
  * into it). */
@@ -844,7 +845,7 @@ static Yv *sg_mlinesave = 0;
  * and sg_drop to put it back where it was -- a dropped block's lines are gone,
  * so nothing may carry on counting from them. */
 static Yv *sg_glsave = 0;
-static long sg_glsaved = 1;
+static ylong sg_glsaved = 1;
 /* The hoisted calls, in CLOSE order: innermost first, then siblings in source
  * order -- which is exactly the order they have to run in. Each carries the
  * top-level statement it belongs to, so the move can order them per statement.
@@ -852,17 +853,17 @@ static long sg_glsaved = 1;
 static Yv *sg_mids = 0;
 /* The top-level statement in progress: its first token's position, and whether
  * one has been found yet (before it, everything is blanks and comments). */
-static long sg_tsline = 1;
-static long sg_tsoff = 0;
+static ylong sg_tsline = 1;
+static ylong sg_tsoff = 0;
 static int sg_tsp = 0;
 /* The depth of the innermost held block, 0 for none, recomputed by sg_m_live
  * whenever a block closes. A top-level `;` or `}` only ends a statement when no
  * block is held, so the anchor cannot land inside one of these hoisted calls. */
-static long sg_mdepth = 0;
-static long sg_line = 1;
-static long sg_col = 1;
+static ylong sg_mdepth = 0;
+static ylong sg_line = 1;
+static ylong sg_col = 1;
 /* 0 code, 1 a `//` comment, 2 a block comment, 3 a literal. */
-static long sg_state = 0;
+static ylong sg_state = 0;
 /* True when the next byte of code position may start a `def`, a `type`, an
  * `import` or a refused name: after a newline, a `;`, a `{`, a `}` or a `#{`.
  * Those are the only places a keyword can be, so the word is only read there --
@@ -873,7 +874,7 @@ static int sg_bound = 0;
  * (the `def` keyword itself, so the header's parameter list counts as the body
  * too). sg_tkind is what is being declared: 0 a `def`, 2 a `type`. */
 static Yv *sg_bkind = 0;
-static long sg_tkind = 0;
+static ylong sg_tkind = 0;
 static int sg_pending = 0;
 /* Per open block: whether only blanks have been seen since its `#{` (an
  * import is only hoistable then), the brace depth at its `#{`, whether it is in
@@ -894,30 +895,30 @@ static Yv *sg_bok = 0;
 static Yv *sg_bsplice = 0;
 static Yv *sg_bdead = 0;
 static Yv *sg_bhold = 0;
-static long sg_depth = 0;
+static ylong sg_depth = 0;
 /* The top-level statement in progress, for the reduction (mg_reduce): the line
  * of G it starts on, the text of the line in progress when it started and the
  * source line that line began at -- so a drop can put both back -- whether it is
  * a declaration, whether a block is inside it, and whether its first word has
  * not been read yet. */
-static long sg_rfrom = 0;
+static ylong sg_rfrom = 0;
 static Yv *sg_rtext = 0;
-static long sg_rgline = 1;
-static long sg_rbrace = 0;
+static ylong sg_rgline = 1;
+static ylong sg_rbrace = 0;
 static int sg_rkeep = 0;
 static int sg_rblk = 0;
 static int sg_rpend = 1;
 /* The first diagnostic, and where. The rest of the text is not scanned. */
 static Yv *sg_err = 0;
-static long sg_eline = 0;
-static long sg_ecol = 0;
+static ylong sg_eline = 0;
+static ylong sg_ecol = 0;
 /* Set while mg_probe scans: the probe is asking "is there a block in this
  * text", not "is this text a legal file", so it must read PAST a diagnostic
  * (the text it is given is G's own, whose `ycc_meta_stmt` calls the program's
  * own pass would refuse) instead of stopping at the first one. */
 static int sg_quiet = 0;
 
-static long sg_fail(Yv *msg, long line, long col) {
+static ylong sg_fail(Yv *msg, ylong line, ylong col) {
     if (ys_eq_lit(sg_err, "") && !sg_quiet) {
         sg_err = msg;
         sg_eline = line;
@@ -935,13 +936,13 @@ static long sg_fail(Yv *msg, long line, long col) {
  * word is one the reduction keeps, mg_stub is the stand-in a block runs when it
  * cannot produce its text, and mg_commit throws the stand-ins' pieces away. */
 static Yv *mg_lines(Yv *text);
-static long sg_region_open(void);
-static long sg_region_word(Yv *w);
+static ylong sg_region_open(void);
+static ylong sg_region_word(Yv *w);
 static int mg_directive(Yv *w);
-static Yv *mg_stub(long slot, int stmt);
-static long mg_commit(void);
+static Yv *mg_stub(ylong slot, int stmt);
+static ylong mg_commit(void);
 
-static long sg_gadd(Yv *t, int mid) {
+static ylong sg_gadd(Yv *t, int mid) {
     if (mid) { sg_mbuf = ys_cat(sg_mbuf, t); }
     else { sg_gbuf = ys_cat(sg_gbuf, t); };
     return 0;
@@ -951,7 +952,7 @@ static long sg_gadd(Yv *t, int mid) {
  * and nowhere else. sg_restore puts it back where it came from; sg_drop throws
  * it away. Nothing is written to the live buffer meanwhile, which is what makes
  * both safe. */
-static long sg_hold(void) {
+static ylong sg_hold(void) {
     sg_midsave = ya_push(sg_midsave, sg_mbuf);
     sg_molsave = ya_push(sg_molsave, sg_mol);
     sg_mlastsave = ya_push(sg_mlastsave, yv_bool(sg_molast));
@@ -968,7 +969,7 @@ static long sg_hold(void) {
 }
 
 /* The enclosing block's buffer back, whatever this one did with its own. */
-static long sg_m_pop(void) {
+static ylong sg_m_pop(void) {
     sg_mbuf = ya_get(sg_midsave, yv_len(sg_midsave) - 1);
     sg_midsave = ya_slice(sg_midsave, 0, yv_len(sg_midsave) - 1);
     sg_mol = ya_get(sg_molsave, yv_len(sg_molsave) - 1);
@@ -992,10 +993,10 @@ static long sg_m_pop(void) {
  * `pre`/`post` are the block's own call: the prefix cannot be written at the
  * `#{` any more, because whether this round has the text of every block inside
  * is only known at the `}#` (see sg_top_close). */
-static long sg_restore(Yv *pre, Yv *post) {
+static ylong sg_restore(Yv *pre, Yv *post) {
     Yv *segs = mg_lines(sg_mbuf);
-    long last = yv_len(segs) - 1;
-    long i = 0;
+    ylong last = yv_len(segs) - 1;
+    ylong i = 0;
     if (!ys_eq_lit(pre, "")) { sg_gbuf = ys_cat(sg_gbuf, pre); };
     while (i < yv_len(segs)) {
         if (i < last) {
@@ -1019,7 +1020,7 @@ static long sg_restore(Yv *pre, Yv *post) {
 /* The held text, thrown away: the block's lines are not in G and not in P, so
  * the line counter goes back to where the buffer began -- the text that follows
  * the block continues the line the block started on, not one of its own. */
-static long sg_drop(void) {
+static ylong sg_drop(void) {
     sg_gline = sg_glsaved;
     return sg_m_pop();
 }
@@ -1033,10 +1034,10 @@ static long sg_drop(void) {
  *
  * The block around it is always held, so the text goes to sg_mbuf; called
  * BEFORE sg_hold, because the text belongs to the enclosing block. */
-static long sg_splice(long slot, long at) {
+static ylong sg_splice(ylong slot, ylong at) {
     Yv *lines = mg_lines(ya_get(mg_piece, slot));
-    long last = yv_len(lines) - 1;
-    long i = 0;
+    ylong last = yv_len(lines) - 1;
+    ylong i = 0;
     while (i < yv_len(lines)) {
         sg_mbuf = ys_cat(sg_mbuf, ya_get(lines, i));
         if (i < last) {
@@ -1050,7 +1051,7 @@ static long sg_splice(long slot, long at) {
     return 0;
 }
 
-static long sg_ts_end(void) {
+static ylong sg_ts_end(void) {
     sg_tsp = 0;
     return 0;
 }
@@ -1062,9 +1063,9 @@ static long sg_ts_end(void) {
  * has started and nothing moves it. Blanks and comments therefore never become
  * the anchor, which is what puts a `// note` before a statement above it
  * rather than inside it. */
-static long sg_ts_go(Yv *t) {
+static ylong sg_ts_go(Yv *t) {
     if (!sg_tsp) {
-        long i = 0;
+        ylong i = 0;
         int go = 1;
         while (go && i < yv_len(t)) {
             if (!m_blank(ys_byte_at(t, i))) {
@@ -1085,7 +1086,7 @@ static long sg_ts_go(Yv *t) {
 static int sg_ml_go(Yv *t) {
     if (sg_molast) { return 1; }
     else {
-        long i = 0;
+        ylong i = 0;
         while (i < yv_len(t)) {
             if (!m_blank(ys_byte_at(t, i))) {
                 sg_molast = 1;
@@ -1102,7 +1103,7 @@ static int sg_ml_go(Yv *t) {
  * P has to drop the block whole. Blanks do not count towards the enclosing
  * block's "nothing but blanks yet" flag, which is what decides whether an
  * `import` there is at the block's top level. */
-static long sg_put(Yv *t) {
+static ylong sg_put(Yv *t) {
     if (yv_len(t) > 0) {
         int mid = sg_mmid;
         if (!mid) { (void)sg_ts_go(t); } else { sg_molast = sg_ml_go(t); };
@@ -1118,7 +1119,7 @@ static long sg_put(Yv *t) {
 }
 
 /* One byte that is never a blank: a delimiter, or a word's first byte. */
-static long sg_put1(Yv *c) {
+static ylong sg_put1(Yv *c) {
     if (sg_mmid) { if (!sg_molast) { sg_molast = 1; } }
     else { (void)sg_ts_go(c); };
     (void)sg_gadd(c, sg_mmid);
@@ -1140,7 +1141,7 @@ static long sg_put1(Yv *c) {
  * A mid-token block's call breaks into ITS buffer, and its origin goes with
  * the line: the call is hoisted to another statement afterwards, so the two
  * have to travel together or a diagnostic in G would name the wrong line. */
-static long sg_break(void) {
+static ylong sg_break(void) {
     if (sg_mmid) {
         sg_mol = ya_push(sg_mol, yv_long(sg_gline));
         sg_mbuf = ys_cat(sg_mbuf, ys("\n"));
@@ -1167,11 +1168,11 @@ static long sg_break(void) {
 /* sg_src[a:b] into both buffers, breaking lines on the newlines it holds. So
  * a literal or a comment that spans lines costs the lines it really has, and
  * the two texts stay in step with the source without either counting. */
-static long sg_out(long a, long b) {
-    long i = a;
+static ylong sg_out(ylong a, ylong b) {
+    ylong i = a;
     while (i < b) {
-        long nl = -1;
-        long j = i;
+        ylong nl = -1;
+        ylong j = i;
         int go = 1;
         while (go && j < b) {
             if (ys_byte_at(sg_src, j) == 10) { nl = j; go = 0; }
@@ -1189,7 +1190,7 @@ static long sg_out(long a, long b) {
     return 0;
 }
 
-static long sg_reset(Yv *src, long fid, Yv *dir) {
+static ylong sg_reset(Yv *src, ylong fid, Yv *dir) {
     sg_src = src;
     sg_fid = fid;
     sg_dir = dir;
@@ -1248,9 +1249,9 @@ static long sg_reset(Yv *src, long fid, Yv *dir) {
  * question and the header question separately. */
 static int sg_in_body(void) {
     int hit = 0;
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(sg_bkind)) {
-        long k = yv_l(ya_get(sg_bkind, i));
+        ylong k = yv_l(ya_get(sg_bkind, i));
         if (k == 1 || k == 2) { hit = 1; };
         i = i + 1;
     };
@@ -1287,11 +1288,11 @@ static int mg_reserved(Yv *w) {
  * and they can sit anywhere in an expression (`let t = spawn { … }` is not at
  * a statement boundary). So a block costs a check per word, and a file with no
  * blocks costs nothing. */
-static long sg_next(long i, long n) {
-    long j = i;
+static ylong sg_next(ylong i, ylong n) {
+    ylong j = i;
     int found = 0;
     while (j < n && !found) {
-        long c = ys_byte_at(sg_src, j);
+        ylong c = ys_byte_at(sg_src, j);
         if (c == '#' || c == '"' || c == '\'' || c == '/' || c == '{' ||
             c == '}' || c == ';' || c == 10) {
             found = 1;
@@ -1310,7 +1311,7 @@ static long sg_next(long i, long n) {
 static Yv *mg_norm_path(Yv *p) {
     Yv *parts = ys_split(p, ys("/"));
     Yv *out = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(parts)) {
         Yv *seg = ya_get(parts, i);
         if (!ys_eq_lit(seg, ".")) { out = ya_push(out, seg); };
@@ -1323,7 +1324,7 @@ static Yv *mg_norm_path(Yv *p) {
  * the splicer normalizes again on its own side, but this one decides WHICH file
  * the path means, so it has to collapse the "/./" a nested base dir carries. */
 static Yv *mg_import_line(Yv *rest, Yv *dir) {
-    long k = ys_index_of(rest, ys(" from "));
+    ylong k = ys_index_of(rest, ys(" from "));
     if (k < 0) {
         return ys_cat(ys("import "), rest);
     } else {
@@ -1346,21 +1347,21 @@ static Yv *mg_import_line(Yv *rest, Yv *dir) {
 /* An `import` inside a block, hoisted to the top of G so the existing splicer
  * resolves it: its dedup, its namespacing, its cycle detection and its
  * depth-32 diagnostic all come free. `after` is past the `import` keyword. */
-static long sg_import(long after, long n) {
-    long ignored = 0;
+static ylong sg_import(ylong after, ylong n) {
+    ylong ignored = 0;
     int top = 0;
-    long k = sg_depth - 1;
+    ylong k = sg_depth - 1;
     if (sg_depth > 0 && yv_truth(ya_get(sg_bclean, k)) &&
         yv_len(sg_bkind) == yv_l(ya_get(sg_bbrace, k))) { top = 1; };
     if (!top) {
         (void)sg_fail(ys("an import inside a meta block must come first in the block"), sg_line, sg_col);
         return after;
     } else {
-        long j = after;
+        ylong j = after;
         int go = 1;
-        long semi = 0;
+        ylong semi = 0;
         while (go && j < n) {
-            long c = ys_byte_at(sg_src, j);
+            ylong c = ys_byte_at(sg_src, j);
             if (c == '"' || c == '\'') {
                 j = lit_end(sg_src, j, &ignored);
             } else if (c == ';') {
@@ -1386,7 +1387,7 @@ static long sg_import(long after, long n) {
 /* A name the pass has an opinion about, in a block: one of the injected
  * helpers, or a thread/process primitive being CALLED or DEFINED (a variable or
  * a field of that name is fine, and so is the bare word). */
-static long sg_check_name(Yv *w, int called) {
+static ylong sg_check_name(Yv *w, int called) {
     if (mg_reserved(w)) {
         (void)sg_fail(scat3(ys("'"), w,
                             ys("' is reserved: the meta pass injects it into the generator")),
@@ -1399,10 +1400,10 @@ static long sg_check_name(Yv *w, int called) {
     return 0;
 }
 
-static long sg_word_go(Yv *w, long after, long n) {
+static ylong sg_word_go(Yv *w, ylong after, ylong n) {
     /* the first word of the statement in progress is what the reduction reads */
     if (mg_reduce && sg_depth == 0) { (void)sg_region_word(w); };
-    long j = after;
+    ylong j = after;
     int go = 1;
     while (go && j < n && (ys_byte_at(sg_src, j) == 32 ||
                            ys_byte_at(sg_src, j) == 9)) {
@@ -1431,8 +1432,8 @@ static long sg_word_go(Yv *w, long after, long n) {
  * `import` and the refused and reserved names; an ordinary name is nothing to
  * do. Returns where to carry on from -- which is past the word, and past an
  * `import` the caller must then not emit again. */
-static long sg_word(long i, long n) {
-    long k = i;
+static ylong sg_word(ylong i, ylong n) {
+    ylong k = i;
     int go = 1;
     while (go && k < n && (ys_byte_at(sg_src, k) == 32 ||
                            ys_byte_at(sg_src, k) == 9 ||
@@ -1441,7 +1442,7 @@ static long sg_word(long i, long n) {
     };
     if (k < n && m_word(ys_byte_at(sg_src, k))) {
         Yv *w = m_word_at(sg_src, k, n);
-        long after = k + yv_len(w);
+        ylong after = k + yv_len(w);
         if (ys_eq_lit(w, "import") && sg_depth > 0) {
             /* hoisted to the top of G, so it is not part of G's block text:
              * the blanks before it are, or the block's own column drifts */
@@ -1461,10 +1462,10 @@ static long sg_word(long i, long n) {
 /* Which G buffer is live now that the block has closed and the per-block
  * stacks have been popped: a held block's own if one is still open, and
  * sg_mdepth says at what depth (0 = the file's own buffer). */
-static long sg_m_live(void) {
+static ylong sg_m_live(void) {
     sg_mmid = 0;
     sg_mdepth = 0;
-    long k = sg_depth - 1;
+    ylong k = sg_depth - 1;
     while (k >= 0) {
         if (yv_truth(ya_get(sg_bhold, k))) { sg_mmid = 1; sg_mdepth = k + 1; };
         k = k - 1;
@@ -1476,13 +1477,13 @@ static long sg_m_live(void) {
  * is the same in every round and is never cleared; a slot nobody has reached yet
  * reads false. sg_open needs it BEFORE it has scanned the block's own body, to
  * know whether to hold that body. */
-static int mg_bkids_had(long slot) {
+static int mg_bkids_had(ylong slot) {
     while (yv_len(mg_bkids) <= slot) { mg_bkids = ya_push(mg_bkids, yv_bool(0)); };
     return yv_truth(ya_get(mg_bkids, slot));
 }
 
 /* Record the nesting shape: a block that opens inside another one. */
-static long mg_kid_note(long par) {
+static ylong mg_kid_note(ylong par) {
     while (yv_len(mg_bkids) <= par) { mg_bkids = ya_push(mg_bkids, yv_bool(0)); };
     ya_set(mg_bkids, par, yv_bool(1));
     return 0;
@@ -1507,7 +1508,7 @@ static long mg_kid_note(long par) {
  * "expected ';'"), so the regions here are exactly the statements. A block
  * statement has no terminator of its own and so runs on to the next one -- which
  * is harmless, because a region holding a block is never dropped. */
-static long sg_region_open(void) {
+static ylong sg_region_open(void) {
     /* The line in progress when a region starts belongs to the region that ENDS
      * here, not to this one: so it is kept aside, and dropping this region puts
      * it back. Everything else this region adds is whole G lines, so a drop is a
@@ -1530,7 +1531,7 @@ static long sg_region_open(void) {
  * a splicer directive is kept, anything else is the statement the reduction is
  * about. A region whose first token is not a word (`#{`, a digit, `(`) leaves
  * sg_rpend set, which costs nothing -- the region is over at the next `;`. */
-static long sg_region_word(Yv *w) {
+static ylong sg_region_word(Yv *w) {
     if (sg_rpend) {
         sg_rpend = 0;
         if (mg_directive(w)) { sg_rkeep = 1; };
@@ -1551,7 +1552,7 @@ static int mg_directive(Yv *w) {
  * its G lines go back to where it began. No hoisted call can point into a
  * dropped region -- a hoist belongs to a mid-token block, and a mid-token block
  * makes its region one that holds a block. */
-static long sg_region_close(void) {
+static ylong sg_region_close(void) {
     if (!sg_rkeep && !sg_rblk) {
         sg_g = ya_slice(sg_g, 0, sg_rfrom);
         sg_gf = ya_slice(sg_gf, 0, sg_rfrom);
@@ -1577,8 +1578,8 @@ static long sg_region_close(void) {
  * whether its text was in the table. A block with nothing inside is never held
  * and never comes through here, which is what keeps a program with no nesting on
  * the path the pass has always taken. */
-static long sg_top_close(long k) {
-    long slot = yv_l(ya_get(sg_bslot, k));
+static ylong sg_top_close(ylong k) {
+    ylong slot = yv_l(ya_get(sg_bslot, k));
     int stmt = yv_truth(ya_get(sg_bstmt, k));
     Yv *helper = ys("ycc_meta_expr");
     if (stmt) { helper = ys("ycc_meta_stmt"); };
@@ -1604,7 +1605,7 @@ static long sg_top_close(long k) {
  * helper and same position as the real call, with the body `0`: the statement
  * around it still compiles and still type-checks exactly as it did. Its piece is
  * "0", and mg_commit throws that away with everything else. */
-static Yv *mg_stub(long slot, int stmt) {
+static Yv *mg_stub(ylong slot, int stmt) {
     Yv *helper = ys("ycc_meta_expr");
     if (stmt) { helper = ys("ycc_meta_stmt"); };
     Yv *s = scat3(helper, ys("("),
@@ -1619,9 +1620,9 @@ static Yv *mg_stub(long slot, int stmt) {
  * would be swallowed. A piece is generated text, and every byte of it counts. */
 static Yv *mg_lines(Yv *text) {
     Yv *out = yav(0);
-    long n = yv_len(text);
-    long start = 0;
-    long i = 0;
+    ylong n = yv_len(text);
+    ylong start = 0;
+    ylong i = 0;
     while (i < n) {
         if (ys_byte_at(text, i) == 10) {
             out = ya_push(out, ys_slice(text, start, i));
@@ -1643,7 +1644,7 @@ static Yv *mg_lines(Yv *text) {
  * block is one that could not be an operand where it stands, and a nested block
  * is one whose enclosing block cannot compile this round -- so neither is an
  * expression by construction, whatever the text around it looks like. */
-static long sg_m_open(long slot) {
+static ylong sg_m_open(ylong slot) {
     (void)sg_hold();
     sg_mbuf = ys_cat(sg_mbuf, scat3(ys("ycc_meta_stmt("),
                                     ys_tostring(yv_long(slot)),
@@ -1656,7 +1657,7 @@ static long sg_m_open(long slot) {
  * one: close the call, record it with the statement to hoist it to, and give the
  * enclosing block its buffer back. Recorded in CLOSE order, which is the order
  * the calls have to run in. */
-static long sg_m_close(long k) {
+static ylong sg_m_close(ylong k) {
     /* A block that is hoisted is not compiled where it stands, so nothing about
      * its source is checked until the round that has its text -- and if one of
      * the blocks inside it has no text this round, its own source cannot compile
@@ -1673,15 +1674,15 @@ static long sg_m_close(long k) {
     };
     Yv *lines = mg_lines(sg_mbuf);
     Yv *ol = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(lines)) {
         if (i < yv_len(sg_mol)) { ol = ya_push(ol, ya_get(sg_mol, i)); }
         else if (sg_molast) { ol = ya_push(ol, yv_long(sg_mline)); }
         else { ol = ya_push(ol, yv_long(sg_gline)); };
         i = i + 1;
     };
-    long line = sg_tsline;
-    long off = sg_tsoff;
+    ylong line = sg_tsline;
+    ylong off = sg_tsoff;
     if (line < 1) { line = 1; };
     if (off < 0) { off = 0; };
     sg_mids = ya_push(sg_mids, yr(4, "line", yv_long(line), "off", yv_long(off),
@@ -1691,13 +1692,13 @@ static long sg_m_close(long k) {
 
 /* One call, into sg_g at its statement: the statement's line is split at the
  * anchor, the call's lines go between the halves, and its origins go with them. */
-static long sg_mids_one(long k) {
+static ylong sg_mids_one(ylong k) {
     Yv *m = ya_get(sg_mids, k);
-    long line = yv_l(yr_get(m, "line"));
-    long off = yv_l(yr_get(m, "off"));
+    ylong line = yv_l(yr_get(m, "line"));
+    ylong off = yv_l(yr_get(m, "off"));
     Yv *text = yr_get(m, "text");
     Yv *ol = yr_get(m, "ol");
-    long ln = line - 1;
+    ylong ln = line - 1;
     if (ln < 0) { ln = 0; };
     Yv *cur = ys("");
     if (ln < yv_len(sg_g)) { cur = ya_get(sg_g, ln); };
@@ -1712,11 +1713,11 @@ static long sg_mids_one(long k) {
         restf = ya_push(restf, yv_long(sg_fid));
         restl = ya_push(restl, yv_long(line));
     };
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(text)) {
         rest = ya_push(rest, ya_get(text, i));
         restf = ya_push(restf, yv_long(sg_fid));
-        long o = 0;
+        ylong o = 0;
         if (i < yv_len(ol)) { o = yv_l(ya_get(ol, i)); };
         restl = ya_push(restl, yv_long(o));
         i = i + 1;
@@ -1726,7 +1727,7 @@ static long sg_mids_one(long k) {
         restf = ya_push(restf, yv_long(sg_fid));
         restl = ya_push(restl, yv_long(line));
     };
-    long t = ln + 1;
+    ylong t = ln + 1;
     while (t < yv_len(sg_g)) {
         rest = ya_push(rest, ya_get(sg_g, t));
         restf = ya_push(restf, ya_get(sg_gf, t));
@@ -1741,11 +1742,11 @@ static long sg_mids_one(long k) {
 
 /* Whether move `a` belongs to a LATER statement (or the same one, further along
  * the list) than `b` -- so `a` is the next one out. */
-static int mg_after(long a, long b) {
+static int mg_after(ylong a, ylong b) {
     Yv *ma = ya_get(sg_mids, a);
     Yv *mb = ya_get(sg_mids, b);
-    long la = yv_l(yr_get(ma, "line"));
-    long lb = yv_l(yr_get(mb, "line"));
+    ylong la = yv_l(yr_get(ma, "line"));
+    ylong lb = yv_l(yr_get(mb, "line"));
     if (la != lb) { return la > lb; }
     else { return yv_l(yr_get(ma, "off")) > yv_l(yr_get(mb, "off")); }
 }
@@ -1756,15 +1757,15 @@ static int mg_after(long a, long b) {
  * before the one already there, which leaves them in the list's order. And the
  * statements are done from the last to the first, so an insertion never moves a
  * position a later pass still has to read. */
-static long sg_mids_move(void) {
-    long n = yv_len(sg_mids);
+static ylong sg_mids_move(void) {
+    ylong n = yv_len(sg_mids);
     Yv *done = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < n) { done = ya_push(done, yv_bool(0)); i = i + 1; };
-    long left = n;
+    ylong left = n;
     while (left > 0) {
-        long at = -1;
-        long j = 0;
+        ylong at = -1;
+        ylong j = 0;
         while (j < n) {
             if (!yv_truth(ya_get(done, j))) {
                 if (at < 0 || mg_after(j, at)) { at = j; };
@@ -1785,8 +1786,8 @@ static long sg_mids_move(void) {
 /* `#{` at i in code position: check it, record the block, open it, and read the
  * word after it (which may be an `import`). Returns where to carry on from, or
  * n when the block is refused. */
-static long sg_open(long i, long n) {
-    long prev = 0;
+static ylong sg_open(ylong i, ylong n) {
+    ylong prev = 0;
     if (i > 0) { prev = ys_byte_at(sg_src, i - 1); };
     int mid = sg_col > 1 && m_token_end(prev);
     /* A block may not be lexically inside a def or type body: in-place emission
@@ -1816,7 +1817,7 @@ static long sg_open(long i, long n) {
         return n;
     } else {
         int nested = sg_depth > 0;
-        long slot = mg_next;
+        ylong slot = mg_next;
         mg_next = slot + 1;
         /* What the block around this one (if any) does with it. A parent whose
          * text was already in the table is not compiled this round -- its text
@@ -1937,20 +1938,20 @@ static long sg_open(long i, long n) {
                           sg_mmid);
             sg_col = sg_col + 2;
         };
-        long k = sg_word(i + 2, n);
+        ylong k = sg_word(i + 2, n);
         sg_col = sg_col + (k - (i + 2));
         return k;
     }
 }
 
 /* `}#` with sg_depth == 0: nothing opened it. */
-static long sg_stray(long i) {
+static ylong sg_stray(ylong i) {
     (void)sg_fail(ys("'}#' in code position with no open meta block"), sg_line, sg_col);
     return i;
 }
 
 /* Whether the quote at i opens an f-string: `f` before it, standing alone. */
-static int sg_fstring(long i) {
+static int sg_fstring(ylong i) {
     return ys_byte_at(sg_src, i) == '"' && i > 0 &&
            ys_byte_at(sg_src, i - 1) == 'f' &&
            (i == 1 || !m_word(ys_byte_at(sg_src, i - 2)));
@@ -1964,15 +1965,15 @@ static int sg_fstring(long i) {
  * expression, and that expression may be a string literal, so its closing
  * quote is not the next quote in the source. The lexer's own fstr_walk finds
  * it, and it falls back to lit_end itself when the f-string is broken. */
-static long sg_literal(long i, long n) {
+static ylong sg_literal(ylong i, ylong n) {
     if (sg_fstring(i)) {
         Yv *w = fstr_walk(sg_src, i);
         (void)sg_out(i, yv_l(yr_get(w, "end")));
         sg_state = 0;
         return yv_l(yr_get(w, "end"));
     } else {
-        long cl = 0;
-        long end = lit_end(sg_src, i, &cl);
+        ylong cl = 0;
+        ylong end = lit_end(sg_src, i, &cl);
         if (cl == 0) {
             (void)sg_fail(ys("unterminated string literal"), sg_line, sg_col);
             return n;
@@ -1987,8 +1988,8 @@ static long sg_literal(long i, long n) {
 /* A block comment: verbatim, comments do not nest, and one that never closes
  * is fatal (the lexer treats it the same way -- the rest of the file would
  * silently disappear). */
-static long sg_block_comment(long i, long n) {
-    long j = i;
+static ylong sg_block_comment(ylong i, ylong n) {
+    ylong j = i;
     int go = 1;
     int found = 0;
     while (go && j + 1 < n) {
@@ -2014,8 +2015,8 @@ static long sg_block_comment(long i, long n) {
 
 /* A `//` comment: EVERYTHING to the newline is text, so the interesting bytes
  * in it are not interesting. */
-static long sg_line_comment(long i, long n) {
-    long j = i;
+static ylong sg_line_comment(ylong i, ylong n) {
+    ylong j = i;
     int go = 1;
     while (go && j < n) {
         if (ys_byte_at(sg_src, j) == 10) { go = 0; } else { j = j + 1; };
@@ -2034,7 +2035,7 @@ static long sg_line_comment(long i, long n) {
 /* `#` in code position: `#{` opens a block, anything else is an error. A stray
  * `#` already reaches the lexer as "expected an expression, got '#'"; this is
  * the same refusal with a message that names the construct. */
-static long sg_hash(long j, long n) {
+static ylong sg_hash(ylong j, ylong n) {
     if (j + 1 < n && ys_byte_at(sg_src, j + 1) == '{') {
         return sg_open(j, n);
     } else {
@@ -2045,13 +2046,13 @@ static long sg_hash(long j, long n) {
 
 /* `}`: the block's own close when it is followed by `#`, else an ordinary
  * brace. The block's `}` closes no Y brace -- its `{` was never pushed. */
-static long sg_close_brace(long j, long n) {
+static ylong sg_close_brace(ylong j, ylong n) {
     if (j + 1 < n && ys_byte_at(sg_src, j + 1) == '#') {
         if (sg_depth == 0) {
             (void)sg_stray(j);
             return n;
         } else {
-            long k = sg_depth - 1;
+            ylong k = sg_depth - 1;
             ya_set(mg_bok, yv_l(ya_get(sg_bslot, k)), ya_get(sg_bok, k));
             int stmt = yv_truth(ya_get(sg_bstmt, k));
             int ismid = yv_truth(ya_get(sg_bmid, k));
@@ -2132,7 +2133,7 @@ static long sg_close_brace(long j, long n) {
  * The two are told apart because only `def` marks its body with sg_pending: a
  * `type` header has braces of its own, so sg_in_body has to find its body on
  * the stack. `sg_tkind` is what is currently being declared. */
-static long sg_open_brace(long j, long n) {
+static ylong sg_open_brace(ylong j, ylong n) {
     if (sg_pending) {
         if (sg_tkind == 2) { sg_bkind = ya_push(sg_bkind, yv_long(2)); }
         else { sg_bkind = ya_push(sg_bkind, yv_long(1)); };
@@ -2146,7 +2147,7 @@ static long sg_open_brace(long j, long n) {
 }
 
 /* A slash: a line comment, a block comment, or division. */
-static long sg_slash(long j, long n) {
+static ylong sg_slash(ylong j, ylong n) {
     if (j + 1 < n && ys_byte_at(sg_src, j + 1) == '/') {
         sg_state = 1;
         (void)sg_put1(ys("/"));
@@ -2164,15 +2165,15 @@ static long sg_slash(long j, long n) {
 }
 
 /* Code position. `sg_bound` says a keyword may start at i. */
-static long sg_code(long i, long n) {
+static ylong sg_code(ylong i, ylong n) {
     if (sg_bound) {
         sg_bound = 0;
-        long k = sg_word(i, n);
+        ylong k = sg_word(i, n);
         if (k > i) { return k; }
     };
-    long j = sg_next(i, n);
+    ylong j = sg_next(i, n);
     (void)sg_out(i, j);
-    long c = 0;
+    ylong c = 0;
     if (j < n) { c = ys_byte_at(sg_src, j); };
     if (sg_depth > 0 && m_word(c)) {
         /* sg_next stops at a word start inside a block, so this is where a
@@ -2230,19 +2231,19 @@ static long sg_code(long i, long n) {
  * is wholly generated when every segment feeding it is -- which is what lint's
  * "a top-level statement runs twice" check needs to tell the user's own
  * statement from the text a block put there. */
-static long mg_emit(Yv *segs, Yv *sego, Yv *segp, long fid, Yv *nl, Yv *nf,
+static ylong mg_emit(Yv *segs, Yv *sego, Yv *segp, ylong fid, Yv *nl, Yv *nf,
                     Yv *nll, Yv *ngen) {
     Yv *cur = ys("");
-    long curo = 0;
+    ylong curo = 0;
     int cgen = 1;
-    long s = 0;
+    ylong s = 0;
     while (s < yv_len(segs)) {
         Yv *text = ya_get(segs, s);
-        long o = yv_l(ya_get(sego, s));
+        ylong o = yv_l(ya_get(sego, s));
         int p = 0;
         if (s < yv_len(segp)) { p = yv_truth(ya_get(segp, s)); };
         Yv *parts = mg_lines(text);
-        long k = 0;
+        ylong k = 0;
         while (k < yv_len(parts)) {
             if (k == 0) {
                 /* this part joins the line being built: it is that line's
@@ -2277,23 +2278,23 @@ static long mg_emit(Yv *segs, Yv *sego, Yv *segp, long fid, Yv *nl, Yv *nf,
  * line's index in sg_p and the block table is in the order the scanner found
  * the blocks, so the blocks for this line are the run that starts at the first
  * entry at or after `at` -- the run is skipped to, not merely tested for. */
-static long mg_splice_line(Yv *line, long ol, long at, long lo, long hi,
+static ylong mg_splice_line(Yv *line, ylong ol, ylong at, ylong lo, ylong hi,
                            Yv *nl, Yv *nf, Yv *nll, Yv *ngen) {
     Yv *segs = yav(0);
     Yv *sego = yav(0);
     Yv *segp = yav(0);
-    long prev = 0;
-    long k = lo;
+    ylong prev = 0;
+    ylong k = lo;
     while (k < hi && yv_l(ya_get(mg_bp, k)) < at) { k = k + 1; };
     int any = 0;
     while (k < hi && yv_l(ya_get(mg_bp, k)) == at) {
         any = 1;
-        long o = yv_l(ya_get(mg_bpo, k));
+        ylong o = yv_l(ya_get(mg_bpo, k));
         if (o >= prev && o <= yv_len(line)) {
             segs = ya_push(segs, ys_slice(line, prev, o));
             sego = ya_push(sego, yv_long(ol));
             segp = ya_push(segp, yv_bool(0));
-            long s = yv_l(ya_get(mg_bslot, k));
+            ylong s = yv_l(ya_get(mg_bslot, k));
             segs = ya_push(segs, ya_get(mg_piece, s));
             sego = ya_push(sego, ya_get(mg_bline, k));
             segp = ya_push(segp, yv_bool(1));
@@ -2315,7 +2316,7 @@ static long mg_splice_line(Yv *line, long ol, long at, long lo, long hi,
 
 /* Splice blocks [lo, hi) -- this file's -- into the scanned P. A no-op when the
  * pieces are not known yet (the collecting pass). */
-static long mg_splice(long lo, long hi) {
+static ylong mg_splice(ylong lo, ylong hi) {
     if (!mg_ready) { return 0; }
     else {
         Yv *lines = sg_p;
@@ -2324,7 +2325,7 @@ static long mg_splice(long lo, long hi) {
         Yv *nf = yav(0);
         Yv *nll = yav(0);
         Yv *ngen = yav(0);
-        long i = 0;
+        ylong i = 0;
         while (i < yv_len(lines)) {
             (void)mg_splice_line(ya_get(lines, i), yv_l(ya_get(ols, i)), i, lo,
                                  hi, nl, nf, nll, ngen);
@@ -2340,7 +2341,7 @@ static long mg_splice(long lo, long hi) {
 
 static Yv *meta_scan_end(void) {
     if (ys_eq_lit(sg_err, "") && sg_depth > 0) {
-        long ln = 1;
+        ylong ln = 1;
         if (mg_first < yv_len(mg_bline)) { ln = yv_l(ya_get(mg_bline, mg_first)); };
         (void)sg_fail(ys("unterminated #{ block: no }# before the end of the file"), ln, 1);
     };
@@ -2386,14 +2387,14 @@ static Yv *meta_scan_end(void) {
 /* The scan. One pass over the file's bytes: P and G come out of it as (line,
  * file, source line) triples, and the block table and hoisted imports go into
  * the module-level lists. */
-Yv *meta_scan(Yv *src, long fid, Yv *dir) {
+Yv *meta_scan(Yv *src, ylong fid, Yv *dir) {
     if (ys_index_of(src, ys("#")) < 0) {
         return scan_none(src, fid);
     } else {
         (void)sg_reset(src, fid, dir);
         mg_first = mg_next;
-        long n = yv_len(src);
-        long i = 0;
+        ylong n = yv_len(src);
+        ylong i = 0;
         while (i < n && ys_eq_lit(sg_err, "")) {
             if (sg_state == 0) {
                 i = sg_code(i, n);
@@ -2432,7 +2433,7 @@ Yv *meta_scan(Yv *src, long fid, Yv *dir) {
  * over the same files in the same order hands out the SAME slots: that is how
  * a piece the generator wrote is matched to the block that asked for it. The
  * pieces themselves survive -- they are what the second pass splices. */
-long mg_pass(void) {
+ylong mg_pass(void) {
     sg_quiet = 0;
     mg_next = 0;
     mg_g = yav(0);
@@ -2460,7 +2461,7 @@ long mg_pass(void) {
  * its piece is discarded (mg_take_pieces) -- leaving it here, and so asking for
  * another round. False means every piece is in and the pass is done. */
 int mg_pending(void) {
-    long i = 0;
+    ylong i = 0;
     int go = 0;
     while (i < mg_next) {
         if (yv_truth(ya_get(mg_need, i)) &&
@@ -2470,7 +2471,7 @@ int mg_pending(void) {
     return go;
 }
 
-long meta_begin(void) {
+ylong meta_begin(void) {
     mg_on = 1;
     mg_ready = 0;
     mg_root = ys("");
@@ -2495,7 +2496,7 @@ long meta_begin(void) {
 /* The reduction, turned on once a pass has found nesting. The collecting pass
  * never turns it on: it does not know yet, and a program with no nesting must
  * compile to exactly what it always did. */
-long mg_reduce_on(void) {
+ylong mg_reduce_on(void) {
     mg_reduce = 1;
     return 0;
 }
@@ -2504,7 +2505,7 @@ long mg_reduce_on(void) {
  * `meta.<field> = v` is a namespaced field ASSIGNMENT and strip_ns rewrites
  * only namespaced dot READS (it handles K.dot, not K.dotassign -- see
  * strip_ns), so a module cannot set another module's global by name. */
-long mg_setup(Yv *root, Yv *files, Yv *base, int exec, Yv *pkgs, Yv *roots) {
+ylong mg_setup(Yv *root, Yv *files, Yv *base, int exec, Yv *pkgs, Yv *roots) {
     mg_root = root;
     mg_files = files;
     mg_gbase = base;
@@ -2518,7 +2519,7 @@ long mg_setup(Yv *root, Yv *files, Yv *base, int exec, Yv *pkgs, Yv *roots) {
  * anything a generator emits is never re-scanned, so nothing in it can open a
  * block. This is what makes "a block's output may not contain a block" true by
  * construction rather than by checking. */
-long mg_set(int on) {
+ylong mg_set(int on) {
     mg_on = on;
     return 0;
 }
@@ -2527,7 +2528,7 @@ long mg_set(int on) {
  * warning, a C `static` one is.) */
 int mg_in(Yv *xs, Yv *s) {
     int hit = 0;
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(xs)) {
         if (ys_eq(ya_get(xs, i), s)) { hit = 1; };
         i = i + 1;
@@ -2538,7 +2539,7 @@ int mg_in(Yv *xs, Yv *s) {
 /* A fatal pass-level diagnostic. Every leak path out of the pass is one of
  * these, never a hand-off to the lexer (see the spec's invariant 1): whatever
  * `#{` the scanner was meant to catch is caught here, with its line. */
-long mg_report(Yv *msg) {
+ylong mg_report(Yv *msg) {
     puts_(ys_cat(ys("error: "), ys_cat(msg, ys("\n"))));
     exit_(1);
     return 0;
@@ -2578,12 +2579,12 @@ static Yv *mg_helpers(void) {
 Yv *meta_gtext(void) {
     Yv *out = yav(0);
     Yv *hs = mg_helpers();
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(hs)) {
         out = ya_push(out, ya_get(hs, i));
         i = i + 1;
     };
-    long k = 0;
+    ylong k = 0;
     while (k < yv_len(mg_imp)) {
         out = ya_push(out, ya_get(mg_imp, k));
         k = k + 1;
@@ -2594,20 +2595,20 @@ Yv *meta_gtext(void) {
 
 /* How many lines of G's origin map are the helpers and the hoisted imports:
  * the generator's body starts here, so a line index has to know. */
-long mg_ghead(void) {
+ylong mg_ghead(void) {
     return yv_len(mg_helpers()) + yv_len(mg_imp);
 }
 
 /* How many lines the generator's body is: the files' own lines, one for one. */
-long mg_glines(void) {
+ylong mg_glines(void) {
     return yv_len(mg_g);
 }
 
 /* Where the block that holds slot `s` stands, as `file:line`. */
-static Yv *mg_where(long s) {
-    long k = 0;
-    long ln = 0;
-    long f = 0;
+static Yv *mg_where(ylong s) {
+    ylong k = 0;
+    ylong ln = 0;
+    ylong f = 0;
     while (k < yv_len(mg_bslot)) {
         if (yv_l(ya_get(mg_bslot, k)) == s) {
             ln = yv_l(ya_get(mg_bline, k));
@@ -2624,24 +2625,24 @@ static Yv *mg_where(long s) {
 
 /* Split the pipe's bytes into pieces. A framing error means the generator did
  * not run our helpers, which cannot happen unless the pass is broken. */
-static long mg_unframe(Yv *data) {
-    long n = yv_len(data);
-    long i = 0;
+static ylong mg_unframe(Yv *data) {
+    ylong n = yv_len(data);
+    ylong i = 0;
     int bad = 0;
     while (i < n && !bad) {
-        long j = i;
+        ylong j = i;
         int go = 1;
         while (go && j < n && ys_byte_at(data, j) != 10) { j = j + 1; };
         if (j >= n) {
             bad = 1;
         } else {
             Yv *head = ys_slice(data, i, j);
-            long sp = ys_index_of(head, ys(" "));
+            ylong sp = ys_index_of(head, ys(" "));
             if (sp < 0) {
                 bad = 1;
             } else {
-                long slot = ys_tolong(ys_slice(head, 0, sp));
-                long take = ys_tolong(ys_slice_from(head, sp + 1));
+                ylong slot = ys_tolong(ys_slice(head, 0, sp));
+                ylong take = ys_tolong(ys_slice_from(head, sp + 1));
                 Yv *body = ys_slice(data, j + 1, j + 1 + take);
                 if (take < 0 || yv_len(body) != take || slot < 0 || slot >= mg_next) {
                     bad = 1;
@@ -2670,9 +2671,9 @@ static long mg_unframe(Yv *data) {
 /* The first slot with no piece, or -1. A block at the top level always runs
  * (the top level IS the generator's program), so a gap means the generator
  * did not reach it -- and the message can name it. */
-static long mg_first_missing(void) {
-    long at = -1;
-    long i = 0;
+static ylong mg_first_missing(void) {
+    ylong at = -1;
+    ylong i = 0;
     while (i < mg_next) {
         if (!yv_truth(ya_get(mg_have, i))) { at = i; };
         i = i + 1;
@@ -2682,7 +2683,7 @@ static long mg_first_missing(void) {
 
 /* ", and the first block that produced nothing was at ..." when there is one. */
 static Yv *mg_blame(void) {
-    long m = mg_first_missing();
+    ylong m = mg_first_missing();
     if (m < 0) { return ys(""); }
     else {
         return ys_cat(ys(", and the first block that produced nothing was at "),
@@ -2693,7 +2694,7 @@ static Yv *mg_blame(void) {
 /* The checks a piece must pass before it is spliced into the program's
  * source. Each names the block, because "the generator emitted something bad"
  * is not a message a reader can act on. */
-long mg_check(long s) {
+ylong mg_check(ylong s) {
     Yv *p = ys("");
     if (s < yv_len(mg_piece)) { p = ya_get(mg_piece, s); };
     if (ys_index_of(p, ys("#{")) >= 0) {
@@ -2710,7 +2711,7 @@ long mg_check(long s) {
 /* Read back what a run produced: check the child's fate, unframe, check every
  * piece, and report the first thing that is wrong. Returns false if the
  * generator died, having said as much as can be said. */
-int mg_take_pieces(long status, long sig, Yv *out) {
+int mg_take_pieces(ylong status, ylong sig, Yv *out) {
     int r = 1;
     /* sized FIRST: mg_blame asks which slots have no piece, so a generator
      * that died before writing anything must still leave the tables the right
@@ -2740,7 +2741,7 @@ int mg_take_pieces(long status, long sig, Yv *out) {
      * downstream can mistake the rest for it. mg_pending is what asks for the
      * next round. */
     (void)mg_commit();
-    long i = 0;
+    ylong i = 0;
     while (i < mg_next) {
         /* A block that ran for real owes the table a piece, and one that did not
          * run does not: a nested block whose text was spliced into the block
@@ -2764,8 +2765,8 @@ int mg_take_pieces(long status, long sig, Yv *out) {
  * The rest is already true of the table mg_unframe writes: a piece is marked
  * present only when it is framed, so a slot holding its piece from an earlier
  * round is not disturbed by a round that stubbed the block. */
-static long mg_commit(void) {
-    long i = 0;
+static ylong mg_commit(void) {
+    ylong i = 0;
     while (i < mg_next) {
         if (i < yv_len(mg_have) && yv_truth(ya_get(mg_have, i)) &&
             !yv_truth(ya_get(mg_bok, i))) {
@@ -2784,19 +2785,19 @@ static long mg_commit(void) {
  * block table saved and put back, so the probe cannot perturb the program's
  * own pass. */
 int mg_probe(Yv *src, Yv *dir) {
-    long n = mg_next;
+    ylong n = mg_next;
     Yv *bs = mg_bslot;
     Yv *bf = mg_bfile;
     Yv *bl = mg_bline;
     Yv *bp = mg_bp;
     Yv *bo = mg_bpo;
-    long bn = mg_nest;
+    ylong bn = mg_nest;
     Yv *bok = mg_bok;
     Yv *bli = mg_live;
     Yv *bne = mg_need;
-    long gn = mg_n;
-    long gi = yv_len(mg_imp);
-    long gl = yv_len(mg_g);
+    ylong gn = mg_n;
+    ylong gi = yv_len(mg_imp);
+    ylong gl = yv_len(mg_g);
     int was_quiet = sg_quiet;
     sg_quiet = 1;
     (void)meta_scan(src, 0, dir);

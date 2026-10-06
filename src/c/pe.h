@@ -45,17 +45,18 @@
 #ifndef PE_H
 #define PE_H
 
+#include "ylong.h"
 #include "yv.h"
 
 /* the Y twin's `export` list, one C prototype per def */
-Yv *pe_build(Yv *code, Yv *rodata, long entry_off, long bss_len, Yv *pdata,
+Yv *pe_build(Yv *code, Yv *rodata, ylong entry_off, ylong bss_len, Yv *pdata,
              Yv *xdata, Yv *dsecs, Yv *ddata, Yv *symtab);
-long pe_bss_from_ro(long code_len, long ro_len, long bss_len);
-long pe_text_base(void);
-long pe_align(long v, long a);
-Yv *pe_sec(Yv *name, long vsz, long rva, long rawptr, long chars);
+ylong pe_bss_from_ro(ylong code_len, ylong ro_len, ylong bss_len);
+ylong pe_text_base(void);
+ylong pe_align(ylong v, ylong a);
+Yv *pe_sec(Yv *name, ylong vsz, ylong rva, ylong rawptr, ylong chars);
 Yv *pe_place(Yv *secs);
 Yv *pe_find(Yv *secs, Yv *nm);
-long pe_headers_size(Yv *secs);
+ylong pe_headers_size(Yv *secs);
 
 #endif /* PE_H */

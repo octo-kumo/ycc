@@ -13,6 +13,7 @@
 #ifndef RENAME_H
 #define RENAME_H
 
+#include "ylong.h"
 #include "yv.h"
 
 /* scope state ({ scopes: [[{ orig: str, uniq: str }]], n: long }) */
@@ -21,15 +22,15 @@ Yv *rn_push(Yv *st);
 Yv *rn_pop(Yv *st);
 Yv *rn_define(Yv *st, Yv *orig, Yv *uniq);
 Yv *rn_lookup(Yv *st, Yv *name);
-Yv *rn_lookup_to(Yv *st, Yv *name, long lo);
+Yv *rn_lookup_to(Yv *st, Yv *name, ylong lo);
 Yv *rn_bind(Yv *st, Yv *orig, Yv *line, Yv *col);
-long rn_def_site(Yv *uniq);
-long rn_def_line(long st);
-long rn_def_col(long st);
+ylong rn_def_site(Yv *uniq);
+ylong rn_def_line(ylong st);
+ylong rn_def_col(ylong st);
 
 /* node lists and ids */
 Yv *rn_list(Yv *nodes, Yv *st);
-Yv *rn_id(Yv *st, Yv *name, long line, long col);
+Yv *rn_id(Yv *st, Yv *name, ylong line, ylong col);
 
 /* def pre-pass and redefinition shadowing */
 Yv *rn_prepass(Yv *stmts, Yv *st);
@@ -37,7 +38,7 @@ Yv *rn_prepass_one(Yv *s, Yv *st);
 Yv *rn_prepass_decl(Yv *s, Yv *st);
 Yv *rn_shadow_dups(Yv *stmts);
 Yv *rn_later(Yv *names);
-long rn_hash(Yv *s);
+ylong rn_hash(Yv *s);
 Yv *rn_decl_name(Yv *s);
 Yv *rn_decl_name_go(Yv *s);
 Yv *rn_rebuild_decl(Yv *s, Yv *newname);
@@ -117,15 +118,15 @@ Yv *rn_func_p2(Yv *func, Yv *fparams, Yv *fptypes, Yv *st);
 Yv *rn_func_p3(Yv *func, Yv *fparams, Yv *fptypes, Yv *fret, Yv *st);
 Yv *rn_func_p4(Yv *func, Yv *fparams, Yv *fptypes, Yv *fret, Yv *fbody,
                Yv *st);
-Yv *rn_func_p5(Yv *fparams, Yv *fptypes, Yv *fret, Yv *fbody, long fline,
-               long fcol, Yv *fppos, Yv *st);
-Yv *rn_func_params(Yv *fparams, Yv *fptypes, Yv *fret, Yv *fbody, long fline,
-                   long fcol, Yv *fppos, Yv *st);
-Yv *rn_func_go(Yv *fparams, Yv *fptypes, Yv *fret, Yv *fbody, long fline,
-               long fcol, Yv *fppos, Yv *params, long i, Yv *st);
-Yv *rn_func_body(Yv *fptypes, Yv *fret, Yv *fbody, long fline, long fcol,
+Yv *rn_func_p5(Yv *fparams, Yv *fptypes, Yv *fret, Yv *fbody, ylong fline,
+               ylong fcol, Yv *fppos, Yv *st);
+Yv *rn_func_params(Yv *fparams, Yv *fptypes, Yv *fret, Yv *fbody, ylong fline,
+                   ylong fcol, Yv *fppos, Yv *st);
+Yv *rn_func_go(Yv *fparams, Yv *fptypes, Yv *fret, Yv *fbody, ylong fline,
+               ylong fcol, Yv *fppos, Yv *params, ylong i, Yv *st);
+Yv *rn_func_body(Yv *fptypes, Yv *fret, Yv *fbody, ylong fline, ylong fcol,
                  Yv *fppos, Yv *params, Yv *st);
-Yv *rn_func_finish(Yv *fptypes, Yv *fret, Yv *fbody, long fline, long fcol,
+Yv *rn_func_finish(Yv *fptypes, Yv *fret, Yv *fbody, ylong fline, ylong fcol,
                    Yv *fppos, Yv *params, Yv *stmts, Yv *st);
 
 /* the module entry points (rename.y: export { rename_program,
@@ -136,30 +137,30 @@ Yv *rename_program_x2(Yv *ast, Yv *dfl, Yv *ofile, Yv *fmods);
 Yv *rn_stmt_mod(Yv *s);
 Yv *rn_qualify(Yv *s);
 Yv *rn_top(Yv *stmts, Yv *st);
-Yv *rename_program_go(Yv *stmts, long line, long col, Yv *dfl);
+Yv *rename_program_go(Yv *stmts, ylong line, ylong col, Yv *dfl);
 
 /* defaults, type aliases, match / slice-assign nodes */
 Yv *rn_note_defaults(Yv *st, Yv *uniq, Yv *func);
 Yv *rn_find_defaults(Yv *st, Yv *name);
-Yv *rn_fill_defaults(Yv *vals, Yv *args, long line, long col);
+Yv *rn_fill_defaults(Yv *vals, Yv *args, ylong line, ylong col);
 int rn_is_optarg(Yv *d);
 Yv *rn_type(Yv *st, Yv *t);
 Yv *rn_types(Yv *st, Yv *ts);
-Yv *rn_type_go(Yv *st, Yv *t, long depth);
-Yv *rn_type_name(Yv *st, Yv *name, Yv *t, long depth);
-long rn_alias_index(Yv *st, Yv *name);
-long rn_alias_index_go(Yv *st, Yv *name);
+Yv *rn_type_go(Yv *st, Yv *t, ylong depth);
+Yv *rn_type_name(Yv *st, Yv *name, Yv *t, ylong depth);
+ylong rn_alias_index(Yv *st, Yv *name);
+ylong rn_alias_index_go(Yv *st, Yv *name);
 Yv *rn_qual_type(Yv *t, Yv *m);
 Yv *rn_qual_list(Yv *ts, Yv *m);
-Yv *rn_tref(Yv *st, long id, Yv *name);
-int rn_reaches(Yv *st, long id, int bare);
-int rn_reaches_any(Yv *st, long id);
-int rn_reaches_go(Yv *st, Yv *t, long id, Yv *seen, int bare);
-Yv *rn_type_list(Yv *st, Yv *ts, long depth);
-Yv *rn_type_fields(Yv *st, Yv *fs, long depth);
+Yv *rn_tref(Yv *st, ylong id, Yv *name);
+int rn_reaches(Yv *st, ylong id, int bare);
+int rn_reaches_any(Yv *st, ylong id);
+int rn_reaches_go(Yv *st, Yv *t, ylong id, Yv *seen, int bare);
+Yv *rn_type_list(Yv *st, Yv *ts, ylong depth);
+Yv *rn_type_fields(Yv *st, Yv *fs, ylong depth);
 Yv *rn_union_flat(Yv *ts);
 Yv *rn_typedef_err(Yv *s, Yv *st);
-Yv *rn_unknown_err(Yv *name, long line, long col);
+Yv *rn_unknown_err(Yv *name, ylong line, ylong col);
 Yv *rn_unknown_type(Yv *st, Yv *t);
 Yv *rn_alias_known(Yv *st, Yv *name);
 Yv *rn_unknown_then(Yv *first, Yv *st, Yv *t);

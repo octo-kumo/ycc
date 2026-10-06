@@ -2,6 +2,7 @@
 // 1:1 port of src/y/target.y (see PORTING.md). The comment that matters
 // is in target.h: the module exists so every reader sees the binding
 // before it is read, and so a third target is a change here first.
+#include "ylong.h"
 #include "target.h"
 
 /* `let res_target = "linux";` — the Y twin's top-level initialiser.

@@ -71,7 +71,7 @@ requires byte-identical binaries).
    that matters, and `test/sh/test_lsp.sh`'s `t013_m4` checks the count
    against the compiler's own list, so a regression there fails loudly.)
 
-2. **Type map**: `long` → `long`, `float` → `double`, `bool` → `int`,
+2. **Type map**: `long` → `ylong`, `float` → `double`, `bool` → `int`,
    `str` → `Yv *`, every record/array/union/option type → `Yv *`.
    Boxing at the boundaries: `yv_long(x)` / `yv_l(v)`, `yv_bool(x)` /
    `yv_b(v)`, `yv_float(x)` / `yv_f(v)`. A `type` alias is `Yv *` too,
@@ -83,6 +83,19 @@ requires byte-identical binaries).
    `yr_get(node, "callee")`), and the identity helpers that give a
    literal its type (`normnode`, `normtype`, `type_node`; `tc_res(t, st)`
    is `yr(2, "typ", t, "st", st)`).
+
+    **`ylong` and not `long`** is the one mapping that is not literal. Y's
+    `long` is 64 bits everywhere, but C's `long` is 64 on LP64 and 32 on
+    Windows (LLP64), and the C copy's whole value model (`Yv.l`, the checker's
+    constants, the emitter's offsets) assumes 64 -- the W1 `cycc.exe` build is
+    how that stopped being a latent bug. `src/c/ylong.h` is `typedef long
+    ylong` on LP64 (so the Linux build and every byte it emits are unchanged)
+    and `typedef int64_t ylong` on `_WIN32`. Every `long` in `src/c` is
+    `ylong`; the exceptions are the spellings a typedef cannot take --
+    `long long` stays `long long`, `unsigned long` became `unsigned long long`
+    -- plus the system calls that want C's own `long`, of which the code has
+    none left (`strtol` -> `strtoll`, and the two `%ld` sites print a
+    `long long`).
 
 3. **Records** are insertion-ordered key/value records (`yr*`), and this
    is what a record *literal in the compiler's own source* ports to:

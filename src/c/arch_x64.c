@@ -1,6 +1,7 @@
 // arch_x64.c — Linux x86_64 code emitters for the native backend (ycc).
 // 1:1 port of src/y/arch_x64.y (see PORTING.md): same defs in the same
 // order, same control flow, character-identical asm text.
+#include "ylong.h"
 #include "arch_x64.h"
 #include "target.h"
 
@@ -26,11 +27,11 @@ Y_EMBED(MATH_ASM, "src/y/arch/math.s")
    each is static here; arch_windows_lines is forward-declared because
    arch_prelude_lines above calls it, exactly as the Y module's own order has
    it. */
-static long l_sysno(Yv *name);
-static long w_sysno(Yv *name);
+static ylong l_sysno(Yv *name);
+static ylong w_sysno(Yv *name);
 static Yv *arch_windows_lines(void);
 static Yv *arch_win_blocks(Yv *lines);
-static long arch_win_check(Yv *lines, Yv *blocks);
+static ylong arch_win_check(Yv *lines, Yv *blocks);
 static int arch_win_labeled(Yv *lines, Yv *nm);
 static Yv *arch_win_marker(Yv *l);
 static Yv *arch_win_tail(Yv *mode, Yv *name);
@@ -38,7 +39,7 @@ static Yv *arch_win_head(Yv *nm);
 static int arch_is_label_line(Yv *l);
 static Yv *arch_win_sub(Yv *lines, Yv *blocks);
 static Yv *arch_win_split(Yv *out);
-static long arch_win_find(Yv *blocks, Yv *nm);
+static ylong arch_win_find(Yv *blocks, Yv *nm);
 static Yv *arch_win_push(Yv *out, Yv *l);
 
 /* the twin of arch_x64.y's arch_asm_lines: the embedded text as prelude
@@ -53,7 +54,7 @@ static Yv *arch_win_push(Yv *out, Yv *l);
 static Yv *arch_asm_lines(Yv *text) {
     Yv *out = yav(0);
     Yv *all = ys_split(text, ys("\n"));
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(all)) {
         Yv *l = ya_get(all, i);
         if (yv_len(l) > 0 && ys_byte_at(l, 0) != 35) {
@@ -69,7 +70,7 @@ Yv *arch_id(void) {
     else { return ys("x86_64-linux"); }
 }
 
-long arch_word(void) {
+ylong arch_word(void) {
     return 8;
 }
 
@@ -81,12 +82,12 @@ long arch_word(void) {
 // one table here, read off the stubs in a real ntdll rather than written from
 // memory. w_self_test would probe one call per class at program start, and
 // does not yet -- see its own comment below.
-long arch_sysno(Yv *name) {
+ylong arch_sysno(Yv *name) {
     if (target_is_windows()) { return w_sysno(name); }
     else { return l_sysno(name); }
 }
 
-static long l_sysno(Yv *name) {
+static ylong l_sysno(Yv *name) {
     if (ys_eq_lit(name, "read")) { return 0; }
     else if (ys_eq_lit(name, "write")) { return 1; }
     else if (ys_eq_lit(name, "close")) { return 3; }
@@ -100,7 +101,7 @@ static long l_sysno(Yv *name) {
 // of the corresponding stub in a real ntdll.dll's .text (a leftover Linux
 // number silently calls a real, different Nt function, which is exactly why
 // this is one table a review can read at once).
-static long w_sysno(Yv *name) {
+static ylong w_sysno(Yv *name) {
     if (ys_eq_lit(name, "write")) { return 8; }              /* NtWriteFile */
     else if (ys_eq_lit(name, "read")) { return 6; }          /* NtReadFile */
     else if (ys_eq_lit(name, "close")) { return 15; }        /* NtClose */
@@ -132,19 +133,19 @@ Yv *w_self_test_lines(void) {
     return yav(0);
 }
 
-Yv *arch_fn_label(long uid, Yv *name) {
+Yv *arch_fn_label(ylong uid, Yv *name) {
     return ys_cat(ys_cat(ys_cat(ys("yfn_"), ys_long(uid)), ys("_")), name);
 }
 
-Yv *arch_global_label(long uid, Yv *name) {
+Yv *arch_global_label(ylong uid, Yv *name) {
     return ys_cat(ys_cat(ys_cat(ys("yg_"), ys_long(uid)), ys("_")), name);
 }
 
-Yv *arch_loc_label(long fuid, long n) {
+Yv *arch_loc_label(ylong fuid, ylong n) {
     return ys_cat(ys_cat(ys_cat(ys("yL_"), ys_long(fuid)), ys("_")), ys_long(n));
 }
 
-Yv *arch_str_label(long i) {
+Yv *arch_str_label(ylong i) {
     return ys_cat(ys("ystr_"), ys_long(i));
 }
 
@@ -188,9 +189,9 @@ Yv *arch_heap_cells(void) {
     return ys("y_heap:\n.zero 32\n");
 }
 
-long arch_frame(long slots) {
+ylong arch_frame(ylong slots) {
     // slots * 8, rounded up to a multiple of 16 (call alignment)
-    long bytes = slots * 8;
+    ylong bytes = slots * 8;
     if (bytes % 16 == 0) { return bytes; } else { return bytes + (16 - bytes % 16); }
 }
 
@@ -284,7 +285,7 @@ Yv *arch_consts(void) {
 // gives GNU as a second opinion on wsys.s as well.
 static Yv *arch_windows_lines(void) {
     Yv *blocks = arch_win_blocks(ys_split(W_SYS_ASM(), ys("\n")));
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(blocks)) {
         if (ys_eq_lit(ya_get(ya_get(blocks, i), 1), "2")) {
             puts_(ys_cat(ys_cat(ys("error: arch/wsys.s: bad block marker ('"),
@@ -306,8 +307,8 @@ static Yv *arch_windows_lines(void) {
 // code in a Windows binary -- the failure mode with no symptom until the
 // program calls the wrong syscall. It cost one whole debugging session to
 // earn, which is why it is a hard error rather than a comment.
-static long arch_win_check(Yv *lines, Yv *blocks) {
-    long i = 0;
+static ylong arch_win_check(Yv *lines, Yv *blocks) {
+    ylong i = 0;
     while (i < yv_len(blocks)) {
         if (ys_eq_lit(ya_get(ya_get(blocks, i), 1), "0")) {
             if (arch_win_labeled(lines, ya_get(ya_get(blocks, i), 0))) { /* found */ }
@@ -324,7 +325,7 @@ static long arch_win_check(Yv *lines, Yv *blocks) {
 }
 
 static int arch_win_labeled(Yv *lines, Yv *nm) {
-    long i = 0;
+    ylong i = 0;
     int found = 0;
     while (i < yv_len(lines)) {
         Yv *l = ya_get(lines, i);
@@ -340,7 +341,7 @@ static int arch_win_labeled(Yv *lines, Yv *nm) {
 static Yv *arch_win_blocks(Yv *lines) {
     Yv *out = yav(0);
     Yv *cur = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(lines)) {
         Yv *l = ya_get(lines, i);
         Yv *mk = arch_win_marker(l);
@@ -371,7 +372,7 @@ static Yv *arch_win_marker(Yv *l) {
         return ys("");
     }
     Yv *body = ys_slice_from(l, 4);
-    long colon = ys_index_of(body, ys(":"));
+    ylong colon = ys_index_of(body, ys(":"));
     if (colon < 0) { return ys("?"); }
     else {
         return arch_win_tail(ys_trim(ys_slice(body, 0, colon)),
@@ -382,7 +383,7 @@ static Yv *arch_win_marker(Yv *l) {
 // "replace: y_alloc_map ===" -> "replace: y_alloc_map". The closing "==="
 // goes by SUFFIX: index_of would find the marker line's OWN leading "===".
 static Yv *arch_win_tail(Yv *mode, Yv *name) {
-    long k = yv_len(name) - 3;
+    ylong k = yv_len(name) - 3;
     if (k >= 0 && ys_eq(ys_slice_from(name, k), ys("==="))) {
         return ys_cat(ys_cat(mode, ys(": ")), ys_trim(ys_slice(name, 0, k)));
     } else { return ys("?"); }
@@ -411,10 +412,10 @@ static int arch_is_label_line(Yv *l) {
 // not the prelude's. The new blocks go after the last replaced one.
 static Yv *arch_win_sub(Yv *lines, Yv *blocks) {
     Yv *out = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(lines)) {
         Yv *l = ya_get(lines, i);
-        long b = -1;
+        ylong b = -1;
         if (arch_is_label_line(l)) {
             b = arch_win_find(blocks, ys_trim(ys_slice(l, 0, yv_len(l) - 1)));
         }
@@ -443,10 +444,10 @@ static Yv *arch_win_sub(Yv *lines, Yv *blocks) {
 
 static Yv *arch_win_split(Yv *out) {
     Yv *res = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(out)) {
         Yv *parts = ys_split(ya_get(out, i), ys("\n"));
-        long j = 0;
+        ylong j = 0;
         while (j < yv_len(parts)) {
             if (yv_len(ya_get(parts, j)) > 0) { res = ya_push(res, ya_get(parts, j)); }
             j = j + 1;
@@ -458,9 +459,9 @@ static Yv *arch_win_split(Yv *out) {
 
 // The block that replaces `nm`, or -1 when wsys.s does not define one (mode
 // "0", name `nm`).
-static long arch_win_find(Yv *blocks, Yv *nm) {
-    long at = -1;
-    long i = 0;
+static ylong arch_win_find(Yv *blocks, Yv *nm) {
+    ylong at = -1;
+    ylong i = 0;
     while (i < yv_len(blocks)) {
         Yv *blk = ya_get(blocks, i);
         if (ys_eq_lit(ya_get(blk, 1), "0") && ys_eq(ya_get(blk, 0), nm)) { at = i; }

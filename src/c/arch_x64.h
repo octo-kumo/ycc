@@ -9,15 +9,16 @@
 #ifndef ARCH_X64_H
 #define ARCH_X64_H
 
+#include "ylong.h"
 #include "yv.h"
 
 Yv *arch_id(void);
-long arch_word(void);
-long arch_sysno(Yv *name);
-Yv *arch_fn_label(long uid, Yv *name);
-Yv *arch_global_label(long uid, Yv *name);
-Yv *arch_loc_label(long fuid, long n);
-Yv *arch_str_label(long i);
+ylong arch_word(void);
+ylong arch_sysno(Yv *name);
+Yv *arch_fn_label(ylong uid, Yv *name);
+Yv *arch_global_label(ylong uid, Yv *name);
+Yv *arch_loc_label(ylong fuid, ylong n);
+Yv *arch_str_label(ylong i);
 Yv *arch_header(void);
 Yv *arch_rodata(void);
 Yv *arch_text(void);
@@ -28,7 +29,7 @@ Yv *arch_prelude_lines(void);
 Yv *arch_prelude_threads_lines(void);
 Yv *arch_math_lines(void);
 Yv *arch_consts(void);
-long arch_frame(long slots);
+ylong arch_frame(ylong slots);
 Yv *arch_exit(void);
 
 #endif /* ARCH_X64_H */

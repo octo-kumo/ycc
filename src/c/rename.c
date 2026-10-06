@@ -31,6 +31,7 @@
  * Yv * here): rename.y calls only its own defs and the string/array
  * builtins (`+`, len, tostring, push -> ys_cat/yv_len/ys_long/ya_push). */
 
+#include "ylong.h"
 #include "rename.h"
 #include "tags.h"
 #include "parser.h"
@@ -106,13 +107,13 @@ Yv *rn_lookup(Yv *st, Yv *name) {
  * 256 names (a small one scans faster than it hashes); rn_ixn of them
  * are in it. */
 static Yv *rn_ix;
-static long rn_ixn;
+static ylong rn_ixn;
 
-Yv *rn_lookup_to(Yv *st, Yv *name, long lo) {
+Yv *rn_lookup_to(Yv *st, Yv *name, ylong lo) {
     /* Innermost scope first; within a frame, the NEWEST binding wins
      * (a later let shadows an earlier one). */
     Yv *all = yr_get(st, "scopes");
-    long i = yv_len(all) - 1;
+    ylong i = yv_len(all) - 1;
     Yv *found = ys("");
     while (i >= lo) {
         Yv *frame = ya_get(all, i);
@@ -127,13 +128,13 @@ Yv *rn_lookup_to(Yv *st, Yv *name, long lo) {
                 }
                 rn_ixn = rn_ixn + 1;
             }
-            long at = nameix_get(rn_ix, name);
+            ylong at = nameix_get(rn_ix, name);
             if (at >= 0) {
                 found = yr_get(ya_get(frame, at), "uniq");
                 i = -1;
             }
         } else {
-            long j = yv_len(frame) - 1;
+            ylong j = yv_len(frame) - 1;
             while (j >= 0) {
                 Yv *e = ya_get(frame, j);
                 if (ys_eq(yr_get(e, "orig"), name)) {
@@ -191,10 +192,10 @@ Yv *rn_bind(Yv *st, Yv *orig, Yv *line, Yv *col) {
 
 /* The def site of `uniq`, packed, or -1. -1 is the sentinel and a consumer must
  * read it as "no site in the source", never as line -1. */
-long rn_def_site(Yv *uniq) {
-    long out = -1;
+ylong rn_def_site(Yv *uniq) {
+    ylong out = -1;
     if (rn_want_defs) {
-        long packed = nameix_get(rn_defs, uniq);
+        ylong packed = nameix_get(rn_defs, uniq);
         if (packed >= 0) {
             out = packed;
         }
@@ -202,12 +203,12 @@ long rn_def_site(Yv *uniq) {
     return out;
 }
 
-long rn_def_line(long st) { return st / 65536; }
-long rn_def_col(long st) { return st % 65536; }
+ylong rn_def_line(ylong st) { return st / 65536; }
+ylong rn_def_col(ylong st) { return st % 65536; }
 
 Yv *rn_list(Yv *nodes, Yv *st) {
     Yv *out = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(nodes)) {
         Yv *r = rn_node(ya_get(nodes, i), st);
         st = yr_get(r, "st");
@@ -217,7 +218,7 @@ Yv *rn_list(Yv *nodes, Yv *st) {
     return yr(2, "st", st, "nodes", out);
 }
 
-Yv *rn_id(Yv *st, Yv *name, long line, long col) {
+Yv *rn_id(Yv *st, Yv *name, ylong line, ylong col) {
     Yv *u = rn_lookup(st, name);
     if (ys_eq_lit(u, "")) {
         return yr(2, "st", st, "node",
@@ -236,7 +237,7 @@ Yv *rn_prepass(Yv *stmts, Yv *st) {
     /* NOTE: stmts elements are bare {k}-holes at the boundary (like res);
      * pass each element as a BARE value (rn_prepass_one takes unannotated
      * s) so field reads resolve via the tcompat law, not merged shapes. */
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(stmts)) {
         st = rn_prepass_one(ya_get(stmts, i), st);
         i = i + 1;
@@ -287,7 +288,7 @@ Yv *rn_prepass_decl(Yv *s, Yv *st) {
  * direct call that leaves trailing arguments out gets them filled in. */
 Yv *rn_note_defaults(Yv *st, Yv *uniq, Yv *func) {
     Yv *dv = yr_get(func, "defs");
-    long i = 0;
+    ylong i = 0;
     int any = 0;
     while (i < yv_len(dv)) {
         if (yv_l(yr_get(ya_get(dv, i), "k")) != K_void) {
@@ -305,7 +306,7 @@ Yv *rn_note_defaults(Yv *st, Yv *uniq, Yv *func) {
 Yv *rn_find_defaults(Yv *st, Yv *name) {
     Yv *out = yav(0);
     Yv *ds = yr_get(st, "dfl");
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(ds)) {
         Yv *d = ya_get(ds, i);
         if (ys_eq(yr_get(d, "name"), name)) {
@@ -319,13 +320,13 @@ Yv *rn_find_defaults(Yv *st, Yv *name) {
 /* args + the defaults of the missing trailing parameters -- only when
  * every one of them has a default. An optional parameter (`b?: T`, its
  * default marked `optarg`) gets some(arg) when the call passes it, none when not. */
-Yv *rn_fill_defaults(Yv *vals, Yv *args, long line, long col) {
-    long n = yv_len(args);
+Yv *rn_fill_defaults(Yv *vals, Yv *args, ylong line, ylong col) {
+    ylong n = yv_len(args);
     if (yv_len(vals) == 0) {
         return args;
     } else {
         int ok = 1;
-        long i = n;
+        ylong i = n;
         while (i < yv_len(vals)) {
             if (yv_l(yr_get(ya_get(vals, i), "k")) == K_void) {
                 ok = 0;
@@ -333,7 +334,7 @@ Yv *rn_fill_defaults(Yv *vals, Yv *args, long line, long col) {
             i = i + 1;
         }
         Yv *out = yav(0);
-        long j = 0;
+        ylong j = 0;
         while (j < n) {
             if (j < yv_len(vals) && rn_is_optarg(ya_get(vals, j))) {
                 Yv *one = yav(0);
@@ -401,7 +402,7 @@ static Yv *rn_tref_nodes;
  * and for each program (rename_program_x). Every alias reference in every
  * annotation asks, and the walk visits every alias it reaches. */
 static Yv *rn_reach_memo;
-static long rn_reach_n = -1;
+static ylong rn_reach_n = -1;
 
 /* t with each name of an alias module m declares at its top level
  * written `m.T` (a module's alias is registered under that name). */
@@ -428,7 +429,7 @@ Yv *rn_qual_type(Yv *t, Yv *m) {
     } else if (yv_l(k) == K_trec) {
         Yv *fs = yr_get(t, "fields");
         Yv *out = yav(0);
-        for (long i = 0; i < yv_len(fs); i++) {
+        for (ylong i = 0; i < yv_len(fs); i++) {
             Yv *f = ya_get(fs, i);
             out = ya_push(out, yr(3, "name", yr_get(f, "name"), "opt", yr_get(f, "opt"),
                                   "typ", rn_qual_type(yr_get(f, "typ"), m)));
@@ -448,7 +449,7 @@ Yv *rn_qual_type(Yv *t, Yv *m) {
 
 Yv *rn_qual_list(Yv *ts, Yv *m) {
     Yv *out = yav(0);
-    for (long i = 0; i < yv_len(ts); i++) {
+    for (ylong i = 0; i < yv_len(ts); i++) {
         out = ya_push(out, rn_qual_type(ya_get(ts, i), m));
     }
     return out;
@@ -467,7 +468,7 @@ Yv *rn_types(Yv *st, Yv *ts) {
         return ts;
     } else {
         Yv *out = yav(0);
-        long i = 0;
+        ylong i = 0;
         while (i < yv_len(ts)) {
             out = ya_push(out, rn_type(st, ya_get(ts, i)));
             i = i + 1;
@@ -476,7 +477,7 @@ Yv *rn_types(Yv *st, Yv *ts) {
     }
 }
 
-Yv *rn_type_go(Yv *st, Yv *t, long depth) {
+Yv *rn_type_go(Yv *st, Yv *t, ylong depth) {
     Yv *k = yr_get(t, "k");
     if (yv_l(k) == K_tname) {
         return rn_type_name(st, yr_get(t, "name"), t, depth);
@@ -503,8 +504,8 @@ Yv *rn_type_go(Yv *st, Yv *t, long depth) {
     }
 }
 
-Yv *rn_type_name(Yv *st, Yv *name, Yv *t, long depth) {
-    long found = rn_alias_index(st, name);
+Yv *rn_type_name(Yv *st, Yv *name, Yv *t, ylong depth) {
+    ylong found = rn_alias_index(st, name);
     /* (depth only guards against a bug: a recursive alias is a tref, never
        spelled out inside itself) */
     if (found < 0 || depth > 64) {
@@ -518,11 +519,11 @@ Yv *rn_type_name(Yv *st, Yv *name, Yv *t, long depth) {
 }
 
 /* rn_reaches(st, id, 0), remembered (rn_reach_memo). */
-int rn_reaches_any(Yv *st, long id) {
-    long n = yv_len(yr_get(st, "tys"));
+int rn_reaches_any(Yv *st, ylong id) {
+    ylong n = yv_len(yr_get(st, "tys"));
     if (n != rn_reach_n) {
         Yv *fresh = yav(0);
-        long i = 0;
+        ylong i = 0;
         while (i < n) {
             fresh = ya_push(fresh, yv_long(0));
             i = i + 1;
@@ -542,9 +543,9 @@ int rn_reaches_any(Yv *st, long id) {
 
 /* The index in st.tys of the alias `name` stands for (the last declared:
  * -1 for none). */
-long rn_alias_index(Yv *st, Yv *name) {
+ylong rn_alias_index(Yv *st, Yv *name) {
     if (rn_mod != NULL && !ys_eq_lit(rn_mod, "") && ys_index_of(name, ys(".")) < 0) {
-        long own = rn_alias_index_go(st, ys_cat(ys_cat(rn_mod, ys(".")), name));
+        ylong own = rn_alias_index_go(st, ys_cat(ys_cat(rn_mod, ys(".")), name));
         if (own >= 0) {
             return own;
         }
@@ -552,10 +553,10 @@ long rn_alias_index(Yv *st, Yv *name) {
     return rn_alias_index_go(st, name);
 }
 
-long rn_alias_index_go(Yv *st, Yv *name) {
+ylong rn_alias_index_go(Yv *st, Yv *name) {
     Yv *tys = yr_get(st, "tys");
-    long i = yv_len(tys) - 1;
-    long found = -1;
+    ylong i = yv_len(tys) - 1;
+    ylong found = -1;
     while (i >= 0) {
         if (ys_eq(yr_get(ya_get(tys, i), "name"), name)) {
             found = i;
@@ -568,9 +569,9 @@ long rn_alias_index_go(Yv *st, Yv *name) {
 
 /* The tref of recursive alias `id`: made, and the alias spelled out into
  * it, the first time it is met. */
-Yv *rn_tref(Yv *st, long id, Yv *name) {
-    long at = -1;
-    long i = 0;
+Yv *rn_tref(Yv *st, ylong id, Yv *name) {
+    ylong at = -1;
+    ylong i = 0;
     while (at < 0 && i < yv_len(rn_tref_ids)) {
         if (yv_l(ya_get(rn_tref_ids, i)) == id) {
             at = i;
@@ -596,18 +597,18 @@ Yv *rn_tref(Yv *st, long id, Yv *name) {
 
 /* Alias `id` refers to itself, through other aliases or not -- anywhere
  * in it, or (`bare`) outside every record field and function type. */
-int rn_reaches(Yv *st, long id, int bare) {
+int rn_reaches(Yv *st, ylong id, int bare) {
     Yv *seen = yav(0);
     return rn_reaches_go(st, yr_get(ya_get(yr_get(st, "tys"), id), "typ"), id,
                          seen, bare);
 }
 
-int rn_reaches_go(Yv *st, Yv *t, long id, Yv *seen, int bare) {
+int rn_reaches_go(Yv *st, Yv *t, ylong id, Yv *seen, int bare) {
     Yv *k = yr_get(t, "k");
     if (yv_l(k) == K_tname) {
-        long j = rn_alias_index(st, yr_get(t, "name"));
+        ylong j = rn_alias_index(st, yr_get(t, "name"));
         int walked = 0;
-        for (long q = 0; q < yv_len(seen); q++) {
+        for (ylong q = 0; q < yv_len(seen); q++) {
             if (yv_l(ya_get(seen, q)) == j) {
                 walked = 1;
             }
@@ -636,7 +637,7 @@ int rn_reaches_go(Yv *st, Yv *t, long id, Yv *seen, int bare) {
         Yv *fs = yr_get(t, "fields");
         int hit = 0;
         if (!bare) {
-            for (long q = 0; q < yv_len(fs); q++) {
+            for (ylong q = 0; q < yv_len(fs); q++) {
                 if (!hit && rn_reaches_go(st, yr_get(ya_get(fs, q), "typ"), id,
                                           seen, bare)) {
                     hit = 1;
@@ -648,7 +649,7 @@ int rn_reaches_go(Yv *st, Yv *t, long id, Yv *seen, int bare) {
         int hit = 0;
         if (!bare) {
             Yv *args = yr_get(t, "args");
-            for (long q = 0; q < yv_len(args); q++) {
+            for (ylong q = 0; q < yv_len(args); q++) {
                 if (!hit && rn_reaches_go(st, ya_get(args, q), id, seen, bare)) {
                     hit = 1;
                 }
@@ -661,7 +662,7 @@ int rn_reaches_go(Yv *st, Yv *t, long id, Yv *seen, int bare) {
     } else if (yv_l(k) == K_tparams || yv_l(k) == K_tunion) {
         Yv *ts = yr_get(t, "ts");
         int hit = 0;
-        for (long q = 0; q < yv_len(ts); q++) {
+        for (ylong q = 0; q < yv_len(ts); q++) {
             if (!hit && rn_reaches_go(st, ya_get(ts, q), id, seen, bare)) {
                 hit = 1;
             }
@@ -672,9 +673,9 @@ int rn_reaches_go(Yv *st, Yv *t, long id, Yv *seen, int bare) {
     }
 }
 
-Yv *rn_type_list(Yv *st, Yv *ts, long depth) {
+Yv *rn_type_list(Yv *st, Yv *ts, ylong depth) {
     Yv *out = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(ts)) {
         out = ya_push(out, rn_type_go(st, ya_get(ts, i), depth));
         i = i + 1;
@@ -682,9 +683,9 @@ Yv *rn_type_list(Yv *st, Yv *ts, long depth) {
     return out;
 }
 
-Yv *rn_type_fields(Yv *st, Yv *fs, long depth) {
+Yv *rn_type_fields(Yv *st, Yv *fs, ylong depth) {
     Yv *out = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(fs)) {
         Yv *f = ya_get(fs, i);
         out = ya_push(out, yr(3, "name", yr_get(f, "name"), "opt", yr_get(f, "opt"), "typ", rn_type_go(st, yr_get(f, "typ"), depth)));
@@ -695,13 +696,13 @@ Yv *rn_type_fields(Yv *st, Yv *fs, long depth) {
 
 Yv *rn_union_flat(Yv *ts) {
     Yv *out = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(ts)) {
         Yv *t = ya_get(ts, i);
         if (yv_l(yr_get(t, "k")) == K_tunion) {
             Yv *inner = yr_get(t, "ts");
             /* Y: `out += inner` — one push per element (see rn_fill_defaults). */
-            for (long j = 0; j < yv_len(inner); j++) out = ya_push(out, ya_get(inner, j));
+            for (ylong j = 0; j < yv_len(inner); j++) out = ya_push(out, ya_get(inner, j));
         } else {
             out = ya_push(out, t);
         }
@@ -713,7 +714,7 @@ Yv *rn_union_flat(Yv *ts) {
 Yv *rn_typedef_err(Yv *s, Yv *st) {
     Yv *un = rn_unknown_type(st, yr_get(s, "typ"));
     Yv *name = yr_get(s, "name");
-    long id = rn_alias_index(st, name);
+    ylong id = rn_alias_index(st, name);
     if (!ys_eq_lit(un, "")) {
         return rn_unknown_err(un, yv_l(yr_get(s, "line")),
                               yv_l(yr_get(s, "col")));
@@ -728,7 +729,7 @@ Yv *rn_typedef_err(Yv *s, Yv *st) {
     }
 }
 
-Yv *rn_unknown_err(Yv *name, long line, long col) {
+Yv *rn_unknown_err(Yv *name, ylong line, ylong col) {
     Yv *msg = ys_cat(ys_cat(ys("unknown type '"), name), ys("'"));
     return yr(4, "k", yv_long(K_err), "msg", msg, "line", yv_long(line),
               "col", yv_long(col));
@@ -781,7 +782,7 @@ Yv *rn_unknown_then(Yv *first, Yv *st, Yv *t) {
 
 Yv *rn_unknown_list(Yv *st, Yv *ts) {
     Yv *out = ys("");
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(ts)) {
         if (ys_eq_lit(out, "")) {
             out = rn_unknown_type(st, ya_get(ts, i));
@@ -794,7 +795,7 @@ Yv *rn_unknown_list(Yv *st, Yv *ts) {
 
 Yv *rn_unknown_fields(Yv *st, Yv *fs) {
     Yv *out = ys("");
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(fs)) {
         Yv *f = ya_get(fs, i);
         if (ys_eq_lit(out, "")) {
@@ -808,7 +809,7 @@ Yv *rn_unknown_fields(Yv *st, Yv *fs) {
 
 Yv *rn_drop_typedefs(Yv *stmts, Yv *st) {
     Yv *out = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(stmts)) {
         Yv *s = ya_get(stmts, i);
         if (yv_l(yr_get(s, "k")) == K_typedef) {
@@ -838,8 +839,8 @@ Yv *rn_drop_typedefs(Yv *stmts, Yv *st) {
  * instead. They are still checked and emitted — only unreachable. */
 Yv *rn_shadow_dups(Yv *stmts) {
     Yv *names = yav(0);
-    long ndefs = 0;
-    long i = 0;
+    ylong ndefs = 0;
+    ylong i = 0;
     while (i < yv_len(stmts)) {
         Yv *nm = rn_decl_name(ya_get(stmts, i));
         names = ya_push(names, nm);
@@ -872,13 +873,13 @@ Yv *rn_shadow_dups(Yv *stmts) {
  * set of the names seen (comparing each def with every later statement
  * was 3% of a self-compile). */
 Yv *rn_later(Yv *names) {
-    long n = yv_len(names);
-    long size = 16;
+    ylong n = yv_len(names);
+    ylong size = 16;
     while (size < 2 * n) {
         size = size * 2;
     }
     Yv *slots = yav(0);
-    long k = 0;
+    ylong k = 0;
     while (k < size) {
         slots = ya_push(slots, ys(""));
         k = k + 1;
@@ -889,11 +890,11 @@ Yv *rn_later(Yv *names) {
         out = ya_push(out, yv_bool(0));
         k = k + 1;
     }
-    long i = n - 1;
+    ylong i = n - 1;
     while (i >= 0) {
         Yv *nm = ya_get(names, i);
         if (!ys_eq_lit(nm, "")) {
-            long h = rn_hash(nm) & (size - 1);
+            ylong h = rn_hash(nm) & (size - 1);
             int go = 1;
             while (go) {
                 Yv *e = ya_get(slots, h);
@@ -914,9 +915,9 @@ Yv *rn_later(Yv *names) {
 }
 
 /* A 24-bit hash of s (rn_later's slots). */
-long rn_hash(Yv *s) {
-    long h = 0;
-    long i = 0;
+ylong rn_hash(Yv *s) {
+    ylong h = 0;
+    ylong i = 0;
     while (i < yv_len(s)) {
         h = (h * 33 + ys_byte_at(s, i)) & 16777215;
         i = i + 1;
@@ -1368,7 +1369,7 @@ Yv *rn_qualified(Yv *st, Yv *obj, Yv *key) {
 
 int rn_in(Yv *xs, Yv *x) {
     int found = 0;
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(xs)) {
         if (ys_eq(ya_get(xs, i), x)) {
             found = 1;
@@ -1653,20 +1654,20 @@ Yv *rn_func_p4(Yv *func, Yv *fparams, Yv *fptypes, Yv *fret, Yv *fbody,
                       yr_get(func, "ppos"), st);
 }
 
-Yv *rn_func_p5(Yv *fparams, Yv *fptypes, Yv *fret, Yv *fbody, long fline,
-               long fcol, Yv *fppos, Yv *st) {
+Yv *rn_func_p5(Yv *fparams, Yv *fptypes, Yv *fret, Yv *fbody, ylong fline,
+               ylong fcol, Yv *fppos, Yv *st) {
     return rn_func_params(fparams, fptypes, fret, fbody, fline, fcol, fppos,
                           st);
 }
 
-Yv *rn_func_params(Yv *fparams, Yv *fptypes, Yv *fret, Yv *fbody, long fline,
-                   long fcol, Yv *fppos, Yv *st) {
+Yv *rn_func_params(Yv *fparams, Yv *fptypes, Yv *fret, Yv *fbody, ylong fline,
+                   ylong fcol, Yv *fppos, Yv *st) {
     return rn_func_go(fparams, fptypes, fret, fbody, fline, fcol, fppos,
                       yav(0), 0, st);
 }
 
-Yv *rn_func_go(Yv *fparams, Yv *fptypes, Yv *fret, Yv *fbody, long fline,
-               long fcol, Yv *fppos, Yv *params, long i, Yv *st) {
+Yv *rn_func_go(Yv *fparams, Yv *fptypes, Yv *fret, Yv *fbody, ylong fline,
+               ylong fcol, Yv *fppos, Yv *params, ylong i, Yv *st) {
     /* NOTE: recursion over the param list (replaces the while loop): the
      * loop's `st = b.st` rebind poisoned the merged-shape read of st.
      * fparams stays BARE (like res(node)): the single `fparams[i]` read
@@ -1681,8 +1682,8 @@ Yv *rn_func_go(Yv *fparams, Yv *fptypes, Yv *fret, Yv *fbody, long fline,
          * landed on the function, not on the parameter. An empty `fppos` (a
          * hand-built Func) falls back to the Func's own position, which is the
          * imprecision rather than a wrong answer. */
-        long pl = fline;
-        long pc = fcol;
+        ylong pl = fline;
+        ylong pc = fcol;
         if (i < yv_len(fppos) && yv_l(ya_get(fppos, i)) > 0) {
             pl = yv_l(ya_get(fppos, i)) / 65536;
             pc = yv_l(ya_get(fppos, i)) % 65536;
@@ -1695,7 +1696,7 @@ Yv *rn_func_go(Yv *fparams, Yv *fptypes, Yv *fret, Yv *fbody, long fline,
     }
 }
 
-Yv *rn_func_body(Yv *fptypes, Yv *fret, Yv *fbody, long fline, long fcol,
+Yv *rn_func_body(Yv *fptypes, Yv *fret, Yv *fbody, ylong fline, ylong fcol,
                  Yv *fppos, Yv *params, Yv *st) {
     /* NOTE: fbody read ONCE here (one read site — no merge). */
     Yv *b = rn_block(yr_get(fbody, "stmts"), st);
@@ -1703,7 +1704,7 @@ Yv *rn_func_body(Yv *fptypes, Yv *fret, Yv *fbody, long fline, long fcol,
                           yr_get(b, "stmts"), rn_pop(yr_get(b, "st")));
 }
 
-Yv *rn_func_finish(Yv *fptypes, Yv *fret, Yv *fbody, long fline, long fcol,
+Yv *rn_func_finish(Yv *fptypes, Yv *fret, Yv *fbody, ylong fline, ylong fcol,
                    Yv *fppos, Yv *params, Yv *stmts, Yv *st) {
     /* NOTE: NO record reads here — all values are params already.
      * (fbody is kept for 1:1 signature parity but never read, as in Y.) */
@@ -1718,7 +1719,7 @@ Yv *rn_func_finish(Yv *fptypes, Yv *fret, Yv *fbody, long fline, long fcol,
         body = ya_push(body, rn_unknown_err(un, fline, fcol));
         ;
     }
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(stmts)) {
         body = ya_push(body, ya_get(stmts, i));
         i = i + 1;
@@ -1766,7 +1767,7 @@ Yv *rename_program_x(Yv *ast, Yv *dfl, Yv *ofile, Yv *fmods) {
     rn_ofile = ofile;
     rn_fmods = fmods;
     Yv *mods = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(fmods)) {
         Yv *m = ya_get(fmods, i);
         if (!ys_eq_lit(m, "") && !rn_in(mods, m)) {
@@ -1787,9 +1788,9 @@ Yv *rn_stmt_mod(Yv *s) {
         /* (the one statement with no line) */
         return ys("");
     } else {
-        long ln = yv_l(yr_get(s, "line"));
+        ylong ln = yv_l(yr_get(s, "line"));
         if (ln >= 1 && ln <= yv_len(rn_ofile)) {
-            long f = yv_l(ya_get(rn_ofile, ln - 1));
+            ylong f = yv_l(ya_get(rn_ofile, ln - 1));
             if (f < yv_len(rn_fmods)) {
                 return ya_get(rn_fmods, f);
             } else {
@@ -1822,7 +1823,7 @@ Yv *rn_qualify(Yv *s) {
 Yv *rn_top(Yv *stmts, Yv *st) {
     Yv *q = yav(0);
     if (yv_len(rn_mods) > 0) {
-        long i = 0;
+        ylong i = 0;
         while (i < yv_len(stmts)) {
             q = ya_push(q, rn_qualify(ya_get(stmts, i)));
             i = i + 1;
@@ -1834,7 +1835,7 @@ Yv *rn_top(Yv *stmts, Yv *st) {
     /* the aliases each module declares at its top level, as `m.T` */
     Yv *mt = yav(0);
     if (yv_len(rn_mods) > 0) {
-        for (long j = 0; j < yv_len(q); j++) {
+        for (ylong j = 0; j < yv_len(q); j++) {
             Yv *s = ya_get(q, j);
             if (yv_l(yr_get(s, "k")) == K_typedef) {
                 Yv *m = rn_stmt_mod(s);
@@ -1849,7 +1850,7 @@ Yv *rn_top(Yv *stmts, Yv *st) {
     st = rn_prepass(q, st);
     Yv *kept = rn_drop_typedefs(q, st);
     Yv *out = yav(0);
-    long k = 0;
+    ylong k = 0;
     while (k < yv_len(kept)) {
         Yv *s = ya_get(kept, k);
         if (yv_len(rn_mods) > 0) {
@@ -1865,11 +1866,11 @@ Yv *rn_top(Yv *stmts, Yv *st) {
     return yr(2, "st", st, "stmts", out);
 }
 
-Yv *rename_program_go(Yv *stmts, long line, long col, Yv *dfl) {
+Yv *rename_program_go(Yv *stmts, ylong line, ylong col, Yv *dfl) {
     /* NOTE: fields passed as values (see rn_func note). dfl is copied:
      * rn_note_defaults appends to the list in place. */
     Yv *d0 = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(dfl)) {
         d0 = ya_push(d0, ya_get(dfl, i));
         i = i + 1;

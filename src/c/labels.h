@@ -5,6 +5,7 @@
 #ifndef LABELS_H
 #define LABELS_H
 
+#include "ylong.h"
 #include "yv.h"
 
 Yv *lbl_new(Yv *name);    /* intern: one id per name */

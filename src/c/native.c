@@ -17,6 +17,7 @@
  * Every value is 8 bytes (long/bool/ptr/str-address); expression values in
  * %rax; locals at negative rbp offsets; Y-function args pushed on the stack.
  */
+#include "ylong.h"
 #include "host.h"
 #include <unistd.h>
 #include "ir.h"
@@ -46,17 +47,17 @@
 /* ── imported (flattened module calls; PORTING.md rule 6) ─────────────── */
 
 /* src/y/arch_x64.y */
-Yv *arch_fn_label(long uid, Yv *name);
-Yv *arch_global_label(long uid, Yv *name);
-Yv *arch_loc_label(long fuid, long n);
-Yv *arch_str_label(long i);
+Yv *arch_fn_label(ylong uid, Yv *name);
+Yv *arch_global_label(ylong uid, Yv *name);
+Yv *arch_loc_label(ylong fuid, ylong n);
+Yv *arch_str_label(ylong i);
 Yv *arch_header(void);
 Yv *arch_rodata(void);
 Yv *arch_text(void);
 Yv *arch_bss(void);
 Yv *arch_global_cell(Yv *label);
 Yv *arch_heap_cells(void);
-long arch_frame(long slots);
+ylong arch_frame(ylong slots);
 Yv *arch_prelude_lines(void);
 Yv *arch_prelude_threads_lines(void);
 Yv *arch_math_lines(void);
@@ -67,14 +68,14 @@ Yv *check_program(Yv *ast, Yv *ext);
 Yv *field_merge(Yv *fields, Yv *name, Yv *typ);
 Yv *str_method(Yv *m);
 Yv *fmt_spec(Yv *spec);
-long fmt_kind(Yv *t);
+ylong fmt_kind(Yv *t);
 Yv *leaf_of(Yv *node);
 Yv *narrow_type(Yv *s, Yv *t);
 Yv *type_names(Yv *t);
 Yv *arr_plus_kind(Yv *lt, Yv *rt);
 int is_bits_op(Yv *op);
 int teq(Yv *a, Yv *b);
-long field_pos(Yv *fs, Yv *name, long hint);
+ylong field_pos(Yv *fs, Yv *name, ylong hint);
 Yv *union_member(Yv *u, Yv *t);
 Yv *unfold(Yv *t);
 Yv *members(Yv *t);
@@ -86,7 +87,7 @@ Yv *t_mutex(void);
 Yv *t_sem(void);
 Yv *tcanon(Yv *t);
 Yv *tsig(Yv *t);
-Yv *inferred_ret(long line, long col);
+Yv *inferred_ret(ylong line, ylong col);
 Yv *fn_ret(Yv *func);
 Yv *str_sorted(Yv *xs);
 Yv *rec_names(Yv *fs);
@@ -120,14 +121,14 @@ static Yv *pkg_ns;
 static Yv *tcode_refs;
 static Yv *tdec_encs;
 static Yv *tdec_refs;
-static long tdec_n;
+static ylong tdec_n;
 /* The record-type descriptors emitted so far (ty_desc; link_units reuses
  * it for the whole program): an open-addressing set of their labels, with
  * each label's canonical form beside it ("" = an empty slot). compile_unit
  * empties it for each unit. */
 static Yv *ty_seen;
 static Yv *ty_forms;
-static long ty_count;
+static ylong ty_count;
 /* ty_desc's labels in this unit, by type signature (types.c tsig): a type
  * named again needs no canonical form spelled out and hashed (a recursive
  * union's is long, and a read through a union asks for every member's).
@@ -153,78 +154,78 @@ static Yv *ush_vals;
  * so these are only ever read inside the function that set them; emit_one_fn
  * clears them regardless, because relying on a check in another file to keep
  * these two consistent is how a jump ends up in an unrelated body. */
-static long brk_label = -1;
-static long cont_label = -1;
+static ylong brk_label = -1;
+static ylong cont_label = -1;
 
 /* ── forward declarations (native.y def order) ────────────────────────── */
 
-Yv *native_resolve(Yv *src, Yv *base_dir, long depth);
-Yv *native_resolve_x(Yv *src, Yv *base_dir, long depth, int allow_exec,
+Yv *native_resolve(Yv *src, Yv *base_dir, ylong depth);
+Yv *native_resolve_x(Yv *src, Yv *base_dir, ylong depth, int allow_exec,
                      Yv *root);
 Yv *native_resolve_pk(Yv *src, Yv *base_dir, int allow_exec, Yv *root,
                       Yv *pkgs, Yv *roots);
-Yv *resolve_unit(Yv *src, Yv *base_dir, long depth, int allow_exec,
+Yv *resolve_unit(Yv *src, Yv *base_dir, ylong depth, int allow_exec,
                  Yv *root);
-long origin_file(Yv *o, long ln);
-Yv *origin_at(Yv *o, long ln, int bare);
+ylong origin_file(Yv *o, ylong ln);
+Yv *origin_at(Yv *o, ylong ln, int bare);
 Yv *prelude_names(void);
 Yv *exec_names(void);
 Yv *str_names(void);
 Yv *std_text(Yv *s);
 Yv *words_seen(Yv *code, Yv *names);
-long words_scan(Yv *code, long lo, long n, Yv *names, Yv *seen);
-int word_byte(long c);
-int blank_byte(long c);
-int word_at(Yv *code, long i, Yv *nm);
-int seen_any(Yv *seen, long lo, long hi, long level);
+ylong words_scan(Yv *code, ylong lo, ylong n, Yv *names, Yv *seen);
+int word_byte(ylong c);
+int blank_byte(ylong c);
+int word_at(Yv *code, ylong i, Yv *nm);
+int seen_any(Yv *seen, ylong lo, ylong hi, ylong level);
 Yv *norm_path(Yv *p);
-long seen_index(Yv *seen, Yv *full);
+ylong seen_index(Yv *seen, Yv *full);
 int seen_has(Yv *seen, Yv *full);
 Yv *dir_of(Yv *p);
 Yv *std_resolve(Yv *name, Yv *base_dir);
-Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen,
-                        Yv *smods, long fid, Yv *self_path);
+Yv *native_resolve_seen(Yv *src, Yv *base_dir, ylong depth, Yv *seen,
+                        Yv *smods, ylong fid, Yv *self_path);
 /* the meta pass (see "the meta pass" below): meta.y hoists these defs, so C
  * needs them said twice -- meta_prepare is called from resolve_unit, which is
  * above it, and meta_run_generator from meta_prepare, which is above that. */
-static Yv *meta_prepare(Yv *src, Yv *base_dir, long depth, int allow_exec,
+static Yv *meta_prepare(Yv *src, Yv *base_dir, ylong depth, int allow_exec,
                         Yv *root, Yv *self_path);
-static Yv *meta_resolve(Yv *src, Yv *base_dir, long depth, int allow_exec,
+static Yv *meta_resolve(Yv *src, Yv *base_dir, ylong depth, int allow_exec,
                         Yv *root, Yv *first, Yv *self_path);
-static long meta_run_generator(Yv *src, Yv *base_dir, int allow_exec,
+static ylong meta_run_generator(Yv *src, Yv *base_dir, int allow_exec,
                                Yv *root, Yv *first);
 static Yv *meta_compile_gen(void);
 int is_embed_decl(Yv *trimmed);
 Yv *embed_decl(Yv *trimmed, Yv *base_dir);
 Yv *quote_text(Yv *s);
-int is_id_b(long c);
-long skip_sp(Yv *b, long i, long hi);
-long tok_end_b(Yv *b, long i, long hi);
-Yv *tok_at_b(Yv *text, Yv *b, long i, long hi);
+int is_id_b(ylong c);
+ylong skip_sp(Yv *b, ylong i, ylong hi);
+ylong tok_end_b(Yv *b, ylong i, ylong hi);
+Yv *tok_at_b(Yv *text, Yv *b, ylong i, ylong hi);
 Yv *tok_push(Yv *out, Yv *t);
-Yv *line_refs_b(Yv *text, Yv *b, long lo, long hi, Yv *out, int want_jumps);
-Yv *refs_range(Yv *text, Yv *b, long lo, long hi, Yv *out, int want_jumps);
-int directive_line_b(Yv *b, long ls);
+Yv *line_refs_b(Yv *text, Yv *b, ylong lo, ylong hi, Yv *out, int want_jumps);
+Yv *refs_range(Yv *text, Yv *b, ylong lo, ylong hi, Yv *out, int want_jumps);
+int directive_line_b(Yv *b, ylong ls);
 static Yv *ir_refs(Yv *ir);
-static Yv *ir_refs_item(Yv *ir, long at, Yv *out);
+static Yv *ir_refs_item(Yv *ir, ylong at, Yv *out);
 static Yv *ir_refs_push(Yv *out, Yv *nm);
 static Yv *ir_relabel(Yv *ir, Yv *m, Yv *dup_new);
-static long ir_relabel_one(long id, Yv *m, Yv *dup_new);
-Yv *label_at(Yv *text, Yv *b, long lo, long hi);
-int is_data_line_b(Yv *text, Yv *b, long lo, long hi);
-int block_falls_b(Yv *text, Yv *b, long lo, long hi);
+static ylong ir_relabel_one(ylong id, Yv *m, Yv *dup_new);
+Yv *label_at(Yv *text, Yv *b, ylong lo, ylong hi);
+int is_data_line_b(Yv *text, Yv *b, ylong lo, ylong hi);
+int block_falls_b(Yv *text, Yv *b, ylong lo, ylong hi);
 Yv *namemap_build(Yv *names);
-long namemap_get(Yv *m, Yv *name);
+ylong namemap_get(Yv *m, Yv *name);
 Yv *fntab_of(Yv *syms, Yv *ids);
 Yv *fntab_ids(Yv *syms);
-Yv *labmap_new(long cap);
-Yv *labmap_put(Yv *m, Yv *name, long sec, long off);
+Yv *labmap_new(ylong cap);
+Yv *labmap_put(Yv *m, Yv *name, ylong sec, ylong off);
 Yv *labmap_get(Yv *m, Yv *name);
 Yv *shake_keep(Yv *names, Yv *refs, Yv *falls, Yv *keep, Yv *roots);
 Yv *shake_refs(Yv *text, Yv *root_refs);
 Yv *prelude_blocks(Yv *lines);
-Yv *lines_refs(Yv *lines, long lo, long hi);
-int lines_fall(Yv *lines, long lo, long hi);
+Yv *lines_refs(Yv *lines, ylong lo, ylong hi);
+int lines_fall(Yv *lines, ylong lo, ylong hi);
 Yv *shake_prelude(Yv *pb, Yv *roots);
 Yv *prelude_with(Yv *core, int threads, int mathasm);
 static Yv *lines_appended(Yv *a, Yv *b);
@@ -232,7 +233,7 @@ Yv *unkept_refs(Yv *refs, Yv *bmap, Yv *keep);
 Yv *prune_bodies(Yv *labels, Yv *refs, Yv *extra_roots);
 int is_all_digits(Yv *s);
 Yv *runtime_base(Yv *name);
-Yv *fn_label_of(long uid, Yv *name);
+Yv *fn_label_of(ylong uid, Yv *name);
 int is_ns(Yv *name, Yv *imports);
 Yv *normnode(Yv *anode);
 Yv *strip_list(Yv *nodes, Yv *imports);
@@ -247,7 +248,7 @@ Yv *next_uid(Yv *st);
 Yv *next_loc(Yv *st);
 Yv *esc_asm(Yv *s);
 Yv *env_find(Yv *st, Yv *name);
-Yv *env_define(Yv *st, Yv *name, Yv *kind, long off, Yv *label, Yv *mark,
+Yv *env_define(Yv *st, Yv *name, Yv *kind, ylong off, Yv *label, Yv *mark,
                Yv *typ);
 Yv *infer(Yv *st, Yv *node);
 Yv *infer_call(Yv *st, Yv *node);
@@ -299,8 +300,8 @@ Yv *app_names(Yv *node, int deep, Yv *skip);
 int own_wanted(Yv *st, Yv *name);
 Yv *bind_own(Yv *st, Yv *name, Yv *t);
 Yv *gen_stmt(Yv *st, Yv *node);
-Yv *gen_sappend(Yv *st, Yv *v, Yv *var_lbl, long var_disp, Yv *cell_lbl,
-                long cell_disp);
+Yv *gen_sappend(Yv *st, Yv *v, Yv *var_lbl, ylong var_disp, Yv *cell_lbl,
+                ylong cell_disp);
 Yv *gen_discard(Yv *st, Yv *node);
 Yv *gen_make_closure(Yv *st, Yv *label, Yv *caps);
 Yv *gen_range(Yv *st, Yv *node);
@@ -313,12 +314,12 @@ Yv *rectest_members(Yv *s, Yv *t);
 Yv *gen_tag_in(Yv *st, Yv *ts, Yv *inu);
 Yv *gen_union_slot(Yv *st, Yv *t, Yv *dkey, int store);
 Yv *gen_narrow_field(Yv *st, Yv *nar, Yv *s, Yv *dkey);
-Yv *gen_slot_move(Yv *st, long sl, int store);
+Yv *gen_slot_move(Yv *st, ylong sl, int store);
 Yv *gen_union_str_rax(Yv *st, Yv *t, Yv *path);
 int is_void_node(Yv *n);
-Yv *loc_pos(long ln);
-static Yv *emit_loc(Yv *st, long ln);
-static Yv *ir_loc(Yv *body, long ln);
+Yv *loc_pos(ylong ln);
+static Yv *emit_loc(Yv *st, ylong ln);
+static Yv *ir_loc(Yv *body, ylong ln);
 Yv *gen_loc_stmt(Yv *st, Yv *node);
 Yv *gen_loc_elif(Yv *st, Yv *els);
 Yv *gen_loc_loop(Yv *st, Yv *node);
@@ -338,19 +339,19 @@ Yv *gen_eq_opt(Yv *st, Yv *pt);
 Yv *gen_eq_arr_deep(Yv *st, Yv *et);
 Yv *gen_bin_rest(Yv *st, Yv *node);
 Yv *gen_shift(Yv *st, Yv *node, Yv *op);
-long shift_imm(Yv *r);
-long syscall_reg(long i);
-static long l_syscall_reg(long i);
-static long w_syscall_reg(long i);
-static long w_syscall_regargs(void);
-static long w_arg_space(void);
-static long w_stack_arg_off(long i);
+ylong shift_imm(Yv *r);
+ylong syscall_reg(ylong i);
+static ylong l_syscall_reg(ylong i);
+static ylong w_syscall_reg(ylong i);
+static ylong w_syscall_regargs(void);
+static ylong w_arg_space(void);
+static ylong w_stack_arg_off(ylong i);
 static Yv *ir_terminate(Yv *body);
 Yv *gen_push_args(Yv *st, Yv *args);
 Yv *gen_push_args_as(Yv *st, Yv *args, Yv *ptypes);
 Yv *gen_conv(Yv *st, Yv *got, Yv *want);
 Yv *arr_elem_type(Yv *t);
-Yv *store_elem_type(Yv *t, long esz);
+Yv *store_elem_type(Yv *t, ylong esz);
 Yv *gen_helper1(Yv *st, Yv *name);
 Yv *gen_call(Yv *st, Yv *node);
 Yv *gen_fmt(Yv *st, Yv *node);
@@ -365,9 +366,9 @@ Yv *gen_cons(Yv *st, Yv *node);
 Yv *gen_cat_conv(Yv *st, Yv *node, Yv *lt);
 Yv *gen_cat_arr(Yv *st, Yv *node, Yv *lt, Yv *rt);
 Yv *gen_acc_cat_const(Yv *st, Yv *s);
-Yv *gen_rec_field_str(Yv *st, long idx, Yv *ft, Yv *path);
+Yv *gen_rec_field_str(Yv *st, ylong idx, Yv *ft, Yv *path);
 Yv *gen_syscall(Yv *st, Yv *node);
-long capture_off(Yv *st);
+ylong capture_off(Yv *st);
 Yv *gen_direct(Yv *st, Yv *node, Yv *name);
 Yv *gen_if(Yv *st, Yv *node);
 Yv *gen_while(Yv *st, Yv *node);
@@ -380,13 +381,13 @@ Yv *gen_tail_call(Yv *st, Yv *node);
 int is_self_call(Yv *st, Yv *node);
 Yv *gen_block(Yv *st, Yv *node);
 Yv *gen_block_as(Yv *st, Yv *node, int dropped);
-long mfield_idx(Yv *names, Yv *name);
+ylong mfield_idx(Yv *names, Yv *name);
 Yv *gen_reclit(Yv *st, Yv *node, Yv *want);
 int lit_wraps(Yv *st, Yv *mv, Yv *rtu, Yv *mk, Yv *ft);
-long fnv64(Yv *s);
-Yv *hex16(long h);
-long rec_slot(Yv *fs, Yv *key);
-long tyset_add(Yv *lbl, Yv *form);
+ylong fnv64(Yv *s);
+Yv *hex16(ylong h);
+ylong rec_slot(Yv *fs, Yv *key);
+ylong tyset_add(Yv *lbl, Yv *form);
 void tyset_grow(void);
 void tyset_reset(void);
 void ty_sig_init(void);
@@ -397,104 +398,104 @@ Yv *alias_of(Yv *t);
 int same_rec(Yv *lt, Yv *t);
 Yv *rec_lit_type(Yv *lt, Yv *want);
 Yv *infer_go(Yv *st, Yv *node);
-Yv *gen_slot_load(Yv *st, long idx);
+Yv *gen_slot_load(Yv *st, ylong idx);
 Yv *gen_func_literal(Yv *st, Yv *node);
 Yv *gen_closure_binding(Yv *st, Yv *name, Yv *func, Yv *caps);
 Yv *gen_decl(Yv *st, Yv *node);
 Yv *bind_decl(Yv *st, Yv *name, Yv *t);
 Yv *gen_assign(Yv *st, Yv *node);
-Yv *gen_fill(Yv *st, long base, long n);
-Yv *gen_fill_heap(Yv *st, long n, long esz);
+Yv *gen_fill(Yv *st, ylong base, ylong n);
+Yv *gen_fill_heap(Yv *st, ylong n, ylong esz);
 Yv *gen_arrrep(Yv *st, Yv *node);
-Yv *gen_arrrep_esz(Yv *st, Yv *node, long esz, Yv *ety);
-long hexval_ch(Yv *c);
+Yv *gen_arrrep_esz(Yv *st, Yv *node, ylong esz, Yv *ety);
+ylong hexval_ch(Yv *c);
 int lit_is_float(Yv *s);
 Yv *norm_num(Yv *s);
-long flit_ebase(Yv *s);
-long flit_bits(Yv *s);
-int flit_dmul_limb(Yv *a, long n);
-void flit_ddiv_limb(Yv *a, long n);
+ylong flit_ebase(Yv *s);
+ylong flit_bits(Yv *s);
+int flit_dmul_limb(Yv *a, ylong n);
+void flit_ddiv_limb(Yv *a, ylong n);
 Yv *gen_lit(Yv *st, Yv *node);
 Yv *gen_index(Yv *st, Yv *node);
 Yv *gen_dotassign(Yv *st, Yv *node);
-Yv *n_num(Yv *v, long line, long col);
-Yv *n_id(Yv *v, long line, long col);
+Yv *n_num(Yv *v, ylong line, ylong col);
+Yv *n_id(Yv *v, ylong line, ylong col);
 Yv *args1(Yv *a);
 Yv *args2(Yv *a, Yv *b);
-Yv *n_call1(Yv *name, Yv *a0, long line, long col);
-Yv *n_call2(Yv *name, Yv *a0, Yv *a1, long line, long col);
-Yv *block2(Yv *a, Yv *b, long ln, long cl);
-Yv *block3(Yv *a, Yv *b, Yv *c, long ln, long cl);
-Yv *block_bind(Yv *first, Yv *rest, long ln, long cl);
-Yv *block4(Yv *a, Yv *b, Yv *c, Yv *d, long ln, long cl);
-Yv *block5(Yv *a, Yv *b, Yv *c, Yv *d, Yv *e, long ln, long cl);
-Yv *block6(Yv *a, Yv *b, Yv *c, Yv *d, Yv *e, Yv *f, long ln, long cl);
+Yv *n_call1(Yv *name, Yv *a0, ylong line, ylong col);
+Yv *n_call2(Yv *name, Yv *a0, Yv *a1, ylong line, ylong col);
+Yv *block2(Yv *a, Yv *b, ylong ln, ylong cl);
+Yv *block3(Yv *a, Yv *b, Yv *c, ylong ln, ylong cl);
+Yv *block_bind(Yv *first, Yv *rest, ylong ln, ylong cl);
+Yv *block4(Yv *a, Yv *b, Yv *c, Yv *d, ylong ln, ylong cl);
+Yv *block5(Yv *a, Yv *b, Yv *c, Yv *d, Yv *e, ylong ln, ylong cl);
+Yv *block6(Yv *a, Yv *b, Yv *c, Yv *d, Yv *e, Yv *f, ylong ln, ylong cl);
 Yv *gen_incdec(Yv *st, Yv *node, int dropped);
 Yv *gen_incdec_desugar(Yv *st, Yv *node, int dropped);
 Yv *gen_opassign_desugar(Yv *st, Yv *node, int dropped);
 Yv *gen_incdec_end(Yv *st, Yv *bind, Yv *d2, Yv *asg, int dropped,
-                   long ln, long cl);
+                   ylong ln, ylong cl);
 Yv *place_value_type(Yv *t);
 Yv *gen_opassign(Yv *st, Yv *node, int dropped);
 /* maps (the section at the end of the file) */
-Yv *n_str(Yv *v, long line, long col);
-Yv *n_bool(Yv *v, long line, long col);
-Yv *n_dot(Yv *obj, Yv *key, long line, long col);
-Yv *n_idx(Yv *arr, Yv *idx, long line, long col);
-Yv *n_bin(Yv *op, Yv *l, Yv *r, long line, long col);
-Yv *n_not(Yv *e, long line, long col);
-Yv *n_if(Yv *c, Yv *t, Yv *e, long ln, long cl);
-Yv *n_while(Yv *c, Yv *b, long ln, long cl);
-Yv *n_decl(Yv *name, Yv *v, long ln, long cl);
-Yv *n_assign(Yv *name, Yv *v, long ln, long cl);
-Yv *block_of(Yv *sts, long ln, long cl);
+Yv *n_str(Yv *v, ylong line, ylong col);
+Yv *n_bool(Yv *v, ylong line, ylong col);
+Yv *n_dot(Yv *obj, Yv *key, ylong line, ylong col);
+Yv *n_idx(Yv *arr, Yv *idx, ylong line, ylong col);
+Yv *n_bin(Yv *op, Yv *l, Yv *r, ylong line, ylong col);
+Yv *n_not(Yv *e, ylong line, ylong col);
+Yv *n_if(Yv *c, Yv *t, Yv *e, ylong ln, ylong cl);
+Yv *n_while(Yv *c, Yv *b, ylong ln, ylong cl);
+Yv *n_decl(Yv *name, Yv *v, ylong ln, ylong cl);
+Yv *n_assign(Yv *name, Yv *v, ylong ln, ylong cl);
+Yv *block_of(Yv *sts, ylong ln, ylong cl);
 Yv *gen_maplit(Yv *st, Yv *node);
 int is_map_read(Yv *st, Yv *e);
 int is_none_id(Yv *e);
-Yv *map_scan(Yv *t, long ln, long cl);
+Yv *map_scan(Yv *t, ylong ln, ylong cl);
 Yv *gen_map_get(Yv *st, Yv *node, Yv *mode);
 Yv *gen_map_set(Yv *st, Yv *node);
-Yv *map_key_repr(Yv *node, Yv *kt, long ln, long cl);
+Yv *map_key_repr(Yv *node, Yv *kt, ylong ln, ylong cl);
 Yv *gen_map_repr(Yv *st, Yv *arg, Yv *t);
 Yv *gen_opassign_arith(Yv *st, Yv *node, int dropped);
-Yv *place_read_id(Yv *tgt, Yv *t1, long ln, long cl);
-Yv *place_arr(Yv *tgt, Yv *t1, long ln, long cl);
-Yv *place_read_idx(Yv *tgt, Yv *t1, long ln, long cl);
-Yv *place_read_dot(Yv *tgt, Yv *t1, long ln, long cl);
-Yv *gen_place_read(Yv *tgt, Yv *t1, long ln, long cl);
-Yv *place_asg_id(Yv *tgt, Yv *valnode, Yv *t1, long ln, long cl);
-Yv *place_asg_idx(Yv *tgt, Yv *valnode, Yv *t1, long ln, long cl);
-Yv *place_asg_dot(Yv *tgt, Yv *valnode, Yv *t1, long ln, long cl);
-Yv *gen_place_assign(Yv *tgt, Yv *valnode, Yv *t1, long ln, long cl);
-Yv *place_bind_id(Yv *tgt, Yv *t1, long ln, long cl);
-Yv *place_bind_idx_id(Yv *tgt, Yv *t1, long ln, long cl);
-Yv *place_bind_idx_nest(Yv *tgt, Yv *t1, long ln, long cl);
-Yv *place_bind_idx(Yv *tgt, Yv *t1, long ln, long cl);
-Yv *place_bind_dot(Yv *tgt, Yv *t1, long ln, long cl);
-Yv *gen_place_bind(Yv *tgt, Yv *t1, long ln, long cl);
+Yv *place_read_id(Yv *tgt, Yv *t1, ylong ln, ylong cl);
+Yv *place_arr(Yv *tgt, Yv *t1, ylong ln, ylong cl);
+Yv *place_read_idx(Yv *tgt, Yv *t1, ylong ln, ylong cl);
+Yv *place_read_dot(Yv *tgt, Yv *t1, ylong ln, ylong cl);
+Yv *gen_place_read(Yv *tgt, Yv *t1, ylong ln, ylong cl);
+Yv *place_asg_id(Yv *tgt, Yv *valnode, Yv *t1, ylong ln, ylong cl);
+Yv *place_asg_idx(Yv *tgt, Yv *valnode, Yv *t1, ylong ln, ylong cl);
+Yv *place_asg_dot(Yv *tgt, Yv *valnode, Yv *t1, ylong ln, ylong cl);
+Yv *gen_place_assign(Yv *tgt, Yv *valnode, Yv *t1, ylong ln, ylong cl);
+Yv *place_bind_id(Yv *tgt, Yv *t1, ylong ln, ylong cl);
+Yv *place_bind_idx_id(Yv *tgt, Yv *t1, ylong ln, ylong cl);
+Yv *place_bind_idx_nest(Yv *tgt, Yv *t1, ylong ln, ylong cl);
+Yv *place_bind_idx(Yv *tgt, Yv *t1, ylong ln, ylong cl);
+Yv *place_bind_dot(Yv *tgt, Yv *t1, ylong ln, ylong cl);
+Yv *gen_place_bind(Yv *tgt, Yv *t1, ylong ln, ylong cl);
 Yv *gen_opassign_arr(Yv *st, Yv *node, int dropped);
 Yv *gen_idxassign(Yv *st, Yv *node);
 Yv *gen_val_tostr_rax(Yv *st, Yv *t, Yv *path);
 static Yv *path_push(Yv *path, Yv *t);
-Yv *gen_acc_cat_rax(Yv *st, long aoff);
+Yv *gen_acc_cat_rax(Yv *st, ylong aoff);
 Yv *gen_map_repr_rax(Yv *st, Yv *t, Yv *path);
 Yv *gen_arr_tostr_rax(Yv *st, Yv *elty, Yv *path);
-Yv *gen_acc_cat_slot(Yv *st, long off, Yv *s);
-long elem_bytes(Yv *t);
-long arr_elem_bytes(Yv *t);
-long ptr_width(Yv *t);
-Yv *elem_load(Yv *st, long esz, long base, long idx, long dst);
-Yv *elem_store_rdx(Yv *st, long esz, long base, long idx);
-Yv *elem_store_rdx_const(Yv *st, long esz, long base, long k);
-long arr_alloc_size(long esz, long n);
-long arr_header_size(void);
+Yv *gen_acc_cat_slot(Yv *st, ylong off, Yv *s);
+ylong elem_bytes(Yv *t);
+ylong arr_elem_bytes(Yv *t);
+ylong ptr_width(Yv *t);
+Yv *elem_load(Yv *st, ylong esz, ylong base, ylong idx, ylong dst);
+Yv *elem_store_rdx(Yv *st, ylong esz, ylong base, ylong idx);
+Yv *elem_store_rdx_const(Yv *st, ylong esz, ylong base, ylong k);
+ylong arr_alloc_size(ylong esz, ylong n);
+ylong arr_header_size(void);
 Yv *gen_dot(Yv *st, Yv *node);
-Yv *gen_prop(Yv *st, Yv *obj, Yv *key, long line, long col);
+Yv *gen_prop(Yv *st, Yv *obj, Yv *key, ylong line, ylong col);
 Yv *gen_dot_rec(Yv *st, Yv *dobj, Yv *dkey, Yv *t);
-long rec_field_idx(Yv *t, Yv *key);
+ylong rec_field_idx(Yv *t, Yv *key);
 Yv *rec_field_type(Yv *t, Yv *key);
 Yv *gen_array(Yv *st, Yv *node);
-Yv *gen_array_esz(Yv *st, Yv *node, long esz, Yv *ety);
+Yv *gen_array_esz(Yv *st, Yv *node, ylong esz, Yv *ety);
 Yv *gen_len(Yv *st, Yv *node);
 Yv *gen_push(Yv *st, Yv *node);
 Yv *gen_push_all(Yv *st, Yv *node);
@@ -512,11 +513,11 @@ Yv *gen_chr(Yv *st, Yv *node);
 Yv *gen_tolong(Yv *st, Yv *node);
 Yv *gen_tofloat(Yv *st, Yv *node);
 Yv *gen_tostring(Yv *st, Yv *node);
-long fmt_code(Yv *f, long kind, long ty);
-Yv *fmt_push(Yv *st, long v);
+ylong fmt_code(Yv *f, ylong kind, ylong ty);
+Yv *fmt_push(Yv *st, ylong v);
 Yv *gen_index_of(Yv *st, Yv *node, int last);
 Yv *gen_join(Yv *st, Yv *node);
-Yv *gen_join_conv(Yv *st, Yv *node, Yv *tostr_fn, long esz);
+Yv *gen_join_conv(Yv *st, Yv *node, Yv *tostr_fn, ylong esz);
 Yv *gen_split(Yv *st, Yv *node);
 Yv *gen_puts(Yv *st, Yv *node);
 Yv *gen_eputs(Yv *st, Yv *node);
@@ -529,7 +530,7 @@ Yv *gen_call_top(Yv *st);
 Yv *gen_exit(Yv *st, Yv *node);
 Yv *gen_argv(Yv *st, Yv *node);
 Yv *gen_store(Yv *st, Yv *node);
-Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
+Yv *emit_one_fn(Yv *st, Yv *label, ylong fuid, Yv *func, int is_main,
                 int want_argv, Yv *captypes, Yv *selfname);
 Yv *infer_fn_ret(Yv *st, Yv *func);
 Yv *func_type(Yv *func);
@@ -542,25 +543,25 @@ Yv *global_decls(Yv *stmts);
 Yv *decl_name(Yv *d);
 Yv *decl_type(Yv *d);
 Yv *decl_value(Yv *d);
-Yv *global_entries(Yv *st, Yv *gdecls, long gbase);
+Yv *global_entries(Yv *st, Yv *gdecls, ylong gbase);
 Yv *app_cells(Yv *gl, Yv *stmts);
 Yv *capturing_defs(Yv *defs, Yv *gnames);
 Yv *fix_fn_types(Yv *st, Yv *hdefs, Yv *only);
 int ret_omitted(Yv *func);
 Yv *fn_ptypes(Yv *func);
 int reads_any(Yv *func, Yv *names);
-Yv *phase_end(Yv *times, Yv *name, long t0, long h0);
+Yv *phase_end(Yv *times, Yv *name, ylong t0, ylong h0);
 Yv *unit_empty(Yv *name);
 Yv *externs_none(void);
 Yv *std_unit_src(Yv *name);
-long std_unit_base(Yv *name);
+ylong std_unit_base(Yv *name);
 int std_unit_bound(Yv *name);
 Yv *std_unit_names(void);
 Yv *std_units(Yv *names, Yv *pack);
 Yv *std_compile(Yv *name, Yv *ext);
 Yv *export_name(Yv *name);
 Yv *unit_exports(Yv *stmts, Yv *hdefs, Yv *fns);
-int pkg_base(long base);
+int pkg_base(ylong base);
 Yv *pkg_exports(Yv *xs, Yv *gl);
 Yv *unit_dfl(Yv *stmts, Yv *origin);
 Yv *dfl_codes(Yv *func);
@@ -568,9 +569,9 @@ Yv *lit_code(Yv *d);
 Yv *lit_text(Yv *d);
 Yv *lit_neg_text(Yv *d);
 Yv *lit_decode(Yv *c);
-Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, long wlevel,
-                 Yv *name, long base, Yv *xt, Yv *ogen);
-Yv *link_locs(Yv *body, long file);
+Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, ylong wlevel,
+                 Yv *name, ylong base, Yv *xt, Yv *ogen);
+Yv *link_locs(Yv *body, ylong file);
 Yv *rodata_intern(Yv *pieces, Yv *allrod, Yv *refs);
 Yv *relabel_dups(Yv *body, Yv *m, Yv *dup_new);
 Yv *link_units(Yv *std, Yv *deps, Yv *prog);
@@ -588,9 +589,9 @@ Yv *tdecode_list(Yv *cur);
 Yv *pack_iface(Yv *out, Yv *unit);
 Yv *pack_unit_fields(Yv *unit);
 Yv *std_pack(Yv *units);
-long pack_len(Yv *cur);
+ylong pack_len(Yv *cur);
 Yv *pack_get(Yv *cur);
-long pack_num(Yv *cur);
+ylong pack_num(Yv *cur);
 Yv *pack_get_strs(Yv *cur);
 Yv *unit_read(Yv *cur, Yv *name, int bound);
 Yv *std_unpack(Yv *pack, Yv *names);
@@ -598,9 +599,9 @@ Yv *unit_obj(Yv *unit, Yv *key);
 Yv *unit_unobj(Yv *text, Yv *key);
 Yv *unit_iface(Yv *unit);
 Yv *unit_externs(Yv *std, Yv *snames, Yv *deps, Yv *pkgs);
-Yv *compile_package(Yv *ast, Yv *nr, Yv *name, long base, long wlevel,
+Yv *compile_package(Yv *ast, Yv *nr, Yv *name, ylong base, ylong wlevel,
                     Yv *std, Yv *deps);
-Yv *emit_program(Yv *ast, Yv *nr, int debug, long wlevel, Yv *std, Yv *deps);
+Yv *emit_program(Yv *ast, Yv *nr, int debug, ylong wlevel, Yv *std, Yv *deps);
 
 /* ── native import resolution ───────────────────────────────────────────
  * An import is a COMPILE-TIME text splice, and both compilers splice the
@@ -622,7 +623,7 @@ Yv *emit_program(Yv *ast, Yv *nr, int debug, long wlevel, Yv *std, Yv *deps);
  * is the module files[k] was imported as by name (`import fs;`: "fs"),
  * "" for the program and the files imported by path. */
 
-Yv *native_resolve(Yv *src, Yv *base_dir, long depth) {
+Yv *native_resolve(Yv *src, Yv *base_dir, ylong depth) {
     return native_resolve_x(src, base_dir, depth, 1, ys(""));
 }
 
@@ -630,7 +631,7 @@ Yv *native_resolve(Yv *src, Yv *base_dir, long depth) {
  * exec, str, rt (std_units compiles them). allow_exec = false is
  * `ycc --no-exec`: exec is left out, so `exec(...)` fails with
  * "undefined function" and the binary has no path to a shell at all. */
-Yv *native_resolve_x(Yv *src, Yv *base_dir, long depth, int allow_exec,
+Yv *native_resolve_x(Yv *src, Yv *base_dir, ylong depth, int allow_exec,
                      Yv *root) {
     res_pkgs = yav(0);
     res_roots = yav(0);
@@ -649,7 +650,7 @@ Yv *native_resolve_pk(Yv *src, Yv *base_dir, int allow_exec, Yv *root,
 
 /* Resolve one program or package unit, collecting its spliced imports,
  * origin map, std dependencies, and linked package dependencies. */
-Yv *resolve_unit(Yv *src, Yv *base_dir, long depth, int allow_exec,
+Yv *resolve_unit(Yv *src, Yv *base_dir, ylong depth, int allow_exec,
                  Yv *root) {
     res_used = yav(0);
     /* The program itself is de-duplicated by `self_path` and NOT by putting it in
@@ -677,7 +678,7 @@ Yv *resolve_unit(Yv *src, Yv *base_dir, long depth, int allow_exec,
     Yv *rimports = yr_get(r, "imports");
     Yv *files = yav(1, root);
     Yv *rseen = yr_get(r, "seen");
-    long fi = 0;
+    ylong fi = 0;
     while (fi < yv_len(rseen)) {
         files = ya_push(files, ya_get(rseen, fi));
         fi = fi + 1;
@@ -701,7 +702,7 @@ Yv *resolve_unit(Yv *src, Yv *base_dir, long depth, int allow_exec,
     Yv *xn = exec_names();
     Yv *sn = str_names();
     Yv *names = yav(0);
-    long ni = 0;
+    ylong ni = 0;
     while (ni < yv_len(pn)) {
         names = ya_push(names, ya_get(pn, ni));
         ni = ni + 1;
@@ -717,7 +718,7 @@ Yv *resolve_unit(Yv *src, Yv *base_dir, long depth, int allow_exec,
         ni = ni + 1;
     }
     Yv *seen = words_seen(rsrc, names);
-    long px = yv_len(pn) + yv_len(xn);
+    ylong px = yv_len(pn) + yv_len(xn);
     /* std/prelude.y, std/exec.y and std/str.y are linked only when the
      * program actually mentions one of their names -- otherwise every
      * binary would carry code it never calls. str.y's names count only
@@ -769,7 +770,7 @@ Yv *resolve_unit(Yv *src, Yv *base_dir, long depth, int allow_exec,
 
 /* Which file line `ln` of the spliced program came from (0, the program
  * itself, when the map does not cover it). */
-long origin_file(Yv *o, long ln) {
+ylong origin_file(Yv *o, ylong ln) {
     Yv *f = yr_get(o, "file");
     if (ln >= 1 && ln <= yv_len(f)) {
         return yv_l(ya_get(f, ln - 1));
@@ -782,19 +783,19 @@ long origin_file(Yv *o, long ln) {
  * just "line" in the program's own file when `bare` (error positions keep
  * the plain `line:col` form there). A line past the end of the map (the
  * end of the input) counts on from the last line it holds. */
-Yv *origin_at(Yv *o, long ln, int bare) {
+Yv *origin_at(Yv *o, ylong ln, int bare) {
     Yv *f = yr_get(o, "file");
     Yv *l = yr_get(o, "line");
-    long n = yv_len(f);
+    ylong n = yv_len(f);
     if (ln < 1 || n == 0) {
         return ys_long(ln);
     } else {
-        long k = ln;
+        ylong k = ln;
         if (k > n) {
             k = n;
             ;
         }
-        long fid = yv_l(ya_get(f, k - 1));
+        ylong fid = yv_l(ya_get(f, k - 1));
         Yv *at = ys_long(yv_l(ya_get(l, k - 1)) + ln - k);
         if (fid == 0 && bare) {
             return at;
@@ -885,7 +886,7 @@ Yv *std_text(Yv *s) {
  * field with a format spec (words_scan). */
 Yv *words_seen(Yv *code, Yv *names) {
     Yv *seen = yav(0);
-    long k = 0;
+    ylong k = 0;
     while (k <= yv_len(names)) {
         seen = ya_push(seen, yv_long(0));
         k = k + 1;
@@ -898,15 +899,15 @@ Yv *words_seen(Yv *code, Yv *names) {
 /* words_seen's pass over code[lo:n], marking seen in place. The fields of
  * an f-string are code: lexer.y fstr_walk finds them as the lexer does,
  * and each is scanned on its own. */
-long words_scan(Yv *code, long lo, long n, Yv *names, Yv *seen) {
-    long ignored = 0;
-    long i = lo;
+ylong words_scan(Yv *code, ylong lo, ylong n, Yv *names, Yv *seen) {
+    ylong ignored = 0;
+    ylong i = lo;
     /* the first byte of the last token of code (blanks and comments skip),
      * and a name just seen after a `.`, waiting for its `(` */
-    long prev = 0;
-    long pend = 0 - 1;
+    ylong prev = 0;
+    ylong pend = 0 - 1;
     while (i < n) {
-        long c = ys_byte_at(code, i);
+        ylong c = ys_byte_at(code, i);
         if (blank_byte(c)) {
             i = i + 1;
             ;
@@ -948,7 +949,7 @@ long words_scan(Yv *code, long lo, long n, Yv *names, Yv *seen) {
                  * cannot disagree about where a literal ends) */
                 i = lit_end(code, i, &ignored);
             } else if (word_byte(c)) {
-                long j = i + 1;
+                ylong j = i + 1;
                 while (j < n && word_byte(ys_byte_at(code, j))) {
                     j = j + 1;
                     ;
@@ -958,7 +959,7 @@ long words_scan(Yv *code, long lo, long n, Yv *names, Yv *seen) {
                     /* f"...": the fields, and whether one has a spec */
                     Yv *w = fstr_walk(code, j);
                     Yv *fs = yr_get(w, "fields");
-                    long f = 0;
+                    ylong f = 0;
                     while (f < yv_len(fs)) {
                         words_scan(code, yv_l(ya_get(fs, f)),
                                    yv_l(ya_get(fs, f + 1)), names, seen);
@@ -973,7 +974,7 @@ long words_scan(Yv *code, long lo, long n, Yv *names, Yv *seen) {
                     i = yv_l(yr_get(w, "end"));
                     ;
                 } else {
-                    long m = 0;
+                    ylong m = 0;
                     while (m < yv_len(names)) {
                         Yv *nm = ya_get(names, m);
                         if (yv_len(nm) == j - i && word_at(code, i, nm)) {
@@ -1008,20 +1009,20 @@ long words_scan(Yv *code, long lo, long n, Yv *names, Yv *seen) {
 
 /* A byte of an identifier-shaped word (the lexer's isalnum: letters,
  * digits, `_`). */
-int word_byte(long c) {
+int word_byte(ylong c) {
     return (c >= 97 && c <= 122) || (c >= 65 && c <= 90) ||
            (c >= 48 && c <= 57) || c == 95;
 }
 
 /* A blank as the lexer skips it (its isspace: space, tab, LF, CR). */
-int blank_byte(long c) {
+int blank_byte(ylong c) {
     return c == 32 || c == 9 || c == 10 || c == 13;
 }
 
 /* Whether code[i:i + len(nm)] is nm (the caller checked the length). */
-int word_at(Yv *code, long i, Yv *nm) {
+int word_at(Yv *code, ylong i, Yv *nm) {
     int ok = 1;
-    long k = 0;
+    ylong k = 0;
     while (ok && k < yv_len(nm)) {
         if (ys_byte_at(code, i + k) != ys_byte_at(nm, k)) {
             ok = 0;
@@ -1034,9 +1035,9 @@ int word_at(Yv *code, long i, Yv *nm) {
 }
 
 /* Whether any of seen[lo..hi) reaches `level` (see words_seen). */
-int seen_any(Yv *seen, long lo, long hi, long level) {
+int seen_any(Yv *seen, ylong lo, ylong hi, ylong level) {
     int r = 0;
-    long i = lo;
+    ylong i = lo;
     while (i < hi) {
         if (yv_l(ya_get(seen, i)) >= level) {
             r = 1;
@@ -1062,10 +1063,10 @@ int seen_any(Yv *seen, long lo, long hi, long level) {
 Yv *norm_path(Yv *p) {
     Yv *parts = ys_split(p, ys("/"));
     Yv *out = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(parts)) {
         Yv *seg = ya_get(parts, i);
-        long n = yv_len(out);
+        ylong n = yv_len(out);
         if (ys_eq_lit(seg, ".")) {
             ;
         } else if (ys_eq_lit(seg, "..") && n > 0 &&
@@ -1082,9 +1083,9 @@ Yv *norm_path(Yv *p) {
 }
 
 /* Where full is in seen (-1: nowhere). */
-long seen_index(Yv *seen, Yv *full) {
-    long at = -1;
-    long i = 0;
+ylong seen_index(Yv *seen, Yv *full) {
+    ylong at = -1;
+    ylong i = 0;
     while (at < 0 && i < yv_len(seen)) {
         if (ys_eq(ya_get(seen, i), full)) {
             at = i;
@@ -1095,7 +1096,7 @@ long seen_index(Yv *seen, Yv *full) {
 }
 
 int seen_has(Yv *seen, Yv *full) {
-    long i = 0;
+    ylong i = 0;
     int found = 0;
     while (i < yv_len(seen)) {
         Yv *e = ya_get(seen, i);
@@ -1135,7 +1136,7 @@ int seen_has(Yv *seen, Yv *full) {
  * a full compile of another program inside this one, and the globals below
  * (native.c's, so only native.c can do it) are the outer compile's state. */
 
-static int gen_at(Yv *g, long i) {
+static int gen_at(Yv *g, ylong i) {
     if (i < yv_len(g)) { return yv_truth(ya_get(g, i)); }
     else { return 0; }
 }
@@ -1144,7 +1145,7 @@ static int gen_at(Yv *g, long i) {
  * lines when it is off. The off case is not a special case anywhere else: P is
  * then the file verbatim and a line's origin is its own line number, which is
  * what meta.c's scan_none produces. */
-static Yv *meta_meta_scan(Yv *src, Yv *base_dir, long fid) {
+static Yv *meta_meta_scan(Yv *src, Yv *base_dir, ylong fid) {
     if (!mg_on) {
         return scan_none(src, fid);
     } else {
@@ -1152,7 +1153,7 @@ static Yv *meta_meta_scan(Yv *src, Yv *base_dir, long fid) {
     }
 }
 
-static Yv *meta_prepare(Yv *src, Yv *base_dir, long depth, int allow_exec,
+static Yv *meta_prepare(Yv *src, Yv *base_dir, ylong depth, int allow_exec,
                         Yv *root, Yv *self_path) {
     if (!mg_on) {
         return native_resolve_seen(src, base_dir, depth, yav(0), yav(0), 0,
@@ -1189,7 +1190,7 @@ static Yv *meta_prepare(Yv *src, Yv *base_dir, long depth, int allow_exec,
  *
  * (meta.y keeps this inline in meta_prepare: the C twin's forward declarations
  * are a flat list, and this is the only thing that needs the second one.) */
-static Yv *meta_resolve(Yv *src, Yv *base_dir, long depth, int allow_exec,
+static Yv *meta_resolve(Yv *src, Yv *base_dir, ylong depth, int allow_exec,
                         Yv *root, Yv *first, Yv *self_path) {
     if (mg_nest > 0) {
         /* A round in which a block cannot produce its text leaves a stand-in
@@ -1206,7 +1207,7 @@ static Yv *meta_resolve(Yv *src, Yv *base_dir, long depth, int allow_exec,
     (void)mg_pass();
     (void)native_resolve_seen(src, base_dir, depth, yav(0), yav(0), 0,
                                        self_path);
-    long rounds = 0;
+    ylong rounds = 0;
     int done = 0;
     while (!done) {
         (void)meta_run_generator(src, base_dir, allow_exec, root, first);
@@ -1236,20 +1237,20 @@ static Yv *meta_resolve(Yv *src, Yv *base_dir, long depth, int allow_exec,
 /* `dst += src` for a Y array (meta.y's `[root] + first.seen`): the elements of
  * src appended to dst. Arrays are reference values here (rule 1). */
 static Yv *yadd_strs(Yv *dst, Yv *src) {
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(src)) { dst = ya_push(dst, ya_get(src, i)); i = i + 1; };
     return dst;
 }
 
 /* Compile and run G, with every global it disturbs saved and put back. */
-static long meta_run_generator(Yv *src, Yv *base_dir, int allow_exec,
+static ylong meta_run_generator(Yv *src, Yv *base_dir, int allow_exec,
                                Yv *root, Yv *first) {
     (void)src;  /* the twin takes it and does not read it: G is built from the
                  * block table, not from the source */
     Yv *spk = res_pkgs;
     Yv *sro = res_roots;
     Yv *su = res_used;
-    long sdl = dbg_lines;
+    ylong sdl = dbg_lines;
     Yv *sdf = dbg_file;
     Yv *sdn = dbg_line;
     Yv *sns = pkg_ns;
@@ -1277,7 +1278,7 @@ static long meta_run_generator(Yv *src, Yv *base_dir, int allow_exec,
 
 static int dup_at(Yv *seen, Yv *at) {
     int hit = 0;
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(seen)) {
         if (ys_eq(ya_get(seen, i), at)) { hit = 1; };
         i = i + 1;
@@ -1289,13 +1290,13 @@ static int dup_at(Yv *seen, Yv *at) {
  * the user's; each line carries the SOURCE line its text came from, which the
  * line map already knows. Line numbers in G are MAPPED, not preserved -- the
  * helpers and the hoisted imports shift everything below them. */
-static Yv *meta_gorigin(long nbody) {
-    long hs = mg_ghead();
-    long n = hs + nbody;
+static Yv *meta_gorigin(ylong nbody) {
+    ylong hs = mg_ghead();
+    ylong n = hs + nbody;
     Yv *f = yav(0);
     Yv *l = yav(0);
     Yv *m = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < n) {
         f = ya_push(f, yv_long(0));
         l = ya_push(l, yv_long(1));
@@ -1303,9 +1304,9 @@ static Yv *meta_gorigin(long nbody) {
         i = i + 1;
     };
     Yv *gol = mg_gol;
-    long k = 0;
+    ylong k = 0;
     while (k < nbody) {
-        long ln = 1;
+        ylong ln = 1;
         if (k < yv_len(gol)) { ln = yv_l(ya_get(gol, k)); };
         ya_set(l, hs + k, yv_long(ln));
         k = k + 1;
@@ -1314,7 +1315,7 @@ static Yv *meta_gorigin(long nbody) {
               yv_long(1), "file", f, "line", l, "mods", m);
 }
 
-static Yv *meta_gorigin(long nbody);
+static Yv *meta_gorigin(ylong nbody);
 
 /* Compile G the way ycc compiles a program, with the pass OFF, and hand back
  * its image. G's errors are reported with G's own origin map, so they read
@@ -1322,7 +1323,7 @@ static Yv *meta_gorigin(long nbody);
  * about the user's file, and still carrying a line through the line map. */
 static Yv *meta_compile_gen(void) {
     Yv *gt = meta_gtext();
-    long nbody = mg_glines();
+    ylong nbody = mg_glines();
     Yv *go = meta_gorigin(nbody);
     (void)mg_set(0);
     Yv *nr = native_resolve_pk(gt, mg_gbase, mg_gexec, ys_cat(mg_root, ys(".meta")),
@@ -1339,7 +1340,7 @@ static Yv *meta_compile_gen(void) {
     if (!yv_truth(yr_get(r, "ok"))) {
         Yv *seen = yav(0);
         Yv *errs = yr_get(r, "errors");
-        long i = 0;
+        ylong i = 0;
         while (i < yv_len(errs)) {
             Yv *e = ya_get(errs, i);
             Yv *at = ys_cat(ys_cat(ys_tostring(origin_at(go, yv_l(yr_get(e, "line")), 0)),
@@ -1378,7 +1379,7 @@ static Yv *meta_compile_gen(void) {
  * scope: its defs are `net.listen_tcp` and friends (rename.c). */
 
 Yv *dir_of(Yv *p) {
-    long s = ys_last_index_of(p, ys("/"));
+    ylong s = ys_last_index_of(p, ys("/"));
     if (s < 0) {
         return ys("");
     } else {
@@ -1401,7 +1402,7 @@ static Yv *self_dir(void) {
     Yv *av = argv_();
     if (yv_len(av) > 0) { by_argv = dir_of(ya_get(av, 0)); }
     char buf[4096];
-    long n = syscall(SYS_readlink, "/proc/self/exe", buf, sizeof(buf));
+    ylong n = syscall(SYS_readlink, "/proc/self/exe", buf, sizeof(buf));
     if (n > 0) {
         Yv *d = dir_of(ys_n((const char *)buf, (size_t)n));
         if (yv_len(d) > 0) { return d; }
@@ -1415,7 +1416,7 @@ Yv *std_resolve(Yv *name, Yv *base_dir) {
                     ys_cat(ys_cat(ys_cat(base_dir, ys("/")), name), ys(".y")));
     cands = ya_push(
         cands, ys_cat(ys_cat(ys_cat(base_dir, ys("/std/")), name), ys(".y")));
-    long ri = 0;
+    ylong ri = 0;
     while (ri < yv_len(res_roots)) {
         Yv *rr = ya_get(res_roots, ri);
         cands = ya_push(cands,
@@ -1436,7 +1437,7 @@ Yv *std_resolve(Yv *name, Yv *base_dir) {
         ;
     }
     Yv *found = ys("");
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(cands)) {
         if (yv_len(found) == 0) {
             Yv *c = ya_get(cands, i);
@@ -1465,8 +1466,8 @@ Yv *std_resolve(Yv *name, Yv *base_dir) {
  * spliced in, as lines; ofile/oline map each one back (see the origin map
  * above native_resolve), and smods[k] is the module seen[k] was imported
  * as by name ("" by path). */
-Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen,
-                        Yv *smods, long fid, Yv *self_path) {
+Yv *native_resolve_seen(Yv *src, Yv *base_dir, ylong depth, Yv *seen,
+                        Yv *smods, ylong fid, Yv *self_path) {
     if (depth > 32) {
         // Fatal, like a missing module: carrying on compiled the program
         // without the rest of the chain and exited 0.
@@ -1510,18 +1511,18 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen,
         Yv *oline = yav(0);
         Yv *ogen = yav(0);
         Yv *imports = yav(0);
-        long i = 0;
-        long n = yv_len(lines);
+        ylong i = 0;
+        ylong n = yv_len(lines);
         while (i < n) {
             Yv *line = ya_get(lines, i);
-            long lf = 0;
+            ylong lf = 0;
             if (i < yv_len(inf)) { lf = yv_l(ya_get(inf, i)); };
-            long ln = 0;
+            ylong ln = 0;
             if (i < yv_len(inl)) { ln = yv_l(ya_get(inl, i)); };
             Yv *trimmed = ys_trim(line);
             if (ys_eq_lit(ys_slice(trimmed, 0, 7), "import ")) {
                 Yv *rest = ys_slice_from(trimmed, 7);
-                long from_idx = ys_index_of(rest, ys(" from "));
+                ylong from_idx = ys_index_of(rest, ys(" from "));
                 Yv *name = ys("");
                 Yv *full = ys("");
                 Yv *path = ys("");
@@ -1632,7 +1633,7 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen,
                         } else {
                             smods = ya_push(smods, name);
                         }
-                        long last_slash = ys_last_index_of(full, ys("/"));
+                        ylong last_slash = ys_last_index_of(full, ys("/"));
                         Yv *mod_dir = base_dir;
                         if (last_slash >= 0) {
                             mod_dir = ys_slice(full, 0, last_slash);
@@ -1655,7 +1656,7 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen,
                         Yv *sub_lines = yr_get(sub, "lines");
                         Yv *sub_ofile = yr_get(sub, "ofile");
                         Yv *sub_oline = yr_get(sub, "oline");
-                        long k = 0;
+                        ylong k = 0;
                         while (k < yv_len(sub_lines)) {
                             out_lines = ya_push(out_lines,
                                                 ya_get(sub_lines, k));
@@ -1677,7 +1678,7 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen,
                             ogen = ya_push(ogen, ya_get(sub_ogen, k));
                             k = k + 1;
                         }
-                        long m = 0;
+                        ylong m = 0;
                         while (m < yv_len(subns)) {
                             imports = ya_push(imports, ya_get(subns, m));
                             m = m + 1;
@@ -1744,7 +1745,7 @@ int is_embed_decl(Yv *trimmed) {
 
 Yv *embed_decl(Yv *trimmed, Yv *base_dir) {
     Yv *rest = ys_slice_from(trimmed, 6);
-    long from_idx = ys_index_of(rest, ys(" from \""));
+    ylong from_idx = ys_index_of(rest, ys(" from \""));
     Yv *name = ys_trim(ys_slice(rest, 0, from_idx));
     Yv *path_part = ys_trim(ys_slice_from(rest, from_idx + 6));
     if (ys_eq_lit(ys_slice_from(path_part, yv_len(path_part) - 1), ";")) {
@@ -1784,13 +1785,13 @@ Yv *embed_decl(Yv *trimmed, Yv *base_dir) {
  * every other byte is copied. */
 Yv *quote_text(Yv *s) {
     Yv *b = bytes_of(s);
-    long n = yv_len(b);
+    ylong n = yv_len(b);
     Yv *hex = ys("0123456789abcdef");
     Yv *out = ya_push(yav(0), ys("\""));
-    long run = 0;
-    long i = 0;
+    ylong run = 0;
+    ylong i = 0;
     while (i < n) {
-        long c = yv_l(ya_get(b, i));
+        ylong c = yv_l(ya_get(b, i));
         Yv *esc = ys("");
         if (c == 92) {
             esc = ys("\\\\");
@@ -1822,7 +1823,7 @@ Yv *quote_text(Yv *s) {
     return ys_join(out, ys(""));
 }
 
-int is_id_b(long c) {
+int is_id_b(ylong c) {
     // letters, digits, `_`, `$` and `.` (a module's names are qualified:
     // `yfn_12_fs.exists$3`); most bytes are lowercase, decided first
     if (c >= 97) {
@@ -1838,8 +1839,8 @@ int is_id_b(long c) {
 
 /* First non-blank offset in [i, hi); blank means space (the asm dialect
  * indents with spaces) or end of range. */
-long skip_sp(Yv *b, long i, long hi) {
-    long p = i;
+ylong skip_sp(Yv *b, ylong i, ylong hi) {
+    ylong p = i;
     int go = 1;
     while (go) {
         if (p >= hi) {
@@ -1861,8 +1862,8 @@ long skip_sp(Yv *b, long i, long hi) {
 
 /* End of the identifier at offset `i` (a leading `$` — an assembly
  * immediate like `$ystr_end-ystr` — is not part of the name). */
-long tok_end_b(Yv *b, long i, long hi) {
-    long p = i;
+ylong tok_end_b(Yv *b, ylong i, ylong hi) {
+    ylong p = i;
     if (p < hi) {
         if (yv_l(ya_get(b, p)) == 36) {
             p = p + 1;
@@ -1890,8 +1891,8 @@ long tok_end_b(Yv *b, long i, long hi) {
 }
 
 /* The identifier at offset `i`, or "". */
-Yv *tok_at_b(Yv *text, Yv *b, long i, long hi) {
-    long s = i;
+Yv *tok_at_b(Yv *text, Yv *b, ylong i, ylong hi) {
+    ylong s = i;
     if (s < hi) {
         if (yv_l(ya_get(b, s)) == 36) {
             s = s + 1;
@@ -1899,7 +1900,7 @@ Yv *tok_at_b(Yv *text, Yv *b, long i, long hi) {
         }
         ;
     }
-    long e = tok_end_b(b, i, hi);
+    ylong e = tok_end_b(b, i, hi);
     if (e > s) {
         return ys_slice(text, s, e);
     } else {
@@ -1918,14 +1919,14 @@ Yv *tok_push(Yv *out, Yv *t) {
 /* Every symbol one line [lo, hi) references: call/lea/jump operands and
  * both labels of a computed immediate (`mov $A-B, ...`). Dispatch on the
  * mnemonic — this walks every line of the emitted text, so no searching. */
-Yv *line_refs_b(Yv *text, Yv *b, long lo, long hi, Yv *out, int want_jumps) {
-    long p = skip_sp(b, lo, hi);
+Yv *line_refs_b(Yv *text, Yv *b, ylong lo, ylong hi, Yv *out, int want_jumps) {
+    ylong p = skip_sp(b, lo, hi);
     if (p >= hi) {
         return out;
     } else {
         Yv *w = tok_at_b(text, b, p, hi);
-        long we = tok_end_b(b, p, hi);
-        long op = skip_sp(b, we, hi);
+        ylong we = tok_end_b(b, p, hi);
+        ylong op = skip_sp(b, we, hi);
         if (ys_eq_lit(w, "call")) {
             out = tok_push(out, tok_at_b(text, b, op, hi));
             ;
@@ -1936,7 +1937,7 @@ Yv *line_refs_b(Yv *text, Yv *b, long lo, long hi, Yv *out, int want_jumps) {
                    || ys_eq_lit(w, "movapd") || ys_eq_lit(w, "addsd") || ys_eq_lit(w, "subsd")
                    || ys_eq_lit(w, "mulsd") || ys_eq_lit(w, "divsd") || ys_eq_lit(w, "addss")
                    || ys_eq_lit(w, "subss") || ys_eq_lit(w, "mulss") || ys_eq_lit(w, "divss")) {
-            long q = p;
+            ylong q = p;
             int go = 1;
             while (go) {
                 if (q >= hi) {
@@ -1956,7 +1957,7 @@ Yv *line_refs_b(Yv *text, Yv *b, long lo, long hi, Yv *out, int want_jumps) {
             if (q < hi) {
                 Yv *t = tok_at_b(text, b, q, hi);
                 out = tok_push(out, t);
-                long after = tok_end_b(b, q, hi);
+                ylong after = tok_end_b(b, q, hi);
                 if (after < hi) {
                     if (yv_l(ya_get(b, after)) == 45) {
                         out = tok_push(out, tok_at_b(text, b, after + 1, hi));
@@ -1980,7 +1981,7 @@ Yv *line_refs_b(Yv *text, Yv *b, long lo, long hi, Yv *out, int want_jumps) {
                     out = tok_push(out, t1);
                     ;
                 }
-                long q2 = op;
+                ylong q2 = op;
                 int seen = 0;
                 while (q2 < hi && !seen) {
                     if (yv_l(ya_get(b, q2)) == 44 || yv_l(ya_get(b, q2)) == 36) {
@@ -2018,9 +2019,9 @@ Yv *line_refs_b(Yv *text, Yv *b, long lo, long hi, Yv *out, int want_jumps) {
 }
 
 /* Every symbol a byte range references, line by line. */
-Yv *refs_range(Yv *text, Yv *b, long lo, long hi, Yv *out, int want_jumps) {
-    long ls = lo;
-    long i = lo;
+Yv *refs_range(Yv *text, Yv *b, ylong lo, ylong hi, Yv *out, int want_jumps) {
+    ylong ls = lo;
+    ylong i = lo;
     Yv *res = out;
     while (i < hi) {
         if (yv_l(ya_get(b, i)) == 10) {
@@ -2053,7 +2054,7 @@ Yv *refs_range(Yv *text, Yv *b, long lo, long hi, Yv *out, int want_jumps) {
    a program that does not use math at all. The coefficient tables are the reason
    that matters (P4's five tables are ~1 KB), and it is why the skip is worth a
    measured 0.85% rather than a guess. */
-int directive_line_b(Yv *b, long ls) {
+int directive_line_b(Yv *b, ylong ls) {
     if (ls < yv_len(b)) {
         return yv_l(ya_get(b, ls)) == 46;
         ;
@@ -2066,14 +2067,14 @@ int directive_line_b(Yv *b, long ls) {
    scans below stay, because arch_consts and the arch asm are still text. */
 
 /* The label a line [lo, hi) defines, or "". */
-Yv *label_at(Yv *text, Yv *b, long lo, long hi) {
-    long p = skip_sp(b, lo, hi);
-    long e = tok_end_b(b, p, hi);
+Yv *label_at(Yv *text, Yv *b, ylong lo, ylong hi) {
+    ylong p = skip_sp(b, lo, hi);
+    ylong e = tok_end_b(b, p, hi);
     Yv *lab = ys("");
     if (e > p) {
         if (e < hi) {
             if (yv_l(ya_get(b, e)) == 58) {
-                long s = p;
+                ylong s = p;
                 if (yv_l(ya_get(b, s)) == 36) {
                     s = s + 1;
                     ;
@@ -2090,9 +2091,9 @@ Yv *label_at(Yv *text, Yv *b, long lo, long hi) {
 
 /* A line that is data, not code: blank lines, directives, or a bare label
  * (possibly followed by data on the same line). */
-int is_data_line_b(Yv *text, Yv *b, long lo, long hi) {
+int is_data_line_b(Yv *text, Yv *b, ylong lo, ylong hi) {
     Yv *lab = label_at(text, b, lo, hi);
-    long p = skip_sp(b, lo, hi);
+    ylong p = skip_sp(b, lo, hi);
     if (yv_len(lab) > 0) {
         p = skip_sp(b, p + 1 + yv_len(lab), hi);
         ;
@@ -2107,14 +2108,14 @@ int is_data_line_b(Yv *text, Yv *b, long lo, long hi) {
 /* Does a block [lo, hi) run into the next one? Only when its last
  * instruction is not a transfer; `ret`/`jmp`/`syscall` end the block (the
  * trap stubs end in an exit syscall and must not drag the file along). */
-int block_falls_b(Yv *text, Yv *b, long lo, long hi) {
-    long end = hi;
+int block_falls_b(Yv *text, Yv *b, ylong lo, ylong hi) {
+    ylong end = hi;
     int falls = 1;
     int go = 1;
     while (go) {
         /* start of the last line in [lo, end) */
-        long p = lo;
-        long i = lo;
+        ylong p = lo;
+        ylong i = lo;
         while (i < end) {
             if (yv_l(ya_get(b, i)) == 10) {
                 p = i + 1;
@@ -2122,7 +2123,7 @@ int block_falls_b(Yv *text, Yv *b, long lo, long hi) {
             }
             i = i + 1;
         }
-        long s = skip_sp(b, p, end);
+        ylong s = skip_sp(b, p, end);
         if (s >= end) {
             /* blank line: drop it and look at the line before */
             if (p > lo) {
@@ -2165,9 +2166,9 @@ int block_falls_b(Yv *text, Yv *b, long lo, long hi) {
    with -- so the mnemonic decides, as it did. */
 static Yv *ir_refs(Yv *ir) {
     Yv *out = yav(0);
-    long at = 0;
+    ylong at = 0;
     while (at < yv_len(ir)) {
-        long f = yv_l(ya_get(ir, at));
+        ylong f = yv_l(ya_get(ir, at));
         if (f < IR_LABEL) {
             /* a form: walk its operands by kind */
             out = ir_refs_item(ir, at, out);
@@ -2178,14 +2179,14 @@ static Yv *ir_refs(Yv *ir) {
     return out;
 }
 
-static Yv *ir_refs_item(Yv *ir, long at, Yv *out) {
-    long f = yv_l(ya_get(ir, at));
+static Yv *ir_refs_item(Yv *ir, ylong at, Yv *out) {
+    ylong f = yv_l(ya_get(ir, at));
     Yv *fo = ir_form(f);
     Yv *kinds = yr_get(fo, "kinds");
-    long wp = at + 1;
-    long i = 0;
+    ylong wp = at + 1;
+    ylong i = 0;
     while (i < yv_len(kinds)) {
-        long k = yv_l(ya_get(kinds, i));
+        ylong k = yv_l(ya_get(kinds, i));
         if (k == O_LBL) {
             out = ir_refs_push(out, lname(ya_get(ir, wp)));
         } else if (k == O_DIFF) {
@@ -2218,16 +2219,16 @@ static Yv *ir_refs_push(Yv *out, Yv *nm) {
    that is the only field this rewrites -- the label of an O_MEM operand under
    a `lea`. (The text version walked the body line by line; relabel_dups.) */
 static Yv *ir_relabel(Yv *ir, Yv *m, Yv *dup_new) {
-    long at = 0;
+    ylong at = 0;
     while (at < yv_len(ir)) {
-        long f = yv_l(ya_get(ir, at));
+        ylong f = yv_l(ya_get(ir, at));
         if (f < IR_LABEL) {
             Yv *fo = ir_form(f);
             Yv *kinds = yr_get(fo, "kinds");
-            long wp = at + 1;
-            long i = 0;
+            ylong wp = at + 1;
+            ylong i = 0;
             while (i < yv_len(kinds)) {
-                long k = yv_l(ya_get(kinds, i));
+                ylong k = yv_l(ya_get(kinds, i));
                 if (k == O_LBL) {
                     ya_set(ir, wp, yv_long(ir_relabel_one(yv_l(ya_get(ir, wp)), m, dup_new)));
                 } else if (k == O_DIFF) {
@@ -2251,7 +2252,7 @@ static Yv *ir_relabel(Yv *ir, Yv *m, Yv *dup_new) {
     return ir;
 }
 
-static long ir_relabel_one(long id, Yv *m, Yv *dup_new) {
+static ylong ir_relabel_one(ylong id, Yv *m, Yv *dup_new) {
     /* The label's own length is what is cut out: the winner's label is what
        gets longer or shorter. */
     Yv *g = labmap_get(m, lname(yv_long(id)));
@@ -2278,7 +2279,7 @@ static long ir_relabel_one(long id, Yv *m, Yv *dup_new) {
 
 Yv *namemap_build(Yv *names) {
     Yv *m = labmap_new(yv_len(names) * 2 + 16);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(names)) {
         Yv *nm = ya_get(names, i);
         if (yv_len(nm) > 0) {
@@ -2293,7 +2294,7 @@ Yv *namemap_build(Yv *names) {
 }
 
 /* Index of `name` among the names it was built from, or -1. */
-long namemap_get(Yv *m, Yv *name) {
+ylong namemap_get(Yv *m, Yv *name) {
     Yv *r = labmap_get(m, name);
     return yv_l(yr_get(r, "sec"));
 }
@@ -2314,7 +2315,7 @@ long namemap_get(Yv *m, Yv *name) {
  * compile, most of it hash_str). */
 Yv *fntab_of(Yv *syms, Yv *ids) {
     Yv *m = labmap_new(yv_len(syms) * 2 + 16);
-    long i = yv_len(syms) - 1;
+    ylong i = yv_len(syms) - 1;
     while (i >= 0) {
         Yv *e = ya_get(syms, i);
         if (yv_len(yr_get(e, "name")) > 0) {
@@ -2329,7 +2330,7 @@ Yv *fntab_of(Yv *syms, Yv *ids) {
 /* `ids` for a Sym list: intern each label, in order. */
 Yv *fntab_ids(Yv *syms) {
     Yv *ids = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(syms)) {
         ids = ya_push(ids, lbl_new(yr_get(ya_get(syms, i), "label")));
         i = i + 1;
@@ -2341,11 +2342,11 @@ Yv *fntab_ids(Yv *syms) {
  * blocks: their own references and (for code that runs into the next block)
  * their successor. `falls[i]` says block i falls through to block i+1. */
 Yv *shake_keep(Yv *names, Yv *refs, Yv *falls, Yv *keep, Yv *roots) {
-    long n = yv_len(names);
+    ylong n = yv_len(names);
     Yv *map = namemap_build(names);
-    long r = 0;
+    ylong r = 0;
     while (r < yv_len(roots)) {
-        long idx = namemap_get(map, ya_get(roots, r));
+        ylong idx = namemap_get(map, ya_get(roots, r));
         if (idx >= 0) {
             ya_set(keep, idx, yv_bool(1));
             ;
@@ -2353,7 +2354,7 @@ Yv *shake_keep(Yv *names, Yv *refs, Yv *falls, Yv *keep, Yv *roots) {
         r = r + 1;
     }
     Yv *scanned = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < n) {
         scanned = ya_push(scanned, yv_bool(0));
         i = i + 1;
@@ -2361,7 +2362,7 @@ Yv *shake_keep(Yv *names, Yv *refs, Yv *falls, Yv *keep, Yv *roots) {
     int more = 1;
     while (more) {
         more = 0;
-        long b = 0;
+        ylong b = 0;
         while (b < n) {
             if (yv_b(ya_get(keep, b))) {
                 if (!(yv_b(ya_get(scanned, b)))) {
@@ -2378,9 +2379,9 @@ Yv *shake_keep(Yv *names, Yv *refs, Yv *falls, Yv *keep, Yv *roots) {
                         ;
                     }
                     Yv *rs = ya_get(refs, b);
-                    long j = 0;
+                    ylong j = 0;
                     while (j < yv_len(rs)) {
-                        long idx = namemap_get(map, ya_get(rs, j));
+                        ylong idx = namemap_get(map, ya_get(rs, j));
                         if (idx >= 0) {
                             if (!(yv_b(ya_get(keep, idx)))) {
                                 ya_set(keep, idx, yv_bool(1));
@@ -2404,13 +2405,13 @@ Yv *shake_keep(Yv *names, Yv *refs, Yv *falls, Yv *keep, Yv *roots) {
  * references) or another kept block reaches. Output order matches input. */
 Yv *shake_refs(Yv *text, Yv *root_refs) {
     Yv *b = bytes_of(text);
-    long n = yv_len(b);
+    ylong n = yv_len(b);
     /* every label starts a block; lines before the first label (directives)
      * form a head block that is always kept */
     Yv *names = yav(0);
     Yv *starts = yav(0);
-    long i = 0;
-    long ls = 0;
+    ylong i = 0;
+    ylong ls = 0;
     while (i < n) {
         if (yv_l(ya_get(b, i)) == 10) {
             Yv *lab = label_at(text, b, ls, i);
@@ -2447,17 +2448,17 @@ Yv *shake_refs(Yv *text, Yv *root_refs) {
         }
         ;
     }
-    long nb = yv_len(starts);
+    ylong nb = yv_len(starts);
     if (nb == 0) {
         return text;
     } else {
         /* per-block references + fall-through flags */
         Yv *refs = yav(0);
         Yv *falls = yav(0);
-        long k = 0;
+        ylong k = 0;
         while (k < nb) {
-            long lo = yv_l(ya_get(starts, k));
-            long hi = n;
+            ylong lo = yv_l(ya_get(starts, k));
+            ylong hi = n;
             if (k + 1 < nb) {
                 hi = yv_l(ya_get(starts, k + 1));
                 ;
@@ -2496,8 +2497,8 @@ Yv *shake_refs(Yv *text, Yv *root_refs) {
         k = 0;
         while (k < nb) {
             if (yv_b(ya_get(keep, k))) {
-                long lo = yv_l(ya_get(starts, k));
-                long hi = n;
+                ylong lo = yv_l(ya_get(starts, k));
+                ylong hi = n;
                 if (k + 1 < nb) {
                     hi = yv_l(ya_get(starts, k + 1));
                     ;
@@ -2522,7 +2523,7 @@ Yv *shake_refs(Yv *text, Yv *root_refs) {
 Yv *prelude_blocks(Yv *lines) {
     Yv *starts = yav(0);
     Yv *names = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(lines)) {
         Yv *l = ya_get(lines, i);
         Yv *lab = ys("");
@@ -2544,9 +2545,9 @@ Yv *prelude_blocks(Yv *lines) {
 }
 
 /* Every reference the lines [lo, hi) make. */
-Yv *lines_refs(Yv *lines, long lo, long hi) {
+Yv *lines_refs(Yv *lines, ylong lo, ylong hi) {
     Yv *out = yav(0);
-    long i = lo;
+    ylong i = lo;
     while (i < hi) {
         Yv *l = ya_get(lines, i);
         Yv *lb = bytes_of(l);
@@ -2558,14 +2559,14 @@ Yv *lines_refs(Yv *lines, long lo, long hi) {
 
 /* Does the block of lines [lo, hi) run into the next one? block_falls_b
  * and is_data_line_b on its lines. */
-int lines_fall(Yv *lines, long lo, long hi) {
+int lines_fall(Yv *lines, ylong lo, ylong hi) {
     int falls = 1;
-    long i = hi - 1;
+    ylong i = hi - 1;
     int go = 1;
     while (go && i >= lo) {
         Yv *l = ya_get(lines, i);
         Yv *lb = bytes_of(l);
-        long s = skip_sp(lb, 0, yv_len(lb));
+        ylong s = skip_sp(lb, 0, yv_len(lb));
         if (s < yv_len(lb)) {
             go = 0;
             Yv *w = tok_at_b(l, lb, s, yv_len(lb));
@@ -2579,7 +2580,7 @@ int lines_fall(Yv *lines, long lo, long hi) {
         Yv *l0 = ya_get(lines, lo);
         Yv *b0 = bytes_of(l0);
         Yv *lab = label_at(l0, b0, 0, yv_len(b0));
-        long p = skip_sp(b0, 0, yv_len(b0));
+        ylong p = skip_sp(b0, 0, yv_len(b0));
         if (yv_len(lab) > 0) {
             p = skip_sp(b0, p + 1 + yv_len(lab), yv_len(b0));
         }
@@ -2598,11 +2599,11 @@ Yv *shake_prelude(Yv *pb, Yv *roots) {
     Yv *lines = yr_get(pb, "lines");
     Yv *starts = yr_get(pb, "starts");
     Yv *names = yr_get(pb, "names");
-    long nb = yv_len(starts);
+    ylong nb = yv_len(starts);
     Yv *keep = yav(0);
     Yv *scanned = yav(0);
     Yv *brefs = yav(0);
-    long k = 0;
+    ylong k = 0;
     while (k < nb) {
         Yv *nm = ya_get(names, k);
         keep = ya_push(keep, yv_bool(yv_len(nm) == 0));
@@ -2610,9 +2611,9 @@ Yv *shake_prelude(Yv *pb, Yv *roots) {
         brefs = ya_push(brefs, yav(0));
         k = k + 1;
     }
-    long r = 0;
+    ylong r = 0;
     while (r < yv_len(roots)) {
-        long idx = namemap_get(yr_get(pb, "ix"), ya_get(roots, r));
+        ylong idx = namemap_get(yr_get(pb, "ix"), ya_get(roots, r));
         if (idx >= 0) {
             ya_set(keep, idx, yv_bool(1));
         }
@@ -2621,13 +2622,13 @@ Yv *shake_prelude(Yv *pb, Yv *roots) {
     int more = 1;
     while (more) {
         more = 0;
-        long b = 0;
+        ylong b = 0;
         while (b < nb) {
             if (yv_b(ya_get(keep, b)) && !yv_b(ya_get(scanned, b))) {
                 ya_set(scanned, b, yv_bool(1));
                 more = 1;
-                long lo = yv_l(ya_get(starts, b));
-                long hi = yv_len(lines);
+                ylong lo = yv_l(ya_get(starts, b));
+                ylong hi = yv_len(lines);
                 if (b + 1 < nb) {
                     hi = yv_l(ya_get(starts, b + 1));
                 }
@@ -2636,9 +2637,9 @@ Yv *shake_prelude(Yv *pb, Yv *roots) {
                 if (b + 1 < nb && lines_fall(lines, lo, hi)) {
                     ya_set(keep, b + 1, yv_bool(1));
                 }
-                long j = 0;
+                ylong j = 0;
                 while (j < yv_len(rs)) {
-                    long idx = namemap_get(yr_get(pb, "ix"), ya_get(rs, j));
+                    ylong idx = namemap_get(yr_get(pb, "ix"), ya_get(rs, j));
                     if (idx >= 0) {
                         ya_set(keep, idx, yv_bool(1));
                     }
@@ -2653,19 +2654,19 @@ Yv *shake_prelude(Yv *pb, Yv *roots) {
     k = 0;
     while (k < nb) {
         if (yv_b(ya_get(keep, k))) {
-            long lo = yv_l(ya_get(starts, k));
-            long hi = yv_len(lines);
+            ylong lo = yv_l(ya_get(starts, k));
+            ylong hi = yv_len(lines);
             if (k + 1 < nb) {
                 hi = yv_l(ya_get(starts, k + 1));
             }
-            long i = lo;
+            ylong i = lo;
             while (i < hi) {
                 pieces = ya_push(pieces, ya_get(lines, i));
                 pieces = ya_push(pieces, ys("\n"));
                 i = i + 1;
             }
             Yv *bk = ya_get(brefs, k);
-            long j = 0;
+            ylong j = 0;
             while (j < yv_len(bk)) {
                 out = ya_push(out, ya_get(bk, j));
                 j = j + 1;
@@ -2681,7 +2682,7 @@ Yv *shake_prelude(Yv *pb, Yv *roots) {
  * needs anyway. */
 static Yv *lines_appended(Yv *a, Yv *b) {
     Yv *out = ya_slice(a, 0, yv_len(a));
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(b)) {
         out = ya_push(out, ya_get(b, i));
         i = i + 1;
@@ -2713,9 +2714,9 @@ Yv *prelude_with(Yv *core, int threads, int mathasm) {
 /* The references (a kept prelude's) that name a body not kept. */
 Yv *unkept_refs(Yv *refs, Yv *bmap, Yv *keep) {
     Yv *out = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(refs)) {
-        long idx = namemap_get(bmap, ya_get(refs, i));
+        ylong idx = namemap_get(bmap, ya_get(refs, i));
         if (idx >= 0) {
             if (!yv_b(ya_get(keep, idx))) {
                 out = ya_push(out, ya_get(refs, i));
@@ -2735,22 +2736,22 @@ Yv *unkept_refs(Yv *refs, Yv *bmap, Yv *keep) {
  * plus everything the kept ones reference — the roots for shaking the
  * arch prelude itself. */
 Yv *prune_bodies(Yv *labels, Yv *refs, Yv *extra_roots) {
-    long nb = yv_len(labels);
+    ylong nb = yv_len(labels);
     Yv *keep = yav(0);
     Yv *falls = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < nb) {
         keep = ya_push(keep, yv_bool(0));
         falls = ya_push(falls, yv_bool(0));
         i = i + 1;
     }
     Yv *roots = yav(0);
-    long ri = 0;
+    ylong ri = 0;
     while (ri < yv_len(extra_roots)) {
         roots = ya_push(roots, ya_get(extra_roots, ri));
         ri = ri + 1;
     }
-    long root = namemap_get(namemap_build(labels), ys("_start"));
+    ylong root = namemap_get(namemap_build(labels), ys("_start"));
     if (root >= 0) {
         roots = ya_push(roots, ys("_start"));
         ;
@@ -2761,7 +2762,7 @@ Yv *prune_bodies(Yv *labels, Yv *refs, Yv *extra_roots) {
     while (i < nb) {
         if (yv_b(ya_get(keep, i))) {
             Yv *rs = ya_get(refs, i);
-            long j = 0;
+            ylong j = 0;
             while (j < yv_len(rs)) {
                 outrefs = ya_push(outrefs, ya_get(rs, j));
                 j = j + 1;
@@ -2777,7 +2778,7 @@ int is_all_digits(Yv *s) {
     if (yv_len(s) == 0) {
         return 0;
     } else {
-        long i = 0;
+        ylong i = 0;
         int ok = 1;
         while (i < yv_len(s)) {
             if (ys_index_of(ys("0123456789"), ys_slice(s, i, i + 1)) < 0) {
@@ -2798,7 +2799,7 @@ Yv *runtime_base(Yv *name) {
         if (!ys_eq_lit(ys_slice(name, 0, 2), "y_")) {
             return ys("");
         } else {
-            long dollar = ys_index_of(name, ys("$"));
+            ylong dollar = ys_index_of(name, ys("$"));
             if (dollar < 0) {
                 return name;
             } else {
@@ -2813,7 +2814,7 @@ Yv *runtime_base(Yv *name) {
     }
 }
 
-Yv *fn_label_of(long uid, Yv *name) {
+Yv *fn_label_of(ylong uid, Yv *name) {
     Yv *base = runtime_base(name);
     if (yv_len(base) > 0) {
         return base;
@@ -2823,7 +2824,7 @@ Yv *fn_label_of(long uid, Yv *name) {
 }
 
 int is_ns(Yv *name, Yv *imports) {
-    long i = 0;
+    ylong i = 0;
     int found = 0;
     while (i < yv_len(imports)) {
         if (ys_eq(ya_get(imports, i), name)) {
@@ -2851,7 +2852,7 @@ Yv *normnode(Yv *anode) { return anode; }
  * Dot arm keeps on purpose (pkg_ns) because a package is linked as a unit of its
  * own and its names stay qualified. */
 Yv *strip_ns_name(Yv *q, Yv *imports) {
-    long dot = ys_index_of(q, ys("."));
+    ylong dot = ys_index_of(q, ys("."));
     if (dot > 0) {
         Yv *ns = ys_slice(q, 0, dot);
         if (is_ns(ns, imports)) { return ys_slice_from(q, dot + 1); }
@@ -2909,7 +2910,7 @@ Yv *strip_type(Yv *t, Yv *imports) {
     } else if (yv_l(k) == K_trec) {
         Yv *fs = yav(0);
         Yv *fields = yr_get(t, "fields");
-        long j = 0;
+        ylong j = 0;
         while (j < yv_len(fields)) {
             Yv *f = ya_get(fields, j);
             fs = ya_push(fs,
@@ -2925,7 +2926,7 @@ Yv *strip_type(Yv *t, Yv *imports) {
 
 Yv *strip_type_list(Yv *ts, Yv *imports) {
     Yv *out = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(ts)) {
         out = ya_push(out, strip_type(ya_get(ts, i), imports));
         i = i + 1;
@@ -2935,7 +2936,7 @@ Yv *strip_type_list(Yv *ts, Yv *imports) {
 
 Yv *strip_list(Yv *nodes, Yv *imports) {
     Yv *out = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(nodes)) {
         out = ya_push(out, strip_ns(ya_get(nodes, i), imports));
         i = i + 1;
@@ -3179,19 +3180,19 @@ static Yv *st_ir(Yv *st, Yv *b) {
  * Every allocation is either still counted when the function ends or released
  * by a block on the way, so this is the high-water mark; emit_one_fn resets it
  * and sizes the frame from it. */
-static long frame_max = 0;
+static ylong frame_max = 0;
 
 /* The state with the frame counter set: what a block does on the way out, so
  * the counter is a stack of depths (see gen_block_as) rather than a running
  * total of every slot the body ever took. */
-static Yv *st_slots(Yv *st, long n) {
+static Yv *st_slots(Yv *st, ylong n) {
     /* A block that took no slot of its own has nothing to release, and the
      * depth it hands back is the one it was given -- which the mark already
      * covers (every allocation is marked where it is taken). */
     if (n == yv_l(yr_get(st, "slots"))) {
         return st;
     }
-    long cur = yv_l(yr_get(st, "slots")) + yv_l(yr_get(st, "temp"));
+    ylong cur = yv_l(yr_get(st, "slots")) + yv_l(yr_get(st, "temp"));
     if (cur > frame_max) { frame_max = cur; }
     return yr(15, "ir", yr_get(st, "ir"), "txt", yr_get(st, "txt"), "rodata",
               yr_get(st, "rodata"), "uid", yr_get(st, "uid"), "fuid",
@@ -3208,12 +3209,12 @@ static Yv *st_slots(Yv *st, long n) {
  * (gen_block_as passes its own entry depth), so a block inside a statement
  * cannot free the statement's. The high-water mark goes with them, so the frame
  * still covers the deepest a single statement reached. */
-static Yv *st_temp(Yv *st, long n) {
+static Yv *st_temp(Yv *st, ylong n) {
     /* a statement that took no temporary, as above */
     if (n == yv_l(yr_get(st, "temp"))) {
         return st;
     }
-    long cur = yv_l(yr_get(st, "slots")) + yv_l(yr_get(st, "temp"));
+    ylong cur = yv_l(yr_get(st, "slots")) + yv_l(yr_get(st, "temp"));
     if (cur > frame_max) { frame_max = cur; }
     return yr(15, "ir", yr_get(st, "ir"), "txt", yr_get(st, "txt"), "rodata",
               yr_get(st, "rodata"), "uid", yr_get(st, "uid"), "fuid",
@@ -3228,14 +3229,14 @@ static Yv *st_temp(Yv *st, long n) {
 /* One instruction: form `f` and its seven field words (see ir.h). The shapes
  * are written out at the call sites, so a site reads as the instruction it
  * emits. */
-static Yv *emit_insn(Yv *st, long f, long a, long b, long c, long d, long e,
-                     long g, long h) {
+static Yv *emit_insn(Yv *st, ylong f, ylong a, ylong b, ylong c, ylong d, ylong e,
+                     ylong g, ylong h) {
     return st_ir(st, ir_push(yr_get(st, "ir"), f, a, b, c, d, e, g, h));
 }
 
 /* A label definition (`yfn_3_foo:`), as an item carrying the label's id: the
  * assembler takes the name from the table, and tree shaking compares ids. */
-static Yv *emit_label(Yv *st, long id) {
+static Yv *emit_label(Yv *st, ylong id) {
     return emit_insn(st, IR_LABEL, id, 0, 0, 0, 0, 0, 0);
 }
 
@@ -3244,7 +3245,7 @@ static Yv *emit_label(Yv *st, long id) {
  * scale, disp, label. For the operands whose shape the emitter only learns from
  * the variable: gen_sappend's variable and its companion cell are a local for
  * one program and a global for the next. */
-static Yv *memop(Yv *lbl, long disp) {
+static Yv *memop(Yv *lbl, ylong disp) {
     if (yv_l(lbl) >= 0) {
         return yav(5, yv_long(-1), yv_long(-1), yv_long(1), yv_long(0), lbl);
     } else {
@@ -3264,7 +3265,7 @@ Yv *emit(Yv *st, Yv *line) {
 }
 
 Yv *next_uid(Yv *st) {
-    long u = yv_l(yr_get(st, "uid"));
+    ylong u = yv_l(yr_get(st, "uid"));
     st = yr(15, "ir", yr_get(st, "ir"), "txt", yr_get(st, "txt"), "rodata", yr_get(st, "rodata"), "uid",
             yv_long(yv_l(yr_get(st, "uid")) + 1), "fuid", yr_get(st, "fuid"),
             "loc", yr_get(st, "loc"), "env", yr_get(st, "env"), "slots",
@@ -3275,7 +3276,7 @@ Yv *next_uid(Yv *st) {
 }
 
 Yv *next_loc(Yv *st) {
-    long n = yv_l(yr_get(st, "loc"));
+    ylong n = yv_l(yr_get(st, "loc"));
     Yv *id = lbl_fresh(arch_loc_label(yv_l(yr_get(st, "fuid")), n));
     st = yr(15, "ir", yr_get(st, "ir"), "txt", yr_get(st, "txt"), "rodata", yr_get(st, "rodata"), "uid",
             yr_get(st, "uid"), "fuid", yr_get(st, "fuid"), "loc",
@@ -3293,12 +3294,12 @@ Yv *next_loc(Yv *st) {
  * long literal (the compiler's own runtime text cost 100 MB that way). */
 Yv *esc_asm(Yv *s) {
     Yv *b = bytes_of(s);
-    long n = yv_len(b);
+    ylong n = yv_len(b);
     Yv *out = yav(0);
-    long run = 0;
-    long i = 0;
+    ylong run = 0;
+    ylong i = 0;
     while (i < n) {
-        long o = yv_l(ya_get(b, i));
+        ylong o = yv_l(ya_get(b, i));
         Yv *esc = ys("");
         if (o == 92) {
             esc = ys("\\\\");
@@ -3361,8 +3362,8 @@ Yv *esc_asm(Yv *s) {
 
 /* The index (a labmap: name -> slot), and the env id it describes. */
 static Yv *env_ix = NULL;
-static long env_ix_id = 0;
-static long env_id = 0;
+static ylong env_ix_id = 0;
+static ylong env_id = 0;
 
 /* Open a fresh env: the sentinel that carries its id (its off field). */
 static Yv *env_open(Yv *env) {
@@ -3387,7 +3388,7 @@ static Yv *env_open(Yv *env) {
  * boxed local of a closure-heavy function), and a doubling cap per rebuild
  * reaches a million slots and out of memory on t89. */
 static Yv *env_index_all(Yv *env, int grow) {
-    long cap = yv_len(env) * 2 + 16;
+    ylong cap = yv_len(env) * 2 + 16;
     /* twice the old table, but only while it is this env's: a fresh env sizes
      * its own (or a unit with two wide units would inherit the first's) */
     if (grow && yv_l(yr_get(ya_get(env, 0), "off")) == env_ix_id &&
@@ -3395,7 +3396,7 @@ static Yv *env_index_all(Yv *env, int grow) {
         cap = yv_len(env_ix) * 2;
     }
     Yv *m = labmap_new(cap);
-    long i = yv_len(env) - 1;
+    ylong i = yv_len(env) - 1;
     while (i >= 0) {
         Yv *e = ya_get(env, i);
         /* the unnamed entries (the sentinel, a function's frame/fnty/boxmark
@@ -3446,12 +3447,12 @@ Yv *env_find(Yv *st, Yv *name) {
     /* The function's own entries first — the newest binding of a name — then
      * the unit's defs (st.fns, by its index). */
     Yv *env = yr_get(st, "env");
-    long n = yv_len(env);
-    long at = -1;
+    ylong n = yv_len(env);
+    ylong at = -1;
     /* the newest bindings, by scan */
-    long lo = n - ENV_SCAN_BACK;
+    ylong lo = n - ENV_SCAN_BACK;
     if (lo < 0) { lo = 0; }
-    long i = n - 1;
+    ylong i = n - 1;
     while (i >= lo && at < 0) {
         Yv *e = ya_get(env, i);
         if (ys_eq(yr_get(e, "name"), name)) { at = i; }
@@ -3460,7 +3461,7 @@ Yv *env_find(Yv *st, Yv *name) {
     /* the rest by index, once the env is wide and the index is this env's */
     if (at < 0 && n > ENV_SCAN_MAX &&
         yv_l(yr_get(ya_get(env, 0), "off")) == env_ix_id && n < yv_len(env_ix)) {
-        long g = yv_l(yr_get(labmap_get(env_ix, name), "sec"));
+        ylong g = yv_l(yr_get(labmap_get(env_ix, name), "sec"));
         if (g >= 0 && g < n && ys_eq(yr_get(ya_get(env, g), "name"), name)) {
             at = g;
         } else if (g < 0) {
@@ -3483,7 +3484,7 @@ Yv *env_find(Yv *st, Yv *name) {
                        "label", yv_long(-1), "mark", ys(""), "typ",
                        yr(1, "k", yv_long(K_tnone)));
         Yv *fns = yr_get(st, "fns");
-        long j = namemap_get(yr_get(fns, "ix"), name);
+        ylong j = namemap_get(yr_get(fns, "ix"), name);
         if (j >= 0) {
             Yv *fe = ya_get(yr_get(fns, "syms"), j);
             found = yr(6, "name", yr_get(fe, "name"), "kind",
@@ -3495,7 +3496,7 @@ Yv *env_find(Yv *st, Yv *name) {
     }
 }
 
-Yv *env_define(Yv *st, Yv *name, Yv *kind, long off, Yv *label, Yv *mark,
+Yv *env_define(Yv *st, Yv *name, Yv *kind, ylong off, Yv *label, Yv *mark,
                 Yv *typ) {
     Yv *env = yr_get(st, "env");
     if (yv_len(env) == 0) { env = env_open(env); }
@@ -3700,7 +3701,7 @@ Yv *infer_go(Yv *st, Yv *node) {
              * union: first appearance keeps the position, later wins the
              * value) -- the same rule as types.y's rec arm. */
             Yv *mfields = yav(0);
-            long mi = 0;
+            ylong mi = 0;
             while (mi < yv_len(melems)) {
                 Yv *mf = infer(st, ya_get(melems, mi));
                 /* mk is read twice: the `...` test, then the merge. */
@@ -3708,7 +3709,7 @@ Yv *infer_go(Yv *st, Yv *node) {
                 if (ys_eq_lit(mk, "...")) {
                     if (yv_l(yr_get(mf, "k")) == K_trec) {
                         Yv *msfs = yr_get(mf, "fields");
-                        long msi = 0;
+                        ylong msi = 0;
                         while (msi < yv_len(msfs)) {
                             Yv *msf = ya_get(msfs, msi);
                             mfields = field_merge(mfields, yr_get(msf, "name"),
@@ -3743,7 +3744,7 @@ Yv *infer_go(Yv *st, Yv *node) {
             int found = 0;
             Yv *ftyp = yr(1, "k", yv_long(K_tunk));
             Yv *dfs = yr_get(dt, "fields");
-            long di = 0;
+            ylong di = 0;
             while (di < yv_len(dfs)) {
                 Yv *df = ya_get(dfs, di);
                 /* NOTE: :str binding (see teq note in types.y): df flows
@@ -3839,7 +3840,7 @@ Yv *infer_call(Yv *st, Yv *node) {
                 return yr(1, "k", yv_long(K_tunk));
             } else {
                 Yv *vt = infer(st, ya_get(vargs, 0));
-                long vk = yv_l(yr_get(vt, "k"));
+                ylong vk = yv_l(yr_get(vt, "k"));
                 if (vk == K_tvoid || vk == K_tunk || vk == K_topt) {
                     return vt;
                 } else {
@@ -3972,7 +3973,7 @@ Yv *infer_block(Yv *st, Yv *node) {
            (print then reads a str option as a raw number, and a match arm's
            `v.f` as one). Only these: every other name is in scope after its
            own statement, which gen has run by the time anything asks. */
-        long i = 0;
+        ylong i = 0;
         while (i < yv_len(stmts)) {
             Yv *sn = ya_get(stmts, i);
             if (yv_l(yr_get(sn, "k")) == K_decl) {
@@ -4021,7 +4022,7 @@ Yv *infer_decl(Yv *st, Yv *node) {
 
 int uses_argv(Yv *stmts) {
     Yv *reads = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(stmts)) {
         reads = fv_walk(ya_get(stmts, i), reads, 1);
         i = i + 1;
@@ -4035,7 +4036,7 @@ int uses_argv(Yv *stmts) {
  * checker proved it). Returns [{name, func}]. */
 
 Yv *collect_from_block(Yv *stmts, Yv *out) {
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(stmts)) {
         out = collect_from_node(ya_get(stmts, i), out);
         i = i + 1;
@@ -4101,11 +4102,11 @@ Yv *collect_from_node(Yv *node, Yv *out) {
  * arch_prelude_threads_lines linked (every compile looks at each line of
  * the prelude it is given). */
 int uses_threads(Yv *refs) {
-    long i = 0;
+    ylong i = 0;
     int found = 0;
     while (i < yv_len(refs) && !found) {
         Yv *r = ya_get(refs, i);
-        long n = yv_len(r);
+        ylong n = yv_len(r);
         /* the entry points (an unlock comes with a lock or a try), by
          * length first: the self-compile has ~50K references */
         found = (n == 6 && ys_eq_lit(r, "y_fork")) || (n == 7 && ys_eq_lit(r, "y_spawn")) || (n == 10 && (ys_eq_lit(r, "y_sem_wait") || ys_eq_lit(r, "y_sem_post"))) || (n == 12 && ys_eq_lit(r, "y_mutex_lock")) || (n == 15 && ys_eq_lit(r, "y_mutex_trylock"));
@@ -4120,11 +4121,11 @@ int uses_threads(Yv *refs) {
  * -- split()ing the lines for every compile measured +2.6% instructions on
  * hello.y, against a few dozen lines (bench/compile_ir.sh). */
 int uses_math(Yv *refs) {
-    long i = 0;
+    ylong i = 0;
     int found = 0;
     while (i < yv_len(refs) && !found) {
         Yv *r = ya_get(refs, i);
-        long n = yv_len(r);
+        ylong n = yv_len(r);
         /* y_sqrt 6, y_fbits 7, y_bitsf 7, y_to_int 8, y_int_trap 10, and the
            length-first names of the bulk kernels: y_dot/y_sum 5, y_exp/y_log/
            y_pow/y_sin/y_cos 5, y_min_of/y_max_of/y_scale/y_axpy 8 */
@@ -4146,7 +4147,7 @@ int uses_math(Yv *refs) {
 }
 
 int name_in(Yv *xs, Yv *n) {
-    long i = 0;
+    ylong i = 0;
     int found = 0;
     /* Stops at the first hit: the answer is a bool, so unlike types.y
      * lookup the order does not matter and the tail cannot change it. */
@@ -4336,7 +4337,7 @@ Yv *fv_walk(Yv *node, Yv *out, int collect) {
 }
 
 Yv *fv_walk_list(Yv *nodes, Yv *out, int collect) {
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(nodes)) {
         out = fv_walk(ya_get(nodes, i), out, collect);
         i = i + 1;
@@ -4467,7 +4468,7 @@ Yv *fv_binds(Yv *node, Yv *out) {
 }
 
 Yv *fv_binds_list(Yv *nodes, Yv *out) {
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(nodes)) {
         out = fv_binds(ya_get(nodes, i), out);
         i = i + 1;
@@ -4488,7 +4489,7 @@ Yv *fn_captures(Yv *func, Yv *ex, Yv *extra) {
                                                        yav(0)));
     Yv *reads = fv_ids(yr_get(func, "body"), yav(0));
     Yv *caps = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(reads)) {
         Yv *n = ya_get(reads, i);
         if (name_in(bound, n)) {
@@ -4509,7 +4510,7 @@ Yv *fn_captures(Yv *func, Yv *ex, Yv *extra) {
 }
 
 Yv *fv_bind_params(Yv *ps, Yv *out) {
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(ps)) {
         Yv *p = ya_get(ps, i);
         out = ya_push(out, p);
@@ -4520,7 +4521,7 @@ Yv *fv_bind_params(Yv *ps, Yv *out) {
 
 Yv *fn_names_of(Yv *fns) {
     Yv *out = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(fns)) {
         Yv *e = ya_get(fns, i);
         out = ya_push(out, yr_get(e, "name"));
@@ -4579,7 +4580,7 @@ Yv *gen_go(Yv *st, Yv *node) {
     } else if (yv_l(k) == K_array) {
         return gen_array(st, node);
     } else if (yv_l(k) == K_deref) {
-        long dw = ptr_width(infer(st, yr_get(node, "e")));
+        ylong dw = ptr_width(infer(st, yr_get(node, "e")));
         st = gen(st, yr_get(node, "e"));
         if (dw == 1) {
             return emit_insn(st, F_MOVZBQ_0_R, R_RAX, -1, 1, -1, -1, R_RAX, 64);
@@ -4686,8 +4687,8 @@ Yv *gen_go(Yv *st, Yv *node) {
 Yv *gen_bstr(Yv *st, Yv *node) {
     Yv *bv = yr_get(node, "v");
     Yv *elems = yav(0);
-    long bi = 0;
-    long bn = yv_len(bv);
+    ylong bi = 0;
+    ylong bn = yv_len(bv);
     while (bi < bn) {
         Yv *bnum = yr(4, "k", yv_long(K_num), "v",
                        ys_long(ys_ord(ys_slice(bv, bi, bi + 1))),
@@ -4740,7 +4741,7 @@ Yv *gen_id(Yv *st, Yv *node) {
             /* A hoisted def used as a VALUE: wrap it in a closure record
              * with no captures (hoisted defs capture nothing). A capturing
              * function naming itself hands out its own record instead. */
-            long soff = -1;
+            ylong soff = -1;
             if (yv_eq(yr_get(e, "label"), yr_get(st, "self_label"))) {
                 soff = capture_off(st);
                 ;
@@ -4768,7 +4769,7 @@ Yv *gen_id(Yv *st, Yv *node) {
         } else if (ys_eq_lit(yr_get(e, "kind"), "own")) {
             /* An appendable string: a read may let its buffer escape, so
              * the companion is cleared (see gen_sappend). */
-            long off = yv_l(yr_get(e, "off"));
+            ylong off = yv_l(yr_get(e, "off"));
             st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, off, -1, R_RAX, 64);
             return emit_insn(st, F_MOV_I_D, 0, R_RBP, -1, 1, off - 8, -1, 0);
         } else if (ys_eq_lit(yr_get(e, "kind"), "capture")) {
@@ -4777,7 +4778,7 @@ Yv *gen_id(Yv *st, Yv *node) {
              * the shared cell pointer — and deref it (see box_capture).
              * NOTE: the index rides in `label` — env entries have no spare
              * numeric field and adding one would touch every signature. */
-            long idx = ys_tolong(yr_get(e, "mark"));
+            ylong idx = ys_tolong(yr_get(e, "mark"));
             st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, yv_l(yr_get(e, "off")), -1, R_RCX, 64);
             st = emit_insn(st, F_MOV_D_R, R_RCX, -1, 1, 8 * (idx + 1), -1, R_RAX, 64);
             return emit_insn(st, F_MOV_0_R, R_RAX, -1, 1, -1, -1, R_RAX, 64);
@@ -4809,7 +4810,7 @@ Yv *gen_cap_ptr(Yv *st, Yv *name) {
     Yv *e = env_find(st, name);
     if (ys_eq_lit(yr_get(e, "kind"), "capture")) {
         /* NOTE: the index rides in `label` (see gen_id's capture arm). */
-        long pidx = ys_tolong(yr_get(e, "mark"));
+        ylong pidx = ys_tolong(yr_get(e, "mark"));
         st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, yv_l(yr_get(e, "off")), -1, R_RCX, 64);
         return emit_insn(st, F_MOV_D_R, R_RCX, -1, 1, 8 * (pidx + 1), -1, R_RAX, 64);
     } else {
@@ -4844,7 +4845,7 @@ Yv *box_capture(Yv *st, Yv *name) {
         st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_alloc"))), 0, 0, 0, 0, 0, 0);
         st = emit_insn(st, F_POP_R, R_RDX, 64, 0, 0, 0, 0, 0);
         st = emit_insn(st, F_MOV_R_0, R_RDX, 64, R_RAX, -1, 1, -1, -1);
-        long boff = (yv_l(yr_get(st, "slots")) + 1) * -8;
+        ylong boff = (yv_l(yr_get(st, "slots")) + 1) * -8;
         st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, boff, -1);
         Yv *st2 =
            yr(15, "ir", yr_get(st, "ir"), "txt", yr_get(st, "txt"), "rodata", yr_get(st, "rodata"),
@@ -4866,7 +4867,7 @@ Yv *box_capture(Yv *st, Yv *name) {
 Yv *box_names(Yv *func) {
     Yv *reads = fv_walk(yr_get(func, "body"), yav(0), 0);
     Yv *out = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(reads)) {
         Yv *n = ya_get(reads, i);
         if (name_in(out, n)) {
@@ -4884,7 +4885,7 @@ Yv *box_names(Yv *func) {
  * cell now (see box_capture). Scans back to this function's "frame". */
 Yv *box_bound(Yv *st, Yv *name) {
     Yv *env = yr_get(st, "env");
-    long i = yv_len(env) - 1;
+    ylong i = yv_len(env) - 1;
     int want = 0;
     int more = 1;
     while (more && i >= 0) {
@@ -5043,7 +5044,7 @@ Yv *app_walk(Yv *node, Yv *out, int deep) {
 }
 
 Yv *app_walk_list(Yv *nodes, Yv *out, int deep) {
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(nodes)) {
         out = app_walk(ya_get(nodes, i), out, deep);
         i = i + 1;
@@ -5057,7 +5058,7 @@ Yv *app_walk_list(Yv *nodes, Yv *out, int deep) {
 Yv *app_names(Yv *node, int deep, Yv *skip) {
     Yv *seen = app_walk(node, yav(0), deep);
     Yv *out = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(seen)) {
         Yv *n = ya_get(seen, i);
         if (ys_eq_lit(ys_slice(n, 0, 1), "&") || name_in(out, n) ||
@@ -5076,7 +5077,7 @@ Yv *app_names(Yv *node, int deep, Yv *skip) {
  * "appmark" past its "frame", see emit_one_fn)? */
 int own_wanted(Yv *st, Yv *name) {
     Yv *env = yr_get(st, "env");
-    long i = yv_len(env) - 1;
+    ylong i = yv_len(env) - 1;
     int want = 0;
     int more = 1;
     while (more && i >= 0) {
@@ -5098,7 +5099,7 @@ int own_wanted(Yv *st, Yv *name) {
 /* Bind an appendable str to the value in %rax: the value slot, and its
  * companion in the slot below, cleared. */
 Yv *bind_own(Yv *st, Yv *name, Yv *t) {
-    long off = (yv_l(yr_get(st, "slots")) + 1) * -8;
+    ylong off = (yv_l(yr_get(st, "slots")) + 1) * -8;
     st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, off, -1);
     st = emit_insn(st, F_MOV_I_D, 0, R_RBP, -1, 1, off - 8, -1, 0);
     Yv *st2 =
@@ -5139,7 +5140,7 @@ Yv *gen_stmt(Yv *st, Yv *node) {
             Yv *tgt = yr_get(assign, "tgt");
             Yv *e = env_find(st, yr_get(tgt, "v"));
             if (ys_eq_lit(yr_get(e, "kind"), "own")) {
-                long off = yv_l(yr_get(e, "off"));
+                ylong off = yv_l(yr_get(e, "off"));
                 return gen_sappend(st, yr_get(assign, "v"), yv_long(-1), off,
                                    yv_long(-1), off - 8);
             } else if (ys_eq_lit(yr_get(e, "kind"), "global") &&
@@ -5169,8 +5170,8 @@ Yv *gen_stmt(Yv *st, Yv *node) {
  * does to the variable (a read clears the companion, a nested append
  * stores its buffer there) leaves it != 1, and y_str_app copies. The
  * order is s = s + v's: the old value first, then v. */
-Yv *gen_sappend(Yv *st, Yv *v, Yv *var_lbl, long var_disp, Yv *cell_lbl,
-                 long cell_disp) {
+Yv *gen_sappend(Yv *st, Yv *v, Yv *var_lbl, ylong var_disp, Yv *cell_lbl,
+                 ylong cell_disp) {
     Yv *va = memop(var_lbl, var_disp);
     Yv *ca = memop(cell_lbl, cell_disp);
     st = emit_insn(st, F_MOV_P_R, yv_l(ya_get(va, 0)), yv_l(ya_get(va, 1)),
@@ -5217,7 +5218,7 @@ Yv *gen_discard(Yv *st, Yv *node) {
  * only when it has a str global at all. */
 Yv *app_cells(Yv *gl, Yv *stmts) {
     int anystr = 0;
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(gl)) {
         Yv *ge = ya_get(gl, i);
         if (yv_l(yr_get(yr_get(ge, "typ"), "k")) == K_tstr) {
@@ -5231,7 +5232,7 @@ Yv *app_cells(Yv *gl, Yv *stmts) {
                        yv_long(1), "col", yv_long(1));
         Yv *names = app_names(block, 1, yav(0));
         Yv *out = yav(0);
-        long j = 0;
+        ylong j = 0;
         while (j < yv_len(gl)) {
             out = ya_push(out, ya_get(gl, j));
             j = j + 1;
@@ -5256,13 +5257,13 @@ Yv *app_cells(Yv *gl, Yv *stmts) {
 }
 
 Yv *gen_make_closure(Yv *st, Yv *label, Yv *caps) {
-    long n = yv_len(caps);
+    ylong n = yv_len(caps);
     st = emit_insn(st, F_MOV_I_R, 8 + 8 * n, R_RDI, 64, 0, 0, 0, 0);
     st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_alloc"))), 0, 0, 0, 0, 0, 0);
     st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
     st = emit_insn(st, F_LEA_P_R, -1, -1, 1, 0, yv_l(label), R_RCX, 64);
     st = emit_insn(st, F_MOV_R_0, R_RCX, 64, R_RAX, -1, 1, -1, -1);
-    long i = 0;
+    ylong i = 0;
     while (i < n) {
         Yv *cn = ya_get(caps, i);
         /* Captured as a shared cell pointer (see box_capture). */
@@ -5288,7 +5289,7 @@ Yv *gen_range(Yv *st, Yv *node) {
 Yv *gen_slice(Yv *st, Yv *node) {
     Yv *lo = yr_get(node, "lo");
     Yv *hi = yr_get(node, "hi");
-    long slesz = arr_elem_bytes(infer(st, yr_get(node, "arr")));
+    ylong slesz = arr_elem_bytes(infer(st, yr_get(node, "arr")));
     st = gen(st, yr_get(node, "arr"));
     st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
     if (yv_l(yr_get(lo, "k")) == K_void) {
@@ -5345,7 +5346,7 @@ Yv *gen_str_slice(Yv *st, Yv *node) {
 Yv *gen_sliceassign(Yv *st, Yv *node) {
     Yv *lo = yr_get(node, "lo");
     Yv *hi = yr_get(node, "hi");
-    long esz = arr_elem_bytes(infer(st, yr_get(node, "arr")));
+    ylong esz = arr_elem_bytes(infer(st, yr_get(node, "arr")));
     st = gen(st, yr_get(node, "arr"));
     st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
     if (yv_l(yr_get(lo, "k")) == K_void) {
@@ -5417,7 +5418,7 @@ Yv *gen_tag_in(Yv *st, Yv *ts, Yv *inu) {
     st = emit_insn(st, F_MOV_D_R, R_RAX, -1, 1, -8, -1, R_RCX, 64);
     Yv *yes = next_loc(st);
     st = yr_get(yes, "st");
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(ts)) {
         Yv *dr = ty_desc_in(st, ya_get(ts, i), inu);
         st = yr_get(dr, "st");
@@ -5441,7 +5442,7 @@ Yv *gen_union_str_rax(Yv *st, Yv *t, Yv *path) {
     Yv *rdone = next_loc(st);
     st = yr_get(rdone, "st");
     st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
-    long m = 0;
+    ylong m = 0;
     while (m < yv_len(ms)) {
         Yv *rnext = next_loc(st);
         st = yr_get(rnext, "st");
@@ -5467,7 +5468,7 @@ Yv *gen_union_str_rax(Yv *st, Yv *t, Yv *path) {
 /* Indirect call through a closure value produced by `callee`. */
 Yv *gen_indirect(Yv *st, Yv *node, Yv *callee) {
     Yv *args = yr_get(node, "args");
-    long n = yv_len(args);
+    ylong n = yv_len(args);
     Yv *iptypes = fn_args_of(infer(st, callee));
     st = gen(st, callee);
     st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
@@ -5512,7 +5513,7 @@ Yv *gen_addr(Yv *st, Yv *node) {
             return emit_insn(st, F_LEA_P_R, -1, -1, 1, 0,
                              yv_l(yr_get(e, "label")), R_RAX, 64);
         } else if (ys_eq_lit(yr_get(e, "kind"), "capture")) {
-            long aidx = ys_tolong(yr_get(e, "mark"));
+            ylong aidx = ys_tolong(yr_get(e, "mark"));
             st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, yv_l(yr_get(e, "off")), -1, R_RCX, 64);
             return emit_insn(st, F_MOV_D_R, R_RCX, -1, 1, 8 * (aidx + 1), -1, R_RAX, 64);
         } else {
@@ -5529,8 +5530,8 @@ Yv *gen_elem_addr(Yv *st, Yv *node) {
      * gen_index and the VM use). */
     Yv *earr = yr_get(node, "arr");
     Yv *bt = infer(st, earr);
-    long eaesz = arr_elem_bytes(bt);
-    long eascale = 8;
+    ylong eaesz = arr_elem_bytes(bt);
+    ylong eascale = 8;
     if (eaesz == 1) {
         eascale = 1;
         ;
@@ -5800,7 +5801,7 @@ Yv *gen_cat(Yv *st, Yv *node, Yv *lt, Yv *rt) {
  * than a literal. Twelve of a chain's twenty-four operators were going the slow
  * way on that alone. */
 int leaf_expr(Yv *n) {
-    long k = yv_l(yr_get(n, "k"));
+    ylong k = yv_l(yr_get(n, "k"));
     if (k == K_num || k == K_id) {
         return 1;
     } else if (k == K_un) {
@@ -6302,8 +6303,8 @@ Yv *gen_bin_rest(Yv *st, Yv *node) {
  * neither check. */
 Yv *gen_shift(Yv *st, Yv *node, Yv *op) {
     Yv *mn = ys("shl");
-    long fi = F_SHL_I_R;
-    long fr = F_SHL_R_R;
+    ylong fi = F_SHL_I_R;
+    ylong fr = F_SHL_R_R;
     if (ys_eq_lit(op, ">>")) {
         mn = ys("sar");
         fi = F_SAR_I_R;
@@ -6315,7 +6316,7 @@ Yv *gen_shift(Yv *st, Yv *node, Yv *op) {
         fr = F_SHR_R_R;
         ;
     }
-    long n = shift_imm(yr_get(node, "r"));
+    ylong n = shift_imm(yr_get(node, "r"));
     st = gen(st, yr_get(node, "l"));
     if (n >= 0) {
         return emit_insn(st, fi, n, R_RAX, 64, 0, 0, 0, 0);
@@ -6344,7 +6345,7 @@ Yv *gen_shift(Yv *st, Yv *node, Yv *op) {
 
 /* The count of a shift when it is a literal from 0 to 63 (gen_shift), else
  * -1. A radix literal may wrap negative (0xFFFF_FFFF_FFFF_FFFF is -1). */
-long shift_imm(Yv *r) {
+ylong shift_imm(Yv *r) {
     if (yv_l(yr_get(r, "k")) == K_num) {
         if (lit_is_float(yr_get(r, "v"))) {
             return -1;
@@ -6368,12 +6369,12 @@ long shift_imm(Yv *r) {
 
 /* The `syscall` intrinsic's argument registers, per target. Linux is SysV
    (rdi..r9); Windows is the NT layout, below. */
-long syscall_reg(long i) {
+ylong syscall_reg(ylong i) {
     if (target_is_windows()) { return w_syscall_reg(i); }
     else { return l_syscall_reg(i); }
 }
 
-static long l_syscall_reg(long i) {
+static ylong l_syscall_reg(ylong i) {
     if (i == 0) {
         return R_RDI;
     } else if (i == 1) {
@@ -6418,7 +6419,7 @@ static long l_syscall_reg(long i) {
 
    So there are FOUR argument registers, not six, and gen_syscall puts the
    fifth and later on the stack itself. */
-static long w_syscall_reg(long i) {
+static ylong w_syscall_reg(ylong i) {
     if (i == 0) {
         return R_R10;
     } else if (i == 1) {
@@ -6432,14 +6433,14 @@ static long w_syscall_reg(long i) {
 
 /* How many arguments the Windows target passes in registers. The rest go on
    the stack (gen_syscall). */
-static long w_syscall_regargs(void) { return 4; }
+static ylong w_syscall_regargs(void) { return 4; }
 
 /* The number of bytes gen_syscall reserves below %rsp on the Windows target
    when the call has a fifth argument or more. The kernel reads those from
    40(%rsp).. up (see w_syscall_reg), and the largest call the checker accepts
    is NtWriteFile's nine arguments, so the last slot is at 40 + 4*8 = 72 and
    the area has to reach 80. 96 covers it and keeps %rsp 16-aligned. */
-static long w_arg_space(void) { return 96; }
+static ylong w_arg_space(void) { return 96; }
 
 /* The offset of argument `i` (1-based, five or more) on the stack, measured
    from %rsp at the `syscall`. Argument five is at 40: Win64 reserves 32
@@ -6447,10 +6448,10 @@ static long w_arg_space(void) { return 96; }
    fifth argument at 40(%rsp), which is where a callee reads it -- and the
    kernel reads its arguments from exactly the place ntdll's own stub has
    them, which is that same shadow space. */
-static long w_stack_arg_off(long i) { return 40 + 8 * (i - 5); }
+static ylong w_stack_arg_off(ylong i) { return 40 + 8 * (i - 5); }
 
 Yv *gen_push_args(Yv *st, Yv *args) {
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(args)) {
         st = gen(st, ya_get(args, i));
         st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
@@ -6462,7 +6463,7 @@ Yv *gen_push_args(Yv *st, Yv *args) {
 /* gen_push_args, with argument i converted (gen_as) to ptypes[i], the
  * type of the parameter it binds; arguments past ptypes are pushed as is. */
 Yv *gen_push_args_as(Yv *st, Yv *args, Yv *ptypes) {
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(args)) {
         if (i < yv_len(ptypes)) {
             st = gen_as(st, ya_get(args, i), ya_get(ptypes, i));
@@ -6556,7 +6557,7 @@ int union_within(Yv *s, Yv *t) {
         return 1;
     }
     Yv *ss = union_parts(unfold(s));
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(ss)) {
         if (yv_l(yr_get(union_member(u, ya_get(ss, i)), "k")) == K_tnone) {
             return 0;
@@ -6578,7 +6579,7 @@ Yv *cast_members(Yv *s, Yv *t) {
     } else {
         ts = ya_push(ts, t);
     }
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(ts)) {
         Yv *m = union_member(su, ya_get(ts, i));
         if (yv_l(yr_get(m, "k")) != K_tnone) {
@@ -6595,7 +6596,7 @@ Yv *gen_cast_check(Yv *st, Yv *ts, Yv *u) {
     Yv *ok = next_loc(st);
     st = yr_get(ok, "st");
     st = emit_insn(st, F_MOV_D_R, R_RAX, -1, 1, -8, -1, R_RCX, 64);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(ts)) {
         Yv *dr = ty_desc_in(st, ya_get(ts, i), u);
         st = yr_get(dr, "st");
@@ -6614,7 +6615,7 @@ Yv *gen_cast_check(Yv *st, Yv *ts, Yv *u) {
  * see types.y set_inferred_ret). infer_fn_ret's scope has none. */
 Yv *cur_fn_type(Yv *st) {
     Yv *env = yr_get(st, "env");
-    long i = yv_len(env) - 1;
+    ylong i = yv_len(env) - 1;
     Yv *ft = yr(3, "k", yv_long(K_tfunc), "args", yav(0),
                 "ret", yr(1, "k", yv_long(K_tunk)));
     int looking = 1;
@@ -6658,7 +6659,7 @@ Yv *arr_elem_type(Yv *t) {
 
 /* The element type a store converts to: none for a packed [byte] (esz 1),
  * whose movb store truncates by itself. */
-Yv *store_elem_type(Yv *t, long esz) {
+Yv *store_elem_type(Yv *t, ylong esz) {
     if (esz == 1) {
         return yr(1, "k", yv_long(K_tnone));
     } else {
@@ -6831,8 +6832,8 @@ Yv *gen_call(Yv *st, Yv *node) {
                data bytes, so +8 first -- the same adjustment syscall's
                arguments get. */
             Yv *oa = yr_get(node, "args");
-            long n = yv_len(oa) - 1;
-            long k = 1;
+            ylong n = yv_len(oa) - 1;
+            ylong k = 1;
             while (k <= n) {
                 st = gen(st, ya_get(oa, k));
                 Yv *ot = infer(st, ya_get(oa, k));
@@ -6869,7 +6870,7 @@ Yv *gen_method(Yv *st, Yv *node) {
         args = ya_push(args, mobj);
         ;
     }
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(margs)) {
         args = ya_push(args, ya_get(margs, i));
         i = i + 1;
@@ -7014,7 +7015,7 @@ Yv *gen_rec_str_rax(Yv *st, Yv *t, Yv *lay, Yv *path) {
     st = gen_str_const(st, ys("{"));
     st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
     Yv *fs = yr_get(t, "fields");
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(fs)) {
         Yv *f = ya_get(fs, i);
         Yv *sep = ys("");
@@ -7038,7 +7039,7 @@ Yv *gen_cons(Yv *st, Yv *node) {
     Yv *ln = yr_get(node, "line");
     Yv *cl = yr_get(node, "col");
     Yv *crt = infer(st, yr_get(node, "r"));
-    long cesz = arr_elem_bytes(crt);
+    ylong cesz = arr_elem_bytes(crt);
     Yv *one = yr(4, "k", yv_long(K_array), "elems", args1(yr_get(node, "l")), "line",
                  ln, "col", cl);
     st = gen_array_esz(st, one, cesz, store_elem_type(crt, cesz));
@@ -7111,7 +7112,7 @@ Yv *gen_cat_arr(Yv *st, Yv *node, Yv *lt, Yv *rt) {
         return gen_cat_conv(st, node, lt);
     }
     int larr = lisarr && !ys_eq_lit(how, "prepend");
-    long esz = 8;
+    ylong esz = 8;
     Yv *ety = yr(1, "k", yv_long(K_tnone));
     if (larr) {
         esz = arr_elem_bytes(lt);
@@ -7161,7 +7162,7 @@ Yv *gen_acc_cat_const(Yv *st, Yv *s) {
 }
 
 /* Slot idx of the record in %rcx into register dst. */
-Yv *gen_slot_load(Yv *st, long idx) {
+Yv *gen_slot_load(Yv *st, ylong idx) {
     return emit_insn(st, F_MOV_D_R, R_RCX, -1, 1, 8 * idx, -1, R_RAX, 64);
 }
 
@@ -7170,7 +7171,7 @@ Yv *gen_slot_load(Yv *st, long idx) {
  * in the walk it ran, and every one of them must leave its EmitSt in `st`:
  * dropping it drops the uid counter with it, and the next string constant would
  * take a label already emitted (native.y gen_rec_field_str). */
-Yv *gen_rec_field_str(Yv *st, long idx, Yv *ft, Yv *path) {
+Yv *gen_rec_field_str(Yv *st, ylong idx, Yv *ft, Yv *path) {
     Yv *fk = yr_get(ft, "k");
     if (yv_l(fk) == K_tstr) {
         /* a str is already its own form */
@@ -7219,15 +7220,15 @@ Yv *gen_rec_field_str(Yv *st, long idx, Yv *ft, Yv *path) {
 Yv *gen_syscall(Yv *st, Yv *node) {
     Yv *args = yr_get(node, "args");
     /* args[0] is the number; rest are the call's arguments. */
-    long n = yv_len(args) - 1;
-    long regs = target_is_windows() ? w_syscall_regargs() : 6;
+    ylong n = yv_len(args) - 1;
+    ylong regs = target_is_windows() ? w_syscall_regargs() : 6;
     /* The stack arguments' room is reserved FIRST, because their slots are
        ABOVE %rsp and every step of the argument sequence moves %rsp: reserved
        afterwards, it would sit below the pushes rather than where the kernel
        reads. Nothing is reserved on Linux, whose six arguments are all
        registers -- which is what keeps the ELF path byte-identical. */
-    long room = (target_is_windows() && n > regs) ? w_arg_space() : 0;
-    long nreg = (n < regs) ? n : regs;
+    ylong room = (target_is_windows() && n > regs) ? w_arg_space() : 0;
+    ylong nreg = (n < regs) ? n : regs;
     if (room > 0) {
         st = emit_insn(st, F_SUB_I_R, room, R_RSP, 64, 0, 0, 0, 0);
         /* The stack arguments go straight to their slots, evaluated here and
@@ -7235,7 +7236,7 @@ Yv *gen_syscall(Yv *st, Yv *node) {
            could be right for the next, and the registers the kernel wants them
            in are the ones the register arguments are about to take. Reverse
            order, like the pops below. */
-        long i = n;
+        ylong i = n;
         while (i > regs) {
             st = gen(st, ya_get(args, i));
             Yv *at = infer(st, ya_get(args, i));
@@ -7251,13 +7252,13 @@ Yv *gen_syscall(Yv *st, Yv *node) {
        top in reverse. */
     st = gen(st, ya_get(args, 0));
     st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
-    long k = 1;
+    ylong k = 1;
     while (k <= nreg) {
         st = gen(st, ya_get(args, k));
         st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
         k = k + 1;
     }
-    long j = nreg;
+    ylong j = nreg;
     while (j >= 1) {
         st = emit_insn(st, F_POP_R, syscall_reg(j - 1), 64, 0, 0, 0, 0, 0);
         /* a str flows in as its header; the kernel wants the data bytes. */
@@ -7282,10 +7283,10 @@ Yv *gen_syscall(Yv *st, Yv *node) {
  * `off` is the record's slot offset) — used to pass the record along on
  * recursive `self` calls, which would otherwise reach the body without
  * one. */
-long capture_off(Yv *st) {
+ylong capture_off(Yv *st) {
     Yv *env = yr_get(st, "env");
-    long i = 0;
-    long res = -1;
+    ylong i = 0;
+    ylong res = -1;
     while (i < yv_len(env)) {
         Yv *e = ya_get(env, i);
         if (ys_eq_lit(yr_get(e, "kind"), "capture")) {
@@ -7324,7 +7325,7 @@ Yv *gen_direct(Yv *st, Yv *node, Yv *name) {
          * reaches the same body, which reads its captures through the
          * closure record — pass this frame's record along, exactly as an
          * indirect call would. */
-        long soff = -1;
+        ylong soff = -1;
         if (yv_eq(label, yr_get(st, "self_label"))) {
             soff = capture_off(st);
             ;
@@ -7336,7 +7337,7 @@ Yv *gen_direct(Yv *st, Yv *node, Yv *name) {
         }
         st = gen_push_args_as(st, yr_get(node, "args"), dptypes);
         st = emit_insn(st, F_CALL_L, yv_l(label), 0, 0, 0, 0, 0, 0);
-        long nbytes = yv_len(yr_get(node, "args")) * 8;
+        ylong nbytes = yv_len(yr_get(node, "args")) * 8;
         if (soff >= 0) {
             nbytes = nbytes + 8;
             ;
@@ -7359,7 +7360,7 @@ Yv *gen_direct(Yv *st, Yv *node, Yv *name) {
    option whose payload is compared (gen_eq_opt -- `x == none` is a plain test
    and is left to the slow path rather than special-cased here). */
 int cmp_word(Yv *t) {
-    long k = yv_l(yr_get(t, "k"));
+    ylong k = yv_l(yr_get(t, "k"));
     return k == K_tlong || k == K_tbyte || k == K_tbool || k == K_tptr;
 }
 
@@ -7372,8 +7373,8 @@ int cmp_word(Yv *t) {
    unordered compare, a structural == is a call), and the emitter may change how
    a bool is built without this going stale. Each jcc is the negation of its
    setcc form: `<` is setl, so its false edge is jge. */
-long int_cmp_jcc(Yv *st, Yv *node) {
-    long jcc = 0;
+ylong int_cmp_jcc(Yv *st, Yv *node) {
+    ylong jcc = 0;
     if (yv_l(yr_get(node, "k")) == K_bin) {
         Yv *bin = node;
         Yv *op = yr_get(bin, "op");
@@ -7428,7 +7429,7 @@ Yv *gen_if(Yv *st, Yv *node) {
     st = yr_get(r1, "st");
     Yv *r2 = next_loc(st);
     st = yr_get(r2, "st");
-    long jcc = int_cmp_jcc(st, yr_get(node, "cond"));
+    ylong jcc = int_cmp_jcc(st, yr_get(node, "cond"));
     if (jcc != 0) {
         /* A comparison branches on the flags it has just set: the bool is
            never built. `setcc; movzbq; test; jcc` (four instructions) becomes
@@ -7466,7 +7467,7 @@ Yv *gen_while(Yv *st, Yv *node) {
     Yv *r2 = next_loc(st);
     st = yr_get(r2, "st");
     st = emit_label(st, yv_l(yr_get(r1, "label")));
-    long jcc = int_cmp_jcc(st, yr_get(node, "cond"));
+    ylong jcc = int_cmp_jcc(st, yr_get(node, "cond"));
     if (jcc != 0) {
         st = gen_cmp_flags(st, yr_get(node, "cond"));
         st = emit_insn(st, jcc, yv_l(yr_get(r2, "label")), 0, 0, 0, 0, 0, 0);
@@ -7477,8 +7478,8 @@ Yv *gen_while(Yv *st, Yv *node) {
     }
     /* A `while` has no step, so "the next turn" IS the head: continue goes to
      * r1 and nothing else is needed. */
-    long saved_brk = brk_label;
-    long saved_cont = cont_label;
+    ylong saved_brk = brk_label;
+    ylong saved_cont = cont_label;
     brk_label = yv_l(yr_get(r2, "label"));
     cont_label = yv_l(yr_get(r1, "label"));
     st = gen_discard(st, yr_get(node, "body"));
@@ -7510,7 +7511,7 @@ Yv *gen_for(Yv *st, Yv *node) {
     Yv *r2 = next_loc(st);
     st = yr_get(r2, "st");
     st = emit_label(st, yv_l(yr_get(r1, "label")));
-    long jcc = int_cmp_jcc(st, yr_get(node, "cond"));
+    ylong jcc = int_cmp_jcc(st, yr_get(node, "cond"));
     if (jcc != 0) {
         st = gen_cmp_flags(st, yr_get(node, "cond"));
         st = emit_insn(st, jcc, yv_l(yr_get(r2, "label")), 0, 0, 0, 0, 0, 0);
@@ -7525,8 +7526,8 @@ Yv *gen_for(Yv *st, Yv *node) {
      * never end. So a third label sits between the body and the step. */
     Yv *r3 = next_loc(st);
     st = yr_get(r3, "st");
-    long f_brk = brk_label;
-    long f_cont = cont_label;
+    ylong f_brk = brk_label;
+    ylong f_cont = cont_label;
     brk_label = yv_l(yr_get(r2, "label"));
     cont_label = yv_l(yr_get(r3, "label"));
     st = gen_discard(st, yr_get(node, "body"));
@@ -7550,8 +7551,8 @@ Yv *gen_for(Yv *st, Yv *node) {
 Yv *gen_forrange(Yv *st, Yv *node) {
     /* for (x in lo..hi) body — half-open: lo inclusive, hi exclusive.
      * Slot layout: [var][limit]; the limit is evaluated once. */
-    long voff = (yv_l(yr_get(st, "slots")) + 1) * -8;
-    long loff = (yv_l(yr_get(st, "slots")) + 2) * -8;
+    ylong voff = (yv_l(yr_get(st, "slots")) + 1) * -8;
+    ylong loff = (yv_l(yr_get(st, "slots")) + 2) * -8;
     st = yr(15, "ir", yr_get(st, "ir"), "txt", yr_get(st, "txt"), "rodata", yr_get(st, "rodata"), "uid",
             yr_get(st, "uid"), "fuid", yr_get(st, "fuid"), "loc",
             yr_get(st, "loc"), "env", yr_get(st, "env"), "slots",
@@ -7589,8 +7590,8 @@ Yv *gen_forrange(Yv *st, Yv *node) {
      * (the counter itself stays in its raw slot). */
     Yv *r3 = next_loc(st);
     st = yr_get(r3, "st");
-    long r_brk = brk_label;
-    long r_cont = cont_label;
+    ylong r_brk = brk_label;
+    ylong r_cont = cont_label;
     brk_label = yv_l(yr_get(r2, "label"));
     cont_label = yv_l(yr_get(r3, "label"));
     st = box_bound(st, yr_get(node, "name"));
@@ -7616,9 +7617,9 @@ Yv *gen_forrange(Yv *st, Yv *node) {
 Yv *gen_foreach(Yv *st, Yv *node) {
     /* foreach (x in arr) body. Slots: [x][arr][i]. The array is evaluated
      * once; `x` is refreshed from arr[i] at the top of every iteration. */
-    long voff = (yv_l(yr_get(st, "slots")) + 1) * -8;
-    long aoff = (yv_l(yr_get(st, "slots")) + 2) * -8;
-    long ioff = (yv_l(yr_get(st, "slots")) + 3) * -8;
+    ylong voff = (yv_l(yr_get(st, "slots")) + 1) * -8;
+    ylong aoff = (yv_l(yr_get(st, "slots")) + 2) * -8;
+    ylong ioff = (yv_l(yr_get(st, "slots")) + 3) * -8;
     st = yr(15, "ir", yr_get(st, "ir"), "txt", yr_get(st, "txt"), "rodata", yr_get(st, "rodata"), "uid",
             yr_get(st, "uid"), "fuid", yr_get(st, "fuid"), "loc",
             yr_get(st, "loc"), "env", yr_get(st, "env"), "slots",
@@ -7662,8 +7663,8 @@ Yv *gen_foreach(Yv *st, Yv *node) {
     /* continue -> just before the increment, for the reason in gen_forrange */
     Yv *r3 = next_loc(st);
     st = yr_get(r3, "st");
-    long e_brk = brk_label;
-    long e_cont = cont_label;
+    ylong e_brk = brk_label;
+    ylong e_cont = cont_label;
     brk_label = yv_l(yr_get(r2, "label"));
     cont_label = yv_l(yr_get(r3, "label"));
     st = box_bound(st, yr_get(node, "name"));
@@ -7702,11 +7703,11 @@ int is_self_call(Yv *st, Yv *node) {
 
 Yv *gen_tail_call(Yv *st, Yv *node) {
     Yv *targs = yr_get(node, "args");
-    long n = yv_len(targs);
+    ylong n = yv_len(targs);
     Yv *tptypes = fn_args_of(cur_fn_type(st));
     /* evaluate each argument into a fresh local */
     Yv *offs = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < n) {
         if (i < yv_len(tptypes)) {
             st = gen_as(st, ya_get(targs, i), ya_get(tptypes, i));
@@ -7715,16 +7716,16 @@ Yv *gen_tail_call(Yv *st, Yv *node) {
             st = gen(st, ya_get(targs, i));
             ;
         }
-        long off = (yv_l(yr_get(st, "slots")) + yv_l(yr_get(st, "temp")) + 1) * -8;
+        ylong off = (yv_l(yr_get(st, "slots")) + yv_l(yr_get(st, "temp")) + 1) * -8;
         st = st_temp(st, yv_l(yr_get(st, "temp")) + 1);
         st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, off, -1);
         offs = ya_push(offs, yv_long(off));
         i = i + 1;
     }
     /* copy the locals over the parameter slots (param k: 16 + 8*(n-1-k)) */
-    long j = 0;
+    ylong j = 0;
     while (j < n) {
-        long po = 16 + 8 * (n - 1 - j);
+        ylong po = 16 + 8 * (n - 1 - j);
         st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, yv_l(ya_get(offs, j)), -1, R_RAX, 64);
         st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, po, -1);
         j = j + 1;
@@ -7752,14 +7753,14 @@ Yv *gen_tail(Yv *st, Yv *node) {
         return gen_as(st, node, cur_fn_ret(st));
     } else if (yv_l(k) == K_block) {
         Yv *tl = yr_get(node, "stmts");
-        long m = yv_len(tl);
+        ylong m = yv_len(tl);
         /* a trailing `;` (void) leaves the statement before it in tail
          * position: the block's value is void either way */
         if (m > 1 && is_void_node(ya_get(tl, m - 1))) {
             m = m - 1;
         }
-        long tdepth = yv_l(yr_get(st, "temp"));
-        long ti = 0;
+        ylong tdepth = yv_l(yr_get(st, "temp"));
+        ylong ti = 0;
         while (ti < m - 1) {
             st = gen_loc_stmt(st, ya_get(tl, ti));
             st = gen_stmt(st, ya_get(tl, ti));
@@ -7774,7 +7775,7 @@ Yv *gen_tail(Yv *st, Yv *node) {
         }
         return st;
     } else if (yv_l(k) == K_kw_if) {
-        long jcc = int_cmp_jcc(st, yr_get(node, "cond"));
+        ylong jcc = int_cmp_jcc(st, yr_get(node, "cond"));
         if (jcc == 0) {
             st = gen(st, yr_get(node, "cond"));
         }
@@ -7823,14 +7824,14 @@ Yv *gen_block_as(Yv *st, Yv *node, int dropped) {
          * outside reads them -- a name it declared is out of scope there (the
          * checker agrees), and a captured variable lives in a heap cell that a
          * closure reaches through its own captures, not through this slot. */
-        long depth = yv_l(yr_get(st, "slots"));
-        long tdepth = yv_l(yr_get(st, "temp"));
+        ylong depth = yv_l(yr_get(st, "slots"));
+        ylong tdepth = yv_l(yr_get(st, "temp"));
         /* A trailing `;` (void) computes nothing: nothing to emit. */
-        long m = yv_len(stmts);
+        ylong m = yv_len(stmts);
         if (m > 1 && is_void_node(ya_get(stmts, m - 1))) {
             m = m - 1;
         }
-        long i = 0;
+        ylong i = 0;
         while (i < m) {
             st = gen_loc_stmt(st, ya_get(stmts, i));
             if (dropped || i < yv_len(stmts) - 1) {
@@ -7858,17 +7859,17 @@ int is_void_node(Yv *n) {
 /* The marker for line `ln` of the spliced program: its origin file's
  * `.file` number (the index + 1) and its line there, counted on past the
  * end of the map like origin_at. Line 0 is DWARF's "no source line". */
-Yv *loc_pos(long ln) {
+Yv *loc_pos(ylong ln) {
     Yv *f = dbg_file;
     Yv *l = dbg_line;
-    long n = yv_len(f);
+    ylong n = yv_len(f);
     if (ln < 1 || n == 0) {
         return yr(2, "file", yv_long(1), "line", yv_long(ln));
     } else {
-        long k = ln;
+        ylong k = ln;
         if (k > n) { k = n; ; }
-        long fid = yv_l(ya_get(f, k - 1));
-        long line = yv_l(ya_get(l, k - 1)) + ln - k;
+        ylong fid = yv_l(ya_get(f, k - 1));
+        ylong line = yv_l(ya_get(l, k - 1)) + ln - k;
         return yr(2, "file", yv_long(fid + 1), "line", yv_long(line));
     }
 }
@@ -7876,7 +7877,7 @@ Yv *loc_pos(long ln) {
 /* The marker as an IR item: the line table reads (file, line) as fields, not
  * out of the text (link_locs renumbered a `.loc` per body by splitting the
  * string; that goes with stage 2b). */
-static Yv *emit_loc(Yv *st, long ln) {
+static Yv *emit_loc(Yv *st, ylong ln) {
     Yv *p = loc_pos(ln);
     return emit_insn(st, IR_LOC, yv_l(yr_get(p, "file")),
                      yv_l(yr_get(p, "line")), 0, 0, 0, 0, 0);
@@ -7884,7 +7885,7 @@ static Yv *emit_loc(Yv *st, long ln) {
 
 /* The marker as an IR item appended to a buffer (the body assembled around the
  * function's own items, in emit_one_fn). */
-static Yv *ir_loc(Yv *body, long ln) {
+static Yv *ir_loc(Yv *body, ylong ln) {
     Yv *p = loc_pos(ln);
     return ir_push(body, IR_LOC, yv_l(yr_get(p, "file")),
                    yv_l(yr_get(p, "line")), 0, 0, 0, 0, 0);
@@ -7933,7 +7934,7 @@ Yv *gen_loc_loop(Yv *st, Yv *node) {
  * file, N = its index + 1. */
 Yv *file_dirs(Yv *files) {
     Yv *pieces = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(files)) {
         Yv *fname = ya_get(files, i);
         Yv *piece = ys_cat(ys(".file "), ys_long(i + 1));
@@ -7947,9 +7948,9 @@ Yv *file_dirs(Yv *files) {
 }
 
 /* Position of `name` in a record literal's merged field list, or -1. */
-long mfield_idx(Yv *names, Yv *name) {
-    long i = 0;
-    long out = -1;
+ylong mfield_idx(Yv *names, Yv *name) {
+    ylong i = 0;
+    ylong out = -1;
     while (i < yv_len(names)) {
         Yv *nm = ya_get(names, i);
         if (ys_eq(nm, name)) {
@@ -7975,24 +7976,24 @@ long mfield_idx(Yv *names, Yv *name) {
  * compare. */
 
 /* FNV-1a over the bytes of s, 64-bit (the multiply wraps). */
-long fnv64(Yv *s) {
-    unsigned long h = 14695981039346656037UL; /* -3750763034362895579 */
-    long n = yv_len(s);
-    long i = 0;
+ylong fnv64(Yv *s) {
+    unsigned long long h = 14695981039346656037UL; /* -3750763034362895579 */
+    ylong n = yv_len(s);
+    ylong i = 0;
     while (i < n) {
-        h = (h ^ (unsigned long)ys_byte_at(s, i)) * 1099511628211UL;
+        h = (h ^ (unsigned long long)ys_byte_at(s, i)) * 1099511628211UL;
         i = i + 1;
     }
-    return (long)h;
+    return (ylong)h;
 }
 
 /* h as 16 lowercase hex digits. */
-Yv *hex16(long h) {
+Yv *hex16(ylong h) {
     Yv *digits = ys("0123456789abcdef");
     Yv *out = ys("");
-    long sh = 60;
+    ylong sh = 60;
     while (sh >= 0) {
-        long d = (long)(((unsigned long)h >> sh) & 15);
+        ylong d = (ylong)(((unsigned long long)h >> sh) & 15);
         out = ys_cat(out, ys_slice(digits, d, d + 1));
         sh = sh - 4;
     }
@@ -8001,10 +8002,10 @@ Yv *hex16(long h) {
 
 /* The slot of field `key` in a record of the fields fs: how many of their
  * names sort before it (-1 when there is no such field). */
-long rec_slot(Yv *fs, Yv *key) {
+ylong rec_slot(Yv *fs, Yv *key) {
     int found = 0;
-    long below = 0;
-    long i = 0;
+    ylong below = 0;
+    ylong i = 0;
     while (i < yv_len(fs)) {
         Yv *fname = yr_get(ya_get(fs, i), "name");
         if (ys_eq(fname, key)) {
@@ -8024,13 +8025,13 @@ long rec_slot(Yv *fs, Yv *key) {
 /* Adds the descriptor label lbl, of canonical form `form`, to ty_seen: 1
  * when it is new, 0 when it is there with that form, -1 when it is there
  * with another (two types, one hash). */
-long tyset_add(Yv *lbl, Yv *form) {
+ylong tyset_add(Yv *lbl, Yv *form) {
     if (2 * (ty_count + 1) > yv_len(ty_seen)) {
         tyset_grow();
     }
-    long mask = yv_len(ty_seen) - 1;
-    long i = fnv64(lbl) & mask;
-    long out = 1;
+    ylong mask = yv_len(ty_seen) - 1;
+    ylong i = fnv64(lbl) & mask;
+    ylong out = 1;
     int looking = 1;
     while (looking) {
         Yv *cur = ya_get(ty_seen, i);
@@ -8056,13 +8057,13 @@ long tyset_add(Yv *lbl, Yv *form) {
 void tyset_grow(void) {
     Yv *old = ty_seen;
     Yv *oldf = ty_forms;
-    long cap = 2 * yv_len(old);
+    ylong cap = 2 * yv_len(old);
     if (cap < 64) {
         cap = 64;
     }
     Yv *fresh = yav(0);
     Yv *freshf = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < cap) {
         fresh = ya_push(fresh, ys(""));
         freshf = ya_push(freshf, ys(""));
@@ -8071,7 +8072,7 @@ void tyset_grow(void) {
     ty_seen = fresh;
     ty_forms = freshf;
     ty_count = 0;
-    long j = 0;
+    ylong j = 0;
     while (j < yv_len(old)) {
         Yv *lb = ya_get(old, j);
         if (yv_len(lb) > 0) {
@@ -8093,7 +8094,7 @@ void tyset_reset(void) {
 
 void ty_sig_init(void) {
     Yv *bkts = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < 512) {
         bkts = ya_push(bkts, yav(0));
         i = i + 1;
@@ -8129,13 +8130,13 @@ Yv *alias_of(Yv *t) {
     Yv *seen = yav(0);
     Yv *todo = yav(0);
     todo = ya_push(todo, t);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(todo)) {
         Yv *x = ya_get(todo, i);
         Yv *k = yr_get(x, "k");
         if (yv_l(k) == K_tref) {
             Yv *tmp = yr_get(x, "tmp");
-            long j = 0;
+            ylong j = 0;
             int met = 0;
             while (j < yv_len(seen)) {
                 if (ys_eq(ya_get(seen, j), tmp)) {
@@ -8155,21 +8156,21 @@ Yv *alias_of(Yv *t) {
             }
         } else if (yv_l(k) == K_trec) {
             Yv *fs = yr_get(x, "fields");
-            long j = 0;
+            ylong j = 0;
             while (j < yv_len(fs)) {
                 todo = ya_push(todo, yr_get(ya_get(fs, j), "typ"));
                 j = j + 1;
             }
         } else if (yv_l(k) == K_tunion) {
             Yv *ms = yr_get(x, "ts");
-            long j = 0;
+            ylong j = 0;
             while (j < yv_len(ms)) {
                 todo = ya_push(todo, ya_get(ms, j));
                 j = j + 1;
             }
         } else if (yv_l(k) == K_tfunc) {
             Yv *as = yr_get(x, "args");
-            long j = 0;
+            ylong j = 0;
             while (j < yv_len(as)) {
                 todo = ya_push(todo, ya_get(as, j));
                 j = j + 1;
@@ -8214,15 +8215,15 @@ Yv *ty_desc_as(Yv *st, Yv *rt, Yv *lay) {
     if (!ty_sig_bkts || yv_len(ty_sig_bkts) == 0) {
         ty_sig_init();
     }
-    long h = fnv64(sig) % 512;
+    ylong h = fnv64(sig) % 512;
     if (h < 0) {
         h = h + 512;
     }
     Yv *bkt = ya_get(ty_sig_bkts, h);
     Yv *known = yv_long(-1);
-    long q = 0;
+    ylong q = 0;
     while (q < yv_len(bkt)) {
-        long ix = yv_l(ya_get(bkt, q));
+        ylong ix = yv_l(ya_get(bkt, q));
         if (yv_l(known) < 0 && ys_eq(ya_get(ty_sig_keys, ix), sig)) {
             known = ya_get(ty_sig_ids, ix);
         }
@@ -8237,7 +8238,7 @@ Yv *ty_desc_as(Yv *st, Yv *rt, Yv *lay) {
     ty_sig_keys = ya_push(ty_sig_keys, sig);
     ty_sig_ids = ya_push(ty_sig_ids, id);
     ya_push(bkt, yv_long(yv_len(ty_sig_keys) - 1));
-    long added = tyset_add(lbl, form);
+    ylong added = tyset_add(lbl, form);
     if (added < 0) {
         ty_collision(lbl, form);
     }
@@ -8265,7 +8266,7 @@ Yv *ty_desc_as(Yv *st, Yv *rt, Yv *lay) {
  * union's node (ush_nodes, emptied for each unit): a recursive alias
  * unfolds to one union node, and every read of a shared field asks. */
 Yv *union_shared(Yv *u) {
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(ush_nodes)) {
         if (ya_get(ush_nodes, i) == u) {
             return ya_get(ush_vals, i);
@@ -8276,11 +8277,11 @@ Yv *union_shared(Yv *u) {
     Yv *out = yav(0);
     if (yv_len(ms) > 0) {
         Yv *fs = yr_get(ya_get(ms, 0), "fields");
-        long j = 0;
+        ylong j = 0;
         while (j < yv_len(fs)) {
             Yv *f = ya_get(fs, j);
             int ok = 1;
-            long q = 0;
+            ylong q = 0;
             while (q < yv_len(ms)) {
                 Yv *ft = rec_field_type(ya_get(ms, q), yr_get(f, "name"));
                 if (ok && (yv_l(yr_get(ft, "k")) == K_tnone ||
@@ -8307,7 +8308,7 @@ Yv *union_lay(Yv *m, Yv *u) {
     Yv *sh = union_shared(u);
     Yv *fs = yr_get(m, "fields");
     Yv *rest = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(fs)) {
         Yv *f = ya_get(fs, i);
         if (mfield_idx(sh, yr_get(f, "name")) < 0) {
@@ -8316,7 +8317,7 @@ Yv *union_lay(Yv *m, Yv *u) {
         i = i + 1;
     }
     Yv *out = yav(0);
-    long j = 0;
+    ylong j = 0;
     while (j < yv_len(sh)) {
         out = ya_push(out, ya_get(sh, j));
         j = j + 1;
@@ -8342,7 +8343,7 @@ Yv *lay_of(Yv *t, Yv *inu) {
 
 int same_lay(Yv *a, Yv *b) {
     int same = yv_len(a) == yv_len(b);
-    long i = 0;
+    ylong i = 0;
     while (same && i < yv_len(a)) {
         if (!ys_eq(ya_get(a, i), ya_get(b, i))) {
             same = 0;
@@ -8374,9 +8375,9 @@ Yv *gen_copy_rec(Yv *st, Yv *from, Yv *to, Yv *tag) {
     st = emit_insn(st, F_LEA_P_R, -1, -1, 1, 0, yv_l(tag), R_RCX, 64);
     st = emit_insn(st, F_MOV_R_D, R_RCX, 64, R_RAX, -1, 1, 0, -1);
     st = emit_insn(st, F_POP_R, R_RSI, 64, 0, 0, 0, 0, 0);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(to)) {
-        long s = mfield_idx(from, ya_get(to, i));
+        ylong s = mfield_idx(from, ya_get(to, i));
         st = emit_insn(st, F_MOV_D_R, R_RSI, -1, 1, 8 * s, -1, R_RCX, 64);
         st = emit_insn(st, F_MOV_R_D, R_RCX, 64, R_RAX, -1, 1, 8 + 8 * i, -1);
         i = i + 1;
@@ -8429,7 +8430,7 @@ Yv *gen_convert(Yv *st, Yv *src0, Yv *want0, int check) {
         Yv *tos = yav(0);
         Yv *tws = yav(0);
         int moves = 0;
-        long q = 0;
+        ylong q = 0;
         while (q < yv_len(ms)) {
             Yv *m = ya_get(ms, q);
             Yv *mu = unfold(m);
@@ -8461,7 +8462,7 @@ Yv *gen_convert(Yv *st, Yv *src0, Yv *want0, int check) {
             st = yr_get(done, "st");
             st = emit_insn(st, F_MOV_D_R, R_RAX, -1, 1, -8, -1, R_RCX, 64);
             Yv *lbls = yav(0);
-            long i = 0;
+            ylong i = 0;
             while (i < yv_len(ms)) {
                 Yv *l = next_loc(st);
                 st = yr_get(l, "st");
@@ -8531,7 +8532,7 @@ Yv *rec_lit_type(Yv *lt, Yv *want) {
         Yv *ms = union_parts(w);
         Yv *found = lt;
         int looking = 1;
-        long i = 0;
+        ylong i = 0;
         while (looking && i < yv_len(ms)) {
             if (same_rec(lt, unfold(ya_get(ms, i)))) {
                 found = ya_get(ms, i);
@@ -8559,20 +8560,20 @@ Yv *rec_lit_type(Yv *lt, Yv *want) {
 Yv *gen_reclit(Yv *st, Yv *node, Yv *want) {
     Yv *mvals = yr_get(node, "vals");
     Yv *mkeys = yr_get(node, "keys");
-    long nent = yv_len(mvals);
+    ylong nent = yv_len(mvals);
     /* Static merge for `...` spread entries (the types.y field_merge
      * rule): a later entry wins the value. The value loop below stores
      * into the fields' slots in entry order, so a later store simply
      * overwrites -- no dynamic shape. */
     Yv *names = yav(0);
-    long ni = 0;
+    ylong ni = 0;
     while (ni < nent) {
         Yv *nk = ya_get(mkeys, ni);
         if (ys_eq_lit(nk, "...")) {
             Yv *srec = infer(st, ya_get(mvals, ni));
             if (yv_l(yr_get(srec, "k")) == K_trec) {
                 Yv *sfs = yr_get(srec, "fields");
-                long si = 0;
+                ylong si = 0;
                 while (si < yv_len(sfs)) {
                     Yv *sf = ya_get(sfs, si);
                     if (mfield_idx(names, yr_get(sf, "name")) < 0) {
@@ -8597,14 +8598,14 @@ Yv *gen_reclit(Yv *st, Yv *node, Yv *want) {
      * slots too: none, which y_alloc's never-reused zeroed memory already is */
     if (yv_l(yr_get(rtu, "k")) == K_trec) {
         Yv *tfs = yr_get(rtu, "fields");
-        for (long q = 0; q < yv_len(tfs); q++) {
+        for (ylong q = 0; q < yv_len(tfs); q++) {
             Yv *f = ya_get(tfs, q);
             if (mfield_idx(names, yr_get(f, "name")) < 0) {
                 names = ya_push(names, yr_get(f, "name"));
             }
         }
     }
-    long n = yv_len(names);
+    ylong n = yv_len(names);
     Yv *slots = str_sorted(names);
     /* made as a member of a declared union: in the union's layout */
     Yv *wu = unfold(want);
@@ -8620,7 +8621,7 @@ Yv *gen_reclit(Yv *st, Yv *node, Yv *want) {
     st = emit_insn(st, F_POP_R, R_RCX, 64, 0, 0, 0, 0, 0);
     st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RCX, -1, 1, 0, -1);
     st = emit_insn(st, F_PUSH_R, R_RCX, 64, 0, 0, 0, 0, 0);
-    long i = 0;
+    ylong i = 0;
     while (i < nent) {
         /* mv is walked twice (gen, then infer), so bind it once. */
         Yv *mv = ya_get(mvals, i);
@@ -8634,10 +8635,10 @@ Yv *gen_reclit(Yv *st, Yv *node, Yv *want) {
             Yv *srec2 = infer(st, mv);
             if (yv_l(yr_get(srec2, "k")) == K_trec) {
                 Yv *sfs2 = yr_get(srec2, "fields");
-                long sj = 0;
+                ylong sj = 0;
                 while (sj < yv_len(sfs2)) {
                     Yv *sf2 = ya_get(sfs2, sj);
-                    long mi2 = mfield_idx(slots, yr_get(sf2, "name"));
+                    ylong mi2 = mfield_idx(slots, yr_get(sf2, "name"));
                     /* %rdx is the source's record VALUE (slot 0 at +0);
                      * %rcx is the fresh record's ALLOC base (slots at +8). */
                     st = emit_insn(st, F_MOV_D_R, R_RDX, -1, 1, 8 * rec_slot(sfs2, yr_get(sf2, "name")), -1, R_RSI, 64);
@@ -8655,7 +8656,7 @@ Yv *gen_reclit(Yv *st, Yv *node, Yv *want) {
                 st = gen_as(st, mv, ft);
             }
             st = emit_insn(st, F_POP_R, R_RCX, 64, 0, 0, 0, 0, 0);
-            long mi = mfield_idx(slots, mk);
+            ylong mi = mfield_idx(slots, mk);
             st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RCX, -1, 1, 8 + mi * 8, -1);
         }
         st = emit_insn(st, F_PUSH_R, R_RCX, 64, 0, 0, 0, 0, 0);
@@ -8673,7 +8674,7 @@ int lit_wraps(Yv *st, Yv *mv, Yv *rtu, Yv *mk, Yv *ft) {
     int opt = 0;
     if (yv_l(yr_get(rtu, "k")) == K_trec) {
         Yv *tfs = yr_get(rtu, "fields");
-        for (long q = 0; q < yv_len(tfs); q++) {
+        for (ylong q = 0; q < yv_len(tfs); q++) {
             Yv *f = ya_get(tfs, q);
             if (ys_eq(yr_get(f, "name"), mk) && yv_b(yr_get(f, "opt"))) {
                 opt = 1;
@@ -8699,7 +8700,7 @@ int lit_wraps(Yv *st, Yv *mv, Yv *rtu, Yv *mk, Yv *ft) {
 Yv *gen_func_literal(Yv *st, Yv *node) {
     Yv *caps = fn_captures(node, yr_get(yr_get(st, "fns"), "ix"), ys(""));
     Yv *captypes = yav(0);
-    long ci = 0;
+    ylong ci = 0;
     while (ci < yv_len(caps)) {
         Yv *cn = ya_get(caps, ci);
         Yv *ce = env_find(st, cn);
@@ -8713,7 +8714,7 @@ Yv *gen_func_literal(Yv *st, Yv *node) {
     st = yr_get(ru, "st");
     st = emit_one_fn(st, lbl, yv_l(yr_get(ru, "uid")), node, 0, 0, captypes,
                      ys(""));
-    long bci = 0;
+    ylong bci = 0;
     while (bci < yv_len(caps)) {
         Yv *bcn = ya_get(caps, bci);
         st = box_capture(st, bcn);
@@ -8729,7 +8730,7 @@ Yv *gen_func_literal(Yv *st, Yv *node) {
  * gets its label here; its body knows its own name (emit_one_fn). */
 Yv *gen_closure_binding(Yv *st, Yv *name, Yv *func, Yv *caps) {
     Yv *captypes = yav(0);
-    long ci = 0;
+    ylong ci = 0;
     while (ci < yv_len(caps)) {
         Yv *cn2 = ya_get(caps, ci);
         Yv *ce = env_find(st, cn2);
@@ -8743,7 +8744,7 @@ Yv *gen_closure_binding(Yv *st, Yv *name, Yv *func, Yv *caps) {
     st = yr_get(ru, "st");
     st = emit_one_fn(st, lbl, yv_l(yr_get(ru, "uid")), func, 0, 0, captypes,
                      name);
-    long bci = 0;
+    ylong bci = 0;
     while (bci < yv_len(caps)) {
         Yv *bcn = ya_get(caps, bci);
         st = box_capture(st, bcn);
@@ -8751,7 +8752,7 @@ Yv *gen_closure_binding(Yv *st, Yv *name, Yv *func, Yv *caps) {
     }
     st = gen_make_closure(st, lbl, caps);
     /* a NAME (let f = ...), so its slot lives to the end of the block */
-    long coff = (yv_l(yr_get(st, "slots")) + 1) * -8;
+    ylong coff = (yv_l(yr_get(st, "slots")) + 1) * -8;
     st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, coff, -1);
     Yv *st3 =
         yr(15, "ir", yr_get(st, "ir"), "txt", yr_get(st, "txt"), "rodata",
@@ -8806,7 +8807,7 @@ Yv *gen_decl(Yv *st, Yv *node) {
             if (yv_l(yr_get(t, "k")) == K_tnone) {
                 t = infer(st, yr_get(node, "v"));
             }
-            long rsz = arr_elem_bytes(t);
+            ylong rsz = arr_elem_bytes(t);
             st = gen_arrrep_esz(st, yr_get(node, "v"), rsz,
                                 store_elem_type(t, rsz));
             return bind_decl(st, yr_get(node, "name"), t);
@@ -8818,7 +8819,7 @@ Yv *gen_decl(Yv *st, Yv *node) {
             if (yv_l(yr_get(t, "k")) == K_tnone) {
                 t = infer(st, yr_get(node, "v"));
             }
-            long asz = arr_elem_bytes(t);
+            ylong asz = arr_elem_bytes(t);
             st = gen_array_esz(st, yr_get(node, "v"), asz,
                                store_elem_type(t, asz));
             return bind_decl(st, yr_get(node, "name"), t);
@@ -8866,7 +8867,7 @@ Yv *bind_decl(Yv *st, Yv *name, Yv *t) {
     } else if (yv_l(yr_get(t, "k")) == K_tstr && own_wanted(st, name)) {
         return bind_own(st, name, t);
     } else {
-        long off = (yv_l(yr_get(st, "slots")) + 1) * -8;
+        ylong off = (yv_l(yr_get(st, "slots")) + 1) * -8;
         st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, off, -1);
         Yv *st2 =
            yr(15, "ir", yr_get(st, "ir"), "txt", yr_get(st, "txt"), "rodata", yr_get(st, "rodata"),
@@ -8889,7 +8890,7 @@ Yv *gen_assign(Yv *st, Yv *node) {
      * cell and is visible in the capturing scope too. */
     st = gen_as(st, yr_get(node, "v"), yr_get(e, "typ"));
     if (ys_eq_lit(yr_get(e, "kind"), "capture")) {
-        long idx = ys_tolong(yr_get(e, "mark"));
+        ylong idx = ys_tolong(yr_get(e, "mark"));
         st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, yv_l(yr_get(e, "off")), -1, R_RCX, 64);
         st = emit_insn(st, F_MOV_D_R, R_RCX, -1, 1, 8 * (idx + 1), -1, R_RDX, 64);
         st = emit_insn(st, F_MOV_R_0, R_RAX, 64, R_RDX, -1, 1, -1, -1);
@@ -8906,7 +8907,7 @@ Yv *gen_assign(Yv *st, Yv *node) {
 }
 
 /* Fill n frame slots (base = lowest address) with the value in %rax. */
-Yv *gen_fill(Yv *st, long base, long n) {
+Yv *gen_fill(Yv *st, ylong base, ylong n) {
     if (n == 0) {
         return st;
     } else {
@@ -8922,7 +8923,7 @@ Yv *gen_fill(Yv *st, long base, long n) {
 
 /* Heap-array fill: the header is in %rdx, the fill value in %rax. Writes
  * data[i] for i = n-1 .. 0 (data starts at header+16). */
-Yv *gen_fill_heap(Yv *st, long n, long esz) {
+Yv *gen_fill_heap(Yv *st, ylong n, ylong esz) {
     if (n == 0) {
         return st;
     } else {
@@ -8952,8 +8953,8 @@ Yv *gen_arrrep(Yv *st, Yv *node) {
 /* Same, with the element width supplied by the declaration (`let b:
  * [byte; 4] = [0; 4]` — the literal's own elements infer as long), and
  * `ety` the element type the fill value converts to (store_elem_type). */
-Yv *gen_arrrep_esz(Yv *st, Yv *node, long esz, Yv *ety) {
-    long n = yv_l(yr_get(node, "n"));
+Yv *gen_arrrep_esz(Yv *st, Yv *node, ylong esz, Yv *ety) {
+    ylong n = yv_l(yr_get(node, "n"));
     st = gen_as(st, yr_get(node, "v"), ety);
     st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
     st = emit_insn(st, F_MOV_I_R, arr_alloc_size(esz, n), R_RDI, 64, 0, 0, 0, 0);
@@ -8973,9 +8974,9 @@ Yv *gen_arrrep_esz(Yv *st, Yv *node, long esz, Yv *ety) {
 
 /* Radix literals (0x../0b..) reach the emitter as their source text; the
  * assembler only understands plain decimal immediates, so normalize here. */
-long hexval_ch(Yv *c) {
-    long o = ys_ord(c);
-    long v = 0;
+ylong hexval_ch(Yv *c) {
+    ylong o = ys_ord(c);
+    ylong v = 0;
     if (o >= 48) {
         if (o <= 57) {
             v = o - 48;
@@ -9045,7 +9046,7 @@ int lit_is_float(Yv *s) {
 }
 
 Yv *norm_num(Yv *s) {
-    long radix = 0;
+    ylong radix = 0;
     if (yv_len(s) > 2) {
         Yv *p = ys_slice(s, 0, 2);
         if (ys_eq_lit(p, "0x")) {
@@ -9069,8 +9070,8 @@ Yv *norm_num(Yv *s) {
     if (radix == 0) {
         return s;
     } else {
-        long v = 0;
-        long i = 2;
+        ylong v = 0;
+        ylong i = 2;
         while (i < yv_len(s)) {
             Yv *c = ys_slice(s, i, i + 1);
             if (ys_eq_lit(c, "_")) {
@@ -9079,8 +9080,8 @@ Yv *norm_num(Yv *s) {
                 /* Y's long arithmetic wraps: a literal with the top bit
                  * set (0xFFFF_FFFF_FFFF_FFFF is -1) is its 64 bits. In C
                  * that is unsigned arithmetic (see parse_num_go in asm.c). */
-                v = (long)((unsigned long)v * (unsigned long)radix +
-                           (unsigned long)hexval_ch(c));
+                v = (ylong)((unsigned long long)v * (unsigned long long)radix +
+                           (unsigned long long)hexval_ch(c));
                 ;
             }
             i = i + 1;
@@ -9127,10 +9128,10 @@ Yv *norm_num(Yv *s) {
 
 /* The limbs a literal needs: its digits, a factor of ten per positive dp, the
  * 2^T scaling (a 2^32 is 10 digits), and room for the compare constants. */
-long flit_size(long ndig, long dp, long t) {
-    long g = dp;
+ylong flit_size(ylong ndig, ylong dp, ylong t) {
+    ylong g = dp;
     if (dp < 0) g = 0;
-    long n = (ndig + g + (t / 32) * 10 + 24) / 9 + 2;
+    ylong n = (ndig + g + (t / 32) * 10 + 24) / 9 + 2;
     if (n > FLIT_LIMBS) {
         return FLIT_LIMBS;
     } else {
@@ -9139,11 +9140,11 @@ long flit_size(long ndig, long dp, long t) {
 }
 
 /* acc *= m (m = 10 or 4294967296). false when it outgrows the limbs. */
-int flit_dmul(Yv *a, long m, long n) {
-    long carry = 0;
-    long i = 0;
+int flit_dmul(Yv *a, ylong m, ylong n) {
+    ylong carry = 0;
+    ylong i = 0;
     while (i < n) {
-        long p = yv_l(ya_get(a, i)) * m + carry;
+        ylong p = yv_l(ya_get(a, i)) * m + carry;
         ya_set(a, i, yv_long(p % FLIT_BASE));
         carry = p / FLIT_BASE;
         i = i + 1;
@@ -9152,11 +9153,11 @@ int flit_dmul(Yv *a, long m, long n) {
 }
 
 /* acc /= m (m = 10 or 2), giving the remainder -- a dropped digit, or a bit. */
-long flit_ddiv(Yv *a, long m, long n) {
-    long rem = 0;
-    long i = n - 1;
+ylong flit_ddiv(Yv *a, ylong m, ylong n) {
+    ylong rem = 0;
+    ylong i = n - 1;
     while (i >= 0) {
-        long cur = rem * FLIT_BASE + yv_l(ya_get(a, i));
+        ylong cur = rem * FLIT_BASE + yv_l(ya_get(a, i));
         ya_set(a, i, yv_long(cur / m));
         rem = cur % m;
         i = i - 1;
@@ -9167,11 +9168,11 @@ long flit_ddiv(Yv *a, long m, long n) {
 /* acc *= 10^9: every limb moves up one and the top one carries out. The limb
  * base is 10^9, so this is a shift, not a multiply -- and the exponent of a
  * literal is spent on exactly these steps. */
-int flit_dmul_limb(Yv *a, long n) {
-    long carry = 0;
-    long i = 0;
+int flit_dmul_limb(Yv *a, ylong n) {
+    ylong carry = 0;
+    ylong i = 0;
     while (i < n) {
-        long v = yv_l(ya_get(a, i));
+        ylong v = yv_l(ya_get(a, i));
         ya_set(a, i, yv_long(carry));
         carry = v;
         i = i + 1;
@@ -9181,8 +9182,8 @@ int flit_dmul_limb(Yv *a, long n) {
 
 /* acc /= 10^9: the lowest limb drops out whole. What was in it is below the
  * significand, so the caller looks at it for sticky first. */
-void flit_ddiv_limb(Yv *a, long n) {
-    long i = 0;
+void flit_ddiv_limb(Yv *a, ylong n) {
+    ylong i = 0;
     while (i < n - 1) {
         ya_set(a, i, ya_get(a, i + 1));
         i = i + 1;
@@ -9196,8 +9197,8 @@ void flit_ddiv_limb(Yv *a, long n) {
  * factor of two) on every literal that was an exact power of two, smallest
  * normal included. c may be more than one limb (2^62 is one, but the comparison
  * is written for any of them). */
-int flit_dgt(Yv *a, Yv *c, long n) {
-    long i = n - 1;
+int flit_dgt(Yv *a, Yv *c, ylong n) {
+    ylong i = n - 1;
     int r = 0;
     int go = 1;
     while (i >= 0 && go) {
@@ -9211,8 +9212,8 @@ int flit_dgt(Yv *a, Yv *c, long n) {
     return r;
 }
 
-int flit_dlt(Yv *a, Yv *c, long n) {
-    long i = n - 1;
+int flit_dlt(Yv *a, Yv *c, ylong n) {
+    ylong i = n - 1;
     int r = 0;
     int go = 1;
     while (i >= 0 && go) {
@@ -9226,8 +9227,8 @@ int flit_dlt(Yv *a, Yv *c, long n) {
     return r;
 }
 
-int flit_dzero(Yv *a, long n) {
-    long i = 0;
+int flit_dzero(Yv *a, ylong n) {
+    ylong i = 0;
     int z = 1;
     while (i < n) {
         if (yv_l(ya_get(a, i)) != 0) z = 0;
@@ -9237,7 +9238,7 @@ int flit_dzero(Yv *a, long n) {
 }
 
 /* acc * 10 + one more digit (building the digits themselves). */
-int flit_dpush(Yv *a, long dg, long n) {
+int flit_dpush(Yv *a, ylong dg, ylong n) {
     if (!flit_dmul(a, 10, n)) {
         return 0;
     } else {
@@ -9249,9 +9250,9 @@ int flit_dpush(Yv *a, long dg, long n) {
 /* A fresh copy, zero-padded to n limbs: the digits arrive with only the limbs
  * they needed, and the scale is retried with a bigger t, so they must survive
  * each attempt whole. */
-Yv *flit_copy(Yv *a, long n) {
+Yv *flit_copy(Yv *a, ylong n) {
     Yv *out = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < n) {
         if (i < yv_len(a)) {
             out = ya_push(out, yv_long(yv_l(ya_get(a, i))));
@@ -9264,10 +9265,10 @@ Yv *flit_copy(Yv *a, long n) {
 }
 
 /* The digits of d as n limbs (d fits a long). */
-Yv *flit_dfrom(long d, long n) {
+Yv *flit_dfrom(ylong d, ylong n) {
     Yv *a = yav(0);
-    long rest = d;
-    long i = 0;
+    ylong rest = d;
+    ylong i = 0;
     while (i < n) {
         a = ya_push(a, yv_long(rest % FLIT_BASE));
         rest = rest / FLIT_BASE;
@@ -9279,9 +9280,9 @@ Yv *flit_dfrom(long d, long n) {
 /* digits x 10^dp x 2^t, floored, as n limbs. flags[0] is set when the floor
  * dropped something -- that is the sticky -- and flags[1] when the value
  * outgrew the limbs, which means inf. */
-Yv *flit_scaled(Yv *digs, long n, long dp, long t, Yv *flags) {
+Yv *flit_scaled(Yv *digs, ylong n, ylong dp, ylong t, Yv *flags) {
     Yv *a = flit_copy(digs, n);
-    long j = 0;
+    ylong j = 0;
     while (j < t / 32) {
         if (flit_dmul(a, 4294967296, n)) {
             j = j + 1;
@@ -9296,7 +9297,7 @@ Yv *flit_scaled(Yv *digs, long n, long dp, long t, Yv *flags) {
      * 1e300 cost 300 of them, and the exponent, not the digits, is what a
      * literal like that spends its time on. */
     if (dp > 0) {
-        long k = dp;
+        ylong k = dp;
         while (k >= 9) {
             if (flit_dmul_limb(a, n)) {
                 k = k - 9;
@@ -9314,7 +9315,7 @@ Yv *flit_scaled(Yv *digs, long n, long dp, long t, Yv *flags) {
             }
         }
     } else {
-        long k = 0 - dp;
+        ylong k = 0 - dp;
         while (k >= 9) {
             if (yv_l(ya_get(a, 0)) != 0) ya_set(flags, 0, yv_bool(1));
             flit_ddiv_limb(a, n);
@@ -9329,7 +9330,7 @@ Yv *flit_scaled(Yv *digs, long n, long dp, long t, Yv *flags) {
 }
 
 /* The significand, the round bit and the exponent, then ONE rounding. */
-long flit_finish(Yv *digs, long ndig, long dp, int neg) {
+ylong flit_finish(Yv *digs, ylong ndig, ylong dp, int neg) {
     Yv *flags = yav(2, yv_bool(0), yv_bool(0));
     /* How big the value is, to pick the scale: D x 10^dp with D ndig digits
      * lies between 10^(ndig-1+dp) and 10^(ndig+dp), and log2(10) is 3.322, so
@@ -9337,8 +9338,8 @@ long flit_finish(Yv *digs, long ndig, long dp, int neg) {
      * Only the SIZE matters here -- a guess too low is caught by the loop below
      * and a guess too high costs a few passes -- so this is not where the
      * literal's value is decided. */
-    long est = (ndig + dp) * 33219 / 10000;
-    long t = 62 - est + 4;
+    ylong est = (ndig + dp) * 33219 / 10000;
+    ylong t = 62 - est + 4;
     /* t must clear -dp, which is where dividing by ten stops being exact. A
      * literal that sits exactly on a rounding boundary is a dyadic rational --
      * v = (2^53+1) x 2^(e-53) -- so its decimal form is d x 10^-k with d
@@ -9351,7 +9352,7 @@ long flit_finish(Yv *digs, long ndig, long dp, int neg) {
     /* whole 2^32 steps, the only way flit_scaled scales by a power of two */
     t = (t + 31) / 32 * 32;
     if (t > 1216) t = 1216;
-    long n = flit_size(ndig, dp, t);
+    ylong n = flit_size(ndig, dp, t);
     Yv *a = flit_scaled(digs, n, dp, t, flags);
     /* p62 and p85 are rebuilt with the value below whenever the scale grows, so
      * a comparison always has n limbs on both sides. 2^62 is the largest power
@@ -9376,14 +9377,14 @@ long flit_finish(Yv *digs, long ndig, long dp, int neg) {
     }
     if (yv_truth(ya_get(flags, 1))) {
         if (neg) {
-            return (long)0xFFF0000000000000ULL;
+            return (ylong)0xFFF0000000000000ULL;
         } else {
-            return (long)0x7FF0000000000000ULL;
+            return (ylong)0x7FF0000000000000ULL;
         }
     } else if (flit_dzero(a, n)) {
         /* below the smallest subnormal */
         if (neg) {
-            return (long)0x8000000000000000ULL;
+            return (ylong)0x8000000000000000ULL;
         } else {
             return 0;
         }
@@ -9405,7 +9406,7 @@ long flit_finish(Yv *digs, long ndig, long dp, int neg) {
          * above the significand, so it lands in [2^53, 2^85). 1e300 is 2^997,
          * and a pass per bit wanted 935 of them -- two thirds of the whole
          * conversion. */
-        long down = 0;
+        ylong down = 0;
         while (flit_dgt(a, p85, n)) {
             if (flit_ddiv(a, 4294967296, n) != 0) ya_set(flags, 0, yv_bool(1));
             down = down + 32;
@@ -9419,17 +9420,17 @@ long flit_finish(Yv *digs, long ndig, long dp, int neg) {
         }
         /* 2^54 fits in two limbs, so the significand and the round bit are one
          * divide apart */
-        long wide = yv_l(ya_get(a, 0));
+        ylong wide = yv_l(ya_get(a, 0));
         if (n > 1) wide = wide + yv_l(ya_get(a, 1)) * FLIT_BASE;
-        long e = 53 + down - t; /* the value is in [2^e, 2^(e+1)) */
+        ylong e = 53 + down - t; /* the value is in [2^e, 2^(e+1)) */
         /* A subnormal's significand is the value on the 2^-1074 grid: value is
          * a * 2^(down - t), so the fraction is a shifted right by t - down - 1074
          * -- which is one bit short of -e - 1022, and every subnormal literal
          * with an even significand came out halved when it was that. */
-        long sh = 0;
+        ylong sh = 0;
         if (e < -1022) sh = t - down - 1074;
-        long round = 0;
-        long mant = 0;
+        ylong round = 0;
+        ylong mant = 0;
         if (sh == 0) {
             /* bit 53 is the round bit and the 53 below it are the significand */
             round = wide % 2;
@@ -9438,19 +9439,19 @@ long flit_finish(Yv *digs, long ndig, long dp, int neg) {
             /* a subnormal shifts the significand right, so the round bit moves
              * up with it and the one below it is sticky */
             if ((wide % 2) != 0) ya_set(flags, 0, yv_bool(1));
-            long words = sh / 32;
-            long bits = sh % 32;
+            ylong words = sh / 32;
+            ylong bits = sh % 32;
             if (words > 0) {
-                long rem = flit_ddiv(a, 4294967296, n);
+                ylong rem = flit_ddiv(a, 4294967296, n);
                 round = rem / 2147483648;
                 if ((rem % 2147483648) != 0) ya_set(flags, 0, yv_bool(1));
             }
             if (bits > 0) {
                 /* (long) on the shifts: 1 << 31 is INT_MIN in C, and the
                  * divisor would come out negative -- native.y shifts longs */
-                long rem = flit_ddiv(a, (long)1 << bits, n);
-                round = (rem / ((long)1 << (bits - 1))) % 2;
-                if ((rem % ((long)1 << (bits - 1))) != 0) ya_set(flags, 0, yv_bool(1));
+                ylong rem = flit_ddiv(a, (ylong)1 << bits, n);
+                round = (rem / ((ylong)1 << (bits - 1))) % 2;
+                if ((rem % ((ylong)1 << (bits - 1))) != 0) ya_set(flags, 0, yv_bool(1));
             }
             /* what is left is the fraction itself: no implicit leading bit */
             mant = yv_l(ya_get(a, 0));
@@ -9463,7 +9464,7 @@ long flit_finish(Yv *digs, long ndig, long dp, int neg) {
                 if ((mant & 1) != 0) mant = mant + 1;
             }
         }
-        long bits = 0;
+        ylong bits = 0;
         if (sh > 0) {
             /* SUBNORMAL: the significand was shifted right by sh, which lands
              * the value on 2^-1074 times a fraction with no implicit leading
@@ -9475,19 +9476,19 @@ long flit_finish(Yv *digs, long ndig, long dp, int neg) {
                 bits = mant;
             }
         } else {
-            long e2 = e;
+            ylong e2 = e;
             if (mant >= 0x20000000000000LL) {
                 mant = mant >> 1;
                 e2 = e + 1;
             }
             if (e2 > 1023) {
-                bits = (long)0x7FF0000000000000ULL; /* past the largest double */
+                bits = (ylong)0x7FF0000000000000ULL; /* past the largest double */
             } else {
                 bits = ((e2 + 1023) << 52) | (mant & 0xFFFFFFFFFFFFFLL);
             }
         }
         if (neg) {
-            return (long)(bits | (unsigned long)0x8000000000000000ULL);
+            return (ylong)(bits | (unsigned long long)0x8000000000000000ULL);
         } else {
             return bits;
         }
@@ -9495,8 +9496,8 @@ long flit_finish(Yv *digs, long ndig, long dp, int neg) {
 }
 
 /* Index of the 'e'/'E' that starts the exponent, or len(s) when absent. */
-long flit_ebase(Yv *s) {
-    long e = ys_index_of(s, ys("e"));
+ylong flit_ebase(Yv *s) {
+    ylong e = ys_index_of(s, ys("e"));
     if (e < 0) e = ys_index_of(s, ys("E"));
     if (e < 0) {
         return yv_len(s);
@@ -9507,19 +9508,19 @@ long flit_ebase(Yv *s) {
 
 /* The IEEE-754 bits a decimal float literal denotes, rounded once to nearest
  * even -- the same value strtod, C's printf and Python's float() give. */
-long flit_bits(Yv *s) {
-    long eb = flit_ebase(s);
+ylong flit_bits(Yv *s) {
+    ylong eb = flit_ebase(s);
     int neg = ys_eq_lit(ys_slice(s, 0, 1), "-");
     /* Two passes over the digits: one to count, one to fill. The bignum has to
      * be sized before the first digit goes in, and sizing it for the worst case
      * made every digit cost a pass over 128 limbs. ALL of the digits go in, not
      * a fixed count: keeping 18 in a long loses ~1e-18 of the value, which is
      * enough to flip a rounding that sits within 1% of its midpoint. */
-    long ndig = 0;
-    long nfrac = 0;
+    ylong ndig = 0;
+    ylong nfrac = 0;
     int seen = 0;
     int past_dot = 0;
-    long i = 0;
+    ylong i = 0;
     if (ys_eq_lit(ys_slice(s, 0, 1), "-")) i = 1;
     if (ys_eq_lit(ys_slice(s, 0, 1), "+")) i = 1;
     while (i < eb) {
@@ -9535,7 +9536,7 @@ long flit_bits(Yv *s) {
         }
         i = i + 1;
     }
-    long n0 = flit_size(ndig, 0, 0);
+    ylong n0 = flit_size(ndig, 0, 0);
     int over = n0 > FLIT_LIMBS;
     if (over) n0 = FLIT_LIMBS;
     Yv *a = yav(0);
@@ -9564,17 +9565,17 @@ long flit_bits(Yv *s) {
     if (!seen) {
         /* 0.0, 0e999 -- zero, with the literal's sign */
         if (neg) {
-            return (long)0x8000000000000000ULL;
+            return (ylong)0x8000000000000000ULL;
         } else {
             return 0;
         }
     } else {
         /* the explicit exponent, clamped: a long digit run must not wrap, and
          * types.y rejects a literal whose magnitude is out of range before here */
-        long ex = 0;
+        ylong ex = 0;
         int eneg = 0;
         if (eb < yv_len(s)) {
-            long j = eb + 1;
+            ylong j = eb + 1;
             Yv *sc = ys_slice(s, j, j + 1);
             if (ys_eq_lit(sc, "-")) {
                 eneg = 1;
@@ -9598,13 +9599,13 @@ long flit_bits(Yv *s) {
             /* more digits than the limbs hold: nothing but inf or zero */
             if (ex - nfrac > 400) {
                 if (neg) {
-                    return (long)0xFFF0000000000000ULL;
+                    return (ylong)0xFFF0000000000000ULL;
                 } else {
-                    return (long)0x7FF0000000000000ULL;
+                    return (ylong)0x7FF0000000000000ULL;
                 }
             } else {
                 if (neg) {
-                    return (long)0x8000000000000000ULL;
+                    return (ylong)0x8000000000000000ULL;
                 } else {
                     return 0;
                 }
@@ -9627,12 +9628,12 @@ long flit_bits(Yv *s) {
  * arithmetic wrapped to -- 0xFFFFFFFFFFFFFFFF comes out as "-1" -- and which
  * keeps any underscores a decimal literal may hold, so the sign is read
  * separately and anything that is not a digit is skipped. */
-static long num_i64(Yv *s) {
+static ylong num_i64(Yv *s) {
     unsigned long long v = 0;
     size_t n = yv_len(s), i = 0;
     int neg = 0;
     while (i < n) {
-        long c = (long)(unsigned char)s->u.s.p[i];
+        ylong c = (ylong)(unsigned char)s->u.s.p[i];
         if (c >= 48 && c <= 57) {
             v = v * 10ULL + (unsigned long long)(c - 48);
         } else if (c == 45 && i == 0) {
@@ -9640,8 +9641,8 @@ static long num_i64(Yv *s) {
         }
         i = i + 1;
     }
-    if (neg) { return -(long)v; }
-    return (long)v;
+    if (neg) { return -(ylong)v; }
+    return (ylong)v;
 }
 
 Yv *gen_lit(Yv *st, Yv *node) {
@@ -9669,7 +9670,7 @@ Yv *gen_index(Yv *st, Yv *node) {
      * runtime len for [T]. */
     Yv *garr = yr_get(node, "arr");
     Yv *bt = infer(st, garr);
-    long ixesz = arr_elem_bytes(bt);
+    ylong ixesz = arr_elem_bytes(bt);
     st = gen(st, garr);
     st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
     st = gen(st, yr_get(node, "idx"));
@@ -9700,7 +9701,7 @@ Yv *gen_dotassign(Yv *st, Yv *node) {
     Yv *dobj = yr_get(node, "obj");
     Yv *dkey = yr_get(node, "key");
     Yv *dt = infer(st, dobj);
-    long idx = rec_field_idx(dt, dkey);
+    ylong idx = rec_field_idx(dt, dkey);
     st = gen(st, dobj);
     st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
     st = gen_as(st, yr_get(node, "v"), rec_field_type(dt, dkey));
@@ -9738,12 +9739,12 @@ Yv *place_value_type(Yv *t) {
     }
 }
 
-Yv *n_num(Yv *v, long line, long col) {
+Yv *n_num(Yv *v, ylong line, ylong col) {
     return yr(4, "k", yv_long(K_num), "v", v, "line", yv_long(line), "col",
               yv_long(col));
 }
 
-Yv *n_id(Yv *v, long line, long col) {
+Yv *n_id(Yv *v, ylong line, ylong col) {
     return yr(4, "k", yv_long(K_id), "v", v, "line", yv_long(line), "col",
               yv_long(col));
 }
@@ -9761,17 +9762,17 @@ Yv *args2(Yv *a, Yv *b) {
     return out;
 }
 
-Yv *n_call1(Yv *name, Yv *a0, long line, long col) {
+Yv *n_call1(Yv *name, Yv *a0, ylong line, ylong col) {
     return yr(5, "k", yv_long(K_call), "callee", n_id(name, line, col), "args",
               args1(a0), "line", yv_long(line), "col", yv_long(col));
 }
 
-Yv *n_call2(Yv *name, Yv *a0, Yv *a1, long line, long col) {
+Yv *n_call2(Yv *name, Yv *a0, Yv *a1, ylong line, ylong col) {
     return yr(5, "k", yv_long(K_call), "callee", n_id(name, line, col), "args",
               args2(a0, a1), "line", yv_long(line), "col", yv_long(col));
 }
 
-Yv *block2(Yv *a, Yv *b, long ln, long cl) {
+Yv *block2(Yv *a, Yv *b, ylong ln, ylong cl) {
     Yv *st = yav(0);
     st = ya_push(st, a);
     st = ya_push(st, b);
@@ -9779,7 +9780,7 @@ Yv *block2(Yv *a, Yv *b, long ln, long cl) {
               yv_long(cl));
 }
 
-Yv *block3(Yv *a, Yv *b, Yv *c, long ln, long cl) {
+Yv *block3(Yv *a, Yv *b, Yv *c, ylong ln, ylong cl) {
     Yv *st = yav(0);
     st = ya_push(st, a);
     st = ya_push(st, b);
@@ -9804,11 +9805,11 @@ static Yv *arr_rest(Yv *a, Yv *b, Yv *c, Yv *d, Yv *e) {
  * all in ONE block: the statements after it read the names the binding declares,
  * so a nested block would take their slots out of scope under them (frame slots
  * are released per block -- see gen_block_as). */
-Yv *block_bind(Yv *first, Yv *rest, long ln, long cl) {
+Yv *block_bind(Yv *first, Yv *rest, ylong ln, ylong cl) {
     Yv *st = yav(0);
     if (yv_l(yr_get(first, "k")) == K_block) {
         Yv *fs = yr_get(first, "stmts");
-        long i = 0;
+        ylong i = 0;
         while (i < yv_len(fs)) {
             st = ya_push(st, ya_get(fs, i));
             ;
@@ -9818,7 +9819,7 @@ Yv *block_bind(Yv *first, Yv *rest, long ln, long cl) {
         st = ya_push(st, first);
         ;
     }
-    long j = 0;
+    ylong j = 0;
     while (j < yv_len(rest)) {
         st = ya_push(st, ya_get(rest, j));
         ;
@@ -9828,7 +9829,7 @@ Yv *block_bind(Yv *first, Yv *rest, long ln, long cl) {
               yv_long(cl));
 }
 
-Yv *block4(Yv *a, Yv *b, Yv *c, Yv *d, long ln, long cl) {
+Yv *block4(Yv *a, Yv *b, Yv *c, Yv *d, ylong ln, ylong cl) {
     Yv *st = yav(0);
     st = ya_push(st, a);
     st = ya_push(st, b);
@@ -9838,7 +9839,7 @@ Yv *block4(Yv *a, Yv *b, Yv *c, Yv *d, long ln, long cl) {
               yv_long(cl));
 }
 
-Yv *block5(Yv *a, Yv *b, Yv *c, Yv *d, Yv *e, long ln, long cl) {
+Yv *block5(Yv *a, Yv *b, Yv *c, Yv *d, Yv *e, ylong ln, ylong cl) {
     Yv *st = yav(0);
     st = ya_push(st, a);
     st = ya_push(st, b);
@@ -9849,7 +9850,7 @@ Yv *block5(Yv *a, Yv *b, Yv *c, Yv *d, Yv *e, long ln, long cl) {
               yv_long(cl));
 }
 
-Yv *block6(Yv *a, Yv *b, Yv *c, Yv *d, Yv *e, Yv *f, long ln, long cl) {
+Yv *block6(Yv *a, Yv *b, Yv *c, Yv *d, Yv *e, Yv *f, ylong ln, ylong cl) {
     Yv *st = yav(0);
     st = ya_push(st, a);
     st = ya_push(st, b);
@@ -9878,8 +9879,8 @@ Yv *block6(Yv *a, Yv *b, Yv *c, Yv *d, Yv *e, Yv *f, long ln, long cl) {
        write goes through the shared cell;
      - a byte slot must wrap at 128, which a 64-bit ALU op on the slot would
        not do (the desugar's movzbq/movb pair does). */
-long inplace_slot(Yv *st, Yv *node) {
-    long off = 0;
+ylong inplace_slot(Yv *st, Yv *node) {
+    ylong off = 0;
     if (yv_l(yr_get(node, "k")) == K_id) {
         Yv *id = node;
         Yv *e = env_find(st, yr_get(id, "v"));
@@ -9899,11 +9900,11 @@ long inplace_slot(Yv *st, Yv *node) {
    {ok, v}.) */
 Yv *int_imm(Yv *r) {
     int ok = 0;
-    long v = 0;
+    ylong v = 0;
     if (yv_l(yr_get(r, "k")) == K_num) {
         Yv *num = r;
         if (!lit_is_float(yr_get(num, "v"))) {
-            long n = ys_tolong(norm_num(yr_get(num, "v")));
+            ylong n = ys_tolong(norm_num(yr_get(num, "v")));
             if (n >= -2147483648L && n <= 2147483647L) {
                 ok = 1;
                 v = n;
@@ -9922,13 +9923,13 @@ Yv *gen_incdec(Yv *st, Yv *node, int dropped) {
        desugar become one: `inc -8(%rbp)` where the desugar wrote a bind, a
        read, a copy in, an immediate, a copy back and a store -- and took a
        frame slot for it. See gen_incdec_desugar for the rest. */
-    long slot = 0;
+    ylong slot = 0;
     if (dropped) {
         slot = inplace_slot(st, yr_get(node, "tgt"));
         ;
     }
     if (slot != 0) {
-        long f = F_INC_D;
+        ylong f = F_INC_D;
         if (ys_eq_lit(yr_get(node, "op"), "--")) {
             f = F_DEC_D;
             ;
@@ -9947,8 +9948,8 @@ Yv *gen_incdec_desugar(Yv *st, Yv *node, int dropped) {
         ;
     }
     Yv *tgt = yr_get(node, "tgt");
-    long ln = yv_l(yr_get(node, "line"));
-    long cl = yv_l(yr_get(node, "col"));
+    ylong ln = yv_l(yr_get(node, "line"));
+    ylong cl = yv_l(yr_get(node, "col"));
     Yv *one = n_num(ys("1"), ln, cl);
     Yv *r = next_uid(st);
     st = yr_get(r, "st");
@@ -9986,8 +9987,8 @@ Yv *gen_incdec_desugar(Yv *st, Yv *node, int dropped) {
 
 /* `{ bind; let v = ...; target = v; v }` -- both `++x` and `x++`, whose value
    is the trailing read of the temporary. As a statement that read is dead. */
-Yv *gen_incdec_end(Yv *st, Yv *bind, Yv *d2, Yv *asg, int dropped, long ln,
-                   long cl) {
+Yv *gen_incdec_end(Yv *st, Yv *bind, Yv *d2, Yv *asg, int dropped, ylong ln,
+                   ylong cl) {
     Yv *vid = n_id(yr_get(d2, "name"), ln, cl);
     Yv *rest = yav(0);
     rest = ya_push(rest, d2);
@@ -10029,10 +10030,10 @@ Yv *gen_opassign_arith(Yv *st, Yv *node, int dropped) {
        the ALU instruction: `/` and `%` need its zero check and idiv, the
        shifts their count check, and a byte, float or non-local target a
        different instruction altogether (see inplace_slot). */
-    long fr = 0;
-    long fi = 0;
-    long slot = 0;
-    long imm = 0;
+    ylong fr = 0;
+    ylong fi = 0;
+    ylong slot = 0;
+    ylong imm = 0;
     int has_imm = 0;
     if (dropped) {
         slot = inplace_slot(st, yr_get(node, "tgt"));
@@ -10096,8 +10097,8 @@ Yv *gen_opassign_desugar(Yv *st, Yv *node, int dropped) {
      * index/base evaluated once through a synthetic let. */
     Yv *tgt = yr_get(node, "tgt");
     Yv *op = yr_get(node, "op");
-    long ln = yv_l(yr_get(node, "line"));
-    long cl = yv_l(yr_get(node, "col"));
+    ylong ln = yv_l(yr_get(node, "line"));
+    ylong cl = yv_l(yr_get(node, "col"));
     Yv *r = next_uid(st);
     st = yr_get(r, "st");
     Yv *t1 = ys_cat(ys("y_t"), ys_long(yv_l(yr_get(r, "uid"))));
@@ -10126,7 +10127,7 @@ Yv *gen_opassign_desugar(Yv *st, Yv *node, int dropped) {
  * captured the target's index (a[i]) or base (o.f) — an id target needs
  * no capture (re-reading a variable has no side effects). Each target
  * shape gets its own arm (single-call dispatch, see normnode note). */
-Yv *place_read_id(Yv *tgt, Yv *t1, long ln, long cl) {
+Yv *place_read_id(Yv *tgt, Yv *t1, ylong ln, ylong cl) {
     (void)t1; /* unused in native.y's def too */
     return n_id(yr_get(tgt, "v"), ln, cl);
 }
@@ -10136,7 +10137,7 @@ Yv *place_read_id(Yv *tgt, Yv *t1, long ln, long cl) {
  * was captured in `t1 + "a"` (see place_bind_idx), so the desugared forms
  * read and write it through a plain variable and evaluate it exactly
  * once. */
-Yv *place_arr(Yv *tgt, Yv *t1, long ln, long cl) {
+Yv *place_arr(Yv *tgt, Yv *t1, ylong ln, ylong cl) {
     Yv *ba = yr_get(tgt, "arr");
     if (yv_l(yr_get(ba, "k")) == K_id) {
         return n_id(yr_get(ba, "v"), ln, cl);
@@ -10145,17 +10146,17 @@ Yv *place_arr(Yv *tgt, Yv *t1, long ln, long cl) {
     }
 }
 
-Yv *place_read_idx(Yv *tgt, Yv *t1, long ln, long cl) {
+Yv *place_read_idx(Yv *tgt, Yv *t1, ylong ln, ylong cl) {
     return yr(5, "k", yv_long(K_index), "arr", place_arr(tgt, t1, ln, cl), "idx",
               n_id(t1, ln, cl), "line", yv_long(ln), "col", yv_long(cl));
 }
 
-Yv *place_read_dot(Yv *tgt, Yv *t1, long ln, long cl) {
+Yv *place_read_dot(Yv *tgt, Yv *t1, ylong ln, ylong cl) {
     return yr(7, "k", yv_long(K_dot), "obj", n_id(t1, ln, cl), "key",
               yr_get(tgt, "key"), "line", yv_long(ln), "col", yv_long(cl), "nline", yv_long(cl), "ncol", yv_long(cl));
 }
 
-Yv *gen_place_read(Yv *tgt, Yv *t1, long ln, long cl) {
+Yv *gen_place_read(Yv *tgt, Yv *t1, ylong ln, ylong cl) {
     if (yv_l(yr_get(tgt, "k")) == K_id) {
         return place_read_id(tgt, t1, ln, cl);
     } else if (yv_l(yr_get(tgt, "k")) == K_index) {
@@ -10165,24 +10166,24 @@ Yv *gen_place_read(Yv *tgt, Yv *t1, long ln, long cl) {
     }
 }
 
-Yv *place_asg_id(Yv *tgt, Yv *valnode, Yv *t1, long ln, long cl) {
+Yv *place_asg_id(Yv *tgt, Yv *valnode, Yv *t1, ylong ln, ylong cl) {
     (void)t1; /* unused in native.y's def too */
     return yr(5, "k", yv_long(K_assign), "name", yr_get(tgt, "v"), "v", valnode,
               "line", yv_long(ln), "col", yv_long(cl));
 }
 
-Yv *place_asg_idx(Yv *tgt, Yv *valnode, Yv *t1, long ln, long cl) {
+Yv *place_asg_idx(Yv *tgt, Yv *valnode, Yv *t1, ylong ln, ylong cl) {
     return yr(6, "k", yv_long(K_idxassign), "arr", place_arr(tgt, t1, ln, cl), "idx",
               n_id(t1, ln, cl), "v", valnode, "line", yv_long(ln), "col",
               yv_long(cl));
 }
 
-Yv *place_asg_dot(Yv *tgt, Yv *valnode, Yv *t1, long ln, long cl) {
+Yv *place_asg_dot(Yv *tgt, Yv *valnode, Yv *t1, ylong ln, ylong cl) {
     return yr(8, "k", yv_long(K_dotassign), "obj", n_id(t1, ln, cl), "key",
               yr_get(tgt, "key"), "v", valnode, "line", yv_long(ln), "col", yv_long(cl), "nline", yv_long(cl), "ncol", yv_long(cl));
 }
 
-Yv *gen_place_assign(Yv *tgt, Yv *valnode, Yv *t1, long ln, long cl) {
+Yv *gen_place_assign(Yv *tgt, Yv *valnode, Yv *t1, ylong ln, ylong cl) {
     if (yv_l(yr_get(tgt, "k")) == K_id) {
         return place_asg_id(tgt, valnode, t1, ln, cl);
     } else if (yv_l(yr_get(tgt, "k")) == K_index) {
@@ -10192,20 +10193,20 @@ Yv *gen_place_assign(Yv *tgt, Yv *valnode, Yv *t1, long ln, long cl) {
     }
 }
 
-Yv *place_bind_id(Yv *tgt, Yv *t1, long ln, long cl) {
+Yv *place_bind_id(Yv *tgt, Yv *t1, ylong ln, ylong cl) {
     (void)tgt; /* unused in native.y's def too */
     (void)t1;
     return yr(4, "k", yv_long(K_block), "stmts", yav(0), "line", yv_long(ln), "col",
               yv_long(cl));
 }
 
-Yv *place_bind_idx_id(Yv *tgt, Yv *t1, long ln, long cl) {
+Yv *place_bind_idx_id(Yv *tgt, Yv *t1, ylong ln, ylong cl) {
     return yr(9, "k", yv_long(K_decl), "kind", ys("let"), "typ",
               yr(1, "k", yv_long(K_tnone)), "name", t1, "v", yr_get(tgt, "idx"),
               "line", yv_long(ln), "col", yv_long(cl), "nline", yv_long(cl), "ncol", yv_long(cl));
 }
 
-Yv *place_bind_idx_nest(Yv *tgt, Yv *t1, long ln, long cl) {
+Yv *place_bind_idx_nest(Yv *tgt, Yv *t1, ylong ln, ylong cl) {
     /* nested base (`grid[0][1]`, `x.y[i]`, `f()[i]`): capture it in
      * `t1 + "a"` as well, so the place evaluates it exactly once. */
     Yv *tba = yr(9, "k", yv_long(K_decl), "kind", ys("let"), "typ",
@@ -10217,7 +10218,7 @@ Yv *place_bind_idx_nest(Yv *tgt, Yv *t1, long ln, long cl) {
     return block2(tba, tib, ln, cl);
 }
 
-Yv *place_bind_idx(Yv *tgt, Yv *t1, long ln, long cl) {
+Yv *place_bind_idx(Yv *tgt, Yv *t1, ylong ln, ylong cl) {
     Yv *ba = yr_get(tgt, "arr");
     if (yv_l(yr_get(ba, "k")) == K_id) {
         return place_bind_idx_id(tgt, t1, ln, cl);
@@ -10226,7 +10227,7 @@ Yv *place_bind_idx(Yv *tgt, Yv *t1, long ln, long cl) {
     }
 }
 
-Yv *place_bind_dot(Yv *tgt, Yv *t1, long ln, long cl) {
+Yv *place_bind_dot(Yv *tgt, Yv *t1, ylong ln, ylong cl) {
     return yr(9, "k", yv_long(K_decl), "kind", ys("let"), "typ",
               yr(1, "k", yv_long(K_tnone)), "name", t1, "v", yr_get(tgt, "obj"),
               "line", yv_long(ln), "col", yv_long(cl), "nline", yv_long(cl), "ncol", yv_long(cl));
@@ -10234,7 +10235,7 @@ Yv *place_bind_dot(Yv *tgt, Yv *t1, long ln, long cl) {
 
 /* The synthetic `let` that runs the target's index/base exactly once (a
  * no-op statement for id targets). */
-Yv *gen_place_bind(Yv *tgt, Yv *t1, long ln, long cl) {
+Yv *gen_place_bind(Yv *tgt, Yv *t1, ylong ln, ylong cl) {
     if (yv_l(yr_get(tgt, "k")) == K_id) {
         return place_bind_id(tgt, t1, ln, cl);
     } else if (yv_l(yr_get(tgt, "k")) == K_index) {
@@ -10248,8 +10249,8 @@ Yv *gen_place_bind(Yv *tgt, Yv *t1, long ln, long cl) {
    is the place read (the array, for `+=` / `*=`). As a statement that read is
    dead, unless it is a named local: reading one clears a string's companion
    cell (gen_id), which gen_stmt's local test deliberately leaves alone. */
-Yv *gen_opassign_end(Yv *st, Yv *bind, Yv *asg, Yv *read, int dropped, long ln,
-                     long cl) {
+Yv *gen_opassign_end(Yv *st, Yv *bind, Yv *asg, Yv *read, int dropped, ylong ln,
+                     ylong cl) {
     Yv *rest = yav(0);
     rest = ya_push(rest, asg);
     rest = ya_push(rest, read);
@@ -10272,8 +10273,8 @@ Yv *gen_opassign_arr(Yv *st, Yv *node, int dropped) {
     Yv *tgt = yr_get(node, "tgt");
     Yv *op = yr_get(node, "op");
     Yv *v = yr_get(node, "v");
-    long ln = yv_l(yr_get(node, "line"));
-    long cl = yv_l(yr_get(node, "col"));
+    ylong ln = yv_l(yr_get(node, "line"));
+    ylong cl = yv_l(yr_get(node, "col"));
     Yv *r = next_uid(st);
     st = yr_get(r, "st");
     Yv *t1 = ys_cat(ys("y_t"), ys_long(yv_l(yr_get(r, "uid"))));
@@ -10368,7 +10369,7 @@ Yv *gen_idxassign(Yv *st, Yv *node) {
      * visible through every binding. */
     Yv *garr = yr_get(node, "arr");
     Yv *bt = infer(st, garr);
-    long iaesz = arr_elem_bytes(bt);
+    ylong iaesz = arr_elem_bytes(bt);
     st = gen(st, garr);
     st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
     st = gen(st, yr_get(node, "idx"));
@@ -10430,13 +10431,13 @@ Yv *gen_idxassign(Yv *st, Yv *node) {
  * compiled it. */
 static Yv *path_push(Yv *path, Yv *t) {
     Yv *p = yav(0);
-    for (long i = 0; i < yv_len(path); i++) p = ya_push(p, ya_get(path, i));
+    for (ylong i = 0; i < yv_len(path); i++) p = ya_push(p, ya_get(path, i));
     return ya_push(p, t);
 }
 
 static int type_on_path(Yv *t, Yv *path) {
     int found = 0;
-    for (long i = 0; i < yv_len(path); i++) {
+    for (ylong i = 0; i < yv_len(path); i++) {
         /* the same node: a recursive alias is one shared node (teq) */
         if (ya_get(path, i) == t) found = 1;
     }
@@ -10489,7 +10490,7 @@ Yv *gen_val_tostr_rax(Yv *st, Yv *t, Yv *path) {
 }
 
 /* acc = acc + <the string in %rax>. */
-Yv *gen_acc_cat_rax(Yv *st, long aoff) {
+Yv *gen_acc_cat_rax(Yv *st, ylong aoff) {
     st = emit_insn(st, F_MOV_R_R, R_RAX, 64, R_RDX, 64, 0, 0, 0);
     st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, aoff, -1, R_RAX, 64);
     st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
@@ -10507,10 +10508,10 @@ Yv *gen_acc_cat_rax(Yv *st, long aoff) {
  * instead, a map nested in an array, an option or a record printed as its heap
  * address, which differs every run. */
 Yv *gen_map_repr_rax(Yv *st, Yv *t, Yv *path) {
-    long moff = (yv_l(yr_get(st, "slots")) + yv_l(yr_get(st, "temp")) + 1) * -8;
-    long aoff = (yv_l(yr_get(st, "slots")) + yv_l(yr_get(st, "temp")) + 2) * -8;
-    long ioff = (yv_l(yr_get(st, "slots")) + yv_l(yr_get(st, "temp")) + 3) * -8;
-    long koff = (yv_l(yr_get(st, "slots")) + yv_l(yr_get(st, "temp")) + 4) * -8;
+    ylong moff = (yv_l(yr_get(st, "slots")) + yv_l(yr_get(st, "temp")) + 1) * -8;
+    ylong aoff = (yv_l(yr_get(st, "slots")) + yv_l(yr_get(st, "temp")) + 2) * -8;
+    ylong ioff = (yv_l(yr_get(st, "slots")) + yv_l(yr_get(st, "temp")) + 3) * -8;
+    ylong koff = (yv_l(yr_get(st, "slots")) + yv_l(yr_get(st, "temp")) + 4) * -8;
     st = st_temp(st, yv_l(yr_get(st, "temp")) + 4);
     st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, moff, -1);
     st = gen_str_const(st, ys("{"));
@@ -10573,9 +10574,9 @@ Yv *gen_map_repr_rax(Yv *st, Yv *t, Yv *path) {
 /* Array header in %rax -> "[e0, e1, ...]" in %rax, the same form tostring()
  * gives. Slots: [src][acc][i]. */
 Yv *gen_arr_tostr_rax(Yv *st, Yv *elty, Yv *path) {
-    long soff = (yv_l(yr_get(st, "slots")) + yv_l(yr_get(st, "temp")) + 1) * -8;
-    long aoff = (yv_l(yr_get(st, "slots")) + yv_l(yr_get(st, "temp")) + 2) * -8;
-    long ioff = (yv_l(yr_get(st, "slots")) + yv_l(yr_get(st, "temp")) + 3) * -8;
+    ylong soff = (yv_l(yr_get(st, "slots")) + yv_l(yr_get(st, "temp")) + 1) * -8;
+    ylong aoff = (yv_l(yr_get(st, "slots")) + yv_l(yr_get(st, "temp")) + 2) * -8;
+    ylong ioff = (yv_l(yr_get(st, "slots")) + yv_l(yr_get(st, "temp")) + 3) * -8;
     st = st_temp(st, yv_l(yr_get(st, "temp")) + 3);
     st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, soff, -1);
     st = gen_str_const(st, ys("["));
@@ -10618,7 +10619,7 @@ Yv *gen_arr_tostr_rax(Yv *st, Yv *elty, Yv *path) {
 }
 
 /* slot(%rbp) = slot(%rbp) + <constant>. */
-Yv *gen_acc_cat_slot(Yv *st, long off, Yv *s) {
+Yv *gen_acc_cat_slot(Yv *st, ylong off, Yv *s) {
     st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, off, -1, R_RAX, 64);
     st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
     st = gen_str_const(st, s);
@@ -10634,7 +10635,7 @@ Yv *gen_acc_cat_slot(Yv *st, long off, Yv *s) {
  * the load/store width all follow from the element type. Everything else
  * stays 8 bytes (one machine word per value). */
 
-long elem_bytes(Yv *t) {
+ylong elem_bytes(Yv *t) {
     if (yv_l(yr_get(t, "k")) == K_tbyte) {
         return 1;
     } else {
@@ -10642,7 +10643,7 @@ long elem_bytes(Yv *t) {
     }
 }
 
-long arr_elem_bytes(Yv *t) {
+ylong arr_elem_bytes(Yv *t) {
     if (yv_l(yr_get(t, "k")) == K_tarr) {
         return elem_bytes(yr_get(t, "of"));
     } else if (yv_l(yr_get(t, "k")) == K_tarrfix) {
@@ -10655,7 +10656,7 @@ long arr_elem_bytes(Yv *t) {
 /* Width of what a pointer of static type `t` addresses: a *byte points into
  * a packed [byte] block (or at a byte local), so `*p` and `*p = v` move one
  * byte; every other pointee is a full 8-byte slot. */
-long ptr_width(Yv *t) {
+ylong ptr_width(Yv *t) {
     if (yv_l(yr_get(t, "k")) == K_tptr) {
         return elem_bytes(yr_get(t, "to"));
     } else {
@@ -10666,7 +10667,7 @@ long ptr_width(Yv *t) {
 /* Load element [idx] into `dst`. `base` is the ARRAY HEADER register, `idx`
  * the index register, `dst` the result. Headers are {len, cap, data} with
  * the elements in a separate block, so the data pointer rides through %dst. */
-Yv *elem_load(Yv *st, long esz, long base, long idx, long dst) {
+Yv *elem_load(Yv *st, ylong esz, ylong base, ylong idx, ylong dst) {
     st = emit_insn(st, F_MOV_D_R, base, -1, 1, 16, -1, dst, 64);
     if (esz == 1) {
         return emit_insn(st, F_MOVZBQ_M_R, dst, idx, 1, 0, -1, dst, 64);
@@ -10680,7 +10681,7 @@ Yv *elem_load(Yv *st, long esz, long base, long idx, long dst) {
  * table; a packed store truncates to 8 bits, which is the narrowing.
  * %r11 is the scratch that carries the data pointer: no generated value
  * lives in it across a store (the syscall instruction clobbers it). */
-Yv *elem_store_rdx(Yv *st, long esz, long base, long idx) {
+Yv *elem_store_rdx(Yv *st, ylong esz, ylong base, ylong idx) {
     st = emit_insn(st, F_MOV_D_R, base, -1, 1, 16, -1, R_R11, 64);
     if (esz == 1) {
         return emit_insn(st, F_MOVB_R_M, R_RDX, 8, R_R11, idx, 1, 0, -1);
@@ -10691,7 +10692,7 @@ Yv *elem_store_rdx(Yv *st, long esz, long base, long idx) {
 
 /* Same, for a compile-time-constant index (array literals): fold the
  * offset into the displacement instead of using an index register. */
-Yv *elem_store_rdx_const(Yv *st, long esz, long base, long k) {
+Yv *elem_store_rdx_const(Yv *st, ylong esz, ylong base, ylong k) {
     st = emit_insn(st, F_MOV_D_R, base, -1, 1, 16, -1, R_R11, 64);
     if (esz == 1) {
         return emit_insn(st, F_MOVB_R_D, R_RDX, 8, R_R11, -1, 1, k, -1);
@@ -10705,8 +10706,8 @@ Yv *elem_store_rdx_const(Yv *st, long esz, long base, long k) {
  * what makes `arr += v` in-place). front, the free slots before data, is
  * the header's fourth word: y_alloc(arr_header_size()) hands out 32
  * zeroed bytes (NATIVE.md). This is the block size for n elements. */
-long arr_alloc_size(long esz, long n) {
-    long b = n * esz;
+ylong arr_alloc_size(ylong esz, ylong n) {
+    ylong b = n * esz;
     if (b < 8) {
         return 8;
     } else {
@@ -10715,7 +10716,7 @@ long arr_alloc_size(long esz, long n) {
 }
 
 /* Bytes to allocate for the header itself. */
-long arr_header_size(void) { return 24; }
+ylong arr_header_size(void) { return 24; }
 
 Yv *gen_dot(Yv *st, Yv *node) {
     /* dobj is read twice (infer, then gen). */
@@ -10759,11 +10760,11 @@ Yv *gen_narrow_field(Yv *st, Yv *nar, Yv *s, Yv *dkey) {
     Yv *ms = rectest_members(s, yr_get(nar, "typ"));
     Yv *slots = yav(0);
     Yv *ds = yav(0);
-    for (long i = 0; i < yv_len(ms); i++) {
-        long sl = mfield_idx(union_lay(unfold(ya_get(ms, i)), s), dkey);
+    for (ylong i = 0; i < yv_len(ms); i++) {
+        ylong sl = mfield_idx(union_lay(unfold(ya_get(ms, i)), s), dkey);
         slots = ya_push(slots, yv_long(sl));
         int seen = 0;
-        for (long q = 0; q < yv_len(ds); q++) {
+        for (ylong q = 0; q < yv_len(ds); q++) {
             if (yv_l(ya_get(ds, q)) == sl) {
                 seen = 1;
             }
@@ -10783,12 +10784,12 @@ Yv *gen_narrow_field(Yv *st, Yv *nar, Yv *s, Yv *dkey) {
         st = yr_get(done, "st");
         st = emit_insn(st, F_MOV_D_R, R_RAX, -1, 1, -8, -1, R_RCX, 64);
         Yv *lbls = yav(0);
-        long d = 0;
+        ylong d = 0;
         while (d < yv_len(ds) - 1) {
             Yv *l = next_loc(st);
             st = yr_get(l, "st");
             lbls = ya_push(lbls, yr_get(l, "label"));
-            long j = 0;
+            ylong j = 0;
             while (j < yv_len(ms)) {
                 if (yv_l(ya_get(slots, j)) == yv_l(ya_get(ds, d))) {
                     Yv *dr = ty_desc_in(st, ya_get(ms, j), s);
@@ -10803,7 +10804,7 @@ Yv *gen_narrow_field(Yv *st, Yv *nar, Yv *s, Yv *dkey) {
         }
         st = gen_slot_move(st, yv_l(ya_get(ds, yv_len(ds) - 1)), 0);
         st = emit_insn(st, F_JMP_L, yv_l(yr_get(done, "label")), 0, 0, 0, 0, 0, 0);
-        long e = 0;
+        ylong e = 0;
         while (e < yv_len(lbls)) {
             st = emit_label(st, yv_l(ya_get(lbls, e)));
             st = gen_slot_move(st, yv_l(ya_get(ds, e)), 0);
@@ -10820,7 +10821,7 @@ Yv *gen_narrow_field(Yv *st, Yv *nar, Yv *s, Yv *dkey) {
 
 /* gen_union_slot's move: slot sl of the record in %rax into %rax, or
  * (store) %rax into slot sl of the record in %rdx. */
-Yv *gen_slot_move(Yv *st, long sl, int store) {
+Yv *gen_slot_move(Yv *st, ylong sl, int store) {
     if (store) {
         return emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RDX, -1, 1, 8 * sl, -1);
     } else {
@@ -10830,7 +10831,7 @@ Yv *gen_slot_move(Yv *st, long sl, int store) {
 
 /* Built-in properties (types.y typeof_prop): `.length` is len(x); `.ptr`
  * is the array header's data word -- the element block's address. */
-Yv *gen_prop(Yv *st, Yv *obj, Yv *key, long line, long col) {
+Yv *gen_prop(Yv *st, Yv *obj, Yv *key, ylong line, ylong col) {
     if (ys_eq_lit(key, "length")) {
         return gen_len(st, n_call1(ys("len"), obj, line, col));
     } else {
@@ -10841,7 +10842,7 @@ Yv *gen_prop(Yv *st, Yv *obj, Yv *key, long line, long col) {
 
 /* Record field read; `t` is the record's static type. */
 Yv *gen_dot_rec(Yv *st, Yv *dobj, Yv *dkey, Yv *t) {
-    long idx = rec_field_idx(t, dkey);
+    ylong idx = rec_field_idx(t, dkey);
     st = gen(st, dobj);
     return emit_insn(st, F_MOV_D_R, R_RAX, -1, 1, idx * 8, -1, R_RAX, 64);
 }
@@ -10849,8 +10850,8 @@ Yv *gen_dot_rec(Yv *st, Yv *dobj, Yv *dkey, Yv *t) {
 /* The slot of field `key` in a record of static type t (fields sorted by
  * name, see "records at run time"); -1 when t has no such field (the
  * checker rejects such a read). */
-long rec_field_idx(Yv *t, Yv *key) {
-    long idx = -1;
+ylong rec_field_idx(Yv *t, Yv *key) {
+    ylong idx = -1;
     if (yv_l(yr_get(t, "k")) == K_trec) {
         Yv *fs = yr_get(t, "fields");
         idx = rec_slot(fs, key);
@@ -10874,7 +10875,7 @@ Yv *rec_field_type(Yv *t, Yv *key) {
         ;
     } else if (yv_l(yr_get(t, "k")) == K_trec) {
         Yv *fs = yr_get(t, "fields");
-        long i = 0;
+        ylong i = 0;
         while (i < yv_len(fs)) {
             Yv *f = ya_get(fs, i);
             if (ys_eq(yr_get(f, "name"), key)) {
@@ -10894,22 +10895,22 @@ Yv *rec_field_type(Yv *t, Yv *key) {
  * 8-byte value like any other) is the expression value. */
 Yv *gen_array(Yv *st, Yv *node) {
     Yv *at = infer(st, node);
-    long gsz = arr_elem_bytes(at);
+    ylong gsz = arr_elem_bytes(at);
     return gen_array_esz(st, node, gsz, store_elem_type(at, gsz));
 }
 
 /* Same, with the element width supplied by the declaration (`let b:
  * [byte] = [104, 105]` — the literal's own elements infer as long), and
  * `ety` the element type each value converts to (store_elem_type). */
-Yv *gen_array_esz(Yv *st, Yv *node, long esz, Yv *ety) {
+Yv *gen_array_esz(Yv *st, Yv *node, ylong esz, Yv *ety) {
     Yv *elems = yr_get(node, "elems");
-    long gi = 0;
+    ylong gi = 0;
     while (gi < yv_len(elems)) {
         st = gen_as(st, ya_get(elems, gi), ety);
         st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
         gi = gi + 1;
     }
-    long n = yv_len(elems);
+    ylong n = yv_len(elems);
     st = emit_insn(st, F_MOV_I_R, arr_alloc_size(esz, n), R_RDI, 64, 0, 0, 0, 0);
     st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_alloc"))), 0, 0, 0, 0, 0, 0);
     st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
@@ -10920,7 +10921,7 @@ Yv *gen_array_esz(Yv *st, Yv *node, long esz, Yv *ety) {
     st = emit_insn(st, F_MOV_I_0, n, R_R10, -1, 1, -1, -1, 0);
     st = emit_insn(st, F_MOV_I_D, n, R_R10, -1, 1, 8, -1, 0);
     st = emit_insn(st, F_MOV_R_D, R_RDX, 64, R_R10, -1, 1, 16, -1);
-    long k = n - 1;
+    ylong k = n - 1;
     while (k >= 0) {
         st = emit_insn(st, F_POP_R, R_RDX, 64, 0, 0, 0, 0, 0);
         st = elem_store_rdx_const(st, esz, R_R10, k);
@@ -10954,14 +10955,14 @@ Yv *gen_len(Yv *st, Yv *node) {
 Yv *gen_push(Yv *st, Yv *node) {
     Yv *pargs = yr_get(node, "args");
     Yv *pat = infer(st, ya_get(pargs, 0));
-    long pesz = arr_elem_bytes(pat);
+    ylong pesz = arr_elem_bytes(pat);
     st = gen_push_args_as(st, yr_get(node, "args"),
                           args2(yr(1, "k", yv_long(K_tnone)),
                                 store_elem_type(pat, pesz)));
     st = emit_insn(st, F_MOV_I_R, pesz, R_RAX, 64, 0, 0, 0, 0);
     st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
     st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_arr_push"))), 0, 0, 0, 0, 0, 0);
-    long nbytes = yv_len(yr_get(node, "args")) * 8 + 8;
+    ylong nbytes = yv_len(yr_get(node, "args")) * 8 + 8;
     return emit_insn(st, F_ADD_I_R, nbytes, R_RSP, 64, 0, 0, 0, 0);
 }
 
@@ -10970,7 +10971,7 @@ Yv *gen_push(Yv *st, Yv *node) {
  * bulk. */
 Yv *gen_push_all(Yv *st, Yv *node) {
     Yv *pargs = yr_get(node, "args");
-    long pesz = arr_elem_bytes(infer(st, ya_get(pargs, 0)));
+    ylong pesz = arr_elem_bytes(infer(st, ya_get(pargs, 0)));
     st = gen_push_args_as(st, yr_get(node, "args"), yav(0));
     st = emit_insn(st, F_MOV_I_R, pesz, R_RAX, 64, 0, 0, 0, 0);
     st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
@@ -10984,7 +10985,7 @@ Yv *gen_push_all(Yv *st, Yv *node) {
 Yv *gen_opt_val(Yv *st, Yv *node) {
     Yv *args = yr_get(node, "args");
     Yv *at = infer(st, ya_get(args, 0));
-    long ak = yv_l(yr_get(at, "k"));
+    ylong ak = yv_l(yr_get(at, "k"));
     if (ak == K_topt || ak == K_tvoid) {
         return gen(st, ya_get(args, 0));
     } else {
@@ -11048,14 +11049,14 @@ Yv *gen_trim(Yv *st, Yv *node) {
 Yv *gen_prepend(Yv *st, Yv *node) {
     Yv *pargs = yr_get(node, "args");
     Yv *pat = infer(st, ya_get(pargs, 0));
-    long pesz = arr_elem_bytes(pat);
+    ylong pesz = arr_elem_bytes(pat);
     st = gen_push_args_as(st, yr_get(node, "args"),
                           args2(yr(1, "k", yv_long(K_tnone)),
                                 store_elem_type(pat, pesz)));
     st = emit_insn(st, F_MOV_I_R, pesz, R_RAX, 64, 0, 0, 0, 0);
     st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
     st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_arr_prepend"))), 0, 0, 0, 0, 0, 0);
-    long nbytes = yv_len(yr_get(node, "args")) * 8 + 8;
+    ylong nbytes = yv_len(yr_get(node, "args")) * 8 + 8;
     return emit_insn(st, F_ADD_I_R, nbytes, R_RSP, 64, 0, 0, 0, 0);
 }
 
@@ -11193,15 +11194,15 @@ Yv *gen_fmt(Yv *st, Yv *node) {
     } else {
         Yv *t = infer(st, a0);
         Yv *f = fmt_spec(spec);
-        long kind = fmt_kind(t);
-        long ty = yv_l(yr_get(f, "ty"));
+        ylong kind = fmt_kind(t);
+        ylong ty = yv_l(yr_get(f, "ty"));
         if (ty == 0) {
             if (kind == 1) { ty = 100; ; }
             else if (kind == 2) { ty = 102; ; }
             else { ty = 115; ; }
             ;
         }
-        long code = fmt_code(f, kind, ty);
+        ylong code = fmt_code(f, kind, ty);
         if (ty == 115) {
             st = gen_tostring(st, ts);
             st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
@@ -11233,7 +11234,7 @@ Yv *gen_fmt(Yv *st, Yv *node) {
                 st = emit_insn(st, F_MOVQ_R_R, R_XMM0, 128, R_RAX, 64, 0, 0, 0);
                 ;
             }
-            long prec = yv_l(yr_get(f, "prec"));
+            ylong prec = yv_l(yr_get(f, "prec"));
             if (prec < 0) { prec = 6; ; }
             st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
             st = fmt_push(st, code);
@@ -11251,9 +11252,9 @@ Yv *gen_fmt(Yv *st, Yv *node) {
  * grouping 0, 1 (`,`) or 2 (`_`). A `0` is fill 0 unless a fill is given
  * and, for a number, alignment `=` unless one is; numbers go right,
  * everything else left. */
-long fmt_code(Yv *f, long kind, long ty) {
-    long fill = yv_l(yr_get(f, "fill"));
-    long align = yv_l(yr_get(f, "align"));
+ylong fmt_code(Yv *f, ylong kind, ylong ty) {
+    ylong fill = yv_l(yr_get(f, "fill"));
+    ylong align = yv_l(yr_get(f, "align"));
     if (yv_b(yr_get(f, "zero")) && fill == 0) { fill = 48; ; }
     if (yv_b(yr_get(f, "zero")) && align == 0 && kind != 0) {
         align = 61;
@@ -11264,13 +11265,13 @@ long fmt_code(Yv *f, long kind, long ty) {
         if (kind != 0) { align = 62; ; } else { align = 60; ; }
         ;
     }
-    long sg = 0;
-    long sign = yv_l(yr_get(f, "sign"));
+    ylong sg = 0;
+    ylong sign = yv_l(yr_get(f, "sign"));
     if (sign == 43) { sg = 1; ; }
     else if (sign == 32) { sg = 2; ; }
 
     if (yv_b(yr_get(f, "alt"))) { sg = sg + 4; ; }
-    long grp = yv_l(yr_get(f, "grp"));
+    ylong grp = yv_l(yr_get(f, "grp"));
     if (grp == 44) { sg = sg + 8; ; }
     else if (grp == 95) { sg = sg + 16; ; }
 
@@ -11278,7 +11279,7 @@ long fmt_code(Yv *f, long kind, long ty) {
 }
 
 /* Push the number v (an argument of a helper call). */
-Yv *fmt_push(Yv *st, long v) {
+Yv *fmt_push(Yv *st, ylong v) {
     st = emit_insn(st, F_MOV_I_R, v, R_RAX, 64, 0, 0, 0, 0);
     return emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
 }
@@ -11329,10 +11330,10 @@ Yv *gen_join(Yv *st, Yv *node) {
 }
 
 /* Slots: [src][dst][i]. Builds dst = [tostr(src[0]), ...] then joins it. */
-Yv *gen_join_conv(Yv *st, Yv *node, Yv *tostr_fn, long esz) {
-    long soff = (yv_l(yr_get(st, "slots")) + yv_l(yr_get(st, "temp")) + 1) * -8;
-    long doff = (yv_l(yr_get(st, "slots")) + yv_l(yr_get(st, "temp")) + 2) * -8;
-    long ioff = (yv_l(yr_get(st, "slots")) + yv_l(yr_get(st, "temp")) + 3) * -8;
+Yv *gen_join_conv(Yv *st, Yv *node, Yv *tostr_fn, ylong esz) {
+    ylong soff = (yv_l(yr_get(st, "slots")) + yv_l(yr_get(st, "temp")) + 1) * -8;
+    ylong doff = (yv_l(yr_get(st, "slots")) + yv_l(yr_get(st, "temp")) + 2) * -8;
+    ylong ioff = (yv_l(yr_get(st, "slots")) + yv_l(yr_get(st, "temp")) + 3) * -8;
     st = st_temp(st, yv_l(yr_get(st, "temp")) + 3);
     Yv *jargs = yr_get(node, "args");
     st = gen(st, ya_get(jargs, 0));
@@ -11592,7 +11593,7 @@ Yv *gen_argv(Yv *st, Yv *node) {
 
 Yv *gen_store(Yv *st, Yv *node) {
     Yv *spt = infer(st, yr_get(node, "p"));
-    long sw = ptr_width(spt);
+    ylong sw = ptr_width(spt);
     Yv *sto = yr(1, "k", yv_long(K_tnone));
     if (sw == 8 && yv_l(yr_get(spt, "k")) == K_tptr) {
         sto = yr_get(spt, "to");
@@ -11613,21 +11614,21 @@ Yv *gen_store(Yv *st, Yv *node) {
  * Frame: locals at rbp-8, rbp-16, ...; params at rbp+16, rbp+24, ....
  * Every emitted function gets: prologue, body, end_label, epilogue. */
 
-Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
+Yv *emit_one_fn(Yv *st, Yv *label, ylong fuid, Yv *func, int is_main,
                 int want_argv, Yv *captypes, Yv *selfname) {
     /* fresh per-function state; uid/rodata/fns flow through and back.
      * Bodies see every hoisted function and global through st.fns
      * (env_find), like the checker's fresh_func_scope. */
     /* frame_max is this function's: emit_one_fn nests (a hoisted def, a
      * closure literal), so the caller's mark is put back on the way out. */
-    long prev_max = frame_max;
+    ylong prev_max = frame_max;
     frame_max = 0;
     /* No loop encloses this body: any loop the closure was made inside is in
      * the CALLER's function, and a jump out of one into another is what the
      * checker's function-boundary rule refuses. Clearing here makes the emitter
      * right on its own terms rather than relying on that check in another file. */
-    long prev_brk = brk_label;
-    long prev_cont = cont_label;
+    ylong prev_brk = brk_label;
+    ylong prev_cont = cont_label;
     brk_label = -1;
     cont_label = -1;
     Yv *f = yr(15, "ir", yav(0), "txt", yav(0), "rodata", yr_get(st, "rodata"), "uid",
@@ -11644,7 +11645,7 @@ Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
                    yr(3, "k", yv_long(K_tfunc), "args", yr_get(func, "ptypes"),
                        "ret", fn_ret(func)));
     Yv *bnames = box_names(func);
-    long bi = 0;
+    ylong bi = 0;
     while (bi < yv_len(bnames)) {
         Yv *bnm = ya_get(bnames, bi);
         f = env_define(f, ys(""), ys("boxmark"), 0, yv_long(-1), bnm,
@@ -11653,7 +11654,7 @@ Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
     }
     /* The names this body appends to (see own_wanted), the same way. */
     Yv *anames = app_names(yr_get(func, "body"), 0, bnames);
-    long ai = 0;
+    ylong ai = 0;
     while (ai < yv_len(anames)) {
         Yv *anm = ya_get(anames, ai);
         f = env_define(f, ys(""), ys("appmark"), 0, yv_long(-1), anm,
@@ -11672,8 +11673,8 @@ Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
      * at rbp+16 and param k lives at rbp+16+8*(n-1-k) (arity-dependent). */
     Yv *params = yr_get(func, "params");
     Yv *ptypes = yr_get(func, "ptypes");
-    long nargs = yv_len(params);
-    long i = 0;
+    ylong nargs = yv_len(params);
+    ylong i = 0;
     while (i < nargs) {
         f = env_define(f, ya_get(params, i), ys("param"),
                        16 + (nargs - 1 - i) * 8, yv_long(-1), ys(""),
@@ -11690,8 +11691,8 @@ Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
         ;
     } else {
         Yv *mycaps = fn_captures(func, yr_get(yr_get(st, "fns"), "ix"), selfname);
-        long cloff = 16 + nargs * 8;
-        long c = 0;
+        ylong cloff = 16 + nargs * 8;
+        ylong c = 0;
         while (c < yv_len(mycaps)) {
             Yv *cn = ya_get(mycaps, c);
             /* Capture types come from the creation site (the enclosing env
@@ -11715,14 +11716,14 @@ Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
         f = box_bound(f, selfname);
         ;
     }
-    long pbi = 0;
+    ylong pbi = 0;
     while (pbi < nargs) {
         Yv *pbn = ya_get(params, pbi);
         f = box_bound(f, pbn);
         pbi = pbi + 1;
     }
     /* An appended-to str parameter moves into an own pair (bind_own). */
-    long opi = 0;
+    ylong opi = 0;
     while (opi < nargs) {
         Yv *opn = ya_get(params, opi);
         Yv *opt = ya_get(ptypes, opi);
@@ -11735,9 +11736,9 @@ Yv *emit_one_fn(Yv *st, Yv *label, long fuid, Yv *func, int is_main,
         opi = opi + 1;
     }
     f = gen_tail(f, yr_get(func, "body"));
-    long peak = yv_l(yr_get(f, "slots")) + yv_l(yr_get(f, "temp"));
+    ylong peak = yv_l(yr_get(f, "slots")) + yv_l(yr_get(f, "temp"));
     if (peak > frame_max) { frame_max = peak; }
-    long frame = arch_frame(frame_max);
+    ylong frame = arch_frame(frame_max);
     frame_max = prev_max;
     brk_label = prev_brk;
     cont_label = prev_cont;
@@ -11838,8 +11839,8 @@ Yv *infer_fn_ret(Yv *st, Yv *func) {
                yr_get(st, "blabels"));
     Yv *params = yr_get(func, "params");
     Yv *ptypes = yr_get(func, "ptypes");
-    long n = yv_len(params);
-    long i = 0;
+    ylong n = yv_len(params);
+    ylong i = 0;
     while (i < n) {
         f = env_define(f, ya_get(params, i), ys("param"),
                        16 + (n - 1 - i) * 8, yv_long(-1), ys(""),
@@ -11889,12 +11890,12 @@ Yv *find_dup(Yv *stmts, Yv *origin) {
     Yv *fids = yav(0);
     Yv *lines = yav(0);
     Yv *cols = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(stmts)) {
         Yv *s = ya_get(stmts, i);
         Yv *nm = top_name_in(s, origin);
         if (yv_len(nm) > 0) {
-            long ln = yv_l(yr_get(s, "line"));
+            ylong ln = yv_l(yr_get(s, "line"));
             names = ya_push(names, nm);
             fids = ya_push(fids, yv_long(origin_file(origin, ln)));
             lines = ya_push(lines, yv_long(ln));
@@ -11917,11 +11918,11 @@ Yv *find_dup(Yv *stmts, Yv *origin) {
     Yv *ppos = yav(0);
     Yv *pnext = yav(0);
     Yv *errs = yav(0);
-    long j = 0;
+    ylong j = 0;
     while (j < yv_len(names)) {
         Yv *nj = ya_get(names, j);
-        long fj = yv_l(ya_get(fids, j));
-        long slot = -1;
+        ylong fj = yv_l(ya_get(fids, j));
+        ylong slot = -1;
         Yv *g = labmap_get(ix, nj);
         if (yv_l(yr_get(g, "sec")) >= 0) { slot = yv_l(yr_get(g, "sec")); }
         if (slot < 0) {
@@ -11930,8 +11931,8 @@ Yv *find_dup(Yv *stmts, Yv *origin) {
             ix = yr_get(labmap_put(ix, nj, slot, 0), "map");
             ;
         }
-        long other = -1;
-        long q = yv_l(ya_get(top, slot));
+        ylong other = -1;
+        ylong q = yv_l(ya_get(top, slot));
         while (q >= 0 && other < 0) {
             if (yv_l(ya_get(pfile, q)) != fj) {
                 other = yv_l(ya_get(ppos, q));
@@ -11965,8 +11966,8 @@ Yv *top_name_in(Yv *s, Yv *origin) {
     if (yv_len(nm) == 0 || ys_starts_with(nm, ys("y_"))) {
         return nm;
     } else {
-        long ln = yv_l(yr_get(s, "line"));
-        long fid = origin_file(origin, ln);
+        ylong ln = yv_l(yr_get(s, "line"));
+        ylong fid = origin_file(origin, ln);
         Yv *om = yr_get(origin, "mods");
         if (fid < yv_len(om) && !ys_eq_lit(ya_get(om, fid), "")) {
             return ys_cat(ys_cat(ya_get(om, fid), ys(".")), nm);
@@ -12009,7 +12010,7 @@ Yv *top_def_name_go(Yv *s) {
  * bindings are defs, not variables). */
 Yv *global_decls(Yv *stmts) {
     Yv *out = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(stmts)) {
         Yv *s = ya_get(stmts, i);
         if (yv_l(yr_get(s, "k")) == K_decl) {
@@ -12037,7 +12038,7 @@ Yv *decl_name(Yv *d) {
  * hoisted defs and the globals before it (what main sees when it runs
  * the declaration). Labels count from the unit's `gbase` (compile_unit),
  * so two units' globals never share one. */
-Yv *global_entries(Yv *st, Yv *gdecls, long gbase) {
+Yv *global_entries(Yv *st, Yv *gdecls, ylong gbase) {
     Yv *f = yr(15, "ir", yav(0), "txt", yav(0), "rodata", yr_get(st, "rodata"), "uid",
                yr_get(st, "uid"), "fuid", yv_long(0), "loc", yv_long(1),
                "env", yav(0), "slots", yv_long(0), "temp", yv_long(0), "self_label",
@@ -12045,7 +12046,7 @@ Yv *global_entries(Yv *st, Yv *gdecls, long gbase) {
                "bodies", yr_get(st, "bodies"), "btext", yr_get(st, "btext"), "blabels",
                yr_get(st, "blabels"));
     Yv *out = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(gdecls)) {
         Yv *d = ya_get(gdecls, i);
         Yv *gn = decl_name(d);
@@ -12077,7 +12078,7 @@ Yv *decl_value(Yv *d) {
  * reaches itself through its own record, see emit_one_fn). */
 Yv *capturing_defs(Yv *defs, Yv *gnames) {
     Yv *fnames = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(defs)) {
         Yv *d = ya_get(defs, i);
         fnames = ya_push(fnames, yr_get(d, "name"));
@@ -12092,7 +12093,7 @@ Yv *capturing_defs(Yv *defs, Yv *gnames) {
         Yv *d = ya_get(defs, i);
         Yv *cs = fn_captures(yr_get(d, "func"), exm, yr_get(d, "name"));
         caps = ya_push(caps, cs);
-        long j = 0;
+        ylong j = 0;
         int reads_var = 0;
         while (j < yv_len(cs)) {
             Yv *cn = ya_get(cs, j);
@@ -12120,7 +12121,7 @@ Yv *capturing_defs(Yv *defs, Yv *gnames) {
                 ;
             } else {
                 Yv *cs = ya_get(caps, i);
-                long j = 0;
+                ylong j = 0;
                 int hit = 0;
                 while (j < yv_len(cs)) {
                     Yv *cn = ya_get(cs, j);
@@ -12150,7 +12151,7 @@ Yv *capturing_defs(Yv *defs, Yv *gnames) {
 Yv *fix_fn_types(Yv *st, Yv *hdefs, Yv *only) {
     Yv *out = yav(0);
     Yv *ftab = yr_get(yr_get(st, "fns"), "syms");
-    long fx = 0;
+    ylong fx = 0;
     while (fx < yv_len(hdefs)) {
         Yv *d = ya_get(hdefs, fx);
         Yv *fe0 = ya_get(ftab, fx);
@@ -12187,7 +12188,7 @@ Yv *fn_ptypes(Yv *func) {
 
 int reads_any(Yv *func, Yv *names) {
     Yv *reads = fv_ids(yr_get(func, "body"), yav(0));
-    long i = 0;
+    ylong i = 0;
     int found = 0;
     while (i < yv_len(reads)) {
         Yv *n = ya_get(reads, i);
@@ -12205,9 +12206,9 @@ int reads_any(Yv *func, Yv *names) {
  * `ycc --time` can show where wall time AND memory go (the arena never
  * frees, so allocation volume is as interesting as elapsed time). */
 
-Yv *phase_end(Yv *times, Yv *name, long t0, long h0) {
-    long t1 = clock_us();
-    long h1 = heap_used();
+Yv *phase_end(Yv *times, Yv *name, ylong t0, ylong h0) {
+    ylong t1 = clock_us();
+    ylong h1 = heap_used();
     return yr(3, "times",
               ya_push(times, yr(3, "name", name, "us", yv_long(t1 - t0),
                                 "heap", yv_long(h1 - h0))),
@@ -12265,7 +12266,7 @@ Yv *std_unit_src(Yv *name) {
     }
 }
 
-long std_unit_base(Yv *name) {
+ylong std_unit_base(Yv *name) {
     if (ys_eq_lit(name, "prelude")) {
         return 1000000000L;
     } else if (ys_eq_lit(name, "exec")) {
@@ -12292,17 +12293,17 @@ Yv *std_units(Yv *names, Yv *pack) {
         ;
     }
     if (yv_len(out) == 0) {
-        long i = 0;
+        ylong i = 0;
         while (i < yv_len(names)) {
             Yv *nm = ya_get(names, i);
             Yv *ext = yav(0);
             if (ys_eq_lit(nm, "exec")) {
-                long j = 0;
+                ylong j = 0;
                 while (j < yv_len(out)) {
                     Yv *u = ya_get(out, j);
                     if (ys_eq_lit(yr_get(u, "name"), "prelude")) {
                         Yv *exports = yr_get(u, "exports");
-                        long k = 0;
+                        ylong k = 0;
                         while (k < yv_len(exports)) {
                             ext = ya_push(ext, ya_get(exports, k));
                             k = k + 1;
@@ -12350,7 +12351,7 @@ Yv *std_compile(Yv *name, Yv *ext) {
                          std_unit_base(name), xt, yav(0));
     if (!yv_b(yr_get(r, "ok"))) {
         Yv *errs = yr_get(r, "errors");
-        long k = 0;
+        ylong k = 0;
         while (k < yv_len(errs)) {
             Yv *e = ya_get(errs, k);
             Yv *msg = ys_cat(ys_cat(ys("ycc: internal error: "), path),
@@ -12372,7 +12373,7 @@ Yv *std_compile(Yv *name, Yv *ext) {
 /* The name a renamed top-level def was written with, or "" for one a
  * later def of the same name replaced (rename.y's `name$shadowK`). */
 Yv *export_name(Yv *name) {
-    long d = ys_index_of(name, ys("$"));
+    ylong d = ys_index_of(name, ys("$"));
     if (ys_index_of(name, ys(".")) >= 0) {
         /* a module's (`fs.exists`): the unit's own import, not its export */
         return ys("");
@@ -12391,12 +12392,12 @@ Yv *export_name(Yv *name) {
  * hdefs' entries. */
 Yv *unit_exports(Yv *stmts, Yv *hdefs, Yv *fns) {
     Yv *out = yav(0);
-    long h = 0;
-    long i = 0;
+    ylong h = 0;
+    ylong i = 0;
     while (i < yv_len(stmts)) {
         Yv *nm = top_def_name(ya_get(stmts, i));
         if (yv_len(nm) > 0) {
-            long h0 = h;
+            ylong h0 = h;
             int found = 0;
             while (!found && h < yv_len(hdefs)) {
                 Yv *hd = ya_get(hdefs, h);
@@ -12435,8 +12436,8 @@ Yv *unit_exports(Yv *stmts, Yv *hdefs, Yv *fns) {
  * other units have an init function. `xt` holds externs, defaults,
  * imported package namespaces, init labels and the argv-use flag. */
 
-Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, long wlevel,
-                 Yv *name, long base, Yv *xt, Yv *ogen) {
+Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, ylong wlevel,
+                 Yv *name, ylong base, Yv *xt, Yv *ogen) {
     tyset_reset();
     dbg_lines = debug;
     dbg_file = yr_get(origin, "file");
@@ -12445,8 +12446,8 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, long wlevel,
     Yv *inits = yr_get(xt, "inits");
     pkg_ns = yr_get(xt, "pkgs");
     Yv *times = yav(0);
-    long pt = clock_us();
-    long ph = heap_used();
+    ylong pt = clock_us();
+    ylong ph = heap_used();
     Yv *ast2 = strip_ns(ast, imports);
     Yv *pr = phase_end(times, ys("strip_ns"), pt, ph);
     times = yr_get(pr, "times");
@@ -12471,7 +12472,7 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, long wlevel,
      * may be only its consequences. */
     Yv *dups = find_dup(yr_get(ast, "stmts"), origin);
     if (yv_len(dups) > 0) {
-        long di = 0;
+        ylong di = 0;
         while (di < yv_len(errors)) {
             dups = ya_push(dups, ya_get(errors, di));
             di = di + 1;
@@ -12496,7 +12497,7 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, long wlevel,
         }
         Yv *gdecls = global_decls(yr_get(ast3, "stmts"));
         Yv *gnames = yav(0);
-        long gi = 0;
+        ylong gi = 0;
         while (gi < yv_len(gdecls)) {
             gnames = ya_push(gnames, decl_name(ya_get(gdecls, gi)));
             gi = gi + 1;
@@ -12504,12 +12505,12 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, long wlevel,
         /* The externs, and the init functions `_start` calls by label. */
         Yv *xfns = yav(0);
         Yv *xids = fntab_ids(ext);
-        long xi = 0;
+        ylong xi = 0;
         while (xi < yv_len(ext)) {
             xfns = ya_push(xfns, ya_get(ext, xi));
             xi = xi + 1;
         }
-        long ii = 0;
+        ylong ii = 0;
         while (ii < yv_len(inits)) {
             Yv *il = ya_get(inits, ii);
             Yv *ityp = yr(3, "k", yv_long(K_tfunc), "args", yav(0),
@@ -12522,7 +12523,7 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, long wlevel,
          * (gen_decl); every other one is hoisted: a label in st.fns. A
          * call to an extern is no capture either. */
         Yv *cexcl = yav(0);
-        long ei = 0;
+        ylong ei = 0;
         while (ei < yv_len(gnames)) {
             cexcl = ya_push(cexcl, ya_get(gnames, ei));
             ei = ei + 1;
@@ -12548,7 +12549,7 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, long wlevel,
         st = yr_get(r, "st");
         Yv *hsyms = yav(0);
         Yv *hids = yav(0);
-        long i = 0;
+        ylong i = 0;
         while (i < yv_len(defs)) {
             Yv *d = ya_get(defs, i);
             if (name_in(capdefs, yr_get(d, "name"))) {
@@ -12582,7 +12583,7 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, long wlevel,
          * emission loop read those by position), the globals after both
          * (see fns_kind). */
         Yv *ids0 = yav(0);
-        long id0i = 0;
+        ylong id0i = 0;
         while (id0i < yv_len(hids)) {
             ids0 = ya_push(ids0, ya_get(hids, id0i));
             id0i = id0i + 1;
@@ -12593,7 +12594,7 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, long wlevel,
             id0i = id0i + 1;
         }
         Yv *fns0 = yav(0);
-        long f0i = 0;
+        ylong f0i = 0;
         while (f0i < yv_len(hsyms)) {
             fns0 = ya_push(fns0, ya_get(hsyms, f0i));
             f0i = f0i + 1;
@@ -12612,7 +12613,7 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, long wlevel,
                 "btext", yr_get(st, "btext"), "blabels", yr_get(st, "blabels"));
         Yv *fixed1 = fix_fn_types(st, hdefs, yav(0));
         Yv *fns1 = yav(0);
-        long f1i = 0;
+        ylong f1i = 0;
         while (f1i < yv_len(fixed1)) {
             fns1 = ya_push(fns1, ya_get(fixed1, f1i));
             f1i = f1i + 1;
@@ -12632,7 +12633,7 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, long wlevel,
         Yv *gl = app_cells(global_entries(st, gdecls, base),
                            yr_get(ast3, "stmts"));
         Yv *fixedfns = yav(0);
-        long fi = 0;
+        ylong fi = 0;
         while (fi < yv_len(fixed1)) {
             fixedfns = ya_push(fixedfns, ya_get(fixed1, fi));
             fi = fi + 1;
@@ -12649,7 +12650,7 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, long wlevel,
         }
         Yv *gids = fntab_ids(gl);
         Yv *idsA = ya_slice(ids0, 0, yv_len(ids0));
-        long idai = 0;
+        ylong idai = 0;
         while (idai < yv_len(gids)) {
             idsA = ya_push(idsA, ya_get(gids, idai));
             idai = idai + 1;
@@ -12723,7 +12724,7 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, long wlevel,
          * read globals and functions, so none does. */
         Yv *main_stmts = yav(0);
         Yv *noargs = yav(0);
-        long ci = 0;
+        ylong ci = 0;
         while (ci < yv_len(inits)) {
             Yv *cl = ya_get(inits, ci);
             Yv *callee = yr(4, "k", yv_long(K_id), "v", cl, "line", yv_long(0),
@@ -12796,7 +12797,7 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, long wlevel,
         pt = yv_l(yr_get(pr, "t"));
         ph = yv_l(yr_get(pr, "h"));
         Yv *glabels = yav(0);
-        long gk = 0;
+        ylong gk = 0;
         while (gk < yv_len(gl)) {
             Yv *ge = ya_get(gl, gk);
             glabels = ya_push(glabels, yr_get(ge, "label"));
@@ -12811,7 +12812,7 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, long wlevel,
         Yv *ubtext = yr_get(st, "btext");
         Yv *blabels = yr_get(st, "blabels");
         Yv *brefs = yav(0);
-        long bk = 0;
+        ylong bk = 0;
         while (bk < yv_len(ubodies)) {
             brefs = ya_push(brefs, ir_refs(ya_get(ubodies, bk)));
             bk = bk + 1;
@@ -12827,7 +12828,7 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, long wlevel,
     }
 }
 
-int pkg_base(long base) {
+int pkg_base(ylong base) {
     return base >= 5000000000L;
 }
 
@@ -12836,7 +12837,7 @@ int pkg_base(long base) {
  * the same source name replace earlier exports. */
 Yv *pkg_exports(Yv *xs, Yv *gl) {
     Yv *all = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(xs)) {
         all = ya_push(all, ya_get(xs, i));
         i = i + 1;
@@ -12846,7 +12847,7 @@ Yv *pkg_exports(Yv *xs, Yv *gl) {
         Yv *ge = ya_get(gl, i);
         Yv *gn = yr_get(ge, "name");
         Yv *xn = ys("");
-        long n = yv_len(gn);
+        ylong n = yv_len(gn);
         if (n >= 2 && ys_eq_lit(ys_slice(gn, n - 2, n), "#o")) {
             Yv *bn = export_name(ys_slice(gn, 0, n - 2));
             if (yv_len(bn) > 0) {
@@ -12867,11 +12868,11 @@ Yv *pkg_exports(Yv *xs, Yv *gl) {
         i = i + 1;
     }
     Yv *out = yav(0);
-    long j = 0;
+    ylong j = 0;
     while (j < yv_len(all)) {
         Yv *e = ya_get(all, j);
         int later = 0;
-        long m = j + 1;
+        ylong m = j + 1;
         while (!later && m < yv_len(all)) {
             Yv *e2 = ya_get(all, m);
             if (ys_eq(yr_get(e2, "name"), yr_get(e, "name"))) {
@@ -12893,14 +12894,14 @@ Yv *pkg_exports(Yv *xs, Yv *gl) {
  * replaces the earlier entry. */
 Yv *unit_dfl(Yv *stmts, Yv *origin) {
     Yv *out = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(stmts)) {
         Yv *s = ya_get(stmts, i);
         Yv *nm = top_name_in(s, origin);
         /* (not an imported module's: see export_name) */
         if (yv_len(nm) > 0 && ys_index_of(nm, ys(".")) < 0) {
             Yv *keep = yav(0);
-            long j = 0;
+            ylong j = 0;
             while (j < yv_len(out)) {
                 Yv *d = ya_get(out, j);
                 if (!ys_eq(yr_get(d, "name"), nm)) {
@@ -12926,7 +12927,7 @@ Yv *dfl_codes(Yv *func) {
     Yv *dv = yr_get(func, "defs");
     Yv *out = yav(0);
     int any = 0;
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(dv)) {
         Yv *d = ya_get(dv, i);
         if (yv_l(yr_get(d, "k")) != K_void) {
@@ -13001,18 +13002,18 @@ Yv *lit_decode(Yv *c) {
 
 /* A linked unit's `.loc` markers are moved by its file-table offset
  * under -g, and dropped otherwise. */
-Yv *link_locs(Yv *body, long off) {
+Yv *link_locs(Yv *body, ylong off) {
     Yv *parts = ys_split(body, ys("\n.loc "));
     if (yv_len(parts) == 1) {
         return body;
     } else {
         Yv *out = yav(0);
         out = ya_push(out, ya_get(parts, 0));
-        long i = 1;
+        ylong i = 1;
         while (i < yv_len(parts)) {
             Yv *p = ya_get(parts, i);
             if (dbg_lines) {
-                long sp = ys_index_of(p, ys(" "));
+                ylong sp = ys_index_of(p, ys(" "));
                 Yv *n = ys_slice(p, 0, sp);
                 Yv *tail = ys_slice_from(p, sp);
                 Yv *loc = ys_cat(ys_cat(ys("\n.loc "),
@@ -13021,7 +13022,7 @@ Yv *link_locs(Yv *body, long off) {
                 out = ya_push(out, loc);
                 ;
             } else {
-                long nl = ys_index_of(p, ys("\n"));
+                ylong nl = ys_index_of(p, ys("\n"));
                 if (nl >= 0) {
                     out = ya_push(out, ys_slice_from(p, nl));
                     ;
@@ -13068,18 +13069,18 @@ Yv *link_locs(Yv *body, long off) {
    builds of a 40,000-entry set at load factor 1 cost 4% of a self-compile. */
 Yv *rodata_intern(Yv *pieces, Yv *allrod, Yv *refs) {
     Yv *m = labmap_new(yv_len(refs) * 2 + 64);
-    long ri = 0;
+    ylong ri = 0;
     while (ri < yv_len(refs)) {
         m = yr_get(labmap_put(m, ya_get(refs, ri), 1, 0), "map");
         ri = ri + 1;
     }
-    long nall = yv_len(allrod);
+    ylong nall = yv_len(allrod);
     /* text -> the index of the winner in `win`, plus loser pairs */
     Yv *texts = labmap_new(nall * 2 + 64);
     Yv *win = yav(0);
     Yv *dup_old = yav(0);
     Yv *dup_new = yav(0);
-    long s2 = 0;
+    ylong s2 = 0;
     while (s2 < nall) {
         Yv *pair = ya_get(allrod, s2);
         Yv *lbl = ya_get(pair, 0);
@@ -13108,7 +13109,7 @@ Yv *rodata_intern(Yv *pieces, Yv *allrod, Yv *refs) {
             }
         } else {
             Yv *form = ya_get(pair, 1);
-            long added = tyset_add(lbl, form);
+            ylong added = tyset_add(lbl, form);
             if (added < 0) {
                 ty_collision(lbl, form);
             }
@@ -13137,13 +13138,13 @@ Yv *rodata_intern(Yv *pieces, Yv *allrod, Yv *refs) {
    remainder of the body each time allocated 600 MB for the same work. */
 Yv *relabel_dups(Yv *body, Yv *m, Yv *dup_new) {
     Yv *lines = ys_split(body, ys("\n"));
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(lines)) {
         Yv *ln = ya_get(lines, i);
-        long at = ys_index_of(ln, ys("lea "));
+        ylong at = ys_index_of(ln, ys("lea "));
         if (at >= 0) {
             Yv *rest = ys_slice(ln, at + 4, yv_len(ln));
-            long e = ys_index_of(rest, ys("(%rip)"));
+            ylong e = ys_index_of(rest, ys("(%rip)"));
             if (e >= 0) {
                 Yv *lbl = ys_slice(rest, 0, e);
                 Yv *g = labmap_get(m, lbl);
@@ -13181,21 +13182,21 @@ Yv *relabel_dups(Yv *body, Yv *m, Yv *dup_new) {
  * program's (or a package's) replaces std's, and link_units drops std's. So
  * only the packages and the program are compared here, and a bin with no
  * package pays nothing for the check. */
-static long dup_y_label(Yv *deps, Yv *prog) {
-    long nu = yv_len(deps);
+static ylong dup_y_label(Yv *deps, Yv *prog) {
+    ylong nu = yv_len(deps);
     if (nu > 0) {
         Yv *m = labmap_new((nu + 1) * 2 + 16);
-        long i = 0;
+        ylong i = 0;
         while (i <= nu) {
             Yv *u = i < nu ? ya_get(deps, i) : prog;
             Yv *labs = yr_get(u, "labels");
-            long k = 0;
+            ylong k = 0;
             while (k < yv_len(labs)) {
                 Yv *lb = ya_get(labs, k);
                 if (ys_eq_lit(ys_slice(lb, 0, 2), "y_")) {
                     Yv *g = labmap_get(m, lb);
                     if (yv_l(yr_get(g, "sec")) > 0) {
-                        long f = yv_l(yr_get(g, "sec")) - 1;
+                        ylong f = yv_l(yr_get(g, "sec")) - 1;
                         Yv *first = f < nu ? yr_get(ya_get(deps, f), "name")
                                            : yr_get(prog, "name");
                         Yv *msg = ys("error: duplicate y_ name '");
@@ -13232,7 +13233,7 @@ static long dup_y_label(Yv *deps, Yv *prog) {
 
 Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
     Yv *units = yav(0);
-    long j = 0;
+    ylong j = 0;
     while (j < yv_len(std)) {
         units = ya_push(units, ya_get(std, j));
         j = j + 1;
@@ -13242,11 +13243,11 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
         units = ya_push(units, ya_get(deps, j));
         j = j + 1;
     }
-    long nstd = yv_len(std);
-    long nu = yv_len(units);
+    ylong nstd = yv_len(std);
+    ylong nu = yv_len(units);
     Yv *files = yav(0);
     Yv *progfiles = yr_get(prog, "files");
-    long k = 0;
+    ylong k = 0;
     while (k < yv_len(progfiles)) {
         files = ya_push(files, ya_get(progfiles, k));
         k = k + 1;
@@ -13262,7 +13263,7 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
         Yv *uk = ya_get(units, k);
         ya_set(offs, k, yv_long(yv_len(files)));
         Yv *ufiles = yr_get(uk, "files");
-        long f = 0;
+        ylong f = 0;
         while (f < yv_len(ufiles)) {
             files = ya_push(files, ya_get(ufiles, f));
             f = f + 1;
@@ -13271,7 +13272,7 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
     }
     /* Package and program runtime labels replace std bodies. */
     Yv *plabels = yav(0);
-    long ou = nstd;
+    ylong ou = nstd;
     while (ou <= nu) {
         Yv *olab;
         if (ou < nu) {
@@ -13281,7 +13282,7 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
             olab = yr_get(prog, "labels");
             ;
         }
-        long pi = 0;
+        ylong pi = 0;
         while (pi < yv_len(olab)) {
             Yv *pl = ya_get(olab, pi);
             if (ys_eq_lit(ys_slice(pl, 0, 2), "y_")) {
@@ -13303,12 +13304,12 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
     j = 0;
     while (j < nu) {
         Yv *u = ya_get(units, j);
-        long f = yv_l(ya_get(offs, j));
+        ylong f = yv_l(ya_get(offs, j));
         Yv *ub = yr_get(u, "bodies");
         Yv *ubl = yr_get(u, "blob");
         Yv *ul = yr_get(u, "labels");
         Yv *ur = yr_get(u, "refs");
-        long b = 0;
+        ylong b = 0;
         while (b < yv_len(ul)) {
             Yv *lb = ya_get(ul, b);
             int drop = 0;
@@ -13340,7 +13341,7 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
     Yv *plab = yr_get(prog, "labels");
     Yv *pbodies = yr_get(prog, "bodies");
     Yv *prefs = yr_get(prog, "refs");
-    long pb2 = 0;
+    ylong pb2 = 0;
     while (pb2 < yv_len(pbodies)) {
         all = ya_push(all, ya_get(pbodies, pb2));
         allblob = ya_push(allblob, ys(""));
@@ -13367,7 +13368,7 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
     Yv *bmap = namemap_build(labels);
     Yv *more = unkept_refs(yr_get(ps, "refs"), bmap, keep);
     while (yv_len(more) > 0) {
-        long mi = 0;
+        ylong mi = 0;
         while (mi < yv_len(more)) {
             extra = ya_push(extra, ya_get(more, mi));
             mi = mi + 1;
@@ -13387,12 +13388,12 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
        the kept prelude's. Computed before the rodata, which uses it as its
        reachability set. */
     Yv *const_refs = yav(0);
-    long cr = 0;
+    ylong cr = 0;
     while (cr < yv_len(yr_get(ps, "refs"))) {
         const_refs = ya_push(const_refs, ya_get(yr_get(ps, "refs"), cr));
         cr = cr + 1;
     }
-    long ci = 0;
+    ylong ci = 0;
     while (ci < yv_len(body_refs)) {
         const_refs = ya_push(const_refs, ya_get(body_refs, ci));
         ci = ci + 1;
@@ -13406,17 +13407,17 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
     tyset_reset();
     Yv *allrod = yav(0);
     Yv *gls = yav(0);
-    long ju = 0;
+    ylong ju = 0;
     while (ju < nu) {
         Yv *u = ya_get(units, ju);
         Yv *ur = yr_get(u, "rodata");
-        long ri2 = 0;
+        ylong ri2 = 0;
         while (ri2 < yv_len(ur)) {
             allrod = ya_push(allrod, ya_get(ur, ri2));
             ri2 = ri2 + 1;
         }
         Yv *ug = yr_get(u, "globals");
-        long gi = 0;
+        ylong gi = 0;
         while (gi < yv_len(ug)) {
             gls = ya_push(gls, ya_get(ug, gi));
             gi = gi + 1;
@@ -13424,13 +13425,13 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
         ju = ju + 1;
     }
     Yv *progrod = yr_get(prog, "rodata");
-    long pri = 0;
+    ylong pri = 0;
     while (pri < yv_len(progrod)) {
         allrod = ya_push(allrod, ya_get(progrod, pri));
         pri = pri + 1;
     }
     Yv *pg = yr_get(prog, "globals");
-    long pgi = 0;
+    ylong pgi = 0;
     while (pgi < yv_len(pg)) {
         gls = ya_push(gls, ya_get(pg, pgi));
         pgi = pgi + 1;
@@ -13441,7 +13442,7 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
     /* loser label -> index into dup_new, so a body's refs can be relabelled in
        one probe each. */
     Yv *dupmap = labmap_new(yv_len(dup_old) * 2 + 64);
-    long di = 0;
+    ylong di = 0;
     while (di < yv_len(dup_old)) {
         dupmap = yr_get(labmap_put(dupmap, ya_get(dup_old, di), 1, di), "map");
         di = di + 1;
@@ -13460,16 +13461,16 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
     /* The bodies, kept, as parts: their items, with the `.loc` markers moved
        to the unit's place in the program's file table. Every body is items
        now -- a unit read from a pack came with them (pack_body). */
-    long ab = 0;
+    ylong ab = 0;
     while (ab < yv_len(all)) {
         if (yv_b(ya_get(keep, ab))) {
-            long kf = yv_l(ya_get(fno, ab));
+            ylong kf = yv_l(ya_get(fno, ab));
             Yv *kb = ya_get(all, ab);
             if (yv_len(kb) == 0) { kb = unpack_body(ya_get(allblob, ab)); }
             if (yv_len(dup_old) > 0) {
                 kb = ir_relabel(kb, dupmap, yr_get(interned, "dup_new"));
             }
-            long off = 0;
+            ylong off = 0;
             if (kf >= 0) { off = kf; }
             parts = ya_push(parts, part_ir(kb, ya_get(alltxt, ab), off,
                                            dbg_lines));
@@ -13485,7 +13486,7 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
         Yv *gpieces = yav(0);
         gpieces = ya_push(gpieces, arch_bss());
         gpieces = ya_push(gpieces, heap_text);
-        long gk = 0;
+        ylong gk = 0;
         while (gk < yv_len(gls)) {
             gpieces = ya_push(gpieces, arch_global_cell(ya_get(gls, gk)));
             gk = gk + 1;
@@ -13500,7 +13501,7 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
    text they replace (ir_render_all), the text parts as they are. */
 Yv *link_text(Yv *parts) {
     Yv *pieces = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(parts)) {
         Yv *p = ya_get(parts, i);
         if (yv_len(yr_get(p, "ir")) > 0) {
@@ -13558,7 +13559,7 @@ Yv *pack_put(Yv *out, Yv *s) {
 
 Yv *pack_strs(Yv *out, Yv *xs) {
     out = pack_put(out, ys_long(yv_len(xs)));
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(xs)) {
         out = pack_put(out, ya_get(xs, i));
         i = i + 1;
@@ -13570,7 +13571,7 @@ Yv *pack_strs(Yv *out, Yv *xs) {
  * own items, so a reader walks one body's lines without another's. */
 Yv *pack_strss(Yv *out, Yv *xss) {
     out = pack_put(out, ys_long(yv_len(xss)));
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(xss)) {
         out = pack_strs(out, ya_get(xss, i));
         i = i + 1;
@@ -13603,11 +13604,11 @@ Yv *pack_strss(Yv *out, Yv *xss) {
  * (125, not 126: 126 and 127 are the tags, and a 126 written as its own byte
  * would read back as one -- the `.loc 1 126` of a std body, which desynced
  * the whole body by two bytes when it did.) */
-static Yv *pack_word(Yv *out, long v) {
+static Yv *pack_word(Yv *out, ylong v) {
     if (v >= 0 && v < 126) {
         out = ya_push(out, ys_chr(v));
     } else if (v < 0 && v > -65536) {
-        long u = 65536 + v;
+        ylong u = 65536 + v;
         out = ya_push(out, ys_chr(127));
         out = ya_push(out, ys_chr(u & 255));
         out = ya_push(out, ys_chr((u >> 8) & 255));
@@ -13617,8 +13618,8 @@ static Yv *pack_word(Yv *out, long v) {
         out = ya_push(out, ys_chr((v >> 8) & 255));
     } else {
         out = ya_push(out, ys_chr(255));
-        long sh = 0;
-        long i = 0;
+        ylong sh = 0;
+        ylong i = 0;
         while (i < 8) {
             out = ya_push(out, ys_chr((v >> sh) & 255));
             sh = sh + 8;
@@ -13628,7 +13629,7 @@ static Yv *pack_word(Yv *out, long v) {
     return out;
 }
 
-static Yv *pack_lbl(Yv *out, long id) {
+static Yv *pack_lbl(Yv *out, ylong id) {
     if (id < 0) {
         out = ya_push(out, ys_chr(0));
     } else {
@@ -13641,12 +13642,12 @@ static Yv *pack_lbl(Yv *out, long id) {
 }
 
 /* One body as the pack carries it: the items above, item by item. */
-static Yv *pack_body(Yv *u, long b) {
+static Yv *pack_body(Yv *u, ylong b) {
     Yv *ir = ya_get(yr_get(u, "bodies"), b);
     Yv *out = yav(0);
-    long at = 0;
+    ylong at = 0;
     while (at < yv_len(ir)) {
-        long f = yv_l(ya_get(ir, at));
+        ylong f = yv_l(ya_get(ir, at));
         out = ya_push(out, ys_chr(f & 255));
         if (f == IR_LABEL) {
             out = pack_lbl(out, yv_l(ya_get(ir, at + 1)));
@@ -13657,10 +13658,10 @@ static Yv *pack_body(Yv *u, long b) {
             out = pack_word(out, yv_l(ya_get(ir, at + 1)));
         } else {
             Yv *kinds = yr_get(ir_form(f), "kinds");
-            long ki = 0;
-            long wp = at + 1;
+            ylong ki = 0;
+            ylong wp = at + 1;
             while (ki < yv_len(kinds)) {
-                long k = yv_l(ya_get(kinds, ki));
+                ylong k = yv_l(ya_get(kinds, ki));
                 if (k == O_LBL) {
                     out = pack_lbl(out, yv_l(ya_get(ir, wp)));
                 } else if (k == O_DIFF) {
@@ -13692,7 +13693,7 @@ static Yv *pack_body(Yv *u, long b) {
 static Yv *pack_bodies(Yv *u) {
     Yv *bodies = yr_get(u, "bodies");
     Yv *out = yav(0);
-    long b = 0;
+    ylong b = 0;
     while (b < yv_len(bodies)) {
         out = ya_push(out, pack_body(u, b));
         b = b + 1;
@@ -13700,23 +13701,23 @@ static Yv *pack_bodies(Yv *u) {
     return out;
 }
 
-static long word_w(Yv *b, long at);
-static long unpack_word(Yv *b, long at);
-static long unpack_lbl(Yv *b, long at);
-static long lbl_w(Yv *b, long at);
+static ylong word_w(Yv *b, ylong at);
+static ylong unpack_word(Yv *b, ylong at);
+static ylong unpack_lbl(Yv *b, ylong at);
+static ylong lbl_w(Yv *b, ylong at);
 
 /* One body read back (unit_read): the same items, with a label name minted to
  * an id of this run and every field word the item does not use left 0, which
  * is what the emitter wrote in it. */
 static Yv *unpack_body(Yv *blob) {
     Yv *b = bytes_of(blob);
-    long n = yv_len(b);
+    ylong n = yv_len(b);
     Yv *ir = yav(0);
-    long at = 0;
+    ylong at = 0;
     while (at < n) {
-        long f = yv_l(ya_get(b, at));
+        ylong f = yv_l(ya_get(b, at));
         at = at + 1;
-        long w[7] = {0, 0, 0, 0, 0, 0, 0};
+        ylong w[7] = {0, 0, 0, 0, 0, 0, 0};
         if (f == IR_LABEL) {
             w[0] = unpack_lbl(b, at);
             at = at + lbl_w(b, at);
@@ -13730,11 +13731,11 @@ static Yv *unpack_body(Yv *blob) {
             at = at + word_w(b, at);
         } else {
             Yv *kinds = yr_get(ir_form(f), "kinds");
-            long ki = 0;
-            long wp = 0;
+            ylong ki = 0;
+            ylong wp = 0;
             while (ki < yv_len(kinds)) {
-                long k = yv_l(ya_get(kinds, ki));
-                long nw = ir_kind_words(k);
+                ylong k = yv_l(ya_get(kinds, ki));
+                ylong nw = ir_kind_words(k);
                 if (k == O_LBL) {
                     w[wp] = unpack_lbl(b, at);
                     at = at + lbl_w(b, at);
@@ -13781,19 +13782,19 @@ static Yv *unpack_body(Yv *blob) {
 }
 
 /* How many bytes the word at `at` takes: its tag byte says (see pack_word). */
-static long word_w(Yv *b, long at) {
-    long t = yv_l(ya_get(b, at));
+static ylong word_w(Yv *b, ylong at) {
+    ylong t = yv_l(ya_get(b, at));
     if (t < 126) { return 1; } else if (t == 255) { return 9; } else { return 3; }
 }
 
-static long unpack_word(Yv *b, long at) {
-    long t = yv_l(ya_get(b, at));
-    long v = 0;
+static ylong unpack_word(Yv *b, ylong at) {
+    ylong t = yv_l(ya_get(b, at));
+    ylong v = 0;
     if (t < 126) {
         v = t;
     } else if (t == 255) {
-        long sh = 0;
-        long i = 0;
+        ylong sh = 0;
+        ylong i = 0;
         while (i < 8) {
             v = v + yv_l(ya_get(b, at + 1 + i)) * (1 << sh);
             sh = sh + 8;
@@ -13808,18 +13809,18 @@ static long unpack_word(Yv *b, long at) {
 
 /* A label field: none (tag 0) or a name -- an id of this run, interned as the
  * text path interned `call y_alloc`'s operand. */
-static long unpack_lbl(Yv *b, long at) {
+static ylong unpack_lbl(Yv *b, ylong at) {
     if (yv_l(ya_get(b, at)) == 0) {
         return -1;
     } else {
-        long n = unpack_word(b, at + 1);
-        long p = at + 1 + word_w(b, at + 1);
+        ylong n = unpack_word(b, at + 1);
+        ylong p = at + 1 + word_w(b, at + 1);
         return yv_l(lbl_new(from_bytes(ya_slice(b, p, p + n))));
     }
 }
 
 /* How many bytes the label field at `at` takes. */
-static long lbl_w(Yv *b, long at) {
+static ylong lbl_w(Yv *b, ylong at) {
     if (yv_l(ya_get(b, at)) == 0) {
         return 1;
     } else {
@@ -13907,7 +13908,7 @@ Yv *tcode_go(Yv *out, Yv *t) {
         out = ya_push(out, ys("R"));
         Yv *fs = yr_get(t, "fields");
         out = pack_put(out, ys_long(yv_len(fs)));
-        long i = 0;
+        ylong i = 0;
         while (i < yv_len(fs)) {
             Yv *f = ya_get(fs, i);
             /* an optional field is `name?` (tdecode_go) */
@@ -13931,7 +13932,7 @@ Yv *tcode_go(Yv *out, Yv *t) {
 
 Yv *tcode_list(Yv *out, Yv *ts) {
     out = pack_put(out, ys_long(yv_len(ts)));
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(ts)) {
         out = tcode_go(out, ya_get(ts, i));
         i = i + 1;
@@ -13949,7 +13950,7 @@ Yv *tdecode(Yv *s) {
 
 Yv *tdecode_go(Yv *cur) {
     Yv *s = yr_get(cur, "s");
-    long p = yv_l(yr_get(cur, "p"));
+    ylong p = yv_l(yr_get(cur, "p"));
     Yv *c = ys_slice(s, p, p + 1);
     yr_set(cur, "p", yv_long(p + 1));
     if (ys_eq_lit(c, "l")) {
@@ -13977,7 +13978,7 @@ Yv *tdecode_go(Yv *cur) {
     } else if (ys_eq_lit(c, "?")) {
         return normnode(yr(2, "k", yv_long(K_topt), "of", tdecode_go(cur)));
     } else if (ys_eq_lit(c, "F")) {
-        long n = pack_num(cur);
+        ylong n = pack_num(cur);
         return normnode(yr(3, "k", yv_long(K_tarrfix), "of", tdecode_go(cur), "n",
                           yv_long(n)));
     } else if (ys_eq_lit(c, "M")) {
@@ -14010,15 +14011,15 @@ Yv *tdecode_go(Yv *cur) {
         return normnode(r);
     } else if (ys_eq_lit(c, "q")) {
         Yv *enc = pack_get(cur);
-        long i = yv_len(tdec_encs) - 1;
+        ylong i = yv_len(tdec_encs) - 1;
         while (i > 0 && !ys_eq(ya_get(tdec_encs, i), enc)) {
             i = i - 1;
         }
         return normnode(ya_get(tdec_refs, i));
     } else {
         Yv *fields = yav(0);
-        long n = pack_num(cur);
-        long i = 0;
+        ylong n = pack_num(cur);
+        ylong i = 0;
         while (i < n) {
             Yv *fname = pack_get(cur);
             /* `name?`: an optional field (tcode_go) */
@@ -14036,8 +14037,8 @@ Yv *tdecode_go(Yv *cur) {
 
 Yv *tdecode_list(Yv *cur) {
     Yv *out = yav(0);
-    long n = pack_num(cur);
-    long i = 0;
+    ylong n = pack_num(cur);
+    ylong i = 0;
     while (i < n) {
         out = ya_push(out, tdecode_go(cur));
         i = i + 1;
@@ -14049,7 +14050,7 @@ Yv *tdecode_list(Yv *cur) {
 Yv *pack_iface(Yv *out, Yv *unit) {
     Yv *xs = yr_get(unit, "exports");
     out = pack_put(out, ys_long(yv_len(xs)));
-    long j = 0;
+    ylong j = 0;
     while (j < yv_len(xs)) {
         Yv *x = ya_get(xs, j);
         out = pack_put(out, yr_get(x, "name"));
@@ -14080,7 +14081,7 @@ Yv *pack_unit_fields(Yv *unit) {
     out = pack_strs(out, yr_get(unit, "labels"));
     Yv *rf = yr_get(unit, "refs");
     out = pack_put(out, ys_long(yv_len(rf)));
-    long j = 0;
+    ylong j = 0;
     while (j < yv_len(rf)) {
         out = pack_strs(out, ya_get(rf, j));
         j = j + 1;
@@ -14101,7 +14102,7 @@ Yv *std_pack(Yv *units) {
     Yv *out = yav(0);
     out = ya_push(out, pack_version());
     out = pack_put(out, ys_long(yv_len(units)));
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(units)) {
         Yv *u = ya_get(units, i);
         out = pack_put(out, yr_get(u, "name"));
@@ -14113,11 +14114,11 @@ Yv *std_pack(Yv *units) {
 
 /* Reading a pack: `cur` is the text and the position in it. pack_len
  * reads a netstring's length, leaving the cursor at its text. */
-long pack_len(Yv *cur) {
+ylong pack_len(Yv *cur) {
     Yv *s = yr_get(cur, "s");
-    long p = yv_l(yr_get(cur, "p"));
-    long n = 0;
-    long c = ys_byte_at(s, p);
+    ylong p = yv_l(yr_get(cur, "p"));
+    ylong n = 0;
+    ylong c = ys_byte_at(s, p);
     while (c != 58 && p < yv_len(s)) {
         n = n * 10 + c - 48;
         p = p + 1;
@@ -14128,21 +14129,21 @@ long pack_len(Yv *cur) {
 }
 
 Yv *pack_get(Yv *cur) {
-    long n = pack_len(cur);
-    long p = yv_l(yr_get(cur, "p"));
+    ylong n = pack_len(cur);
+    ylong p = yv_l(yr_get(cur, "p"));
     Yv *s = yr_get(cur, "s");
     yr_set(cur, "p", yv_long(p + n));
     return ys_slice(s, p, p + n);
 }
 
-long pack_num(Yv *cur) {
+ylong pack_num(Yv *cur) {
     return ys_tolong(pack_get(cur));
 }
 
 Yv *pack_get_strs(Yv *cur) {
-    long n = pack_num(cur);
+    ylong n = pack_num(cur);
     Yv *out = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < n) {
         out = ya_push(out, pack_get(cur));
         i = i + 1;
@@ -14155,8 +14156,8 @@ Yv *pack_get_strs(Yv *cur) {
 Yv *unit_read(Yv *cur, Yv *name, int bound) {
     Yv *files = pack_get_strs(cur);
     Yv *xs = yav(0);
-    long nx = pack_num(cur);
-    long j = 0;
+    ylong nx = pack_num(cur);
+    ylong j = 0;
     while (j < nx) {
         Yv *xn = pack_get(cur);
         Yv *xl = pack_get(cur);
@@ -14170,7 +14171,7 @@ Yv *unit_read(Yv *cur, Yv *name, int bound) {
         j = j + 1;
     }
     Yv *dfl = yav(0);
-    long nf = pack_num(cur);
+    ylong nf = pack_num(cur);
     j = 0;
     while (j < nf) {
         Yv *dn = pack_get(cur);
@@ -14182,23 +14183,23 @@ Yv *unit_read(Yv *cur, Yv *name, int bound) {
      * (they are the only ones it assembles), which is what the text path did
      * by reading a body's text only when it kept it. */
     Yv *blob = pack_get_strs(cur);
-    long nb = pack_num(cur);
+    ylong nb = pack_num(cur);
     Yv *btext = yav(0);
-    long bi = 0;
+    ylong bi = 0;
     while (bi < nb) {
         btext = ya_push(btext, pack_get_strs(cur));
         bi = bi + 1;
     }
     Yv *labels = pack_get_strs(cur);
     Yv *refs = yav(0);
-    long nr = pack_num(cur);
+    ylong nr = pack_num(cur);
     j = 0;
     while (j < nr) {
         refs = ya_push(refs, pack_get_strs(cur));
         j = j + 1;
     }
     Yv *rodata = yav(0);
-    long nd = pack_num(cur);
+    ylong nd = pack_num(cur);
     j = 0;
     while (j < nd) {
         rodata = ya_push(rodata, pack_get_strs(cur));
@@ -14217,13 +14218,13 @@ Yv *std_unpack(Yv *pack, Yv *names) {
     Yv *ver = pack_version();
     if (ys_eq(ys_slice(pack, 0, yv_len(ver)), ver)) {
         Yv *cur = yr(2, "s", pack, "p", yv_long(yv_len(ver)));
-        long n = pack_num(cur);
+        ylong n = pack_num(cur);
         Yv *got = yav(0);
-        long i = 0;
+        ylong i = 0;
         while (i < n) {
             Yv *nm = pack_get(cur);
-            long ul = pack_len(cur);
-            long at = yv_l(yr_get(cur, "p"));
+            ylong ul = pack_len(cur);
+            ylong at = yv_l(yr_get(cur, "p"));
             if (name_in(names, nm)) {
                 got = ya_push(got,
                               unit_read(cur, nm, std_unit_bound(nm)));
@@ -14232,10 +14233,10 @@ Yv *std_unpack(Yv *pack, Yv *names) {
             yr_set(cur, "p", yv_long(at + ul));
             i = i + 1;
         }
-        long k = 0;
+        ylong k = 0;
         while (k < yv_len(names)) {
             Yv *want = ya_get(names, k);
-            long a = 0;
+            ylong a = 0;
             while (a < yv_len(got)) {
                 Yv *u = ya_get(got, a);
                 if (ys_eq(yr_get(u, "name"), want)) {
@@ -14269,7 +14270,7 @@ Yv *unit_obj(Yv *unit, Yv *key) {
     Yv *out = yav(0);
     out = ya_push(out, obj_version());
     out = pack_put(out, key);
-    long at_fields = yv_len(ys_join(out, ys("")));
+    ylong at_fields = yv_len(ys_join(out, ys("")));
     out = pack_put(out, yr_get(unit, "name"));
     out = pack_put(out, pack_unit_fields(unit));
     Yv *body = ys_join(out, ys(""));
@@ -14286,17 +14287,17 @@ Yv *unit_unobj(Yv *text, Yv *key) {
     if (ys_eq(ys_slice(text, 0, yv_len(ver)), ver)) {
         Yv *cur = yr(2, "s", text, "p", yv_long(yv_len(ver)));
         if (ys_eq(pack_get(cur), key)) {
-            long body_at = yv_l(yr_get(cur, "p")); /* the name field starts
+            ylong body_at = yv_l(yr_get(cur, "p")); /* the name field starts
              * here, and the checksum covers it and the fields */
             Yv *name = pack_get(cur);
-            long ul = pack_len(cur);
+            ylong ul = pack_len(cur);
             /* where unit_read starts, once the checksum has been checked */
-            long body_end = yv_l(yr_get(cur, "p")) + ul;
+            ylong body_end = yv_l(yr_get(cur, "p")) + ul;
             /* the checksum field must be there (one byte at least), so an
              * object written before this one is rebuilt rather than read at a
              * byte past its end */
             if (body_end < yv_len(text)) {
-                long sum = hash_str(ys_slice(text, body_at, body_end));
+                ylong sum = hash_str(ys_slice(text, body_at, body_end));
                 yr_set(cur, "p", yv_long(body_end));
                 if (pack_num(cur) == sum && yv_l(yr_get(cur, "p")) == yv_len(text)) {
                     yr_set(cur, "p", yv_long(body_end - ul));
@@ -14322,13 +14323,13 @@ Yv *unit_iface(Yv *unit) {
 Yv *unit_externs(Yv *std, Yv *snames, Yv *deps, Yv *pkgs) {
     Yv *xt = externs_none();
     Yv *ext = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(std)) {
         Yv *u = ya_get(std, i);
         Yv *un = yr_get(u, "name");
         if (std_unit_bound(un) && name_in(snames, un)) {
             Yv *exports = yr_get(u, "exports");
-            long j = 0;
+            ylong j = 0;
             while (j < yv_len(exports)) {
                 ext = ya_push(ext, ya_get(exports, j));
                 j = j + 1;
@@ -14344,7 +14345,7 @@ Yv *unit_externs(Yv *std, Yv *snames, Yv *deps, Yv *pkgs) {
         Yv *un = yr_get(u, "name");
         if (name_in(pkgs, un)) {
             Yv *xs = yr_get(u, "exports");
-            long j = 0;
+            ylong j = 0;
             while (j < yv_len(xs)) {
                 Yv *x = ya_get(xs, j);
                 Yv *qname =
@@ -14360,7 +14361,7 @@ Yv *unit_externs(Yv *std, Yv *snames, Yv *deps, Yv *pkgs) {
                 Yv *d = ya_get(ds, j);
                 Yv *dv = yr_get(d, "vals");
                 Yv *vals = yav(0);
-                long m = 0;
+                ylong m = 0;
                 while (m < yv_len(dv)) {
                     vals = ya_push(vals, lit_decode(ya_get(dv, m)));
                     m = m + 1;
@@ -14380,7 +14381,7 @@ Yv *unit_externs(Yv *std, Yv *snames, Yv *deps, Yv *pkgs) {
     return xt;
 }
 
-Yv *compile_package(Yv *ast, Yv *nr, Yv *name, long base, long wlevel,
+Yv *compile_package(Yv *ast, Yv *nr, Yv *name, ylong base, ylong wlevel,
                     Yv *std, Yv *deps) {
     Yv *xt = unit_externs(std, yr_get(nr, "std"), deps, yr_get(nr, "pkgs"));
     return compile_unit(ast, yr_get(nr, "imports"), yr_get(nr, "origin"), 1,
@@ -14391,10 +14392,10 @@ Yv *compile_package(Yv *ast, Yv *nr, Yv *name, long base, long wlevel,
  *
  * The program's unit, compiled against the std units `std` and package
  * units `deps`, then linked with them. */
-Yv *emit_program(Yv *ast, Yv *nr, int debug, long wlevel, Yv *std, Yv *deps) {
+Yv *emit_program(Yv *ast, Yv *nr, int debug, ylong wlevel, Yv *std, Yv *deps) {
     Yv *xt = unit_externs(std, yr_get(nr, "std"), deps, yr_get(nr, "pkgs"));
     Yv *units = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(std)) {
         units = ya_push(units, ya_get(std, i));
         i = i + 1;
@@ -14421,7 +14422,7 @@ Yv *emit_program(Yv *ast, Yv *nr, int debug, long wlevel, Yv *std, Yv *deps) {
     while (i < yv_len(deps)) {
         Yv *u = ya_get(deps, i);
         Yv *rf = yr_get(u, "refs");
-        long b = 0;
+        ylong b = 0;
         while (!wargv && b < yv_len(rf)) {
             wargv = name_in(ya_get(rf, b), ys("y_argv"));
             b = b + 1;
@@ -14434,8 +14435,8 @@ Yv *emit_program(Yv *ast, Yv *nr, int debug, long wlevel, Yv *std, Yv *deps) {
     Yv *times = yr_get(r, "times");
     if (yv_b(yr_get(r, "ok"))) {
         dup_y_label(deps, yr_get(r, "unit"));
-        long pt = clock_us();
-        long ph = heap_used();
+        ylong pt = clock_us();
+        ylong ph = heap_used();
         Yv *asm_ = link_units(std, deps, yr_get(r, "unit"));
         Yv *pr = phase_end(times, ys("asm_parts"), pt, ph);
         return yr(5, "ok", yv_bool(1), "asm", asm_, "errors",
@@ -14455,47 +14456,47 @@ Yv *emit_program(Yv *ast, Yv *nr, int debug, long wlevel, Yv *std, Yv *deps) {
  * formatting), so maps need no runtime assembly of their own. Reads are
  * always optional: a hit boxes the value (some(v)), a miss leaves none. */
 
-Yv *n_str(Yv *v, long line, long col) {
+Yv *n_str(Yv *v, ylong line, ylong col) {
     return yr(4, "k", yv_long(K_str), "v", v, "line", yv_long(line), "col", yv_long(col));
 }
 
-Yv *n_bool(Yv *v, long line, long col) {
+Yv *n_bool(Yv *v, ylong line, ylong col) {
     return yr(4, "k", yv_long(K_bool), "v", v, "line", yv_long(line), "col", yv_long(col));
 }
 
-Yv *n_dot(Yv *obj, Yv *key, long line, long col) {
+Yv *n_dot(Yv *obj, Yv *key, ylong line, ylong col) {
     return yr(7, "k", yv_long(K_dot), "obj", obj, "key", key, "line", yv_long(line), "col", yv_long(col), "nline", yv_long(col), "ncol", yv_long(col));
 }
 
-Yv *n_idx(Yv *arr, Yv *idx, long line, long col) {
+Yv *n_idx(Yv *arr, Yv *idx, ylong line, ylong col) {
     return yr(5, "k", yv_long(K_index), "arr", arr, "idx", idx, "line", yv_long(line), "col", yv_long(col));
 }
 
-Yv *n_bin(Yv *op, Yv *l, Yv *r, long line, long col) {
+Yv *n_bin(Yv *op, Yv *l, Yv *r, ylong line, ylong col) {
     return yr(6, "k", yv_long(K_bin), "op", op, "l", l, "r", r, "line", yv_long(line), "col", yv_long(col));
 }
 
-Yv *n_not(Yv *e, long line, long col) {
+Yv *n_not(Yv *e, ylong line, ylong col) {
     return yr(5, "k", yv_long(K_un), "op", ys("!"), "e", e, "line", yv_long(line), "col", yv_long(col));
 }
 
-Yv *n_if(Yv *c, Yv *t, Yv *e, long ln, long cl) {
+Yv *n_if(Yv *c, Yv *t, Yv *e, ylong ln, ylong cl) {
     return yr(7, "k", yv_long(K_kw_if), "cond", c, "then", t, "els", e, "has_else", yv_bool(1), "line", yv_long(ln), "col", yv_long(cl));
 }
 
-Yv *n_while(Yv *c, Yv *b, long ln, long cl) {
+Yv *n_while(Yv *c, Yv *b, ylong ln, ylong cl) {
     return yr(5, "k", yv_long(K_kw_while), "cond", c, "body", b, "line", yv_long(ln), "col", yv_long(cl));
 }
 
-Yv *n_decl(Yv *name, Yv *v, long ln, long cl) {
+Yv *n_decl(Yv *name, Yv *v, ylong ln, ylong cl) {
     return yr(9, "k", yv_long(K_decl), "kind", ys("let"), "typ", yr(1, "k", yv_long(K_tnone)), "name", name, "v", v, "line", yv_long(ln), "col", yv_long(cl), "nline", yv_long(cl), "ncol", yv_long(cl));
 }
 
-Yv *n_assign(Yv *name, Yv *v, long ln, long cl) {
+Yv *n_assign(Yv *name, Yv *v, ylong ln, ylong cl) {
     return yr(5, "k", yv_long(K_assign), "name", name, "v", v, "line", yv_long(ln), "col", yv_long(cl));
 }
 
-Yv *block_of(Yv *sts, long ln, long cl) {
+Yv *block_of(Yv *sts, ylong ln, ylong cl) {
     return yr(4, "k", yv_long(K_block), "stmts", sts, "line", yv_long(ln), "col", yv_long(cl));
 }
 
@@ -14509,18 +14510,18 @@ Yv *block_of(Yv *sts, long ln, long cl) {
  * the old box -- it is never mutated). Reads allocate at most once per
  * entry and write. */
 Yv *gen_maplit(Yv *st, Yv *node) {
-    long ln = yv_l(yr_get(node, "line"));
-    long cl = yv_l(yr_get(node, "col"));
+    ylong ln = yv_l(yr_get(node, "line"));
+    ylong cl = yv_l(yr_get(node, "col"));
     Yv *mkeys = yr_get(node, "keys");
     Yv *mvals = yr_get(node, "vals");
     Yv *keys = yav(0);
     Yv *vals = yav(0);
-    long mi = 0;
+    ylong mi = 0;
     while (mi < yv_len(mkeys)) {
         Yv *mk = ya_get(mkeys, mi);
         Yv *mv = ya_get(mvals, mi);
         int found = 0;
-        long fi = 0;
+        ylong fi = 0;
         while (fi < yv_len(keys)) {
             Yv *kk = ya_get(keys, fi);
             if (ys_eq(kk, mk)) {
@@ -14541,7 +14542,7 @@ Yv *gen_maplit(Yv *st, Yv *node) {
     }
     Yv *knodes = yav(0);
     Yv *bnodes = yav(0);
-    long ki = 0;
+    ylong ki = 0;
     while (ki < yv_len(keys)) {
         Yv *ks = ya_get(keys, ki);
         knodes = ya_push(knodes, n_str(ks, ln, cl));
@@ -14577,7 +14578,7 @@ int is_none_id(Yv *e) {
  * place, so the header never moves), t+"i" = 0, t+"n" = len(t+"ks") and
  * the loop bound t+"j" = t+"n". A hit pulls the bound in to i rather than
  * testing `i < n && keys[i] != k`, which materializes a bool every step. */
-Yv *map_scan(Yv *t, long ln, long cl) {
+Yv *map_scan(Yv *t, ylong ln, ylong cl) {
     Yv *i = n_id(ys_cat(t, ys("i")), ln, cl);
     Yv *key = n_idx(n_id(ys_cat(t, ys("ks")), ln, cl), i, ln, cl);
     Yv *hit = yav(0);
@@ -14597,8 +14598,8 @@ Yv *map_scan(Yv *t, long ln, long cl) {
  * is m[k]! (vals[i]; a miss traps like unwrap(none)), "has" is
  * is_some(m[k]) and m[k] != none, "none" is m[k] == none. */
 Yv *gen_map_get(Yv *st, Yv *node, Yv *mode) {
-    long ln = yv_l(yr_get(node, "line"));
-    long cl = yv_l(yr_get(node, "col"));
+    ylong ln = yv_l(yr_get(node, "line"));
+    ylong cl = yv_l(yr_get(node, "col"));
     Yv *r = next_uid(st);
     st = yr_get(r, "st");
     Yv *t = ys_cat(ys("y_t"), ys_long(yv_l(yr_get(r, "uid"))));
@@ -14654,8 +14655,8 @@ Yv *gen_map_get(Yv *st, Yv *node, Yv *mode) {
  * The value runs before the scan counts the entries, so a value that
  * itself adds keys is seen. */
 Yv *gen_map_set(Yv *st, Yv *node) {
-    long ln = yv_l(yr_get(node, "line"));
-    long cl = yv_l(yr_get(node, "col"));
+    ylong ln = yv_l(yr_get(node, "line"));
+    ylong cl = yv_l(yr_get(node, "col"));
     Yv *r = next_uid(st);
     st = yr_get(r, "st");
     Yv *t = ys_cat(ys("y_t"), ys_long(yv_l(yr_get(r, "uid"))));
@@ -14689,7 +14690,7 @@ Yv *gen_map_set(Yv *st, Yv *node) {
 
 /* One key's repr inside a map: string keys quote (Python-style), the
  * other hashable keys stringify bare. */
-Yv *map_key_repr(Yv *node, Yv *kt, long ln, long cl) {
+Yv *map_key_repr(Yv *node, Yv *kt, ylong ln, ylong cl) {
     if (yv_l(yr_get(kt, "k")) == K_tstr) {
         return n_bin(ys("+"), n_bin(ys("+"), n_str(ys("\""), ln, cl), node, ln, cl), n_str(ys("\""), ln, cl), ln, cl);
     } else {
@@ -14700,8 +14701,8 @@ Yv *map_key_repr(Yv *node, Yv *kt, long ln, long cl) {
 /* {"k": v, ...}: a synthetic string-building loop -- the entry count is
  * dynamic, but every format decision (keys, values) is static. */
 Yv *gen_map_repr(Yv *st, Yv *arg, Yv *t) {
-    long ln = 0;
-    long cl = 0;
+    ylong ln = 0;
+    ylong cl = 0;
     Yv *r = next_uid(st);
     st = yr_get(r, "st");
     Yv *g = ys_cat(ys("y_t"), ys_long(yv_l(yr_get(r, "uid"))));

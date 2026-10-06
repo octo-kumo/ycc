@@ -2,6 +2,7 @@
  * PORTING.md). The enum is in tags.h; this is the reverse direction,
  * for the four places a tag reaches a diagnostic text, and the check
  * that the two tables have not drifted. */
+#include "ylong.h"
 #include "yv.h"
 #include "tags.h"
 
@@ -19,7 +20,7 @@ static const char *const ktags[] = {
     "break", "continue"
 };
 
-Yv *ktag(long n) {
+Yv *ktag(ylong n) {
     if (n >= 1 && (size_t)n <= sizeof(ktags) / sizeof(ktags[0])) {
         return ys_cstr(ktags[n - 1]);
     }
@@ -33,7 +34,7 @@ Yv *ktag(long n) {
  * parser, the renamer, the checker, the emitter -- counts its depth here,
  * at its own entry, so `yv_nest` is a plain long as `nest` is a top-level
  * one in Y. No reset between phases: every walk that enters also leaves. */
-long yv_nest = 0;
+ylong yv_nest = 0;
 
 Yv *nest_reset(void) { yv_nest = 0; return yv_long(0); }
 

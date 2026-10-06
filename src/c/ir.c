@@ -8,6 +8,7 @@
  * ir_render prints an item back as the text it replaces, byte for byte: it
  * runs only under -S and for a body that is still handed to the assembler as
  * text, so the emitted bytes do not depend on it being right until then. */
+#include "ylong.h"
 #include "ir.h"
 #include "labels.h"
 
@@ -116,7 +117,7 @@ static void ir_init(void) {
     t = ya_push(t, yr(3, "id", yv_long(F_JMP_IND), "mn", ys("jmp"), "kinds", yav(1, yv_long(O_IND))));
     /* The ids above are positions in this list; a form added in the wrong
        place would decode and print as a different instruction, so check it. */
-    long i = 0;
+    ylong i = 0;
     while (i < 98) {
         if (yv_l(yr_get(ya_get(t, i), "id")) != i) {
             eputs_(ys_cat(ys("INTERNAL: ir form table: "),
@@ -135,7 +136,7 @@ static void ir_init(void) {
  * function's own items). */
 Yv *ir_cat(Yv *a, Yv *b) {
     Yv *out = ya_slice(a, 0, yv_len(a));
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(b)) {
         out = ya_push(out, ya_get(b, i));
         i = i + 1;
@@ -144,7 +145,7 @@ Yv *ir_cat(Yv *a, Yv *b) {
 }
 
 /* The form `f`, building the table on first use. */
-Yv *ir_form(long f) {
+Yv *ir_form(ylong f) {
     if (!ir_ready) { ir_init(); }
     return ya_get(ir_tab, f);
 }
@@ -154,8 +155,8 @@ Yv *ir_form(long f) {
  * its label field -1 "not a rip-relative label" -- see ir_render_mem). A
  * memory operand and a register take five and two of them, the widest form
  * there is. */
-Yv *ir_push(Yv *ir, long f, long a, long b, long c, long d, long e, long g,
-            long h) {
+Yv *ir_push(Yv *ir, ylong f, ylong a, ylong b, ylong c, ylong d, ylong e, ylong g,
+            ylong h) {
     ir = ya_push(ir, yv_long(f));
     ir = ya_push(ir, yv_long(a));
     ir = ya_push(ir, yv_long(b));
@@ -168,7 +169,7 @@ Yv *ir_push(Yv *ir, long f, long a, long b, long c, long d, long e, long g,
 
 /* Register `n` of `size` bits, spelled as the emitter spells it (enc64's
  * reg_num/reg_size are the inverse). */
-Yv *ir_reg(long n, long size) {
+Yv *ir_reg(ylong n, ylong size) {
     if (size == 128) {
         return ys_cat(ys("%xmm"), ys_long(n));
     } else if (size == 32) {
@@ -190,17 +191,17 @@ static const char *ir_reg8_names[16] = {"al",  "cl",  "dl",  "bl",  "spl", "bpl"
                                      "sil", "dil", "r8b", "r9b", "r10b", "r11b",
                                      "r12b", "r13b", "r14b", "r15b"};
 
-Yv *ir_reg64(long n) {
+Yv *ir_reg64(ylong n) {
     if (n >= 0 && n < 16) { return ys_cat(ys("%"), ys_cstr(ir_reg64_names[n])); }
     else { return ys("%r?"); }
 }
 
-Yv *ir_reg32(long n) {
+Yv *ir_reg32(ylong n) {
     if (n >= 0 && n < 16) { return ys_cat(ys("%"), ys_cstr(ir_reg32_names[n])); }
     else { return ys("%e?"); }
 }
 
-Yv *ir_reg8(long n) {
+Yv *ir_reg8(ylong n) {
     if (n >= 0 && n < 16) { return ys_cat(ys("%"), ys_cstr(ir_reg8_names[n])); }
     else { return ys("%b?"); }
 }
@@ -210,14 +211,14 @@ Yv *ir_reg8(long n) {
  * whatever the disp word holds: the emitter spells `0(%rbp)` and `(%rax)`
  * differently, and a frame slot's displacement is negative, so the spelling
  * cannot come from its sign. */
-Yv *ir_render_mem(Yv *ir, long at, int nodisp) {
+Yv *ir_render_mem(Yv *ir, ylong at, int nodisp) {
     /* the operand's five words start AT `at`: base, index, scale, disp, label */
-    long ml = yv_l(ya_get(ir, at + 4));
+    ylong ml = yv_l(ya_get(ir, at + 4));
     if (ml >= 0) {
         return ys_cat(lname(yv_long(ml)), ys("(%rip)"));
     } else {
-        long disp = yv_l(ya_get(ir, at + 3));
-        long idx = yv_l(ya_get(ir, at + 1));
+        ylong disp = yv_l(ya_get(ir, at + 3));
+        ylong idx = yv_l(ya_get(ir, at + 1));
         /* The displacement is written whenever the kind says so -- but an
            indexed operand leaves a zero one out, which is what the emitter
            wrote (`(%rax,%rcx,8)`, and `8(%rcx,%rax,1)` beside it). The bytes
@@ -246,7 +247,7 @@ Yv *ir_render_mem(Yv *ir, long at, int nodisp) {
 }
 
 /* One operand of kind `k` at word `at`, as text. */
-Yv *ir_render_op(long k, Yv *ir, long at) {
+Yv *ir_render_op(ylong k, Yv *ir, ylong at) {
     if (k == O_REG) {
         return ir_reg(yv_l(ya_get(ir, at)), yv_l(ya_get(ir, at + 1)));
     } else if (k == O_IND) {
@@ -272,8 +273,8 @@ Yv *ir_render_op(long k, Yv *ir, long at) {
 
 /* The item at word `at`, as the text it replaces. `txt` holds the body's raw
  * lines (IR_TEXT). */
-Yv *ir_render(Yv *ir, Yv *txt, long at, long fno) {
-    long f = yv_l(ya_get(ir, at));
+Yv *ir_render(Yv *ir, Yv *txt, ylong at, ylong fno) {
+    ylong f = yv_l(ya_get(ir, at));
     if (f == IR_LABEL) {
         return ys_cat(lname(ya_get(ir, at + 1)), ys(":"));
     } else if (f == IR_LOC) {
@@ -285,15 +286,15 @@ Yv *ir_render(Yv *ir, Yv *txt, long at, long fno) {
                            ys_cat(ys(" "),
                                 ys_long(yv_l(ya_get(ir, at + 2))))));
     } else if (f == IR_TEXT) {
-        long i = yv_l(ya_get(ir, at + 1));
+        ylong i = yv_l(ya_get(ir, at + 1));
         if (i >= 0 && i < yv_len(txt)) { return ya_get(txt, i); }
         else { return ys("    # INTERNAL: bad text item"); }
     } else {
         Yv *fo = ir_form(f);
         Yv *line = ys_cat(ys("    "), yr_get(fo, "mn"));
         Yv *kinds = yr_get(fo, "kinds");
-        long i = 0;
-        long wp = at + 1;
+        ylong i = 0;
+        ylong wp = at + 1;
         while (i < yv_len(kinds)) {
             Yv *op = ir_render_op(yv_l(ya_get(kinds, i)), ir, wp);
             if (i == 0) {
@@ -309,7 +310,7 @@ Yv *ir_render(Yv *ir, Yv *txt, long at, long fno) {
 }
 
 /* How many words an operand of kind `k` takes. */
-long ir_kind_words(long k) {
+ylong ir_kind_words(ylong k) {
     if (k == O_REG || k == O_IND || k == O_DIFF) { return 2; }
     else if (k == O_MEM || k == O_MEM0) { return 5; }
     else { return 1; }
@@ -320,9 +321,9 @@ long ir_kind_words(long k) {
 /* `locs` says whether to print the `.loc` markers: a body compiled with line
  * info carries them whatever the program asked for, and a link without -g
  * drops them (asm_ir_items drops the item, link_text drops the line). */
-Yv *ir_render_all(Yv *ir, Yv *txt, int locs, long fno) {
+Yv *ir_render_all(Yv *ir, Yv *txt, int locs, ylong fno) {
     Yv *out = yav(0);
-    long at = 0;
+    ylong at = 0;
     while (at < yv_len(ir)) {
         if (locs || yv_l(ya_get(ir, at)) != IR_LOC) {
             out = ya_push(out, ir_render(ir, txt, at, fno));

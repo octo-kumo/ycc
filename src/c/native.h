@@ -10,27 +10,28 @@
 #ifndef NATIVE_H
 #define NATIVE_H
 
+#include "ylong.h"
 #include "yv.h"
 
-Yv *native_resolve(Yv *src, Yv *base_dir, long depth);
-Yv *native_resolve_x(Yv *src, Yv *base_dir, long depth, int allow_exec,
+Yv *native_resolve(Yv *src, Yv *base_dir, ylong depth);
+Yv *native_resolve_x(Yv *src, Yv *base_dir, ylong depth, int allow_exec,
                      Yv *root);
 Yv *native_resolve_pk(Yv *src, Yv *base_dir, int allow_exec, Yv *root,
                       Yv *pkgs, Yv *roots);
 Yv *std_units(Yv *names, Yv *pack);
 Yv *std_unit_names(void);
 Yv *std_pack(Yv *units);
-Yv *compile_package(Yv *ast, Yv *nr, Yv *name, long base, long wlevel,
+Yv *compile_package(Yv *ast, Yv *nr, Yv *name, ylong base, ylong wlevel,
                     Yv *std, Yv *deps);
 Yv *unit_obj(Yv *unit, Yv *key);
 Yv *unit_unobj(Yv *text, Yv *key);
 Yv *unit_iface(Yv *unit);
-Yv *origin_at(Yv *o, long ln, int bare);
+Yv *origin_at(Yv *o, ylong ln, int bare);
 Yv *strip_ns(Yv *node, Yv *imports);
 Yv *strip_list(Yv *nodes, Yv *imports);
 Yv *strip_decl(Yv *node, Yv *imports);
-Yv *phase_end(Yv *times, Yv *name, long t0, long h0);
-Yv *emit_program(Yv *ast, Yv *nr, int debug, long wlevel, Yv *std,
+Yv *phase_end(Yv *times, Yv *name, ylong t0, ylong h0);
+Yv *emit_program(Yv *ast, Yv *nr, int debug, ylong wlevel, Yv *std,
                     Yv *deps);
 /* The parts emit_program returned, rendered as assembly text: what -S
  * prints. The assembler takes the parts themselves. */

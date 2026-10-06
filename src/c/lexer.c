@@ -7,9 +7,10 @@
  *
  * NOTE: short underscore-free names (isdigit/isalpha/...) — see below. */
 
+#include "ylong.h"
 #include "lexer.h"
 
-int isdigit(long c) {
+int isdigit(ylong c) {
     // On the byte itself, the way the Y copy reads it: `c` is the byte at
     // the source position, not a 1-char slice of it. The old form compared
     // the slice with ys_cmp/ys_eq_lit, so classifying every character of the
@@ -17,15 +18,15 @@ int isdigit(long c) {
     return c >= '0' && c <= '9';
 }
 
-int isupper(long c) {
+int isupper(ylong c) {
     return c >= 'A' && c <= 'Z';
 }
 
-int islower(long c) {
+int islower(ylong c) {
     return c >= 'a' && c <= 'z';
 }
 
-int isalpha(long c) {
+int isalpha(ylong c) {
     // word chars: letters AND underscore (chr(95)) AND digits (Y words like
     // "t0"/"r64" contain digits; the C backend's take_alpha accepts them too
     // via is_alpha... precisely: parser.c is_alpha includes is_digit, so
@@ -33,12 +34,12 @@ int isalpha(long c) {
     return islower(c) || isupper(c) || c == '_' || isdigit(c);
 }
 
-int isalnum(long c) {
+int isalnum(ylong c) {
     return isdigit(c) || isalpha(c);
 }
 
 // Digit of a radix literal (0x.. / 0b..), including `_` separators.
-int is_radix_ch(long c, long radix) {
+int is_radix_ch(ylong c, ylong radix) {
     if (c == '_') { return 1; }
     else if (radix == 2) { return c == '0' || c == '1'; }
     else { return isdigit(c) ||
@@ -54,7 +55,7 @@ Yv *strip_seps(Yv *s) {
     else { return ys_join(ys_split(s, ys("_")), ys("")); }
 }
 
-int isspace(long c) {
+int isspace(ylong c) {
     return c == ' ' || c == '\t' || c == '\n' || c == '\r';
 }
 
@@ -68,7 +69,7 @@ int isspace(long c) {
 // names in ycc/*.y therefore use the flat isalpha/isdigit/isalnum style.
 
 // is c one of the single-char punctuation symbols?
-int ispunct(long c) {
+int ispunct(ylong c) {
     return c == '(' || c == ')' ||
            c == '{' || c == '}' ||
            c == '[' || c == ']' ||
@@ -77,17 +78,17 @@ int ispunct(long c) {
 }
 
 static Yv *unescape(Yv *raw, int braces);
-long lit_end(Yv *src, long q, long *closed);
+ylong lit_end(Yv *src, ylong q, ylong *closed);
 
 // Scan a quoted literal at src[i] (a `"` or `'` quote): returns the
 // decoded text and the position just past the closing quote. Escapes:
 // \n \t \r, \xHH, and `\<c>` drops the backslash (the Y literal rules).
-Yv *lex_quoted(Yv *src, long i, long line, long col, Yv *what) {
+Yv *lex_quoted(Yv *src, ylong i, ylong line, ylong col, Yv *what) {
     Yv *q = ys_slice(src, i, i + 1);
-    long n = yv_len(src);
+    ylong n = yv_len(src);
     i = i + 1;
     col = col + 1;
-    long start = i;
+    ylong start = i;
     int open = 1;
     int closed = 0;
     int hasesc = 0;
@@ -133,8 +134,8 @@ Yv *lex_quoted(Yv *src, long i, long line, long col, Yv *what) {
 static Yv *unescape(Yv *raw, int braces) {
     /* a chunk list + join (O(n)) */
     Yv *chunks = yav(0);
-    long k = 0;
-    long rn = yv_len(raw);
+    ylong k = 0;
+    ylong rn = yv_len(raw);
     while (k < rn) {
         Yv *rc = ys_slice(raw, k, k + 1);
         if (ys_eq_lit(rc, "\\")) {
@@ -144,8 +145,8 @@ static Yv *unescape(Yv *raw, int braces) {
             else if (ys_eq_lit(esc, "r")) { chunks = ya_push(chunks, ys("\r")); k = k + 2; ; }
             else if (ys_eq_lit(esc, "x")) {
                 /* \xHH -- two hex digits */
-                long h1 = hexvalx(ys_slice(raw, k + 2, k + 3));
-                long h2 = hexvalx(ys_slice(raw, k + 3, k + 4));
+                ylong h1 = hexvalx(ys_slice(raw, k + 2, k + 3));
+                ylong h2 = hexvalx(ys_slice(raw, k + 3, k + 4));
                 if (h1 >= 0 && h2 >= 0) {
                     chunks = ya_push(chunks, ys_chr(h1 * 16 + h2));
                     k = k + 4;
@@ -182,7 +183,7 @@ static Yv *unescape(Yv *raw, int braces) {
  * in it: f"{d["k"]}", f"{s[1:3]}", f"{n == 1 ? "" : "s"}". */
 
 /* A byte of an identifier-shaped word (isalnum, on a byte). */
-static int wordbyte(long c) {
+static int wordbyte(ylong c) {
     return (c >= 97 && c <= 122) || (c >= 65 && c <= 90) ||
            (c >= 48 && c <= 57) || c == 95;
 }
@@ -197,15 +198,15 @@ static int wordbyte(long c) {
  * pass both call it. lex_quoted does NOT: it counts line and column as it
  * scans and reports an unterminated literal in `err` (so the fault lands on
  * the offending token), which is why it carries its own loop above. */
-long lit_end(Yv *src, long q, long *closed) {
-    long n = yv_len(src);
-    long qc = ys_byte_at(src, q);
-    long i = q + 1;
-    long end = n;
+ylong lit_end(Yv *src, ylong q, ylong *closed) {
+    ylong n = yv_len(src);
+    ylong qc = ys_byte_at(src, q);
+    ylong i = q + 1;
+    ylong end = n;
     int open = 1;
     int was = 0;
     while (open && i < n) {
-        long c = ys_byte_at(src, i);
+        ylong c = ys_byte_at(src, i);
         if (c == 92) { i = i + 2; ; }
         else if (c == qc) { end = i + 1; open = 0; was = 1; ; }
         else { i = i + 1; ; };
@@ -218,16 +219,16 @@ long lit_end(Yv *src, long q, long *closed) {
  * first `}` or `:` outside brackets and literals (but a `:` that closes a
  * `?`), or a `,` `;` or unmatched `)` `]` there, which fstr_walk rejects;
  * len(src) when the source runs out first. */
-static long fstr_expr_end(Yv *src, long lo) {
-    long ignored = 0;
-    long n = yv_len(src);
-    long depth = 0;
-    long tern = 0;
-    long i = lo;
-    long stop = n;
+static ylong fstr_expr_end(Yv *src, ylong lo) {
+    ylong ignored = 0;
+    ylong n = yv_len(src);
+    ylong depth = 0;
+    ylong tern = 0;
+    ylong i = lo;
+    ylong stop = n;
     int go = 1;
     while (go && i < n) {
-        long c = ys_byte_at(src, i);
+        ylong c = ys_byte_at(src, i);
         if (c == 34 || c == 39) {
             if (c == 34 && i > lo && ys_byte_at(src, i - 1) == 102 &&
                 (i - 1 == lo || !wordbyte(ys_byte_at(src, i - 2)))) {
@@ -274,11 +275,11 @@ static long fstr_expr_end(Yv *src, long lo) {
 }
 
 /* Whether src[lo:hi] is all blanks. */
-static int fstr_blank(Yv *src, long lo, long hi) {
-    long i = lo;
+static int fstr_blank(Yv *src, ylong lo, ylong hi) {
+    ylong i = lo;
     int blank = 1;
     while (blank && i < hi) {
-        long c = ys_byte_at(src, i);
+        ylong c = ys_byte_at(src, i);
         blank = c == 32 || c == 9 || c == 10 || c == 13;
         i = i + 1;
         ;
@@ -293,13 +294,13 @@ static int fstr_blank(Yv *src, long lo, long hi) {
  * (lex_fstring) and native.y's splice scan reads the same fields as code
  * (words_scan), so the two always agree. A broken f-string ends where a
  * plain literal would. */
-Yv *fstr_walk(Yv *src, long q) {
-    long ignored = 0;
-    long n = yv_len(src);
+Yv *fstr_walk(Yv *src, ylong q) {
+    ylong ignored = 0;
+    ylong n = yv_len(src);
     Yv *fields = yav(0);
     Yv *err = ys("");
-    long at = q;
-    long i = q + 1;
+    ylong at = q;
+    ylong i = q + 1;
     int open = 1;
     while (open) {
         if (i >= n) {
@@ -307,7 +308,7 @@ Yv *fstr_walk(Yv *src, long q) {
             open = 0;
             ;
         } else {
-            long c = ys_byte_at(src, i);
+            ylong c = ys_byte_at(src, i);
             if (c == 92) {
                 i = i + 2;
                 ;
@@ -325,9 +326,9 @@ Yv *fstr_walk(Yv *src, long q) {
                 open = 0;
                 ;
             } else if (c == 123) {
-                long lo = i + 1;
-                long hi = fstr_expr_end(src, lo);
-                long hc = 0;
+                ylong lo = i + 1;
+                ylong hi = fstr_expr_end(src, lo);
+                ylong hc = 0;
                 if (hi < n) { hc = ys_byte_at(src, hi); ; }
                 if (hc != 125 && hc != 58) {
                     if (hi >= n) {
@@ -358,7 +359,7 @@ Yv *fstr_walk(Yv *src, long q) {
                     ;
                 } else {
                     /* the spec: up to the closing brace */
-                    long e = hi + 1;
+                    ylong e = hi + 1;
                     while (e < n && ys_byte_at(src, e) != 125 &&
                            ys_byte_at(src, e) != 123 &&
                            ys_byte_at(src, e) != 34) {
@@ -396,16 +397,16 @@ Yv *fstr_walk(Yv *src, long q) {
         };
         ;
     };
-    long end = i;
+    ylong end = i;
     if (!ys_eq_lit(err, "")) { end = lit_end(src, q, &ignored); ; }
     return yr(4, "end", yv_long(end), "err", err, "at", yv_long(at), "fields", fields);
 }
 
 /* The position (line, col) moves to over src[a:b]. */
-static Yv *fstr_adv(Yv *src, long a, long b, long line, long col) {
-    long ln = line;
-    long cl = col;
-    long i = a;
+static Yv *fstr_adv(Yv *src, ylong a, ylong b, ylong line, ylong col) {
+    ylong ln = line;
+    ylong cl = col;
+    ylong i = a;
     while (i < b) {
         if (ys_byte_at(src, i) == 10) { ln = ln + 1; cl = 1; ; } else { cl = cl + 1; ; };
         i = i + 1;
@@ -423,7 +424,7 @@ static Yv *fstr_adv(Yv *src, long a, long b, long line, long col) {
  * it stands; the rest sits at the field's `{`. Without fields it is a plain
  * string; a broken one is an `ferr` token, which the parser turns into an
  * error where the walk stopped. */
-static Yv *lex_fstring(Yv *src, long q, long line, long col, Yv *toks) {
+static Yv *lex_fstring(Yv *src, ylong q, ylong line, ylong col, Yv *toks) {
     Yv *w = fstr_walk(src, q);
     Yv *fs = yr_get(w, "fields");
     if (!ys_eq_lit(yr_get(w, "err"), "")) {
@@ -440,15 +441,15 @@ static Yv *lex_fstring(Yv *src, long q, long line, long col, Yv *toks) {
         ;
     } else {
         toks = ya_push(toks, mktok(ys("punct"), ys("("), line, col));
-        long from = q + 1;
-        long at = q - 1;
-        long bl = line;
-        long bc = col;
-        long k = 0;
+        ylong from = q + 1;
+        ylong at = q - 1;
+        ylong bl = line;
+        ylong bc = col;
+        ylong k = 0;
         while (k < yv_len(fs)) {
-            long lo = yv_l(ya_get(fs, k));
-            long hi = yv_l(ya_get(fs, k + 1));
-            long slo = yv_l(ya_get(fs, k + 2));
+            ylong lo = yv_l(ya_get(fs, k));
+            ylong hi = yv_l(ya_get(fs, k + 1));
+            ylong slo = yv_l(ya_get(fs, k + 2));
             Yv *bp = fstr_adv(src, at, lo - 1, bl, bc);
             at = lo - 1;
             bl = yv_l(yr_get(bp, "line"));
@@ -464,7 +465,7 @@ static Yv *lex_fstring(Yv *src, long q, long line, long col, Yv *toks) {
             toks = ya_push(toks, mktok(ys("id"), ys("#fmt"), bl, bc));
             toks = ya_push(toks, mktok(ys("punct"), ys("("), bl, bc));
             Yv *sub = tokenize(ys_slice(src, lo, hi));
-            long j = 0;
+            ylong j = 0;
             while (j + 1 < yv_len(sub)) {
                 Yv *tk = ya_get(sub, j);
                 if (yv_l(yr_get(tk, "line")) == 1) {
@@ -499,7 +500,7 @@ static Yv *lex_fstring(Yv *src, long q, long line, long col, Yv *toks) {
             k = k + 4;
             ;
         };
-        long end = yv_l(yr_get(w, "end"));
+        ylong end = yv_l(yr_get(w, "end"));
         if (end - 1 > from) {
             toks = ya_push(toks, mktok(ys("op"), ys("+"), bl, bc));
             toks = ya_push(toks, mktok(ys("str"),
@@ -514,13 +515,13 @@ static Yv *lex_fstring(Yv *src, long q, long line, long col, Yv *toks) {
     return yr(3, "end", yr_get(w, "end"), "line", yr_get(e, "line"), "col", yr_get(e, "col"));
 }
 
-Yv *mktok(Yv *t, Yv *v, long line, long col) {
+Yv *mktok(Yv *t, Yv *v, ylong line, ylong col) {
     return yr(4, "t", t, "v", v, "line", yv_long(line), "col", yv_long(col));
 }
 
 // Value of a single hex digit char (0-15), or -1 if not a hex digit.
-long hexvalx(Yv *c) {
-    long o = ys_ord(c);
+ylong hexvalx(Yv *c) {
+    ylong o = ys_ord(c);
     if (o >= 48 && o <= 57) { return o - 48; }
     else if (o >= 65 && o <= 70) { return o - 65 + 10; }
     else if (o >= 97 && o <= 102) { return o - 97 + 10; }
@@ -536,7 +537,7 @@ long hexvalx(Yv *c) {
 // lexes as the ternary `a ? .b`, and `c ?.5 : 1` -- a conditional whose arm
 // starts with a fraction, which no program wants -- is a syntax error, as
 // in C.
-Yv *multicharop(Yv *src, long i, Yv *c) {
+Yv *multicharop(Yv *src, ylong i, Yv *c) {
     if (ys_eq_lit(c, "<") || ys_eq_lit(c, ">")) {
         Yv *four = ys_slice(src, i, i + 4);
         Yv *three = ys_slice(src, i, i + 3);
@@ -550,7 +551,7 @@ Yv *multicharop(Yv *src, long i, Yv *c) {
 }
 
 // Try to read a two-char operator at position i. Returns the operator or "".
-Yv *twocharop(Yv *src, long i) {
+Yv *twocharop(Yv *src, ylong i) {
     Yv *two = ys_slice(src, i, i + 2);
     if (ys_eq_lit(two, "==") || ys_eq_lit(two, "!=") ||
         ys_eq_lit(two, "<=") || ys_eq_lit(two, ">=") ||
@@ -567,7 +568,7 @@ Yv *twocharop(Yv *src, long i) {
     else { return ys(""); }
 }
 
-int issingleop(long c) {
+int issingleop(ylong c) {
     return c == '+' || c == '-' ||
            c == '*' || c == slashb() ||
            c == '%' || c == '<' ||
@@ -584,9 +585,9 @@ int issingleop(long c) {
 // slash() for the string uses and spells the byte as c'/' in the predicates.
 Yv *slash(void) { return ys("/"); }
 
-long slashb(void) { return '/'; }
+ylong slashb(void) { return '/'; }
 
-int isdigitch(long c) {
+int isdigitch(ylong c) {
     // The same test as isdigit, spelled out; unused since isdigit took a
     // byte too, but kept so this file stays 1:1 with src/y/lexer.y.
     if (c == '0') { return 1; }
@@ -603,26 +604,26 @@ int isdigitch(long c) {
 
 Yv *tokenize(Yv *src) {
     Yv *toks = yav(0);
-    long i = 0;
-    long n = yv_len(src);
-    long line = 1;
-    long col = 1;
+    ylong i = 0;
+    ylong n = yv_len(src);
+    ylong line = 1;
+    ylong col = 1;
     while (i < n) {
-        long c = ys_byte_at(src, i);
+        ylong c = ys_byte_at(src, i);
         if (isspace(c)) {
             if (c == '\n') { line = line + 1; col = 1; ; }
             else { col = col + 1; ; }
             i = i + 1;
             ;
         } else if (isdigit(c)) {
-            long start = i;
-            long startcol = col;
+            ylong start = i;
+            ylong startcol = col;
             // 0x../0X.. (hex) and 0b../0B.. (binary) integer literals.
-            long radix = 0;
+            ylong radix = 0;
             if (c == '0') {
                 /* one past the last byte is a peek, not an index: Y reads
                  * src[i + 1:i + 2] here, and a slice clamps */
-                long nxt = ys_byte_peek(src, i + 1);
+                ylong nxt = ys_byte_peek(src, i + 1);
                 if (nxt == 'x' || nxt == 'X') { radix = 16; }
                 else if (nxt == 'b' || nxt == 'B') { radix = 2; }
             }
@@ -635,7 +636,7 @@ Yv *tokenize(Yv *src) {
                 int rdone = 0;
                 while (rdone == 0) {
                     if (i < n) {
-                        long rc = ys_byte_at(src, i);
+                        ylong rc = ys_byte_at(src, i);
                         if (is_radix_ch(rc, radix)) {
                             if (rc != '_') { digits = 1; }
                             i = i + 1;
@@ -662,7 +663,7 @@ Yv *tokenize(Yv *src) {
             int ind = 0;
             while (ind == 0) {
                 if (i < n) {
-                    long dc = ys_byte_at(src, i);
+                    ylong dc = ys_byte_at(src, i);
                     if (isdigit(dc) || dc == '_') { i = i + 1; col = col + 1; ; }
                     else { ind = 1; ; };
                     ;
@@ -673,11 +674,11 @@ Yv *tokenize(Yv *src) {
                 !ys_eq_lit(ys_slice(src, i + 1, i + 2), ".")) {
                 i = i + 1;
                 col = col + 1;
-                long fs = i;
+                ylong fs = i;
                 int frd = 0;
                 while (frd == 0) {
                     if (i < n) {
-                        long fc = ys_byte_at(src, i);
+                        ylong fc = ys_byte_at(src, i);
                         if (isdigit(fc) || (fc == '_' && i > fs)) { i = i + 1; col = col + 1; ; }
                         else { frd = 1; ; };
                         ;
@@ -689,7 +690,7 @@ Yv *tokenize(Yv *src) {
             // number followed by an identifier rather than a bad literal.
             Yv *ec = ys_slice(src, i, i + 1);
             if (ys_eq_lit(ec, "e") || ys_eq_lit(ec, "E")) {
-                long esign = 0;
+                ylong esign = 0;
                 Yv *sc = ys_slice(src, i + 1, i + 2);
                 if (ys_eq_lit(sc, "+") || ys_eq_lit(sc, "-")) { esign = 1; }
                 /* one past the digits can be the end of the source (`1e`):
@@ -700,7 +701,7 @@ Yv *tokenize(Yv *src) {
                     int exd = 0;
                     while (exd == 0) {
                         if (i < n) {
-                            long xc = ys_byte_at(src, i);
+                            ylong xc = ys_byte_at(src, i);
                             if (isdigit(xc) || xc == '_') { i = i + 1; col = col + 1; ; }
                             else { exd = 1; ; };
                             ;
@@ -719,8 +720,8 @@ Yv *tokenize(Yv *src) {
             }
             ;
         } else if (isalpha(c)) {
-            long start = i;
-            long startcol = col;
+            ylong start = i;
+            ylong startcol = col;
             // The first character is already known to be a word character.
             i = i + 1;
             col = col + 1;
@@ -753,7 +754,7 @@ Yv *tokenize(Yv *src) {
             if (ys_eq_lit(word, "b")) {
                 // b"..." / b'...' -- a byte-string literal: the same type
                 // as [byte], spelled like a Python bytes literal.
-                long bline = line;
+                ylong bline = line;
                 Yv *qch = ys_slice(src, i, i + 1);
                 if (ys_eq_lit(qch, "\"") || ys_eq_lit(qch, "'")) {
                     Yv *bq = lex_quoted(src, i, line, col, ys("byte string"));
@@ -775,7 +776,7 @@ Yv *tokenize(Yv *src) {
                 ;
             } else if (ys_eq_lit(word, "c") && ys_eq_lit(ys_slice(src, i, i + 1), "'")) {
                 // c'a' -- a character literal: one byte, typed `byte`.
-                long cline = line;
+                ylong cline = line;
                 Yv *cq = lex_quoted(src, i, line, col, ys("character literal"));
                 i = yv_l(yr_get(cq, "end"));
                 line = yv_l(yr_get(cq, "line"));
@@ -805,8 +806,8 @@ Yv *tokenize(Yv *src) {
             // string literal with escapes. NOTE: this arm precedes the slash
             // arms below: every slash inside quotes is consumed here, so the
             // slash arms only ever see real comment openers or operators.
-            long startline = line;
-            long startcol = col;
+            ylong startline = line;
+            ylong startcol = col;
             Yv *q = lex_quoted(src, i, line, col, ys("string literal"));
             i = yv_l(yr_get(q, "end"));
             line = yv_l(yr_get(q, "line"));
@@ -916,8 +917,8 @@ Yv *tokenize(Yv *src) {
                  * "unterminated string literal". lex_quoted walks the run and
                  * says whether it closed; an unclosed one is a second fault
                  * on top of this one, and this is the message that helps. */
-                long aline = line;
-                long acol = col;
+                ylong aline = line;
+                ylong acol = col;
                 Yv *aq = lex_quoted(src, i, line, col, ys("character literal"));
                 i = yv_l(yr_get(aq, "end"));
                 line = yv_l(yr_get(aq, "line"));

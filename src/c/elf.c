@@ -22,6 +22,7 @@
  * Y-side binary data flows through packed [byte] arrays. The C value model
  * keeps each element as a boxed long; the driver writes it directly. */
 
+#include "ylong.h"
 #include "elf.h"
 
 /* imported — src/y/enc64.y (`import elfenc from "./enc64.y";`; module calls
@@ -30,33 +31,33 @@
  * `def byte_of(v: long, i: long) -> long`. */
 #include "enc64.h"
 
-long elf_code_off(long bss_len) {
+ylong elf_code_off(ylong bss_len) {
     if (bss_len > 0) { return 176; } else { return 120; }
 }
 
 /* The R+E image's size in MEMORY, from the code's start: the code, the
    rodata and its 8-byte trailer, rounded up to a page. The tail past the last
    byte in the file is the loader's zero-fill (see the header). */
-static long elf_mem_code(long codesz, long ro_len) {
-    long n = codesz + ro_len + 8;
-    long trail = n % 4096;
+static ylong elf_mem_code(ylong codesz, ylong ro_len) {
+    ylong n = codesz + ro_len + 8;
+    ylong trail = n % 4096;
     if (trail != 0) { return n + 4096 - trail; } else { return n; }
 }
 
 /* The same rounding for a file size that includes the headers (p_memsz). */
-static long elf_memsz(long filesz) {
-    long trail = filesz % 4096;
+static ylong elf_memsz(ylong filesz) {
+    ylong trail = filesz % 4096;
     if (trail != 0) { return filesz + 4096 - trail; } else { return filesz; }
 }
 
-long elf_bss_from_ro(long code_len, long ro_len) {
+ylong elf_bss_from_ro(ylong code_len, ylong ro_len) {
     return elf_mem_code(code_len, ro_len) + 4096 - code_len;
 }
 
-Yv *elf_build(Yv *code, Yv *rodata, long entry_off, long bss_len,
+Yv *elf_build(Yv *code, Yv *rodata, ylong entry_off, ylong bss_len,
               Yv *syms, Yv *dsecs) {
-    long code_off = elf_code_off(bss_len);
-    long base = 4194304;
+    ylong code_off = elf_code_off(bss_len);
+    ylong base = 4194304;
     // Layout: [EHDR 64][PHDR 56][code][rodata + trailer]. Nothing is padded:
     // rodata need not be page-aligned (it is reached through a patched
     // rip-relative lea), and the mapping's last page is zero-filled by the
@@ -66,15 +67,15 @@ Yv *elf_build(Yv *code, Yv *rodata, long entry_off, long bss_len,
     // while `out = concat(out, f)` would allocate a fresh array and copy
     // every byte written so far, for every field. Helpers below append.
     Yv *out = yav(0);
-    long codesz = yv_len(code);
-    long ro_len = yv_len(rodata);
+    ylong codesz = yv_len(code);
+    ylong ro_len = yv_len(rodata);
     /* What the file holds and what the loader maps. The difference is the
        last page's zero-fill (elf_mem_code), and it is what the kernel used to
        be handed as 7,727 literal zero bytes. */
-    long filesz = code_off + codesz + ro_len + 8;
-    long memsz = elf_memsz(filesz);
-    long bss_vaddr = base + elf_mem_code(codesz, ro_len) + 4096;
-    long entry = base + code_off + entry_off;
+    ylong filesz = code_off + codesz + ro_len + 8;
+    ylong memsz = elf_memsz(filesz);
+    ylong bss_vaddr = base + elf_mem_code(codesz, ro_len) + 4096;
+    ylong entry = base + code_off + entry_off;
     /* the .bss address is computed once, here, and handed down: the plain and
        the -g build must not each have their own formula for it. */
     Yv *dbg = elf_debug(code_off, codesz, ro_len, filesz, bss_vaddr,
@@ -95,7 +96,7 @@ Yv *elf_build(Yv *code, Yv *rodata, long entry_off, long bss_len,
     out = push_le32(out, 0);
     out = push_le16(out, 64);
     out = push_le16(out, 56);
-    long phnum = 1;
+    ylong phnum = 1;
     if (bss_len > 0) { phnum = 2; ; }
     out = push_le16(out, phnum);
     if (yv_l(yr_get(dbg, "shnum")) > 0) {
@@ -151,19 +152,19 @@ Yv *elf_build(Yv *code, Yv *rodata, long entry_off, long bss_len,
  * R+W PHDR's p_offset/p_filesz), at the page boundary past the image
  * (p_offset must share p_vaddr's page offset). The loader zeroes the rest
  * of that page, so memory holds the same zeros as without -g. */
-Yv *elf_debug(long code_off, long codesz, long ro_len, long filesz,
-              long bss_vaddr, long bss_len, Yv *syms, Yv *dsecs) {
+Yv *elf_debug(ylong code_off, ylong codesz, ylong ro_len, ylong filesz,
+              ylong bss_vaddr, ylong bss_len, Yv *syms, Yv *dsecs) {
     if (yv_len(syms) == 0) {
         Yv *none_bytes = yav(0);
         return yr(6, "bytes", none_bytes, "shoff", yv_long(0), "shnum",
                   yv_long(0), "shstrndx", yv_long(0), "bss_foff",
                   yv_long(0), "bss_fsz", yv_long(0));
     } else {
-        long base = 4194304;
-        long ro_off = code_off + codesz;
-        long bss_addr = base + bss_vaddr;
-        long bss_idx = 0;
-        long symtab_idx = 3;
+        ylong base = 4194304;
+        ylong ro_off = code_off + codesz;
+        ylong bss_addr = base + bss_vaddr;
+        ylong bss_idx = 0;
+        ylong symtab_idx = 3;
         if (bss_len > 0) {
             bss_idx = 3;
             symtab_idx = 4;
@@ -171,8 +172,8 @@ Yv *elf_debug(long code_off, long codesz, long ro_len, long filesz,
         Yv *strtab = yav(1, yv_long(0));
         Yv *symtab = yav(0);
         symtab = push_zeros(symtab, 24);
-        long nlocal = 1;
-        long i = 0;
+        ylong nlocal = 1;
+        ylong i = 0;
         while (i < yv_len(syms)) {
             Yv *sy = ya_get(syms, i);
             if (!ys_eq_lit(yr_get(sy, "name"), "_start")) {
@@ -195,22 +196,22 @@ Yv *elf_debug(long code_off, long codesz, long ro_len, long filesz,
         }
         /* section names, each at its offset in .shstrtab */
         Yv *shstr = yav(1, yv_long(0));
-        long n_text = yv_len(shstr);
+        ylong n_text = yv_len(shstr);
         shstr = push_cstr(shstr, ys(".text"));
-        long n_ro = yv_len(shstr);
+        ylong n_ro = yv_len(shstr);
         shstr = push_cstr(shstr, ys(".rodata"));
-        long n_bss = yv_len(shstr);
+        ylong n_bss = yv_len(shstr);
         if (bss_len > 0) {
             shstr = push_cstr(shstr, ys(".bss"));
         }
-        long n_sym = yv_len(shstr);
+        ylong n_sym = yv_len(shstr);
         shstr = push_cstr(shstr, ys(".symtab"));
-        long n_str = yv_len(shstr);
+        ylong n_str = yv_len(shstr);
         shstr = push_cstr(shstr, ys(".strtab"));
-        long n_shs = yv_len(shstr);
+        ylong n_shs = yv_len(shstr);
         shstr = push_cstr(shstr, ys(".shstrtab"));
         Yv *dnames = yav(0);
-        long di = 0;
+        ylong di = 0;
         while (di < yv_len(dsecs)) {
             Yv *ds = ya_get(dsecs, di);
             dnames = ya_push(dnames, yv_long(yv_len(shstr)));
@@ -218,9 +219,9 @@ Yv *elf_debug(long code_off, long codesz, long ro_len, long filesz,
             di = di + 1;
         }
         Yv *blob = yav(0);
-        long bss_foff = 0;
-        long bss_fsz = 0;
-        long symtab_off = filesz;
+        ylong bss_foff = 0;
+        ylong bss_fsz = 0;
+        ylong symtab_off = filesz;
         if (bss_len > 0) {
             /* The .bss head must sit at a file offset that shares the mapped
                page offset of its address (the R+W PHDR's p_offset against
@@ -238,8 +239,8 @@ Yv *elf_debug(long code_off, long codesz, long ro_len, long filesz,
             blob = push_zeros(blob, bss_foff + bss_fsz - filesz);
             symtab_off = bss_foff + bss_fsz;
         }
-        long strtab_off = symtab_off + yv_len(symtab);
-        long shstr_off = strtab_off + yv_len(strtab);
+        ylong strtab_off = symtab_off + yv_len(symtab);
+        ylong shstr_off = strtab_off + yv_len(strtab);
         blob = push_bytes(blob, symtab);
         blob = push_bytes(blob, strtab);
         blob = push_bytes(blob, shstr);
@@ -251,9 +252,9 @@ Yv *elf_debug(long code_off, long codesz, long ro_len, long filesz,
             blob = push_bytes(blob, yr_get(ds, "data"));
             di = di + 1;
         }
-        long pad = (8 - yv_len(blob) % 8) % 8;
+        ylong pad = (8 - yv_len(blob) % 8) % 8;
         blob = push_zeros(blob, pad);
-        long shoff = filesz + yv_len(blob);
+        ylong shoff = filesz + yv_len(blob);
         /* section headers */
         blob = push_zeros(blob, 64);
         blob = push_shdr(blob, n_text, 1, 6, base + code_off, code_off,
@@ -287,8 +288,8 @@ Yv *elf_debug(long code_off, long codesz, long ro_len, long filesz,
 
 /* One Elf64_Sym: name offset, info (bind << 4 | type), other, section
  * index, value (the address), size. */
-Yv *push_sym(Yv *out, long name_off, Yv *sy, long bss_idx, long text_addr,
-             long bss_addr, long bind) {
+Yv *push_sym(Yv *out, ylong name_off, Yv *sy, ylong bss_idx, ylong text_addr,
+             ylong bss_addr, ylong bind) {
     out = push_le32(out, name_off);
     if (yv_l(yr_get(sy, "sec")) == 0) {
         out = ya_push(out, yv_long(byte_of(bind * 16 + 2, 0)));
@@ -308,8 +309,8 @@ Yv *push_sym(Yv *out, long name_off, Yv *sy, long bss_idx, long text_addr,
 }
 
 /* One Elf64_Shdr. */
-Yv *push_shdr(Yv *out, long name, long typ, long flags, long addr, long off,
-              long size, long link, long info, long align, long entsize) {
+Yv *push_shdr(Yv *out, ylong name, ylong typ, ylong flags, ylong addr, ylong off,
+              ylong size, ylong link, ylong info, ylong align, ylong entsize) {
     out = push_le32(out, name);
     out = push_le32(out, typ);
     out = push_le64(out, flags);
@@ -330,8 +331,8 @@ Yv *push_cstr(Yv *out, Yv *s) {
     return out;
 }
 
-Yv *push_zeros(Yv *out, long n) {
-    long i = 0;
+Yv *push_zeros(Yv *out, ylong n) {
+    ylong i = 0;
     while (i < n) {
         out = ya_push(out, yv_long(0));
         i = i + 1;
@@ -346,7 +347,7 @@ Yv *push_zeros(Yv *out, long n) {
 Yv *push_bytes(Yv *out, Yv *bytes) {
     // NOTE: annotated `[byte]`, not a bare hole: a hole takes its element
     // type from the call site, and these buffers are always packed bytes.
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(bytes)) {
         out = ya_push(out, ya_get(bytes, i));
         i = i + 1;
@@ -355,13 +356,13 @@ Yv *push_bytes(Yv *out, Yv *bytes) {
     return out;
 }
 
-Yv *push_le16(Yv *out, long v) {
+Yv *push_le16(Yv *out, ylong v) {
     out = ya_push(out, yv_long(byte_of(v, 0)));
     out = ya_push(out, yv_long(byte_of(v, 1)));
     return out;
 }
 
-Yv *push_le32(Yv *out, long v) {
+Yv *push_le32(Yv *out, ylong v) {
     out = ya_push(out, yv_long(byte_of(v, 0)));
     out = ya_push(out, yv_long(byte_of(v, 1)));
     out = ya_push(out, yv_long(byte_of(v, 2)));
@@ -369,7 +370,7 @@ Yv *push_le32(Yv *out, long v) {
     return out;
 }
 
-Yv *push_le64(Yv *out, long v) {
+Yv *push_le64(Yv *out, ylong v) {
     out = ya_push(out, yv_long(byte_of(v, 0)));
     out = ya_push(out, yv_long(byte_of(v, 1)));
     out = ya_push(out, yv_long(byte_of(v, 2)));

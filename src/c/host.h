@@ -25,6 +25,7 @@
 
 #ifdef _WIN32
 
+#include "ylong.h"
 #include <windows.h>
 #include <io.h>
 #include <direct.h>
@@ -36,6 +37,7 @@
 #include <errno.h>
 #include <stdarg.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <string.h>
 
 /* The Linux numbers, so the call sites do not change. */
@@ -76,9 +78,9 @@
  * the only thing the caller does with it is `close` it. */
 #define Y_HOST_DIRFD 0x40000000L
 
-long syscall(long n, ...);
+ylong syscall(ylong n, ...);
 #define readlink y_host_readlink
-long y_host_readlink(const char *path, char *buf, size_t n);
+ylong y_host_readlink(const char *path, char *buf, size_t n);
 #define clock_gettime y_host_clock_gettime
 int y_host_clock_gettime(int clk, struct timespec *ts);
 #define nanosleep y_host_nanosleep

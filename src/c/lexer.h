@@ -5,6 +5,7 @@
 #ifndef LEXER_H
 #define LEXER_H
 
+#include "ylong.h"
 #include "yv.h"
 
 /* <ctype.h> FIRST, before the renames below. On Windows a later <windows.h>
@@ -31,30 +32,30 @@
 #define isspace y_lex_isspace
 #define ispunct y_lex_ispunct
 
-int isdigit(long c);                 /* (c: byte) -> bool */
-int isupper(long c);                 /* (c: byte) -> bool */
-int islower(long c);                 /* (c: byte) -> bool */
-int isalpha(long c);                 /* (c: byte) -> bool */
-int isalnum(long c);                 /* (c: byte) -> bool */
-int is_radix_ch(long c, long radix); /* (c: byte, radix: long) -> bool */
+int isdigit(ylong c);                 /* (c: byte) -> bool */
+int isupper(ylong c);                 /* (c: byte) -> bool */
+int islower(ylong c);                 /* (c: byte) -> bool */
+int isalpha(ylong c);                 /* (c: byte) -> bool */
+int isalnum(ylong c);                 /* (c: byte) -> bool */
+int is_radix_ch(ylong c, ylong radix); /* (c: byte, radix: long) -> bool */
 Yv *strip_seps(Yv *s);               /* (s: str) -> str */
-int isspace(long c);                 /* (c: byte) -> bool */
-int ispunct(long c);                 /* (c: byte) -> bool */
-Yv *lex_quoted(Yv *src, long i, long line, long col, Yv *what);
+int isspace(ylong c);                 /* (c: byte) -> bool */
+int ispunct(ylong c);                 /* (c: byte) -> bool */
+Yv *lex_quoted(Yv *src, ylong i, ylong line, ylong col, Yv *what);
                                      /* -> { text: str, end: long, line: long, col: long, err: str } */
-long lit_end(Yv *src, long q, long *closed);
+ylong lit_end(Yv *src, ylong q, ylong *closed);
                                      /* (src: str, q: long, closed: [long]) -> long */
-Yv *mktok(Yv *t, Yv *v, long line, long col);
+Yv *mktok(Yv *t, Yv *v, ylong line, ylong col);
                                      /* -> { t: str, v: str, line: long, col: long } */
-long hexvalx(Yv *c);                 /* (c: str) -> long */
-Yv *multicharop(Yv *src, long i, Yv *c);
+ylong hexvalx(Yv *c);                 /* (c: str) -> long */
+Yv *multicharop(Yv *src, ylong i, Yv *c);
                                      /* (src: str, i: long, c: str) -> str */
-Yv *twocharop(Yv *src, long i);      /* (src: str, i: long) -> str */
-int issingleop(long c);              /* (c: byte) -> bool */
+Yv *twocharop(Yv *src, ylong i);      /* (src: str, i: long) -> str */
+int issingleop(ylong c);              /* (c: byte) -> bool */
 Yv *slash(void);                     /* () -> str */
-long slashb(void);                   /* () -> byte */
-int isdigitch(long c);               /* (c: byte) -> bool */
+ylong slashb(void);                   /* () -> byte */
+int isdigitch(ylong c);               /* (c: byte) -> bool */
 Yv *tokenize(Yv *src);               /* (src: str) -> [{ t: str, v: str, line: long, col: long }] */
-Yv *fstr_walk(Yv *src, long q);      /* (src: str, q: long) -> { end: long, err: str, at: long, fields: [long] } */
+Yv *fstr_walk(Yv *src, ylong q);      /* (src: str, q: long) -> { end: long, err: str, at: long, fields: [long] } */
 
 #endif /* LEXER_H */

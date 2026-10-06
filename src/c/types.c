@@ -32,22 +32,23 @@
  * boxed with yv_long()/yv_bool() and read out with yv_l()/yv_b(). The
  * `0;` value-tails of Y if-arms are `;` here; tail values of blocks in
  * return position are `return`. */
+#include "ylong.h"
 #include "types.h"
 #include "target.h"
 #include "yv.h"
 #include "tags.h"
 
 /* parser.c's name index (NameIx, lookup below) */
-Yv *nameix_new(long cap);
-void nameix_put(Yv *m, Yv *k, long v);
-long nameix_get(Yv *m, Yv *k);
+Yv *nameix_new(ylong cap);
+void nameix_put(Yv *m, Yv *k, ylong v);
+ylong nameix_get(Yv *m, Yv *k);
 
 /* imported — types.y imports parser.y for its Field, Node and Type aliases
  * (a record is a Yv * here): every call below is a builtin
  * (len/push/index_of/join/tostring) or a def of this file. */
 
 /* forward declarations (Y defs are mutually visible) */
-static Yv *err_at(Yv *msg, long line, long col);
+static Yv *err_at(Yv *msg, ylong line, ylong col);
 static Yv *t_unk(void);
 static Yv *type_node(Yv *t);
 static Yv *tc_res(Yv *typ, Yv *st);
@@ -59,10 +60,10 @@ static int has_free(Yv *t);
 static int ret_pending(Yv *t);
 static int ret_unknown(Yv *t);
 static Yv *map_type_of(Yv *v);
-static int teq_fields(Yv *af, Yv *bf, long i);
-static int teq_list(Yv *aa, Yv *bb, long i);
-static int teq_members(Yv *ua, Yv *ub, long i);
-static void union_parts_go(Yv *out, Yv *t, long depth);
+static int teq_fields(Yv *af, Yv *bf, ylong i);
+static int teq_list(Yv *aa, Yv *bb, ylong i);
+static int teq_members(Yv *ua, Yv *ub, ylong i);
+static void union_parts_go(Yv *out, Yv *t, ylong depth);
 static int teq_ref(Yv *a, Yv *b);
 static Yv *tcanon_go(Yv *out, Yv *t, Yv *stack);
 static int str_in(Yv *xs, Yv *s);
@@ -70,31 +71,31 @@ static Yv *trec_field_type(Yv *rec, Yv *key);
 static Yv *tstr_go(Yv *t);
 static int num_is_float(Yv *s);
 static int num_mantissa_zero(Yv *s);
-static long num_net_exp(Yv *s);
+static ylong num_net_exp(Yv *s);
 static int is_value_type(Yv *t);
 static int t_poisoned(Yv *t);
-static int t_poisoned_go(Yv *t, long d);
+static int t_poisoned_go(Yv *t, ylong d);
 static int is_hash_key(Yv *t);
 static Yv *lookup(Yv *bindings, Yv *name);
 static Yv *st_bind(Yv *st, Yv *name, Yv *typ, Yv *kind, Yv *line, Yv *col);
 static Yv *st_errors(Yv *st, Yv *errs);
 static Yv *st_self(Yv *st, Yv *selfv);
 static Yv *st_ret(Yv *st, Yv *ret);
-static Yv *fail(Yv *st, Yv *msg, long line, long col);
+static Yv *fail(Yv *st, Yv *msg, ylong line, ylong col);
 static Yv *disp(Yv *name);
-static Yv *check_visible(Yv *st, Yv *got, Yv *name, long line, long col);
-static Yv *expect_type(Yv *st, Yv *got, Yv *want, Yv *what, long line, long col);
+static Yv *check_visible(Yv *st, Yv *got, Yv *name, ylong line, ylong col);
+static Yv *expect_type(Yv *st, Yv *got, Yv *want, Yv *what, ylong line, ylong col);
 static int cast_ok(Yv *got, Yv *want);
-static Yv *expect_cast(Yv *st, Yv *got, Yv *want, Yv *what, long line, long col);
-static Yv *expect_arg(Yv *st, Yv *got, Yv *want, Yv *arg, Yv *what, long line, long col);
+static Yv *expect_cast(Yv *st, Yv *got, Yv *want, Yv *what, ylong line, ylong col);
+static Yv *expect_arg(Yv *st, Yv *got, Yv *want, Yv *arg, Yv *what, ylong line, ylong col);
 static int is_some_call(Yv *n);
-static Yv *typeof_arith(Yv *st, Yv *op, Yv *lt, Yv *rt, long line, long col);
-static Yv *typeof_arith_arr(Yv *st, Yv *op, Yv *lt, Yv *rt, long line, long col);
+static Yv *typeof_arith(Yv *st, Yv *op, Yv *lt, Yv *rt, ylong line, ylong col);
+static Yv *typeof_arith_arr(Yv *st, Yv *op, Yv *lt, Yv *rt, ylong line, ylong col);
 Yv *arr_plus_kind(Yv *lt, Yv *rt);
 /* `x :: a` -- cons: a NEW array with x prepended as exactly ONE element
  * (unlike `elem + a`, an array-typed element is never spliced). The right
  * operand must be an array; the left must be its element type. */
-static Yv *typeof_cons(Yv *st, Yv *lt, Yv *rt, long line, long col) {
+static Yv *typeof_cons(Yv *st, Yv *lt, Yv *rt, ylong line, ylong col) {
     if (yv_l(yr_get(rt, "k")) == K_tarr ||
         yv_l(yr_get(rt, "k")) == K_tarrfix) {
         st = expect_type(st, lt, yr_get(rt, "of"), ys("'::' element"), line, col);
@@ -110,14 +111,14 @@ static Yv *typeof_cons(Yv *st, Yv *lt, Yv *rt, long line, long col) {
     }
 }
 
-static Yv *typeof_arith_long(Yv *st, Yv *op, Yv *lt, Yv *rt, long line, long col);
+static Yv *typeof_arith_long(Yv *st, Yv *op, Yv *lt, Yv *rt, ylong line, ylong col);
 int is_bits_op(Yv *op);
-static Yv *typeof_bits(Yv *st, Yv *op, Yv *lt, Yv *rt, long line, long col);
-static Yv *typeof_cmp(Yv *st, Yv *op, Yv *lt, Yv *rt, long line, long col);
+static Yv *typeof_bits(Yv *st, Yv *op, Yv *lt, Yv *rt, ylong line, ylong col);
+static Yv *typeof_cmp(Yv *st, Yv *op, Yv *lt, Yv *rt, ylong line, ylong col);
 static int is_num_kind(Yv *t);
 static int num_eq_ok(Yv *lt, Yv *rt);
-static Yv *typeof_eq(Yv *st, Yv *op, Yv *lt, Yv *rt, long line, long col);
-static Yv *typeof_logic(Yv *st, Yv *op, Yv *lt, Yv *rt, long line, long col);
+static Yv *typeof_eq(Yv *st, Yv *op, Yv *lt, Yv *rt, ylong line, ylong col);
+static Yv *typeof_logic(Yv *st, Yv *op, Yv *lt, Yv *rt, ylong line, ylong col);
 static int tcompat(Yv *got, Yv *want);
 static int arr_lit_adopts(Yv *got, Yv *want, Yv *n);
 static int arr_lit_adopts_go(Yv *got, Yv *want, Yv *n);
@@ -149,7 +150,7 @@ static Yv *opassign_check(Yv *st, Yv *node, Yv *tt, Yv *vt);
    emitted arch lines actually define (native.c check_os_call_names). */
 static int os_call_name(Yv *nm) {
     Yv *names = os_call_names();
-    long i = 0;
+    ylong i = 0;
     int found = 0;
     while (i < yv_len(names)) {
         if (ys_eq(ya_get(names, i), nm)) { found = 1; }
@@ -179,13 +180,13 @@ static Yv *typeof_lit(Yv *st, Yv *node, Yv *target);
 static Yv *typeof_expr_go(Yv *st, Yv *node);
 static Yv *typeof_decl(Yv *st, Yv *node);
 static Yv *ret_inferred_hint(Yv *rt);
-static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col, Yv *nline, Yv *ncol,
+static Yv *typeof_def(Yv *st, Yv *name, Yv *func, ylong line, ylong col, Yv *nline, Yv *ncol,
                        int isnat);
-static long ret_note(Yv *rl, Yv *typ, long line, long col);
-static long set_inferred_ret(Yv *func, Yv *ret);
-static Yv *st_fdepth(Yv *st, long d);
-static Yv *st_loop(Yv *st, long n, long fd);
-static Yv *st_unloop(Yv *st, long n, long fd);
+static ylong ret_note(Yv *rl, Yv *typ, ylong line, ylong col);
+static ylong set_inferred_ret(Yv *func, Yv *ret);
+static Yv *st_fdepth(Yv *st, ylong d);
+static Yv *st_loop(Yv *st, ylong n, ylong fd);
+static Yv *st_unloop(Yv *st, ylong n, ylong fd);
 static Yv *def_sig(Yv *name, Yv *func);
 static Yv *tstr_union(Yv *ts, Yv *sep);
 static int rec_has_names(Yv *r, Yv *names);
@@ -196,26 +197,26 @@ static int pattern_fits(Yv *s, Yv *t);
 static Yv *typeof_narrow(Yv *st, Yv *node);
 static Yv *typeof_matchend(Yv *st, Yv *node);
 static int covered(Yv *m, Yv *cover);
-static Yv *union_field(Yv *st, Yv *t, Yv *dkey, long line, long col);
+static Yv *union_field(Yv *st, Yv *t, Yv *dkey, ylong line, ylong col);
 static Yv *dotassign_union(Yv *st, Yv *t, Yv *node);
 static Yv *typeof_sliceassign(Yv *st, Yv *node);
-static Yv *typeof_prop(Yv *st, Yv *t, Yv *key, long line, long col);
-static Yv *typeof_field(Yv *st, Yv *t, Yv *dkey, long line, long col);
-static Yv *sm_mk(Yv *fn, Yv *params, long nreq, Yv *ret, Yv *dflt, int last);
+static Yv *typeof_prop(Yv *st, Yv *t, Yv *key, ylong line, ylong col);
+static Yv *typeof_field(Yv *st, Yv *t, Yv *dkey, ylong line, ylong col);
+static Yv *sm_mk(Yv *fn, Yv *params, ylong nreq, Yv *ret, Yv *dflt, int last);
 static Yv *sm_t(Yv *k);
 static Yv *sm_arr(Yv *of);
 static Yv *sm_any(void);
 static int sm_accepts(Yv *got, Yv *want);
-static int fmt_align(long c);
-static int fmt_digit(long c);
-static int fmt_type(long c);
-static long fmt_number(Yv *spec, long a, long b);
-static Yv *fmt_check(Yv *f, long kind, Yv *tname);
-static Yv *const_check(Yv *st, Yv *tgt, Yv *tt, Yv *op, long line, long col);
-static Yv *place_check(Yv *st, Yv *tgt, Yv *tt, Yv *op, long line, long col);
+static int fmt_align(ylong c);
+static int fmt_digit(ylong c);
+static int fmt_type(ylong c);
+static ylong fmt_number(Yv *spec, ylong a, ylong b);
+static Yv *fmt_check(Yv *f, ylong kind, Yv *tname);
+static Yv *const_check(Yv *st, Yv *tgt, Yv *tt, Yv *op, ylong line, ylong col);
+static Yv *place_check(Yv *st, Yv *tgt, Yv *tt, Yv *op, ylong line, ylong col);
 static Yv *base_type(Yv *st, Yv *e);
 
-static Yv *err_at(Yv *msg, long line, long col) {
+static Yv *err_at(Yv *msg, ylong line, ylong col) {
     return yr(3, "msg", msg, "line", yv_long(line), "col", yv_long(col));
 }
 
@@ -298,7 +299,7 @@ static int has_free(Yv *t) {
         return has_free(yr_get(t, "key")) || has_free(yr_get(t, "of"));
     } else if (yv_l(k) == K_trec) {
         Yv *fs = yr_get(t, "fields");
-        long i = 0;
+        ylong i = 0;
         while (i < yv_len(fs)) {
             if (has_free(yr_get(ya_get(fs, i), "typ"))) {
                 return 1;
@@ -308,7 +309,7 @@ static int has_free(Yv *t) {
         return 0;
     } else if (yv_l(k) == K_tunion) {
         Yv *ts = yr_get(t, "ts");
-        long i = 0;
+        ylong i = 0;
         while (i < yv_len(ts)) {
             if (has_free(ya_get(ts, i))) {
                 return 1;
@@ -318,7 +319,7 @@ static int has_free(Yv *t) {
         return 0;
     } else if (yv_l(k) == K_tfunc) {
         Yv *as = yr_get(t, "args");
-        long i = 0;
+        ylong i = 0;
         while (i < yv_len(as)) {
             if (has_free(ya_get(as, i))) {
                 return 1;
@@ -444,7 +445,7 @@ int teq(Yv *a, Yv *b) {
             int ok = teq(yr_get(a, "ret"), yr_get(b, "ret"));
             Yv *aa = yr_get(a, "args");
             Yv *bb = yr_get(b, "args");
-            long i = 0;
+            ylong i = 0;
             while (ok) {
                 if (i < yv_len(aa)) {
                     ok = teq(ya_get(aa, i), ya_get(bb, i));
@@ -501,9 +502,9 @@ Yv *union_parts(Yv *t) {
     return out;
 }
 
-static void union_parts_go(Yv *out, Yv *t, long depth) {
+static void union_parts_go(Yv *out, Yv *t, ylong depth) {
     Yv *ms = yr_get(t, "ts");
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(ms)) {
         Yv *m = ya_get(ms, i);
         Yv *u = unfold(m);
@@ -520,7 +521,7 @@ static void union_parts_go(Yv *out, Yv *t, long depth) {
 Yv *members(Yv *t) {
     Yv *ps = union_parts(t);
     Yv *out = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(ps)) {
         out = ya_push(out, unfold(ya_get(ps, i)));
         i = i + 1;
@@ -534,7 +535,7 @@ Yv *pat_members(Yv *s, Yv *t) {
     Yv *ps = union_parts(s);
     Yv *names = yr_get(t, "names");
     Yv *out = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(ps)) {
         if (rec_has_names(unfold(ya_get(ps, i)), names)) {
             out = ya_push(out, ya_get(ps, i));
@@ -547,7 +548,7 @@ Yv *pat_members(Yv *s, Yv *t) {
 // teq with a recursive alias on a side: two trefs are equal when their
 // canonical forms are; a tref against a type written out (a literal of a
 // recursive record type, say) is unfolded, at most 64 levels deep.
-static long teq_unfolds;
+static ylong teq_unfolds;
 // Two recursive aliases whose types visibly differ -- other kinds, or
 // records of other field names -- have other canonical forms: teq_ref
 // answers without spelling them out (long, for a big recursive union).
@@ -585,11 +586,11 @@ static int teq_ref(Yv *a, Yv *b) {
 // xs sorted (insertion sort: field lists are short).
 Yv *str_sorted(Yv *xs) {
     Yv *out = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(xs)) {
         Yv *x = ya_get(xs, i);
         out = ya_push(out, x);
-        long j = yv_len(out) - 1;
+        ylong j = yv_len(out) - 1;
         while (j > 0 && ys_cmp(x, ya_get(out, j - 1)) < 0) {
             ya_set(out, j, ya_get(out, j - 1));
             j = j - 1;
@@ -604,7 +605,7 @@ Yv *str_sorted(Yv *xs) {
 // (native.y "records at run time").
 Yv *rec_names(Yv *fs) {
     Yv *names = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(fs)) {
         names = ya_push(names, yr_get(ya_get(fs, i), "name"));
         i = i + 1;
@@ -670,7 +671,7 @@ static Yv *tcanon_go(Yv *out, Yv *t, Yv *stack) {
     } else if (yv_l(k) == K_tfunc) {
         Yv *args = yr_get(t, "args");
         out = ya_push(out, ys("("));
-        long i = 0;
+        ylong i = 0;
         while (i < yv_len(args)) {
             out = tcanon_go(out, ya_get(args, i), stack);
             out = ya_push(out, ys(","));
@@ -682,7 +683,7 @@ static Yv *tcanon_go(Yv *out, Yv *t, Yv *stack) {
         Yv *fs = yr_get(t, "fields");
         Yv *names = rec_names(fs);
         out = ya_push(out, ys("{"));
-        long i = 0;
+        ylong i = 0;
         while (i < yv_len(names)) {
             Yv *nm = ya_get(names, i);
             Yv *f = ya_get(fs, field_pos(fs, nm, 0));
@@ -696,7 +697,7 @@ static Yv *tcanon_go(Yv *out, Yv *t, Yv *stack) {
     } else if (yv_l(k) == K_tunion) {
         Yv *ms = union_parts(t);
         Yv *forms = yav(0);
-        long i = 0;
+        ylong i = 0;
         while (i < yv_len(ms)) {
             Yv *mf = ys_join(tcanon_go(yav(0), ya_get(ms, i), stack), ys(""));
             if (!str_in(forms, mf)) {
@@ -709,8 +710,8 @@ static Yv *tcanon_go(Yv *out, Yv *t, Yv *stack) {
         return out;
     } else if (yv_l(k) == K_tref) {
         Yv *tmp = yr_get(t, "tmp");
-        long d = -1;
-        long i = yv_len(stack) - 1;
+        ylong d = -1;
+        ylong i = yv_len(stack) - 1;
         while (d < 0 && i >= 0) {
             if (ys_eq(ya_get(stack, i), tmp)) {
                 d = yv_len(stack) - 1 - i;
@@ -723,7 +724,7 @@ static Yv *tcanon_go(Yv *out, Yv *t, Yv *stack) {
             return ya_push(out, ys_cat(ys("^"), ys_long(d)));
         } else {
             Yv *inner = yav(0);
-            for (long q = 0; q < yv_len(stack); q++) {
+            for (ylong q = 0; q < yv_len(stack); q++) {
                 inner = ya_push(inner, ya_get(stack, q));
             }
             inner = ya_push(inner, tmp);
@@ -737,7 +738,7 @@ static Yv *tcanon_go(Yv *out, Yv *t, Yv *stack) {
 // s is one of xs.
 static int str_in(Yv *xs, Yv *s) {
     int found = 0;
-    long i = 0;
+    ylong i = 0;
     while (!found && i < yv_len(xs)) {
         if (ys_eq(ya_get(xs, i), s)) {
             found = 1;
@@ -751,7 +752,7 @@ static int str_in(Yv *xs, Yv *s) {
 // count on both sides (teq checks it), the two are one set of fields.
 // Index recursion (not a loop) so the shape stays checker-clean and
 // out-of-range reads impossible.
-static int teq_fields(Yv *af, Yv *bf, long i) {
+static int teq_fields(Yv *af, Yv *bf, ylong i) {
     if (i >= yv_len(af)) {
         return 1;
     } else {
@@ -759,7 +760,7 @@ static int teq_fields(Yv *af, Yv *bf, long i) {
         // NOTE: :str binding (see teq note): fa flows from bare params
         // (tunk), so a direct `==` would compare string POINTERS.
         Yv *an = yr_get(fa, "name");
-        long j = field_pos(bf, an, i);
+        ylong j = field_pos(bf, an, i);
         if (j < 0) {
             return 0;
         } else {
@@ -776,14 +777,14 @@ static int teq_fields(Yv *af, Yv *bf, long i) {
 // The index of the field named `name` in the field list fs, -1 when there
 // is none. `hint` is tried first: records written in the same order find
 // every field there.
-long field_pos(Yv *fs, Yv *name, long hint) {
-    long found = -1;
+ylong field_pos(Yv *fs, Yv *name, ylong hint) {
+    ylong found = -1;
     if (hint < yv_len(fs)) {
         if (ys_eq(yr_get(ya_get(fs, hint), "name"), name)) {
             found = hint;
         }
     }
-    long i = 0;
+    ylong i = 0;
     while (found < 0 && i < yv_len(fs)) {
         if (ys_eq(yr_get(ya_get(fs, i), "name"), name)) {
             found = i;
@@ -794,12 +795,12 @@ long field_pos(Yv *fs, Yv *name, long hint) {
 }
 
 // Every member of ua has an equal member in ub.
-static int teq_members(Yv *ua, Yv *ub, long i) {
+static int teq_members(Yv *ua, Yv *ub, ylong i) {
     if (i >= yv_len(ua)) {
         return 1;
     } else {
         int found = 0;
-        long j = 0;
+        ylong j = 0;
         while (!found && j < yv_len(ub)) {
             if (teq(ya_get(ua, i), ya_get(ub, j))) {
                 found = 1;
@@ -814,7 +815,7 @@ static int teq_members(Yv *ua, Yv *ub, long i) {
     }
 }
 
-static int teq_list(Yv *aa, Yv *bb, long i) {
+static int teq_list(Yv *aa, Yv *bb, ylong i) {
     if (i >= yv_len(aa)) {
         return 1;
     } else if (teq(ya_get(aa, i), ya_get(bb, i))) {
@@ -830,7 +831,7 @@ static Yv *trec_field_type(Yv *rec, Yv *key) {
     Yv *found = yr(1, "k", yv_long(K_tnone));
     if (yv_l(yr_get(rec, "k")) == K_trec) {
         Yv *fs = yr_get(rec, "fields");
-        long i = 0;
+        ylong i = 0;
         while (i < yv_len(fs)) {
             Yv *f = ya_get(fs, i);
             if (ys_eq(yr_get(f, "name"), key)) {
@@ -890,7 +891,7 @@ static Yv *tstr_go(Yv *t) {
     } else if (yv_l(yr_get(t, "k")) == K_trec) {
         Yv *parts = yav(0);
         Yv *fs = yr_get(t, "fields");
-        long i = 0;
+        ylong i = 0;
         while (i < yv_len(fs)) {
             // NOTE: bound once — `fields` is a bare param here, so an inline
             // `fs[i]` would merge shapes across arms (see teq note).
@@ -910,7 +911,7 @@ static Yv *tstr_go(Yv *t) {
     } else if (yv_l(yr_get(t, "k")) == K_tfunc) {
         Yv *parts = yav(0);
         Yv *ta = yr_get(t, "args");
-        long i = 0;
+        ylong i = 0;
         while (i < yv_len(ta)) {
             parts = ya_push(parts, tstr_go(ya_get(ta, i)));
             i = i + 1;
@@ -929,7 +930,7 @@ Yv *tstr(Yv *t) {
 
 static Yv *tstr_union(Yv *ts, Yv *sep) {
     Yv *parts = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(ts)) {
         parts = ya_push(parts, tstr_go(ya_get(ts, i)));
         i = i + 1;
@@ -950,14 +951,14 @@ Yv *type_names(Yv *t) {
     Yv *tk = yr_get(t, "k");
     if (yv_l(tk) == K_trec) {
         Yv *fs = yr_get(t, "fields");
-        long i = 0;
+        ylong i = 0;
         while (i < yv_len(fs)) {
             out = ya_push(out, yr_get(ya_get(fs, i), "name"));
             i = i + 1;
         }
     } else if (yv_l(tk) == K_tpat) {
         Yv *ns = yr_get(t, "names");
-        for (long j = 0; j < yv_len(ns); j++) out = ya_push(out, ya_get(ns, j));
+        for (ylong j = 0; j < yv_len(ns); j++) out = ya_push(out, ya_get(ns, j));
     }
     return out;
 }
@@ -968,11 +969,11 @@ static int rec_has_names(Yv *r, Yv *names) {
     } else {
         Yv *have = type_names(r);
         int ok = 1;
-        long i = 0;
+        ylong i = 0;
         while (i < yv_len(names)) {
             Yv *nm = ya_get(names, i);
             int found = 0;
-            long j = 0;
+            ylong j = 0;
             while (j < yv_len(have)) {
                 if (ys_eq(ya_get(have, j), nm)) {
                     found = 1;
@@ -1007,7 +1008,7 @@ Yv *narrow_type(Yv *s, Yv *t) {
         Yv *ms = members(s);
         Yv *names = yr_get(t, "names");
         Yv *found = yav(0);
-        long i = 0;
+        ylong i = 0;
         while (i < yv_len(ms)) {
             if (rec_has_names(ya_get(ms, i), names)) {
                 found = ya_push(found, ya_get(ms, i));
@@ -1031,7 +1032,7 @@ Yv *narrow_type(Yv *s, Yv *t) {
 Yv *union_member(Yv *u, Yv *t) {
     Yv *ms = union_parts(u);
     Yv *found = yr(1, "k", yv_long(K_tnone));
-    long i = yv_len(ms) - 1;
+    ylong i = yv_len(ms) - 1;
     while (i >= 0) {
         if (teq(ya_get(ms, i), t)) {
             found = ya_get(ms, i);
@@ -1043,11 +1044,11 @@ Yv *union_member(Yv *u, Yv *t) {
 
 // `u.f` on a union: every member has f, with one type -- a field they do
 // not share is read after a match.
-static Yv *union_field(Yv *st, Yv *t, Yv *dkey, long line, long col) {
+static Yv *union_field(Yv *st, Yv *t, Yv *dkey, ylong line, ylong col) {
     Yv *ms = members(t);
     Yv *ft = t_unk();
     int ok = 1;
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(ms) && ok) {
         Yv *mt = trec_field_type(ya_get(ms, i), dkey);
         if (yv_l(yr_get(mt, "k")) == K_tnone) {
@@ -1097,7 +1098,7 @@ static Yv *dotassign_union(Yv *st, Yv *t, Yv *node) {
 static int union_ok(Yv *t) {
     Yv *ms = members(t);
     int ok = 1;
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(ms)) {
         if (yv_l(yr_get(ya_get(ms, i), "k")) != K_trec) {
             ok = 0;
@@ -1114,7 +1115,7 @@ static int union_accepts(Yv *got, Yv *want) {
     if (yv_l(yr_get(got, "k")) == K_tunion) {
         Yv *gs = members(got);
         int ok = 1;
-        long i = 0;
+        ylong i = 0;
         while (i < yv_len(gs)) {
             if (!union_accepts(ya_get(gs, i), want)) {
                 ok = 0;
@@ -1125,7 +1126,7 @@ static int union_accepts(Yv *got, Yv *want) {
     } else {
         Yv *ws = members(want);
         int any = 0;
-        long j = 0;
+        ylong j = 0;
         while (j < yv_len(ws)) {
             if (tcompat(got, ya_get(ws, j))) {
                 any = 1;
@@ -1143,16 +1144,16 @@ static int union_accepts(Yv *got, Yv *want) {
  * compiler), so the checker rejects it. A literal merely past the range is not
  * an error: 1e400 and 1e40000 are inf, as IEEE says (t171). (native.y keeps its
  * own copy of this scan -- the two modules never share helpers.) */
-static long num_net_exp(Yv *s) {
-    long dot = ys_index_of(s, ys("."));
-    long eb = ys_index_of(s, ys("e"));
+static ylong num_net_exp(Yv *s) {
+    ylong dot = ys_index_of(s, ys("."));
+    ylong eb = ys_index_of(s, ys("e"));
     if (eb < 0) eb = ys_index_of(s, ys("E"));
     if (eb < 0) eb = yv_len(s);
-    long nfrac = 0;
+    ylong nfrac = 0;
     if (dot >= 0) nfrac = eb - dot - 1;
-    long ex = 0;
+    ylong ex = 0;
     if (eb < yv_len(s)) {
-        long i = eb + 1;
+        ylong i = eb + 1;
         int neg = 0;
         Yv *sc = ys_slice(s, i, i + 1);
         if (ys_eq_lit(sc, "-")) { neg = 1; i = i + 1; }
@@ -1182,9 +1183,9 @@ static int num_mantissa_zero(Yv *s) {
      * the exponent alone. That check exists to catch "a mistake, not a value",
      * and a zero written with a huge exponent is not a magnitude anybody could
      * have meant. */
-    long end = yv_len(s);
-    long eb = ys_index_of(s, ys("e"));
-    long i = 0;
+    ylong end = yv_len(s);
+    ylong eb = ys_index_of(s, ys("e"));
+    ylong i = 0;
     int all = 1;
     if (eb < 0) { eb = ys_index_of(s, ys("E")); }
     if (eb >= 0) { end = eb; }
@@ -1250,7 +1251,7 @@ static Yv *field_merge_dup(Yv *fields, Yv *name, Yv *typ);
 // field was quadratic in the literal's field count in *copies*: 722 MB at 4 000
 // fields, every field copied once per field after it.
 Yv *field_merge(Yv *fields, Yv *name, Yv *typ) {
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(fields)) {
         if (ys_eq(yr_get(ya_get(fields, i), "name"), name)) {
             return field_merge_dup(fields, name, typ);
@@ -1267,7 +1268,7 @@ Yv *field_merge(Yv *fields, Yv *name, Yv *typ) {
 // appearances of the name have to go -- rare enough that the copy is worth it.
 static Yv *field_merge_dup(Yv *fields, Yv *name, Yv *typ) {
     Yv *out = yav(0);
-    long i = 0;
+    ylong i = 0;
     int seen = 0;
     while (i < yv_len(fields)) {
         Yv *f = ya_get(fields, i);
@@ -1304,7 +1305,7 @@ static Yv *field_merge_dup(Yv *fields, Yv *name, Yv *typ) {
  * tname/tnone/tparams already unify quietly in tcompat and are not poison. */
 static int t_poisoned(Yv *t) { return t_poisoned_go(t, 0); }
 
-static int t_poisoned_go(Yv *t, long d) {
+static int t_poisoned_go(Yv *t, ylong d) {
     Yv *k = yr_get(t, "k");
     if (yv_l(k) == K_tunk) {
         return 1;
@@ -1389,19 +1390,19 @@ static int is_hash_key(Yv *t) {
 // list passes 256 entries (st_bind; a small unit scans faster than it
 // hashes): tc_ixn bindings are in it, all of them from then on.
 static Yv *tc_ix;
-static long tc_ixn;
+static ylong tc_ixn;
 
 static Yv *lookup(Yv *bindings, Yv *name) {
     /* The newest binding of the name: the last few bindings first (a
      * local is almost always among them), then the index: scanning back
      * through the whole list cost every reference to a global thousands
      * of compares. "" is not indexed: it is scanned for. */
-    long i = yv_len(bindings) - 1;
-    long stop = i - 8;
+    ylong i = yv_len(bindings) - 1;
+    ylong stop = i - 8;
     if (tc_ixn == 0) {
         stop = -1;
     }
-    long at = -1;
+    ylong at = -1;
     while (i >= 0 && i > stop) {
         Yv *e = ya_get(bindings, i);
         if (ys_eq(yr_get(e, "name"), name)) {
@@ -1491,7 +1492,7 @@ static Yv *st_self(Yv *st, Yv *selfv) {
 /* Entering a loop: one deeper, and the innermost loop's function depth is
  * this one's. `loop_fd: -1` means "no loop", so a stale depth can never be
  * mistaken for a live one. 1:1 with st_loop in src/y/types.y. */
-static Yv *st_loop(Yv *st, long n, long fd) {
+static Yv *st_loop(Yv *st, ylong n, ylong fd) {
     return yr(7, "bindings", yr_get(st, "bindings"), "errors", yr_get(st, "errors"),
               "ret", yr_get(st, "ret"), "self", yr_get(st, "self"),
               "fdepth", yv_long(yv_l(yr_get(st, "fdepth"))),
@@ -1500,7 +1501,7 @@ static Yv *st_loop(Yv *st, long n, long fd) {
 
 /* Leaving one: back to whatever enclosed it. The caller's own `loops`/`loop_fd`
  * from before the loop are what it passes, so this is a plain restore. */
-static Yv *st_unloop(Yv *st, long n, long fd) {
+static Yv *st_unloop(Yv *st, ylong n, ylong fd) {
     return yr(7, "bindings", yr_get(st, "bindings"), "errors", yr_get(st, "errors"),
               "ret", yr_get(st, "ret"), "self", yr_get(st, "self"),
               "fdepth", yv_long(yv_l(yr_get(st, "fdepth"))),
@@ -1515,14 +1516,14 @@ static Yv *st_ret(Yv *st, Yv *ret) {
               "loop_fd", yv_long(yv_l(yr_get(st, "loop_fd"))));
 }
 
-static Yv *fail(Yv *st, Yv *msg, long line, long col) {
+static Yv *fail(Yv *st, Yv *msg, ylong line, ylong col) {
     return st_errors(st, ya_push(yr_get(st, "errors"), err_at(msg, line, col)));
 }
 
 // Display name: strip the rename pass's `$N` suffix so errors read like
 // the user's source (`$` is lexer-illegal, so it can only come from rename).
 static Yv *disp(Yv *name) {
-    long i = ys_index_of(name, ys("$"));
+    ylong i = ys_index_of(name, ys("$"));
     if (i < 0) {
         return name;
     } else {
@@ -1536,7 +1537,7 @@ static Yv *disp(Yv *name) {
 // (native.y box_capture), so a write inside the closure is visible outside.
 // Nothing is left to check here, so this is a pass-through kept at every call
 // site as the hook for a future capture rule.
-static Yv *check_visible(Yv *st, Yv *got, Yv *name, long line, long col) {
+static Yv *check_visible(Yv *st, Yv *got, Yv *name, ylong line, ylong col) {
     (void)got;
     (void)name;
     (void)line;
@@ -1544,7 +1545,7 @@ static Yv *check_visible(Yv *st, Yv *got, Yv *name, long line, long col) {
     return st;
 }
 
-static Yv *expect_type(Yv *st, Yv *got, Yv *want, Yv *what, long line, long col) {
+static Yv *expect_type(Yv *st, Yv *got, Yv *want, Yv *what, ylong line, ylong col) {
     if (tcompat(got, want)) {
         return st;
     } else {
@@ -1574,7 +1575,7 @@ static int cast_ok(Yv *got, Yv *want) {
 // parameter, a declared return type -- so a union value casts to it. Where
 // the type was inferred (an assignment, a field, an element) a union value
 // does not: a binding inferred too narrow is an error, not a trap.
-static Yv *expect_cast(Yv *st, Yv *got, Yv *want, Yv *what, long line, long col) {
+static Yv *expect_cast(Yv *st, Yv *got, Yv *want, Yv *what, ylong line, ylong col) {
     if (cast_ok(got, want)) {
         return st;
     } else {
@@ -1586,7 +1587,7 @@ static Yv *expect_cast(Yv *st, Yv *got, Yv *want, Yv *what, long line, long col)
  * the argument of an optional parameter `b?: T` becomes -- is reported as
  * v against T: "expected long, got long?", not "expected long?, got long??". */
 static Yv *expect_arg(Yv *st, Yv *got, Yv *want, Yv *arg, Yv *what,
-                      long line, long col) {
+                      ylong line, ylong col) {
     if (cast_ok(got, want)) {
         return st;
     } else if (yv_l(yr_get(got, "k")) == K_topt &&
@@ -1619,7 +1620,7 @@ static int is_some_call(Yv *n) {
 // Binary-operator result typing. Split out of the `bin` arm so the operator
 // table there stays a flat `op == "..."` dispatch and each operator's rule
 // lives in one named place.
-static Yv *typeof_arith(Yv *st, Yv *op, Yv *lt, Yv *rt, long line, long col) {
+static Yv *typeof_arith(Yv *st, Yv *op, Yv *lt, Yv *rt, ylong line, ylong col) {
     // "+" on strings concatenates (either side may be poison tunk, but at
     // least one side must be a real str — hence the per-kind arms below).
     // AUTO-STRINGIFY: str + long/bool/float (and the mirror) stringify the
@@ -1690,7 +1691,7 @@ static Yv *typeof_arith(Yv *st, Yv *op, Yv *lt, Yv *rt, long line, long col) {
     }
 }
 
-static Yv *typeof_arith_arr(Yv *st, Yv *op, Yv *lt, Yv *rt, long line, long col) {
+static Yv *typeof_arith_arr(Yv *st, Yv *op, Yv *lt, Yv *rt, ylong line, ylong col) {
     // The array operand decides the result type. Two arrays CONCATENATE
     // (each side's elements are spliced in, so the ELEMENT types must
     // match — arrays are homogeneous by design); a non-array operand is
@@ -1754,8 +1755,8 @@ Yv *arr_plus_kind(Yv *lt, Yv *rt) {
     }
 }
 
-static Yv *typeof_arith_long(Yv *st, Yv *op, Yv *lt, Yv *rt, long line,
-                             long col) {
+static Yv *typeof_arith_long(Yv *st, Yv *op, Yv *lt, Yv *rt, ylong line,
+                             ylong col) {
     // Numeric arithmetic. If either side is a float the result is a float
     // and the other side widens (long -> float, the only coercion).
     if (yv_l(yr_get(lt, "k")) == K_tfloat ||
@@ -1787,7 +1788,7 @@ int is_bits_op(Yv *op) {
 // `&` `|` `^` `<<` `>>` `>>>` take integers only: a byte operand widens and
 // the result is a long. No float, no bool (`&&` and `||` are the logical
 // forms).
-static Yv *typeof_bits(Yv *st, Yv *op, Yv *lt, Yv *rt, long line, long col) {
+static Yv *typeof_bits(Yv *st, Yv *op, Yv *lt, Yv *rt, ylong line, ylong col) {
     st = expect_type(st, lt, yr(1, "k", yv_long(K_tlong)),
                      ys_cat(ys_cat(ys("'"), op), ys("' left operand")), line,
                      col);
@@ -1797,7 +1798,7 @@ static Yv *typeof_bits(Yv *st, Yv *op, Yv *lt, Yv *rt, long line, long col) {
     return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
 }
 
-static Yv *typeof_cmp(Yv *st, Yv *op, Yv *lt, Yv *rt, long line, long col) {
+static Yv *typeof_cmp(Yv *st, Yv *op, Yv *lt, Yv *rt, ylong line, ylong col) {
     if (yv_l(yr_get(lt, "k")) == K_tstr) {
         // str < str is lexicographic ordering (byte by byte), matching the
         // y_str_cmp helper native.y emits.
@@ -1848,7 +1849,7 @@ static int num_eq_ok(Yv *lt, Yv *rt) {
     }
 }
 
-static Yv *typeof_eq(Yv *st, Yv *op, Yv *lt, Yv *rt, long line, long col) {
+static Yv *typeof_eq(Yv *st, Yv *op, Yv *lt, Yv *rt, ylong line, ylong col) {
     // str compares by content. `x == none` is the option's is-none check.
     // Nested ifs throughout (house style — one kind per arm).
     if (teq(lt, rt)) {
@@ -1915,8 +1916,8 @@ static Yv *typeof_eq(Yv *st, Yv *op, Yv *lt, Yv *rt, long line, long col) {
 static Yv *typeof_logic(Yv *st, Yv *op __attribute__((unused)),
                         Yv *lt __attribute__((unused)),
                         Yv *rt __attribute__((unused)),
-                        long line __attribute__((unused)),
-                        long col __attribute__((unused))) {
+                        ylong line __attribute__((unused)),
+                        ylong col __attribute__((unused))) {
     // Truthiness: any 8-byte value decides (nonzero = true), like the C
     // runtime. The result is always a bool; operands keep their own types.
     return yr(2, "typ", yr(1, "k", yv_long(K_tbool)), "st", st);
@@ -2072,7 +2073,7 @@ static void tci_reset(void) {
     tci_keys = yav(0);
     tci_typs = yav(0);
     Yv *bkts = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < 1024) {
         bkts = ya_push(bkts, yav(0));
         i = i + 1;
@@ -2090,10 +2091,10 @@ void type_index_on(void) {
 void type_index_off(void) { tc_index = 0; }
 
 /* One entry, unless the key is already there -- the FIRST type wins, as above. */
-static void tci_note_key(long key, Yv *t) {
+static void tci_note_key(ylong key, Yv *t) {
     Yv *bkt = ya_get(tci_bkts, key % 1024);
     int seen = 0;
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(bkt) && !seen) {
         if (yv_l(ya_get(tci_keys, yv_l(ya_get(bkt, i)))) == key) {
             seen = 1;
@@ -2116,14 +2117,14 @@ static void tci_note(Yv *node, Yv *t) {
         Yv *ln = yr_get(node, "line");
         Yv *co = yr_get(node, "col");
         if (yv_l(ln) > 0 && yv_l(co) >= 0) {
-            long key = yv_l(ln) * 65536 + yv_l(co);
+            ylong key = yv_l(ln) * 65536 + yv_l(co);
             Yv *bkt = ya_get(tci_bkts, key % 1024);
             /* FIRST wins. An expression is checked more than once when it is a
              * function literal's value (the checker infers, then re-checks with
              * the return type known), and the first type is the one the source
              * says rather than the one the second pass settled on. */
             int seen = 0;
-            long i = 0;
+            ylong i = 0;
             while (i < yv_len(bkt) && !seen) {
                 if (yv_l(ya_get(tci_keys, yv_l(ya_get(bkt, i)))) == key) {
                     seen = 1;
@@ -2146,7 +2147,7 @@ static void tci_note(Yv *node, Yv *t) {
          *
          * Only when the index is on, so a real compile pays nothing: this is
          * inside tci_note, which typeof_expr does not even call. */
-        long nk = yv_l(yr_get(node, "k"));
+        ylong nk = yv_l(yr_get(node, "k"));
         /* A `let`/`def` records its type at its NAME's position as well as the
          * keyword's, for the same reason a member access does: the keyword is
          * where the node sits and the name is where a cursor goes. Without this a
@@ -2168,12 +2169,12 @@ static void tci_note(Yv *node, Yv *t) {
  * indexed there. tunk rather than tnone: tnone is a real type a program can write,
  * and a consumer must be able to tell "the checker says none" from "there is
  * nothing here", or it will print a type it did not get from the checker. */
-Yv *expr_type(long line, long col) {
+Yv *expr_type(ylong line, ylong col) {
     Yv *found = yr(1, "k", yv_long(K_tunk));
     if (tci_bkts != NULL) {
-        long key = line * 65536 + col;
+        ylong key = line * 65536 + col;
         Yv *bkt = ya_get(tci_bkts, key % 1024);
-        long i = 0;
+        ylong i = 0;
         while (i < yv_len(bkt)) {
             if (yv_l(ya_get(tci_keys, yv_l(ya_get(bkt, i)))) == key) {
                 found = ya_get(tci_typs, yv_l(ya_get(bkt, i)));
@@ -2214,7 +2215,7 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
     Yv *k = yr_get(node, "k");
     if (yv_l(k) == K_num) {
         if (num_is_float(yr_get(node, "v"))) {
-            long dp = num_net_exp(yr_get(node, "v"));
+            ylong dp = num_net_exp(yr_get(node, "v"));
             if (dp > 100000 || dp < -100000) {
                 /* out of range by thousands of decades: a mistake, not a value.
                  * A literal merely past the double's range (1e400) is still
@@ -2594,8 +2595,8 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
          * the loop context on purpose: `while break { }` is not a jump out of
          * this loop, it is a jump out of an enclosing one, and treating it as
          * this loop's would be a jump to a label that does not exist yet. */
-        long saved_loops = yv_l(yr_get(st, "loops"));
-        long saved_fd = yv_l(yr_get(st, "loop_fd"));
+        ylong saved_loops = yv_l(yr_get(st, "loops"));
+        ylong saved_fd = yv_l(yr_get(st, "loop_fd"));
         st = st_loop(st, saved_loops + 1, yv_l(yr_get(st, "fdepth")));
         Yv *b = typeof_block(st, yr_get(node, "body"));
         st = st_unloop(yr_get(b, "st"), saved_loops, saved_fd);
@@ -2609,8 +2610,8 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
         st = expect_type(yr_get(fc, "st"), yr_get(fc, "typ"),
                          yr(1, "k", yv_long(K_tbool)), ys("'for' condition"),
                          yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
-        long floops = yv_l(yr_get(st, "loops"));
-        long ffd = yv_l(yr_get(st, "loop_fd"));
+        ylong floops = yv_l(yr_get(st, "loops"));
+        ylong ffd = yv_l(yr_get(st, "loop_fd"));
         st = st_loop(st, floops + 1, yv_l(yr_get(st, "fdepth")));
         Yv *fb = typeof_block(st, yr_get(node, "body"));
         st = st_unloop(yr_get(fb, "st"), floops, ffd);
@@ -2637,8 +2638,8 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
             ;
         }
         st = st_bind(st, yr_get(node, "name"), elt, ys("local"), yr_get(node, "line"), yr_get(node, "col") );
-        long eloops = yv_l(yr_get(st, "loops"));
-        long efd = yv_l(yr_get(st, "loop_fd"));
+        ylong eloops = yv_l(yr_get(st, "loops"));
+        ylong efd = yv_l(yr_get(st, "loop_fd"));
         st = st_loop(st, eloops + 1, yv_l(yr_get(st, "fdepth")));
         Yv *fbb = typeof_block(st, yr_get(node, "body"));
         st = st_unloop(yr_get(fbb, "st"), eloops, efd);
@@ -2655,8 +2656,8 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                          yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
         st = st_bind(st, yr_get(node, "name"), yr(1, "k", yv_long(K_tlong)),
                      ys("local"), yr_get(node, "line"), yr_get(node, "col") );
-        long rloops = yv_l(yr_get(st, "loops"));
-        long rfd = yv_l(yr_get(st, "loop_fd"));
+        ylong rloops = yv_l(yr_get(st, "loops"));
+        ylong rfd = yv_l(yr_get(st, "loop_fd"));
         st = st_loop(st, rloops + 1, yv_l(yr_get(st, "fdepth")));
         Yv *rb = typeof_block(st, yr_get(node, "body"));
         st = st_unloop(yr_get(rb, "st"), rloops, rfd);
@@ -2830,7 +2831,7 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
             return yr(2, "typ", yr(2, "k", yv_long(K_trec), "fields", yav(0)), "st", st);
         } else {
             Yv *fields = yav(0);
-            long i = 0;
+            ylong i = 0;
             int ok = 1;
             while (i < yv_len(mkeys)) {
                 // NOTE: each bound once — flow-snapshot: `vals` is a bare
@@ -2846,7 +2847,7 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                     // keeps the position). No dynamic shape is involved.
                     if (yv_l(yr_get(yr_get(r, "typ"), "k")) == K_trec) {
                         Yv *sfs = yr_get(yr_get(r, "typ"), "fields");
-                        long si = 0;
+                        ylong si = 0;
                         while (si < yv_len(sfs)) {
                             Yv *sf = ya_get(sfs, si);
                             fields = field_merge(fields, yr_get(sf, "name"),
@@ -2913,7 +2914,7 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
         Yv *gkeys = yr_get(node, "keys");
         Yv *gvals = yr_get(node, "vals");
         int gok = 1;
-        long gi = 0;
+        ylong gi = 0;
         Yv *gt = t_unk();
         while (gi < yv_len(gvals)) {
             Yv *gk = ya_get(gkeys, gi);
@@ -3384,7 +3385,7 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                           yv_l(yr_get(node, "col")));
                 return yr(2, "typ", t_unk(), "st", st);
             } else {
-                long i = 1;
+                ylong i = 1;
                 /* A nested literal [[..], ..] lands here too: the inner
                  * literal type IS known, so it becomes the element type
                  * ([[1], [2]] : [[long]]) and every later element is
@@ -3523,7 +3524,7 @@ static Yv *typeof_matchend(Yv *st, Yv *node) {
     } else if (yv_l(sk) == K_tunion) {
         Yv *ms = members(s);
         Yv *missing = yav(0);
-        long i = 0;
+        ylong i = 0;
         while (i < yv_len(ms)) {
             if (!covered(ya_get(ms, i), cover)) {
                 missing = ya_push(missing, tstr(ya_get(ms, i)));
@@ -3552,7 +3553,7 @@ static Yv *typeof_matchend(Yv *st, Yv *node) {
 // A member is covered by a type arm of its type.
 static int covered(Yv *m, Yv *cover) {
     int any = 0;
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(cover)) {
         Yv *c = unfold(ya_get(cover, i));
         if (yv_l(yr_get(c, "k")) == K_trec) {
@@ -3614,12 +3615,12 @@ static Yv *typeof_sliceassign(Yv *st, Yv *node) {
  * callee `x.f(...)`, so the receiver is typed once whether or not it turns
  * out to be a str (a string method) or a record (a field holding a
  * function). */
-static Yv *typeof_field(Yv *st, Yv *t, Yv *dkey, long line, long col) {
+static Yv *typeof_field(Yv *st, Yv *t, Yv *dkey, ylong line, ylong col) {
     if (yv_l(yr_get(t, "k")) == K_trec) {
         int found = 0;
         Yv *ftyp = t_unk();
         Yv *fs = yr_get(t, "fields");
-        long j = 0;
+        ylong j = 0;
         while (j < yv_len(fs)) {
             // NOTE: bound once (flow-snapshot, see the dot arm's note).
             // NOTE: :str bindings (see teq note).
@@ -3674,7 +3675,7 @@ static Yv *typeof_field(Yv *st, Yv *t, Yv *dkey, long line, long col) {
  * so it is valid for an empty array too, where &a[0] traps. A str has no
  * `.ptr`: its bytes can live in read-only .rodata, where a store through
  * the pointer would fault. */
-static Yv *typeof_prop(Yv *st, Yv *t, Yv *key, long line, long col) {
+static Yv *typeof_prop(Yv *st, Yv *t, Yv *key, ylong line, ylong col) {
     if (ys_eq_lit(key, "length")) {
         return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
     } else if (ys_eq_lit(key, "ptr") &&
@@ -3771,7 +3772,7 @@ Yv *str_method(Yv *m) {
     }
 }
 
-static Yv *sm_mk(Yv *fn, Yv *params, long nreq, Yv *ret, Yv *dflt,
+static Yv *sm_mk(Yv *fn, Yv *params, ylong nreq, Yv *ret, Yv *dflt,
                  int last) {
     return yr(6, "fn", fn, "params", params, "nreq", yv_long(nreq),
               "ret", ret, "dflt", dflt, "last", yv_bool(last));
@@ -3795,9 +3796,9 @@ static Yv *sm_any(void) {
 static Yv *typeof_method(Yv *st, Yv *node, Yv *m) {
     Yv *sm = str_method(m);
     Yv *margs = yr_get(node, "args");
-    long na = yv_len(margs);
+    ylong na = yv_len(margs);
     Yv *ps = yr_get(sm, "params");
-    long np = yv_len(ps);
+    ylong np = yv_len(ps);
     Yv *what = ys_cat(ys_cat(ys("'str."), m), ys("'"));
     if (ys_eq_lit(yr_get(sm, "fn"), "")) {
         Yv *hint = ys("");
@@ -3810,7 +3811,7 @@ static Yv *typeof_method(Yv *st, Yv *node, Yv *m) {
                                 ys("'")),
                          hint),
                   yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
-        long i = 0;
+        ylong i = 0;
         while (i < na) {
             Yv *r = typeof_expr(st, ya_get(margs, i));
             st = yr_get(r, "st");
@@ -3830,7 +3831,7 @@ static Yv *typeof_method(Yv *st, Yv *node, Yv *m) {
                                 ys(" args, got ")),
                          ys_long(na)),
                   yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
-        long i = 0;
+        ylong i = 0;
         while (i < na) {
             Yv *r = typeof_expr(st, ya_get(margs, i));
             st = yr_get(r, "st");
@@ -3838,7 +3839,7 @@ static Yv *typeof_method(Yv *st, Yv *node, Yv *m) {
         }
         return yr(2, "typ", yr_get(sm, "ret"), "st", st);
     } else {
-        long i = 0;
+        ylong i = 0;
         while (i < na) {
             Yv *r = typeof_expr(st, ya_get(margs, i));
             st = yr_get(r, "st");
@@ -3887,7 +3888,7 @@ static int sm_accepts(Yv *got, Yv *want) {
  * while the in-place array forms (`arr += v`, `arr *= v`) and element or
  * field writes (`a[i] = v`, `r.f = v`) still mutate the shared value. Plain
  * `=` is refused in the `assign` arm itself; this covers the other two. */
-static Yv *const_check(Yv *st, Yv *tgt, Yv *tt, Yv *op, long line, long col) {
+static Yv *const_check(Yv *st, Yv *tgt, Yv *tt, Yv *op, ylong line, ylong col) {
     if (yv_l(yr_get(tgt, "k")) == K_id) {
         Yv *got = lookup(yr_get(st, "bindings"), yr_get(tgt, "v"));
         int inplace = yv_l(yr_get(tt, "k")) == K_tarr ||
@@ -3918,7 +3919,7 @@ static Yv *const_check(Yv *st, Yv *tgt, Yv *tt, Yv *op, long line, long col) {
  * operator's own rules stay quiet. (`*p = v` is a store of its own; `*p`
  * is no target here.) Only a target that can be one of those -- a byte
  * element, a `.length` or `.ptr` -- has its base looked at. */
-static Yv *place_check(Yv *st, Yv *tgt, Yv *tt, Yv *op, long line, long col) {
+static Yv *place_check(Yv *st, Yv *tgt, Yv *tt, Yv *op, ylong line, ylong col) {
     Yv *k = yr_get(tgt, "k");
     int ok = 1;
     if (yv_l(k) == K_index) {
@@ -4105,10 +4106,10 @@ static Yv *opassign_check(Yv *st, Yv *node, Yv *tt, Yv *vt) {
  * s d x X o b c f F e E %. Bytes, 0 when absent (-1 for the two numbers);
  * err is "" when the spec reads. */
 Yv *fmt_spec(Yv *spec) {
-    long n = yv_len(spec);
-    long i = 0;
-    long fill = 0;
-    long align = 0;
+    ylong n = yv_len(spec);
+    ylong i = 0;
+    ylong fill = 0;
+    ylong align = 0;
     if (n >= 2 && fmt_align(ys_byte_at(spec, 1))) {
         fill = ys_byte_at(spec, 0);
         align = ys_byte_at(spec, 1);
@@ -4119,7 +4120,7 @@ Yv *fmt_spec(Yv *spec) {
         i = 1;
         ;
     }
-    long sign = 0;
+    ylong sign = 0;
     if (i < n && (ys_byte_at(spec, i) == 43 ||
                   ys_byte_at(spec, i) == 45 ||
                   ys_byte_at(spec, i) == 32)) {
@@ -4131,24 +4132,24 @@ Yv *fmt_spec(Yv *spec) {
     if (i < n && ys_byte_at(spec, i) == 35) { alt = 1; i = i + 1; ; }
     int zero = 0;
     if (i < n && ys_byte_at(spec, i) == '0') { zero = 1; i = i + 1; ; }
-    long ws = i;
+    ylong ws = i;
     while (i < n && fmt_digit(ys_byte_at(spec, i))) {
         i = i + 1;
         ;
     }
-    long width = 0 - 1;
+    ylong width = 0 - 1;
     if (i > ws) { width = fmt_number(spec, ws, i); ; }
-    long grp = 0;
+    ylong grp = 0;
     if (i < n && (ys_byte_at(spec, i) == 44 || ys_byte_at(spec, i) == 95)) {
         grp = ys_byte_at(spec, i);
         i = i + 1;
         ;
     }
     Yv *err = ys("");
-    long prec = 0 - 1;
+    ylong prec = 0 - 1;
     if (i < n && ys_byte_at(spec, i) == 46) {
         i = i + 1;
-        long ps = i;
+        ylong ps = i;
         while (i < n && fmt_digit(ys_byte_at(spec, i))) {
             i = i + 1;
             ;
@@ -4157,7 +4158,7 @@ Yv *fmt_spec(Yv *spec) {
         else { err = ys("'.' without a precision"); ; }
         ;
     }
-    long ty = 0;
+    ylong ty = 0;
     if (i < n && fmt_type(ys_byte_at(spec, i))) {
         ty = ys_byte_at(spec, i);
         i = i + 1;
@@ -4182,16 +4183,16 @@ Yv *fmt_spec(Yv *spec) {
               "prec", yv_long(prec), "ty", yv_long(ty));
 }
 
-static int fmt_align(long c) {
+static int fmt_align(ylong c) {
     return c == 60 || c == 62 || c == 94 || c == 61;
 }
 
-static int fmt_digit(long c) {
+static int fmt_digit(ylong c) {
     return c >= 48 && c <= 57;
 }
 
 /* s d x X o b c f F e E % */
-static int fmt_type(long c) {
+static int fmt_type(ylong c) {
     return c == 115 || c == 100 || c == 120 || c == 88 || c == 111 ||
            c == 98 || c == 99 || c == 102 || c == 70 || c == 101 ||
            c == 69 || c == 37;
@@ -4199,9 +4200,9 @@ static int fmt_type(long c) {
 
 /* The digits spec[a:b] as a number, stopping short of overflow (a value
  * that large is over fmt_spec's limit anyway). */
-static long fmt_number(Yv *spec, long a, long b) {
-    long v = 0;
-    long i = a;
+static ylong fmt_number(Yv *spec, ylong a, ylong b) {
+    ylong v = 0;
+    ylong i = a;
     while (i < b) {
         if (v < 1000000) { v = v * 10 + ys_byte_at(spec, i) - '0'; ; }
         i = i + 1;
@@ -4212,7 +4213,7 @@ static long fmt_number(Yv *spec, long a, long b) {
 
 /* How a value formats under a spec: 1 an integer (long, byte), 2 a float,
  * 0 anything else -- its tostring text, like a str. */
-long fmt_kind(Yv *t) {
+ylong fmt_kind(Yv *t) {
     Yv *k = yr_get(t, "k");
     if (yv_l(k) == K_tlong || yv_l(k) == K_tbyte) {
         return 1;
@@ -4227,8 +4228,8 @@ long fmt_kind(Yv *t) {
  * type tname: "" when nothing is. Python's rules: a sign, `#`, grouping
  * and `=` need a number, a precision is no integer type's, `c` takes no
  * sign, `#` or grouping, and `,` groups decimals only. */
-static Yv *fmt_check(Yv *f, long kind, Yv *tname) {
-    long ty = yv_l(yr_get(f, "ty"));
+static Yv *fmt_check(Yv *f, ylong kind, Yv *tname) {
+    ylong ty = yv_l(yr_get(f, "ty"));
     int ints = ty == 100 || ty == 120 || ty == 88 || ty == 111 ||
                ty == 98 || ty == 99;
     if (!ys_eq_lit(yr_get(f, "err"), "")) {
@@ -4427,7 +4428,7 @@ static Yv *typeof_call_go(Yv *st, Yv *node) {
                           yv_l(yr_get(node, "col")));
                 return yr(2, "typ", yr_get(cft, "ret"), "st", st);
             } else {
-                long ci = 0;
+                ylong ci = 0;
                 while (ci < yv_len(cargs)) {
                     Yv *ra = typeof_want(st, ya_get(cargs, ci), ya_get(cfargs, ci));
                     st = yr_get(ra, "st");
@@ -4444,7 +4445,7 @@ static Yv *typeof_call_go(Yv *st, Yv *node) {
                       ys_cat(ys_cat(ys("cannot call "), tstr(yr_get(cf, "typ"))),
                              ys(" (not a function)")),
                       yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
-            long i = 0;
+            ylong i = 0;
             while (i < yv_len(yr_get(node, "args"))) {
                 Yv *r = typeof_expr(st, ya_get(cargs, i));
                 st = yr_get(r, "st");
@@ -5228,7 +5229,7 @@ static Yv *typeof_call_go(Yv *st, Yv *node) {
                                      ys("' is not a call name (see os_call_names)")),
                               yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
                 }
-                long i = 1;
+                ylong i = 1;
                 while (i < yv_len(cargs)) {
                     Yv *r = typeof_expr(st, ya_get(cargs, i));
                     st = yr_get(r, "st");
@@ -5258,7 +5259,7 @@ static Yv *typeof_call_go(Yv *st, Yv *node) {
                Windows side. (The old comment here said six in registers and
                32(%rsp); both wrong, and see w_syscall_reg in native.c for the
                proof that four registers at 40(%rsp) is the real layout.) */
-            long maxargs = 7;
+            ylong maxargs = 7;
             if (target_is_windows()) { maxargs = 10; }
             if (yv_len(yr_get(node, "args")) < 1 ||
                 yv_len(yr_get(node, "args")) > maxargs) {
@@ -5272,7 +5273,7 @@ static Yv *typeof_call_go(Yv *st, Yv *node) {
                           yv_l(yr_get(node, "col")));
                 return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
             } else {
-                long i = 0;
+                ylong i = 0;
                 while (i < yv_len(yr_get(node, "args"))) {
                     Yv *r = typeof_expr(st, ya_get(cargs, i));
                     st = yr_get(r, "st");
@@ -5321,7 +5322,7 @@ static Yv *typeof_call_go(Yv *st, Yv *node) {
             } else {
                 Yv *r = typeof_expr(st, ya_get(cargs, 0));
                 st = yr_get(r, "st");
-                long ak = yv_l(yr_get(yr_get(r, "typ"), "k"));
+                ylong ak = yv_l(yr_get(yr_get(r, "typ"), "k"));
                 if (ak != K_tlong && ak != K_tunk && ak != K_tptr) {
                     st = fail(st,
                               ys_cat(ys("jmp_at needs an address, got "),
@@ -5375,7 +5376,7 @@ static Yv *typeof_call_go(Yv *st, Yv *node) {
                                  ys("' is used before its return type is known (annotate it)")),
                           yv_l(yr_get(node, "line")),
                           yv_l(yr_get(node, "col")));
-                long i = 0;
+                ylong i = 0;
                 while (i < yv_len(cargs)) {
                     Yv *r = typeof_expr(st, ya_get(cargs, i));
                     st = yr_get(r, "st");
@@ -5386,7 +5387,7 @@ static Yv *typeof_call_go(Yv *st, Yv *node) {
                 // poisoned binding (tunk) from an earlier error — don't
                 // cascade new errors, but still check the arguments for
                 // their own errors.
-                long i = 0;
+                ylong i = 0;
                 while (i < yv_len(cargs)) {
                     Yv *r = typeof_expr(st, ya_get(cargs, i));
                     st = yr_get(r, "st");
@@ -5407,7 +5408,7 @@ static Yv *typeof_call_go(Yv *st, Yv *node) {
                               yv_l(yr_get(node, "col")));
                     return yr(2, "typ", call_result(ft), "st", st);
                 } else {
-                    long i = 0;
+                    ylong i = 0;
                     while (i < yv_len(cargs)) {
                         Yv *r = typeof_want(st, ya_get(cargs, i), ya_get(cargs_ft, i));
                         st = yr_get(r, "st");
@@ -5441,7 +5442,7 @@ static Yv *typeof_block(Yv *st, Yv *node) {
     // No scope push: names are unique post-rename, blocks share the frame.
     Yv *last = yr(1, "k", yv_long(K_tvoid));
     Yv *bstmts = yr_get(node, "stmts");
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(bstmts)) {
         Yv *r = typeof_expr(st, ya_get(bstmts, i));
         st = yr_get(r, "st");
@@ -5456,7 +5457,7 @@ static Yv *typeof_block(Yv *st, Yv *node) {
 static Yv *typeof_block_want(Yv *st, Yv *node, Yv *want) {
     Yv *last = yr(1, "k", yv_long(K_tvoid));
     Yv *bstmts = yr_get(node, "stmts");
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(bstmts)) {
         Yv *w = yr(1, "k", yv_long(K_tnone));
         if (i == yv_len(bstmts) - 1) {
@@ -5535,10 +5536,10 @@ Yv *lit_target(Yv *node, Yv *want) {
     } else if (yv_l(wk) == K_tunion) {
         Yv *ps = union_parts(w);
         Yv *exact = yr(1, "k", yv_long(K_tnone));
-        long nexact = 0;
+        ylong nexact = 0;
         Yv *fit = yr(1, "k", yv_long(K_tnone));
-        long nfit = 0;
-        for (long i = 0; i < yv_len(ps); i++) {
+        ylong nfit = 0;
+        for (ylong i = 0; i < yv_len(ps); i++) {
             Yv *p = ya_get(ps, i);
             if (lit_fits(unfold(p), keys)) {
                 fit = p;
@@ -5566,12 +5567,12 @@ static int lit_fits(Yv *t, Yv *keys) {
     }
     Yv *fs = yr_get(t, "fields");
     int ok = 1;
-    for (long i = 0; i < yv_len(keys); i++) {
+    for (ylong i = 0; i < yv_len(keys); i++) {
         if (field_pos(fs, ya_get(keys, i), 0) < 0) {
             ok = 0;
         }
     }
-    for (long i = 0; i < yv_len(fs); i++) {
+    for (ylong i = 0; i < yv_len(fs); i++) {
         Yv *f = ya_get(fs, i);
         if (!yv_b(yr_get(f, "opt")) && !str_in(keys, yr_get(f, "name"))) {
             ok = 0;
@@ -5585,7 +5586,7 @@ static int field_opt(Yv *t, Yv *key) {
     int opt = 0;
     if (yv_l(yr_get(t, "k")) == K_trec) {
         Yv *fs = yr_get(t, "fields");
-        for (long i = 0; i < yv_len(fs); i++) {
+        for (ylong i = 0; i < yv_len(fs); i++) {
             Yv *f = ya_get(fs, i);
             if (ys_eq(yr_get(f, "name"), key) && yv_b(yr_get(f, "opt"))) {
                 opt = 1;
@@ -5615,7 +5616,7 @@ static int same_names(Yv *t, Yv *keys) {
         Yv *fs = yr_get(t, "fields");
         Yv *distinct = yav(0);
         int ok = 1;
-        long i = 0;
+        ylong i = 0;
         while (i < yv_len(keys)) {
             Yv *key = ya_get(keys, i);
             if (!str_in(distinct, key)) {
@@ -5637,7 +5638,7 @@ static Yv *typeof_lit(Yv *st, Yv *node, Yv *target) {
     Yv *tu = unfold(target);
     Yv *keys = yr_get(node, "keys");
     Yv *vals = yr_get(node, "vals");
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(keys)) {
         Yv *key = ya_get(keys, i);
         Yv *ft = trec_field_type(tu, key);
@@ -5824,7 +5825,7 @@ static Yv *typeof_decl(Yv *st, Yv *node) {
 // A `return` in a def whose return type is still being inferred: its type
 // and position go into the marker typeof_def put in st.ret (`rl`, a record
 // shared by reference), to be checked once the body's type is known.
-static long ret_note(Yv *rl, Yv *typ, long line, long col) {
+static ylong ret_note(Yv *rl, Yv *typ, ylong line, ylong col) {
     Yv *rets = yr_get(rl, "rets");
     ya_push(rets, yr(3, "typ", typ, "line", yv_long(line), "col", yv_long(col)));
     return 0;
@@ -5844,7 +5845,7 @@ static Yv *inf_bkts;
 
 static void inf_reset(void) {
     Yv *bkts = yav(0);
-    long i = 0;
+    ylong i = 0;
     while (i < 1024) {
         bkts = ya_push(bkts, yav(0));
         i = i + 1;
@@ -5854,11 +5855,11 @@ static void inf_reset(void) {
     inf_bkts = bkts;
 }
 
-static long set_inferred_ret(Yv *func, Yv *ret) {
+static ylong set_inferred_ret(Yv *func, Yv *ret) {
     if (!inf_bkts || yv_len(inf_bkts) == 0) {
         inf_reset();
     }
-    long key = yv_l(yr_get(func, "line")) * 65536 + yv_l(yr_get(func, "col"));
+    ylong key = yv_l(yr_get(func, "line")) * 65536 + yv_l(yr_get(func, "col"));
     Yv *bkt = ya_get(inf_bkts, key % 1024);
     inf_keys = ya_push(inf_keys, yv_long(key));
     inf_typs = ya_push(inf_typs, ret);
@@ -5867,14 +5868,14 @@ static long set_inferred_ret(Yv *func, Yv *ret) {
 }
 
 // The return type inferred for the def at (line, col); tnone for none.
-Yv *inferred_ret(long line, long col) {
+Yv *inferred_ret(ylong line, ylong col) {
     Yv *found = yr(1, "k", yv_long(K_tnone));
     if (inf_bkts && yv_len(inf_bkts) > 0) {
-        long key = line * 65536 + col;
+        ylong key = line * 65536 + col;
         Yv *bkt = ya_get(inf_bkts, key % 1024);
-        long q = 0;
+        ylong q = 0;
         while (q < yv_len(bkt)) {
-            long ix = yv_l(ya_get(bkt, q));
+            ylong ix = yv_l(ya_get(bkt, q));
             if (yv_l(ya_get(inf_keys, ix)) == key) {
                 found = ya_get(inf_typs, ix);
             }
@@ -5906,7 +5907,7 @@ static Yv *ret_inferred_hint(Yv *rt) {
 /* `line`/`col` are the KEYWORD's, for the diagnostics inside; `nline`/`ncol` are
  * the NAME's, and are what st_bind records. They differ by however much
  * whitespace `let`/`def` was followed by. */
-static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col, Yv *nline, Yv *ncol,
+static Yv *typeof_def(Yv *st, Yv *name, Yv *func, ylong line, ylong col, Yv *nline, Yv *ncol,
                        int isnat) {
     if (yv_len(yr_get(func, "params")) != yv_len(yr_get(func, "ptypes"))) {
         st = fail(st, ys("internal: params/ptypes length mismatch"), line, col);
@@ -5923,7 +5924,7 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col, Yv *nline
          * position -- which is the imprecision, not a silent wrong answer, because
          * the name is still bound and every use still resolves. */
         Yv *fpos = yr_get(func, "ppos");
-        long i = 0;
+        ylong i = 0;
         int ok = 1;
         while (i < yv_len(fparams)) {
             Yv *pt = ya_get(fptypes, i);
@@ -6002,9 +6003,9 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col, Yv *nline
         // capture — legal, and closure-converted by the emitter.
         Yv *saved_self = yr_get(st, "self");
         Yv *saved_ret = yr_get(st, "ret");
-        long saved_depth = yv_l(yr_get(st, "fdepth"));
+        ylong saved_depth = yv_l(yr_get(st, "fdepth"));
         st = st_fdepth(st, saved_depth + 1);
-        long j = 0;
+        ylong j = 0;
         while (j < yv_len(fparams)) {
             /* The binding's position is the FUNCTION's, because a parameter has no
              * node of its own -- but the parser does now keep each name's own
@@ -6012,8 +6013,8 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col, Yv *nline
              * and a go-to-definition all need to point. Binding at `nline`/`ncol`
              * was the one thing `Binding.line/col` could not answer, and it is why
              * hovering a parameter's own name showed nothing. */
-            long pl = yv_l(nline);
-            long pc = yv_l(ncol);
+            ylong pl = yv_l(nline);
+            ylong pc = yv_l(ncol);
             if (j < yv_len(fpos) && yv_l(ya_get(fpos, j)) > 0) {
                 pl = yv_l(ya_get(fpos, j)) / 65536;
                 pc = yv_l(ya_get(fpos, j)) % 65536;
@@ -6033,7 +6034,7 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col, Yv *nline
         }
         st = st_self(st, ft);
         st = st_ret(st, body_ret);
-        long nerr = yv_len(yr_get(st, "errors"));
+        ylong nerr = yv_len(yr_get(st, "errors"));
         Yv *b = typeof_block_want(st, yr_get(func, "body"), body_ret);
         st = yr_get(b, "st");
         if (ret_inferred) {
@@ -6048,7 +6049,7 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col, Yv *nline
             // whose type is the one being inferred -- leaves the type to the
             // first `return` that knows its own.
             Yv *rsrc = ys("the end of the body");
-            long ri = 0;
+            ylong ri = 0;
             while (ri < yv_len(rets)) {
                 Yv *rn = ya_get(rets, ri);
                 Yv *rt = yr_get(rn, "typ");
@@ -6101,7 +6102,7 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col, Yv *nline
                 st = expect_type(st, yr_get(b2, "typ"), br,
                                  ys_cat(ys_cat(ys("'"), disp(name)), ys("' body")),
                                  line, col);
-                long ri2 = 0;
+                ylong ri2 = 0;
                 while (ri2 < yv_len(rets2)) {
                     Yv *rn2 = ya_get(rets2, ri2);
                     if (!tcompat(yr_get(rn2, "typ"), br)) {
@@ -6152,7 +6153,7 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col, Yv *nline
     }
 }
 
-static Yv *st_fdepth(Yv *st, long d) {
+static Yv *st_fdepth(Yv *st, ylong d) {
     return yr(7, "bindings", yr_get(st, "bindings"), "errors", yr_get(st, "errors"),
               "ret", yr_get(st, "ret"), "self", yr_get(st, "self"),
               "fdepth", yv_long(d),
@@ -6174,7 +6175,7 @@ Yv *check_program(Yv *ast, Yv *ext) {
     // pass 1: collect top-level def signatures (allows mutual recursion).
     Yv *defs = yav(0);
     Yv *pstmts = yr_get(ast, "stmts");
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(pstmts)) {
         Yv *s = ya_get(pstmts, i);
         // NOTE: nested ifs, not `&&` (house style — the `s.v.k` read is
@@ -6212,7 +6213,7 @@ ys("intrinsic"), yv_long(-1), yv_long(-1) );
     // ... syscall), so these two bindings are never consulted by a call; they
     // exist only so `print`/`syscall` read as defined when they appear as
     // values (e.g. `let p = print;`).
-    long x = 0;
+    ylong x = 0;
     while (x < yv_len(ext)) {
         Yv *xe = ya_get(ext, x);
         Yv *kind = ys("func");
@@ -6223,7 +6224,7 @@ ys("intrinsic"), yv_long(-1), yv_long(-1) );
         st = st_bind(st, yr_get(xe, "name"), yr_get(xe, "typ"), kind, yv_long(-1), yv_long(-1) );
         x = x + 1;
     }
-    long d = 0;
+    ylong d = 0;
     while (d < yv_len(defs)) {
         st = st_bind(st, yr_get(ya_get(defs, d), "name"),
                      yr_get(ya_get(defs, d), "typ"), ys("func"), yv_long(-1), yv_long(-1) );
@@ -6238,7 +6239,7 @@ static Yv *def_sig(Yv *name, Yv *func) {
     // pass 2 (typeof_def) reports each exactly once.
     Yv *args = yav(0);
     Yv *fpt = yr_get(func, "ptypes");
-    long i = 0;
+    ylong i = 0;
     while (i < yv_len(yr_get(func, "params"))) {
         Yv *pt = ya_get(fpt, i);
         if (yv_l(yr_get(pt, "k")) == K_tnone) {

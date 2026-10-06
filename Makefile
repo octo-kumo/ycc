@@ -78,6 +78,18 @@ ycc: cycc $(YCC_SRCS) $(CYC_SRCS) $(CY_HDRS) $(STD_EMBEDS) $(ARCH_EMBEDS)
 	rm -f _ycc _ycc0
 	@echo "verified: cycc output == refs/ycc.ref == ycc self-compile (byte-identical)"
 
+# [W1] the Windows build of the C copy, cross-compiled with mingw-w64. It is
+# the SAME source as cycc -- src/c/ylong.h is what makes Y's 64-bit long hold
+# on LLP64 -- so this is a second host for one compiler, not a second compiler.
+# The gate is test/sh/cycc-win.sh: every fixture cycc.exe compiles under wine
+# must be byte-identical to Linux cycc's. `-S` too (binary-mode stdout). `-g`
+# embeds the host's own absolute cwd, which is a different string on Windows
+# by construction, so it is compared host-against-host, not across hosts.
+MINGW ?= x86_64-w64-mingw32-gcc
+cycc.exe: $(CYC_SRCS) $(CY_HDRS) $(STD_EMBEDS) $(ARCH_EMBEDS)
+	$(MINGW) $(CFLAGS) -o cycc.exe $(CYC_SRCS)
+	@echo "cycc.exe built: the C copy for Windows ($$(stat -c%s cycc.exe) bytes)"
+
 # AddressSanitizer + UBSan build of the C copy (one command, no CI). Every
 # finding is fatal (-fno-sanitize-recover): UBSan's default is to print and
 # carry on, and a suite that compares outputs never sees a report it printed.
@@ -259,7 +271,7 @@ rebless: cycc
 	@echo "blessed refs/ycc.ref $$(sha256sum refs/ycc.ref | cut -c1-16)"
 
 clean:
-	rm -f $(CYC_SRCS:src/c/%.c=src/c/%.o) cycc cycc-asan ycc _ycc _ycc0 _ycc0.pack ycc.pack a.out
+	rm -f $(CYC_SRCS:src/c/%.c=src/c/%.o) cycc cycc.exe cycc-asan ycc _ycc _ycc0 _ycc0.pack ycc.pack a.out
 	rm -f ynew _ynew1 _ynew2 _ynew3 _ynewp _ynewp.pack _rb1 _rb2 _rbp _rbp.pack
 	rm -rf _check docs/build
 
