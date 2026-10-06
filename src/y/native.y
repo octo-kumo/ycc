@@ -166,10 +166,24 @@ def native_resolve_pk(src: str, base_dir: str, allow_exec: bool, root: str, pkgs
 // "undefined function" and the binary has no path to a shell at all.
 def resolve_unit(src: str, base_dir: str, depth: long, allow_exec: bool, root: str) -> Resolved {
     res_used = [];
+    // The program itself is de-duplicated by `self_path` and NOT by putting it in
+    // `seen`. `seen` is also the file-id counter -- a nested call is handed
+    // `len(seen)` -- so seeding it would shift every module's id in
+    // `origin.file` by one and mis-attribute whole files. It was done that way
+    // first and `origin.file` then gave `bn.y` zero lines at id 1 while its text
+    // landed past the end of `files`, which stopped ycc.y and bignum.y compiling.
+    // `self_path` costs one string comparison per import and shifts nothing.
+    //
+    // Normalised, because the comparison is against what `std_resolve` returns and
+    // that is `norm_path`ed: `ycc src/y/asm.y` passes `src/y/asm.y`, and
+    // `std_resolve("./asm.y", "src/y")` answers `src/y/asm.y` after dropping the
+    // `.`. Comparing the raw spelling would simply never match.
+    let self_path = "";
+    if (root != "") { self_path = norm_path(root); };
     // NOTE: seen-threading wrapper (see native_resolve_seen): asm.y imports
     // enc64 as `enc` AND elf.y imports enc64 as `elfenc`; without dedup the
     // encoder splices twice and every enc64 def collides (find_dup).
-    let r = native_resolve_seen(src, base_dir, depth, [], [], 0);
+    let r = native_resolve_seen(src, base_dir, depth, [], [], 0, self_path);
     let rsrc = join(r.lines, "\n");
     let rimports = r.imports;
     let files: [str] = [root];
@@ -555,7 +569,11 @@ def std_resolve(name: str, base_dir: str) -> str {
 // spliced in, as lines; ofile/oline map each one back (see the origin map
 // above native_resolve), and smods[k] is the module seen[k] was imported
 // as by name ("" by path).
-def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str], smods: [str], fid: long) -> { lines: [str], imports: [str], seen: [str], smods: [str], ofile: [long], oline: [long] } {
+// `self_path` is the normalised path of the PROGRAM being compiled, or "" when
+// there is no single file (native_resolve, and a synthesized unit). It is passed
+// separately from `seen` on purpose -- see resolve_unit -- because a module may
+// import the program back, and that must not splice it a second time.
+def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str], smods: [str], fid: long, self_path: str) -> { lines: [str], imports: [str], seen: [str], smods: [str], ofile: [long], oline: [long] } {
     if (depth > 32) {
         // Fatal, like a missing module: carrying on compiled the program
         // without the rest of the chain and exited 0.
@@ -624,12 +642,33 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str], smods
                     if (mod_src == none) {
                         puts("error: cannot open import '" + path + "' (resolved to '" + full + "')\n");
                         exit(1);
-                    } else if (seen_has(seen, full)) {
+                    } else if (seen_has(seen, full) || (self_path != "" && full == self_path)) {
                         // NOTE: already spliced (see native_resolve note):
                         // record the namespace name (strip_ns needs it,
                         // unless the file is a module with its own scope)
                         // but do NOT splice the text a second time.
-                        if (smods[seen_index(seen, full)] == "") { imports += name; }
+                        //
+                        // The program itself counts as already spliced: it is, by
+                        // the line above this walk started. `asm.y` imports `ir.y`
+                        // and `ir.y` imports `asm.y` back, which is legal -- they
+                        // are separate units, and a unit may be imported by more
+                        // than one -- and before this test existed the program was
+                        // spliced a second time inside its own module. Every one of
+                        // its declarations then stood in the tree twice, so
+                        // `ycc src/y/asm.y` reported "duplicate definition
+                        // 'is_digit_ch' ... defines it too" for each, and the
+                        // checker reported `type 'AsmLabel' is declared more than
+                        // once` -- thirty-two errors that `ycc ycc.y` never
+                        // produced, because there the program is ycc.y and nothing
+                        // imports ycc.y back.
+                        //
+                        // `smods` has no entry for the program -- it is not a
+                        // spliced module -- so its smod is "" , which is right:
+                        // the program's own copy IS the flattened one, so
+                        // strip_ns must strip whatever qualifier a module used.
+                        let smod = "";
+                        if (full != self_path) { smod = smods[seen_index(seen, full)]; };
+                        if (smod == "") { imports += name; }
                     } else {
                         seen += full;
                         if (from_idx >= 0) { smods += ""; } else { smods += name; };
@@ -641,7 +680,7 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str], smods
                         // mod_src is str? (read_file returns none on missing
                         // file); the none case exited above, so unwrap here.
                         let mod_src2 = unwrap(mod_src);
-                        let sub = native_resolve_seen(mod_src2, mod_dir, depth + 1, seen, smods, len(seen));
+                        let sub = native_resolve_seen(mod_src2, mod_dir, depth + 1, seen, smods, len(seen), self_path);
                         let subns = sub.imports;
                         let subseen = sub.seen;
                         seen = subseen;
