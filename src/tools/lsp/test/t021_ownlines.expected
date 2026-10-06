@@ -1,0 +1,10 @@
+line 9 (it.fix) -> spliced 11 (want 11: helper.y's 4 lines replace line 4's 1)
+line 4 (the import) -> spliced 0 (want 0)
+line 1 (a comment) -> spliced 1 (want 1)
+line 2 (a comment) -> spliced 2 (want 2)
+one entry per buffer line, plus the sentinel: true
+hover on it -> Item's fields
+hover on it is not a string: true
+it. offers 2: sec,fix
+it. offers exactly Item's fields: true
+hover on the call's `use` is a signature: true
