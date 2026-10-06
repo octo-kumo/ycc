@@ -2830,7 +2830,10 @@ def infer(st: EmitSt, node: Node) -> Type {
 
 def infer_go(st: EmitSt, node: Node) -> Type {
     let k = node.k;
-    if (k == K.num) {
+    if (k == K.bignum) {
+        normtype({ k: K.tbigint })
+    }
+    else if (k == K.num) {
         let leaf: Leaf = node;
         if (lit_is_float(leaf.v)) { normtype({ k: K.tfloat }) } else { normtype({ k: K.tlong }) }
     }
@@ -2880,6 +2883,8 @@ def infer_go(st: EmitSt, node: Node) -> Type {
                 normtype({ k: K.tarr, of: right.of })
             } else if (op == "+" && (bl.k == K.tstr || br.k == K.tstr)) {
                 normtype({ k: K.tstr })
+            } else if (bl.k == K.tbigint || br.k == K.tbigint) {
+                normtype({ k: K.tbigint })
             } else if (bl.k == K.tfloat) {
                 normtype({ k: K.tfloat })
             } else if (br.k == K.tfloat) {
@@ -3798,6 +3803,9 @@ def gen_go(st: EmitSt, node: Node) -> EmitSt {
     if (k == K.num) {
         let lit: Leaf = node;
         gen_lit(st, lit)
+    } else if (k == K.bignum) {
+        let lit: Leaf = node;
+        gen_biglit(st, lit)
     } else if (k == K.bool) {
         let lit: Leaf = node;
         if (lit.v == "true") {
@@ -4670,7 +4678,10 @@ def gen_un(st: EmitSt, node: Un) -> EmitSt {
     let ut = infer(st, node.e);
     st = gen(st, node.e);
     if (node.op == "-") {
-        if (ut.k == K.tfloat) {
+        if (ut.k == K.tbigint) {
+            st = gen_helper1(st, "y_bigint_neg");
+            st
+        } else if (ut.k == K.tfloat) {
             // flip the sign bit: -0.0 is a negative zero, -nan a nan
             st = emit_insn(st, insn.F_MOV_I_R, 1, insn.R_RCX, 64, 0, 0, 0, 0);
             st = emit_insn(st, insn.F_SHL_I_R, 63, insn.R_RCX, 64, 0, 0, 0, 0);
@@ -4869,6 +4880,16 @@ def gen_cat(st: EmitSt, node: Bin, lt: Type, rt: Type) -> EmitSt {
             st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
             st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_cat"), 0, 0, 0, 0, 0, 0);
             st = emit_insn(st, insn.F_ADD_I_R, 16, insn.R_RSP, 64, 0, 0, 0, 0)
+        } else if (rt.k == K.tbigint) {
+            st = gen(st, node.l);
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+            st = gen(st, node.r);
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_CALL_L, lbl_new("y_bigint_tostr"), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_cat"), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_ADD_I_R, 16, insn.R_RSP, 64, 0, 0, 0, 0)
         } else {
             // Unknown right operand: treat it as a string. Most unknowns
             // here ARE strings (a field read through an untyped hole infers
@@ -4916,6 +4937,16 @@ def gen_cat(st: EmitSt, node: Bin, lt: Type, rt: Type) -> EmitSt {
             st = gen(st, node.l);
             st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
             st = emit_insn(st, insn.F_CALL_L, lbl_new("y_float_tostr"), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+            st = gen(st, node.r);
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_cat"), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_ADD_I_R, 16, insn.R_RSP, 64, 0, 0, 0, 0)
+        } else if (lt.k == K.tbigint) {
+            st = gen(st, node.l);
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_CALL_L, lbl_new("y_bigint_tostr"), 0, 0, 0, 0, 0, 0);
             st = emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0);
             st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
             st = gen(st, node.r);
@@ -5101,7 +5132,7 @@ def gen_str_cmp(st: EmitSt, node: Bin, op: str) -> EmitSt {
 // y_arr_eq_str cores; the others loop here: options and arrays look
 // inside, and floats compare as numbers (0.0 == -0.0).
 def eq_elem_loop(t: Type) -> bool {
-    t.k == K.topt || t.k == K.tarr || t.k == K.tfloat
+    t.k == K.topt || t.k == K.tarr || t.k == K.tfloat || t.k == K.tbigint
 };
 
 // The left operand pushed, the right one in %rax: pops the left and leaves
@@ -5125,6 +5156,13 @@ def gen_eq_vals(st: EmitSt, t: Type) -> EmitSt {
             st = emit_insn(st, insn.F_CALL_L, lbl_new("y_arr_eq"), 0, 0, 0, 0, 0, 0);
             emit_insn(st, insn.F_ADD_I_R, 24, insn.R_RSP, 64, 0, 0, 0, 0)
         }
+    } else if (t.k == K.tbigint) {
+        st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_CALL_L, lbl_new("y_bigint_cmp"), 0, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_ADD_I_R, 16, insn.R_RSP, 64, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_CMP_I_R, 0, insn.R_RAX, 64, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_SETE_R, insn.R_RAX, 8, 0, 0, 0, 0, 0);
+        emit_insn(st, insn.F_MOVZBQ_R_R, insn.R_RAX, 8, insn.R_RAX, 64, 0, 0, 0)
     } else if (t.k == K.tstr) {
         st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
         st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_eq"), 0, 0, 0, 0, 0, 0);
@@ -5248,6 +5286,10 @@ def gen_bin_rest(st: EmitSt, node: Bin) -> EmitSt {
         gen_cons(st, node)
     } else if (op == "<<" || op == ">>" || op == ">>>") {
         gen_shift(st, node, op)
+    } else if (lt.k == K.tbigint || rt.k == K.tbigint) {
+        // + - * / % and every comparison go through the runtime bigint
+        // helpers. Mixed long/byte/float operands convert silently.
+        gen_bigint_bin(st, node, lt, rt)
     } else if (lt.k == K.tfloat || rt.k == K.tfloat) {
         gen_float_bin(st, node, lt, rt)
     } else if ((op == "==" || op == "!=") && (lt.k == K.tstr || rt.k == K.tstr)) {
@@ -5590,11 +5632,17 @@ def gen_push_args_as(st: EmitSt, args: [Node], ptypes: [Type]) -> EmitSt {
 def gen_conv(st: EmitSt, got: Type, want: Type) -> EmitSt {
     let gk: long = got.k;
     let wk: long = want.k;
-    if (wk == K.tfloat && (gk == K.tlong || gk == K.tbyte)) {
+    if (gk == wk) {
+        st
+    } else if (wk == K.tfloat && (gk == K.tlong || gk == K.tbyte)) {
         st = emit_insn(st, insn.F_CVTSI2SD_R_R, insn.R_RAX, 64, insn.R_XMM0, 128, 0, 0, 0);
         emit_insn(st, insn.F_MOVQ_R_R, insn.R_XMM0, 128, insn.R_RAX, 64, 0, 0, 0)
     } else if (wk == K.tbyte && gk == K.tlong) {
         emit_insn(st, insn.F_MOVZBQ_R_R, insn.R_RAX, 8, insn.R_RAX, 64, 0, 0, 0)
+    } else if (wk == K.tbigint && gk == K.tfloat) {
+        gen_helper1(st, "y_bigint_from_float")
+    } else if (wk == K.tbigint) {
+        gen_helper1(st, "y_bigint_from_long")
     } else {
         st
     }
@@ -5625,7 +5673,7 @@ def gen_as(st: EmitSt, node: Node, want0: Type) -> EmitSt {
     } else {
         st = gen(st, node);
     };
-    if (wk == K.tfloat || wk == K.tbyte) {
+    if (wk == K.tfloat || wk == K.tbyte || wk == K.tbigint) {
         gen_conv(st, infer(st, node), want)
     } else if ((wk == K.trec || wk == K.tunion) && nk != K.rec) {
         // a record literal is made in the declared layout (gen_reclit)
@@ -6050,6 +6098,9 @@ def gen_print_scalar(st: EmitSt, arg: Node, t: Type) -> EmitSt {
     st = gen(st, arg);
     if (t.k == K.tbool) {
         st = gen_helper1(st, "y_print_bool");
+        emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0)
+    } else if (t.k == K.tbigint) {
+        st = gen_helper1(st, "y_bigint_print");
         emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0)
     } else if (t.k == K.tstr) {
         st = gen_helper1(st, "y_print_hstr");
@@ -8482,6 +8533,80 @@ def gen_lit(st: EmitSt, node: Leaf) -> EmitSt {
         emit_insn(st, insn.F_MOV_I_R, num_i64(norm_num(node.v)), insn.R_RAX, 64, 0, 0, 0, 0)
     }
 };
+// 1000n -- parse the literal text at run time into a bigint. The parser
+// accepts decimal and 0x/0o/0b forms, so one helper covers every radix.
+def gen_biglit(st: EmitSt, node: Leaf) -> EmitSt {
+    st = gen_str_const(st, node.v);
+    gen_helper1(st, "y_bigint_parse")
+};
+
+// Leave `node` in %rax as a bigint: a bigint is already one, a long/byte
+// converts exactly, a float truncates toward zero.
+def gen_bigint_to(st: EmitSt, node: Node) -> EmitSt {
+    let t = infer(st, node);
+    st = gen(st, node);
+    if (t.k == K.tbigint) {
+        st
+    } else if (t.k == K.tfloat) {
+        gen_helper1(st, "y_bigint_from_float")
+    } else {
+        gen_helper1(st, "y_bigint_from_long")
+    }
+};
+
+// Bigint binary operations. The runtime helpers take two stack arguments in
+// the ordinary Y order (left, then right) and return a bigint or, for cmp, a
+// signed -1/0/1.
+def gen_bigint_bin(st: EmitSt, node: Bin, lt: Type, rt: Type) -> EmitSt {
+    let op = node.op;
+    st = gen_bigint_to(st, node.l);
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    st = gen_bigint_to(st, node.r);
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    let helper = "";
+    if (op == "+") { helper = "y_bigint_add"; }
+    else if (op == "-") { helper = "y_bigint_sub"; }
+    else if (op == "*") { helper = "y_bigint_mul"; }
+    else if (op == "/") { helper = "y_bigint_div"; }
+    else if (op == "%") { helper = "y_bigint_mod"; }
+    else { helper = "y_bigint_cmp"; };
+    st = emit_insn(st, insn.F_CALL_L, lbl_new(helper), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_ADD_I_R, 16, insn.R_RSP, 64, 0, 0, 0, 0);
+    if (op == "<") {
+        st = emit_insn(st, insn.F_CMP_I_R, 0, insn.R_RAX, 64, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_SETL_R, insn.R_RAX, 8, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOVZBQ_R_R, insn.R_RAX, 8, insn.R_RAX, 64, 0, 0, 0);
+        st
+    } else if (op == ">") {
+        st = emit_insn(st, insn.F_CMP_I_R, 0, insn.R_RAX, 64, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_SETG_R, insn.R_RAX, 8, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOVZBQ_R_R, insn.R_RAX, 8, insn.R_RAX, 64, 0, 0, 0);
+        st
+    } else if (op == "<=") {
+        st = emit_insn(st, insn.F_CMP_I_R, 0, insn.R_RAX, 64, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_SETLE_R, insn.R_RAX, 8, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOVZBQ_R_R, insn.R_RAX, 8, insn.R_RAX, 64, 0, 0, 0);
+        st
+    } else if (op == ">=") {
+        st = emit_insn(st, insn.F_CMP_I_R, 0, insn.R_RAX, 64, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_SETGE_R, insn.R_RAX, 8, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOVZBQ_R_R, insn.R_RAX, 8, insn.R_RAX, 64, 0, 0, 0);
+        st
+    } else if (op == "==") {
+        st = emit_insn(st, insn.F_CMP_I_R, 0, insn.R_RAX, 64, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_SETE_R, insn.R_RAX, 8, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOVZBQ_R_R, insn.R_RAX, 8, insn.R_RAX, 64, 0, 0, 0);
+        st
+    } else if (op == "!=") {
+        st = emit_insn(st, insn.F_CMP_I_R, 0, insn.R_RAX, 64, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_SETNE_R, insn.R_RAX, 8, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOVZBQ_R_R, insn.R_RAX, 8, insn.R_RAX, 64, 0, 0, 0);
+        st
+    } else {
+        st
+    }
+};
+
 def gen_index(st: EmitSt, node: Index) -> EmitSt {
     // Checker: an array expression — a plain variable or a nested place
     // (`grid[0][1]`, `rec.v[i]`); the base is evaluated once, here.
@@ -9149,6 +9274,8 @@ def gen_val_tostr_rax(st: EmitSt, t: Type, path: [Type]) -> EmitSt {
         gen_str_const(st, "<" + types.tstr(named) + ">")
     } else if (tk == K.tstr) {
         st
+    } else if (tk == K.tbigint) {
+        gen_helper1(st, "y_bigint_tostr")
     } else if (tk == K.tbool) {
         st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
         st = emit_insn(st, insn.F_CALL_L, lbl_new("y_bool_tostr"), 0, 0, 0, 0, 0, 0);
@@ -9839,7 +9966,9 @@ def gen_tolong(st: EmitSt, node: Call) -> EmitSt {
     let targs: [Node] = node.args;
     let a0 = targs[0];
     let t = infer(st, a0);
-    let lbl = if (t.k == K.tfloat) { "y_f2l" } else { "y_str_tolong" };
+    let lbl = if (t.k == K.tfloat) { "y_f2l" }
+              else if (t.k == K.tbigint) { "y_bigint_to_long" }
+              else { "y_str_tolong" };
     st = gen_push_args(st, node.args);
     st = emit_insn(st, insn.F_CALL_L, lbl_new(lbl), 0, 0, 0, 0, 0, 0);
     emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0)
@@ -9857,6 +9986,10 @@ def gen_tofloat(st: EmitSt, node: Call) -> EmitSt {
         st = gen(st, a0);
         st = emit_insn(st, insn.F_CVTSI2SD_R_R, insn.R_RAX, 64, insn.R_XMM0, 128, 0, 0, 0);
         emit_insn(st, insn.F_MOVQ_R_R, insn.R_XMM0, 128, insn.R_RAX, 64, 0, 0, 0)
+    } else if (t.k == K.tbigint) {
+        st = gen_push_args(st, node.args);
+        st = emit_insn(st, insn.F_CALL_L, lbl_new("y_bigint_to_float"), 0, 0, 0, 0, 0, 0);
+        emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0)
     } else {
         st = gen_push_args(st, node.args);
         st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_tofloat"), 0, 0, 0, 0, 0, 0);
@@ -9898,6 +10031,10 @@ def gen_tostring(st: EmitSt, node: Call) -> EmitSt {
         gen_union_str_rax(st, t, [])
     } else if (t.k == K.tmap) {
         gen_map_repr(st, a0, t)
+    } else if (t.k == K.tbigint) {
+        st = gen_push_args(st, node.args);
+        st = emit_insn(st, insn.F_CALL_L, lbl_new("y_bigint_tostr"), 0, 0, 0, 0, 0, 0);
+        emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0)
     } else {
         st = gen_push_args(st, node.args);
         st = emit_insn(st, insn.F_CALL_L, lbl_new("y_long_tostr"), 0, 0, 0, 0, 0, 0);
@@ -12228,6 +12365,7 @@ def tcode_go(out: [str], t: Type) -> [str] {
     if (k == K.tlong) { out += "l"; out }
     else if (k == K.tbyte) { out += "b"; out }
     else if (k == K.tfloat) { out += "f"; out }
+    else if (k == K.tbigint) { out += "g"; out }
     else if (k == K.tbool) { out += "o"; out }
     else if (k == K.tstr) { out += "s"; out }
     else if (k == K.tvoid) { out += "v"; out }
@@ -12323,6 +12461,7 @@ def tdecode_go(cur: Cursor) -> Type {
     if (c == "l") { normtype({ k: K.tlong }) }
     else if (c == "b") { normtype({ k: K.tbyte }) }
     else if (c == "f") { normtype({ k: K.tfloat }) }
+    else if (c == "g") { normtype({ k: K.tbigint }) }
     else if (c == "o") { normtype({ k: K.tbool }) }
     else if (c == "s") { normtype({ k: K.tstr }) }
     else if (c == "v") { normtype({ k: K.tvoid }) }

@@ -457,6 +457,7 @@ def tcanon_go(out: [str], t: Type, stack: [str]) -> [str] {
     if (k == K.tlong) { out += "l"; out }
     else if (k == K.tbyte) { out += "b"; out }
     else if (k == K.tfloat) { out += "f"; out }
+    else if (k == K.tbigint) { out += "g"; out }
     else if (k == K.tbool) { out += "o"; out }
     else if (k == K.tstr) { out += "s"; out }
     else if (k == K.tvoid) { out += "v"; out }
@@ -654,6 +655,7 @@ def tstr_go(t: Type) -> str {
     if (t.k == K.tlong) { "long" }
     else if (t.k == K.tbyte) { "byte" }
     else if (t.k == K.tfloat) { "float" }
+    else if (t.k == K.tbigint) { "bigint" }
     else if (t.k == K.tbool) { "bool" }
     else if (t.k == K.tstr) { "str" }
     else if (t.k == K.tvoid) { "void" }
@@ -1030,6 +1032,7 @@ def is_value_type(t: Type) -> bool {
     if (t.k == K.tlong) { true }
     else if (t.k == K.tbyte) { true }
     else if (t.k == K.tfloat) { true }
+    else if (t.k == K.tbigint) { true }
     else if (t.k == K.tbool) { true }
     else if (t.k == K.tstr) { true }
     else if (t.k == K.tptr) { true }
@@ -1272,6 +1275,7 @@ def typeof_arith(st: TcSt, op: str, lt: Type, rt: Type, line: long, col: long) -
             else if (rt.k == K.tbyte) { tc_res({ k: K.tstr }, st) }
             else if (rt.k == K.tfloat) { tc_res({ k: K.tstr }, st) }
             else if (rt.k == K.tbool) { tc_res({ k: K.tstr }, st) }
+            else if (rt.k == K.tbigint) { tc_res({ k: K.tstr }, st) }
             else { typeof_arith_long(st, op, lt, rt, line, col) }
         } else if (lt.k == K.tunk) {
             if (rt.k == K.tstr) { tc_res({ k: K.tstr }, st) }
@@ -1286,6 +1290,9 @@ def typeof_arith(st: TcSt, op: str, lt: Type, rt: Type, line: long, col: long) -
             if (rt.k == K.tstr) { tc_res({ k: K.tstr }, st) }
             else { typeof_arith_long(st, op, lt, rt, line, col) }
         } else if (lt.k == K.tbool) {
+            if (rt.k == K.tstr) { tc_res({ k: K.tstr }, st) }
+            else { typeof_arith_long(st, op, lt, rt, line, col) }
+        } else if (lt.k == K.tbigint) {
             if (rt.k == K.tstr) { tc_res({ k: K.tstr }, st) }
             else { typeof_arith_long(st, op, lt, rt, line, col) }
         } else { typeof_arith_long(st, op, lt, rt, line, col) }
@@ -1379,9 +1386,15 @@ def typeof_cons(st: TcSt, lt: Type, rt: Type, line: long, col: long) -> TcRes {
 };
 
 def typeof_arith_long(st: TcSt, op: str, lt: Type, rt: Type, line: long, col: long) -> TcRes {
-    // Numeric arithmetic. If either side is a float the result is a float
-    // and the other side widens (long -> float, the only coercion).
-    if (lt.k == K.tfloat || rt.k == K.tfloat) {
+    // Numeric arithmetic. A bigint operand makes the result a bigint and
+    // the other side is converted silently (long/byte exactly, float by
+    // truncating toward zero). Otherwise a float makes the result a float
+    // and the other side widens; everything else is long arithmetic.
+    if (lt.k == K.tbigint || rt.k == K.tbigint) {
+        st = expect_type(st, lt, { k: K.tbigint }, "'" + op + "' left operand", line, col);
+        st = expect_type(st, rt, { k: K.tbigint }, "'" + op + "' right operand", line, col);
+        tc_res({ k: K.tbigint }, st)
+    } else if (lt.k == K.tfloat || rt.k == K.tfloat) {
         st = expect_type(st, lt, { k: K.tfloat }, "'" + op + "' left operand", line, col);
         st = expect_type(st, rt, { k: K.tfloat }, "'" + op + "' right operand", line, col);
         tc_res({ k: K.tfloat }, st)
@@ -1412,6 +1425,11 @@ def typeof_cmp(st: TcSt, op: str, lt: Type, rt: Type, line: long, col: long) -> 
         // y_str_cmp helper native.y emits.
         st = expect_type(st, rt, { k: K.tstr }, "'" + op + "' right operand", line, col);
         tc_res({ k: K.tbool }, st)
+    } else if (lt.k == K.tbigint || rt.k == K.tbigint) {
+        // bigint ordering: long/byte/float convert to bigint.
+        st = expect_type(st, lt, { k: K.tbigint }, "'" + op + "' left operand", line, col);
+        st = expect_type(st, rt, { k: K.tbigint }, "'" + op + "' right operand", line, col);
+        tc_res({ k: K.tbool }, st)
     } else if (lt.k == K.tfloat || rt.k == K.tfloat) {
         st = expect_type(st, lt, { k: K.tfloat }, "'" + op + "' left operand", line, col);
         st = expect_type(st, rt, { k: K.tfloat }, "'" + op + "' right operand", line, col);
@@ -1430,6 +1448,7 @@ def is_num_kind(t: Type) -> bool {
     if (t.k == K.tlong) { true }
     else if (t.k == K.tbyte) { true }
     else if (t.k == K.tfloat) { true }
+    else if (t.k == K.tbigint) { true }
     else { false }
 };
 
@@ -1536,13 +1555,20 @@ def tcompat(got: Type, want: Type) -> bool {
         // The value is masked to 8 bits where it is stored.
         if (want.k == K.tfloat) { true }
         else if (want.k == K.tbyte) { true }
+        else if (want.k == K.tbigint) { true }
         else { false }
     } else if (got.k == K.tbyte) {
         // byte widens to long (and on to float) — it is an 8-bit unsigned
         // integer, so every value is representable.
         if (want.k == K.tlong) { true }
         else if (want.k == K.tfloat) { true }
+        else if (want.k == K.tbigint) { true }
         else { false }
+    } else if (want.k == K.tbigint) {
+        // long, byte and float convert to bigint silently: from long/byte
+        // exactly, from float by truncating toward zero. The reverse needs
+        // tolong()/tofloat().
+        got.k == K.tlong || got.k == K.tbyte || got.k == K.tfloat
     } else { false }
 };
 
@@ -1744,7 +1770,11 @@ def typeof_expr(st: TcSt, node: Node) -> TcRes {
 
 def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
     let k = node.k;
-    if (k == K.num) {
+    if (k == K.bignum) {
+        // 1000n always has the built-in bigint type; the value is built at
+        // run time (native.y gen_biglit).
+        tc_res(type_node({ k: K.tbigint }), st)
+    } else if (k == K.num) {
         let lit: Leaf = node;
         if (num_is_float(lit.v)) {
             let dp = num_net_exp(lit.v);
@@ -1818,6 +1848,8 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
         if (un.op == "-") {
             if (r.typ.k == K.tfloat) {
                 tc_res(type_node({ k: K.tfloat }), st)
+            } else if (r.typ.k == K.tbigint) {
+                tc_res(type_node({ k: K.tbigint }), st)
             } else {
                 st = expect_type(st, r.typ, type_node({ k: K.tlong }), "unary '-'", un.line, un.col);
                 tc_res(type_node({ k: K.tlong }), st)
@@ -3061,7 +3093,7 @@ def base_type(st: TcSt, e: Node) -> Type {
 // ++/-- target rule: numbers (long/byte/float) only.
 def incdec_check(st: TcSt, node: IncDec, tt: Type) -> TcRes {
     let op = node.op;
-    if (tt.k == K.tlong || tt.k == K.tbyte || tt.k == K.tfloat) {
+    if (tt.k == K.tlong || tt.k == K.tbyte || tt.k == K.tfloat || tt.k == K.tbigint) {
         tc_res(tt, st)
     } else if (tt.k == K.tunk || tt.k == K.tnone) {
         tc_res(t_unk(), st)
@@ -3084,7 +3116,7 @@ def incdec_check(st: TcSt, node: IncDec, tt: Type) -> TcRes {
 // The result is always the target's type (the new value).
 def opassign_check(st: TcSt, node: OpAssign, tt: Type, vt: Type) -> TcRes {
     let op = node.op;
-    if (is_bits_op(op)) {
+    if (is_bits_op(op) && tt.k != K.tbigint) {
         if (tt.k == K.tlong || tt.k == K.tbyte) {
             st = expect_type(st, vt, type_node({ k: K.tlong }), "'" + op + "=' value", node.line, node.col);
             tc_res(tt, st)
@@ -3139,6 +3171,14 @@ def opassign_check(st: TcSt, node: OpAssign, tt: Type, vt: Type) -> TcRes {
         } else {
             st = fail(st, "strings support only '+=' (concatenate), not '" + op + "='", node.line, node.col);
             tc_res(tt, st)
+        }
+    } else if (tt.k == K.tbigint) {
+        if (op == "+" || op == "-" || op == "*" || op == "/" || op == "%") {
+            st = expect_type(st, vt, tt, "'" + op + "=' value", node.line, node.col);
+            tc_res(tt, st)
+        } else {
+            st = fail(st, "bigints support only '+', '-', '*', '/' and '%' with '='", node.line, node.col);
+            tc_res(t_unk(), st)
         }
     } else if (tt.k == K.tlong || tt.k == K.tbyte || tt.k == K.tfloat) {
         st = expect_type(st, vt, tt, "'" + op + "=' value", node.line, node.col);
@@ -3309,8 +3349,8 @@ def typeof_fmt(st: TcSt, node: Call) -> TcRes {
     if (sp == none) {
         let e: Err = fargs[1];
         st = fail(st, e.msg, e.line, e.col);
-    } else if (!(t.k == K.tlong || t.k == K.tbyte || t.k == K.tbool || t.k == K.tstr || t.k == K.tfloat || t.k == K.tunk || t.k == K.tarr || t.k == K.tarrfix || t.k == K.trec || t.k == K.tmap || t.k == K.topt || t.k == K.tunion)) {
-        st = fail(st, "an f-string field takes long/bool/float/str/array/record/map/option, got " + tstr(t), node.line, node.col);
+    } else if (!(t.k == K.tlong || t.k == K.tbyte || t.k == K.tbool || t.k == K.tstr || t.k == K.tfloat || t.k == K.tbigint || t.k == K.tunk || t.k == K.tarr || t.k == K.tarrfix || t.k == K.trec || t.k == K.tmap || t.k == K.topt || t.k == K.tunion)) {
+        st = fail(st, "an f-string field takes long/bool/float/bigint/str/array/record/map/option, got " + tstr(t), node.line, node.col);
     } else if (spec != "") {
         let e = fmt_check(fmt_spec(spec), fmt_kind(t), tstr(t));
         if (e != "") { st = fail(st, "format spec '" + spec + "': " + e, node.line, node.col); }
@@ -3474,10 +3514,10 @@ def typeof_call_go(st: TcSt, node: Call) -> TcRes {
             } else {
                 let r = typeof_expr(st, cargs[0]);
                 st = r.st;
-                if (r.typ.k == K.tlong || r.typ.k == K.tbyte || r.typ.k == K.tbool || r.typ.k == K.tstr || r.typ.k == K.tfloat || r.typ.k == K.tunk || r.typ.k == K.trec || r.typ.k == K.tmap || r.typ.k == K.tfunc || r.typ.k == K.tarr || r.typ.k == K.tarrfix || r.typ.k == K.topt || r.typ.k == K.tunion) {
+                if (r.typ.k == K.tlong || r.typ.k == K.tbyte || r.typ.k == K.tbool || r.typ.k == K.tstr || r.typ.k == K.tfloat || r.typ.k == K.tbigint || r.typ.k == K.tunk || r.typ.k == K.trec || r.typ.k == K.tmap || r.typ.k == K.tfunc || r.typ.k == K.tarr || r.typ.k == K.tarrfix || r.typ.k == K.topt || r.typ.k == K.tunion) {
                     tc_res(type_node({ k: K.tvoid }), st)
                 } else {
-                    st = fail(st, "print supports long/bool/float/str/array/record/map/option, got " + tstr(r.typ), node.line, node.col);
+                    st = fail(st, "print supports long/bool/float/bigint/str/array/record/map/option, got " + tstr(r.typ), node.line, node.col);
                     tc_res(type_node({ k: K.tvoid }), st)
                 }
             }
@@ -3677,8 +3717,8 @@ def typeof_call_go(st: TcSt, node: Call) -> TcRes {
                 st = r.st;
                 // A str is parsed; a float is truncated. Two types rather than
                 // one is what makes the name worth changing.
-                if (r.typ.k != K.tstr && r.typ.k != K.tfloat) {
-                    st = fail(st, "tolong needs a str to parse or a float to truncate, got "
+                if (r.typ.k != K.tstr && r.typ.k != K.tfloat && r.typ.k != K.tbigint) {
+                    st = fail(st, "tolong needs a str to parse, a float to truncate or a bigint to narrow, got "
                            + tstr(r.typ), node.line, node.col);
                     tc_res(t_unk(), st)
                 } else {
@@ -3695,8 +3735,8 @@ def typeof_call_go(st: TcSt, node: Call) -> TcRes {
                 // A str is parsed; a long is widened, which the language already
                 // does implicitly -- so this arm exists for SYMMETRY with
                 // tolong, not because it needs to.
-                if (r.typ.k != K.tstr && r.typ.k != K.tlong) {
-                    st = fail(st, "tofloat needs a str to parse or a long to widen, got "
+                if (r.typ.k != K.tstr && r.typ.k != K.tlong && r.typ.k != K.tbigint) {
+                    st = fail(st, "tofloat needs a str to parse, a long to widen or a bigint to convert, got "
                            + tstr(r.typ), node.line, node.col);
                     tc_res(t_unk(), st)
                 } else {
@@ -3710,10 +3750,10 @@ def typeof_call_go(st: TcSt, node: Call) -> TcRes {
             } else {
                 let r = typeof_expr(st, cargs[0]);
                 st = r.st;
-                if (r.typ.k == K.tlong || r.typ.k == K.tbyte || r.typ.k == K.tbool || r.typ.k == K.tstr || r.typ.k == K.tfloat || r.typ.k == K.tunk || r.typ.k == K.tarr || r.typ.k == K.tarrfix || r.typ.k == K.trec || r.typ.k == K.tmap || r.typ.k == K.topt || r.typ.k == K.tunion) {
+                if (r.typ.k == K.tlong || r.typ.k == K.tbyte || r.typ.k == K.tbool || r.typ.k == K.tstr || r.typ.k == K.tfloat || r.typ.k == K.tbigint || r.typ.k == K.tunk || r.typ.k == K.tarr || r.typ.k == K.tarrfix || r.typ.k == K.trec || r.typ.k == K.tmap || r.typ.k == K.topt || r.typ.k == K.tunion) {
                     tc_res(type_node({ k: K.tstr }), st)
                 } else {
-                    st = fail(st, "tostring supports long/bool/float/str/array/record/map/option, got " + tstr(r.typ), node.line, node.col);
+                    st = fail(st, "tostring supports long/bool/float/bigint/str/array/record/map/option, got " + tstr(r.typ), node.line, node.col);
                     tc_res(t_unk(), st)
                 }
             }

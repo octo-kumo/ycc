@@ -112,6 +112,9 @@ enum {
     /* `break` and `continue` (2025): see src/y/tags.y. */
     K_kw_break       = 83,
     K_kw_continue    = 84,
+    /* Big integers: a literal node and the built-in type. */
+    K_bignum         = 85,
+    K_tbigint        = 86,
 };
 
 #endif

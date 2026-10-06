@@ -43,7 +43,9 @@ const K = {
     // `break` and `continue` (2025): a jump out of, or to the next turn of, the
     // innermost enclosing loop. Bare nodes -- no payload, so the shape is
     // `Bare` and no union member is needed.
-    kw_break: 83, kw_continue: 84
+    kw_break: 83, kw_continue: 84,
+    // Big integers: a literal node and the built-in type.
+    bignum: 85, tbigint: 86
 };
 
 const KTAGS: [str] = [
@@ -57,7 +59,7 @@ const KTAGS: [str] = [
     "terr", "tfloat", "tfunc", "tinfer", "tlong", "tmap", "tname", "tnone",
     "topt", "tparams", "tpat", "tpend", "tptr", "trec", "tref", "tstr",
     "tunion", "tunk", "tvoid", "typedef", "un", "void", "while",
-    "break", "continue"
+    "break", "continue", "bignum", "tbigint"
 ];
 
 // The name of a tag, for a diagnostic. The argument is always a tag the
@@ -139,7 +141,8 @@ def tags_agree() -> bool {
     ktag(K.tunion) == "tunion" && ktag(K.tunk) == "tunk" && ktag(K.tvoid) == "tvoid" &&
     ktag(K.typedef) == "typedef" && ktag(K.un) == "un" && ktag(K.void) == "void" &&
     ktag(K.kw_while) == "while" &&
-    ktag(K.kw_break) == "break" && ktag(K.kw_continue) == "continue"
+    ktag(K.kw_break) == "break" && ktag(K.kw_continue) == "continue" &&
+    ktag(K.bignum) == "bignum" && ktag(K.tbigint) == "tbigint"
 };
 
 // MAX_NEST is the other number the two copies must hold the same: a limit

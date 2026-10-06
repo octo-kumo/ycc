@@ -1,7 +1,7 @@
 /* lexer.c — tokenize a Y source string into a list of token maps.
  * 1:1 C copy of src/y/lexer.y (see PORTING.md).
  * Each token is { t: <type>, v: <lexeme/value>, line: <1-based>, col: <1-based> }.
- * Token types: id, num, str, bstr, char, op, punct, kw, eof, and ferr -- a
+ * Token types: id, num, bigint, str, bstr, char, op, punct, kw, eof, and ferr -- a
  * malformed literal (a broken f-string, lex_fstring; a radix prefix without
  * digits), v its error message.
  *
@@ -724,6 +724,7 @@ Yv *tokenize(Yv *src) {
             // two tokens in the stream for one literal: `expected ';', got
             // '0b10001b'`)
             ylong bval = -1;
+            int big = 0;
             if (radix > 0) {
                 i = i + 2;
                 col = col + 2;
@@ -749,6 +750,14 @@ Yv *tokenize(Yv *src) {
                     if (radix == 16) { what = ys("hex"); }
                     else if (radix == 8) { what = ys("octal"); }
                     err = ys_cat(ys_cat(ys_cat(what, ys(" literal '")), ys_slice(src, start, i)), ys("' has no digits"));
+                } else if (ys_eq_lit(ys_slice(src, i, i + 1), "n") &&
+                           !lex_word_slice(ys_slice(src, i + 1, i + 2))) {
+                    /* `0b10001n` / `0o17n` / `0x1Fn`: a BIGINT literal.
+                     * `n` is not a digit of any radix, so the digits end
+                     * where it starts. */
+                    i = i + 1;
+                    col = col + 1;
+                    big = 1;
                 } else if (ys_eq_lit(ys_slice(src, i, i + 1), "b") &&
                            !lex_word_slice(ys_slice(src, i + 1, i + 2))) {
                     /* `0b10001b` / `0o17b`: a BYTE literal. `b` is not a digit
@@ -824,10 +833,29 @@ Yv *tokenize(Yv *src) {
                     ;
                 }
             }
+            if (ys_eq_lit(ys_slice(src, i, i + 1), "n") &&
+                !lex_word_slice(ys_slice(src, i + 1, i + 2))) {
+                if (ys_index_of(ys_slice(src, start, i), ys(".")) >= 0 ||
+                    ys_index_of(ys_slice(src, start, i), ys("e")) >= 0 ||
+                    ys_index_of(ys_slice(src, start, i), ys("E")) >= 0) {
+                    err = ys_cat(ys_cat(ys("bigint literal '"),
+                                       ys_slice(src, start, i + 1)),
+                                 ys("' is a float; a bigint is a whole number"));
+                    i = i + 1;
+                    col = col + 1;
+                } else {
+                    i = i + 1;
+                    col = col + 1;
+                    big = 1;
+                }
+            }
             }
             Yv *txt = ys_slice(src, start, i);
             if (!ys_eq_lit(err, "")) {
                 toks = ya_push(toks, mktok(ys("ferr"), err, line, startcol));
+            } else if (big) {
+                toks = ya_push(toks, mktok(ys("bigint"),
+                    strip_seps(ys_slice(src, start, i - 1)), line, startcol));
             } else if (bval >= 0) {
                 toks = ya_push(toks, mktok(ys("char"), ys_chr(bval), line, startcol));
             } else if (ys_eq_lit(ys_slice(src, i, i + 1), "b") &&

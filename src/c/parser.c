@@ -271,6 +271,9 @@ Yv *parse_primary(Yv *toks, ylong p) {
     ylong cl = tcol(toks, p);
     if (ys_eq_lit(t, "num")) {
         return res(yr(4, "k", yv_long(K_num), "v", v, "line", yv_long(ln), "col", yv_long(cl)), p + 1);
+    } else if (ys_eq_lit(t, "bigint")) {
+        /* 1000n -- an arbitrary-precision integer literal. */
+        return res(yr(4, "k", yv_long(K_bignum), "v", v, "line", yv_long(ln), "col", yv_long(cl)), p + 1);
     } else if (ys_eq_lit(t, "str")) {
         return res(yr(4, "k", yv_long(K_str), "v", v, "line", yv_long(ln), "col", yv_long(cl)), p + 1);
     } else if (ys_eq_lit(t, "bstr")) {
@@ -1241,6 +1244,8 @@ Yv *parse_type_atom2(Yv *toks, ylong p) {
         return parse_type_tail(toks, p + 1, yr(1, "k", yv_long(K_tstr)));
     } else if (ys_eq_lit(nm, "float")) {
         return parse_type_tail(toks, p + 1, yr(1, "k", yv_long(K_tfloat)));
+    } else if (ys_eq_lit(nm, "bigint")) {
+        return parse_type_tail(toks, p + 1, yr(1, "k", yv_long(K_tbigint)));
     } else if (ys_eq_lit(nm, "void")) {
         return parse_type_tail(toks, p + 1, yr(1, "k", yv_long(K_tvoid)));
     } else if (ys_eq_lit(nm, "mutex") || ys_eq_lit(nm, "sem")) {
@@ -1387,6 +1392,8 @@ Yv *lit_type(Yv *node) {
     Yv *k = yr_get(node, "k");
     if (yv_l(k) == K_num) {
         return num_lit_type(yr_get(node, "v"));
+    } else if (yv_l(k) == K_bignum) {
+        return yr(1, "k", yv_long(K_tbigint));
     } else if (yv_l(k) == K_str) {
         return yr(1, "k", yv_long(K_tstr));
     } else if (yv_l(k) == K_bool) {
@@ -1404,6 +1411,8 @@ Yv *lit_type_neg(Yv *node) {
     Yv *e = yr_get(node, "e");
     if (ys_eq_lit(yr_get(node, "op"), "-") && yv_l(yr_get(e, "k")) == K_num) {
         return num_lit_type(yr_get(e, "v"));
+    } else if (ys_eq_lit(yr_get(node, "op"), "-") && yv_l(yr_get(e, "k")) == K_bignum) {
+        return yr(1, "k", yv_long(K_tbigint));
     } else {
         return yr(1, "k", yv_long(K_tnone));
     }

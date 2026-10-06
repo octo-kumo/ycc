@@ -659,6 +659,8 @@ static Yv *tcanon_go(Yv *out, Yv *t, Yv *stack) {
         return ya_push(out, ys("b"));
     } else if (yv_l(k) == K_tfloat) {
         return ya_push(out, ys("f"));
+    } else if (yv_l(k) == K_tbigint) {
+        return ya_push(out, ys("g"));
     } else if (yv_l(k) == K_tbool) {
         return ya_push(out, ys("o"));
     } else if (yv_l(k) == K_tstr) {
@@ -865,6 +867,8 @@ static Yv *tstr_go(Yv *t) {
         return ys("byte");
     } else if (yv_l(yr_get(t, "k")) == K_tfloat) {
         return ys("float");
+    } else if (yv_l(yr_get(t, "k")) == K_tbigint) {
+        return ys("bigint");
     } else if (yv_l(yr_get(t, "k")) == K_tbool) {
         return ys("bool");
     } else if (yv_l(yr_get(t, "k")) == K_tstr) {
@@ -1327,6 +1331,8 @@ static int is_value_type(Yv *t) {
         return 1;
     } else if (yv_l(yr_get(t, "k")) == K_tfloat) {
         return 1;
+    } else if (yv_l(yr_get(t, "k")) == K_tbigint) {
+        return 1;
     } else if (yv_l(yr_get(t, "k")) == K_tbool) {
         return 1;
     } else if (yv_l(yr_get(t, "k")) == K_tstr) {
@@ -1643,6 +1649,8 @@ static Yv *typeof_arith(Yv *st, Yv *op, Yv *lt, Yv *rt, ylong line, ylong col) {
                 return yr(2, "typ", yr(1, "k", yv_long(K_tstr)), "st", st);
             } else if (yv_l(yr_get(rt, "k")) == K_tbool) {
                 return yr(2, "typ", yr(1, "k", yv_long(K_tstr)), "st", st);
+            } else if (yv_l(yr_get(rt, "k")) == K_tbigint) {
+                return yr(2, "typ", yr(1, "k", yv_long(K_tstr)), "st", st);
             } else {
                 return typeof_arith_long(st, op, lt, rt, line, col);
             }
@@ -1671,6 +1679,12 @@ static Yv *typeof_arith(Yv *st, Yv *op, Yv *lt, Yv *rt, ylong line, ylong col) {
                 return typeof_arith_long(st, op, lt, rt, line, col);
             }
         } else if (yv_l(yr_get(lt, "k")) == K_tbool) {
+            if (yv_l(yr_get(rt, "k")) == K_tstr) {
+                return yr(2, "typ", yr(1, "k", yv_long(K_tstr)), "st", st);
+            } else {
+                return typeof_arith_long(st, op, lt, rt, line, col);
+            }
+        } else if (yv_l(yr_get(lt, "k")) == K_tbigint) {
             if (yv_l(yr_get(rt, "k")) == K_tstr) {
                 return yr(2, "typ", yr(1, "k", yv_long(K_tstr)), "st", st);
             } else {
@@ -1750,9 +1764,20 @@ Yv *arr_plus_kind(Yv *lt, Yv *rt) {
 
 static Yv *typeof_arith_long(Yv *st, Yv *op, Yv *lt, Yv *rt, ylong line,
                              ylong col) {
-    // Numeric arithmetic. If either side is a float the result is a float
-    // and the other side widens (long -> float, the only coercion).
-    if (yv_l(yr_get(lt, "k")) == K_tfloat ||
+    // Numeric arithmetic. A bigint operand makes the result a bigint and
+    // the other side is converted silently (long/byte exactly, float by
+    // truncating toward zero). Otherwise a float makes the result a float
+    // and the other side widens.
+    if (yv_l(yr_get(lt, "k")) == K_tbigint ||
+        yv_l(yr_get(rt, "k")) == K_tbigint) {
+        st = expect_type(st, lt, yr(1, "k", yv_long(K_tbigint)),
+                         ys_cat(ys_cat(ys("'"), op), ys("' left operand")), line,
+                         col);
+        st = expect_type(st, rt, yr(1, "k", yv_long(K_tbigint)),
+                         ys_cat(ys_cat(ys("'"), op), ys("' right operand")),
+                         line, col);
+        return yr(2, "typ", yr(1, "k", yv_long(K_tbigint)), "st", st);
+    } else if (yv_l(yr_get(lt, "k")) == K_tfloat ||
         yv_l(yr_get(rt, "k")) == K_tfloat) {
         st = expect_type(st, lt, yr(1, "k", yv_long(K_tfloat)),
                          ys_cat(ys_cat(ys("'"), op), ys("' left operand")), line,
@@ -1799,6 +1824,15 @@ static Yv *typeof_cmp(Yv *st, Yv *op, Yv *lt, Yv *rt, ylong line, ylong col) {
                          ys_cat(ys_cat(ys("'"), op), ys("' right operand")),
                          line, col);
         return tc_res(type_node(yr(1, "k", yv_long(K_tbool))), st);
+    } else if (yv_l(yr_get(lt, "k")) == K_tbigint ||
+               yv_l(yr_get(rt, "k")) == K_tbigint) {
+        st = expect_type(st, lt, yr(1, "k", yv_long(K_tbigint)),
+                         ys_cat(ys_cat(ys("'"), op), ys("' left operand")), line,
+                         col);
+        st = expect_type(st, rt, yr(1, "k", yv_long(K_tbigint)),
+                         ys_cat(ys_cat(ys("'"), op), ys("' right operand")),
+                         line, col);
+        return yr(2, "typ", yr(1, "k", yv_long(K_tbool)), "st", st);
     } else if (yv_l(yr_get(lt, "k")) == K_tfloat ||
                yv_l(yr_get(rt, "k")) == K_tfloat) {
         st = expect_type(st, lt, yr(1, "k", yv_long(K_tfloat)),
@@ -1828,6 +1862,8 @@ static int is_num_kind(Yv *t) {
     } else if (yv_l(yr_get(t, "k")) == K_tbyte) {
         return 1;
     } else if (yv_l(yr_get(t, "k")) == K_tfloat) {
+        return 1;
+    } else if (yv_l(yr_get(t, "k")) == K_tbigint) {
         return 1;
     } else {
         return 0;
@@ -1983,6 +2019,8 @@ static int tcompat(Yv *got, Yv *want) {
             return 1;
         } else if (yv_l(yr_get(want, "k")) == K_tbyte) {
             return 1;
+        } else if (yv_l(yr_get(want, "k")) == K_tbigint) {
+            return 1;
         } else {
             return 0;
         }
@@ -1993,9 +2031,15 @@ static int tcompat(Yv *got, Yv *want) {
             return 1;
         } else if (yv_l(yr_get(want, "k")) == K_tfloat) {
             return 1;
+        } else if (yv_l(yr_get(want, "k")) == K_tbigint) {
+            return 1;
         } else {
             return 0;
         }
+    } else if (yv_l(yr_get(want, "k")) == K_tbigint) {
+        return yv_l(yr_get(got, "k")) == K_tlong ||
+               yv_l(yr_get(got, "k")) == K_tbyte ||
+               yv_l(yr_get(got, "k")) == K_tfloat;
     } else {
         return 0;
     }
@@ -2206,7 +2250,11 @@ static Yv *typeof_expr(Yv *st, Yv *node) {
 
 static Yv *typeof_expr_go(Yv *st, Yv *node) {
     Yv *k = yr_get(node, "k");
-    if (yv_l(k) == K_num) {
+    if (yv_l(k) == K_bignum) {
+        /* 1000n always has the built-in bigint type; the value is built at
+         * run time (native.c gen_biglit). */
+        return yr(2, "typ", yr(1, "k", yv_long(K_tbigint)), "st", st);
+    } else if (yv_l(k) == K_num) {
         if (num_is_float(yr_get(node, "v"))) {
             ylong dp = num_net_exp(yr_get(node, "v"));
             if (dp > 100000 || dp < -100000) {
@@ -2294,6 +2342,8 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
         if (ys_eq_lit(yr_get(node, "op"), "-")) {
             if (yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tfloat) {
                 return yr(2, "typ", yr(1, "k", yv_long(K_tfloat)), "st", st);
+            } else if (yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tbigint) {
+                return yr(2, "typ", yr(1, "k", yv_long(K_tbigint)), "st", st);
             } else {
                 st = expect_type(st, yr_get(r, "typ"), yr(1, "k", yv_long(K_tlong)),
                                  ys("unary '-'"), yv_l(yr_get(node, "line")),
@@ -4017,7 +4067,8 @@ static Yv *incdec_check(Yv *st, Yv *node, Yv *tt) {
     Yv *op = yr_get(node, "op");
     if (yv_l(yr_get(tt, "k")) == K_tlong ||
         yv_l(yr_get(tt, "k")) == K_tbyte ||
-        yv_l(yr_get(tt, "k")) == K_tfloat) {
+        yv_l(yr_get(tt, "k")) == K_tfloat ||
+        yv_l(yr_get(tt, "k")) == K_tbigint) {
         return yr(2, "typ", tt, "st", st);
     } else if (yv_l(yr_get(tt, "k")) == K_tunk ||
                yv_l(yr_get(tt, "k")) == K_tnone) {
@@ -4045,7 +4096,7 @@ static Yv *incdec_check(Yv *st, Yv *node, Yv *tt) {
 // The result is always the target's type (the new value).
 static Yv *opassign_check(Yv *st, Yv *node, Yv *tt, Yv *vt) {
     Yv *op = yr_get(node, "op");
-    if (is_bits_op(op)) {
+    if (is_bits_op(op) && yv_l(yr_get(tt, "k")) != K_tbigint) {
         if (yv_l(yr_get(tt, "k")) == K_tlong ||
             yv_l(yr_get(tt, "k")) == K_tbyte) {
             st = expect_type(st, vt, yr(1, "k", yv_long(K_tlong)),
@@ -4128,6 +4179,18 @@ static Yv *opassign_check(Yv *st, Yv *node, Yv *tt, Yv *vt) {
                              ys("='")),
                       yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
             return yr(2, "typ", tt, "st", st);
+        }
+    } else if (yv_l(yr_get(tt, "k")) == K_tbigint) {
+        if (ys_eq_lit(op, "+") || ys_eq_lit(op, "-") || ys_eq_lit(op, "*") ||
+            ys_eq_lit(op, "/") || ys_eq_lit(op, "%")) {
+            st = expect_type(st, vt, tt, ys_cat(ys_cat(ys("'"), op), ys("=' value")),
+                             yv_l(yr_get(node, "line")),
+                             yv_l(yr_get(node, "col")));
+            return yr(2, "typ", tt, "st", st);
+        } else {
+            st = fail(st, ys("bigints support only '+', '-', '*', '/' and '%' with '='"),
+                      yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
+            return yr(2, "typ", t_unk(), "st", st);
         }
     } else if (yv_l(yr_get(tt, "k")) == K_tlong ||
                yv_l(yr_get(tt, "k")) == K_tbyte ||
@@ -4357,12 +4420,13 @@ static Yv *typeof_fmt(Yv *st, Yv *node) {
         ;
     } else if (!(yv_l(k) == K_tlong || yv_l(k) == K_tbyte ||
                  yv_l(k) == K_tbool || yv_l(k) == K_tstr ||
-                 yv_l(k) == K_tfloat || yv_l(k) == K_tunk ||
+                 yv_l(k) == K_tfloat || yv_l(k) == K_tbigint ||
+                 yv_l(k) == K_tunk ||
                  yv_l(k) == K_tarr || yv_l(k) == K_tarrfix ||
                  yv_l(k) == K_trec || yv_l(k) == K_tmap ||
                  yv_l(k) == K_topt || yv_l(k) == K_tunion)) {
         st = fail(st,
-                  ys_cat(ys("an f-string field takes long/bool/float/str/array/record/map/option, got "),
+                  ys_cat(ys("an f-string field takes long/bool/float/bigint/str/array/record/map/option, got "),
                         tstr(t)),
                   yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
         ;
@@ -4518,6 +4582,7 @@ static Yv *typeof_call_go(Yv *st, Yv *node) {
                     yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tbool ||
                     yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tstr ||
                     yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tfloat ||
+                    yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tbigint ||
                     yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tunk ||
                     yv_l(yr_get(yr_get(r, "typ"), "k")) == K_trec ||
                     yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tmap ||
@@ -4529,7 +4594,7 @@ static Yv *typeof_call_go(Yv *st, Yv *node) {
                     return yr(2, "typ", yr(1, "k", yv_long(K_tvoid)), "st", st);
                 } else {
                     st = fail(st,
-                              ys_cat(ys("print supports long/bool/float/str/array/record/map/option, got "),
+                              ys_cat(ys("print supports long/bool/float/bigint/str/array/record/map/option, got "),
                                      tstr(yr_get(r, "typ"))),
                               yv_l(yr_get(node, "line")),
                               yv_l(yr_get(node, "col")));
@@ -4809,9 +4874,11 @@ static Yv *typeof_call_go(Yv *st, Yv *node) {
                 /* A str is parsed; a float is truncated. Two types rather than
                  * one is what makes the name worth changing. */
                 if (yv_l(yr_get(yr_get(r, "typ"), "k")) != K_tstr
-                    && yv_l(yr_get(yr_get(r, "typ"), "k")) != K_tfloat) {
-                    st = fail(st, ys_cat(ys("tolong needs a str to parse or a "
-                                            "float to truncate, got "),
+                    && yv_l(yr_get(yr_get(r, "typ"), "k")) != K_tfloat
+                    && yv_l(yr_get(yr_get(r, "typ"), "k")) != K_tbigint) {
+                    st = fail(st, ys_cat(ys("tolong needs a str to parse, a "
+                                            "float to truncate or a bigint to "
+                                            "narrow, got "),
                                          tstr(yr_get(r, "typ"))),
                               yv_l(yr_get(node, "line")),
                               yv_l(yr_get(node, "col")));
@@ -4833,9 +4900,11 @@ static Yv *typeof_call_go(Yv *st, Yv *node) {
                  * already does implicitly -- so this arm exists for SYMMETRY
                  * with tolong, not because it needs to. */
                 if (yv_l(yr_get(yr_get(r, "typ"), "k")) != K_tstr
-                    && yv_l(yr_get(yr_get(r, "typ"), "k")) != K_tlong) {
-                    st = fail(st, ys_cat(ys("tofloat needs a str to parse or a "
-                                            "long to widen, got "),
+                    && yv_l(yr_get(yr_get(r, "typ"), "k")) != K_tlong
+                    && yv_l(yr_get(yr_get(r, "typ"), "k")) != K_tbigint) {
+                    st = fail(st, ys_cat(ys("tofloat needs a str to parse, a "
+                                            "long to widen or a bigint to "
+                                            "convert, got "),
                                          tstr(yr_get(r, "typ"))),
                               yv_l(yr_get(node, "line")),
                               yv_l(yr_get(node, "col")));
@@ -4858,6 +4927,7 @@ static Yv *typeof_call_go(Yv *st, Yv *node) {
                     yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tbool ||
                     yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tstr ||
                     yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tfloat ||
+                    yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tbigint ||
                     yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tunk ||
                     yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tarr ||
                     yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tarrfix ||
@@ -4868,7 +4938,7 @@ static Yv *typeof_call_go(Yv *st, Yv *node) {
                     return yr(2, "typ", yr(1, "k", yv_long(K_tstr)), "st", st);
                 } else {
                     st = fail(st,
-                              ys_cat(ys("tostring supports long/bool/float/str/array/record/map/option, got "),
+                              ys_cat(ys("tostring supports long/bool/float/bigint/str/array/record/map/option, got "),
                                      tstr(yr_get(r, "typ"))),
                               yv_l(yr_get(node, "line")),
                               yv_l(yr_get(node, "col")));

@@ -48,7 +48,7 @@ e, bound from an import: ```y|float|```||```y|e|```
 math itself: ```y|math|```
 the import statement's own name: ```y|math|```
 -- 7. completion after a `.` is the object's OWN members
-math. offers 196 items: min,max,abs,clamp,sign,gcd
+math. offers 198 items: min,max,abs,clamp,sign,gcd
   the first three, and whether each has a type: min=<none>, max=<none>, abs=<none>
   string methods wrongly among them: none
 z. (a record literal) offers: z

@@ -307,6 +307,12 @@ def is_nan(x: float) -> bool {
     x != x
 };
 
+// The C spelling, for callers coming from there. Same single test as
+// is_nan; floor/ceil/round already live in this module under those names.
+def isnan(x: float) -> bool {
+    x != x
+};
+
 // True for a finite x (neither an infinity nor a NaN). x - x is 0.0 for every
 // finite x and a NaN for an infinity, so one comparison settles both.
 def is_finite(x: float) -> bool {

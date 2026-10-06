@@ -382,3 +382,516 @@ def y_bytes_repr(b: [byte]) -> str {
     };
     out + chr(39)
 };
+
+// ── big integers ───────────────────────────────────────────────────────
+// A bigint is a heap record: sign, significant-limb count, and little-endian
+// base-2^28 limbs. Base 2^28 keeps every schoolbook product inside a signed
+// long with a wide margin (see examples/bignum/README.md) and makes bit shifts
+// and the low-64-bit narrowing cheap. The language's `bigint` is this exact
+// object at run time; only the labels below cross that boundary, so the type
+// checker can keep bigint opaque while the runtime manipulates YBig records.
+type YBig = { neg: long, n: long, limbs: [long] };
+type YBigPair = { q: YBig, r: YBig };
+
+ndef y_bigint_fbits(x: float) -> long = "y_fbits";
+
+def y_bigint_zero() -> YBig {
+    { neg: 0, n: 0, limbs: [] }
+};
+
+// n zero limbs.
+def y_bigint_new(n: long) -> YBig {
+    let limbs: [long] = [];
+    let i = 0;
+    while (i < n) {
+        limbs += 0;
+        i = i + 1;
+    };
+    { neg: 0, n: 0, limbs: limbs }
+};
+
+// Drop leading zero limbs (and the sign of zero).
+def y_bigint_norm(b: YBig) -> YBig {
+    let l: [long] = b.limbs;
+    let n = len(l);
+    while (n > 0 && l[n - 1] == 0) { n = n - 1; };
+    b.n = n;
+    if (n == 0) { b.neg = 0; };
+    b
+};
+
+def y_bigint_copy_mag(a: YBig, neg: long) -> YBig {
+    let out = y_bigint_new(a.n);
+    let i = 0;
+    while (i < a.n) {
+        out.limbs[i] = a.limbs[i];
+        i = i + 1;
+    };
+    out.n = a.n;
+    out.neg = neg;
+    y_bigint_norm(out)
+};
+
+def y_bigint_copy(a: YBig) -> YBig {
+    y_bigint_copy_mag(a, a.neg)
+};
+
+def y_bigint_from_long(v: long) -> YBig {
+    if (v == 0) { return y_bigint_zero(); };
+    let neg = 0;
+    let m = v;
+    if (v < 0) {
+        neg = 1;
+        m = 0 - v;
+        if (m < 0) {
+            // -2^63: 0 - v wraps back negative. It is 128 * 2^56, which is
+            // exactly [0, 0, 128] in base 2^28.
+            let s: [long] = [0, 0, 128];
+            let z: YBig = { neg: 1, n: 3, limbs: s };
+            return z;
+        };
+    };
+    let limbs: [long] = [];
+    while (m > 0) {
+        limbs += m & 268435455;
+        m = m >> 28;
+    };
+    let out: YBig = { neg: neg, n: len(limbs), limbs: limbs };
+    y_bigint_norm(out)
+};
+
+def y_bigint_mag_cmp(a: YBig, b: YBig) -> long {
+    if (a.n != b.n) {
+        if (a.n < b.n) { return 0 - 1; } else { return 1; };
+    };
+    let i = a.n - 1;
+    while (i >= 0) {
+        let av = a.limbs[i];
+        let bv = b.limbs[i];
+        if (av != bv) {
+            if (av < bv) { return 0 - 1; } else { return 1; };
+        };
+        i = i - 1;
+    };
+    0
+};
+
+def y_bigint_cmp(a: YBig, b: YBig) -> long {
+    if (a.neg != b.neg) {
+        if (a.neg == 1) { return 0 - 1; } else { return 1; };
+    };
+    let c = y_bigint_mag_cmp(a, b);
+    if (a.neg == 1) { return 0 - c; } else { return c; }
+};
+
+def y_bigint_mag_add(a: YBig, b: YBig) -> YBig {
+    let n = a.n;
+    if (b.n > n) { n = b.n; };
+    let out = y_bigint_new(n + 1);
+    let carry = 0;
+    let i = 0;
+    while (i < n) {
+        let av = 0;
+        if (i < a.n) { av = a.limbs[i]; };
+        let bv = 0;
+        if (i < b.n) { bv = b.limbs[i]; };
+        let cur = av + bv + carry;
+        out.limbs[i] = cur & 268435455;
+        carry = cur >> 28;
+        i = i + 1;
+    };
+    out.n = n;
+    if (carry > 0) {
+        out.limbs[n] = carry;
+        out.n = n + 1;
+    };
+    y_bigint_norm(out)
+};
+
+// a - b for magnitudes a >= b.
+def y_bigint_mag_sub(a: YBig, b: YBig) -> YBig {
+    let out = y_bigint_new(a.n);
+    let borrow = 0;
+    let i = 0;
+    while (i < a.n) {
+        let bv = 0;
+        if (i < b.n) { bv = b.limbs[i]; };
+        let cur = a.limbs[i] - bv - borrow;
+        if (cur < 0) {
+            cur = cur + 268435456;
+            borrow = 1;
+        } else {
+            borrow = 0;
+        };
+        out.limbs[i] = cur;
+        i = i + 1;
+    };
+    out.n = a.n;
+    y_bigint_norm(out)
+};
+
+def y_bigint_add(a: YBig, b: YBig) -> YBig {
+    if (a.neg == 0) {
+        if (b.neg == 0) { return y_bigint_mag_add(a, b); };
+        let c = y_bigint_mag_cmp(a, b);
+        if (c >= 0) { return y_bigint_mag_sub(a, b); };
+        let r = y_bigint_mag_sub(b, a);
+        r.neg = 1;
+        return y_bigint_norm(r);
+    };
+    if (b.neg == 0) {
+        let c = y_bigint_mag_cmp(b, a);
+        if (c >= 0) { return y_bigint_mag_sub(b, a); };
+        let r = y_bigint_mag_sub(a, b);
+        r.neg = 1;
+        return y_bigint_norm(r);
+    };
+    let r = y_bigint_mag_add(a, b);
+    r.neg = 1;
+    y_bigint_norm(r)
+};
+
+def y_bigint_neg(a: YBig) -> YBig {
+    if (a.n == 0) { return y_bigint_zero(); };
+    let r = y_bigint_copy_mag(a, a.neg);
+    if (r.neg == 0) { r.neg = 1; } else { r.neg = 0; };
+    r
+};
+
+def y_bigint_sub(a: YBig, b: YBig) -> YBig {
+    y_bigint_add(a, y_bigint_neg(b))
+};
+
+def y_bigint_mul_small(a: YBig, m: long) -> YBig {
+    if (a.n == 0 || m == 0) { return y_bigint_zero(); };
+    let out = y_bigint_new(a.n + 1);
+    let carry = 0;
+    let i = 0;
+    while (i < a.n) {
+        let cur = a.limbs[i] * m + carry;
+        out.limbs[i] = cur & 268435455;
+        carry = cur >> 28;
+        i = i + 1;
+    };
+    out.n = a.n;
+    if (carry > 0) {
+        out.limbs[a.n] = carry;
+        out.n = a.n + 1;
+    };
+    y_bigint_norm(out)
+};
+
+def y_bigint_add_small(a: YBig, d: long) -> YBig {
+    if (d == 0) { return y_bigint_copy(a); };
+    let out = y_bigint_new(a.n + 1);
+    let carry = d;
+    let i = 0;
+    while (i < a.n) {
+        let cur = a.limbs[i] + carry;
+        out.limbs[i] = cur & 268435455;
+        carry = cur >> 28;
+        i = i + 1;
+    };
+    out.n = a.n;
+    if (carry > 0) {
+        out.limbs[a.n] = carry;
+        out.n = a.n + 1;
+    };
+    y_bigint_norm(out)
+};
+
+def y_bigint_mag_mul(a: YBig, b: YBig) -> YBig {
+    if (a.n == 0 || b.n == 0) { return y_bigint_zero(); };
+    let out = y_bigint_new(a.n + b.n + 1);
+    let i = 0;
+    while (i < a.n) {
+        let carry = 0;
+        let j = 0;
+        while (j < b.n) {
+            let cur = out.limbs[i + j] + a.limbs[i] * b.limbs[j] + carry;
+            out.limbs[i + j] = cur & 268435455;
+            carry = cur >> 28;
+            j = j + 1;
+        };
+        out.limbs[i + b.n] = carry;
+        i = i + 1;
+    };
+    out.n = a.n + b.n;
+    y_bigint_norm(out)
+};
+
+def y_bigint_mul(a: YBig, b: YBig) -> YBig {
+    let r = y_bigint_mag_mul(a, b);
+    if (a.neg != b.neg) { r.neg = 1; } else { r.neg = 0; };
+    y_bigint_norm(r)
+};
+
+// Shift the magnitude left/right by `bits` (0 <= bits <= a few thousand).
+def y_bigint_mag_shl_bits(a: YBig, bits: long) -> YBig {
+    if (a.n == 0 || bits <= 0) { return y_bigint_copy_mag(a, 0); };
+    let limb_shift = bits / 28;
+    let bit_shift = bits % 28;
+    let out = y_bigint_new(a.n + limb_shift + 1);
+    let i = 0;
+    if (bit_shift == 0) {
+        while (i < a.n) {
+            out.limbs[i + limb_shift] = a.limbs[i];
+            i = i + 1;
+        };
+    } else {
+        let carry = 0;
+        let mask = 268435455;
+        while (i < a.n) {
+            let cur = (a.limbs[i] << bit_shift) | carry;
+            out.limbs[i + limb_shift] = cur & mask;
+            carry = cur >> 28;
+            i = i + 1;
+        };
+        out.limbs[a.n + limb_shift] = carry;
+    };
+    out.n = a.n + limb_shift + 1;
+    y_bigint_norm(out)
+};
+
+def y_bigint_mag_shr_bits(a: YBig, bits: long) -> YBig {
+    if (a.n == 0 || bits <= 0) { return y_bigint_copy_mag(a, 0); };
+    let limb_shift = bits / 28;
+    let bit_shift = bits % 28;
+    if (limb_shift >= a.n) { return y_bigint_zero(); };
+    let n = a.n - limb_shift;
+    let out = y_bigint_new(n);
+    let i = 0;
+    if (bit_shift == 0) {
+        while (i < n) {
+            out.limbs[i] = a.limbs[i + limb_shift];
+            i = i + 1;
+        };
+    } else {
+        let mask = (1 << bit_shift) - 1;
+        while (i < n) {
+            let lo = a.limbs[i + limb_shift] >> bit_shift;
+            let hi = 0;
+            if (i + limb_shift + 1 < a.n) {
+                hi = (a.limbs[i + limb_shift + 1] & mask) << (28 - bit_shift);
+            };
+            out.limbs[i] = lo | hi;
+            i = i + 1;
+        };
+    };
+    out.n = n;
+    y_bigint_norm(out)
+};
+
+def y_bigint_mag_bitlen(a: YBig) -> long {
+    if (a.n == 0) { return 0; };
+    let bits = (a.n - 1) * 28;
+    let v = a.limbs[a.n - 1];
+    while (v > 0) {
+        bits = bits + 1;
+        v = v >> 1;
+    };
+    bits
+};
+
+def y_bigint_mag_bit(a: YBig, i: long) -> long {
+    let li = i / 28;
+    if (li >= a.n) { return 0; };
+    (a.limbs[li] >> (i % 28)) & 1
+};
+
+def y_bigint_mag_setbit(a: YBig, i: long) -> YBig {
+    let li = i / 28;
+    while (len(a.limbs) <= li) { a.limbs += 0; };
+    a.limbs[li] = a.limbs[li] | (1 << (i % 28));
+    if (li + 1 > a.n) { a.n = li + 1; };
+    a
+};
+
+// Binary long division on magnitudes. The quotient and remainder are exact;
+// the caller applies the signs.
+def y_bigint_mag_divmod(a: YBig, b: YBig) -> YBigPair {
+    let q = y_bigint_zero();
+    let r = y_bigint_zero();
+    let i = y_bigint_mag_bitlen(a) - 1;
+    while (i >= 0) {
+        r = y_bigint_mag_shl_bits(r, 1);
+        if (y_bigint_mag_bit(a, i) == 1) {
+            r = y_bigint_add_small(r, 1);
+        };
+        if (y_bigint_mag_cmp(r, b) >= 0) {
+            r = y_bigint_mag_sub(r, b);
+            q = y_bigint_mag_setbit(q, i);
+        };
+        i = i - 1;
+    };
+    { q: q, r: r }
+};
+
+// Divide by a small positive long, in place, returning the remainder.
+def y_bigint_mag_div_small(a: YBig, d: long) -> long {
+    let i = a.n - 1;
+    let rem = 0;
+    while (i >= 0) {
+        let cur = rem * 268435456 + a.limbs[i];
+        a.limbs[i] = cur / d;
+        rem = cur % d;
+        i = i - 1;
+    };
+    y_bigint_norm(a);
+    rem
+};
+
+def y_bigint_div_zero() -> YBig {
+    y_put_hstr("runtime error: division by zero\n");
+    exit(1);
+    y_bigint_zero()
+};
+
+def y_bigint_div(a: YBig, b: YBig) -> YBig {
+    if (b.n == 0) { return y_bigint_div_zero(); };
+    let p = y_bigint_mag_divmod(y_bigint_copy_mag(a, 0), y_bigint_copy_mag(b, 0));
+    let q = p.q;
+    if (a.neg != b.neg) { q.neg = 1; } else { q.neg = 0; };
+    y_bigint_norm(q)
+};
+
+def y_bigint_mod(a: YBig, b: YBig) -> YBig {
+    if (b.n == 0) { return y_bigint_div_zero(); };
+    let p = y_bigint_mag_divmod(y_bigint_copy_mag(a, 0), y_bigint_copy_mag(b, 0));
+    let r = p.r;
+    if (a.neg == 1) { r.neg = 1; } else { r.neg = 0; };
+    y_bigint_norm(r)
+};
+
+def y_bigint_digit(c: byte, radix: long) -> long {
+    if (c >= '0' && c <= '9') { return c - '0'; };
+    if (c >= 'a' && c <= 'f') { return c - 'a' + 10; };
+    if (c >= 'A' && c <= 'F') { return c - 'A' + 10; };
+    0 - 1
+};
+
+def y_bigint_parse(s: str) -> YBig {
+    let n = len(s);
+    let radix = 10;
+    let start = 0;
+    if (n >= 2 && byte_at(s, 0) == '0') {
+        let p = byte_at(s, 1);
+        if (p == 'x' || p == 'X') { radix = 16; start = 2; }
+        else if (p == 'o' || p == 'O') { radix = 8; start = 2; }
+        else if (p == 'b' || p == 'B') { radix = 2; start = 2; };
+    };
+    let out = y_bigint_zero();
+    let i = start;
+    while (i < n) {
+        let c = byte_at(s, i);
+        if (c != '_') {
+            let d = y_bigint_digit(c, radix);
+            if (d >= 0) {
+                out = y_bigint_mul_small(out, radix);
+                out = y_bigint_add_small(out, d);
+            };
+        };
+        i = i + 1;
+    };
+    y_bigint_norm(out)
+};
+
+def y_bigint_to_dec(a: YBig) -> str {
+    if (a.n == 0) { return "0"; };
+    let x = y_bigint_copy_mag(a, 0);
+    let out = "";
+    let first = true;
+    while (x.n > 0) {
+        let r = y_bigint_mag_div_small(x, 1000000000);
+        let part = tostring(r);
+        if (first) {
+            out = part;
+            first = false;
+        } else {
+            while (len(part) < 9) { part = "0" + part; };
+            out = part + out;
+        };
+    };
+    let start = 0;
+    while (start + 1 < len(out) && byte_at(out, start) == '0') { start = start + 1; };
+    if (start > 0) { out = out[start:len(out)]; };
+    if (a.neg == 1) { out = "-" + out; };
+    out
+};
+
+def y_bigint_tostr(a: YBig) -> str {
+    y_bigint_to_dec(a)
+};
+
+def y_bigint_print(a: YBig) -> long {
+    y_print_hstr(y_bigint_to_dec(a))
+};
+
+def y_bigint_to_long(a: YBig) -> long {
+    let l0 = 0;
+    let l1 = 0;
+    let l2 = 0;
+    if (a.n > 0) { l0 = a.limbs[0]; };
+    if (a.n > 1) { l1 = a.limbs[1]; };
+    if (a.n > 2) { l2 = a.limbs[2]; };
+    let mag = l0 + (l1 << 28) + ((l2 & 255) << 56);
+    if (a.neg == 1) { 0 - mag } else { mag }
+};
+
+def y_bigint_to_float(a: YBig) -> float {
+    y_str_tofloat(y_bigint_to_dec(a))
+};
+
+def y_bigint_from_float(f: float) -> YBig {
+    let bits = y_bigint_fbits(f);
+    let exp = (bits >>> 52) & 2047;
+    if (exp == 2047) {
+        y_put_hstr("runtime error: float has no bigint value\n");
+        exit(1);
+        return y_bigint_zero();
+    };
+    let sign = bits >>> 63;
+    let frac = bits & 4503599627370495;
+    if (exp == 0) {
+        if (frac == 0) { return y_bigint_zero(); };
+        // A subnormal truncates to zero: frac * 2^-1074 < 1.
+        return y_bigint_zero();
+    };
+    let mant = frac + 4503599627370496;
+    let e = exp - 1075;
+    let mag = y_bigint_from_long(mant);
+    if (e >= 0) {
+        mag = y_bigint_mag_shl_bits(mag, e);
+    } else {
+        mag = y_bigint_mag_shr_bits(mag, 0 - e);
+    };
+    if (sign == 1) { mag.neg = 1; };
+    y_bigint_norm(mag)
+};
+
+def y_bigint_from_bytes_be(b: [byte]) -> YBig {
+    let out = y_bigint_zero();
+    let i = 0;
+    while (i < len(b)) {
+        out = y_bigint_mul_small(out, 256);
+        out = y_bigint_add_small(out, b[i]);
+        i = i + 1;
+    };
+    y_bigint_norm(out)
+};
+
+def y_bigint_to_bytes_be(a: YBig, n: long) -> [byte] {
+    let out: [byte] = [];
+    let i = 0;
+    while (i < n) {
+        out += 0;
+        i = i + 1;
+    };
+    let x = y_bigint_copy_mag(a, 0);
+    i = n - 1;
+    while (i >= 0) {
+        out[i] = y_bigint_mag_div_small(x, 256);
+        i = i - 1;
+    };
+    out
+};

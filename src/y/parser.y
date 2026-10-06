@@ -291,6 +291,9 @@ def parse_primary(toks: [Tok], p: long) -> Parsed {
     let cl = tcol(toks, p);
     if (t == "num") {
         res({ k: K.num, v: v, line: ln, col: cl }, p + 1)
+    } else if (t == "bigint") {
+        // 1000n -- an arbitrary-precision integer literal.
+        res({ k: K.bignum, v: v, line: ln, col: cl }, p + 1)
     } else if (t == "str") {
         res({ k: K.str, v: v, line: ln, col: cl }, p + 1)
     } else if (t == "bstr") {
@@ -1137,6 +1140,7 @@ def type_word_names() -> [str] {
     out += "bool";
     out += "str";
     out += "float";
+    out += "bigint";
     out += "void";
     out += "mutex";
     out += "sem";
@@ -1154,6 +1158,7 @@ def parse_type_atom2(toks: [Tok], p: long) -> PType {
     else if (nm == "bool") { parse_type_tail(toks, p + 1, { k: K.tbool }) }
     else if (nm == "str") { parse_type_tail(toks, p + 1, { k: K.tstr }) }
     else if (nm == "float") { parse_type_tail(toks, p + 1, { k: K.tfloat }) }
+    else if (nm == "bigint") { parse_type_tail(toks, p + 1, { k: K.tbigint }) }
     else if (nm == "void") { parse_type_tail(toks, p + 1, { k: K.tvoid }) }
     else if (nm == "mutex" || nm == "sem") { parse_type_tail(toks, p + 1, sync_type(nm)) }
     else if (is_op(toks, p + 1, ".") && tt(toks, p + 2) == "id") {
@@ -1279,6 +1284,7 @@ def lit_type(node: Node) -> Type {
         let leaf: Leaf = node;
         num_lit_type(leaf.v)
     }
+    else if (k == K.bignum) { let ty: Type = { k: K.tbigint }; ty }
     else if (k == K.str) { let ty: Type = { k: K.tstr }; ty }
     else if (k == K.bool) { let ty: Type = { k: K.tbool }; ty }
     else if (k == K.char) { let ty: Type = { k: K.tbyte }; ty }
