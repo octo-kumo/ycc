@@ -219,6 +219,98 @@ def handle_one(st: State, raw: str) -> [str] {
 }
 
 
+// `HH:MM:SS.mmm`, wall clock. Without it the timing lines are unusable for the only
+// question they are asked: the numbers are small (a whole-file token request is tens
+// of milliseconds) and the editor is still frozen, so the time has to be BETWEEN the
+// lines, not in them. A wall-clock prefix makes an idle gap impossible to miss.
+//
+// `time_us`, not `clock_us`: this is for a person reading a log, and the wall clock
+// is what they compare against the clock in the corner of the screen. The deltas
+// that matter are milliseconds, so monotonic-vs-wall is not worth thinking about here.
+def stamp() -> str {
+    let us = time_us();
+    let secs = us / 1000000;
+    let ms = (us % 1000000) / 1000;
+    let tod = secs % 86400;
+    let h = tod / 3600;
+    let mi = (tod % 3600) / 60;
+    let se = tod % 60;
+    let hh = tostring(h);
+    let mm = tostring(mi);
+    let ss = tostring(se);
+    let m3 = tostring(ms);
+    if (len(hh) < 2) { hh = "0" + hh; };
+    if (len(mm) < 2) { mm = "0" + mm; };
+    if (len(ss) < 2) { ss = "0" + ss; };
+    while (len(m3) < 3) { m3 = "0" + m3; };
+    hh + ":" + mm + ":" + ss + "." + m3
+}
+
+// The method name out of the raw frame, for the timing line. A substring search
+// rather than a second json.parse: the message has already been parsed twice (once
+// in the parent by apply_state, once in the child by handle_one), and a log line is
+// not worth a third walk of a buffer that is a whole document on didChange.
+def method_of_raw(raw: str) -> str {
+    let k = index_of(raw, "\"method\":\"");
+    if (k < 0) { k = index_of(raw, "\"method\": \""); };
+    if (k < 0) {
+        "?"
+    } else {
+        let rest = raw[k + 10:];
+        let e = index_of(rest, "\"");
+        if (e <= 0) { "?" } else { rest[0:e] }
+    }
+}
+
+// Per-request timing, to the client's own log.
+//
+// stderr is where a language client already collects server output -- extension.ts
+// passes `outputChannel: output` for exactly this -- so a line written to FD_OUT
+// after the child's dup2 lands in the "Y" output channel under View: Toggle Output.
+// No new protocol and no new setting: the channel the extension already creates is
+// where a person looks for what the server is doing.
+//
+// The child's half: what this one request cost. The queueing half is the PARENT's
+// blocked time and is logged from there, because that is where it happens -- see
+// log_blocked.
+//
+// `wait` used to be printed here, stamped at the parent's read of the frame. It was
+// always 0-3 ms and it was measuring nothing: the parent does almost nothing
+// between reading a frame and forking, so the message had not been sitting
+// anywhere yet. The delay a client actually sees is spent AFTER that, in the
+// parent's wait_pid on the handlers ahead of it.
+def log_work(method: str, work_us: long) {
+    fs.write_text(FD_OUT, stamp() + "  yserve  " + method + "  work "
+        + tostring(work_us / 1000) + "ms\n");
+}
+
+// The parent's half, and the number that explains a freeze. This loop runs one
+// handler at a time, so every message that arrives while a handler is running waits
+// for it -- and that wait is serialised, summed over the whole backlog. On
+// src/y/asm.y a handler is ~30 ms, so a thousand queued messages is half a minute
+// of one core, and the editor sees no highlighting for the whole of it.
+//
+// FD_LOG, not FD_OUT: the parent's fd 1 is the framed protocol stream, and writing
+// a log line into it would corrupt the stream. Only the child dup2s its stdout onto
+// the log, which is why log_work can use FD_OUT.
+def log_blocked(us: long) {
+    fs.write_text(FD_LOG, stamp() + "  yserve  [parent] blocked " + tostring(us / 1000)
+        + "ms waiting for a handler\n");
+}
+
+// How long the parent sat in read_frame with nothing to do.
+//
+// This is the number that decides WHERE a freeze is. `blocked` only counts time the
+// parent spends waiting for a handler it already has. If the editor is frozen and
+// `blocked` is small, the parent is not the busy one -- it is sitting in this call,
+// and the time is going to work that never reached the server at all: the client, the
+// extension host, or the disk. Without this line that is a guess; with it, the log
+// says which side of the socket is behind.
+def log_idle(us: long) {
+    fs.write_text(FD_LOG, stamp() + "  yserve  [parent] idle " + tostring(us / 1000)
+        + "ms waiting for a message\n");
+}
+
 // Claim the reply fd, once, before the first fork so every child inherits it.
 // dup returns the new fd, or a negative errno.
 def claim_reply_fd() -> long {
@@ -227,13 +319,32 @@ def claim_reply_fd() -> long {
 }
 
 // The loop. Reads frames until stdin ends or `exit` arrives.
+//
+// ONE handler at a time: it waits for each child before reading the next frame, so
+// a burst is a queue and its wall time is the SUM of its handlers rather than their
+// maximum. Measured on src/y/asm.y, 34 ms of CPU per semanticTokens/full and 30 ms
+// per hover, all in the child, so the queue is what the editor feels. The timing
+// lines above make that visible rather than inferred: `wait` is the queue, `work` is
+// the cost.
+//
+// Making the handlers overlap is the obvious next step -- reap with wait4(WNOHANG)
+// instead of blocking, and bound how many may run at once. It is NOT done here
+// because the first attempt at it left finished children unreaped, and a server that
+// drops replies is worse than a server that is slow. The measurements it needs are
+// now in the output channel.
 def serve_loop(st: State, fd_in: long) -> long {
     let reply = claim_reply_fd();
     let r = rpc.in_new();
     let go = true;
     let code = 0;
+    let idle_since = clock_us();
     while (go) {
         let got = rpc.read_frame(r, fd_in);
+        let idle_us = clock_us() - idle_since;
+        idle_since = clock_us();
+        // A gap under 200 ms is ordinary -- a person thinking -- and logging every
+        // one would bury the lines that matter. A gap this size IS the freeze.
+        if (idle_us > 200000) { log_idle(idle_us); };
         if (!is_some(got)) {
             // Clean end of input: the client closed the connection. Exiting 0
             // here is right -- this is how a client says "I am done", and the
@@ -256,12 +367,14 @@ def serve_loop(st: State, fd_in: long) -> long {
                 // compiler prints -- an import it cannot open, a trap message --
                 // lands in the client's log instead of in the framed stream.
                 syscall(33, FD_LOG, FD_OUT, 0);
+                let t0 = clock_us();
                 let bodies = handle_one(st, raw);
                 let k = 0;
                 while (k < len(bodies)) {
                     rpc.write_frame(reply, bodies[k]);
                     k = k + 1;
-                }
+                };
+                log_work(method_of_raw(raw), clock_us() - t0);
                 // exit_group(0): the child must not return into the runtime's
                 // normal exit path, which would flush the parent's buffers and
                 // run atexit handlers twice.
@@ -272,7 +385,9 @@ def serve_loop(st: State, fd_in: long) -> long {
                 // The pid, or -errno. A negative result is a fork failure, not a
                 // child: there is nothing to wait for, and the loop must not
                 // spin forever on a resource limit.
+                let w0 = clock_us();
                 let status = wait_pid(child);
+                log_blocked(clock_us() - w0);
                 if (status < 0) {
                     // The child died on a signal, or wait4 itself failed. A
                     // request that crashes the child must not take the server
