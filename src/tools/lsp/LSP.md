@@ -12,17 +12,36 @@ yet", which was wrong from the moment M1 shipped and stayed wrong through four
 milestones. A design document that understates its own state is worse than one
 that has none: a reader checks whether it is real before reading it.
 
-What is **not** built, precisely:
+What is **not** built, precisely — and this list was three entries long while three
+of them were wrong, which is the failure mode this document's own next paragraph
+warns about, so each was checked by running the thing rather than by reading the
+claim:
 
-- **M4 Stage B / §9.2, the C2 compiler change** — for TYPES only: an inferred
-  type in a hover, and a record's own fields after a `.`. Cross-file navigation
-  used to be on this list and is **not**: §11.4 found it needs no compiler change
-  at all, and `xref.y` now does it. What remains is the semantic token classes
-  that say what a name *denotes*, which are the same missing thing.
-- **M5's packaging**, beyond the documentation rows: no `vsce` package, no
-  marketplace entry.
-- The requirement text below is unchanged and still the target; where a
-  requirement is partly delivered the status note at its head says which part.
+- **M-sugar (§16)** — C3's recursive aliases through `[T]`/`T?`/`{K=>T}` and then
+  C5's `json{ }` / `json[ ]` literal syntax. The only milestone open. It is a
+  **compiler** feature rather than LSP work, nothing here is blocked on it, and no
+  requirement above needs it. §16.5 has the cost and §16.6 says why C3 is the
+  separable one.
+- **A marketplace entry.** `make lsp-vsix` produces
+  `y-lang-0.2.0.vsix` through `@vscode/vsce` and it is on disk, so the packaging
+  this list used to deny exists; what does not exist is a *published* listing.
+  `package.json` carries a `publisher` and no `repository`, which is what
+  publishing needs and this document cannot honestly claim.
+- **A user switch for the semantic layer** — and it is deliberately absent rather
+  than missing. The grammar is unregistered (§10.3a), so semantic tokens are the
+  only highlighter and a switch for them would reintroduce the exact
+  "no syntax highlighting" report §10.3a records. R2.3 used to promise one; the
+  promise was written before the grammar was unregistered and is withdrawn.
+
+Everything else in the milestone table is delivered and marked as such: M-json,
+M1, M2, M3, M4 and M5 done, M0 dropped. Each row names the checks that make its
+claim checkable, and none of them is a number nothing compares.
+
+The requirement text below is unchanged and still the target; where a
+requirement is partly delivered the status note at its head says which part. The
+one standing deviation is R2.3's `method` class: nothing in the language
+distinguishes a method from a function called through a field, and §R2.3 says so
+where it happens rather than shipping a class that guesses.
 
 **On citations.** Compiler internals are named by **symbol** — `types.check_program`,
 `native.origin_file`, `rename.rn_reaches_go` — and never by line number. `src/y`
@@ -406,6 +425,40 @@ document also publishes empty arrays for files whose diagnostics went away.
 **R1.8** `y.lsp.checkOnChange` (default on). With it off, only `didSave`
 publishes. Compilation is skipped entirely for unopened changes.
 
+**Delivered**, and the requirement above had been true of nothing for as long as
+it had been written. Two independent gaps, and the second is the one worth
+remembering:
+
+1. **`initialize`'s params were dropped on the floor.** `dispatch.lifecycle` took
+   `(st, id, method)` and nothing else, so there was nowhere for the client to put
+   the value. Adding the parameter was the obvious fix and it was **wrong**:
+2. **the server forks per request, so the child cannot remember anything.** The
+   parent records what must survive (`dispatch.apply_state`) and the child answers
+   from a copy and dies (§4.2). A flag read in `do_initialize` lives in the child
+   that read it: the client said `false`, the child honoured it, and the *next*
+   keystroke got a server that had forgotten — so diagnostics were published on
+   every change exactly as before, with a passing-looking fixture if the test
+   happened to send both notifications down one connection. The setting is read in
+   `apply_state`, in the parent, which is the only side of the fork that survives.
+   `t019_checkonchange` drives `apply_state` with a raw frame for that reason, and
+   `client-check.js` runs a second real session against a second process because
+   the option is read once per session and cannot be re-negotiated.
+
+What "off" means is the other half, and it is **not** "ignore changes": `note_change`
+runs in the parent as always, so the buffer is current, and only the *publish* is
+skipped. The alternative reading would leave hover, completion, semantic tokens and
+formatting answering about text the user has already replaced — worse than the slow
+check the switch exists for. `didOpen` and `didSave` still check either way, so an
+OFF user is not left without errors.
+
+A missing, `null` or non-`bool` value all mean ON, so a client that says nothing
+gets the behaviour the server always had. The client's own default is `true` and
+`activation-check.js` asserts **both** directions — every setting `package.json`
+offers is read by the client, and every setting the client reads is offered —
+because `y.lsp.checkOnChange` is exactly the shape of bug that check exists for: a
+setting in the settings UI that does nothing. (Verified: deleting the one line that
+reads it turns that check red.)
+
 **R1.9** Unsaved buffer contents are what gets checked. `native_resolve_x`
 takes source text, not a path (`native.native_resolve_x`); the `native_resolve_x` call in `ycc.y` is the only
 `fs.read_file` in the pipeline. The document arrives from `didChange`.
@@ -432,8 +485,15 @@ source spans for an f-string.
 operator, punctuation. **Delivered**, with one honest deviation: `method` is not a
 class, because nothing in the language distinguishes one — a method *is* a function
 called through a record field, and a name after a `.` is classified `property`
-whether or not what it names is callable. A `y.lsp.semantic` setting turns the
-semantic layer off for users who do not want two colours for the same identifier.
+whether or not what it names is callable. 
+
+> **There is no `y.lsp.semantic` setting, and this paragraph used to claim there
+> was.** It is not implemented, and it should not be: the grammar is unregistered
+> (§10.3a), so semantic tokens are the **only** highlighter, and a switch that turns
+> them off would leave the user with no colours at all — which is the exact defect
+> §10.3a records having been reported. A user who wants fewer colours has a theme.
+> The claim was written before the grammar was unregistered, when the two layers
+> really did both paint every identifier.
 
 The legend is 14 entries, the eight syntactic ones at their existing indices and
 the five semantic ones **appended** — an editor's theme is keyed on those numbers,
@@ -1295,18 +1355,23 @@ Each ends green on `make test`.
 
 | | | Acceptance |
 |---|---|---|
-| **M-sugar** | C3 then C5: recursive aliases through `[T]`/`T?`/`{K=>T}`, then `json{ }` / `json[ ]` literal syntax (§16) | Literals parse, typecheck as `json.Val`, and agree with `parse`/`stringify` of themselves; **no existing program changes meaning** (`make corpus-diff`); manual + `COVERAGE.md` + fixtures. Independent of M-json. |
-| **M-json** | `src/y/std/json.y` (§15) | Parses and emits every case in `test/y/native/tNNN_json.y`; round-trips losslessly; compiles warning-free; a manual section, a `COVERAGE.md` row and a checked fixture all exist. **Blocks M1.** |
+| **M-sugar** | C3 then C5: recursive aliases through `[T]`/`T?`/`{K=>T}`, then `json{ }` / `json[ ]` literal syntax (§16) | **The only milestone not done, and it is a compiler feature rather than LSP work** — nothing in this document is blocked on it, and no requirement above needs it. Literals must parse, typecheck as `json.Val`, and agree with `parse`/`stringify` of themselves; **no existing program may change meaning** (`make corpus-diff`, which measured 503 programs and 0 differences for every change in this document); manual + `COVERAGE.md` + fixtures. C3 first: without it `json` cannot appear inside its own type, so the literal has nothing to be. §16.5 has the cost and §16.6 says why C3 is the separable one. |
+| **M-json** | `src/y/std/json.y` (§15) | **Done.** All four acceptance criteria are met and each is checkable: parses and emits every shape (`test/y/native/t204_std_json.y`, plus `lsp/test/t001_json_shapes.y` and `t002_json_parse.y`), round-trips losslessly (the same fixtures assert `parse(stringify(v)) == v`), compiles warning-free (`test_fixpoint.sh` builds every `src/y/std` file), and the manual section (`docs/src/09-builtins.tex`, "JSON (the json module)"), the `COVERAGE.md` row and the fixtures all exist. It blocked M1, which is done — M1 could not have landed without it, because `yserve` needs a parser and an emitter and Y programs at large need the same. **Not extended:** §16's `json{ }` / `json[ ]` sugar is M-sugar's C5, not this. |
 | ~~**M0**~~ | ~~C1: the two exports~~ | **Dropped** — M1 does not need them (§9.1). Nothing was blocked on this, so no reblessing was needed. |
-| **M1** | R1 — errors and warnings | **Done, end to end.** `yserve` answers errors *and* warnings together, live, on an unsaved buffer, for the file **and each import** (one `publishDiagnostics` per file); survives an unterminated literal, a missing import and a 4000-line file; the VS Code extension activates, spawns it and reaches `Running` (`activation-check.js` 21/21), and the same server is driven by the JSON-RPC library VS Code uses (`client-check.js` 20/20). 39 process-level checks, 12 fixture runs under both compilers, registered in `make test`. |
-| **M2** | R2 — semantic tokens | **Done.** `sem.y` turns `scan.y`'s spans into the protocol's delta encoding; `textDocument/semanticTokens/full` is advertised and answered. The grammar is unregistered from `package.json`, so this IS the only highlighter. `t010_sem` pins the round trip (R2.4) over the whole corpus; `client-check.js` decodes the delta the way an editor does. The **semantic half of the legend is now delivered** (R2.3, M4): parameter / function / type / property / builtin are all resolved, and the language's own type names come from `parser.type_word_names()` so the list cannot drift (§11.6). An **f-string is no longer one token** — each `{...}` is scanned as code, which is what a reader is actually looking at (§11.6). **Not yet:** a user setting to turn the layer off. |
-| **M3** | R3 — formatting | **Formatter and the protocol handler done** (idempotent over every `.y` file in
+| **M1** | R1 — errors and warnings | **Done, end to end.** `yserve` answers errors *and* warnings together, live, on an unsaved buffer, for the file **and each import** (one `publishDiagnostics` per file); survives an unterminated literal, a missing import and a 4000-line file; the VS Code extension activates, spawns it and reaches `Running` (`activation-check.js` **26/26**), and the same server is driven by the JSON-RPC library VS Code uses (`client-check.js` **78/78**, and `activation-check.js` **26/26** against a stubbed VS Code). Registered in `make test` as the `lsp` suite. |
+| **M2** | R2 — semantic tokens | **Done.** `sem.y` turns `scan.y`'s spans into the protocol's delta encoding; `textDocument/semanticTokens/full` is advertised and answered. The grammar is unregistered from `package.json`, so this IS the only highlighter. `t010_sem` pins the round trip (R2.4) over the whole corpus; `client-check.js` decodes the delta the way an editor does. The **semantic half of the legend is now delivered** (R2.3, M4): parameter / function / type / property / builtin are all resolved, and the language's own type names come from `parser.type_word_names()` so the list cannot drift (§11.6). An **f-string is no longer one token** — each `{...}` is scanned as code, which is what a reader is actually looking at (§11.6). **Nothing is left undone in this row.** There is deliberately no setting to turn the layer off: the grammar is unregistered (§10.3a), so this layer is the only highlighter, and a switch for it would reintroduce the "no syntax highlighting" report. |
+| **M3** | R3 — formatting | **Done** (idempotent over every `.y` file in
 the tree — `test-fmt.sh` compares the number of files that are NOT idempotent,
 which must be zero, and only *prints* the total, so the total moves as `src/y`
 moves without anything failing; this row used to quote 487, a number nothing
-checks; no edits on an unlexable buffer; no edits when already formatted). **Not yet:** wiring the VS Code command. |
-| **M4** | R4–R6 + C2 — hover, go-to-def, completion | **Stage A done and measured; Stage B decided and not started** (§11.3). `scope.y` + `nav.y` answer all three from the declarations of the open buffer: definition points at the name (not the keyword), hover shows the signature as written plus the comment above it, completion offers the visible names and the builtins with `isIncomplete: true`. The builtins come from `native.intrinsic_names()`, which this work added to the compiler so the list cannot drift. `strm.y` answers the member position from the compiler's own `types.str_method`, so a hover on `"a,b".split` shows the signature the checker would use and completion after a `.` offers the methods and only the methods. `t012_scope` pins the visibility rules, `t013_m4` the wire shapes, `t014_strm` the string methods and the mirror's ratchet, and `client-check.js` drives all of it through the JSON-RPC library VS Code uses (**73/73**). `scope-coverage.y` measures what the index resolves over `src/y`: **61%** of identifier tokens, after two bugs that had it at 46% (§11.3), and `request-cost.y` what a request costs on the largest file in the tree — 20 ms, after a bug that had it at 5,499 ms. `xref.y` + `nav.find_decl_named` close the cross-file half: `helper.helper` jumps to `mod.y` at the name, with its signature and doc comment, and `helper.TOP` to the `let` that declares it. `t015_xref` pins the three compiler facts it rests on. §9.2 is **delivered**: the checker keeps its inferred types in a position-keyed table behind a flag (§9.2 A2, +0.09% instructions on `ycc.y`, +0.00% for the member-key addition), so a hover shows the type the checker computed — including on an expression that is not a name, and including a record's field, which has a type and no binding — and completion after a `.` offers a record's own fields. §9.2.2 lists what it refuses. The semantic classes are **delivered** too (R2.3): `sem`'s legend has five more entries and `serve.semantic_overrides` resolves each identifier to one, from `scope`'s declaration kinds and `native.intrinsic_names()`. (It was `serve.classify` until the `bugs-ledger` merge, which put a `classify` into `std/tui.y` — a path import flattens, so the two were one name in one namespace; §5's collision check is what found it.) It needed **no** compiler change — this row's earlier note said it did, on the grounds that what a name denotes is the checker's answer; it is `scope`'s answer about DECLARATIONS, plus a dot's own text, and §9.2's type table is not involved. Three costs were found by measuring rather than by reading, and all three are now in `request-cost.y`: `classify` was **34.5 s** on `src/y/native.y` and is **115 ms**, and the two causes were a per-identifier position lookup that counted newlines from byte 0 (quadratic), and `scope_end` walking all ~7,000 scope pairs per candidate (linear in the file, per identifier). The second also made completion `visible()` **22x** faster, 7,576 us to 347 us on the same file, which nothing had asked about because a completion asks once. `t017_sem` pins the five classes and the four names that must stay `variable`, and `t010_sem` pins the one that was a whole line of tokens missing (§11.5). Cross-file navigation is **not** behind §9.2 as this row previously said — §11.4 measured that the renamer the server already runs produces the pairing it needs. **Six defects a user reported are fixed and pinned** (`t018_reported`, §11.6): a declaration's own name and a parameter's own name now answer, a builtin answers, an imported name answers, an f-string is sub-tokenized, type names are painted as types, and a module or a record literal offers its own members after a `.`. Five of the six were **one bug** — something recorded at one column and asked about at another — and one was *not* a server bug at all and is reported as such rather than as a fix. **Nothing is left undone in this row.** |
-| **M5** | packaging and docs | `PORTING.md` and `AGENTS.md` updated (§4, §10); `AGENTS.md`'s suite list gains `lsp`; the extension README documents `yserve` placement and every setting. |
+checks; no edits on an unlexable buffer; no edits when already formatted). The
+VS Code command is wired too: `y.formatDocument` is declared in `package.json` and
+registered in `extension.ts`, and it exists to be **findable** — the formatter
+itself is registered from the server's advertised capability, so "no formatter
+available" and a Format Document that silently does nothing are the two reports
+this prevents. |
+| **M4** | R4–R6 + C2 — hover, go-to-def, completion | **Done.** Stage A and Stage B both, and Stage B did not go the way §11.3 decided it would (§11.4). `scope.y` + `nav.y` answer all three from the declarations of the open buffer: definition points at the name (not the keyword), hover shows the signature as written plus the comment above it, completion offers the visible names and the builtins with `isIncomplete: true`. The builtins come from `native.intrinsic_names()`, which this work added to the compiler so the list cannot drift. `strm.y` answers the member position from the compiler's own `types.str_method`, so a hover on `"a,b".split` shows the signature the checker would use and completion after a `.` offers the methods and only the methods. `t012_scope` pins the visibility rules, `t013_m4` the wire shapes, `t014_strm` the string methods and the mirror's ratchet, and `client-check.js` drives all of it through the JSON-RPC library VS Code uses (**78/78**, including a second real session with R1.8's `checkOnChange` off). `scope-coverage.y` measures what the index resolves over `src/y`: **61%** of identifier tokens, after two bugs that had it at 46% (§11.3), and `request-cost.y` what a request costs on the largest file in the tree — 20 ms, after a bug that had it at 5,499 ms. `xref.y` + `nav.find_decl_named` close the cross-file half: `helper.helper` jumps to `mod.y` at the name, with its signature and doc comment, and `helper.TOP` to the `let` that declares it. `t015_xref` pins the three compiler facts it rests on. §9.2 is **delivered**: the checker keeps its inferred types in a position-keyed table behind a flag (§9.2 A2, +0.09% instructions on `ycc.y`, +0.00% for the member-key addition), so a hover shows the type the checker computed — including on an expression that is not a name, and including a record's field, which has a type and no binding — and completion after a `.` offers a record's own fields. §9.2.2 lists what it refuses. The semantic classes are **delivered** too (R2.3): `sem`'s legend has five more entries and `serve.semantic_overrides` resolves each identifier to one, from `scope`'s declaration kinds and `native.intrinsic_names()`. (It was `serve.classify` until the `bugs-ledger` merge, which put a `classify` into `std/tui.y` — a path import flattens, so the two were one name in one namespace; §5's collision check is what found it.) It needed **no** compiler change — this row's earlier note said it did, on the grounds that what a name denotes is the checker's answer; it is `scope`'s answer about DECLARATIONS, plus a dot's own text, and §9.2's type table is not involved. Three costs were found by measuring rather than by reading, and all three are now in `request-cost.y`: `classify` was **34.5 s** on `src/y/native.y` and is **115 ms**, and the two causes were a per-identifier position lookup that counted newlines from byte 0 (quadratic), and `scope_end` walking all ~7,000 scope pairs per candidate (linear in the file, per identifier). The second also made completion `visible()` **22x** faster, 7,576 us to 347 us on the same file, which nothing had asked about because a completion asks once. `t017_sem` pins the five classes and the four names that must stay `variable`, and `t010_sem` pins the one that was a whole line of tokens missing (§11.5). Cross-file navigation is **not** behind §9.2 as this row previously said — §11.4 measured that the renamer the server already runs produces the pairing it needs. **Six defects a user reported are fixed and pinned** (`t018_reported`, §11.6): a declaration's own name and a parameter's own name now answer, a builtin answers, an imported name answers, an f-string is sub-tokenized, type names are painted as types, and a module or a record literal offers its own members after a `.`. Five of the six were **one bug** — something recorded at one column and asked about at another — and one was *not* a server bug at all and is reported as such rather than as a fix. **Nothing is left undone in this row.** |
+| **M5** | packaging and docs | **Done.** All three: `PORTING.md`'s module map carries the LSP row with the reason it is *not* ported and the two checks that keep a path-importing tool from breaking the compiler; `AGENTS.md` gains the layout bullet, the suite-list entry (`test_lsp.sh [lsp]`) and the description of `make yserve`; and the extension README documents `yserve` placement — `make yserve` at the repository root, then the search order, then `y.lsp.serverPath` alone — and **every** setting in a table (`serverPath`, `rootPath`, `trace.server`, which is all three of them). |
 
 ### 11.1 Two bugs the work found in the compiler
 

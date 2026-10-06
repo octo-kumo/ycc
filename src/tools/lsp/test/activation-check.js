@@ -76,6 +76,46 @@ check(
 check('package.json: vscode-languageclient is a RUNTIME dependency',
     !!(pkg.dependencies && pkg.dependencies['vscode-languageclient']),
     'it is in devDependencies, so the packaged .vsix cannot require it');
+
+// Every setting the manifest offers must be READ by the client, and every setting
+// the client reads must be OFFERED.
+//
+// Both directions have happened. `y.lsp.checkOnChange` was in LSP.md's
+// requirements as R1.8 for as long as that document existed and was read by
+// nobody -- the server dropped `initialize`'s params, so there was nowhere for the
+// value to arrive even if the client had sent it (t019). A setting that appears in
+// the settings UI and does nothing is the quietest kind of broken, because the
+// user changes it, sees no difference, and concludes the feature is unreliable.
+//
+// The reverse is the `y.lsp.semantic` LSP.md promised: a switch that does not
+// exist at all. Documentation claiming a setting is not catchable from here, but
+// the manifest is.
+const settings = ((pkg.contributes && pkg.contributes.configuration) || {}).properties || {};
+const srcDir = path.join(extDir, 'src');
+const clientSrc = fs
+    .readdirSync(srcDir)
+    .filter((f) => f.endsWith('.ts'))
+    .map((f) => fs.readFileSync(path.join(srcDir, f), 'utf8'))
+    .join('\n');
+const settingKeys = Object.keys(settings).map((k) => k.replace(/^y\.lsp\./, ''));
+check(
+    'package.json: every setting it offers is READ by the client',
+    settingKeys.every((k) => clientSrc.includes("'" + k + "'")),
+    'unread: ' + settingKeys.filter((k) => !clientSrc.includes("'" + k + "'")).join(','),
+);
+const readKeys = [...clientSrc.matchAll(/get<[^>]*>\('([a-zA-Z.]+)'/g)].map((m) => m[1]);
+check(
+    'package.json: every setting the client reads is OFFERED',
+    readKeys.every((k) => settingKeys.includes(k)),
+    'read but not declared: ' + readKeys.filter((k) => !settingKeys.includes(k)).join(','),
+);
+check(
+    'package.json: the four settings, and checkOnChange is a boolean defaulting on',
+    settingKeys.length === 4 &&
+        settings['y.lsp.checkOnChange'].type === 'boolean' &&
+        settings['y.lsp.checkOnChange'].default === true,
+    'settings: ' + settingKeys.join(','),
+);
 check('package.json: it is not ALSO in devDependencies',
     !(pkg.devDependencies && pkg.devDependencies['vscode-languageclient']));
 

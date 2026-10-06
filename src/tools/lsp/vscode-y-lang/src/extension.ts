@@ -129,7 +129,17 @@ async function start(context: vscode.ExtensionContext, why: string): Promise<voi
             // user gets for a missing squiggle, so they belong in the channel
             // the Output menu points at.
             revealOutputChannelOn: RevealOutputChannelOn.Never,
-            initializationOptions: { rootPath: root ?? null },
+            // R1.8. `rootPath` here is redundant -- it also goes on argv as
+            // `--root` (see serverArgs), which is where yserve reads it -- and it
+            // is left in place rather than removed, because a client sending an
+            // option the server ignores is harmless and removing it would churn
+            // the wire for nothing. `checkOnChange` is NOT redundant: argv has no
+            // place for it, and without initializationOptions there was nowhere
+            // for the server to read it at all.
+            initializationOptions: {
+                rootPath: root ?? null,
+                checkOnChange: cfg.checkOnChange,
+            },
         };
 
         const c = new LanguageClient('y', 'Y Language Server', server, clientOptions);

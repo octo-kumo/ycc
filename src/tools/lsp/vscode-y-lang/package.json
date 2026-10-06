@@ -42,6 +42,11 @@
           "default": "",
           "markdownDescription": "Workspace root passed to `yserve` as `--root`. Imports in an open file resolve against the file's own directory first, so this only matters for files outside the workspace. Empty uses the server's working directory."
         },
+        "y.lsp.checkOnChange": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Run the checker and the linter on every keystroke. Off checks on `didOpen` and `didSave` only, which is much cheaper on a large file and costs you live errors. **The other features are unaffected**: hover, completion, semantic tokens and formatting still read your unsaved buffer, so they are never a keystroke behind."
+        },
         "y.lsp.trace.server": {
           "type": "string",
           "enum": [

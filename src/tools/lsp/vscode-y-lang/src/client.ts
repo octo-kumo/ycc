@@ -127,12 +127,19 @@ export function serverArgs(root: string | undefined): string[] {
 export function config(): {
     serverPath: string | undefined;
     rootPath: string | undefined;
+    checkOnChange: boolean;
     trace: 'off' | 'messages' | 'verbose';
 } {
     const cfg = vscode.workspace.getConfiguration('y.lsp');
     return {
         serverPath: cfg.get<string>('serverPath') || undefined,
         rootPath: cfg.get<string>('rootPath') || undefined,
+        // Default ON, and the default is spelled out rather than left to
+        // `get<boolean>`'s own: a client that sends nothing must get the
+        // behaviour the server has always had. The server reads it as
+        // `initializationOptions.checkOnChange` and treats anything that is not a
+        // bool as ON, so the two defaults cannot drift apart silently.
+        checkOnChange: cfg.get<boolean>('checkOnChange', true),
         trace: cfg.get<'off' | 'messages' | 'verbose'>('trace.server', 'off'),
     };
 }
