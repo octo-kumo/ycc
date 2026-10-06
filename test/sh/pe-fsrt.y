@@ -54,9 +54,27 @@ print(fs.exists("pefsrt.txt"));
 // (that is user-space work), so a chdir("..") that Linux accepts fails here, and
 // a fixture both targets must agree on is the wrong place to pin that down.
 print(fs.cwd().length > 0);
+// list_dir: one file, so the answer does not depend on the order a directory
+// happens to come back in. "." and ".." are not listed on either target.
+print(fs.make_dir("pefsrt_ls"));
+print(fs.write_file("pefsrt_ls/only.txt", "x"));
+let ls = fs.list_dir("pefsrt_ls")!;
+print(ls.length);
+print(ls[0]);
+print(fs.remove_file("pefsrt_ls/only.txt"));
+print(fs.remove_dir("pefsrt_ls"));
 print(fs.make_dir("pefsrt_cd"));
 print(fs.chdir("pefsrt_cd"));
 print(fs.cwd().ends_with("pefsrt_cd"));
 print(fs.chdir("pefsrt_missing"));
 print(fs.cwd().ends_with("pefsrt_cd"));
 print(fs.cwd().length > 0);
+// list_dir: one file, so the answer does not depend on the order a directory
+// happens to come back in. "." and ".." are not listed on either target.
+print(fs.make_dir("pefsrt_ls"));
+print(fs.write_file("pefsrt_ls/only.txt", "x"));
+let ls = fs.list_dir("pefsrt_ls")!;
+print(ls.length);
+print(ls[0]);
+print(fs.remove_file("pefsrt_ls/only.txt"));
+print(fs.remove_dir("pefsrt_ls"));

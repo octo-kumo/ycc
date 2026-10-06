@@ -277,8 +277,37 @@ branch-disjointness false positive.
   2000, where stat's own layout has exactly 2000. `y_os_close` (NtClose, 15) was
   written the same round and reverted with it, untested, for the same reason:
   it is only reachable through a file handle that openat has to produce first.
-- **`y_os_list`: measured, written, reverted -- and the next attempt has a
-  precise starting point.** It is the LAST of the thirteen, and the only one
+- **`y_os_list` WORKS (round 47), so ALL THIRTEEN named-layer entries fs.y
+  calls now have Windows bodies.** B2's file layer is complete: read, write,
+  stat, openat, close, mkdir, unlink, set_mode, lseek, rename, getcwd, chdir
+  and list.
+  And the payoff is measurable: `test/sh/pe-fs.y`, the 45-line portable
+  file-path program that pe-gate.sh has been reporting as a known gap since it
+  started TIMING OUT in round 39, now RUNS TO COMPLETION under wine and matches
+  the Linux transcript on all but FOUR lines.
+  THE FOUR ARE ONE PLATFORM DIFFERENCE, not a missing body: NT's native API does
+  not resolve `.` or `..` -- that is user-space work
+  (RtlDosPathNameToNtPathName) and there is no user space here -- so
+  fs.list_dir(".") answers none and chdir("..") answers false, where Linux
+  resolves both, and two later lines fail as a consequence of the second. That
+  is the whole remaining diff, and `y_w_path` normalising those components in the
+  rebuilt path is what closes it.
+  HOW IT WAS FOUND, because the method is the point: the body rewrites the
+  caller's buffer IN PLACE, so every dump taken AFTER a call showed the walk's
+  own output rather than the kernel's, and two rounds of guessing at offsets
+  produced nothing. What settled it was a TEMPORARY body that made the
+  NtQueryDirectoryFile call and returned WITHOUT TOUCHING THE BUFFER, dumped
+  through a helper in std/fs.y (read from source, so no rebless). That showed
+  FILE_BOTH_DIR_INFORMATION exactly as documented -- NextEntryOffset (+0) = 96,
+  FileAttributes (+56) = 16 for ".", FileNameLength (+60) = 2 bytes, FileName
+  (+94) = 46 00 -- and the walk was then a transcription rather than a guess.
+  FileNamesInformation (12) is NOT what wine answers for this call; class 3 is.
+  Two more things this body needed, both already-known rules: the frame must be
+  128 bytes so that NtQueryDirectoryFile's SEVEN stack arguments at 40(%rsp) and
+  up land clear of the IO_STATUS_BLOCK at -32, and the length has to survive the
+  syscall in a frame slot rather than in %rcx or %r11.
+- **The `y_os_list` measurement that came before (round 46), kept for the
+  method:** It is the LAST of the thirteen, and the only one
   without a Windows body.
   What is established:
     * the call is `NtQueryDirectoryFile` (53), eleven arguments: four in

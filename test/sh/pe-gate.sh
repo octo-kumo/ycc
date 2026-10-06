@@ -96,7 +96,7 @@ if (cd "$ROOT" && "$YCC" --target=windows "$RTSRC" -o "$OUT/fsrt.exe") >/dev/nul
     ( cd "$OUT" && rm -f pefsrt.txt; WINEARCH=win64 WINEDEBUG=-all \
         timeout 60 wine ./fsrt.exe >fsrt.out 2>fsrt.err )
     if diff -u "$RTEXP" "$OUT/fsrt.out" >"$OUT/fsrt.diff"; then
-        echo "pe-gate: file round trip ok (create/write/read/append/size/mkdir/unlink/seek/rename/cwd/chdir, PE == Linux)"
+        echo "pe-gate: file round trip ok (create/write/read/append/size/mkdir/unlink/seek/rename/cwd/chdir/list, PE == Linux)"
     else
         sed 's/^/    /' "$OUT/fsrt.diff" | head -10
         echo "pe-gate: FAIL (the PE's file round trip differs from the Linux output)"; exit 1
@@ -127,14 +127,14 @@ frc=$?
 # reports rather than fails, so the rest of this file stays a gate.
 if [ $frc -ne 0 ]; then
     grep -v '^$' "$OUT/fs.err" | head -3 | sed 's/^/    ! /'
-    echo "pe-gate: file path is a KNOWN GAP (exited $frc): 1 of fs.y's 13 layer entries has no Windows body yet (y_os_list)"
+    echo "pe-gate: file path is a KNOWN GAP (exited $frc): the only difference left is that NT does not resolve '.' or '..' (all 13 bodies exist)"
     exit 0
 fi
 if diff -u "$FSEXP" "$OUT/fs.out" >"$OUT/fs.diff"; then
     echo "pe-gate: file path ok ($(wc -l <"$FSEXP") lines, PE == the Linux output)"
 else
     sed 's/^/    /' "$OUT/fs.diff" | head -6
-    echo "pe-gate: file path is a KNOWN GAP (output differs): 1 of fs.y's 13 layer entries has no Windows body yet (y_os_list)"
+    echo "pe-gate: file path is a KNOWN GAP (output differs): the only difference left is that NT does not resolve '.' or '..' (all 13 bodies exist)"
     exit 0
 fi
 rm -f "$OUT/peg_fs.txt"

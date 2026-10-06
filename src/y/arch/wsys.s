@@ -1635,3 +1635,141 @@ yocd_fail:
     mov %rbp, %rsp
     pop %rbp
     ret
+# y_os_list(fd, buf, len, restart) -> the number of BYTES written to buf, or 0
+# when the directory is finished (or -1). The bytes are NUL-terminated names,
+# "." and ".." left out -- ONE format on both kernels, because fs.list_dir
+# parses it and must not branch on the target -- and fs.list_dir stops at
+# anything <= 0, so an error ends a listing rather than hanging it.
+#
+# FOUR ARGUMENTS, FRAMELESS in the ELF body: restart (arg4) at 8(%rsp) ->
+# 16(%rbp), len (arg3) at 16 -> 24, buf (arg2) at 24 -> 32, fd (arg1) at 32 -> 40.
+# The fd is a DIRECTORY HANDLE from y_os_openat, which opens with
+# FILE_DIRECTORY_FILE when fs.y asks for O_DIRECTORY.
+#
+# NtQueryDirectoryFile (53) takes eleven arguments: four in registers and SEVEN
+# on the stack, at 40(%rsp) and up. That is why the frame is 128 bytes and the
+# IO_STATUS_BLOCK sits at -32: the argument area is rbp-88 to rbp-33 and the two
+# must not overlap, which is the rule round 44 paid for.
+#
+# FileInformationClass is FileBothDirectoryInformation (3), and THE LAYOUT WAS
+# MEASURED, not assumed. FileNamesInformation (12) looked like the obvious
+# choice -- it carries nothing but the name -- and wine 11.17 does not answer it
+# with FILE_NAMES_INFORMATION; class 3 does answer with
+# FILE_BOTH_DIR_INFORMATION, and a dump of the raw buffer (a temporary body that
+# made the call and returned without touching it) shows:
+#
+#   +0   ULONG NextEntryOffset   -- 96 for the first record, 0 on the last
+#   +56  ULONG FileAttributes    -- 16, FILE_ATTRIBUTE_DIRECTORY, for "."
+#   +60  ULONG FileNameLength    -- 2, i.e. ONE UTF-16 unit for "."
+#   +94  WCHAR FileName[]        -- 46 00, which is "."
+#
+# THE DUMP HAD TO COME FIRST, because this body rewrites the buffer IN PLACE and
+# therefore destroys the kernel's own records as it goes: every earlier dump was
+# of the walk's output, not of the input, which is why two rounds of offset
+# guessing produced nothing. In-place is safe for the same reason the ELF half
+# says getdents64 is: a 94-byte header plus a name is always longer than the
+# name alone, so the write cursor never catches the read cursor.
+#
+# Names are narrowed to one byte each (ASCII) and NUL-terminated. The ELF half
+# uses an 8-byte store, which is why fs.y passes 32760 rather than 32768; this
+# half does not need that slack, but it must not write past len either, so a
+# name that does not fit ends the listing.
+#
+# Status: STATUS_SUCCESS (0) means records follow, STATUS_BUFFER_OVERFLOW
+# (0x80000005) means as many as fitted, and STATUS_NO_MORE_FILES (0x80000006)
+# means the directory is done and the answer is 0. Anything else is -1.
+#=== replace: y_os_list ===
+y_os_list:
+    push %rbp
+    mov %rsp, %rbp
+    sub $128, %rsp
+    mov 40(%rbp), %r10
+    xor %edx, %edx
+    xor %r8d, %r8d
+    xor %r9d, %r9d
+    lea -32(%rbp), %rax
+    mov %rax, 40(%rsp)
+    mov 32(%rbp), %rax
+    mov %rax, 48(%rsp)
+    mov 24(%rbp), %rax
+    mov %rax, 56(%rsp)
+    mov $3, 64(%rsp)
+    mov $0, 72(%rsp)
+    mov $0, 80(%rsp)
+    mov 16(%rbp), %rax
+    mov %rax, 88(%rsp)
+    mov $53, %eax
+    syscall
+    cmp $0, %eax
+    je yol_records
+    cmp $-2147483643, %eax
+    je yol_records
+    cmp $-2147483642, %eax
+    je yol_none
+    jmp yol_fail
+yol_none:
+    xor %eax, %eax
+    mov %rbp, %rsp
+    pop %rbp
+    ret
+yol_records:
+    mov 32(%rbp), %rsi
+    mov 24(%rbp), %rcx
+    mov $0, %r8
+    mov $0, %r9
+yol_rec:
+    mov %rsi, %r11
+    add %r8, %r11
+    mov 60(%r11), %r10
+    shr $1, %r10
+    cmp $1, %r10
+    jne yol_chk2
+    movzbq 94(%r11), %rax
+    cmp $46, %rax
+    je yol_next
+yol_chk2:
+    cmp $2, %r10
+    jne yol_emit
+    movzbq 94(%r11), %rax
+    cmp $46, %rax
+    jne yol_emit
+    movzbq 96(%r11), %rax
+    cmp $46, %rax
+    je yol_next
+yol_emit:
+    xor %rdi, %rdi
+yol_name:
+    cmp %r10, %rdi
+    jge yol_term
+    cmp %rcx, %r9
+    jge yol_done
+    mov %rdi, %rax
+    add %rax, %rax
+    add $94, %rax
+    movzbq (%r11,%rax,1), %rdx
+    movb %dl, (%rsi,%r9,1)
+    add $1, %r9
+    add $1, %rdi
+    jmp yol_name
+yol_term:
+    cmp %rcx, %r9
+    jge yol_done
+    movb $0, (%rsi,%r9,1)
+    add $1, %r9
+yol_next:
+    mov 0(%r11), %rax
+    cmp $0, %rax
+    je yol_done
+    add %rax, %r8
+    cmp %rcx, %r8
+    jl yol_rec
+yol_done:
+    mov %r9, %rax
+    mov %rbp, %rsp
+    pop %rbp
+    ret
+yol_fail:
+    mov $-1, %rax
+    mov %rbp, %rsp
+    pop %rbp
+    ret
