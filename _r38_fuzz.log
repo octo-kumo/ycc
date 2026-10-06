@@ -1,3 +1,0 @@
-fuzz: 300 inputs, seed 3838, corpus 505 files, findings in /tmp/yfz
-fuzz: 0 distinct finding(s)
-fuzz=0
