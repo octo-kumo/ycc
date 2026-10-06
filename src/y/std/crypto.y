@@ -1655,7 +1655,7 @@ def bigint_to_bytes_be(x: bigint, n: long) -> [byte] {
     i = n - 1;
     while (i >= 0) {
         let rem: bigint = y % 256n;
-        out[i] = tolong(rem);
+        out[i] = tolong(rem)!;
         y = y / 256n;
         i = i - 1;
     };

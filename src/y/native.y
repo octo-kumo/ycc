@@ -49,6 +49,7 @@ import lint from "./lint.y";
 import meta from "./meta.y";
 import fs;
 
+
 // The std units' sources (see std_units). `embed` (see embed_decl) makes
 // each file a str const when the compiler is BUILT: the shipped ycc is a
 // standalone static ELF and cannot read support files at run time. The C
@@ -3192,10 +3193,15 @@ def infer_call(st: EmitSt, node: Call) -> Type {
             // the checker; native.y check_os_call_names makes sure each name is
             // a label the arch lines really define).
             type_node({ k: K.tlong })
-        } else if (name == "tolong" || name == "ord" || name == "byte_at" || name == "mod" || name == "index_of" || name == "last_index_of") {
-            normtype({ k: K.tlong })
+        } else if (name == "tolong") {
+            // tolong returns an OPTION: a fully valid input is required, and a
+            // value outside the long range or a float with no long answer is
+            // none rather than a wrap or a trap.
+            normtype({ k: K.topt, of: normtype({ k: K.tlong }) })
         } else if (name == "tofloat") {
-            normtype({ k: K.tfloat })
+            normtype({ k: K.topt, of: normtype({ k: K.tfloat }) })
+        } else if (name == "ord" || name == "byte_at" || name == "mod" || name == "index_of" || name == "last_index_of") {
+            normtype({ k: K.tlong })
         } else if (name == "clock_us" || name == "time_us" || name == "heap_used") {
             type_node({ k: K.tlong })
         } else if (name == "keys") {
@@ -4040,7 +4046,7 @@ def gen_id(st: EmitSt, node: Leaf) -> EmitSt {
             // the shared cell pointer — and deref it (see box_capture).
             // NOTE: the index rides in `label` — env entries have no spare
             // numeric field and adding one would touch every signature.
-            let idx = tolong(e.mark);
+            let idx = leading_long(e.mark);
             st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, e.off, -1, insn.R_RCX, 64);
             st = emit_insn(st, insn.F_MOV_D_R, insn.R_RCX, -1, 1, 8 * (idx + 1), -1, insn.R_RAX, 64);
             emit_insn(st, insn.F_MOV_0_R, insn.R_RAX, -1, 1, -1, -1, insn.R_RAX, 64)
@@ -4071,7 +4077,7 @@ def gen_cap_ptr(st: EmitSt, name: str) -> EmitSt {
     let e = env_find(st, name);
     if (e.kind == "capture") {
         // NOTE: the index rides in `label` (see gen_id's capture arm).
-        let pidx = tolong(e.mark);
+        let pidx = leading_long(e.mark);
         st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, e.off, -1, insn.R_RCX, 64);
         emit_insn(st, insn.F_MOV_D_R, insn.R_RCX, -1, 1, 8 * (pidx + 1), -1, insn.R_RAX, 64)
     } else {
@@ -4710,7 +4716,7 @@ def gen_addr(st: EmitSt, node: Wrap) -> EmitSt {
         } else if (e.kind == "global") {
             emit_insn(st, insn.F_LEA_P_R, -1, -1, 1, 0, e.label, insn.R_RAX, 64)
         } else if (e.kind == "capture") {
-            let aidx = tolong(e.mark);
+            let aidx = leading_long(e.mark);
             st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, e.off, -1, insn.R_RCX, 64);
             emit_insn(st, insn.F_MOV_D_R, insn.R_RCX, -1, 1, 8 * (aidx + 1), -1, insn.R_RAX, 64)
         } else {
@@ -5509,7 +5515,7 @@ def shift_imm(r: Node) -> long {
         if (lit_is_float(num.v)) { -1 } else {
             let s = norm_num(num.v);
             if (len(s) > 2 || s[0:1] == "-") { -1 }
-            else if (tolong(s) < 64) { tolong(s) }
+            else if (leading_long(s) < 64) { leading_long(s) }
             else { -1 }
         }
     } else { -1 }
@@ -7903,7 +7909,7 @@ def gen_assign(st: EmitSt, node: Assign) -> EmitSt {
     // cell and is visible in the capturing scope too.
     st = gen_as(st, node.v, e.typ);
     if (e.kind == "capture") {
-        let idx = tolong(e.mark);
+        let idx = leading_long(e.mark);
         st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, e.off, -1, insn.R_RCX, 64);
         st = emit_insn(st, insn.F_MOV_D_R, insn.R_RCX, -1, 1, 8 * (idx + 1), -1, insn.R_RDX, 64);
         st = emit_insn(st, insn.F_MOV_R_0, insn.R_RAX, 64, insn.R_RDX, -1, 1, -1, -1);
@@ -8811,7 +8817,7 @@ def int_imm(r: Node) -> AsmNum {
     if (r.k == K.num) {
         let num: Leaf = r;
         if (!lit_is_float(num.v)) {
-            let n = tolong(norm_num(num.v));
+            let n = leading_long(norm_num(num.v));
             if (n >= -2147483648 && n <= 2147483647) {
                 ok = true;
                 v = n;
@@ -9985,7 +9991,11 @@ def gen_tofloat(st: EmitSt, node: Call) -> EmitSt {
     if (t.k == K.tlong) {
         st = gen(st, a0);
         st = emit_insn(st, insn.F_CVTSI2SD_R_R, insn.R_RAX, 64, insn.R_XMM0, 128, 0, 0, 0);
-        emit_insn(st, insn.F_MOVQ_R_R, insn.R_XMM0, 128, insn.R_RAX, 64, 0, 0, 0)
+        st = emit_insn(st, insn.F_MOVQ_R_R, insn.R_XMM0, 128, insn.R_RAX, 64, 0, 0, 0);
+        // tofloat answers an OPTION now, so the widened value is boxed the same
+        // way some(v) is: a pointer with the value at offset 0. A bigint
+        // conversion is already boxed by its runtime helper.
+        gen_box_rax(st)
     } else if (t.k == K.tbigint) {
         st = gen_push_args(st, node.args);
         st = emit_insn(st, insn.F_CALL_L, lbl_new("y_bigint_to_float"), 0, 0, 0, 0, 0, 0);
@@ -11595,7 +11605,7 @@ def link_locs(b: str, off: long) -> str {
             let p: str = parts[i];
             if (dbg_lines) {
                 let sp = index_of(p, " ");
-                out += "\n.loc " + tostring(tolong(p[:sp]) + off) + p[sp:];
+                out += "\n.loc " + tostring(leading_long(p[:sp]) + off) + p[sp:];
             } else {
                 let nl = index_of(p, "\n");
                 if (nl >= 0) { out += p[nl:]; }
@@ -12625,7 +12635,7 @@ def pack_get(cur: Cursor) -> str {
 };
 
 def pack_num(cur: Cursor) -> long {
-    tolong(pack_get(cur))
+    leading_long(pack_get(cur))
 };
 
 def pack_get_strs(cur: Cursor) -> [str] {

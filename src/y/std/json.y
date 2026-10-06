@@ -147,7 +147,9 @@ def as_str(v: Val) -> str? {
 
 def as_long(v: Val) -> long? {
     let out: long? = none;
-    if let Num n = v { out = some(tolong(n.num)); };
+    // tolong answers long?: a JSON number with a fraction or an exponent is
+    // none here rather than silently truncated, which is what as_long means.
+    if let Num n = v { out = tolong(n.num); };
     out
 }
 
@@ -679,9 +681,20 @@ export {
 // member BINDS it, and five of the six bindings would be unused, which is a
 // warning per case and this file has to compile with zero.  The accessors
 // already do the matching and use their own bindings.
+// Is v a Num? NOT `as_long(v) != none`: tolong requires a fully valid input
+// now, so a number with a fraction -- still a Num, still printed as its own
+// text by stringify -- answered none, vkind said "none of the above", and
+// pretty() printed an empty string for it. The question vkind is asking is
+// about the SHAPE, so it asks it about the shape.
+def is_num(v: Val) -> bool {
+    let got = false;
+    if let Num { num: _ } = v { got = true; };
+    got
+};
+
 def vkind(v: Val) -> long {
     let k = 0;
-    if (as_long(v) != none) {
+    if (is_num(v)) {
         k = 1
     } else {
         if (as_str(v) != none) {
@@ -752,7 +765,13 @@ def get_long(o: Val, key: str, dflt: long) -> long {
     let out = dflt;
     let f = field(o, key);
     if (f != none) {
-        if let Num n = f! { out = tolong(n.num) };
+        // A number that is not a whole one (a fraction, an exponent, junk)
+        // leaves the caller's default: tolong answers none rather than
+        // truncating, and this function's contract is a long, not an option.
+        if let Num n = f! {
+            let v = tolong(n.num);
+            if (v != none) { out = v!; };
+        };
     };
     out
 }

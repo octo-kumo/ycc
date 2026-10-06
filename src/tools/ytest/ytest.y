@@ -183,7 +183,7 @@ def pct_in(line: str, prefix: str) -> float {
     let rest = line[i + len(prefix):];
     let j = index_of(rest, "%");
     if (j < 0) { return 0.0 - 1.0; };
-    tofloat(rest[0:j])
+    tofloat(rest[0:j])!
 };
 
 // The number after `marker` (to the end of the line), or 0.
@@ -192,8 +192,8 @@ def num_after(line: str, marker: str) -> long {
     if (i < 0) { return 0; };
     let rest = trim(line[i + len(marker):]);
     let j = index_of(rest, " ");
-    if (j < 0) { return tolong(rest); };
-    tolong(rest[0:j])
+    if (j < 0) { return tolong(rest)!; };
+    tolong(rest[0:j])!
 };
 
 // One source's executed/total lines, from `gcov`'s own summary. `-o` is the
@@ -217,7 +217,7 @@ def one_cov(name: str) -> Cov {
     };
     let hit = total;
     if (pct >= 0.0) {
-        hit = tolong(0.5 + (pct / 100.0) * tofloat(total));
+        hit = tolong(0.5 + (pct / 100.0) * tofloat(total))!;
     };
     return { name: name, pct: pct, executed: hit, total: total };
 };
@@ -274,7 +274,7 @@ def coverage(argv: [str]) -> long {
         i = i + 1;
     };
     let whole = 0.0;
-    if (sum_t > 0) { whole = 100.0 * tofloat(sum_e) / tofloat(sum_t); };
+    if (sum_t > 0) { whole = 100.0 * tofloat(sum_e)! / tofloat(sum_t)!; };
     print("coverage: " + tostring(sum_e) + "/" + tostring(sum_t) + " lines = "
         + fmt_pct(whole) + " over " + tostring(seen) + " files");
     0
@@ -298,7 +298,7 @@ def pad_left(s: str, n: long) -> str {
 // fmt_pct prints a percentage with one decimal, because tostring's float form
 // is not what a table wants. Rounded to the nearest tenth.
 def fmt_pct(p: float) -> str {
-    let tenths = tolong(p * 10.0 + 0.5);
+    let tenths = tolong(p * 10.0 + 0.5)!;
     tostring(tenths / 10) + "." + tostring(tenths % 10) + "%"
 };
 

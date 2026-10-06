@@ -113,7 +113,7 @@ print("escaped: ", regex.replace(date, text, "$$1"));
 print("unknown name stays: ", regex.replace(date, text, "$9 and ${nope}"));
 print("function: ", regex.replace_with(date, text, def (x: regex.Match) -> str {
     let y = regex.named(x, "y")!;
-    tostring(tolong(y) + 1) + "/" + regex.named(x, "m")!
+    tostring(tolong(y)! + 1) + "/" + regex.named(x, "m")!
 }));
 
 // ── find over a subject, group by group ───────────────────────────────────

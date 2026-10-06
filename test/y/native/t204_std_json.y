@@ -84,18 +84,18 @@ def main() -> long {
         tostring(json.index(m_tags, 1))
     }, tostring(json.str("y")));
 
-    test.group("as_long is tolong over the text, and is not a conversion");
-    // The manual says this outright, so it is asserted rather than described:
-    // each of these is a reasonable assumption a caller would bring to a JSON
-    // number, and every one of them is wrong.
-    test.ck_eq("\"3.9\" is 3", json.as_long(json.numtext("3.9"))!, 3);
-    test.ck_eq("\"-3.9\" is -3", json.as_long(json.numtext("-3.9"))!, -3);
-    test.ck_eq("\"1e10\" is 1 -- the exponent is never read",
-        json.as_long(json.numtext("1e10"))!, 1);
-    test.ck_eq("\"1.50\" is 1", json.as_long(json.numtext("1.50"))!, 1);
-    test.ck_eq("and past 64 bits it wraps, to the wrong number", {
-        json.as_long(json.numtext("12345678901234567890123"))!
-    }, 4807115922877859019);
+    test.group("as_long is tolong over the text: a WHOLE number, or none");
+    // The block used to carry five numbers the compiler produced by stopping at
+    // the first non-digit and wrapping past 64 bits, with a comment saying every
+    // one of them was "a reasonable assumption a caller would bring ... and
+    // every one of them is wrong". tolong requires a fully valid input now, so
+    // all five are none, and the comment is true of the old answers rather than
+    // the new ones: a caller who brings those assumptions gets nothing to use.
+    test.ck_eq("\"3.9\" is none, not 3", if (json.as_long(json.numtext("3.9")) == none) { 1 } else { 0 }, 1);
+    test.ck_eq("\"-3.9\" is none, not -3", if (json.as_long(json.numtext("-3.9")) == none) { 1 } else { 0 }, 1);
+    test.ck_eq("\"1e10\" is none, not 1", if (json.as_long(json.numtext("1e10")) == none) { 1 } else { 0 }, 1);
+    test.ck_eq("\"1.50\" is none, not 1", if (json.as_long(json.numtext("1.50")) == none) { 1 } else { 0 }, 1);
+    test.ck_eq("and past 64 bits it is none, not a wrapped number", if (json.as_long(json.numtext("12345678901234567890123")) == none) { 1 } else { 0 }, 1);
     test.ck_str("while the text itself is preserved exactly", {
         json.stringify_val(json.numtext("1.50"), 0)
     }, "1.50");

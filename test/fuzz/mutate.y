@@ -94,7 +94,7 @@ if (len(args) != 5) {
     eputs("usage: mutate SEED OTHER RNG OUT\n");
     exit(2);
 };
-rng[0] = tolong(args[3]);
+rng[0] = tolong(args[3])!;
 let s = read_or_empty(args[1]);
 let other = read_or_empty(args[2]);
 foreach (m in range(1 + rand(4))) {

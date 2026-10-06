@@ -41,17 +41,17 @@ a document parses, and every shape reads back
   ok    and an index in range is the element
           6 chars
 
-as_long is tolong over the text, and is not a conversion
-  ok    "3.9" is 3
-          got 3, want 3
-  ok    "-3.9" is -3
-          got -3, want -3
-  ok    "1e10" is 1 -- the exponent is never read
+as_long is tolong over the text: a WHOLE number, or none
+  ok    "3.9" is none, not 3
           got 1, want 1
-  ok    "1.50" is 1
+  ok    "-3.9" is none, not -3
           got 1, want 1
-  ok    and past 64 bits it wraps, to the wrong number
-          got 4807115922877859019, want 4807115922877859019
+  ok    "1e10" is none, not 1
+          got 1, want 1
+  ok    "1.50" is none, not 1
+          got 1, want 1
+  ok    and past 64 bits it is none, not a wrapped number
+          got 1, want 1
   ok    while the text itself is preserved exactly
           4 chars
 

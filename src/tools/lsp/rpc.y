@@ -73,7 +73,12 @@ def read_frame(r: In, fd: long) -> str? {
             go = false;                         // the blank line: headers are done
         } else {
             let v = header_value(line, "content-length");
-            if (v != "") { want = tolong(v); started = true; }
+            if (v != "") {
+                // A Content-Length that is not a number is a bad header, not a
+                // length: tolong answers none rather than reading what it can.
+                let wv = tolong(v);
+                if (wv != none) { want = wv!; started = true; };
+            }
         }
     }
 
