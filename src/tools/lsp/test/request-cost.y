@@ -13,7 +13,7 @@
 //
 // Measured on this machine, whole-file, both phases plus visible():
 //
-//   file       size    scan      index           heap
+//   file       size    scan      index      classify           heap
 //   tags.y       8 KB    0 ms     0 ms /   0.4 MB
 //   lint.y      42 KB    1 ms     2 ms /   3.2 MB
 //   types.y    191 KB    5 ms     7 ms /  12.7 MB
@@ -23,13 +23,17 @@
 // 973 and 5,499 ms, and the heap column 0.5, 43, 584 and 2,541 MB. So the fix is
 // worth 275x on the largest file -- not because 20 ms is fast, but because 5.5 s
 // is the difference between a feature and a hang.
-import fs;
 import scan from "../scan.y";
 import scope from "../scope.y";
 import nav from "../nav.y";
+// `serve` rather than `import fs`: serve path-imports std/fs and flattens it, so a
+// bare `import fs` beside it is a duplicate definition of every name fs exports.
+import serve from "../serve.y";
+import sem from "../sem.y";
+import pos from "../pos.y";
 
 foreach (f in ["src/y/tags.y", "src/y/lint.y", "src/y/types.y", "src/y/native.y"]) {
-    let src = fs.read_file(f)!;
+    let src = serve.fs.read_file(f)!;
     let bytes = len(src);
     let h0 = heap_used();
     let t0 = clock_us();
@@ -48,4 +52,33 @@ foreach (f in ["src/y/tags.y", "src/y/lint.y", "src/y/types.y", "src/y/native.y"
     print("   scan  " + tostring((t1 - t0) / 1000) + " ms  +" + tostring((h1 - h0) / 1024) + " KB");
     print("   index " + tostring((t2 - t1) / 1000) + " ms  +" + tostring((h2 - h1) / 1024) + " KB");
     print("   visible() " + tostring(t4 - t3) + " us  " + tostring(len(vis)) + " names");
+    // semanticTokens/full is the other whole-buffer request, and since the
+    // semantic classes landed it has a third phase: `classify` asks, once per
+    // identifier, what the name resolves to. That is a linear walk of the
+    // declarations per identifier -- the same order as `visible()`, but over EVERY
+    // identifier rather than one position -- so it is the phase that decides
+    // whether the highlighter is usable on a big file.
+    // `classify` in two, because "it is slow" is not a finding: by_name is the
+    // once-per-buffer bucket build and the rest is the per-identifier work.
+    let tb0 = clock_us();
+    let byn = nav.by_name(idx);
+    let tb1 = clock_us();
+    print("   by_name " + tostring((tb1 - tb0) / 1000) + " ms  " + tostring(len(keys(byn))) + " names");
+    // The same walk with NO classification, which is the floor: if this is most of
+    // `classify` then the span loop is the cost and the classification is nearly
+    // free, and the two need different fixes.
+    let tt0 = clock_us();
+    let base = sem.tokens_in(pos.doc_of(src), []);
+    let tt1 = clock_us();
+    print("   tokens_in (no classes) " + tostring((tt1 - tt0) / 1000) + " ms  " + tostring(len(base)) + " tokens");
+    let t5 = clock_us();
+    let h3 = heap_used();
+    let over = serve.semantic_overrides(src, f);
+    let t6 = clock_us();
+    let h4 = heap_used();
+    let n_over = 0;
+    let oi = 0;
+    while (oi < len(over)) { if (over[oi] != 0) { n_over = n_over + 1; }; oi = oi + 1; };
+    print("   classify " + tostring((t6 - t5) / 1000) + " ms  +" + tostring((h4 - h3) / 1024) +
+          " KB  " + tostring(n_over) + " of " + tostring(len(over)) + " spans classified");
 };

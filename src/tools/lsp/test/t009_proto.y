@@ -9,6 +9,7 @@
 import json;
 import pos from "../pos.y";
 import diag from "../diag.y";
+import sem from "../sem.y";
 import serve from "../serve.y";
 import dispatch from "../dispatch.y";
 import yserve from "../yserve.y";
@@ -152,8 +153,16 @@ def as_text(v: json.Val) -> str {
     let t = json.as_str(v);
     if is_some(t) { t! } else { "(not a string)" }
 }
-print("legend[0] is a comment: " + tostring(len(types) == 9 && as_text(types[0]) == "comment"));
-print("legend[8] is an error: " + tostring(len(types) == 9 && as_text(types[8]) == "error"));
+// The advertised legend is `sem.token_types()`, so its LENGTH is compared against
+// that rather than a literal. These two lines used to say `len(types) == 9 && ...`
+// and the moment the legend grew -- five semantic classes, R2.3 -- both went false
+// and read as "the legend is broken" rather than "the legend changed". t010_sem
+// pins the order and the indices; this pins that the ADVERTISED list is the same
+// one, which is the part a client sees.
+let sem_legend = sem.token_types();
+print("legend matches sem.token_types() in length: " + tostring(len(types) == len(sem_legend)));
+print("legend[0] is a comment: " + tostring(as_text(types[0]) == "comment"));
+print("legend[8] is an error: " + tostring(as_text(types[8]) == "error"));
 
 // A string id must come back as a string, not a number: an id is an opaque
 // token, and coercing it makes the reply unmatchable.
@@ -207,7 +216,7 @@ print("second source: " + sfield(items_own(items)[1], "source"));
 const WS = fs.cwd() + "/src/tools/lsp/test";
 let impst = serve.server_state(WS, "", 0);
 deliver(impst, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"rootUri\":" + jlit("file://" + WS) + "}}");
-let imp: [str] = [];
+let imp_scratch: [str] = [];
 // An absolute path, because a real URI has a root and a test that uses a
 // relative one stops noticing when uri_path mishandles it.
 let imp = frames_of(impst, did_open("file://" + WS + "/main2.y", "import helper from \"./mod.y\";\nprint(helper.f());\n", 1));

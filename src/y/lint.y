@@ -31,9 +31,26 @@ import tags from "./tags.y";
 import types from "./types.y";
 import parser from "./parser.y";
 
-type LintVar = { name: str, kind: str, num: long, line: long, col: long, scal: bool, fresh: bool };
+type LintVar = { name: str, kind: str, num: long, line: long, col: long, scal: bool, fresh: bool, strf: bool, top: bool };
+// Where each top-level name was declared last: a name -> line map (the
+// parser's NameIx, which lint already keeps one of). A walk of `vars` would
+// do it too, but that list holds every local -- measured at +4.4% of a
+// self-compile -- and a list of the top-level names in order is quadratic in
+// them (+1.4%). The line says which file too (lint_file_of), so a module's
+// name and the program's do not shadow each other's warning.
 type LintRet = { name: str, ret: Type, line: long, col: long };
-type LintSt = { warns: [Diag], vars: [LintVar], flags: [long], rets: [LintRet], ridx: NameIx, self: str, wlevel: long };
+// Three fields say, in the emitter's terms, whether the statement being
+// walked is generated through `gen` (a value is produced) or through
+// `gen_stmt` (nothing reads one). `dropnext`: the statement list about to be
+// walked is a loop body's, whose value the emitter drops (gen_discard ->
+// gen_block_as with dropped true). `vused`: this statement is the last of a
+// list that is not dropped, and every other block generates its last
+// statement through `gen`. `loops`: how many loop bodies enclose it, so the
+// one warning that wants them (a copying append inside a loop) does not fire
+// on a single copy, which costs what any `+` costs. Which of the first two
+// an expression sees decides whether a `+=` on a string appends in place or
+// copies; see lint_opassign.
+type LintSt = { warns: [Diag], vars: [LintVar], tops: NameIx, flags: [long], rets: [LintRet], ridx: NameIx, self: str, wlevel: long, dropnext: bool, vused: bool, loops: long };
 type LintRoot = { typ: Type, line: long, col: long, alias: str, mod: str };
 type LintOcc = { key: str, typ: Type, line: long, col: long, parent: long, decl: bool, alias: str, rep: bool };
 type LintTy = { roots: [LintRoot], atyps: [Type], amods: [str], amap: NameIx, amemo: [str], abusy: [bool], occs: [LintOcc], line: long, col: long, mod: str };
@@ -53,7 +70,7 @@ def lint_unit(ast: Block, ast3: Block, ofile: [long], fmods: [str], wlevel: long
     let vars: [LintVar] = [];
     let flags: [long] = [];
     let rets: [LintRet] = [];
-    let st = { warns: warns, vars: vars, flags: flags, rets: rets, ridx: parser.nameix_new(64), self: "", wlevel: wlevel };
+    let st = { warns: warns, vars: vars, tops: parser.nameix_new(256), flags: flags, rets: rets, ridx: parser.nameix_new(64), self: "", wlevel: wlevel, dropnext: false, vused: false, loops: 0 };
     if (wlevel >= 1) {
         lint_rets(st, ast3.stmts)
     };
@@ -219,12 +236,98 @@ def lint_mark(st: LintSt, name: str, bit: long) -> long {
 // A local binding (let, const, nested def), checked for use at the end.
 // `scal`: it holds a number, string or bool, whose `+=` makes a new value
 // only it sees. `fresh`: it starts as an array literal no one else holds.
-def lint_note(st: LintSt, name: str, kind: str, line: long, col: long, scal: bool, fresh: bool) -> long {
+def lint_note(st: LintSt, name: str, kind: str, line: long, col: long, scal: bool, fresh: bool, strf: bool) -> long {
     let d = lint_disp(name);
     if (d != "" && byte_at(d, 0) != 95 && index_of(name, "$shadow") < 0) {
-        st.vars += { name: d, kind: kind, num: lint_num(name), line: line, col: col, scal: scal, fresh: fresh };
+        st.vars += { name: d, kind: kind, num: lint_num(name), line: line, col: col, scal: scal, fresh: fresh, strf: strf, top: false };
     };
     0
+};
+
+// A top-level binding: a global. Recorded, because the value-used append
+// check needs to know whether the name holds a string, and marked `top` so
+// lint_vars leaves it alone -- a global that nothing in this unit reads is
+// not an unused variable (another unit of the program may read it).
+def lint_note_top(st: LintSt, node: Decl) -> long {
+    let name = node.name;
+    let d = lint_disp(name);
+    if (d != "" && byte_at(d, 0) != 95) {
+        // A name bound twice at the top level is legal -- the later
+        // declaration shadows the earlier one, which t14_shadow, t30 and
+        // t53 all pin -- and rename.y keeps the earlier one under its
+        // `$shadow` name so a self call inside it still binds to itself.
+        // What is not legal is not knowing which copy is running: a
+        // copy-paste that leaves an old definition behind shadows the new
+        // one silently, and every read of the source shows the copy that is
+        // not the one called. A warning is the whole of it (the same shape
+        // the duplicate type alias gets); find_dup still rejects the
+        // cross-file case outright, where there is no shadowing to mean.
+        let fid = lint_file_of(node.line);
+        let first = lint_top_first(st, d, fid);
+        if (first > 0) {
+            lint_warn(st, "'" + d + "' is declared more than once; the last declaration counts (the earlier one at line " + tostring(first) + ")", node.line, node.col);
+        };
+        // recorded either way: the map holds where each name was declared
+        // LAST, so a third declaration names the second
+        parser.nameix_put(st.tops, d, node.line);
+        if (first == 0) {
+            st.vars += { name: d, kind: node.kind, num: lint_num(name), line: node.line, col: node.col, scal: lint_scal(node.typ, node.v), fresh: lint_fresh(node.v), strf: lint_strheld(node.typ, node.v), top: true };
+        };
+    };
+    0
+};
+
+// Where a top-level name was declared last, if that was in this file (0
+// otherwise). Only the names this check records count, so a local of the
+// same name never shadows a global's warning (different scopes, and lint
+// has no scope). The file matters: a path-imported unit shares the
+// program's namespace -- t134 pins that a module global may share the
+// program's name -- so only two declarations of one file are the
+// copy-paste this names.
+def lint_top_first(st: LintSt, d: str, fid: long) -> long {
+    let prev = parser.nameix_get(st.tops, d);
+    if (prev > 0 && lint_file_of(prev) == fid) { prev } else { 0 }
+};
+
+// The file the line ln is in, 0 for the program's own text and for a line
+// past the origin table.
+def lint_file_of(ln: long) -> long {
+    if (ln >= 1 && ln <= len(lint_ofile)) { lint_ofile[ln - 1] } else { 0 }
+};
+
+// A binding that holds a string, as far as the syntax shows: annotated
+// `str`, or initialised with a string literal. Deliberately a syntactic
+// question, not a type one -- lint never runs the checker -- so a binding
+// whose string-ness is only visible from a call's return is simply not
+// flagged. The check it feeds is advice, so a miss is a miss and never a
+// wrong warning.
+def lint_strheld(typ: Type, v: Node) -> bool {
+    if (typ.k == K.tstr) {
+        true
+    } else {
+        v.k == K.str
+    }
+};
+
+// Whether the binding a name refers to was noted as holding a string (see
+// lint_strheld). A renamed binding is matched on rename.y's number, which
+// identifies the binding itself -- two locals spelled the same in two defs
+// are two bindings, and a match on the written name would let one of them
+// vouch for the other. A top-level binding is renamed to nothing (its name
+// is unique in the unit already, and lint_mark leaves globals alone for the
+// same reason: see the number), so those are matched on the name.
+def lint_var_str(st: LintSt, name: str) -> bool {
+    let n = lint_num(name);
+    let d = lint_disp(name);
+    let i = 0;
+    while (i < len(st.vars)) {
+        let v: LintVar = st.vars[i];
+        if (v.strf && ((n > 0 && v.num == n) || (n == 0 && v.num == 0 && v.name == d))) {
+            return true;
+        };
+        i = i + 1;
+    };
+    false
 };
 
 // A statement list: a block's, a function body's, the unit's. Only the
@@ -233,6 +336,9 @@ def lint_note(st: LintSt, name: str, kind: str, line: long, col: long, scal: boo
 // does: defs hoist).
 def lint_stmts(st: LintSt, stmts: [Node], used: bool, top: bool) -> long {
     let n = len(stmts);
+    // a flag for this list, if lint_loop_body marked it a dropped one
+    let drop = st.dropnext;
+    st.dropnext = false;
     let dead = false;
     let told = false;
     let i = 0;
@@ -242,6 +348,7 @@ def lint_stmts(st: LintSt, stmts: [Node], used: bool, top: bool) -> long {
             lint_warn_start(st, "unreachable code", s);
             told = true;
         };
+        st.vused = !drop && i == n - 1;
         lint_stmt(st, s, used && i == n - 1, top);
         if (!dead && lint_diverges(s)) {
             dead = true;
@@ -292,6 +399,7 @@ def lint_stmt(st: LintSt, s: Node, used: bool, top: bool) -> long {
         let decl: Decl = s;
         // a top-level binding is a global: its value is walked, not its
         // use, but a def's body still reaches itself through `self`
+        lint_note_top(st, decl);
         if (decl.kind == "def") {
             lint_def_body(st, decl.name, decl.v)
         } else {
@@ -395,7 +503,7 @@ def lint_node(st: LintSt, node: Node, used: bool) -> long {
     } else if (k == K.kw_while) {
         let loop: While = node;
         lint_node(st, loop.cond, true);
-        lint_node(st, loop.body, false)
+        lint_loop_body(st, loop.body)
     } else if (k == K.func) {
         let func: Func = node;
         lint_func(st, func);
@@ -421,11 +529,11 @@ def lint_node(st: LintSt, node: Node, used: bool) -> long {
     } else if (k == K.kw_foreach) {
         let loop: Foreach = node;
         lint_node(st, loop.iter, true);
-        lint_node(st, loop.body, false)
+        lint_loop_body(st, loop.body)
     } else if (k == K.forrange) {
         let loop: ForRange = node;
         lint_two(st, loop.lo, loop.hi);
-        lint_node(st, loop.body, false)
+        lint_loop_body(st, loop.body)
     } else if (k == K.map) {
         let map: RecLit = node;
         lint_lit(st, map, "key", "map");
@@ -640,7 +748,26 @@ def lint_for(st: LintSt, node: For) -> long {
     lint_node(st, node.init, false);
     lint_node(st, node.cond, true);
     lint_node(st, node.step, false);
-    lint_node(st, node.body, false)
+    lint_loop_body(st, node.body)
+};
+
+// A loop body: its value is dropped, so a block body's last statement is a
+// statement like the ones before it. Only a block -- gen_discard sends a
+// bare statement through gen_stmt anyway -- and only that block's own list:
+// a block nested inside it (an if arm, say) is generated through `gen`, so
+// its last statement does produce a value.
+def lint_loop_body(st: LintSt, body: Node) -> long {
+    let was = st.dropnext;
+    let wv = st.vused;
+    let wl = st.loops;
+    st.dropnext = body.k == K.block;
+    st.vused = false;
+    st.loops = st.loops + 1;
+    lint_node(st, body, false);
+    st.dropnext = was;
+    st.vused = wv;
+    st.loops = wl;
+    0
 };
 
 def lint_func(st: LintSt, node: Func) -> long {
@@ -651,10 +778,10 @@ def lint_func(st: LintSt, node: Func) -> long {
 def lint_decl(st: LintSt, node: Decl) -> long {
     let v = node.v;
     if (node.kind == "def") {
-        lint_note(st, node.name, "def", node.line, node.col, false, false);
+        lint_note(st, node.name, "def", node.line, node.col, false, false, false);
         lint_def_body(st, node.name, v)
     } else {
-        lint_note(st, node.name, node.kind, node.line, node.col, lint_scal(node.typ, v), lint_fresh(v));
+        lint_note(st, node.name, node.kind, node.line, node.col, lint_scal(node.typ, v), lint_fresh(v), lint_strheld(node.typ, v));
         lint_node(st, v, true)
     }
 };
@@ -723,6 +850,21 @@ def lint_opassign(st: LintSt, node: OpAssign, used: bool) -> long {
     if ((op == "/" || op == "%") && lint_zero(v)) {
         lint_warn_at(st, "division by zero", node);
     };
+    // A value-used `+=` on a string is `s = s + t`: the ownership cell is
+    // dropped, so the buffer is exactly as long as the result and nothing
+    // can append to it in place again. That is what keeps a string already
+    // read from `s` stable -- but it also means the whole string is copied
+    // here, and a loop of these copies it once per iteration: 10,000 of
+    // them building 120 KB allocate 1.2 GB. An append statement is O(1)
+    // amortised instead (see gen_sappend), so the one-character difference
+    // is worth naming. It is advice rather than an error because the value
+    // may well be wanted.
+    if (st.loops > 0 && (used || st.vused) && op == "+" && t.k == K.id) {
+        let tid: Leaf = t;
+        if (lint_var_str(st, tid.v)) {
+            lint_warn_at(st, "this `+=` on a string copies the whole string, so a loop of them is quadratic -- add a `;` if nothing reads the value", node);
+        };
+    };
     0
 };
 
@@ -758,17 +900,20 @@ def lint_seen(keys: [str], i: long) -> bool {
 def lint_vars(st: LintSt) -> long {
     let flags = st.flags;
     foreach (v in st.vars) {
-        let f = 0;
-        if (v.num < len(flags)) {
-            f = flags[v.num];
-        };
-        let word = lint_word(v.kind);
-        if (f & 1 != 0) {
-        } else if (f & 4 != 0 && !(v.scal || (v.fresh && f & 2 == 0))) {
-        } else if (f & 6 != 0) {
-            lint_warn(st, word + " '" + v.name + "' is assigned but never read", v.line, v.col)
+        if (v.top) {
         } else {
-            lint_warn(st, "unused " + word + " '" + v.name + "'", v.line, v.col)
+            let f = 0;
+            if (v.num < len(flags)) {
+                f = flags[v.num];
+            };
+            let word = lint_word(v.kind);
+            if (f & 1 != 0) {
+            } else if (f & 4 != 0 && !(v.scal || (v.fresh && f & 2 == 0))) {
+            } else if (f & 6 != 0) {
+                lint_warn(st, word + " '" + v.name + "' is assigned but never read", v.line, v.col)
+            } else {
+                lint_warn(st, "unused " + word + " '" + v.name + "'", v.line, v.col)
+            };
         };
     };
     0

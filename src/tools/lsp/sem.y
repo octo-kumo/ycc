@@ -39,16 +39,19 @@ import pos from "./pos.y";
 // initialize; if the two ever disagree, every token after the first difference
 // is painted as the wrong kind -- silently, because nothing errors.
 //
-// Only the SYNTACTIC classes are here. `parameter`, `function`, `method`, `type`
-// and `builtin` need to know what a name DENOTES, which is the renamer's and the
-// checker's answer rather than the lexer's -- so they are §9.2 / Stage B, and NOT
-// M4.
+// The SEMANTIC classes are here too, and they are the point of R2.3: an editor
+// paints `n` in `let n = 1` and `n` in `def n(...)` differently, and only the
+// second is what a reader needs to see. This file used to say they "need to know
+// what a name DENOTES, which is the renamer's and the checker's answer rather than
+// the lexer's -- so they are §9.2 / Stage B, and NOT M4", which was true of the
+// lexer and wrong about the consequence: what a name denotes is `scope`'s answer
+// about DECLARATIONS and a dot's own text, and neither needs the type index.
 //
-// That correction matters because this comment used to say they "come with M4
-// (R2.3)", and M4 is delivered. A reader who trusted it would go looking after
-// M4 and find `variable` for every identifier, with this file having told them
-// the classes were on the way. Until §9.2 lands, `variable` is the honest answer
-// for every name: the lexer really does not know what one denotes.
+// So `type_of` still answers from the span alone -- it must, because a lexer-class
+// is all a span knows -- and the semantic classes arrive as an OVERRIDE table from
+// the caller (`serve.semantic_overrides`), one entry per span index, 0 meaning "no opinion".
+// That keeps `sem.y` importing only `scan` and `pos`: it cannot import `scope` or
+// `serve` without a cycle, and Y has no function values to hand it a predicate.
 //
 // A `y.lsp.semantic` setting on the client turns the whole layer off for users
 // who do not want two colours for the same identifier.
@@ -61,6 +64,13 @@ const T_operator = 5;
 const T_punct = 6;
 const T_variable = 7;
 const T_error = 8;
+// The semantic classes, appended so the eight above keep their wire indices -- an
+// editor's theme is keyed on them and a renumbering repaints every file.
+const T_parameter = 9;
+const T_function = 10;
+const T_property = 11;
+const T_type = 12;
+const T_builtin = 13;
 
 // The legend, in index order, for `semanticTokensProvider.legend.tokenTypes`.
 //
@@ -81,6 +91,11 @@ def token_types() -> [str] {
     out += "punctuation";
     out += "variable";
     out += "error";
+    out += "parameter";
+    out += "function";
+    out += "property";
+    out += "type";
+    out += "builtin";
     out
 }
 
@@ -121,12 +136,12 @@ type SemTok = { line: long, ch: long, len: long, typ: long };
 
 // The absolute tokens for a buffer: sorted, one per line, no overlaps.
 def tokens(src: str) -> [SemTok] {
-    tokens_in(doc_of(src))
+    tokens_in(doc_of(src), [])
 }
 
 // The same, over a document whose line starts are already known. One table for
 // the whole document instead of one per line -- see pos.line_bytes_from.
-def tokens_in(d: SrcDoc) -> [SemTok] {
+def tokens_in(d: SrcDoc, over: [long]) -> [SemTok] {
     let src = d.src;
     let out: [SemTok] = [];
     let r = scan.scan_full(src);
@@ -136,6 +151,11 @@ def tokens_in(d: SrcDoc) -> [SemTok] {
         let s = sps[i];
         if (s.end > s.off && s.end <= len(src)) {
             let t = type_of(src, s);
+            // An override only ever REPLACES a name's class, never a comment's or
+            // a number's: `semantic_overrides` is handed the identifier spans and has no
+            // opinion about anything else, and the guard makes that structural
+            // rather than a promise.
+            if (i < len(over) && over[i] != 0) { t = over[i]; };
             out += split_lines(d, s, t);
         }
         i = i + 1;
@@ -160,14 +180,35 @@ def split_lines(d: SrcDoc, s: Span, t: long) -> [SemTok] {
     let starts = d.starts;
     let last_byte = s.end - 1;                    // the span's last byte
     // The line holding that byte: starts[last_byte] is the first start past it.
-    let last_line = 1;
+    // The last line is the last one in the table, NOT 1, and the difference is
+    // visible in an editor.
+    //
+    // A file that ends with a newline has one more line than it has text, and the
+    // byte after the last token is past that extra line's start -- so the loop
+    // below finds it and the answer comes out right by accident. A file that does
+    // NOT end with a newline -- which is what an editor sends for the line being
+    // typed right now -- has no start past the last byte, the loop finds nothing,
+    // and `last_line` stayed 1: the `while` below never visited the last line and
+    // EVERY token on it was dropped. A 17-line buffer yielded 115 spans and 110
+    // tokens, and the 5 that went missing were exactly the last line's.
+    //
+    // So the default is the last line in the table and the loop only ever narrows
+    // it.
+    let last_line = 0;
+    if (len(starts) > 0) { last_line = len(starts) - 1; };
     let k = 1;
     while (k < len(starts)) {
         if (starts[k] > last_byte) { last_line = k; k = len(starts); } else { k = k + 1; }
     }
+    // `s.line` is the SCANNER's line, which is 1-based; `last_line` is an index
+    // into `starts`, which is 0-based. Comparing them directly is an off-by-one
+    // that only shows up on the LAST line of a buffer with no trailing newline --
+    // there `last_line` is the last index and `s.line` is one past it, so the loop
+    // never ran and the whole line was dropped. `ln - 1` is the 0-based line, and
+    // the token is emitted as `ln - 1` below, so that is what is compared.
     let ln = s.line;
     let go = true;
-    while (go && ln <= last_line) {
+    while (go && ln - 1 <= last_line) {
         let lo = starts[ln - 1];
         let hi = pos.doc_line_end(d, ln);
         // the overlap of [s.off, s.end) with this line
@@ -188,7 +229,7 @@ def split_lines(d: SrcDoc, s: Span, t: long) -> [SemTok] {
             }
         }
         ln = ln + 1;
-        if (ln > last_line) { go = false; }
+        if (ln - 1 > last_line) { go = false; }
     }
     out
 }
@@ -227,20 +268,22 @@ def encode(toks: [SemTok]) -> [long] {
     out
 }
 
-// The whole result, as the reply value.
-def sem_full_of(src: str) -> { data: [long] } {
-    let r: { data: [long] } = { data: encode(tokens(src)) };
+// The whole result, as the reply value. `over` is the caller's semantic-class
+// table, one entry per span index, 0 for "no opinion" -- see the header.
+def sem_full_of(src: str, over: [long]) -> { data: [long] } {
+    let r: { data: [long] } = { data: encode(tokens_in(doc_of(src), over)) };
     r
 }
 
-def sem_full_in(d: SrcDoc) -> { data: [long] } {
-    let r: { data: [long] } = { data: encode(tokens_in(d)) };
+def sem_full_in(d: SrcDoc, over: [long]) -> { data: [long] } {
+    let r: { data: [long] } = { data: encode(tokens_in(d, over)) };
     r
 }
 
 export {
   SemTok, T_comment, T_string, T_number, T_keyword, T_selfnone,
   T_operator, T_punct, T_variable, T_error,
+  T_parameter, T_function, T_property, T_type, T_builtin,
   token_types, type_of, word, tokens, tokens_in, split_lines, encode,
   sem_full_of, sem_full_in
 };

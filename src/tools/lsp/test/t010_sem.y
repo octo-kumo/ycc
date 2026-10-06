@@ -10,6 +10,7 @@
 import json;
 import sem from "../sem.y";
 import pos from "../pos.y";
+import scan from "../scan.y";
 
 const HERE = "src/tools/lsp/test";
 
@@ -56,7 +57,10 @@ let WIRE: [str] = [tostring(sem.T_comment) + "=comment", tostring(sem.T_string) 
     tostring(sem.T_number) + "=number", tostring(sem.T_keyword) + "=keyword",
     tostring(sem.T_selfnone) + "=selfNone", tostring(sem.T_operator) + "=operator",
     tostring(sem.T_punct) + "=punctuation", tostring(sem.T_variable) + "=variable",
-    tostring(sem.T_error) + "=error"];
+    tostring(sem.T_error) + "=error",
+    tostring(sem.T_parameter) + "=parameter", tostring(sem.T_function) + "=function",
+    tostring(sem.T_property) + "=property", tostring(sem.T_type) + "=type",
+    tostring(sem.T_builtin) + "=builtin"];
 let wire_ok = 0;
 let wire_bad = 0;
 let wi = 0;
@@ -111,6 +115,35 @@ print("  '->' is an operator:   " + type_at(0, 15));
 print("  '1' is a number:       " + type_at(1, 16));
 print("  '//' is a comment:     " + type_at(1, 21));
 print("  the string is a string:" + type_at(2, 4));
+
+// ── the LAST line, which an editor sends without a trailing newline ───────
+//
+// A buffer's text is what the file holds right now, so the line being typed has
+// no newline after it. That case used to lose the ENTIRE last line: `split_lines`
+// bounded its loop with the first line-start past the span's last byte, and a
+// buffer with no trailing newline has none -- so the bound stayed at its initial
+// value and every token on the final line was dropped. A 17-line buffer yielded
+// 115 spans and 110 tokens, and the 5 missing were exactly that line's.
+//
+// An editor shows it as the highlighter going blank on the current line, which is
+// the one line the user is looking at. Every other fixture here ends with a
+// newline, which is why it went unnoticed: a round trip cannot see a token that
+// was never produced.
+let no_nl = "def f() -> long {\n    let y = 1;\n    y\n}\nprint(1)";
+let with_nl = no_nl + "\n";
+let t_no = sem.tokens(no_nl);
+let t_yes = sem.tokens(with_nl);
+let span_no = len(scan.scan_full(no_nl).spans);
+let span_yes = len(scan.scan_full(with_nl).spans);
+print("no trailing newline: " + tostring(len(t_no)) + " tokens for " + tostring(span_no) + " spans");
+print("with one: " + tostring(len(t_yes)) + " tokens for " + tostring(span_yes) + " spans");
+print("the last line survives either way: " +
+      tostring(len(t_no) == span_no && len(t_yes) == span_yes));
+// `print(1)` is 0-based line 4: the buffer is five lines and `def`, `let y`, `y`,
+// `}` and `print(1)`.
+let last_line_tok = 0;
+foreach (t in t_no) { if (t.line == 4) { last_line_tok = last_line_tok + 1; } };
+print("tokens on the last line of the no-newline buffer: " + tostring(last_line_tok) + " (want 4)");
 
 // ── the rules the format enforces ───────────────────────────────────────
 // sorted, non-overlapping, positive length, and one line each.

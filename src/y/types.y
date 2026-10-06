@@ -1617,6 +1617,22 @@ def type_index_on() -> void {
 
 def type_index_off() -> void { tc_index = false };
 
+// One entry, unless the key is already there -- the FIRST type wins, as above.
+def tci_note_key(key: long, t: Type) {
+    let bkt: [long] = tci_bkts[key % 1024];
+    let seen = false;
+    let i = 0;
+    while (i < len(bkt)) {
+        if (tci_keys[bkt[i]] == key) { seen = true; i = len(bkt); }
+        else { i = i + 1; };
+    };
+    if (!seen) {
+        tci_keys += key;
+        tci_typs += t;
+        bkt += len(tci_keys) - 1;
+    };
+};
+
 // Only ever called when tc_index is set: the flag is tested at the call site in
 // typeof_expr rather than here, so the off path costs a load and a branch and
 // not a call. Measured: testing it inside made the call itself the cost, and
@@ -1641,6 +1657,24 @@ def tci_note(node: Node, t: Type) {
                 tci_typs += t;
                 bkt += len(tci_keys) - 1;
             };
+        };
+        // A member access records its type at the KEY's position too.
+        //
+        // `a.b` parses with the Dot at the `.`, so the table holds the FIELD's
+        // type under the dot and nothing under the field's own name -- which is
+        // where an editor puts the cursor and what go-to-highlight asks about. The
+        // parser keeps the key's position for exactly this (Decl/Dot `nline`/
+        // `ncol`, 9.2 A5), so it is recorded as well.
+        //
+        // Only when the index is on, so a real compile pays nothing: this is
+        // inside tci_note, which typeof_expr does not even call.
+        let nk = node.k;
+        if (nk == K.dot) {
+            let d: Dot = node;
+            if (d.nline > 0 && d.ncol > 0) { tci_note_key(d.nline * 65536 + d.ncol, t); };
+        } else if (nk == K.dotassign) {
+            let d: DotAssign = node;
+            if (d.nline > 0 && d.ncol > 0) { tci_note_key(d.nline * 65536 + d.ncol, t); };
         };
     };
 };
@@ -2297,6 +2331,16 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
                 // reports at its own site.
                 let ri = typeof_expr(st, index.idx);
                 st = ri.st;
+                tc_res(t_unk(), st)
+            } else if (br.typ.k == K.tvoid && (barr.k == K.kw_if || barr.k == K.block)) {
+                // An `if` or a block in expression position, with no value:
+                // `if (c) { A }["k"]` indexes the `if`, and A's arms are
+                // statements (or disagree, so the `if` is void), so there is
+                // nothing there to index. As the ordinary message it names
+                // neither the base nor the fix, and nothing near it in the
+                // source shows an index of an `if` — the `[` reads as a
+                // literal. Name the base and the `;`.
+                st = fail(st, "cannot index this '" + ktag(barr.k) + "', which has no value: add a ';' after it to make it a statement", index.line, index.col);
                 tc_res(t_unk(), st)
             } else {
                 st = fail(st, "cannot index " + tstr(br.typ) + " (only arrays and maps)", index.line, index.col);
@@ -4223,6 +4267,20 @@ def inferred_ret(line: long, col: long) -> Type {
 // Check a func value bound to `name` (def decl, let-bound anonymous def, or
 // an anonymous literal). Returns { typ, st }: `typ` is the def's tfunc (with
 // an inferred return filled in), and `name` ends up bound as kind "func".
+// The tail of the inferred-return diagnostic, for a `return` with no value.
+// The type the message quotes is one the reader never wrote -- it comes
+// from the body's tail -- so this case says what does resolve it: one word
+// on the def's head makes the inferred type a written one, and the void
+// return then is what the def says it does. Every other disagreement is an
+// ordinary type error and closes the parenthesis as before.
+def ret_inferred_hint(rt: Type) -> str {
+    if (rt.k == K.tvoid) {
+        "; write '-> void' on the def to return nothing)"
+    } else {
+        ")"
+    }
+};
+
 // `line`/`col` are the KEYWORD's, for the diagnostics inside; `nline`/`ncol` are
 // the NAME's, and are what st_bind records. They differ by however much
 // whitespace `let`/`def` was followed by.
@@ -4336,7 +4394,7 @@ def typeof_def(st: TcSt, name: str, func: Func, line: long, col: long, nline: lo
             while (ri < len(rets)) {
                 let rn = rets[ri];
                 if (!tcompat(rn.typ, br)) {
-                    st = fail(st, "'return': expected " + tstr(br) + ", got " + tstr(rn.typ) + " (the return type is inferred from " + rsrc + ")", rn.line, rn.col);
+                    st = fail(st, "'return': expected " + tstr(br) + ", got " + tstr(rn.typ) + " (the return type is inferred from " + rsrc + ret_inferred_hint(rn.typ), rn.line, rn.col);
                 }
                 ri = ri + 1;
             };
@@ -4363,7 +4421,7 @@ def typeof_def(st: TcSt, name: str, func: Func, line: long, col: long, nline: lo
                 while (ri2 < len(rets2)) {
                     let rn2 = rets2[ri2];
                     if (!tcompat(rn2.typ, br)) {
-                        st = fail(st, "'return': expected " + tstr(br) + ", got " + tstr(rn2.typ) + " (the return type is inferred from " + rsrc + ")", rn2.line, rn2.col);
+                        st = fail(st, "'return': expected " + tstr(br) + ", got " + tstr(rn2.typ) + " (the return type is inferred from " + rsrc + ret_inferred_hint(rn2.typ), rn2.line, rn2.col);
                     }
                     ri2 = ri2 + 1;
                 };

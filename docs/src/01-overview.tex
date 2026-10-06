@@ -3,9 +3,11 @@
 
 \textsf{Y} is a small imperative language with a static checker, designed
 so that a complete implementation of the language fits in one head: the
-compiler is roughly seventeen thousand lines of \textsf{Y} itself
-(\ic{src/y/}, plus the runtime library it splices into programs) and
-compiles a program to a \emph{static} x86-64 ELF executable using only
+compiler is about forty thousand lines of \textsf{Y} itself
+(\ic{src/y/} --- twenty-nine thousand of compiler and thirteen of the std
+units it splices into programs --- or thirty-two thousand with the comments
+and blank lines taken out) and compiles a program to a \emph{static} x86-64
+ELF executable using only
 its own assembler and ELF writer --- no system assembler, linker, or C
 toolchain is involved at run time or at build time of user programs.
 

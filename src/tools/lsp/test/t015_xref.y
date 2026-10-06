@@ -232,6 +232,13 @@ print("definition of v (the buffer's own) -> " + loc_str(d3));
 
 let h1 = ask(st, 4, "textDocument/hover", at(MAIN_URI, 2, 21));
 print("hover on helper.helper: " + hover_str(h1));
+// A cross-file hover shows a TYPE as well as the declaration, and that is not
+// extra: the checker indexes by the SPLICED line, so getting `long` here means
+// `Prepared.mine` mapped this buffer's line to the right line of the spliced
+// program -- which was wrong by one until it was derived from the two line counts
+// rather than from `origin.file`, and the symptom was a hover on a BLANK line
+// returning the next line's type. See xref.own_lines; client-check.js pins the
+// symptom.
 let h2 = ask(st, 5, "textDocument/hover", at(MAIN_URI, 3, 13));
 print("hover on helper.TOP: " + hover_str(h2));
 

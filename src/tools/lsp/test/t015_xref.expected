@@ -21,7 +21,7 @@ definition of helper.helper -> file:///tmp/opencode/t015_ws/mod.y:1:4
 definition of helper.TOP -> file:///tmp/opencode/t015_ws/mod.y:5:4
 definition of v (the buffer's own) -> file:///tmp/opencode/t015_ws/main.y:2:4
 hover on helper.helper: ```y|helper(n: long) -> long|```||doubles a number
-hover on helper.TOP: ```y|TOP: long = 7|```
+hover on helper.TOP: ```y|long|```||```y|TOP: long = 7|```
 -- and what it refuses
 a name no file declares: true
 done

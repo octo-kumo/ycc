@@ -244,8 +244,7 @@ Yv *cur_fn_ret(Yv *st);
 Yv *fn_args_of(Yv *t);
 Yv *infer_block(Yv *st, Yv *node);
 Yv *infer_decl(Yv *st, Yv *node);
-Yv *uses_scan_block(Yv *stmts, Yv *out);
-Yv *uses_scan_node(Yv *node, Yv *out);
+int uses_argv(Yv *stmts);
 Yv *collect_from_block(Yv *stmts, Yv *out);
 Yv *collect_from_node(Yv *node, Yv *out);
 int uses_threads(Yv *refs);
@@ -1024,15 +1023,27 @@ int seen_any(Yv *seen, long lo, long hi, long level) {
 
 /* Collapse "/./" segments so the same file resolves to one key no matter
  * how deep the import nesting is (base dirs accumulate "/." per level:
- * "ycc/././enc64.y" vs "ycc/./././enc64.y"). Deterministic, so same-file
- * inputs always yield the same key (sufficient for seen-dedup). */
+ * "ycc/././enc64.y" vs "ycc/./././enc64.y"), and "/../" segments so one file
+ * reached by two spellings is one key: without the fold, a tool outside
+ * src/y/ that imports a std module by name and a sibling by a path with a
+ * ".." in it splices that module twice -- once per spelling -- and every
+ * name in it is reported as a duplicate definition against itself.
+ * Deterministic, so same-file inputs always yield the same key (sufficient
+ * for seen-dedup). Purely lexical, as the rest of it is: a ".." that would
+ * leave the root is kept, because whether it exists is the filesystem's
+ * answer and this runs before any file is read. */
 Yv *norm_path(Yv *p) {
     Yv *parts = ys_split(p, ys("/"));
     Yv *out = yav(0);
     long i = 0;
     while (i < yv_len(parts)) {
         Yv *seg = ya_get(parts, i);
+        long n = yv_len(out);
         if (ys_eq_lit(seg, ".")) {
+            ;
+        } else if (ys_eq_lit(seg, "..") && n > 0 &&
+                   !ys_eq(ya_get(out, n - 1), ys(".."))) {
+            out = ya_slice(out, 0, n - 1);
             ;
         } else {
             out = ya_push(out, seg);
@@ -3626,120 +3637,27 @@ Yv *infer_decl(Yv *st, Yv *node) {
 }
 
 /* ── feature-use scan (for conditional prologue) ───────────────────────
- * Walk the renamed AST for calls the _start prologue must serve: argv()
- * needs y_argv_init to materialize the [str] array from the raw stack.
- * Everything else (y_alloc, y_print_*, ...) is position-independent.
- * Returns { argv: bool }. */
+ * Whether the _start prologue has to serve argv(): argv() needs
+ * y_argv_init to materialize the [str] array from the raw stack. Everything
+ * else (y_alloc, y_print_*, ...) is position-independent.
+ *
+ * The walk is fv_walk -- the one that collects the names a closure must
+ * capture -- so no node kind can hide a call behind a gap in a second ladder.
+ * The one this replaces had no arm for a K_dot, so `argv().length` (a
+ * field read on a call) left this false: the prologue's y_argv_init was never
+ * emitted, `y_argv` returned an untouched %r15, and the program died on
+ * SIGSEGV with no output whenever the length was the only read of argv.
+ * Matching the *name* rather than a call to it is the safe direction: a false
+ * positive costs the prologue (a few hundred bytes), a false negative crashes. */
 
-Yv *uses_scan_block(Yv *stmts, Yv *out) {
+int uses_argv(Yv *stmts) {
+    Yv *reads = yav(0);
     long i = 0;
     while (i < yv_len(stmts)) {
-        out = uses_scan_node(ya_get(stmts, i), out);
+        reads = fv_walk(ya_get(stmts, i), reads, 1);
         i = i + 1;
     }
-    return out;
-}
-
-Yv *uses_scan_node(Yv *node, Yv *out) {
-    Yv *k = yr_get(node, "k");
-    if (yv_l(k) == K_call) {
-        /* scan callee + args (argv() could nest inside an argument).
-         * ncallee is read three times: the argv test, the id test, the walk. */
-        Yv *ncallee = yr_get(node, "callee");
-        Yv *nargs = yr_get(node, "args");
-        Yv *found = out;
-        if (yv_l(yr_get(ncallee, "k")) == K_id) {
-            if (ys_eq_lit(yr_get(ncallee, "v"), "argv")) {
-                found = yr(1, "argv", yv_bool(1));
-                ;
-            }
-            ;
-        }
-        Yv *o2 = uses_scan_node(ncallee, found);
-        return uses_scan_block(nargs, o2);
-    } else if (yv_l(k) == K_un) {
-        return uses_scan_node(yr_get(node, "e"), out);
-    } else if (yv_l(k) == K_bin) {
-        return uses_scan_node(yr_get(node, "r"),
-                              uses_scan_node(yr_get(node, "l"), out));
-    } else if (yv_l(k) == K_addr || yv_l(k) == K_deref) {
-        return uses_scan_node(yr_get(node, "e"), out);
-    } else if (yv_l(k) == K_kw_if) {
-        return uses_scan_node(yr_get(node, "els"),
-                              uses_scan_node(yr_get(node, "then"),
-                                             uses_scan_node(
-                                                 yr_get(node, "cond"), out)));
-    } else if (yv_l(k) == K_kw_while) {
-        return uses_scan_node(yr_get(node, "body"),
-                              uses_scan_node(yr_get(node, "cond"), out));
-    } else if (yv_l(k) == K_block) {
-        return uses_scan_block(yr_get(node, "stmts"), out);
-    } else if (yv_l(k) == K_decl) {
-        return uses_scan_node(yr_get(node, "v"), out);
-    } else if (yv_l(k) == K_func) {
-        return uses_scan_node(yr_get(node, "body"), out);
-    } else if (yv_l(k) == K_assign) {
-        return uses_scan_node(yr_get(node, "v"), out);
-    } else if (yv_l(k) == K_incdec) {
-        return uses_scan_node(yr_get(node, "tgt"), out);
-    } else if (yv_l(k) == K_opassign) {
-        return uses_scan_node(yr_get(node, "v"),
-                              uses_scan_node(yr_get(node, "tgt"), out));
-    } else if (yv_l(k) == K_store) {
-        return uses_scan_node(yr_get(node, "v"),
-                              uses_scan_node(yr_get(node, "p"), out));
-    } else if (yv_l(k) == K_ret) {
-        return uses_scan_node(yr_get(node, "e"), out);
-    } else if (yv_l(k) == K_array) {
-        return uses_scan_block(yr_get(node, "elems"), out);
-    } else if (yv_l(k) == K_arrrep) {
-        return uses_scan_node(yr_get(node, "v"), out);
-    } else if (yv_l(k) == K_rec) {
-        return uses_scan_block(yr_get(node, "vals"), out);
-    } else if (yv_l(k) == K_map) {
-        return uses_scan_block(yr_get(node, "vals"), out);
-    } else if (yv_l(k) == K_index) {
-        return uses_scan_node(yr_get(node, "idx"),
-                              uses_scan_node(yr_get(node, "arr"), out));
-    } else if (yv_l(k) == K_slice) {
-        return uses_scan_node(yr_get(node, "hi"),
-                              uses_scan_node(yr_get(node, "lo"),
-                                             uses_scan_node(
-                                                 yr_get(node, "arr"), out)));
-    } else if (yv_l(k) == K_idxassign) {
-        return uses_scan_node(yr_get(node, "v"),
-                              uses_scan_node(yr_get(node, "idx"),
-                                             uses_scan_node(
-                                                 yr_get(node, "arr"), out)));
-    } else if (yv_l(k) == K_dotassign) {
-        return uses_scan_node(yr_get(node, "v"),
-                              uses_scan_node(yr_get(node, "obj"), out));
-    } else if (yv_l(k) == K_kw_foreach) {
-        return uses_scan_node(yr_get(node, "body"),
-                              uses_scan_node(yr_get(node, "iter"), out));
-    } else if (yv_l(k) == K_forrange) {
-        return uses_scan_node(yr_get(node, "body"),
-                              uses_scan_node(yr_get(node, "hi"),
-                                             uses_scan_node(
-                                                 yr_get(node, "lo"), out)));
-    } else if (yv_l(k) == K_kw_for) {
-        return uses_scan_node(yr_get(node, "body"),
-                              uses_scan_node(yr_get(node, "step"),
-                                             uses_scan_node(
-                                                 yr_get(node, "cond"),
-                                                 uses_scan_node(
-                                                     yr_get(node, "init"),
-                                                     out))));
-    } else if (yv_l(k) == K_sliceassign) {
-        return uses_scan_node(yr_get(node, "v"),
-                              uses_scan_node(yr_get(node, "hi"),
-                                             uses_scan_node(yr_get(node, "lo"),
-                                                            uses_scan_node(yr_get(node, "arr"), out))));
-    } else if (yv_l(k) == K_rectest || yv_l(k) == K_narrow || yv_l(k) == K_matchend) {
-        return uses_scan_node(yr_get(node, "e"), out);
-    } else {
-        return out;
-    }
+    return name_in(reads, ys("argv"));
 }
 
 /* ── def collection (incl. hoisting) ────────────────────────────────────
@@ -5375,6 +5293,22 @@ Yv *gen_cat(Yv *st, Yv *node, Yv *lt, Yv *rt) {
             st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
             st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_str_cat"))), 0, 0, 0, 0, 0, 0);
             st = emit_insn(st, F_ADD_I_R, 16, R_RSP, 64, 0, 0, 0, 0);
+        } else if (yv_l(yr_get(rt, "k")) == K_tbyte) {
+            /* A byte stringifies as the number it holds: `s[i]` is a byte, so
+             * this is the shape a glyph ramp or a lookup table builds a string
+             * with. Without the arm a byte fell through to the unknown-
+             * operand arm below, which pushes the VALUE where y_str_cat wants
+             * a pointer -- a dereference of 65, and SIGSEGV. gen leaves a byte
+             * zero-extended in %rax, so y_long_tostr takes it as it is. */
+            st = gen(st, yr_get(node, "l"));
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+            st = gen(st, yr_get(node, "r"));
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_long_tostr"))), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_ADD_I_R, 8, R_RSP, 64, 0, 0, 0, 0);
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_str_cat"))), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_ADD_I_R, 16, R_RSP, 64, 0, 0, 0, 0);
         } else if (yv_l(yr_get(rt, "k")) == K_tfloat) {
             st = gen(st, yr_get(node, "l"));
             st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
@@ -5413,6 +5347,17 @@ Yv *gen_cat(Yv *st, Yv *node, Yv *lt, Yv *rt) {
             st = gen(st, yr_get(node, "l"));
             st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
             st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_bool_tostr"))), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_ADD_I_R, 8, R_RSP, 64, 0, 0, 0, 0);
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+            st = gen(st, yr_get(node, "r"));
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_str_cat"))), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_ADD_I_R, 16, R_RSP, 64, 0, 0, 0, 0);
+        } else if (yv_l(yr_get(lt, "k")) == K_tbyte) {
+            /* the mirror of the right-operand byte arm */
+            st = gen(st, yr_get(node, "l"));
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_long_tostr"))), 0, 0, 0, 0, 0, 0);
             st = emit_insn(st, F_ADD_I_R, 8, R_RSP, 64, 0, 0, 0, 0);
             st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
             st = gen(st, yr_get(node, "r"));
@@ -12165,8 +12110,8 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, long wlevel,
         if (yv_len(name) == 0) {
             /* Only pay for argv materialization when the program or one
              * of its linked units uses it. */
-            Yv *want = uses_scan_block(yr_get(ast3, "stmts"),
-                                       yr(1, "argv", yv_bool(0)));
+            int want_argv =
+                uses_argv(yr_get(ast3, "stmts")) || yv_b(yr_get(xt, "argv"));
             st = emit_one_fn(
                 st, lbl_new(ys("_start")), yv_l(yr_get(rm, "uid")),
                 yr(6, "params", yav(0), "ptypes", yav(0), "ret",
@@ -12174,8 +12119,7 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, long wlevel,
                    yr(4, "k", yv_long(K_block), "stmts", main_stmts, "line",
                       yv_long(0), "col", yv_long(0)),
                    "line", yv_long(0), "col", yv_long(0)),
-                1, yv_b(yr_get(want, "argv")) || yv_b(yr_get(xt, "argv")),
-                yav(0), ys(""));
+                1, want_argv, yav(0), ys(""));
             ;
         } else if (yv_len(main_stmts) > 0) {
             init = arch_fn_label(yv_l(yr_get(rm, "uid")), ys("init"));

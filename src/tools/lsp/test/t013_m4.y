@@ -223,8 +223,16 @@ print("range end char " + tostring(at_char(field(h1, "range"), "end")));
 // types. Pinned here because the bug looks like a missing feature.
 print("return type present: " + tostring(index_of(json.as_str(c1)!, ") -> long") > 0));
 
-// A `let` with no annotation has no signature to show, and the hover says just
-// the name rather than inventing a type.
+// A `let` with no annotation has no signature to show, so the hover shows the
+// name -- and, since the checker's type index (LSP.md 9.2 A2), the type the
+// checker INFERRED for the binding above it.
+//
+// The comment this replaces said the hover "says just the name rather than
+// inventing a type", and the not-inventing half is still the point and still the
+// test: `long` here is `types.expr_type` read out of the compiler's own table, not
+// anything this server worked out. It was absent because the server had no types at
+// all, which was a missing capability rather than a piece of honesty. The
+// declaration is still shown underneath, so a reader can tell the two apart.
 let h2 = ask(st, 10, "textDocument/hover", at(10, 13));
 print("base, no annotation: " + json.as_str(field(field(h2, "contents"), "value"))!);
 print("hover on nothing: " + tostring(is_null(ask(st, 11, "textDocument/hover", at(2, 0)))));

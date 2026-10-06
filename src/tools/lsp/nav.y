@@ -3,7 +3,7 @@
 // Stage A, and deliberately so: everything here comes from spans and from
 // declarations the index actually found. Nothing is inferred, nothing is
 // guessed from a type, and a name that is not declared answers "not found"
-// rather than the nearest thing that looks like it. The alternative -- resolve
+// rather than the nearest thing that looks like it. The alternative -- resolve_decl
 // through the compiler's own symbol tables -- is Stage B (LSP.md §9, C2) and
 // costs a compiler change; see LSP.md R5 for why the honest answer is worth
 // having first.
@@ -39,7 +39,7 @@ type Hit = { name: str, off: long, end: long, line: long, ch: long };
 // nothing -- the right answer for a position that is not on a name.)
 //
 // Only K_ident is considered. A keyword or a contextual word under the cursor
-// is not a name to resolve, and a string or a comment is text.
+// is not a name to resolve_decl, and a string or a comment is text.
 def ident_at(sps: [Span], src: str, off: long) -> Hit? {
     let out: Hit? = none;
     let i = 0;
@@ -84,7 +84,11 @@ def in_scope(idx: FileIdx, d: IdxDecl, line: long, ch: long) -> bool {
     let there = scope.pack(d.line, d.ch);
     let opened = true;
     if (d.scope_start >= 0) {
-        let endp = scope.scope_end(idx.closed, d.scope_start);
+        // `d.scope_end` was resolved once per index (scope.y's post-pass), so this
+        // is a field read rather than a lookup: `nav.in_scope` runs once per
+        // candidate of every question, and the highlighter asks about every
+        // identifier in the file.
+        let endp = d.scope_end;
         opened = here >= d.scope_start && (endp < 0 || here <= endp);
     };
     if (!opened) { false }
@@ -119,22 +123,102 @@ def better(a: IdxDecl, b: IdxDecl, line: long, ch: long) -> bool {
 // is the answer, and "first found" is whichever the index happened to record
 // first, which is source order and not scope order.
 def find_decl(idx: FileIdx, name: str, line: long, ch: long) -> IdxDecl? {
-    let best: IdxDecl? = none;
+    find_decl_in(idx, candidates(idx, name), name, line, ch)
+}
+
+// The declarations of one name, as `idx.decls` holds them: source order, which is
+// what `better` reads when two of them are visible at once.
+def candidates(idx: FileIdx, name: str) -> [IdxDecl] {
+    let out: [IdxDecl] = [];
     let i = 0;
     while (i < len(idx.decls)) {
         let d = idx.decls[i];
+        if (d.name == name) { out += d; };
+        i = i + 1;
+    };
+    out
+}
+
+// Every declaration by name, ONCE per request.
+//
+// The resolution rules do not change: `find_decl` is this over one bucket, so a
+// lookup costs the handful of declarations that share the name rather than every
+// declaration in the file.
+//
+// It was 34.5 SECONDS on `src/y/native.y` before, which is the highlighter hanging
+// on any real file: semantic tokens ask about EVERY identifier, and each ask was a
+// walk of all 3,621 declarations -- twice, once for "what does this resolve_decl to"
+// and once for "is this token some declaration's own name". `visible()` and
+// `find_decl` were fine because a completion asks once, which is why nothing
+// measured it until the highlighter started asking about everything.
+def by_name(idx: FileIdx) -> { str => [IdxDecl] } {
+    let out: { str => [IdxDecl] } = {};
+    let i = 0;
+    while (i < len(idx.decls)) {
+        let d = idx.decls[i];
+        // A map read gives the option, so the accumulator is a local: `out[k] + d`
+        // would be adding a record to an OPTION, which the checker refuses rather
+        // than quietly unwrapping.
+        let got = out[d.name];
+        let cur: [IdxDecl] = [];
+        if is_some(got) { cur = got!; };
+        cur += d;
+        out[d.name] = cur;
+        i = i + 1;
+    };
+    out
+}
+
+def find_decl_in(idx: FileIdx, cands: [IdxDecl], name: str, line: long, ch: long) -> IdxDecl? {
+    let best: IdxDecl? = none;
+    let i = 0;
+    while (i < len(cands)) {
+        let d = cands[i];
         if (d.name == name && in_scope(idx, d, line, ch)) {
             if (best == none) {
                 best = some(d);
             } else {
                 let b: IdxDecl = best!;
                 if (better(d, b, line, ch)) { best = some(d); };
-            };
+            }
         };
         i = i + 1;
     };
     best
-};
+}
+
+// What a name resolves to at a position, given the map `by_name` built. The
+// answer is identical to `find_decl`'s -- same `in_scope`, same `better` -- and it
+// is the same question; only the walk is shorter.
+def resolve_decl(byname: { str => [IdxDecl] }, idx: FileIdx, name: str, line: long, ch: long) -> IdxDecl? {
+    let got = byname[name];
+    let cands: [IdxDecl] = [];
+    if is_some(got) { cands = got!; };
+    find_decl_in(idx, cands, name, line, ch)
+}
+
+// The declaration whose own NAME is the token at (line, ch) of length `len2`.
+//
+// Separate from `resolve_decl` because a declaration is not in scope at its own
+// declaration: `in_scope` compares against the body's `{`, which is still to the
+// right, so asking what `n` resolves to AT `def f(n: long)` answers nothing at
+// all. An editor wants that token painted as the parameter it declares, so the
+// question has to be asked differently -- and it is a different question, not a
+// different answer.
+def decl_at(byname: { str => [IdxDecl] }, name: str, line: long, ch: long, len2: long) -> IdxDecl? {
+    let out: IdxDecl? = none;
+    let got = byname[name];
+    if is_some(got) {
+        let cands = got!;
+        let i = 0;
+        while (i < len(cands) && out == none) {
+            let d = cands[i];
+            if (d.line == line && d.ch <= ch && ch + len2 <= d.end_ch) { out = some(d); }
+            else { i = i + 1; };
+        };
+    };
+    out
+}
 
 // The declaration of `name` ANYWHERE in the file, with no position to be in
 // scope of. For the target of a cross-file jump (LSP.md 11.4): the file is not
@@ -219,4 +303,7 @@ def with_prefix(ds: [IdxDecl], prefix: str) -> [IdxDecl] {
     out
 }
 
-export { Hit, ident_at, in_scope, better, find_decl, find_decl_named, visible, with_prefix };
+export {
+  Hit, ident_at, in_scope, better, find_decl, find_decl_in, find_decl_named,
+  by_name, candidates, resolve_decl, decl_at, visible, with_prefix
+};

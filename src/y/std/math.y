@@ -1057,9 +1057,10 @@ let exp_lo: float = -745.133219101941074020;
 // |z| stays at sqrt(2)-1.
 let inv_sqrt2: float = 0.70710678118654752440;
 
-// ln2 as a plain constant: exp2's reduction multiplies the fractional part by
-// it, where the two-part split is for the *whole* multiples of it
-let ln2: float = 0.6931471805599453094172321214581765680755001343602553;
+// exp2's reduction multiplies the fractional part by ln2, which is the
+// constant in the public list above -- the same double, so the two-part
+// `ln2_hi`/`ln2_lo` split is for the *whole* multiples of it only, and
+// declaring ln2 again here would silently shadow the public one.
 
 // Where sin, cos and tan stop having an answer at all: the quadrant must fit a
 // long, and past 9.9999999999995904e18 it does not, so the reduction cannot be

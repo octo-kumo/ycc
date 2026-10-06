@@ -174,11 +174,21 @@ print("range on split: line " + tostring(at_line(field(h1, "range"), "start")) +
       tostring(at_char(field(h1, "range"), "end")));
 
 print("-- hover NOT on a string method");
-// `rec.k` -- a record field after a dot. Stage A cannot type the receiver, so
-// the honest answer is nothing. It is worth checking that the string-method
-// branch did not turn this into an answer: it must not claim `k` is a method.
-print("rec.k: " + tostring(is_null(ask(st, 4, "textDocument/hover", at(5, 12)))));
-// `split` used WITHOUT a dot is the local on line 9, not the method.
+// `rec.k` -- a record field after a dot. This used to be asserted as NOTHING,
+// on the grounds that "Stage A cannot type the receiver, so the honest answer is
+// nothing". With the checker's type index (LSP.md 9.2 A2) the receiver IS typed --
+// `rec` is a record literal -- so the field now answers with its own type, and the
+// old assertion was testing a limitation rather than a rule.
+//
+// What the line is FOR does not change, and is checked just as sharply: the answer
+// must be the field's TYPE and must NOT be a method signature. `is_method_sig`
+// looks for the "(...) -> ..." shape every signature in strm.y has, so an answer
+// that had been mis-routed into the string-method branch would fail here.
+let hk = hover_value(ask(st, 4, "textDocument/hover", at(5, 12)));
+print("rec.k: " + hk.replace("\n", "|"));
+print("rec.k is a type, not a method: " + tostring(hk == "long"));
+// `split` used WITHOUT a dot is the local on line 9, not the method -- and with
+// A2 it also shows the local's own type, which is `long` and not `str`.
 let h4 = hover_value(ask(st, 5, "textDocument/hover", at(9, 11)));
 print("a local of the same name, no dot: " + h4.replace("\n", "|"));
 

@@ -23,7 +23,7 @@ through the enclosing uses. Typical families:
 \item name errors: \ic{undefined variable 'x'};
 \item shape errors: \ic{record has no field 'f'};
 \item operator typing: \ic{'++' needs a number target};
-\item array operators: \ic{'+=' appended elements: expected [long], got long};
+\item array operators: \ic{'+=' appended elements: expected [long], got str};
 \item in-place only: \ic{arrays support only '+=' and '*=' (in place), not '-='};
 \item call errors: \ic{call takes 2 args, got 1};
 \item non-value use: \ic{cannot index long (only arrays and maps)};
@@ -34,8 +34,13 @@ through the enclosing uses. Typical families:
 walks the program recursively (the parser, then the renamer, the
 checker and the emitter), so an expression, a type or a block nested
 deeper than \textbf{1000} is refused with the position that was too
-deep, \ic{line:col: error: an expression nests deeper than 1000, the
-compiler's limit}. Both compilers share the number, so the same program
+deep. The message names what was nested, so there are three of them:
+\ic{an expression nests deeper than 1000, the
+compiler's limit},
+\ic{a type nests deeper than 1000, ...} and
+\ic{a statement nests deeper than 1000, ...} --- so a deep type says
+\ic{a type} and not \ic{an expression}.
+Both compilers share the number, so the same program
 is accepted or refused by each. A long chain counts too, once the
 walks reach it: \ic{1+1+1+...} parses in a loop, but the checker and
 the emitter follow it down, so a chain of a thousand terms is refused
