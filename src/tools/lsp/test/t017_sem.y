@@ -18,7 +18,7 @@
 // "must not be a method" / "no type here" assertions pass for the wrong reason --
 // the request landed on whitespace. See t016_types.
 //
-// It goes through `serve.classify_text` and `sem.tokens_in` rather than a
+// It goes through `serve.semantic_overrides` and `sem.tokens_in` rather than a
 // `semanticTokens/full` request, which is the same path the request handler takes
 // (serve.do_semantic_tokens calls exactly these two) and needs no JSON.
 
@@ -65,7 +65,7 @@ def col_of(line: long, needle: str, at: long) -> long {
 }
 
 let legend = sem.token_types();
-let toks = sem.tokens_in(pos.doc_of(SRC), serve.classify_text(SRC, ""));
+let toks = sem.tokens_in(pos.doc_of(SRC), serve.semantic_overrides(SRC, ""));
 
 // The class of the token covering (line, ch), by the legend's NAME. A name and
 // not a number: a number would let a legend reordering pass unnoticed, which is

@@ -3,7 +3,7 @@
 // Stage A, and deliberately so: everything here comes from spans and from
 // declarations the index actually found. Nothing is inferred, nothing is
 // guessed from a type, and a name that is not declared answers "not found"
-// rather than the nearest thing that looks like it. The alternative -- resolve
+// rather than the nearest thing that looks like it. The alternative -- resolve_decl
 // through the compiler's own symbol tables -- is Stage B (LSP.md §9, C2) and
 // costs a compiler change; see LSP.md R5 for why the honest answer is worth
 // having first.
@@ -39,7 +39,7 @@ type Hit = { name: str, off: long, end: long, line: long, ch: long };
 // nothing -- the right answer for a position that is not on a name.)
 //
 // Only K_ident is considered. A keyword or a contextual word under the cursor
-// is not a name to resolve, and a string or a comment is text.
+// is not a name to resolve_decl, and a string or a comment is text.
 def ident_at(sps: [Span], src: str, off: long) -> Hit? {
     let out: Hit? = none;
     let i = 0;
@@ -147,7 +147,7 @@ def candidates(idx: FileIdx, name: str) -> [IdxDecl] {
 //
 // It was 34.5 SECONDS on `src/y/native.y` before, which is the highlighter hanging
 // on any real file: semantic tokens ask about EVERY identifier, and each ask was a
-// walk of all 3,621 declarations -- twice, once for "what does this resolve to"
+// walk of all 3,621 declarations -- twice, once for "what does this resolve_decl to"
 // and once for "is this token some declaration's own name". `visible()` and
 // `find_decl` were fine because a completion asks once, which is why nothing
 // measured it until the highlighter started asking about everything.
@@ -190,7 +190,7 @@ def find_decl_in(idx: FileIdx, cands: [IdxDecl], name: str, line: long, ch: long
 // What a name resolves to at a position, given the map `by_name` built. The
 // answer is identical to `find_decl`'s -- same `in_scope`, same `better` -- and it
 // is the same question; only the walk is shorter.
-def resolve(byname: { str => [IdxDecl] }, idx: FileIdx, name: str, line: long, ch: long) -> IdxDecl? {
+def resolve_decl(byname: { str => [IdxDecl] }, idx: FileIdx, name: str, line: long, ch: long) -> IdxDecl? {
     let got = byname[name];
     let cands: [IdxDecl] = [];
     if is_some(got) { cands = got!; };
@@ -199,7 +199,7 @@ def resolve(byname: { str => [IdxDecl] }, idx: FileIdx, name: str, line: long, c
 
 // The declaration whose own NAME is the token at (line, ch) of length `len2`.
 //
-// Separate from `resolve` because a declaration is not in scope at its own
+// Separate from `resolve_decl` because a declaration is not in scope at its own
 // declaration: `in_scope` compares against the body's `{`, which is still to the
 // right, so asking what `n` resolves to AT `def f(n: long)` answers nothing at
 // all. An editor wants that token painted as the parameter it declares, so the
@@ -305,5 +305,5 @@ def with_prefix(ds: [IdxDecl], prefix: str) -> [IdxDecl] {
 
 export {
   Hit, ident_at, in_scope, better, find_decl, find_decl_in, find_decl_named,
-  by_name, candidates, resolve, decl_at, visible, with_prefix
+  by_name, candidates, resolve_decl, decl_at, visible, with_prefix
 };

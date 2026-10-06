@@ -73,7 +73,7 @@ foreach (f in ["src/y/tags.y", "src/y/lint.y", "src/y/types.y", "src/y/native.y"
     print("   tokens_in (no classes) " + tostring((tt1 - tt0) / 1000) + " ms  " + tostring(len(base)) + " tokens");
     let t5 = clock_us();
     let h3 = heap_used();
-    let over = serve.classify_text(src, f);
+    let over = serve.semantic_overrides(src, f);
     let t6 = clock_us();
     let h4 = heap_used();
     let n_over = 0;

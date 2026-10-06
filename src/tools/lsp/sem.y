@@ -49,7 +49,7 @@ import pos from "./pos.y";
 //
 // So `type_of` still answers from the span alone -- it must, because a lexer-class
 // is all a span knows -- and the semantic classes arrive as an OVERRIDE table from
-// the caller (`serve.classify`), one entry per span index, 0 meaning "no opinion".
+// the caller (`serve.semantic_overrides`), one entry per span index, 0 meaning "no opinion".
 // That keeps `sem.y` importing only `scan` and `pos`: it cannot import `scope` or
 // `serve` without a cycle, and Y has no function values to hand it a predicate.
 //
@@ -152,7 +152,7 @@ def tokens_in(d: SrcDoc, over: [long]) -> [SemTok] {
         if (s.end > s.off && s.end <= len(src)) {
             let t = type_of(src, s);
             // An override only ever REPLACES a name's class, never a comment's or
-            // a number's: `classify` is handed the identifier spans and has no
+            // a number's: `semantic_overrides` is handed the identifier spans and has no
             // opinion about anything else, and the guard makes that structural
             // rather than a promise.
             if (i < len(over) && over[i] != 0) { t = over[i]; };

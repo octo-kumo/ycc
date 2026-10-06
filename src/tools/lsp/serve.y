@@ -649,19 +649,19 @@ def do_formatting(st: State, id: json.Val, p: { str => json.Val }) -> str {
 // The cost is one `nav.find_decl` per identifier, which is the same lookup
 // go-to-definition does, so this is the price of one extra pass over the names.
 // request-cost.y measures it.
-def classify(d: Doc) -> [long] { classify_text(d.text, d.path) }
+def semantic_classes_of(d: Doc) -> [long] { semantic_overrides(d.text, d.path) }
 
 // The same over a bare text and path, which is what a test wants: a `Doc` is the
 // server's document record and a fixture that only has a buffer should not have to
 // invent one to ask what its identifiers mean.
-def classify_text(text: str, path: str) -> [long] {
+def semantic_overrides(text: str, path: str) -> [long] {
     let out: [long] = [];
     let sps = scan.scan_full(text).spans;
     let idx = scope.index_src(text, path);
     // Once per buffer, not once per identifier: `nav.by_name` buckets the
     // declarations so each lookup walks only the few that share the name. Walking
     // all of them per identifier was 34.5 s on `src/y/native.y` -- the highlighter
-    // hanging on any real file. `nav.resolve` is `nav.find_decl`'s rule over one
+    // hanging on any real file. `nav.resolve_decl` is `nav.find_decl`'s rule over one
     // bucket, so the ANSWER is unchanged; only the walk is shorter.
     let byname = nav.by_name(idx);
     // A MAP, not an array: `index_of` finds a substring in a string, and a linear
@@ -677,7 +677,7 @@ def classify_text(text: str, path: str) -> [long] {
     // start can be carried forward. They were not: each identifier asked for its
     // own position by counting newlines from byte 0, which on a 500 KB file is
     // ~250,000 steps for a name near the end, times ~17,000 names -- and that
-    // quadratic, not the declaration lookup, is what made `classify` take 34
+    // quadratic, not the declaration lookup, is what made `semantic_classes_of` take 34
     // seconds on `src/y/native.y`.
     let i = 0;
     let cur_line = 0;
@@ -711,7 +711,7 @@ def index_of_char(text: str, ch: long, from: long) -> long {
 }
 
 // `sp` is the span; `ln`/`ch` are its 0-based (line, character), carried in from
-// the single forward pass in classify_text rather than recomputed per identifier,
+// the single forward pass in semantic_overrides rather than recomputed per identifier,
 // and `after` is the byte offset just past the name -- which is where a
 // declaration's tail text starts.
 def class_of_span(text: str, sp: Span, idx: FileIdx, byname: { str => [IdxDecl] }, builtins: { str => long }, ln: long, ch: long, after: long) -> long {
@@ -733,7 +733,7 @@ def class_of_span(text: str, sp: Span, idx: FileIdx, byname: { str => [IdxDecl] 
         let mine = nav.decl_at(byname, w, ln, ch, s.end - s.off);
         if (is_some(mine)) { out = decl_class(mine!, text, after); }
         else {
-            let found = nav.resolve(byname, idx, w, ln, ch);
+            let found = nav.resolve_decl(byname, idx, w, ln, ch);
             if is_some(found) { out = decl_class(found!, text, after); };
         };
     };
@@ -796,9 +796,9 @@ def do_semantic_tokens(st: State, id: json.Val, p: { str => json.Val }) -> str {
     let data: [long] = [];
     if is_some(got) {
         let d: Doc = got!;
-        // `classify` first: it is the expensive half and a buffer with no
+        // `semantic_classes_of` first: it is the expensive half and a buffer with no
         // identifiers in it must not pay for the pass that would have found none.
-        data = sem.sem_full_in(pos.doc_of(d.text), classify(d)).data;
+        data = sem.sem_full_in(pos.doc_of(d.text), semantic_classes_of(d)).data;
     }
     let r = json.obj();
     r["data"] = json.jarr(numbers(data));
@@ -1634,5 +1634,5 @@ export {
   do_semantic_tokens, do_document_symbols, numbers, symbols_json,
   end_position, count_lines,
   field_of, members_of, str_field, long_field, params_of,
-  change_count, change_at, classify, classify_text, class_of_span, decl_class, is_function_let, text_from, inferred_at, type_at, none_type, before_dot_col, object_col, record_fields, field_item, field_name, field_type, index_of_char
+  change_count, change_at, semantic_classes_of, semantic_overrides, class_of_span, decl_class, is_function_let, text_from, inferred_at, type_at, none_type, before_dot_col, object_col, record_fields, field_item, field_name, field_type, index_of_char
 };
