@@ -369,7 +369,7 @@ for above; everything else already had its `;`.
   load-bearing case is a compile error, never a silent break, and that is the
   reason the audit could be done by measurement.
 * `args.ar_left` has one value-used append (`s += " VALUE"`), and `args` is
-  a **vendored, byte-identical copy** of `examples/_toolkit/args, which must
+  a **vendored, byte-identical copy** of `test/std/args, which must
   not be edited. It is left as it is: `--help` builds one ~30-byte column per
   declared option (there are eight), so the quadratic term is a few hundred
   bytes once, at startup, on a path that prints the usage text. Trading
@@ -420,7 +420,7 @@ says so.
 ## Toolkit
 
 `args` comes from std. It used to be the frozen toolkit module, copied
-byte-identical from `examples/_toolkit/` and never edited:
+byte-identical from `test/std/` and never edited:
 
 ```
 sha256  cdac36da1cf2cd8551bd06b1bf2a7b608736bc55106e64f5be3b7aa9332e9d28

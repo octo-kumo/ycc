@@ -1,7 +1,17 @@
-# `examples/_toolkit/` — what is left here, and where the rest went
+# `test/std/` — the self-test suites for the std units that have one
 
-Four of the five modules that used to live in this folder now live in **std**,
-and the examples import them:
+**This folder was `examples/_toolkit/` until 2026-10-05, and moving it is
+what the rest of this file is about.** Four of the five modules it used to
+hold now live in **std**; what remained was `fx.y` plus five self-test
+suites, and four of those five test the standard library rather than a
+sibling copy. A verification harness is not an example, and the examples
+corpus says so in its own `.gitignore`: "a verification harness is not an
+example and does not belong in the examples tree" — which is why
+`term_pty_test.py` sat there untracked, denied by the `**/*.py` rule. The
+suites are a gate, so they live under `test/` now, and
+`test/sh/test_std_suites.sh` runs them.
+
+The other four modules now live in **std**, and the examples import them:
 
 | was | is now | an example writes |
 |---|---|---|
@@ -10,25 +20,88 @@ and the examples import them:
 | `time.y` (245 lines) | `std/tui.y`, and `clock_us()` is a builtin | the frame pacer and the fps meter |
 | `args.y` (512 lines) | `std/args.y` | `import args;` — flag parsing, usage text, exit codes |
 
-**`fx.y` is the only module still here.** SUGGESTIONS #1 proposes `std/math` for
-it, and that does not exist, so `fx.y` stays vendored: an example that wants it
-copies the file into its own folder, byte-identical, exactly as before. The
-other fourteen copies in the corpus are unchanged by this migration.
+**`fx.y` is the only module still here, and it stays because `std/math` does
+not yet cover it — not because `std/math` does not exist.** This file used to
+say the opposite. `src/y/std/math.y` landed in the meantime: 1982 lines, 117
+`def`s, and it covers all 23 names `fx.y` overlaps on (`abs acos asin atan
+atan2 ceil clamp cos floor hypot lerp round sin sqrt tan to_int trunc` and the
+rest of the float set).
 
-So this folder holds `fx.y` and five self-test suites — and four of those suites
-now test **std** rather than a sibling copy. `fb_test.y` and `term_test.y`
+Eighteen of `fx.y`’s 36 functions still have no counterpart in `std/math` by
+name, and those are why the file is still vendored rather than deleted:
+
+```
+atan_unit  fdiv  fmod  from_int  imax  imin  mul  mul_wide
+poly_cos   poly_sin  round_pos  to_deg  to_float  to_rad  to_str
+wrap_2pi   wrap_pi  wrap_u
+```
+
+Integer Q30 fixed-point is the other half of it: `std/math.y` is floats and
+`math.to_int` is the one truncating conversion, so a caller wanting exact
+integer trigonometry has nothing to import. Folding the rest of `fx.y` into
+`std/math.y` is a compiler change with a port-gate obligation for `src/c/`,
+not an examples cleanup — deliberately **not** done as part of this move.
+
+So an example that wants `fx.y` copies the file into its own folder,
+byte-identical, exactly as before. All fifteen copies in the corpus —
+fourteen examples plus the canonical one here — are byte-identical at
+sha256 `4b47a9bf` (`wc -l` 694), and each example README pins that pair.
+
+So this folder holds `fx.y` and five self-test suites — and four of those five
+test **std** rather than a sibling copy. `fb_test.y` and `term_test.y`
 exercise the two halves of `std/tui.y`, `time_test.y` its pacer and fps meter,
 `args_test.y` `std/args.y`. They were written against this folder's own copies
 and were carried across by the same rename as everything else; the behaviour
-they assert did not change, so their check counts did not either:
+they assert did not change, so their check counts did not either (measured
+from a run of each, not carried over):
 
 | suite | checks | tests |
 |---|---|---|
 | `fx_test.y` | 292 | `fx.y`, still vendored |
 | `args_test.y` | 61 | `std/args.y`, and the `tui` pacer it paces with |
-| `fb_test.y` | 47 | the surface half of `std/tui.y` |
-| `term_test.y` | 43 | the terminal half of `std/tui.y` — needs a real pty |
+| `fb_test.y` | 41 | the surface half of `std/tui.y` |
+| `term_test.y` | 108 | the terminal half of `std/tui.y` — needs a real pty |
 | `time_test.y` | 47 | the `tui` pacer and fps meter — needs real time |
+
+All five are run by one suite, which builds each with **both** compilers and
+requires them to agree:
+
+```
+(ulimit -S -v 3670016; bash test/sh/test_std_suites.sh) </dev/null
+```
+
+How each is gated was measured, because the three cases are genuinely
+different and guessing would make the gate a coin flip:
+
+* `fx_test.y` and `fb_test.y` are **byte-deterministic** — two consecutive
+  runs of the same binary are identical, 316 and 53 lines — so the whole
+  transcript is diffed against `test/std/golden/`. A changed message fails,
+  not just a failed check.
+* `time_test.y` and `args_test.y` print **measured clock values**
+  (`now_us() is a real monotonic reading: 18167151015`, `500052us`) that
+  differ every run, so they are gated on exit status plus their PASS marker.
+  Their check *verdicts* are stable; only the `[note]` lines move.
+* `term_test.y` needs a **real pty**. `ioctl(2)` `TCGETS` and `TIOCGWINSZ`
+  both return `ENOTTY` on a pipe and a pipe's `read()` hits EOF at once, so
+  run headless it declines to run and every "the keyboard works" claim would
+  be vacuous. `term_pty_test.py` forks the pty, sizes the slave before
+  `execv`, and relays the master.
+
+The PASS markers are **not uniform** and were read off real runs:
+`RESULT: PASS` for `fx_test`/`fb_test`/`time_test`, `all 61 checks passed` for
+`args_test`, `term_test: OK` for `term_test`.
+
+The suite runs `term_test.y` with the driver's `--skip-crash`, which drops
+the two `SIGKILL`-watchdog cases. That is because they are **flaky**, not
+because they are uninteresting: over six runs of one binary, one failed
+`SIGKILL with a watchdog armed: terminal NOT restored` and five passed. A
+watchdog child racing its parent's death is a scheduling question, and a
+gate that fails one run in six teaches its reader to re-run it. Eight
+consecutive runs with the flag are clean and the marker still prints, so the
+other 106 checks are gated as before; run the driver by hand without the flag
+to exercise the watchdog.
+
+To run one by hand, from this folder:
 
 ```
 (ulimit -S -v 3670016; \\
@@ -400,9 +473,13 @@ Nothing here is a bug in Y, and nothing here is patched in the compiler. See
 ## Vendoring
 
 Only `fx.y` is vendored now. Copy it into your example's folder and import it
-there. Do not import `../_toolkit/fx.y`, and do not edit the copy: if you need
-different behaviour, add your own file beside it. Record which revision you
-froze in your README.
+there. Do not import `../../test/std/fx.y`, and do not edit the copy: if you
+need different behaviour, add your own file beside it. Record which revision
+you froze in your README, as a sha256 and a `wc -l` line count —
+`4b47a9bfef0c1e30` and 694 today.
+
+`revendor.py` and `verify-filings.py` do the copying and the checking for the
+corpus; they resolve the canonical file from `test/std/fx.y` now.
 
 `fx.y` has no dependencies beyond itself — no other toolkit module, no std
 module, no asset file — so a vendored copy is exactly this one file.

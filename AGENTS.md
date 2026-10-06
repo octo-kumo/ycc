@@ -120,8 +120,8 @@ behavior or diagnostics), `make bench`, `make bench-ir` (see
 
 ## Test suites (`test/sh/`)
 
-Eighteen suites, run by `test/sh/run_all.sh` (named below in brackets). Most
-compile each program with **both** compilers — the reference side is
+Nineteen suites, run by `test/sh/run_all.sh` (named below in brackets).
+Most compile each program with **both** compilers — the reference side is
 `refs/ycc.ref` — and require the outputs to agree (byte-identical
 binaries, the same warnings, identical program behavior). `test_native.sh`,
 `test_native_examples.sh`, `test_debug.sh`, `test_link.sh`, `test_pkg.sh`,
@@ -208,8 +208,9 @@ very build was just compared (`make test`, `check`, `rebless` do);
 - `test_math.sh` [math] — the accuracy gate for `std/math.y`: reads
   `test/math/ulp_table.txt` (2695 cases — the pinned edges, the overflow and
   flush points, both sides of 1, the poles, the signed zeros, a seeded
-  1500-case spread, and a seeded 240-case spread over [-1, 1] for `asin` and
-  `acos`, the only two with a bounded domain — each line the function, its
+  1884-case spread (1540 of one argument, 344 of two or three), and a seeded
+  240-case spread over [-1, 1] for `asin` and `acos`, the only two with a
+  bounded domain — each line the function, its
   argument(s) and the reference answer as IEEE-754 bit patterns), evaluates
   every case with both compilers and
   **fails on anything more than 1 ulp from the reference**. The gap is counted
@@ -221,6 +222,26 @@ very build was just compared (`make test`, `check`, `rebless` do);
   table from this platform's libm (mpmath is not installed here, and a platform
   libm is the *relevant* reference anyway — the promise is to match what C
   gives), and `gen_kernel.py` fits and checks the kernels' coefficients.
+- `test_std_suites.sh` [std-suites] — the self-test suites for the std units
+  that have one, in `test/std/`: `fx_test.y` (292 checks, the vendored `fx.y`),
+  `args_test.y` (61, `std/args.y` and the pacer it paces with),
+  `fb_test.y` (41, the surface half of `std/tui.y`), `term_test.y` (108,
+  the terminal half — needs a real pty) and `time_test.y` (47, the pacer and
+  fps meter). Each is built with **both** compilers and must compile without
+  a diagnostic. `fx_test` and
+  `fb_test` are byte-deterministic, so the whole transcript is diffed against
+  `test/std/golden/`; `time_test` and `args_test` print measured clock values
+  that differ every run, so they are gated on exit status plus their PASS marker;
+  `term_test` runs under `term_pty_test.py`, which forks a real pty because
+  `TCGETS` and `TIOCGWINSZ` both return `ENOTTY` on a pipe. That driver is run
+  with `--skip-crash`: its two `SIGKILL`-watchdog cases failed 1 run in 6 on this
+  machine, and a gate that re-runs is worse than none. This folder was
+  `examples/_toolkit/` until 2026-10-05; it left the corpus because four of its
+  five modules had moved into `std` and what remained was a verification harness,
+  which `examples/.gitignore` says does not belong there. `fx.y` stays vendored
+  (14 examples hold a byte-identical copy, sha256 `4b47a9bfef0c1e30`, `wc -l` 694)
+  because 18 of its 36 functions have no `std/math` counterpart and it is integer
+  Q30 where `std/math` is float.
 - `test_coverage.sh` [coverage] — static, compiles nothing: every
   diagnostic the compiler can print has its message in a test
   expectation, every builtin in the manual is called by a checked test,
@@ -459,7 +480,10 @@ replaces the std one at link time).
   which is `make check`), `test/y/`
   (`native/` fixtures with expected/exit/stdin, `audit/` edge cases,
   `examples/` regression corpus, `ycc/` unit fixtures, `net/` servers
-  for `test_net.sh`), `test/COVERAGE.md` (feature → test matrix).
+  for `test_net.sh`), `test/std/` (the std self-test suites + their
+  goldens and the pty driver; `test_std_suites.sh`), `test/math/`
+  (`ulp_table.txt` + `ulp_check.y` + the generators; `test_math.sh`),
+  `test/COVERAGE.md` (feature → test matrix).
 - `bench/` — benchmarks + `compare.sh` + `profile.sh` + `compile_ir.sh`
   (see the workflow above).
 

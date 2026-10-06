@@ -30,7 +30,7 @@ beside it, sha256
 re-run, and update both it and `EXPECTED` — the golden file is only meaningful
 against the compiler that produced it.
 
-**Vendored toolkit** — copied byte-identical from `examples/_toolkit/`, never
+**Vendored toolkit** — copied byte-identical from `test/std/`, never
 edited:
 
 `fx.y` and `tui` are not used: there is no fixed-point math here, and the live

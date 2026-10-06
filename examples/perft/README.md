@@ -27,7 +27,7 @@ different paths, same bytes):
 | `perft` (from `perft.y`) | `59bd6d06d3b1b20f01418fb5e8af28eda287d04c0232bf46badba22f24d98221` | 70654 |
 | `queue_test` | `6a4ba67d15f4770189c54b2c2da88453e6658eb68834310a0be9cae8986a9ec6` | 6212 |
 
-Vendored toolkit, byte-identical to `examples/_toolkit/`:
+Vendored toolkit, byte-identical to `test/std/`:
 
 `ref_perft.py` and `queue_test.y` are development/test tools, not part of the
 build; see *Cross-checks* and *The bug in the pool* below.

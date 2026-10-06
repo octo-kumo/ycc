@@ -370,7 +370,7 @@ else in the program — it took a second reader of the input, which is now
 **Nothing is vendored.** This example needs no `fx` (every number here is an
 integer), no `term` (no terminal), no `fb` (no framebuffer), no `args` (three
 flags are read from `argv()` directly) and no `time`. The frozen toolkit in
-`examples/_toolkit/` is byte-identical and untouched; its shas, for the record,
+`test/std/` is byte-identical and untouched; its shas, for the record,
 are `fx.y 4b47a9bfef0c1e30aa2397a24e21ab43753e6994c298f7ccd43c418b87b62058`,
 tui 07135b31109fcecdef5bddf7d0299c9194039d172396b49347630a93a286b6ee`,
 tui 95a7663b7f1c7a90ff3756b51e51644ea952c9b671eeca1012b8f64e18589697`,

@@ -113,7 +113,7 @@ for this example — the 200-request *polling* loop in `--self-test` calls
 that is the path a dashboard runs in.
 
 **The std units.** `args`, `http`, `json` and `tui` are std's, imported
-(`args` and `tui` are byte-identical copies of `examples/_toolkit/` —
+(`args` and `tui` are byte-identical copies of `test/std/` —
 they are std units now, so they are imported rather than vendored into
 this folder):
 

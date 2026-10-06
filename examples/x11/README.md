@@ -21,7 +21,7 @@ broken client would pass.**
 ```
 
 Five files, zero warnings, no toolkit vendored (this example needs nothing from
-`_toolkit/` — the fixed-point maths it wanted turned out to be unnecessary,
+`test/std/` — the fixed-point maths it wanted turned out to be unnecessary,
 because an X11 protocol is integers throughout and there is not one float or
 trigonometry in the whole handshake).
 

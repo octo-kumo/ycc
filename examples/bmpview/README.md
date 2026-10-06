@@ -415,11 +415,11 @@ recorded at build time and re-checked at the end of the task. Compiles with
 **zero warnings**. There is no `make` target and no `src/` change: this is a
 consumer of the compiler.
 
-**The frozen toolkit.** Vendored from `examples/_toolkit/`, unmodified:
+**The frozen toolkit.** Vendored from `test/std/`, unmodified:
 
 | file | sha256 (prefix) | lines |
 |---|---|---|
-| `fx.y` | `4b47a9bfef0c1e30` | 687 |
+| `fx.y` | `4b47a9bfef0c1e30` | 694 |
 
 `fx.y` is vendored because the folder contract names it; nothing here calls it
 (this example has no trigonometry — the view is integer arithmetic), and

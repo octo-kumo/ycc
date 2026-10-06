@@ -233,16 +233,16 @@ os.waitpid(pid, 0)                   # -> 0, terminal restored
 
 ## The std units this uses
 
-Vendored copies, byte-identical to `examples/_toolkit/`, **not edited**:
+Vendored copies, byte-identical to `test/std/`, **not edited**:
 
 | file | sha256 (first 16) | lines | used for |
 |---|---|---|---|
-| `fx.y` | `4b47a9bfef0c1e30` | 687 | *not imported* — see below |
+| `fx.y` | `4b47a9bfef0c1e30` | 694 | *not imported* — see below |
 
 `fx.y` is vendored because the frozen set is the frozen set, and this example
 **does not import it**: Life is integers and booleans, so there is no trig, no
 fixed point and no float anywhere in it. Nothing was changed in any of the five
-copies — the diff against `examples/_toolkit/` is empty.
+copies — the diff against `test/std/` is empty.
 
 **Compiler pin.** `refs/ycc.ref`, sha256
 `c53cc41524a7baa2de88d0f56faf5e2c9d006845ab5fa7a1b70edc53f9df6631` — the sha
