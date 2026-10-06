@@ -266,6 +266,43 @@ effect (`print`, a call, an assignment through a global) must still run --
 "unused import" is not "unreachable module" -- and a global initialized from
 a call cannot be folded, only dropped when unread.
 
+**Map for the attempt** (a first try landed and was reverted; these are the
+things it cost an hour to learn, so they are written down here):
+
+  * **Where the cost is.** Only the four embedded units (`rt`, `str`,
+    `exec`, `prelude`) are linked as Units. Every other std unit -- `math`
+    included -- is SPLICED into the program's unit, so its globals are
+    `prog.globals` (`yg_0_math.pi$206`) and its initializations are in the
+    program's `_start` body, not in a separate unit `init`. A per-UNIT drop
+    looks at `units` and sees `[str, rt]` and nothing else; that is the wrong
+    boundary.
+  * **A packed body cannot be walked.** A Unit from the std pack carries
+    packed bodies, not items, so its references are invisible to an IR scan.
+    Dropping a packed unit's cell as "unread" fails at assembly
+    (`undefined label 'yg_1000000002_y_rl_end$6'`). Any cell-level pass has
+    to stay inside `prog.globals` (a packed unit cannot read a program global
+    anyway -- it was compiled before the program existed).
+  * **Dropping the STORE is not enough.** For the literal constants the
+    pattern is two items (`mov $imm, %rax`; `mov %rax, cell`) and dropping
+    both took 803 of the 6705 bytes, with every answer still right -- but the
+    other ~1600 instructions stayed, orphaned: a non-literal initializer is a
+    whole computation (`mov $bits,%rax`; `movq %rax,%xmm0`; ...; `divsd`)
+    whose only consumer was the store. Dead code that is *unreferenced* still
+    costs, so the pass has to delete the initializer's whole RANGE.
+  * So the two designs that work: **emission-time markers** (in `gen_decl`,
+    for a top-level global, emit a start/end label pair named for the cell,
+    and let the link step delete the range for a dead cell -- two label mints
+    per global, and `-S` noise unless they are stripped), or **const-value
+    substitution** (a `const` global with a literal initializer never gets a
+    cell at all: uses emit the literal, which is the "substitute const values
+    known at compile time" half of the request as well). The second needs an
+    address-taken guard -- `&x` must keep the cell -- which is unit-local for
+    the spliced case and has to be conservative (or a loud assembly failure)
+    for a packed one.
+  * The gate is already in place: `test/sh/test_treeshake.sh` and the ratchet
+    in `test/treeshake/costs.txt`. `math` must come down from 6705 to ~0 and
+    the zeros for `fs` and `struct` must stay zero.
+
 **Cost.** Medium. The link step already computes each unit's `globals` and
 each kept body's label references (`native.y`, `Unit`); this adds "and the
 global cell labels", then filters `global_decls`/the init text by it. The
