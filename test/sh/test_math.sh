@@ -144,6 +144,19 @@ else
     fail "a new repeated computation in src/y/std/math.y (above); it is a defect, or it needs a reason in KNOWN"
 fi
 
+# Is every def in std/math.y reached by something a test checks? The ulp table
+# pins 38 names and the module has 114, and the rest are helpers -- reachable only
+# through a pinned caller, where a wrong answer hides inside the final rounding.
+# audit_coverage.py walks the call graph from the table's names and every
+# `math.NAME(` in test/ and asks what is left over. Nothing is, which is the
+# answer; it is kept as a ratchet, and verified to fail on a planted gap.
+if python3 "$ROOT/test/math/audit_coverage.py" "$ROOT/src/y/std/math.y" >/dev/null 2>&1; then
+    pass "every def in std/math.y is reachable from a checked root"
+else
+    fail "a def in std/math.y is reachable from nothing checked"
+    python3 "$ROOT/test/math/audit_coverage.py" "$ROOT/src/y/std/math.y" 2>&1 | sed 's/^/  /'
+fi
+
 # And the finder itself, or it proves nothing: each detector must find a plant of
 # the thing it claims to find. A detector that silently stops detecting is worse
 # than no detector, because the ratchet above would then read as coverage.
