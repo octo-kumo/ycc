@@ -442,6 +442,55 @@ def to_int(x: float) -> long {
     }
 };
 
+// SUGGESTIONS.md 4: a CHECKED integer parse. The builtin tolong() guesses and
+// every guess is silent -- measured: tolong("12abc") is 12, tolong("") is 0,
+// tolong(" 12 ") is 0 (no whitespace is skipped, though trailing junk is),
+// tolong("0x10") is 0, and a 21-digit number WRAPS
+// (tolong("999999999999999999999") is 3875820019684212735). This accepts
+// exactly one spelling -- an optional + or - then one or more digits, nothing
+// else -- and answers none for anything else, including a value too large for a
+// long, so a caller can tell "not a number" from "0".
+//
+// The magnitude is carried as a NEGATIVE long when the sign is negative: the
+// most negative long has no positive counterpart, so -(acc*10) - d is the way
+// to reach -9223372036854775808 without ever forming 9223372036854775808.
+def parse_long(s: str) -> long? {
+    let n = len(s);
+    if (n == 0) {
+        none
+    } else {
+        let i = 0;
+        let neg = false;
+        if (s[0] == 45) { neg = true; i = 1; }
+        else if (s[0] == 43) { i = 1; };
+        if (i >= n) {
+            none
+        } else {
+            let mag = 0;
+            let ok = true;
+            while (i < n) {
+                let d = s[i] - 48;
+                if (d < 0 || d > 9) {
+                    ok = false;
+                    i = n;
+                } else {
+                    if (neg) {
+                        if (mag < -922337203685477580) { ok = false; }
+                        else if (mag == -922337203685477580 && d > 8) { ok = false; }
+                        else { mag = mag * 10 - d; i = i + 1; };
+                    } else {
+                        if (mag > 922337203685477580) { ok = false; }
+                        else if (mag == 922337203685477580 && d > 7) { ok = false; }
+                        else { mag = mag * 10 + d; i = i + 1; };
+                    };
+                    if (!ok) { i = n; };
+                };
+            };
+            if (!ok) { none } else { some(mag) }
+        }
+    }
+};
+
 // floor(x): the greatest integer <= x. to_int truncates, so a negative x is one
 // too high exactly when it had a fractional part; the zero case returns x
 // itself so that floor(-0.0) is -0.0 and not +0.0 (C preserves the sign).

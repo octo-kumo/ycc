@@ -63,6 +63,17 @@ The design question is only whether `f * 0.5` should convert
 implicitly anywhere a `long` is wanted, or whether it should require
 an explicit `long(f)` form.
 
+### Status (round 63, 2026-10-06) — NARROWED: `tolong(f)` closed the FLOAT half; the IMPLICIT form is what is left
+
+Re-probed on this tree. `tolong(3.7)` is 3 and `tolong(-3.7)` is -3, so the
+"a program cannot truncate a float" half of this entry is answered by the
+escape hatch now that it has a fast path. What is still missing is exactly what
+the **Wanted** block shows: a float in a `long` position is still
+`error: let 'n': expected long, got float`, so `let n: long = f;` and
+`let m: long = f * 0.5;` remain unwritable. That is a checker-and-emitter
+change (`cvttsd2si`) and nothing about it has been started; the entry stays
+open, one paragraph narrower than it was.
+
 ### Status (orchestrator, 2026-10-05) — STILL OPEN, and independently corroborated
 
 Re-read per the protocol while checking #1. This entry is **not** fixed, and
@@ -151,6 +162,38 @@ deterministic across 5 runs. (This is the sha in `refs/SHA256SUMS`; the one
 printed in ORCHESTRATOR.md §3 and §8, `d459af4f…`, is stale — the reference
 has been reblessed since. Worth correcting there.)
 ---
+
+### Status (round 63, 2026-10-06) — THE GAP IS CLOSED AS A LIBRARY FUNCTION; the proposed builtin spelling is not
+
+`std/math.y` now has `parse_long(s: str) -> long?`. It is this entry's
+substance -- accept exactly one spelling (an optional `+`/`-` then one or more
+digits, nothing else) and answer `none` for everything else, a value outside
+the `long` range included -- reached without the compiler change the **Costs**
+paragraph asks for, so it needed no rebless (`math.y` is not one of the four
+embedded units).
+
+The evidence, measured against the builtin rather than asserted:
+
+| input | `tolong(...)` | `parse_long(...)` |
+| --- | --- | --- |
+| `"12abc"` | 12 | `none` |
+| `""` | 0 | `none` |
+| `" 12 "` | 0 | `none` |
+| `"0x10"` | 0 | `none` |
+| `"999999999999999999999"` | 3875820019684212735 | `none` |
+| `"9223372036854775807"` | 9223372036854775807 | 9223372036854775807 |
+| `"-9223372036854775808"` | -9223372036854775808 | -9223372036854775808 |
+
+`test/y/native/t352_parse_long.y` pins all of it and prints the `tolong`
+column beside it, so the contrast cannot drift. A negative magnitude is
+carried as a NEGATIVE long (`-(acc*10) - d`, never `0 - (acc*10 + d)`), because
+the most negative long has no positive counterpart to compute through.
+
+WHAT REMAINS OPEN is this entry's own spelling: `tolong_opt(v)` as a builtin
+with a `str_method` entry in `types.y` and its C twin. That stays a compiler
+change and is the nicety, not the gap. The boundary question the entry raises
+is answered by leaving `tolong` alone: it keeps its documented guessing
+behaviour, and nothing existing changed.
 
 ## 5. A typed syscall-wrapper unit, so out-parameters stop being a width guess
 
@@ -565,6 +608,13 @@ since this entry was filed, and is now
 errors above reproduce identically against it — `examples/life` compiles with
 zero warnings and produces byte-identical output under both pins.*
 ---
+
+### Status (round 63, 2026-10-06) — STILL OPEN, re-confirmed in one line
+
+`let n = 3; let a: [long] = [0; n];` is still
+`error: expected an array size (an integer literal from 0 to 2147483647), got 'n'`.
+A fixed-size array whose length is a literal works (`[0; 3]`); a runtime length
+does not, so this entry is exactly as open as it was written.
 
 ## 9. No way to write one scalar into a `[byte]` at an offset — `struct` has readers that cost nothing and writers that cost 48 bytes a call
 
