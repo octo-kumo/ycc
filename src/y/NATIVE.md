@@ -1321,6 +1321,10 @@ them starts compiling again, so the list can only shrink.
   `LONG_MIN / -1` and `LONG_MIN % -1` (`idiv` raises `#DE` on that pair, so
   divisor `-1` is compiled as a negation / a constant zero instead).
   Negating `LONG_MIN` still wraps to `LONG_MIN`, as the language requires.
+- `%` truncates toward zero (C's) and `mod(a, b)` floors (the sign of `b`);
+  they agree when the remainder is zero or the operands share a sign. Both
+  are exact at `LONG_MIN` (`mod(LONG_MIN, -1)` is 0, not `#DE`), and both
+  trap on a zero divisor.
 - Division/modulo by zero, a negative shift count, OOB indexing,
   unwrap-of-none, OOM each exit cleanly with a message + exit 1.
 - Maps are linear-scan (a `{keys, vals, boxes}` record): fine for small

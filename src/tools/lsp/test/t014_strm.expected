@@ -19,7 +19,7 @@ after `csv.sp`: split
 no `print` after a dot: true
 no `csv` after a dot: true
 -- completion without a dot is still the names
-at an empty prefix: 46
+at an empty prefix: 47
 has print: true
 has csv (declared after this position): false
 no upper in the name list: true

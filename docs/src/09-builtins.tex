@@ -116,6 +116,14 @@ a record still calls the field. \ic{s.length} is a property, so
   \ic{long} it is the widening the language already does implicitly, made
   explicit so that \ic{tolong} and \ic{tofloat} are a pair; a long beyond
   \ic{2\textasciicircum 53} rounds to the nearest double, as widening always does.
+\item[\ic{mod(a, b)}] The \emph{floored} remainder of two \ic{long}s: the
+  result has the sign of \ic{b}, so \ic{mod(-949, 100)} is \ic{51} and
+  \ic{mod(949, -100)} is \ic{-51}. The \ic{\%} operator is C's --- it
+  truncates toward zero and takes the sign of \ic{a}, so \ic{-949 \% 100}
+  is \ic{-49} --- which is the wrong answer for a wrap-around index, a ring
+  buffer or a clock face, and the right one for a quotient. A zero divisor
+  traps, and \ic{mod(x, -1)} is \ic{0} for every \ic{x}, \ic{LONG\_MIN}
+  included, exactly as \ic{\%} is.
 \item[\ic{typeof(v)}] The static type as a printable value
   (\ic{typeof(none)} is \ic{"none"}). The rendering is the one the
   compiler's own diagnostics use, character for character, so what

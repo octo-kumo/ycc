@@ -4695,6 +4695,30 @@ static Yv *typeof_call_go(Yv *st, Yv *node) {
                                  yv_l(yr_get(node, "col")));
                 return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
             }
+        } else if (ys_eq_lit(name, "mod")) {
+            /* mod(a, b) -> long: the FLOORED remainder, whose sign follows
+             * the DIVISOR -- where `%` truncates toward zero and takes the
+             * sign of the dividend, which is the wrong answer for every
+             * wrap-around index (examples/SUGGESTIONS.md #16). Whole numbers
+             * only; a floored modulo on floats is a separate question. */
+            if (yv_len(cargs) != 2) {
+                st = fail(st, ys("mod takes exactly 2 arguments"),
+                          yv_l(yr_get(node, "line")),
+                          yv_l(yr_get(node, "col")));
+                return yr(2, "typ", t_unk(), "st", st);
+            } else {
+                Yv *r0 = typeof_expr(st, ya_get(cargs, 0));
+                st = yr_get(r0, "st");
+                st = expect_type(st, yr_get(r0, "typ"), yr(1, "k", yv_long(K_tlong)),
+                                 ys("mod left"), yv_l(yr_get(node, "line")),
+                                 yv_l(yr_get(node, "col")));
+                Yv *r2 = typeof_expr(st, ya_get(cargs, 1));
+                st = yr_get(r2, "st");
+                st = expect_type(st, yr_get(r2, "typ"), yr(1, "k", yv_long(K_tlong)),
+                                 ys("mod right"), yv_l(yr_get(node, "line")),
+                                 yv_l(yr_get(node, "col")));
+                return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
+            }
         } else if (ys_eq_lit(name, "chr")) {
             if (yv_len(cargs) != 1) {
                 st = fail(st, ys("chr takes exactly 1 argument"),

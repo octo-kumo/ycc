@@ -3597,6 +3597,24 @@ def typeof_call_go(st: TcSt, node: Call) -> TcRes {
                 st = expect_type(st, r2.typ, { k: K.tlong }, "byte_at index", node.line, node.col);
                 tc_res(type_node({ k: K.tlong }), st)
             }
+        } else if (name == "mod") {
+            // mod(a, b) -> long: the FLOORED remainder, whose sign follows
+            // the DIVISOR -- where `%` truncates toward zero and takes the
+            // sign of the dividend, which is the wrong answer for every
+            // wrap-around index (examples/SUGGESTIONS.md #16). Whole numbers
+            // only; a floored modulo on floats is a separate question.
+            if (len(cargs) != 2) {
+                st = fail(st, "mod takes exactly 2 arguments", node.line, node.col);
+                tc_res(t_unk(), st)
+            } else {
+                let r = typeof_expr(st, cargs[0]);
+                st = r.st;
+                st = expect_type(st, r.typ, { k: K.tlong }, "mod left", node.line, node.col);
+                let r2 = typeof_expr(st, cargs[1]);
+                st = r2.st;
+                st = expect_type(st, r2.typ, { k: K.tlong }, "mod right", node.line, node.col);
+                tc_res(type_node({ k: K.tlong }), st)
+            }
         } else if (name == "chr") {
             if (len(cargs) != 1) {
                 st = fail(st, "chr takes exactly 1 argument", node.line, node.col);

@@ -511,6 +511,7 @@ Yv *gen_unwrap(Yv *st, Yv *node);
 Yv *gen_trim(Yv *st, Yv *node);
 Yv *gen_prepend(Yv *st, Yv *node);
 Yv *gen_byte_at(Yv *st, Yv *node);
+Yv *gen_mod(Yv *st, Yv *node);
 Yv *gen_ord(Yv *st, Yv *node);
 Yv *gen_chr(Yv *st, Yv *node);
 Yv *gen_tolong(Yv *st, Yv *node);
@@ -3915,7 +3916,8 @@ Yv *infer_call(Yv *st, Yv *node) {
                a label the arch lines really define). */
             return yr(1, "k", yv_long(K_tlong));
         } else if (ys_eq_lit(name, "tolong") || ys_eq_lit(name, "ord") ||
-                   ys_eq_lit(name, "byte_at") || ys_eq_lit(name, "index_of") ||
+                   ys_eq_lit(name, "byte_at") || ys_eq_lit(name, "mod") ||
+                   ys_eq_lit(name, "index_of") ||
                    ys_eq_lit(name, "last_index_of")) {
             return yr(1, "k", yv_long(K_tlong));
         } else if (ys_eq_lit(name, "tofloat")) {
@@ -4200,7 +4202,7 @@ static Yv *intrinsics(void) {
                 ys("is_some"), ys("unwrap"), ys("opt$test"), ys("opt$val"), ys("trim"), ys("ord"),
                 ys("byte_at"), ys("chr"), ys("tolong"), ys("tofloat"),
                 ys("tostring"),
-                ys("index_of"), ys("prepend"), ys("last_index_of"), ys("join"),
+                ys("index_of"), ys("mod"), ys("prepend"), ys("last_index_of"), ys("join"),
                 ys("split"), ys("puts"), ys("eputs"), ys("clock_us"), ys("time_us"), ys("sleep"),
                 ys("heap_used"), ys("keys"), ys("spawn"), ys("fork"), ys("wait_pid"),
                 ys("mutex"), ys("sem"), ys("lock"), ys("try_lock"), ys("post"), ys("wait"),
@@ -6727,6 +6729,8 @@ Yv *gen_call(Yv *st, Yv *node) {
             return gen_trim(st, node);
         } else if (ys_eq_lit(name, "prepend")) {
             return gen_prepend(st, node);
+        } else if (ys_eq_lit(name, "mod")) {
+            return gen_mod(st, node);
         } else if (ys_eq_lit(name, "byte_at")) {
             return gen_byte_at(st, node);
         } else if (ys_eq_lit(name, "ord")) {
@@ -11042,6 +11046,56 @@ Yv *gen_byte_at(Yv *st, Yv *node) {
     st = emit_insn(st, F_CMP_R_R, R_RDX, 64, R_RAX, 64, 0, 0, 0);
     st = emit_insn(st, F_JGE_L, yv_l(lbl_new(ys("y_oob"))), 0, 0, 0, 0, 0, 0);
     return emit_insn(st, F_MOVZBQ_M_R, R_RCX, R_RAX, 1, 8, -1, R_RAX, 64);
+}
+
+/* mod(a, b): the FLOORED remainder -- the sign of the DIVISOR, where `%` is
+ * C's truncating one. The `%` sequence is emitted first (with its
+ * divide-by-zero trap and its `x % -1` case, both of which mod needs for the
+ * same reason), and then the one adjustment that makes it floor: when the
+ * remainder is NON-ZERO and its sign differs from the divisor's, add the
+ * divisor. `(r ^ b) < 0` is that sign test in one xor -- the two signs differ
+ * exactly when the xor's top bit is set. The `-1` case is why the remainder
+ * is tested for zero first: `x % -1` is 0 for every x, and 0 needs no
+ * adjustment whatever the divisor's sign.
+ *
+ * F_MOV_R_R and F_ADD_R_R take their operands the way the assembler writes
+ * them, SOURCE first (the in-tree assembler is AT&T): `mov %rax, %rcx` is
+ * RCX <- RAX, and the `+` case adds with F_ADD_R_R, R_RCX, R_RAX for the same
+ * reason. Written the other way round the three register moves below put the
+ * divisor's garbage in RCX and mod(5, 3) trapped with "division by zero"; and
+ * the xor must write RDX, not RCX, or the sign test eats the divisor and
+ * mod(-949, 100) comes out -134 instead of 51. */
+Yv *gen_mod(Yv *st, Yv *node) {
+    Yv *args = yr_get(node, "args");
+    st = gen(st, ya_get(args, 0));
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+    st = gen(st, ya_get(args, 1));
+    st = emit_insn(st, F_MOV_R_R, R_RAX, 64, R_RCX, 64, 0, 0, 0);
+    st = emit_insn(st, F_POP_R, R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_TEST_R_R, R_RCX, 64, R_RCX, 64, 0, 0, 0);
+    st = emit_insn(st, F_JZ_L, yv_l(lbl_new(ys("y_div_zero"))), 0, 0, 0, 0, 0, 0);
+    Yv *m1 = next_loc(st);
+    st = yr_get(m1, "st");
+    Yv *m2 = next_loc(st);
+    st = yr_get(m2, "st");
+    st = emit_insn(st, F_CMP_I_R, -1, R_RCX, 64, 0, 0, 0, 0);
+    st = emit_insn(st, F_JNE_L, yv_l(yr_get(m1, "label")), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
+    st = emit_insn(st, F_JMP_L, yv_l(yr_get(m2, "label")), 0, 0, 0, 0, 0, 0);
+    st = emit_label(st, yv_l(yr_get(m1, "label")));
+    st = emit_insn(st, F_CQO, 0, 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_IDIV_R, R_RCX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_MOV_R_R, R_RDX, 64, R_RAX, 64, 0, 0, 0);
+    st = emit_label(st, yv_l(yr_get(m2, "label")));
+    Yv *m3 = next_loc(st);
+    st = yr_get(m3, "st");
+    st = emit_insn(st, F_TEST_R_R, R_RAX, 64, R_RAX, 64, 0, 0, 0);
+    st = emit_insn(st, F_JZ_L, yv_l(yr_get(m3, "label")), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_MOV_R_R, R_RAX, 64, R_RDX, 64, 0, 0, 0);
+    st = emit_insn(st, F_XOR_R_R, R_RCX, 64, R_RDX, 64, 0, 0, 0);
+    st = emit_insn(st, F_JNS_L, yv_l(yr_get(m3, "label")), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_ADD_R_R, R_RCX, 64, R_RAX, 64, 0, 0, 0);
+    return emit_label(st, yv_l(yr_get(m3, "label")));
 }
 
 Yv *gen_ord(Yv *st, Yv *node) {

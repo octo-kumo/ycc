@@ -3018,7 +3018,7 @@ def infer_call(st: EmitSt, node: Call) -> Type {
             // the checker; native.y check_os_call_names makes sure each name is
             // a label the arch lines really define).
             type_node({ k: K.tlong })
-        } else if (name == "tolong" || name == "ord" || name == "byte_at" || name == "index_of" || name == "last_index_of") {
+        } else if (name == "tolong" || name == "ord" || name == "byte_at" || name == "mod" || name == "index_of" || name == "last_index_of") {
             normtype({ k: K.tlong })
         } else if (name == "tofloat") {
             normtype({ k: K.tfloat })
@@ -3269,6 +3269,7 @@ def name_in(xs: [str], n: str) -> bool {
 let INTRINSICS: [str] = ["print", "syscall", "len", "push", "some", "is_some", "unwrap",
              "opt$test", "opt$val",
              "trim", "ord", "byte_at", "chr", "tolong", "tofloat", "tostring", "index_of",
+             "mod",
              "prepend",
              "last_index_of", "join", "split", "puts", "eputs", "clock_us",
              "time_us", "sleep", "heap_used", "keys", "spawn", "fork", "wait_pid",
@@ -5651,6 +5652,8 @@ def gen_call(st: EmitSt, node: Call) -> EmitSt {
             gen_trim(st, node)
         } else if (name == "prepend") {
             gen_prepend(st, node)
+        } else if (name == "mod") {
+            gen_mod(st, node)
         } else if (name == "byte_at") {
             gen_byte_at(st, node)
         } else if (name == "ord") {
@@ -9560,6 +9563,58 @@ def gen_byte_at(st: EmitSt, node: Call) -> EmitSt {
     st = emit_insn(st, insn.F_CMP_R_R, insn.R_RDX, 64, insn.R_RAX, 64, 0, 0, 0);
     st = emit_insn(st, insn.F_JGE_L, lbl_new("y_oob"), 0, 0, 0, 0, 0, 0);
     emit_insn(st, insn.F_MOVZBQ_M_R, insn.R_RCX, insn.R_RAX, 1, 8, -1, insn.R_RAX, 64)
+};
+
+// mod(a, b): the FLOORED remainder -- the sign of the DIVISOR, where `%` is
+// C's truncating one. The `%` sequence is emitted first (with its
+// divide-by-zero trap and its `x % -1` case, both of which mod needs for the
+// same reason), and then the one adjustment that makes it floor: when the
+// remainder is NON-ZERO and its sign differs from the divisor's, add the
+// divisor. `(r ^ b) < 0` is that sign test in one xor -- the two signs differ
+// exactly when the xor's top bit is set. The `-1` case is why the remainder
+// is tested for zero first: `x % -1` is 0 for every x, and 0 needs no
+// adjustment whatever the divisor's sign.
+def gen_mod(st: EmitSt, node: Call) -> EmitSt {
+    let args: [Node] = node.args;
+    st = gen(st, args[0]);
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    st = gen(st, args[1]);
+    // F_MOV_R_R and F_ADD_R_R take their operands the way the assembler
+    // writes them, SOURCE first (the in-tree assembler is AT&T): `mov %rax,
+    // %rcx` is RCX <- RAX, and the `+` case adds with F_ADD_R_R, R_RCX,
+    // R_RAX for the same reason. Written the other way round the three
+    // register moves below put the divisor's garbage in RCX and mod(5, 3)
+    // trapped with "division by zero".
+    st = emit_insn(st, insn.F_MOV_R_R, insn.R_RAX, 64, insn.R_RCX, 64, 0, 0, 0);
+    st = emit_insn(st, insn.F_POP_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_TEST_R_R, insn.R_RCX, 64, insn.R_RCX, 64, 0, 0, 0);
+    st = emit_insn(st, insn.F_JZ_L, lbl_new("y_div_zero"), 0, 0, 0, 0, 0, 0);
+    let m1 = next_loc(st);
+    st = m1.st;
+    let m2 = next_loc(st);
+    st = m2.st;
+    st = emit_insn(st, insn.F_CMP_I_R, -1, insn.R_RCX, 64, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_JNE_L, m1.label, 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
+    st = emit_insn(st, insn.F_JMP_L, m2.label, 0, 0, 0, 0, 0, 0);
+    st = emit_label(st, m1.label);
+    st = emit_insn(st, insn.F_CQO, 0, 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_IDIV_R, insn.R_RCX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_R_R, insn.R_RDX, 64, insn.R_RAX, 64, 0, 0, 0);
+    st = emit_label(st, m2.label);
+    let m3 = next_loc(st);
+    st = m3.st;
+    st = emit_insn(st, insn.F_TEST_R_R, insn.R_RAX, 64, insn.R_RAX, 64, 0, 0, 0);
+    st = emit_insn(st, insn.F_JZ_L, m3.label, 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_R_R, insn.R_RAX, 64, insn.R_RDX, 64, 0, 0, 0);
+    // xor %rcx, %rdx: the divisor is in RCX and the adjustment below still
+    // needs it, so the SIGN TEST goes into RDX (written the other way round
+    // RCX was overwritten by the test itself, and mod(-949, 100) came out
+    // -134 instead of 51)
+    st = emit_insn(st, insn.F_XOR_R_R, insn.R_RCX, 64, insn.R_RDX, 64, 0, 0, 0);
+    st = emit_insn(st, insn.F_JNS_L, m3.label, 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_ADD_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0);
+    emit_label(st, m3.label)
 };
 
 def gen_ord(st: EmitSt, node: Call) -> EmitSt {
