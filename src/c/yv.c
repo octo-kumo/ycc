@@ -253,8 +253,15 @@ int ys_eq(const Yv *a, const Yv *b) {
 
 int ys_eq_lit(const Yv *a, const char *lit) {
     if (!a || a->tag != Y_STR) return 0;
-    size_t n = strlen(lit);
-    return a->u.s.n == n && memcmp(a->u.s.p, lit, n) == 0;
+    /* A byte loop, not strlen + memcmp: this is on the hot path of every
+     * comparison of a Y string against a keyword or a field name (2.2% of
+     * cycc's instructions was strlen alone, measured with callgrind). */
+    const unsigned char *p = (const unsigned char *)a->u.s.p;
+    size_t i = 0;
+    for (; i < a->u.s.n; i++) {
+        if (lit[i] == '\0' || p[i] != (unsigned char)lit[i]) return 0;
+    }
+    return lit[i] == '\0';
 }
 
 int ys_cmp(const Yv *a, const Yv *b) {
@@ -658,10 +665,22 @@ Yv *yr(size_t n, ...) {
     return v;
 }
 
+/* Equality of two NUL-terminated record keys, INLINE. The keys are short
+ * literals and a record holds a handful of them, so what this removes is not
+ * the scan but the CALL: `strcmp` was 36% of cycc's instructions (callgrind,
+ * compiling test/y/native/t100_tail_call_space.y), because the C copy reaches
+ * every record field through yr_get while the Y compiler's own field reads
+ * are native offset loads. The C copy is the slower compiler by design; this
+ * is the one place where the gap was a library call rather than the model. */
+static inline int yk_eq(const char *a, const char *b) {
+    while (*a && *a == *b) { a++; b++; }
+    return *a == *b;
+}
+
 Yv *yr_get(const Yv *m, const char *key) {
     if (m && m->tag == Y_REC) {
         for (size_t i = 0; i < m->u.r.len; i++) {
-            if (strcmp(m->u.r.keys[i], key) == 0) return m->u.r.vals[i];
+            if (yk_eq(m->u.r.keys[i], key)) return m->u.r.vals[i];
         }
     }
     return yv_none();
@@ -672,7 +691,7 @@ Yv *yr_get(const Yv *m, const char *key) {
 Yv *yr_set(Yv *m, const char *key, Yv *v) {
     if (!m || m->tag != Y_REC) return m;
     for (size_t i = 0; i < m->u.r.len; i++) {
-        if (strcmp(m->u.r.keys[i], key) == 0) {
+        if (yk_eq(m->u.r.keys[i], key)) {
             m->u.r.vals[i] = v;
             return m;
         }
@@ -687,7 +706,7 @@ Yv *yr_set(Yv *m, const char *key, Yv *v) {
 int yr_has(const Yv *m, const char *key) {
     if (!m || m->tag != Y_REC) return 0;
     for (size_t i = 0; i < m->u.r.len; i++) {
-        if (strcmp(m->u.r.keys[i], key) == 0) return 1;
+        if (yk_eq(m->u.r.keys[i], key)) return 1;
     }
     return 0;
 }

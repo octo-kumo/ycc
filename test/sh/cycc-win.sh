@@ -25,6 +25,21 @@ LIN="${LIN:-$ROOT/cycc}"
 WIN="${WIN:-$ROOT/cycc.exe}"
 WINE="${WINE:-wine}"
 MEM=3670016
+# A STALE cycc.exe is the one way this gate lies, and it did: with the binary
+# from before a round's changes it compared those changes' absence against the
+# Linux build of NOW and printed 53 "DIFF ... (ELF bytes differ)" lines that
+# read as a port regression. The header says "make cycc.exe &&" -- but a gate
+# that depends on the reader remembering is not a gate, so with the DEFAULT
+# paths (an overridden $LIN/$WIN is somebody else's build and not ours to
+# touch) make is asked, and a rebuild is SAID rather than silent.
+if [ "$LIN" = "$ROOT/cycc" ] && [ "$WIN" = "$ROOT/cycc.exe" ] &&
+   command -v make >/dev/null 2>&1; then
+    lb=$(stat -c %Y "$LIN" 2>/dev/null || echo 0)
+    wb=$(stat -c %Y "$WIN" 2>/dev/null || echo 0)
+    ( cd "$ROOT" && make cycc cycc.exe >/dev/null 2>&1 ) || true
+    [ "$(stat -c %Y "$LIN" 2>/dev/null || echo 0)" = "$lb" ] || echo "cycc-win: rebuilt a stale cycc"
+    [ "$(stat -c %Y "$WIN" 2>/dev/null || echo 0)" = "$wb" ] || echo "cycc-win: rebuilt a stale cycc.exe"
+fi
 if [ ! -x "$LIN" ]; then echo "no Linux cycc at $LIN — run make" >&2; exit 2; fi
 if [ ! -x "$WIN" ]; then echo "no cycc.exe at $WIN — run make cycc.exe" >&2; exit 2; fi
 if ! command -v "$WINE" >/dev/null 2>&1; then echo "skipped: no wine"; exit 0; fi

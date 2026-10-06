@@ -1,6 +1,27 @@
 GCC=gcc
 # The C compiler is a 1:1 copy of the Y compiler (see PORTING.md): it compiles .y straight to a native ELF exactly like ycc.
-CFLAGS=-Wall -Wextra -std=gnu99 -g
+# -O1 is about the TEST LOOP, not the shipped artifact (that is `ycc`, which
+# cycc only has to agree with byte for byte). Every suite compiles its whole
+# corpus with cycc as well as with the Y compiler, and `make rebless` is
+# mostly that: measured at 13.0 s with -O0, the port suite is nearly all of it,
+# and cycc is the slow half -- ~11x the Y compiler's per-compile time
+# (20.5 ms against 1.8 ms on test/y/native/t100_tail_call_space.y).
+#
+# Two things made cycc slow, and neither was the value model:
+#   - it was built with no -O flag at all, so -O0;
+#   - 65% of its instructions were record lookups (callgrind), whose biggest
+#     single piece was a LIBC strcmp PER FIELD ACCESS -- 36% on its own --
+#     because the C copy reaches every record field through yr_get while the
+#     Y compiler's own field reads are native offset loads. That compare is
+#     inlined in yv.c now.
+# Together: 206.7M -> 126.3M instructions compiling that fixture (-39%), 100
+# compiles 2.05 s -> 1.33 s, the port suite 16 s (-j 4) -> 7.7 s (-j 8), and
+# rebless 13.0 s -> 9.4 s. At -O0 the inline compare alone buys NOTHING
+# (2.07 s): the loop needs the optimizer, so the flag and the inline are one
+# change. -O2 measured no better on the suite (7.9 s) for a 9.4 s build
+# instead of 5.7 s, so -O1. What says none of this changed what cycc EMITS is
+# the port gate: 553 fixtures, twice (default and -W 1), byte-identical.
+CFLAGS=-Wall -Wextra -std=gnu99 -O1 -g
 CYC_SRCS=$(wildcard src/c/*.c)
 CY_HDRS=$(wildcard src/c/*.h)
 CYCC=cycc
