@@ -146,7 +146,15 @@ def cov_corpus(argv: [str]) -> [str] {
         let out: [str] = [];
         let i = 2;
         while (i < len(argv)) {
-            out += argv[i] + " -o /tmp/ytest-cov/out";
+            // The EXISTENCE CHECK BELONGS HERE, on the path, and not in
+            // coverage(): by the time the corpus is a command string it ends
+            // in " -o /tmp/ytest-cov/out", and testing THAT for existence
+            // rejects every valid path too. (Tested: it did.)
+            if (!fs.exists(argv[i])) {
+                eputs("ytest: no such program: " + argv[i]);
+            } else {
+                out += argv[i] + " -o /tmp/ytest-cov/out";
+            };
             i = i + 1;
         };
         return out;
@@ -229,11 +237,22 @@ def coverage(argv: [str]) -> long {
     };
     make_proj();
     print("== coverage: running " + tostring(len(corpus)) + " program(s) ==");
+    // A CORPUS PATH THAT DOES NOT EXIST USED TO BE INVISIBLE. The compiler's
+    // output is discarded here, so `./ytest coverage test/y/examples/hello.y`
+    // -- a file that is called helloworld.y -- ran nothing, compiled nothing,
+    // and reported "1.3% over 20 files" as if that were a measurement. A
+    // measurement tool that silently measures nothing is worse than one that
+    // fails, so a missing path is said out loud and a corpus in which NOTHING
+    // exists is an error.
     let c = 0;
     while (c < len(corpus)) {
         sh("(ulimit -v 3670016; /tmp/ytest-cov/cycc-cov " + corpus[c]
          + ") >/dev/null 2>&1");
         c = c + 1;
+    };
+    if (len(corpus) == 0) {
+        eputs("ytest: nothing to measure -- every corpus path was missing");
+        return 1;
     };
     let names = c_sources();
     print("== coverage: gcov over " + tostring(len(names)) + " source files ==");
@@ -321,4 +340,9 @@ def main(argv: [str]) -> long {
     return usage();
 };
 
-main(argv());
+// exit(main(...)), NOT a bare main(...). This file had the exact bug the math
+// gate's own header documents: a statement whose value is discarded, so the 1
+// a failure produced went nowhere and ./ytest ALWAYS exited 0. `./ytest suites`
+// reporting "0 failed" was a number nothing could act on, and coverage's new
+// "nothing to measure" error was swallowed too.
+exit(main(argv()));

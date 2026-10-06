@@ -285,6 +285,27 @@ branch-disjointness false positive.
   harness has no tty for wine, so a console handle (as opposed to a pipe) is
   unverified, and `test_std_suites.sh`'s `term_test` needs a pty and only runs
   against ELF.
+- **`./ytest` COULD NOT FAIL, and its coverage measured nothing silently
+  (round 57).** Two bugs in Y's own test framework, both the same shape as
+  things this project has already been bitten by:
+    * `ytest.y` ended in a bare `main(argv());` -- a statement whose value is
+      discarded -- so the process ALWAYS exited 0. That is verbatim the bug the
+      math gate's header documents ("the 1 a failure produced went nowhere, the
+      process always exited 0, and the gate could not fail"), and it meant
+      `./ytest suites` reporting "0 failed" was a number nothing could act on.
+      It is `exit(main(argv()));` now, and the three paths check out: usage 1,
+      a missing corpus 1, a valid corpus 0.
+    * `./ytest coverage test/y/examples/hello.y` -- a file that is actually
+      called `helloworld.y` -- compiled NOTHING and reported "1.3% over 20
+      files" as if it were a measurement, because the corpus runs discard the
+      compiler's output. A missing path is now named, and a corpus in which
+      every path is missing is an error rather than a number.
+      And the existence check has to be on the PATH: the corpus entries are
+      command strings ending in " -o /tmp/ytest-cov/out", so testing the entry
+      for existence rejects every valid path as well. (Tested: it did.)
+  The numbers this tool reports were therefore always plausible and never
+  actionable. With a real corpus it is 36.3% of the C copy over one example, and
+  41.3% over two.
 - **`argv()` ON PE IS A NULL FAULT, and the map for fixing it (round 56,
   measured).** `t198_argv_only_length` page-faults on a read of address 0 at
   0x140001328, and `t20_files_argv` fails the same way. `argv()` is
