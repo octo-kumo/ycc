@@ -514,38 +514,6 @@ y_os_random:
     mov $-38, %rax
     ret
 #=== add: y_w_path ===
-# y_w_path(dst, rel, len) -> the number of UTF-16 units written, or -1, with
-# the three arguments in %rdi, %rsi and %rcx -- %rcx and not %rdx, because every
-# caller is a `replace:` block that has just loaded the layer's own argument
-# slots and already holds the length there. Getting that wrong assembles, runs
-# and fails as an unwrap of none, which is a whole debugging session for one
-# register. Builds
-# an ABSOLUTE NT path at dst: the `\??\` prefix, then the current directory's
-# own DOS path out of the PEB, then `rel` widened byte by byte.
-#
-# It exists as one helper because every path-taking call needs exactly this, and
-# WINDOWS DOES NOT DO IT FOR US. A relative name handed to the kernel answers
-# STATUS_OBJECT_PATH_SYNTAX_BAD: resolving one against the process's current
-# directory is user-space work (RtlDosPathNameToNtPathName) and there is no
-# user space here, just syscalls. Two further details, both learned by watching
-# a real call fail:
-#
-#   * the PEB's CURDIR.DosPath is a UNICODE_STRING at ProcessParameters+56 whose
-#     Length (BYTES) is at +56 and whose Buffer is at +64. It usually ends in a
-#     backslash already, and a doubled one is not harmless, so the separator is
-#     added only if the last unit copied is not one.
-#   * `/` must become `\`. `pe-fs.expected` (no separator) worked while
-#     `src/y/std/fs.y` answered "no such file", which is a confusing way to
-#     learn that NT does not take the Unix separator.
-#
-# Only ASCII is accepted: a byte >= 128 returns -1 rather than being mangled,
-# because a wrong path is worse than a refused one. An empty relative path is
-# also -1: `\??\CWD\` alone is the current directory, and that is not what
-# fs.exists("") answers on Linux.
-#
-# Callers get the unit count so they can fill UNICODE_STRING.Length (in BYTES,
-# without the terminator, which MaximumLength leaves room for).
-#=== add: y_w_path ===
 y_w_path:
     push %rbp
     mov %rsp, %rbp
@@ -598,20 +566,91 @@ ywp_loop:
     cmp %rcx, %r9
     jge ywp_done
     movzbq (%rsi,%r9,1), %rax
+    cmp $47, %rax
+    je ywp_adv
+    cmp $92, %rax
+    je ywp_adv
+    jmp ywp_comp
+ywp_adv:
+    add $1, %r9
+    jmp ywp_loop
+ywp_comp:
+    mov %r9, %r10
+ywp_scan:
+    cmp %rcx, %r9
+    jge ywp_have
+    movzbq (%rsi,%r9,1), %rax
+    cmp $47, %rax
+    je ywp_have
+    cmp $92, %rax
+    je ywp_have
+    add $1, %r9
+    jmp ywp_scan
+ywp_have:
+    mov %r9, %rdx
+    sub %r10, %rdx
+    cmp $1, %rdx
+    jne ywp_two
+    movzbq (%rsi,%r10,1), %rax
+    cmp $46, %rax
+    je ywp_loop
+ywp_two:
+    cmp $2, %rdx
+    jne ywp_pre
+    movzbq (%rsi,%r10,1), %rax
+    cmp $46, %rax
+    jne ywp_pre
+    mov %r10, %rax
+    add $1, %rax
+    movzbq (%rsi,%rax,1), %rax
+    cmp $46, %rax
+    je ywp_pop
+ywp_pre:
+    movzbq -2(%rdi), %rax
+    cmp $92, %rax
+    je ywp_copy
+    movb $92, (%rdi)
+    movb $0, 1(%rdi)
+    add $2, %rdi
+    add $1, %r8
+    cmp $1000, %r8
+    jg ywp_e_long
+ywp_copy:
+    xor %r11, %r11
+ywp_copyc:
+    cmp %rdx, %r11
+    jge ywp_loop
+    mov %r10, %rax
+    add %r11, %rax
+    movzbq (%rsi,%rax,1), %rax
     cmp $128, %rax
     jge ywp_e_hi
     cmp $47, %rax
-    jne ywp_keep
+    jne ywp_copyk
     mov $92, %rax
-ywp_keep:
+ywp_copyk:
     movb %al, (%rdi)
     movb $0, 1(%rdi)
     add $2, %rdi
     add $1, %r8
-    add $1, %r9
     cmp $1000, %r8
     jg ywp_e_long
-    jmp ywp_loop
+    add $1, %r11
+    jmp ywp_copyc
+ywp_pop:
+    cmp $7, %r8
+    jle ywp_loop
+    sub $2, %rdi
+    sub $1, %r8
+ywp_popscan:
+    cmp $7, %r8
+    jle ywp_loop
+    movzbq -2(%rdi), %rax
+    cmp $92, %rax
+    je ywp_loop
+    sub $2, %rdi
+    sub $1, %r8
+    jmp ywp_popscan
 ywp_done:
     movb $0, (%rdi)
     movb $0, 1(%rdi)
@@ -631,11 +670,6 @@ ywp_e_hi:
     ret
 ywp_e_long:
     mov $-4, %rax
-    mov %rbp, %rsp
-    pop %rbp
-    ret
-ywp_fail:
-    mov $-1, %rax
     mov %rbp, %rsp
     pop %rbp
     ret
@@ -1518,6 +1552,13 @@ yogc_fail:
 # that read, so Length became a stray character from the copy loop and the
 # directory came out as the wrong path -- with chdir still reporting success.
 #
+# The trailing separator is added only if the path does not already end in one.
+# y_w_path leaves a `\` behind when it pops a `..`, so appending unconditionally
+# produced `...\w49\\`; fs.cwd drops ONE trailing separator, as getcwd(2) does,
+# and therefore reported `Z:/tmp/ts/w49/`. Every relative path after that was
+# resolved against a directory whose name ends in a slash, and removing a file
+# in it failed while every other operation on it succeeded.
+#
 # Frame: the path at -2200 (y_w_path writes upward), the UNICODE_STRING at
 # -2320, the FILE_NETWORK_OPEN_INFORMATION at -2280 (its 56 bytes end at -2225,
 # below the buffer's start), the OBJECT_ATTRIBUTES at -2380, the allocated base
@@ -1607,9 +1648,16 @@ yocd_copy:
 yocd_tail:
     mov %r9, %rax
     add %rax, %rax
+    cmp $0, %rax
+    je yocd_sep
+    movzbq -2(%rdi,%rax,1), %rdx
+    cmp $92, %rdx
+    je yocd_after
+yocd_sep:
     movb $92, (%rdi,%rax,1)
     movb $0, 1(%rdi,%rax,1)
     add $2, %rax
+yocd_after:
     movb $0, (%rdi,%rax,1)
     movb $0, 1(%rdi,%rax,1)
     mov %rax, %r11

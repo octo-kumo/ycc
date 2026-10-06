@@ -54,6 +54,10 @@ print(fs.exists("pefsrt.txt"));
 // (that is user-space work), so a chdir("..") that Linux accepts fails here, and
 // a fixture both targets must agree on is the wrong place to pin that down.
 print(fs.cwd().length > 0);
+// "." and ".." are resolved by the layer, not the kernel: NT takes a relative
+// name literally, so these are normalised in y_w_path.
+print(fs.exists("./pefsrt_dir/inner.txt"));
+print(fs.is_dir("pefsrt_dir/../pefsrt_dir"));
 // list_dir: one file, so the answer does not depend on the order a directory
 // happens to come back in. "." and ".." are not listed on either target.
 print(fs.make_dir("pefsrt_ls"));
@@ -69,6 +73,10 @@ print(fs.cwd().ends_with("pefsrt_cd"));
 print(fs.chdir("pefsrt_missing"));
 print(fs.cwd().ends_with("pefsrt_cd"));
 print(fs.cwd().length > 0);
+// "." and ".." are resolved by the layer, not the kernel: NT takes a relative
+// name literally, so these are normalised in y_w_path.
+print(fs.exists("./pefsrt_dir/inner.txt"));
+print(fs.is_dir("pefsrt_dir/../pefsrt_dir"));
 // list_dir: one file, so the answer does not depend on the order a directory
 // happens to come back in. "." and ".." are not listed on either target.
 print(fs.make_dir("pefsrt_ls"));

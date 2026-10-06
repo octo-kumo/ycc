@@ -111,8 +111,13 @@ echo "pe-gate: $YCC --target=windows $FSSRC"
 if ! (cd "$ROOT" && "$YCC" --target=windows "$FSSRC" -o "$OUT/fs.exe"); then
     echo "pe-gate: FAIL (the compiler refused the file-path program)"; exit 1
 fi
-( cd "$OUT" && rm -f peg_fs.txt; ulimit -v 3670016 2>/dev/null; WINEARCH=win64 WINEDEBUG=-all \
-    timeout 60 wine ./fs.exe >fs.out 2>fs.err )
+# A FRESH directory, because this program lists "." and a leftover from an
+# earlier check changes the answer. That is a property of the test, not of the
+# layer: a listing is only meaningful against a directory whose contents are
+# known.
+mkdir -p "$OUT/fspath"
+( cd "$OUT/fspath" && rm -f peg_fs.txt; ulimit -v 3670016 2>/dev/null; WINEARCH=win64 WINEDEBUG=-all \
+    timeout 60 wine ../fs.exe >"$OUT/fs.out" 2>"$OUT/fs.err" )
 frc=$?
 # KNOWN GAP, loud on purpose: wsys.s has Windows bodies for only NINE of the
 # thirteen named-layer entries fs.y calls (read, write, stat, openat, close,
@@ -127,15 +132,13 @@ frc=$?
 # reports rather than fails, so the rest of this file stays a gate.
 if [ $frc -ne 0 ]; then
     grep -v '^$' "$OUT/fs.err" | head -3 | sed 's/^/    ! /'
-    echo "pe-gate: file path is a KNOWN GAP (exited $frc): the only difference left is that NT does not resolve '.' or '..' (all 13 bodies exist)"
-    exit 0
+    echo "pe-gate: FAIL (the file-path program exited $frc)"; exit 1
 fi
 if diff -u "$FSEXP" "$OUT/fs.out" >"$OUT/fs.diff"; then
     echo "pe-gate: file path ok ($(wc -l <"$FSEXP") lines, PE == the Linux output)"
 else
     sed 's/^/    /' "$OUT/fs.diff" | head -6
-    echo "pe-gate: file path is a KNOWN GAP (output differs): the only difference left is that NT does not resolve '.' or '..' (all 13 bodies exist)"
-    exit 0
+    echo "pe-gate: FAIL (the PE's file-path output differs from the Linux one)"; exit 1
 fi
 rm -f "$OUT/peg_fs.txt"
 
@@ -175,7 +178,10 @@ fts=$(objdump -p "$OUT/imp.exe" 2>/dev/null | awk '/Thunk/{getline; print $NF; e
 # objdump -h prints the VMA; FirstThunk is an RVA, and the image base is
 # 0x140000000, so the RVA is the low eight hex digits.
 bssva=$(objdump -h "$OUT/imp.exe" 2>/dev/null | awk '$2==".bss"{print $4; exit}')
-bss=${bssva: -8}
+# The VMA minus the image base, done as arithmetic: the low eight hex digits of
+# 0x140006000 are 0x40006000, which is NOT the RVA, and comparing that against
+# FirstThunk failed the moment this assertion first ran for real.
+bss=$(printf '%08x' $((16#$bssva - 0x140000000)))
 if [ -z "$fts" ] || [ -z "$bss" ]; then
     echo "pe-gate: FAIL (no FirstThunk or no .bss to compare)"; exit 1
 fi

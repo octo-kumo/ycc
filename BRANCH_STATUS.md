@@ -277,6 +277,44 @@ branch-disjointness false positive.
   2000, where stat's own layout has exactly 2000. `y_os_close` (NtClose, 15) was
   written the same round and reverted with it, untested, for the same reason:
   it is only reachable through a file handle that openat has to produce first.
+- **B2's FILE LAYER IS DONE (round 48). `pe-fs.y` MATCHES LINUX EXACTLY.** The
+  45-line portable file-path program that pe-gate.sh has carried as a known gap
+  since round 39 -- when it stopped failing and started TIMING OUT -- now
+  produces the Linux transcript line for line, and the two "known gap" exits in
+  pe-gate.sh that used to report and return 0 are FAILURES again. That check is
+  a hard gate for the first time in ten rounds, and the whole gate is green:
+
+      pe-gate: file path ok (45 lines, PE == the Linux output)
+      pe-gate: import table ok (KERNEL32.dll!GetCurrentProcessId, bcrypt.dll!BCryptGenRandom)
+      pe-gate: IAT at .bss 00006000 ok
+      pe-gate: -g sections ok (.debug_l has its bytes)
+
+  Two things in pe-gate.sh had to be right for that, and neither was: the
+  file-path program runs in a FRESH directory now (it lists ".", so a leftover
+  from the round-trip check changed the answer -- a property of the test, not of
+  the layer), and the IAT assertion's RVA arithmetic was wrong in a way that had
+  never mattered because the assertion had never run for real: the low eight hex
+  digits of the VMA 0x140006000 are 0x40006000, not the RVA, so it compares
+  a hex string against a decimal number. It is `printf '%08x' $((16#$vma -
+  0x140000000))` now.
+  The last thing it needed was not a body: all thirteen entries already had one
+  after round 47. It was that **NT's kernel does not resolve `.` or `..`** --
+  a relative name is an object name, taken literally -- so `fs.list_dir(".")`
+  answered none and `chdir("..")` answered false. `y_w_path` now walks the
+  relative part ONE COMPONENT AT A TIME: `.` is dropped, `..` pops the previous
+  component, components are joined by a single separator added only when the
+  path so far does not already end in one, and a pop never goes above
+  `\??\X:\` (seven units: four for the prefix, three for the drive root).
+  Two bugs fell out of that, both the same shape as this layer's earlier ones:
+    * appending the separator unconditionally in y_os_chdir produced
+      `...\w49\\` when the path already ended in one -- and fs.cwd drops ONE
+      trailing separator, as getcwd(2) does, so it reported `Z:/tmp/ts/w49/`.
+      Every relative path after that was resolved against a directory whose name
+      ends in a slash: reads and writes still worked, and removing a file in it
+      failed. A wrong answer that looks almost right.
+    * a `#` comment inside a `#=== replace:` block is `unexpected comment
+      (backend bug)`; comments go ABOVE the marker. That rule has now been
+      broken four times, once per round of asm work.
 - **`y_os_list` WORKS (round 47), so ALL THIRTEEN named-layer entries fs.y
   calls now have Windows bodies.** B2's file layer is complete: read, write,
   stat, openat, close, mkdir, unlink, set_mode, lseek, rename, getcwd, chdir
