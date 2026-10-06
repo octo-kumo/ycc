@@ -76,9 +76,18 @@ def locals(x: long) -> long {
     x
 };
 
-// exempt: parameters, loop variables, top-level bindings, `_` names
+// exempt: parameters, loop variables, top-level bindings, `_` names --
+// and an unused IMPORT, which is not exempt by design but because the lint
+// pass cannot see the import list (it is handed a spliced AST and, per line,
+// the module that line came from). It costs binary space rather than being
+// free -- 6705 bytes for `import math;`, TODO.md #9 -- and
+// test/sh/test_treeshake.sh is what measures that. When the warning lands it
+// has to keep `// For its alias X.` modules quiet: a module imported only for
+// a type alias has no identifier to see.
+import math;
 def exempt(p: long) -> long {
     for i in 0..3 { };
+    foreach (j in [1, 2]) { };
     0
 };
 let top = 1;
