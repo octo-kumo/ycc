@@ -802,6 +802,31 @@ not a method, and `str_method` does not list it.
 **R6.3** The list is filtered by prefix, and each item carries `sortText`,
 `detail` (the type) and `documentation` (the doc comment above the definition).
 
+**Delivered, and two of the three needed correcting rather than adding.** `sortText`
+was set by **none** of the five item builders; it is on all five now through one
+`serve.sort_text`, so a kind added later cannot forget it. Its value is the label,
+which is deliberate: the field exists to override the editor's sort key, and the
+only override this language would want is a rule putting `_`-prefixed names first,
+which no Y name can trigger — no `src/y/std` unit declares one, and `y_` is the
+reserved prefix for generated labels, emitted under their bare name precisely so
+they never appear as declarations. So the rule would be untestable.
+
+`detail` is **per kind**, and the requirement's flat "each item carries" was never
+true:
+
+| kind | `detail` | why |
+|---|---|---|
+| a record's field | the field's type | the checker's answer |
+| a string method | the signature | `types.str_method`, the compiler's own table |
+| a declaration | its signature or doc | `scope`'s record of it |
+| a **builtin** | **none** | Stage A holds no `types.Binding` for one, and a wrong signature is worse than none |
+| a **module member** | **none, in practice** | a linked unit's `exports` are `[Sym]`s and DO carry types, but `std_units` for a workspace links only the always-on `str` and `rt`, neither of which can be written `x.` — so a module is reached through the SPLICED path, which has names and no types |
+
+That last row is the interesting one: the code for the typed route is there and
+correct (`types.Sym` is now exported for it), and what a user actually gets is no
+type. `t018_reported` and `t020_sorttext` pin it as measured, with the reason,
+rather than as wished for.
+
 **R6.4** Completion must not block. It runs in the same forked child as
 everything else and is debounced identically to R1.1.
 
