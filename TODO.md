@@ -401,3 +401,24 @@ fixed (its `keep` array holds bools: `yv_b`, not `yv_l`; its packed-body
 fallback is in place). The port gate will not let one copy ship alone, so the
 whole thing is reverted; the next step is a print of which body the C's marks
 land in.
+
+**Fifth look, and the question is now exact.** Both copies were re-applied
+(the Y from its saved form plus the purity gate, the C ported again with
+`yv_b` in both loops) and the Y side is correct as before (math 7678 -> 973,
+400 tables 78173 -> 973, `g` 987, fixpoint holds). The C still fails, and the
+instrumented answer is:
+
+  * `_start` IS reached (`DBGENTRY items=13016`) and `keep`/`reads`/`all` are
+    right (`DBGKEPT 5 reads 45 all 188`, with `_start items=13016 blob=0`
+    among the kept);
+  * and that body's items hold **126 `IR_LABEL`s and zero `ygi` names** --
+    while `-S` prints 62 `ygiS_` lines *inside* `_start`.
+
+Both cannot be true of the same `[long]` item array, and the renderer walks
+the same items (`ir_render_all(kb, txt, ...)`), so the difference has to be
+the *text*: the C is emitting those marks as `IR_TEXT` items (raw lines the
+renderer prints verbatim) rather than as `IR_LABEL` items. The next step is
+therefore one print with the body's `txt` array in hand (`alltxt` is in scope
+in `link_units`): for an `IR_TEXT` item whose line starts with `ygi`, print
+it. If that fires, the fix is to make the C's mark emission produce the item
+the Y's does.

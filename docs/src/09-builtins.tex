@@ -1082,6 +1082,29 @@ octal permission number, written as one (\ic{0o644}, \ic{0o755});
 \item[\ic{fs.close\_file(fd)}] \ic{bool}.
 \end{description}
 
+\subsection{Text and Unicode (the utf8 module)}
+\label{sec:builtin-utf8}
+
+\ic{import utf8;} encodes and decodes UTF-8. The builtin \ic{chr} is the
+inverse of \ic{ord}, and \ic{ord} reads a \emph{byte} --- so
+\ic{chr(9608)} is one byte, \ic{0x88}, and not the block character
+U+2588 that it looks like. \ic{utf8.chr} is the one that makes the glyph,
+and it builds a \ic{str}, so a frame of text can be assembled with
+\ic{+=} and printed with \ic{puts}.
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{utf8.chr(cp)}] The UTF-8 encoding of \ty{cp} as a \ic{str}:
+  one to four bytes by the width table (1 below U+0080, 2 below U+0800, 3
+  below U+10000, 4 below U+110000). A negative \ty{cp}, or one past
+  U+10FFFF, gives \ic{""}; a surrogate is encoded rather than rejected.
+\item[\ic{utf8.len\_of(cp)}] How many bytes \ic{utf8.chr(cp)} is, or
+  \ic{0} for a value it cannot encode --- so a caller can size a buffer
+  without building the string.
+\item[\ic{utf8.codes(s)}] The codepoints of \ty{s} as \ic{[long]}. An
+  invalid byte decodes as U+FFFD and is consumed one byte at a time, so
+  there is one codepoint per position and no trap.
+\end{description}
+
 \subsection{The web (the http, tls and net modules)}
 \label{sec:builtin-http}
 
