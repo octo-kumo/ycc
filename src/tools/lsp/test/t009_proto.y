@@ -232,10 +232,16 @@ let sitems = items_own(field(field(second, "params"), "diagnostics"));
 print("the import's own finding is in it: " + tostring(len(sitems) == 1 && index_of(sfield(sitems[0], "message"), "'spare'") >= 0));
 print("the document's notification is empty: " + tostring(items_own(field(field(parsed(imp[0]), "params"), "diagnostics")) == []));
 // The column must be measured against the IMPORTED file's bytes, not the
-// document's -- same bug one level down. mod.y's warning is at line 7, and the
-// document is 2 lines long, so using the wrong text cannot accidentally agree.
+// document's -- same bug one level down. mod.y's `let spare` is on 1-based line 8,
+// so its LSP line is 7, and the document is 2 lines long, so using the wrong text
+// cannot accidentally agree.
+//
+// (This said 6, and the comment said 7. Both were the off-by-one that
+// `diag.line_in_file` fixes: the line published was one short of the real one, and
+// the expectation had absorbed it, so a wrong answer passed. An expectation that
+// records a bug is worse than no expectation.)
 let spos = field(field(sitems[0], "range"), "start");
-print("import finding at line " + tostring(lfield(spos, "line")) + " (want 6)");
+print("import finding at line " + tostring(lfield(spos, "line")) + " (want 7)");
 // An import we have no version for: the key must be ABSENT, not 0, because 0 is
 // a claim and a client that believed it would drop the diagnostics as stale.
 let sv = field(second, "params");

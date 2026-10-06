@@ -170,6 +170,31 @@ def label_of(item: json.Val) -> str {
     out
 }
 
+// `label=detail` for the first few completion items, comma-joined. R6.3's `detail`
+// is the type, and whether an item HAS one is per kind: a LINKED unit's member has
+// one, a builtin and a spliced sibling file's member do not. `t020_sorttext` covers
+// both routes; this is where `math` resolves as a unit, so it is where the first
+// route is shown doing its job.
+def details_of(st: State, id: long, line: long, col: long) -> str {
+    let out = "";
+    let ix = items_of(serve.field_of(serve.members_of(
+        ask(st, id, "textDocument/completion", at(line, col))), "items"));
+    let i = 0;
+    while (i < len(ix) && i < 3) {
+        if (i > 0) { out = out + ", "; };
+        out = out + label_of(ix[i]) + "=" + detail_of(ix[i]);
+        i = i + 1;
+    };
+    out
+}
+
+def detail_of(item: json.Val) -> str {
+    let out = "<none>";
+    let got = json.as_str(serve.field_of(serve.members_of(item), "detail"));
+    if is_some(got) { out = got!; };
+    out
+}
+
 def labels(st: State, id: long, line: long, col: long) -> str {
     let out = "";
     let ix = items_of(serve.field_of(serve.members_of(
@@ -416,6 +441,14 @@ print("-- 7. completion after a `.` is the object's OWN members");
 // pinned. What is pinned is the property: the receiver's own members, in the
 // receiver's own spelling, with the string methods absent.
 print("math. offers " + count_first(labels(st, 20, 29, col_of(29, "math.", 0) + 5)));
+// R6.3 says a completion item's `detail` is the type. For a module member that is
+// CONDITIONAL and, from a workspace, the condition is false: a linked unit's
+// `exports` are `[Sym]`s with types, but `std_units(nr.std, pack)` for a buffer
+// outside the compiler tree links only the always-on units -- `str` and `rt` -- and
+// neither is reachable as `x.`. So `math.` here reaches the SPLICED path, which has
+// names and no types, and the items carry no `detail`. Recorded as measured rather
+// than as wished for; `t020_sorttext` shows the same for a sibling file.
+print("  the first three, and whether each has a type: " + details_of(st, 26, 29, col_of(29, "math.", 0) + 5));
 print("  string methods wrongly among them: " + string_methods_in(labels(st, 26, 29, col_of(29, "math.", 0) + 5)));
 print("z. (a record literal) offers: " + labels(st, 21, 30, col_of(30, "z.", 0) + 2));
 print("a. (a record variable) offers: " + labels(st, 22, 24, col_of(24, "a.a;", 0) + 2));

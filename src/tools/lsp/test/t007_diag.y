@@ -66,6 +66,23 @@ print("unterminated comment: " + tostring(len(d8)));
 let main = "import helper from \"./mod.y\";\nprint(helper.f());\n";
 let d9 = diag.diagnose(main, HERE, "src/tools/lsp/test/main.y", "", 0);
 print("with an import: " + tostring(len(d9)));
+// The BUFFER'S OWN finding, with an import ahead of it in the splice. This is the
+// case the user's editor showed worst: a diagnostic at the right place in the
+// wrong coordinate system, so the editor could not draw it. `nosuchfn` is on line 3
+// of a 3-line buffer whose import puts mod.y's 10 lines first -- spliced, that
+// finding is on line 13, and it was published as 13.
+let own = "import helper from \"./mod.y\";\nlet v = 1;\nlet w = nosuchfn(v);\n";
+let d9b = diag.diagnose(own, HERE, "src/tools/lsp/test/main.y", "", 0);
+print("the buffer's own finding: " + tostring(len(d9b)));
+foreach (d in d9b) {
+    print("  " + d.file + ":" + tostring(d.line) + " " + d.msg);
+};
+// A Finding's `line` is 1-based and is the line IN THE FILE IT NAMES -- not the
+// spliced line the checker reported, which for a file with imports is a different
+// number entirely (mod.y's 8th line is the 10th of the splice). Both halves of
+// that were wrong once: the line was the spliced one, and this expectation had
+// the off-by-one baked in, so the pair agreed and the fixture passed on a wrong
+// answer. mod.y's `let spare` really is on line 8.
 foreach (d in d9) {
     print("  " + d.file + ":" + tostring(d.line) + " " + d.msg);
 }

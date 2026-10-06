@@ -43,12 +43,13 @@ a paren inside it agrees too: comment/comment
 at 178 and 219
 the `//` in line 19's string scans as a string: string
 -- 6. an IMPORTED name answers
-exp of math.exp, at the call: float
+exp of math.exp, at the call: ```y|exp(x: float) -> float|```||── exp ────────────────────────────────────────────────────────────────────|exp(x): e^x. The argument is split as k*ln2 + r, the kernel computes e^r in|[0.707, 1.414), and 2^k goes back on by adding to the exponent field -- which|is exact, so the whole answer is as accurate as the kernel and the reduction.
 e, bound from an import: ```y|float|```||```y|e|```
 math itself: ```y|math|```
 the import statement's own name: ```y|math|```
 -- 7. completion after a `.` is the object's OWN members
 math. offers 170 items: min,max,abs,clamp,sign,gcd
+  the first three, and whether each has a type: min=<none>, max=<none>, abs=<none>
   string methods wrongly among them: none
 z. (a record literal) offers: z
 a. (a record variable) offers: a

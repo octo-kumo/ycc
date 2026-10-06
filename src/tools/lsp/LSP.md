@@ -802,6 +802,31 @@ not a method, and `str_method` does not list it.
 **R6.3** The list is filtered by prefix, and each item carries `sortText`,
 `detail` (the type) and `documentation` (the doc comment above the definition).
 
+**Delivered, and two of the three needed correcting rather than adding.** `sortText`
+was set by **none** of the five item builders; it is on all five now through one
+`serve.sort_text`, so a kind added later cannot forget it. Its value is the label,
+which is deliberate: the field exists to override the editor's sort key, and the
+only override this language would want is a rule putting `_`-prefixed names first,
+which no Y name can trigger — no `src/y/std` unit declares one, and `y_` is the
+reserved prefix for generated labels, emitted under their bare name precisely so
+they never appear as declarations. So the rule would be untestable.
+
+`detail` is **per kind**, and the requirement's flat "each item carries" was never
+true:
+
+| kind | `detail` | why |
+|---|---|---|
+| a record's field | the field's type | the checker's answer |
+| a string method | the signature | `types.str_method`, the compiler's own table |
+| a declaration | its signature or doc | `scope`'s record of it |
+| a **builtin** | **none** | Stage A holds no `types.Binding` for one, and a wrong signature is worse than none |
+| a **module member** | **none, in practice** | a linked unit's `exports` are `[Sym]`s and DO carry types, but `std_units` for a workspace links only the always-on `str` and `rt`, neither of which can be written `x.` — so a module is reached through the SPLICED path, which has names and no types |
+
+That last row is the interesting one: the code for the typed route is there and
+correct (`types.Sym` is now exported for it), and what a user actually gets is no
+type. `t018_reported` and `t020_sorttext` pin it as measured, with the reason,
+rather than as wished for.
+
 **R6.4** Completion must not block. It runs in the same forked child as
 everything else and is debounced identically to R1.1.
 
@@ -2233,3 +2258,135 @@ comment. `#strings` now comes first — a comment outside any string still match
 because nothing starts before it. `t018_reported.y` asserts the ORDER, on the file's
 text, because the order is the semantics and reparsing the JSON would only make
 the same comparison harder to read.
+
+### 11.7 Four more, from a user reading real files
+
+Four reports against files that were open in an editor. Three were the server's and
+one was not a bug at all — which is worth stating first, because the question was
+asked directly:
+
+> **"Are you cheating by using textmate to do highlight and not the LSP?"**
+
+**No.** The extension contributes **no TextMate grammar at all**:
+`contributes` is `commands`, `configuration`, `configurationDefaults`,
+`languages` and `semanticTokenTypes`, and there is no `grammars` key. Read out of
+the *installed* package, not the source. Every colour in a `.y` file comes from
+`textDocument/semanticTokens/full`. Which is why the following four were all real.
+
+#### 1. Every diagnostic landed past the end of the file
+
+`asm.y` is 1888 lines. Its six imports splice to 6426, and **every diagnostic the
+user saw was on line 3356 and up** — past the end, where an editor cannot draw a
+squiggle. So the finding was invisible *and* the message looked wrong, which
+together read as "the errors are nonsense". The user reported it as "errors show up
+at the end of file", and separately as "`+=` shows up at the end of file", which is
+the same bug: a lint warning is the same shape.
+
+The cause was one discarded value. `native.origin_at` renders `"path:line"` and
+already computes the line **in the file the spliced line came from**. Every caller
+wanted only the path, so `diag.file_of` took everything up to the last colon and
+**threw the line away** — leaving a `Finding` carrying a *spliced* line, published
+against the buffer's own URI. `diag.line_in_file` is that arithmetic, done directly
+(`o.line[k-1] + ln - k`) instead of by rendering a string and taking it apart again.
+
+Two fixtures had the bug baked into their EXPECTATIONS, which is the part worth
+remembering: `t007_diag` printed `mod.y:7` and `t009_proto` asserted line `6` with
+a comment saying "line 7", while `mod.y`'s `let spare` is on **line 8**. Both the
+code and the expectation were wrong by one and therefore agreed. An expectation
+that records a bug is worse than no expectation. `t007` now also pins the case that
+hurt most — a finding in the buffer **itself**, with an import spliced ahead of it,
+so the published line is 3 and the spliced one is 13.
+
+#### 2. Builtins were white
+
+`print`, `heap_used`, `len`, `clock_us` rendered as plain foreground.
+
+VS Code's built-in fallback colours the LSP's *standard* token type names. Ten of
+Y's fourteen legend entries are standard; four are not — `selfNone`, `punctuation`,
+`error`, `builtin` — and nothing colours those. Confirmed against the shipped
+themes rather than from memory: `dark_plus.json`, `light_plus.json` and
+`dark_modern.json` carry exactly four `semanticTokenColors` between them
+(`customLiteral`, `newOperator`, `numberLiteral`, `stringLiteral`), none of them in
+Y's legend.
+
+The fix is `contributes.semanticTokenTypes` with a **`superType`**, which is
+theme-independent: VS Code scores a theme rule against the token type's superType
+*chain* (`getTypeHierarchy(n).indexOf(o.type)`, `l += 100 - u`), so an exact rule
+still wins and the parent is only the fallback. `builtin → function`,
+`punctuation → operator`, `selfNone → keyword`, `error → keyword`.
+
+`client-check.js` now asserts **both** directions — every advertised token type is
+either standard or declared with a superType, and every declared superType
+resolves to a real type — because the second half is the same bug in a different
+hat: a dangling parent dead-ends the chain and the token is uncoloured again.
+Verified by deleting the `builtin` declaration: red.
+
+#### 3. Brackets inside comments were highlighted
+
+Not the server. A `//` comment is **one** `K_comment` span and one semantic token —
+`t018_reported` pins that every bracket and paren inside a comment carries the
+comment's class — so there is nothing per-bracket for a theme to paint. With no
+grammar registered either, the only layer left is VS Code's own bracket-pair
+colourization, which colours matching brackets anywhere in the line, strings and
+comments included. The extension now contributes
+`configurationDefaults: {"[y]": {"editor.bracketPairColorization.enabled": false}}`,
+scoped to `.y` so every other language is untouched.
+
+#### 4. A module member imported BY NAME was unreachable
+
+`examples/bignum`, line 43: `tostring(bn.NLIMB)`. Ctrl-click did nothing, and the
+hover on `bn.bn_from_long` showed `long` — the call's return type — instead of the
+signature. `t015_xref` covers exactly this and passes, which is why it survived:
+**that fixture imports by PATH, and this file imports by NAME**, and the two are
+different shapes.
+
+- `import bn;` resolves through `std_resolve` ("next to the importer"), and a
+  module imported by name **keeps its namespace**. The spliced top level therefore
+  spells the name `bn.NLIMB`.
+- `import helper from "./mod.y"` is **flattened** by `strip_ns`, so the spliced top
+  level spells it `NLIMB`.
+
+`serve.resolve_name` looked up the bare spelling only. It now tries
+`<object>.<name>` first and falls back, so both shapes resolve, and
+`t015_xref` gained a by-name import beside the by-path one — asserting the
+definition **and** that the hover carries `helper(n: long) -> long`, since a type
+alone is what the report was.
+
+### 11.8 A compiler bug this found, and did not fix
+
+`asm.y` also shows errors that are not real: `undefined variable 'O_REG'` and 31
+more. **They are the compiler's own.** `./ycc src/y/asm.y` reports the same class
+from the command line:
+
+```
+80:1: error: duplicate definition 'is_digit_ch': src/y/asm.y:80 defines it too
+```
+
+and `type 'AsmLabel' is declared more than once`, which `ycc ycc.y` has never said.
+The cause is `native.resolve_unit`: `native_resolve_seen` de-duplicates spliced
+modules through a `seen` list, and **`seen` starts empty — the program itself is
+never in it**. `asm.y` imports `ir.y`, and `ir.y` imports `asm.y` back, which is
+legal (they are separate units) and which put asm.y into the flat splice **twice**:
+1878 lines as the program and 1879 again as `ir.y`'s import. Every declaration then
+existed twice and every member reference lost its namespace.
+
+asm.y is never compiled on its own in practice — it is a unit of `ycc.y` — so
+nothing caught it until the language server checked the file a user had open.
+
+The fix is to seed `seen` with the normalised program path before the walk. **It is
+written, it works for the case it targets, and it is not landed**: seeding shifts
+every nested module's file id by one, and `origin.file` then mis-attributed whole
+modules — `ycc src/y/ycc.y` and `ycc examples/bignum/bignum.y` both stopped
+compiling, with `bn.y` contributing zero lines at file id 1 and its content
+attributed to ids past the end of `files`. That off-by-one was not isolated before
+the change was reverted, and shipping a change that stops the compiler compiling
+itself is a far worse trade than a documented limitation.
+
+Until it is fixed, **`src/y/asm.y` cannot be opened in the editor without 32 false
+errors** — and they are now at the right lines, so what the editor shows is
+exactly what `ycc src/y/asm.y` prints. That is the honest state: the server is
+faithful and the compiler is wrong, which is the opposite of the shape §11.5 and
+§11.6 kept finding. It also makes hover and completion on a **parameter used as a
+member's object** (`it.fix`, `it.`) answer nothing *in that file only* — the same
+code in a file with no back-import works, which `t020`-shaped minimal cases and
+the fixtures both show.

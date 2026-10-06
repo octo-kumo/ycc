@@ -23,7 +23,7 @@ first is the document: true
 second is the import: true
 the import's own finding is in it: true
 the document's notification is empty: true
-import finding at line 6 (want 6)
+import finding at line 7 (want 7)
 no version claimed for the import: true
 line is 36 bytes, 32 utf16 units
 diagnostics: 1
