@@ -186,10 +186,13 @@ stdin-eof).
 very build was just compared (`make test`, `check`, `rebless` do);
 `YQUIET=1` prints failures only.
 
-Beyond the suites, two harnesses are run by hand because they need more than
+Beyond the suites, three harnesses are run by hand because they need more than
 the suite runner: `test/sh/cycc-win.sh` (W1: `cycc.exe` under wine must match
-Linux `cycc` byte for byte) and `./ytest` (times the suites; gcov line
-coverage). Neither is in `make test`.
+Linux `cycc` byte for byte), `test/sh/w_sysno.py` (prints the NT syscall number
+a named `Nt*` function actually has in the installed wine ntdll, read from its
+export stub -- the independent check for `arch_x64.y`'s pinned `w_sysno` table,
+which otherwise only the W3 self-test verifies and only at runtime) and
+`./ytest` (times the suites; gcov line coverage). None is in `make test`.
 
 - `test_port.sh` [port] — the port gate: every `test/y/**.y` (plus
   `src/y/ycc.y` itself) compile to byte-identical binaries with

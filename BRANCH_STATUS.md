@@ -220,6 +220,34 @@ branch-disjointness false positive.
   this divergence has been invisible. It is a real port-gate hole: a `-g` PE
   case belongs in `cycc-win.sh` once the C path works.
 
+- **`test/sh/w_sysno.py` -- where a pinned NT syscall number can be CHECKED.**
+  `arch_x64.y`'s `w_sysno` numbers are pinned to one ntdll sample and the W3
+  self-test is the only thing that verifies them, at runtime, on a PE. This
+  reads them out of the ntdll **actually installed** instead: the export's stub
+  is `mov %rcx,%r10` then `mov $imm32,%eax` then `syscall`, so the number is
+  the immediate at byte 4. Run `python3 test/sh/w_sysno.py NtClose NtCreateFile`
+  and it prints the number, the RVA and the raw stub.
+  Validated against the pinned table: all ten numbers `w_sysno` carries -- 6, 8,
+  15, 24, 30, 44, 49, 52, 80, 90 -- come back exactly, which is the first
+  independent confirmation that table has ever had.
+  It immediately settled a guess: `NtQueryFullAttributesFile` is **196**, not
+  the 62 the public Win10 table suggests (62 is `NtQueryAttributesFile`'s
+  neighbour by coincidence, and calling it answers STATUS_INVALID_HANDLE).
+- **`y_os_stat` on NT: written, assembled, ran, and reverted -- with the exact
+  next step known.** The body widened the path to UTF-16 on the stack, built an
+  OBJECT_ATTRIBUTES (Length 48, RootDirectory NULL, OBJ_CASE_INSENSITIVE) and a
+  UNICODE_STRING, and called `NtQueryFullAttributesFile`, filling the two fields
+  `fs.y` reads (st_mode at byte 24, st_size at 48 from EndOfFile). With the
+  right number and correct structures it answers **STATUS_OBJECT_PATH_SYNTAX_BAD
+  (0xC000003B)**, which is the whole finding: the kernel does NOT resolve a
+  relative name against the process's current directory -- that is user-space
+  work (`RtlDosPathNameToNtPathName`) -- so the body must build an ABSOLUTE NT
+  path: `\??\` then the current directory's DOS path from the PEB
+  (`%gs:96` -> ProcessParameters at +32 -> CURDIR.DosPath at +56, a
+  UNICODE_STRING whose Length is at +56 and Buffer at +64) then the relative
+  part, all UTF-16. That helper is what `y_os_openat`, `y_os_mkdir`,
+  `y_os_unlink`, `y_os_rename` and `y_os_list` need too, which is why it is the
+  first thing to write rather than the last.
 - **CORRECTION to the entry below, and it is the important one.** The claim
   that the PE failure was environmental was WRONG, and the comparison it rested
   on was invalid: I rebuilt the file-path program with `refs/ycc.ref` *after*
