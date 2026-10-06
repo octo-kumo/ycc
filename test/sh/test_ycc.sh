@@ -351,6 +351,27 @@ meta_dump "$ROOT/test/y/native/t197_meta_field_name_ok.y" "-E dump of a meta fil
 # scanner must never read again (ideas/meta.md, "the two cases")
 meta_dump "$ROOT/test/y/native/t200_meta_mid_token.y" "-E dump of a mid-token meta file"
 
+# `ycc run FILE -- ARG...`: everything after `--` is the program's own argv,
+# verbatim, so a test can drive argv without the driver reading the program's
+# flags as its own. argv[0] is the source path the run was asked for.
+run_args() {
+    local compiler="$1" tag="$2" dir out
+    dir=$(mktemp -d /tmp/ycc_run.XXXXXX)
+    printf 'let a = argv();\nprint(tostring(len(a)));\nlet i = 1;\nwhile (i < len(a)) { print(a[i]); i = i + 1; };\n' > "$dir/p.y"
+    out=$(cd "$dir" && timeout $((60 * YTIMEOUT_SCALE)) "$compiler" run p.y -- one "two three" </dev/null 2>&1)
+    if [ "$out" = "3
+one
+two three" ]; then
+        pass "run -- passes the program its argv ($tag)"
+    else
+        fail "run -- passes the program its argv ($tag)" "got '$(printf '%s' "$out" | tr '\n' '|')'"
+    fi
+    rm -rf "$dir"
+}
+for compiler in "$YCC_BIN" "$CYCC"; do
+    [ -x "$compiler" ] && run_args "$compiler" "${compiler##*/}"
+done
+
 echo ""
 echo "═══════════════════════════════════════════"
 TOTAL=$((PASS + FAIL))

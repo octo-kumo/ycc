@@ -55,6 +55,7 @@ Yv *parse_cli_args(Yv *argv) {
     Yv *std_pack_path = ys("");
     int run = 0;
     int dump = 0;
+    Yv *prog = yav(0);
     ylong i = 1; /* skip argv[0] */
     ylong n = yv_len(argv);
     while (i < n) {
@@ -131,9 +132,11 @@ Yv *parse_cli_args(Yv *argv) {
             }
         } else if (ys_eq_lit(a, "--help") || ys_eq_lit(a, "-h")) {
             puts_(ys("Usage: ycc [-o OUTPUT] [-S] [-E] [-t] [-g] [-w] [-W N] [--no-exec] [-h] FILE\n"));
-            puts_(ys("       ycc run [-g] [--no-exec] FILE     compile FILE and run it in a\n"));
-            puts_(ys("                                           child; ycc's exit status is\n"));
-            puts_(ys("                                           the program's\n"));
+            puts_(ys("       ycc run [-g] [--no-exec] FILE [-- ARG...]\n"));
+            puts_(ys("                                       compile FILE and run it in a\n"));
+            puts_(ys("                                       child; ycc's exit status is\n"));
+            puts_(ys("                                       the program's, and ARG... is\n"));
+            puts_(ys("                                       the program's own argv\n"));
             puts_(ys("       ycc build [-g] [-w] [-W N] [--no-exec] [--std-src] [DIR]\n"));
             puts_(ys("       ycc vendor [DIR]\n"));
             puts_(ys("  (no flags)   compile FILE to a native executable (default: "
@@ -144,8 +147,9 @@ puts_(ys("  --target=NAME  emit for NAME: linux (the default, an ELF)\n"));
 puts_(ys("               or windows (a PE32+ executable, x64)\n"));
 puts_(ys("  -E           dump the source the lexer sees, each line tagged with\n"));
 puts_(ys("               the file and line it came from, and stop\n"));
-puts_(ys("  run FILE     compile FILE and run it in a forked child: no output\n"));
-puts_(ys("               file, and ycc exits with the program's status\n"));
+puts_(ys("  run FILE [-- ARG...]  compile FILE and run it in a forked child:\n"));
+puts_(ys("               no output file, and ycc exits with the program's\n"));
+puts_(ys("               status; everything after `--` is the program's argv\n"));
             puts_(ys("  -t, --time   print per-phase time and heap use to stderr\n"));
             puts_(ys("  -g           add section headers, a symbol table (functions,\n"));
             puts_(ys("               globals) and DWARF line info, so perf, gdb,\n"));
@@ -171,6 +175,14 @@ puts_(ys("               file, and ycc exits with the program's status\n"));
             puts_(ys("  vendor [DIR] copy the project's git dependencies into DIR/vendor\n"));
             exit_(0);
             ;
+        } else if (ys_eq_lit(a, "--") && run) {
+            /* Everything after `--` is the program's own argv, verbatim:
+             * `ycc run p.y -- -x foo` hands the program ["-x", "foo"] (ycc.y). */
+            i = i + 1;
+            while (i < n) {
+                prog = ya_push(prog, ya_get(argv, i));
+                i = i + 1;
+            }
         } else if (ys_eq_lit(ys_slice(a, 0, 1), "-")) {
             puts_(ys_cat(ys_cat(ys("ycc: unknown flag '"), a),
                          ys("' (see ycc -h)\n")));
@@ -182,11 +194,12 @@ puts_(ys("               file, and ycc exits with the program's status\n"));
         }
         i = i + 1;
     }
-    return yr(12, "out", out, "files", files, "asm_only", yv_bool(asm_only),
+    return yr(13, "out", out, "files", files, "asm_only", yv_bool(asm_only),
               "timing", yv_bool(timing), "allow_exec", yv_bool(allow_exec),
               "debug", yv_bool(debug), "nowarn", yv_bool(nowarn), "wlevel",
               yv_long(wlevel), "std_src", yv_bool(std_src), "std_pack",
-              std_pack_path, "run", yv_bool(run), "dump", yv_bool(dump));
+              std_pack_path, "run", yv_bool(run), "dump", yv_bool(dump),
+              "prog", prog);
 }
 
 /* --target=NAME: object format and OS. One global (target.c's res_target),
@@ -1306,6 +1319,12 @@ ylong y_main(Yv *cmdline) {
                 } else {
                     if (yv_b(yr_get(pargs, "run"))) {
                         Yv *av = yav(1, file);
+                        Yv *pgo = yr_get(pargs, "prog");
+                        ylong pg = 0;
+                        while (pg < yv_len(pgo)) {
+                            av = ya_push(av, ya_get(pgo, pg));
+                            pg = pg + 1;
+                        }
                         Yv *rr = run_image(yr_get(ab, "bytes"), av, 0);
                         if (!yv_truth(yr_get(rr, "ok"))) {
                             puts_(ys_cat(ys("error: "),

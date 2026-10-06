@@ -29,7 +29,7 @@ import fs;
 
 // ── argument parsing ─────────────────────────────────────────────────────
 
-def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, timing: bool, allow_exec: bool, debug: bool, nowarn: bool, wlevel: long, std_src: bool, std_pack: str, run: bool, dump: bool } {
+def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, timing: bool, allow_exec: bool, debug: bool, nowarn: bool, wlevel: long, std_src: bool, std_pack: str, run: bool, dump: bool, prog: [str] } {
     let out = "";
     let files: [str] = [];
     let asm_only = false;
@@ -42,6 +42,7 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
     let std_pack = "";
     let run = false;
     let dump = false;
+    let prog: [str] = [];
     let i = 1;  // skip argv[0]
     let n = len(argv);
     while (i < n) {
@@ -102,9 +103,11 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
             };
         } else if (a == "--help" || a == "-h") {
             puts("Usage: ycc [-o OUTPUT] [-S] [-E] [-t] [-g] [-w] [-W N] [--no-exec] [-h] FILE\n");
-            puts("       ycc run [-g] [--no-exec] FILE     compile FILE and run it in a\n");
-            puts("                                           child; ycc's exit status is\n");
-            puts("                                           the program's\n");
+            puts("       ycc run [-g] [--no-exec] FILE [-- ARG...]\n");
+            puts("                                       compile FILE and run it in a\n");
+            puts("                                       child; ycc's exit status is\n");
+            puts("                                       the program's, and ARG... is\n");
+            puts("                                       the program's own argv\n");
             puts("       ycc build [-g] [-w] [-W N] [--no-exec] [--std-src] [DIR]\n");
             puts("       ycc vendor [DIR]\n");
             puts("  (no flags)   compile FILE to a native executable (default: a.out)\n");
@@ -114,8 +117,9 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
             puts("               or windows (a PE32+ executable, x64)\n");
             puts("  -E           dump the source the lexer sees, each line tagged with\n");
             puts("               the file and line it came from, and stop\n");
-            puts("  run FILE     compile FILE and run it in a forked child: no output\n");
-            puts("               file, and ycc exits with the program's status\n");
+            puts("  run FILE [-- ARG...]  compile FILE and run it in a forked child:\n");
+            puts("               no output file, and ycc exits with the program's\n");
+            puts("               status; everything after `--` is the program's argv\n");
             puts("  -t, --time   print per-phase time and heap use to stderr\n");
             puts("  -g           add section headers, a symbol table (functions,\n");
             puts("               globals) and DWARF line info, so perf, gdb,\n");
@@ -140,6 +144,16 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
             puts("               depends on compiled once (DIR/build/obj keeps them)\n");
             puts("  vendor [DIR] copy the project's git dependencies into DIR/vendor\n");
             exit(0);
+        } else if (a == "--" && run) {
+            // Everything after `--` is the program's own argv, verbatim:
+            // `ycc run p.y -- -x foo` hands the program ["-x", "foo"], so a
+            // test can drive argv without the driver reading the program's
+            // flags as its own. Without `run`, `--` stays an unknown flag.
+            i = i + 1;
+            while (i < n) {
+                prog += argv[i];
+                i = i + 1;
+            };
         } else if (a[0:1] == "-") {
             puts("ycc: unknown flag '" + a + "' (see ycc -h)\n");
             exit(1);
@@ -148,7 +162,7 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
         };
         i = i + 1;
     };
-    { out: out, files: files, asm_only: asm_only, timing: timing, allow_exec: allow_exec, debug: debug, nowarn: nowarn, wlevel: wlevel, std_src: std_src, std_pack: std_pack, run: run, dump: dump }
+    { out: out, files: files, asm_only: asm_only, timing: timing, allow_exec: allow_exec, debug: debug, nowarn: nowarn, wlevel: wlevel, std_src: std_src, std_pack: std_pack, run: run, dump: dump, prog: prog }
 };
 
 // --target NAME: the one place a target name becomes the global every other
@@ -1060,6 +1074,7 @@ def main(cmdline: [str]) -> long {
                 } else {
                     if (pargs.run) {
                         let av: [str] = [file];
+                        av += pargs.prog;
                         let rr = meta.run_image(ab.bytes, av, false);
                         if (!rr.ok) {
                             puts("error: " + rr.err + "\n");

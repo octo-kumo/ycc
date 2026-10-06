@@ -67,9 +67,10 @@ one in the other worktrees is for a different base). The merged tree was
 therefore blessed as the new reference — `make ynew` builds it from source,
 `make port-check` shows `cycc` and `ynew` agree on every fixture, `make ycc`
 reports `cycc output == refs/ycc.ref == ycc self-compile (byte-identical)`, and
-`refs/ycc.ref` is now sha256 `35ba76615fc38845…` (it has moved twice since
-the merge — `d7b7c8fe1b296a29…` at the merge, `9ef011d4a1c10080…` after the
-`pe_no_abs` guard, and this one after the W1/popen changes).
+`refs/ycc.ref` is now sha256 `042c0c7a15131288…` (it has moved three times
+since the merge — `d7b7c8fe1b296a29…` at the merge, `9ef011d4a1c10080…` after
+the `pe_no_abs` guard, `35ba76615fc38845…` after W1/popen, and this one after
+`ycc run --`).
 
 ---
 
@@ -255,6 +256,14 @@ benchmarks against the same on-disk `std/math.y`.
 - **`refs/` is gitignored and was missing here.** It is not disposable (see
   `AGENTS.md`); it was re-blessed from the merged tree, and the original
   reference for this base is not recoverable from this clone.
+- **Rebless timing, measured.** On this 4-CPU host `make rebless` is ~20 s once
+  `cycc` exists: `cycc` compiling `ycc.y` 1.48 s, the Y build 0.43 s, the pack
+  0.01 s, and the port suite 17.3 s (8 shards, 4 at a time). It looked slow
+  earlier only because the host reported one CPU then and the shards serialized
+  (~3 min). A *cold* rebless adds gcc rebuilding `cycc` (~40 s). The port suite
+  is the cost, and `make check` has usually run it already; that is the one
+  place a future change could stop repeating work, and it would need check to
+  leave a validated artifact behind rather than re-run the fixtures.
 - Three `-Wextra` unused-parameter warnings come from `meta-win`'s C code
   (`asm.c`'s `pe_prologue_push`, `pe.c`'s `pe_bss_from_ro`). They predate the
   merge and do not fail any gate; the Y twins declare the same unused
