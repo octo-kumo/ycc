@@ -101,44 +101,6 @@ over from `TODO.y` (2026-10-04). Four of the eight features `TODO.y` lists are
 already implemented and were **not** moved: `while` and `if` without brackets,
 and the `0b1010` binary literal.
 
-## 4. `std/random.py` — a `random` module
-
-**Useful because** every std module so far is deterministic — `crypto` takes
-its entropy from the kernel, `struct` and `str` are pure — so there is no way
-to write a program that varies between runs: a fuzzer, a load generator, a
-sampler, a test that wants a different seed each time. `random.seed(n)` matters
-as much as the generator, because a failing case is worthless if it cannot be
-replayed.
-
-```y
-// wanted
-import random;
-
-random.seed(1234);            // optional; omit for a kernel-seeded stream
-
-let d = 0;
-while (random.randint(0, d + 10) < 100) {
-    print(d);
-}
-```
-
-Today:
-
-```y
-import random;
-```
-```
-error: cannot find module 'random' (import name; looks next to the importer and in std/)
-```
-
-**Cost.** Small, and it is a module rather than a language change: a file in
-`src/y/std/` with an `export` clause, no `src/c` twin (std modules stay Y), and
-the usual obligations — a manual section in `docs/src/09-builtins.tex`, a
-`test/COVERAGE.md` row, and checked `t*.y` fixtures. The one real design
-question is the entropy source: `std/crypto.y:87` already reaches `getrandom(2)`
-(`syscall(318, …)`) and it is the only std module that does, so seeding should
-come from there rather than inventing a second source.
-
 ## 5. `break` to a label (multi-level exit)
 
 `break` and `continue` are implemented (they landed with the 2025 loop work;

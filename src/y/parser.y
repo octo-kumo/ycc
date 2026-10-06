@@ -1951,7 +1951,15 @@ def parse_for_or_range(toks: [Tok], p: long) -> Parsed {
         let name = tv(toks, p + 1);
         let lo = parse_expr(toks, p + 3);
         if (!is_op(toks, lo.pos, "..")) {
-            return res(expect_err(toks, lo.pos, "'..'"), sync_stmt(toks, p + 1));
+            // The two iteration forms differ by one keyword, and the OBVIOUS
+            // spelling for an array is the one that does not compile. The
+            // old message was `expected '..', got '{'`: accurate about what
+            // the parser wanted, silent about why, and silent about the form
+            // that does walk a sequence -- which is the whole of what the
+            // reader needs (examples/SUGGESTIONS.md #6). Name both.
+            return res({ k: K.err,
+                         msg: "'for ... in' walks an integer range (for x in lo..hi); to walk an array, a str or keys(m), use 'foreach (x in expr)'",
+                         line: tline(toks, lo.pos), col: tcol(toks, lo.pos) }, sync_stmt(toks, p + 1));
         };
         let hi = parse_expr(toks, lo.pos + 1);
         let body = parse_block(toks, hi.pos);

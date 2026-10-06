@@ -2243,8 +2243,16 @@ Yv *parse_for_or_range(Yv *toks, ylong p) {
         Yv *name = tv(toks, p + 1);
         Yv *lo = parse_expr(toks, p + 3);
         if (!is_op(toks, yv_l(yr_get(lo, "pos")), ys(".."))) {
-            return res(expect_err(toks, yv_l(yr_get(lo, "pos")),
-                                  ys("'..'")),
+            /* The two iteration forms differ by one keyword, and the OBVIOUS
+             * spelling for an array is the one that does not compile. The old
+             * message was `expected '..', got '{'`: accurate about what the
+             * parser wanted, silent about why, and silent about the form that
+             * does walk a sequence -- which is the whole of what the reader
+             * needs (examples/SUGGESTIONS.md #6). Name both. */
+            return res(yr(4, "k", yv_long(K_err),
+                          "msg", ys("'for ... in' walks an integer range (for x in lo..hi); to walk an array, a str or keys(m), use 'foreach (x in expr)'"),
+                          "line", yv_long(tline(toks, yv_l(yr_get(lo, "pos")))),
+                          "col", yv_long(tcol(toks, yv_l(yr_get(lo, "pos"))))),
                        sync_stmt(toks, p + 1));
         }
         Yv *hi = parse_expr(toks, yv_l(yr_get(lo, "pos")) + 1);

@@ -220,63 +220,6 @@ accessors, or take a caller-supplied buffer), and whether the `cc` array
 wants a real `[byte; 32]` or accessor functions. Nothing here is blocked on
 the compiler, which is what makes it cheap.
 
-## 6. `for x in <array>` should say so, not `expected '..'`
-
-**Useful because** Y has two iteration forms over a sequence and they differ
-by three characters: `for x in a..b` walks a half-open integer range, and
-`foreach (x in a)` walks an array, a fixed array, a string's characters or
-`keys(m)`. Every language with only one of the two makes the obvious spelling
-work; Y has both, and the obvious spelling is the one that does not compile.
-The diagnostic it produces names neither the sequence nor the alternative, so
-the reader is left looking for a missing `..` in a program that already has
-everything the grammar asked for.
-
-Today — a loop over an array, a fixed array or a map's keys:
-
-```y
-let xs = [1, 2, 3];
-for x in xs { print(x); };
-```
-
-```
-1:31: error: expected '..', got '{'
-```
-
-The message is accurate about what the parser wanted and useless about why.
-`docs/src/03-grammar.tex:251` documents both forms, so the information exists —
-it is simply not in the diagnostic. The same message comes out of
-`for k in keys(m) { ... }`, where `m` is a map and `..` could not possibly be
-right either.
-
-Wanted — either the loop form unified, or the diagnostic that names the
-alternative. Unifying is the smaller language: `for x in a..b` is exactly
-`for i in range(b - a)`, so one `for x in <expr>` covering ranges, arrays,
-strings and `keys()` would let the rest of `foreach` go:
-
-```y
-for x in xs { print(x); };               // array, fixed array, str, keys(m)
-for i in 0..cols { ... };                // still works, or becomes range(cols)
-```
-
-If unification is not wanted, then at least name the two forms in the error,
-which is a `parser.y` message and nothing else:
-
-```
-1:31: error: 'for ... in' walks a range (for x in lo..hi); use
-                'foreach (x in expr)' to walk an array
-```
-
-**Costs** Unifying is a real language change: `for..in`'s loop variable is
-documented as fresh per iteration (`docs/src/08-functions.tex:75`) and
-`range(n)` allocates, so making it the single form costs an allocation per
-integer-range loop unless the compiler special-cases it — a codegen decision,
-plus the tree-shaking and capture interaction TODO.md §5 already lists for
-`break`. The message-only version is nearly free: one diagnostic string in
-`parser.y` and its twin in `src/c/parser.c`.
-
-**Costs, in short**: message only — trivial. One loop form — medium, and it
-interacts with the capture rules.
-
 ## 7. A record or array literal inside a loop body allocates on every iteration
 
 ### Independently measured
