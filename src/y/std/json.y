@@ -147,7 +147,7 @@ def as_str(v: Val) -> str? {
 
 def as_long(v: Val) -> long? {
     let out: long? = none;
-    if let Num n = v { out = some(tolong(n.num)); };
+    if let Num n = v { out = some(tolong(n.num)!); };
     out
 }
 
@@ -752,7 +752,7 @@ def get_long(o: Val, key: str, dflt: long) -> long {
     let out = dflt;
     let f = field(o, key);
     if (f != none) {
-        if let Num n = f! { out = tolong(n.num) };
+        if let Num n = f! { out = tolong(n.num)! };
     };
     out
 }

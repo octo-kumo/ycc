@@ -18,5 +18,5 @@
 // Here: the bound from below, which must NOT trap, and the float above the
 // bound, which must. Two directions, one process, exit 1.
 
-print(tolong(-9223372036854775808.0));
-print(tolong(9.3e18));
+print(tolong(-9223372036854775808.0)!);
+print(tolong(9.3e18)!);

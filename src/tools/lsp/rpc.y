@@ -73,7 +73,7 @@ def read_frame(r: In, fd: long) -> str? {
             go = false;                         // the blank line: headers are done
         } else {
             let v = header_value(line, "content-length");
-            if (v != "") { want = tolong(v); started = true; }
+            if (v != "") { want = tolong(v)!; started = true; }
         }
     }
 

@@ -2347,6 +2347,28 @@ def mg_where(s: long) -> str {
 
 // Split the pipe's bytes into pieces. A framing error means the generator did
 // not run our helpers, which cannot happen unless the pass is broken.
+// The leading digits of s as a long, 0 when there are none (whitespace is
+// skipped). The meta piece header's fields are written by the generator and
+// read here; this is the one place that wants a prefix rather than a whole
+// string, and it exists so that tolong can be strict everywhere else.
+def leading_long(s: str) -> long {
+    let i = 0;
+    let n = len(s);
+    while (i < n) {
+        let c = byte_at(s, i);
+        if (c == 32 || (c >= 9 && c <= 13)) { i = i + 1; } else { i = n; };
+    };
+    let v = 0;
+    while (i < n) {
+        let c = byte_at(s, i);
+        if (c >= 48 && c <= 57) {
+            v = v * 10 + (c - 48);
+            i = i + 1;
+        } else { i = n; };
+    };
+    v
+};
+
 def mg_unframe(data: str) -> long {
     let n = len(data);
     let i = 0;
@@ -2363,8 +2385,15 @@ def mg_unframe(data: str) -> long {
             if (sp < 0) {
                 bad = true;
             } else {
-                let slot = tolong(head[:sp]);
-                let take = tolong(head[sp + 1:]);
+                // The header is "<slot> <take>", both decimal -- but this used
+                // to lean on tolong stopping at the first non-digit, and the
+                // text handed to it is not always exactly two numbers. tolong
+                // requires a fully valid input now, so the digit prefix is
+                // taken HERE, where the intent is visible, instead of being a
+                // side effect of a lenient parser. leading_long reproduces the
+                // old read exactly: the digits, or 0 when there are none.
+                let slot = leading_long(head[:sp]);
+                let take = leading_long(head[sp + 1:]);
                 let body = data[j + 1:j + 1 + take];
                 if (take < 0 || len(body) != take || slot < 0 || slot >= mg_next) {
                     bad = true;

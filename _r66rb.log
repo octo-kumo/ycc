@@ -1,0 +1,5 @@
+ulimit -v 3670016; ./cycc -o _rb1 src/y/ycc.y
+ulimit -v 2097152; ./_rb1 -o _rb2 src/y/ycc.y
+runtime error: unwrap of none
+make: *** [Makefile:315: rebless] Error 1
+rebless=2

@@ -4037,7 +4037,7 @@ def gen_id(st: EmitSt, node: Leaf) -> EmitSt {
             // the shared cell pointer — and deref it (see box_capture).
             // NOTE: the index rides in `label` — env entries have no spare
             // numeric field and adding one would touch every signature.
-            let idx = tolong(e.mark);
+            let idx = tolong(e.mark)!;
             st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, e.off, -1, insn.R_RCX, 64);
             st = emit_insn(st, insn.F_MOV_D_R, insn.R_RCX, -1, 1, 8 * (idx + 1), -1, insn.R_RAX, 64);
             emit_insn(st, insn.F_MOV_0_R, insn.R_RAX, -1, 1, -1, -1, insn.R_RAX, 64)
@@ -4068,7 +4068,7 @@ def gen_cap_ptr(st: EmitSt, name: str) -> EmitSt {
     let e = env_find(st, name);
     if (e.kind == "capture") {
         // NOTE: the index rides in `label` (see gen_id's capture arm).
-        let pidx = tolong(e.mark);
+        let pidx = tolong(e.mark)!;
         st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, e.off, -1, insn.R_RCX, 64);
         emit_insn(st, insn.F_MOV_D_R, insn.R_RCX, -1, 1, 8 * (pidx + 1), -1, insn.R_RAX, 64)
     } else {
@@ -4704,7 +4704,7 @@ def gen_addr(st: EmitSt, node: Wrap) -> EmitSt {
         } else if (e.kind == "global") {
             emit_insn(st, insn.F_LEA_P_R, -1, -1, 1, 0, e.label, insn.R_RAX, 64)
         } else if (e.kind == "capture") {
-            let aidx = tolong(e.mark);
+            let aidx = tolong(e.mark)!;
             st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, e.off, -1, insn.R_RCX, 64);
             emit_insn(st, insn.F_MOV_D_R, insn.R_RCX, -1, 1, 8 * (aidx + 1), -1, insn.R_RAX, 64)
         } else {
@@ -5033,7 +5033,10 @@ def gen_float_bin(st: EmitSt, node: Bin, lt: Type, rt: Type) -> EmitSt {
         // SSE2 (fmod has no instruction), so the prelude does the reduction;
         // both operands are already in SSE registers.
         st = emit_insn(st, insn.F_CALL_L, lbl_new("y_fmod"), 0, 0, 0, 0, 0, 0);
-        emit_insn(st, insn.F_MOVQ_R_R, insn.R_XMM0, 128, insn.R_RAX, 64, 0, 0, 0)
+        st = emit_insn(st, insn.F_MOVQ_R_R, insn.R_XMM0, 128, insn.R_RAX, 64, 0, 0, 0);
+        // tofloat answers an OPTION now, so the widened value is boxed the same
+        // way some(v) is: a pointer with the value at offset 0.
+        gen_box_rax(st)
     } else {
         // Comparisons. ucomisd sets ZF=PF=CF=1 when the operands are unordered
         // (a NaN anywhere), so every test has to look at the parity flag: the
@@ -5472,7 +5475,7 @@ def shift_imm(r: Node) -> long {
         if (lit_is_float(num.v)) { -1 } else {
             let s = norm_num(num.v);
             if (len(s) > 2 || s[0:1] == "-") { -1 }
-            else if (tolong(s) < 64) { tolong(s) }
+            else if (tolong(s)! < 64) { tolong(s)! }
             else { -1 }
         }
     } else { -1 }
@@ -7857,7 +7860,7 @@ def gen_assign(st: EmitSt, node: Assign) -> EmitSt {
     // cell and is visible in the capturing scope too.
     st = gen_as(st, node.v, e.typ);
     if (e.kind == "capture") {
-        let idx = tolong(e.mark);
+        let idx = tolong(e.mark)!;
         st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, e.off, -1, insn.R_RCX, 64);
         st = emit_insn(st, insn.F_MOV_D_R, insn.R_RCX, -1, 1, 8 * (idx + 1), -1, insn.R_RDX, 64);
         st = emit_insn(st, insn.F_MOV_R_0, insn.R_RAX, 64, insn.R_RDX, -1, 1, -1, -1);
@@ -8691,7 +8694,7 @@ def int_imm(r: Node) -> AsmNum {
     if (r.k == K.num) {
         let num: Leaf = r;
         if (!lit_is_float(num.v)) {
-            let n = tolong(norm_num(num.v));
+            let n = tolong(norm_num(num.v))!;
             if (n >= -2147483648 && n <= 2147483647) {
                 ok = true;
                 v = n;
@@ -11463,7 +11466,7 @@ def link_locs(b: str, off: long) -> str {
             let p: str = parts[i];
             if (dbg_lines) {
                 let sp = index_of(p, " ");
-                out += "\n.loc " + tostring(tolong(p[:sp]) + off) + p[sp:];
+                out += "\n.loc " + tostring(tolong(p[:sp])! + off) + p[sp:];
             } else {
                 let nl = index_of(p, "\n");
                 if (nl >= 0) { out += p[nl:]; }
@@ -12491,7 +12494,7 @@ def pack_get(cur: Cursor) -> str {
 };
 
 def pack_num(cur: Cursor) -> long {
-    tolong(pack_get(cur))
+    tolong(pack_get(cur))!
 };
 
 def pack_get_strs(cur: Cursor) -> [str] {

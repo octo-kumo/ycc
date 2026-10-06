@@ -18,4 +18,4 @@ print(math.parse_long("-9223372036854775809") == none);
 print(math.parse_long("999999999999999999999") == none);
 print(math.parse_long("1_000") == none);
 // What tolong does with the same inputs, for the contrast the entry is about.
-print(tolong("12abc"), " ", tolong(""), " ", tolong(" 12 "), " ", tolong("0x10"));
+print(tolong("12abc")!, " ", tolong("")!, " ", tolong(" 12 ")!, " ", tolong("0x10")!);

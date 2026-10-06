@@ -214,6 +214,10 @@ static Yv *dotassign_union(Yv *st, Yv *t, Yv *node);
 static Yv *typeof_sliceassign(Yv *st, Yv *node);
 static Yv *typeof_prop(Yv *st, Yv *t, Yv *key, ylong line, ylong col);
 static Yv *typeof_field(Yv *st, Yv *t, Yv *dkey, ylong line, ylong col);
+/* native.c owns this: the C twin of types.y's normtype. Declared here
+   because the str_method table wraps a type in an option. */
+Yv *normnode(Yv *anode);
+
 static Yv *sm_mk(Yv *fn, Yv *params, ylong nreq, Yv *ret, Yv *dflt, int last);
 static Yv *sm_t(Yv *k);
 static Yv *sm_arr(Yv *of);
