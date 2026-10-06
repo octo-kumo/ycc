@@ -115,12 +115,15 @@ def keys_of(o: { str => Val }) -> [str] {
 // map's own `o[k]` with the type spelled out for a caller holding a `Val`.
 def field(o: Val, k: str) -> Val? {
     let hit: Val? = none;
-    if let JObj j = o {
-        // `j.v` bound to a local before the read: reading a field of an
-        // `if let`-narrowed binding in place loses the field's type (BUGS.md).
-        let m = j.members;
-        hit = m[k];
-    };
+    // `j.members[k]`, read in place. This bound the map to a local first, on
+    // the belief that a field of an `if let`-narrowed binding loses its type
+    // (the oldest entry in BUGS.md). There is no such bug: the shape that
+    // failed is the `[` of the NEXT line being read as an index of the `if`,
+    // because expressions continue across newlines -- `;` after the block is
+    // the whole fix (docs 03-grammar, "Statements are separated by `;`", and
+    // test/y/native/e175_index_valueless_if.y, which names the shape). The
+    // local was never needed; the type is there.
+    if let JObj j = o { hit = j.members[k]; };
     hit
 }
 

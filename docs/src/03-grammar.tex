@@ -329,6 +329,10 @@ in an \ic{expr} position is not this at all --- it is the empty record
 has to hold a statement. A statement-form \ic{if} is an expression too, and a
 \ic{[} after it indexes that value --- \ic{if (c) \{ A \}["k"]} is
 \ic{A["k"]} --- so a \ic{;} after the block is what keeps the two apart.
+(\ic{if let} is included: a \ic{[} on the line after one is an index of the
+narrowed \ic{if}, not the next statement, and the fix is the same \ic{;}.
+This one shape was read as a checker bug --- "the narrowed field lost its
+type" --- eight times before the diagnostic named the \ic{;}.)
 Indexing one that has no value (its arms are statements, or disagree) says
 so and names the \ic{;} rather than reporting the \ic{[}: \ic{cannot index
 this 'if', which has no value: add a ';' after it to make it a statement}. Statements are separated by \ic{;}, which may be
