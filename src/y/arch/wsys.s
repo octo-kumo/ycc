@@ -103,7 +103,16 @@
 # ->StandardOutput. (Whole-line `#` comments are allowed in this file only
 # because the arch module strips them; an indented one reaches the assembler,
 # which has no comment syntax of its own.)
+# 0, 1 and 2 are the PEB's StandardInput/Output/Error; anything higher is
+# already a real handle (fs.y's y_os_openat returns an NtCreateFile handle) and
+# goes through untouched. This used to send every fd above 1 to StandardError,
+# which was invisible while the only fds anyone had were 0, 1 and 2 -- writes
+# appeared on the console and read never saw the file.
 y_os_handle:
+    cmp $3, %rdi
+    jl yosh_map
+    ret
+yosh_map:
     mov %gs:96, %rax
     mov 32(%rax), %rax
     cmp $1, %rdi
@@ -1185,4 +1194,236 @@ yai_emit3:
     add $128, %rax
     call yai_put
     inc %r12
+    ret
+# y_os_openat(dirfd, path, plen, flags, mode) -> the handle, or -1.
+#=== replace: y_os_openat ===
+#
+# The other half of the shared entry point (see ideas/WINDOWS.md). std is
+# compiled once and the pack is target-free, so this label and its prelude
+# counterpart are the SAME name for both kernels and the choice of which kernel
+# call that is happens when the arch half is assembled -- never at run time and
+# never in std. fs.y computes Linux O_* flags; the Windows half re-derives the
+# NT equivalents here, because that translation IS the target-specific part.
+#
+#   O_RDONLY 0 -> FILE_GENERIC_READ          O_WRONLY 1 -> FILE_GENERIC_WRITE
+#   O_RDWR   2 -> read|write                  O_APPEND  -> FILE_APPEND_DATA
+#   O_CREAT  -> FILE_OPEN_IF   O_EXCL -> FILE_CREATE   O_TRUNC -> FILE_SUPERSEDE
+#
+# NtCreateFile takes ELEVEN arguments, four in registers and seven at 40(%rsp)
+# upwards, which is why the frame below reserves 2176 bytes: 40(%rsp) lands at
+# rbp-2136 and the path buffer stops at rbp-2096 so the two cannot meet. It is
+# also why this is an arch label and not a `syscall` in Y -- the intrinsic's
+# Windows ceiling is ten arguments (types.y maxargs), and eleven is what
+# opening a file costs.
+#
+# Two limits, both deliberate and both loud rather than silent:
+#   * the path must be an ABSOLUTE DOS path ("Z:\..." or "C:\..."). A relative
+#     path needs the process's CurrentDirectory, which NT has no call for; it
+#     answers -1 instead of handing Nt a name with no root (0xC000003A). The
+#     PEB's RTL_USER_PROCESS_PARAMETERS.CurrentDirectory is the fix, and it is
+#     the same answer chdir and getcwd need.
+#   * the path must be ASCII (bytes < 128); '/' becomes '\'. A byte >= 128 is
+#     -1 rather than a mangled name, because NT wants UTF-16 and guessing at a
+#     multi-byte sequence would silently open the wrong file.
+y_os_openat:
+    push %rbp
+    mov %rsp, %rbp
+    push %rbx
+    push %r12
+    push %r13
+    push %r14
+    push %r15
+# 2184, not 2176: five callee-saved pushes after `push %rbp` leave %rsp at 8
+# (mod 16), and Windows x64 wants %rsp 16-byte aligned where the syscall
+# instruction sits. 2184 is 8 (mod 16), which corrects it. It is also 8 bytes
+# more than the arithmetic needs, and those 8 bytes sit below every NT argument
+# slot (40(%rsp) lands at rbp-2184), clear of the path buffer at rbp-2096.
+    sub $2184, %rsp
+    mov 40(%rbp), %r12
+    mov 32(%rbp), %r13
+    mov 24(%rbp), %rbx
+# an absolute DOS path is "X:" -- two bytes at least, a letter then a colon
+    cmp $2, %r13
+    jl yoa_bad
+    movzbq (%r12), %rax
+    add $32, %rax
+    cmp $97, %rax
+    jl yoa_bad
+    cmp $123, %rax
+    jg yoa_bad
+    movzbq 1(%r12), %rax
+    cmp $58, %rax
+    jne yoa_bad
+    cmp $900, %r13
+    jg yoa_bad
+# the Win32 namespace prefix, as four UTF-16 code units in one store:
+# '\' '?' '?' '\' -> 0x5C3F3F5C little-endian
+    lea -2096(%rbp), %r14
+    mov $1547648860, %rax
+    mov %rax, (%r14)
+    add $8, %r14
+# widen the path: one byte in, one UTF-16 unit out, '/' folded to '\'
+    mov $0, %r15
+yoa_loop:
+    cmp %r13, %r15
+    jge yoa_path_done
+    mov %r12, %rax
+    add %r15, %rax
+    movzbq (%rax), %rax
+    cmp $47, %rax
+    jne yoa_nosep
+    mov $92, %rax
+yoa_nosep:
+    cmp $128, %rax
+    jge yoa_bad
+    mov %rax, (%r14)
+    add $8, %r14
+    inc %r15
+    jmp yoa_loop
+yoa_path_done:
+# UNICODE_STRING at rbp-32. Length and MaximumLength are 16-bit and equal, so one
+# 64-bit store carries both: Length | (Length << 16). %r14 is already a BYTE
+# cursor -- it advanced 8 per character -- so it is not shifted again; the only
+# subtraction is the 8-byte prefix, which is part of the name but not part of
+# its length. The Buffer points past that prefix, at rbp-2088.
+    mov %r14, %rax
+    sub %rbp, %rax
+    add $2096, %rax
+    sub $8, %rax
+    mov %rax, %r15
+    shl $16, %rax
+    add %r15, %rax
+    mov %rax, -32(%rbp)
+    lea -2088(%rbp), %rax
+    mov %rax, -24(%rbp)
+# OBJECT_ATTRIBUTES at rbp-208 (48 bytes, rbp-208..rbp-169)
+    mov $48, %rax
+    mov %rax, -208(%rbp)
+    mov $0, %rax
+    mov %rax, -200(%rbp)
+    lea -32(%rbp), %rax
+    mov %rax, -192(%rbp)
+    mov $0, %rax
+    mov %rax, -184(%rbp)
+    mov %rax, -176(%rbp)
+    mov %rax, -168(%rbp)
+# DesiredAccess from the access mode, unless this is an append. The masks are
+# the generic ones with SYNCHRONIZE and READ_CONTROL taken out: asking for
+# SYNCHRONIZE obliges the handle to be opened FILE_SYNCHRONOUS_IO_NONALERT, and
+# then every read and write must carry its own byte offset, because the file has
+# no shared position. y_os_read and y_os_write pass offset NULL, so the handle
+# keeps the file pointer and the Linux side's lseek behaviour carries over.
+    mov %rbx, %rax
+    and $1024, %rax
+    cmp $0, %rax
+    jne yoa_acc_app
+    mov %rbx, %rax
+    and $3, %rax
+    cmp $0, %rax
+    je yoa_acc_rd
+    cmp $1, %rax
+    je yoa_acc_wr
+    mov $415, %rax
+    jmp yoa_acc_set
+yoa_acc_rd:
+    mov $137, %rax
+    jmp yoa_acc_set
+yoa_acc_wr:
+    mov $278, %rax
+    jmp yoa_acc_set
+yoa_acc_app:
+    mov $4, %rax
+yoa_acc_set:
+    mov %rax, -40(%rbp)
+# ShareAccess: FILE_SHARE_READ|WRITE|DELETE, which is what a POSIX open wants
+    mov $7, %rax
+    mov %rax, -48(%rbp)
+# CreateDisposition from O_APPEND, then O_TRUNC, then O_CREAT|O_EXCL, then O_CREAT
+    mov %rbx, %rax
+    and $1024, %rax
+    cmp $0, %rax
+    jne yoa_disp_openif
+    mov %rbx, %rax
+    and $512, %rax
+    cmp $0, %rax
+    jne yoa_disp_super
+    mov %rbx, %rax
+    and $192, %rax
+    cmp $64, %rax
+    je yoa_disp_openif
+    cmp $192, %rax
+    je yoa_disp_create
+yoa_disp_open:
+    mov $1, %rax
+    jmp yoa_disp_set
+yoa_disp_super:
+    mov $0, %rax
+    jmp yoa_disp_set
+yoa_disp_create:
+    mov $2, %rax
+    jmp yoa_disp_set
+yoa_disp_openif:
+    mov $3, %rax
+yoa_disp_set:
+    mov %rax, -56(%rbp)
+    mov $64, %rax
+    mov %rax, -64(%rbp)
+    mov $128, %rax
+    mov %rax, -72(%rbp)
+# NtCreateFile: rdi handle-out, rsi access, rdx ObjectAttributes,
+# rcx IoStatusBlock, r8 AllocationSize(NULL), r9 FileAttributes,
+# then ShareAccess, CreateDisposition, CreateOptions, EaBuffer, EaLength
+    lea -272(%rbp), %rdi
+    mov -40(%rbp), %rsi
+    lea -208(%rbp), %rdx
+    lea -16(%rbp), %rcx
+    mov $0, %r8
+    mov $128, %r9d
+    mov -48(%rbp), %rax
+    mov %rax, 40(%rsp)
+    mov -56(%rbp), %rax
+    mov %rax, 48(%rsp)
+    mov -64(%rbp), %rax
+    mov %rax, 56(%rsp)
+    mov $0, %rax
+    mov %rax, 64(%rsp)
+    mov $0, %rax
+    mov %rax, 72(%rsp)
+    mov $85, %eax
+    syscall
+    test %eax, %eax
+    js yoa_bad
+    mov -272(%rbp), %rax
+    jmp yoa_ret
+yoa_bad:
+    mov $-1, %rax
+yoa_ret:
+    mov %rbp, %rsp
+    pop %rbp
+    ret
+# y_os_close(fd) -> 0, or -1. The other half of the shared close above.
+#=== replace: y_os_close ===
+# A POSIX close(2) returns 0 and leaves errno for the failure; NtClose answers
+# an NTSTATUS. The contract fs.close_file asks for is `== 0`, so "not a success"
+# is folded into -1 here -- handing back 0xC00000XX would look like a descriptor
+# to every caller above. The fd goes through y_os_handle for the same reason
+# y_os_read's does: 0, 1 and 2 are descriptors on one kernel and PEB handles on
+# the other.
+y_os_close:
+    push %rbp
+    mov %rsp, %rbp
+    mov 8(%rbp), %rdi
+    call y_os_handle
+    mov %rax, %rdi
+    mov $15, %eax
+    syscall
+    test %eax, %eax
+    js yocl_fail
+    mov $0, %eax
+    jmp yocl_ret
+yocl_fail:
+    mov $-1, %eax
+yocl_ret:
+    mov %rbp, %rsp
+    pop %rbp
     ret

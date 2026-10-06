@@ -40,12 +40,12 @@ def open_file(path: str, how: str, mode: long = 420) -> long {
     let m = mode;
     if (m < 0) { m = 420; }
     if (fl < 0) { -1 } else {
-        let fd = syscall(257, fs_at_cwd(), path, fl + 524288, m);
+        let fd = os_call("y_os_openat", fs_at_cwd(), path, len(path), fl + 524288, m);
         if (fd < 0) { -1 } else { fd }
     }
 };
 
-def close_file(fd: long) -> bool { syscall(3, fd) == 0 };
+def close_file(fd: long) -> bool { os_call("y_os_close", fd) == 0 };
 
 // Up to n bytes from fd, at most 65536 in one call ([] at the end, or on
 // an error).
@@ -55,7 +55,7 @@ def read_some(fd: long, n: long) -> [byte] {
     if (m > 65536) { m = 65536; }
     if (m > 0) {
         let buf: [byte; 65536] = [0; 65536];
-        let k = syscall(0, fd, &buf[0], m);
+        let k = os_call("y_os_read", fd, &buf[0], m);
         if (k > 0) { out = buf[0:k]; }
     }
     out
@@ -67,7 +67,7 @@ def read_all_bytes(fd: long) -> [byte] {
     let chunk: [byte; 65536] = [0; 65536];
     let go = true;
     while (go) {
-        let k = syscall(0, fd, &chunk[0], 65536);
+        let k = os_call("y_os_read", fd, &chunk[0], 65536);
         if (k <= 0) { go = false; } else { out += chunk[0:k]; };
     };
     out
@@ -81,7 +81,7 @@ def write_data(fd: long, b: [byte]) -> bool {
     let off = 0;
     let ok = true;
     while (ok && off < total) {
-        let w = syscall(1, fd, &b[off], total - off);
+        let w = os_call("y_os_write", fd, &b[off], total - off);
         if (w <= 0) { ok = false; } else { off = off + w; };
     };
     ok
@@ -91,14 +91,14 @@ def write_data(fd: long, b: [byte]) -> bool {
 // write) through write_data.
 def write_text(fd: long, s: str) -> bool {
     let n = len(s);
-    let w = syscall(1, fd, s, n);
+    let w = os_call("y_os_write", fd, s, n);
     if (w == n) { true } else if (w < 0) { false } else { write_data(fd, bytes(s)[w:]) }
 };
 
 // Move fd's position: from the start (whence 0), the current position (1)
 // or the end (2). The new position, or -1.
 def seek(fd: long, off: long, whence: long) -> long {
-    let p = syscall(8, fd, off, whence);
+    let p = os_call("y_os_lseek", fd, off, whence);
     if (p < 0) { -1 } else { p }
 };
 

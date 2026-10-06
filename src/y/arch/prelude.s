@@ -1810,3 +1810,37 @@ y_bytes_to_str:
     pop %rbx
     pop %rbp
     ret
+# y_os_openat(dirfd, path, plen, flags, mode) -> the fd, or -1.
+# The shared std code names ONE entry point for both kernels (ideas/WINDOWS.md):
+# here it is openat(2) with dirfd AT_FDCWD (-100) and the Linux O_* flags fs.y
+# already computes. plen is passed and IGNORED -- openat(2) takes a NUL-
+# terminated path, so the byte is already there. The Windows half needs the
+# length to widen the path into UTF-16, so the shared signature carries it and
+# only one target has a use for it.
+# Arguments arrive cdecl-style, pushed right to left, so argN is the closest to
+# the return address and arg1 is the furthest: for five arguments that is 8, 16,
+# 24, 32 and 40 (%rsp) for args five down to one. y_os_read's three arguments at
+# 24, 16 and 8 are the same rule seen from the other end. openat(2) wants four
+# of the five in rdi, rsi, rdx and r10, so arg3 (plen) is stepped over.
+y_os_openat:
+    mov 8(%rsp), %r10
+    mov 16(%rsp), %rdx
+    mov 32(%rsp), %rsi
+    mov 40(%rsp), %rdi
+    mov $257, %eax
+    syscall
+    ret
+# y_os_close(fd) -> 0, or -1. One contract on both kernels: zero for success,
+# negative for failure, which is what fs.close_file's `== 0` asks for and what
+# close(2) already returns. NtClose answers an NTSTATUS instead, so the Windows
+# half folds "not a success" into -1 rather than handing a 0xC00000xx back as
+# if it were a descriptor.
+y_os_close:
+    mov 8(%rsp), %rdi
+    mov $3, %eax
+    syscall
+    test %rax, %rax
+    jns yosc_ret
+    mov $-1, %rax
+yosc_ret:
+    ret
