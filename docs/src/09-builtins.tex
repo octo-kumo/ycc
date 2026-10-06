@@ -1029,6 +1029,9 @@ octal permission number, written as one (\ic{0o644}, \ic{0o755});
 \item[\ic{fs.is\_dir(path)}] A directory.
 \item[\ic{fs.file\_size(path)}] Its size in bytes, \ic{long?}.
 \item[\ic{fs.set\_mode(path, mode)}] Set the permissions; \ic{bool}.
+  (On Windows there are no permission bits: the only thing the mode can say
+  there is the write bit, which maps to \ic{FILE\_ATTRIBUTE\_READONLY}. A
+  mode with the owner-write bit clears it, one without sets it.)
 \item[\ic{fs.make\_dir(path, mode = 0o755)}] \ic{bool}.
 \item[\ic{fs.make\_dirs(path, mode = 0o755)}] The directory and every one
   above it that is missing; \ic{true} when it exists already.

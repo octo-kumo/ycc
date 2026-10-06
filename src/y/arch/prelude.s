@@ -2004,6 +2004,21 @@ yolist_done:
 yolist_fail:
     mov $-1, %rax
     ret
+# y_os_set_mode(path, len, mode) -> 0, or -1. THREE arguments, frameless: path
+# at 24, len at 16, mode at 8. fchmodat(2) with no flags. The Windows half
+# cannot do modes and maps what it can (see wsys.s).
+y_os_set_mode:
+    mov 8(%rsp), %rdx
+    mov 24(%rsp), %rsi
+    mov $-100, %rdi
+    mov $0, %r10
+    mov $268, %eax
+    syscall
+    test %rax, %rax
+    jns yosetmode_ret
+    mov $-1, %rax
+yosetmode_ret:
+    ret
 # y_os_close(fd) -> 0, or -1. One contract on both kernels: zero for success,
 # negative for failure, which is what fs.close_file's `== 0` asks for and what
 # close(2) already returns. NtClose answers an NTSTATUS instead, so the Windows

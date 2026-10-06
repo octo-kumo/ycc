@@ -132,7 +132,7 @@ def read_lines(path: str) -> [str]? {
 
 // Set the permissions of path (mode -1: leave them).
 def set_mode(path: str, mode: long) -> bool {
-    if (mode < 0) { true } else { syscall(268, fs_at_cwd(), path, mode, 0) == 0 }
+    if (mode < 0) { true } else { os_call("y_os_set_mode", path, len(path), mode) == 0 }
 };
 
 // The end of a whole-file write that went `ok`: close fd, then (mode >= 0)

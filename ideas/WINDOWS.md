@@ -949,8 +949,18 @@ reason this section exists:
   bit set -- accepted as data) and rewrites those records in place. Path
   resolution grew a COMPONENT WALKER for the same reason: NT has no dot
   components, so `fs.list_dir(".")` was STATUS_OBJECT_PATH_SYNTAX_BAD, and
-  "a/../b" now resolves rather than failing. **Still raw `syscall(` in
-  `fs.y`**: `set_mode` (268) -- the last of the B2 slice.
+  "a/../b" now resolves rather than failing. **`fs.y` now has NO raw
+  `syscall(` at all** -- B2's `fs` slice is complete. `set_mode` is
+  `y_os_set_mode` (fchmodat(2) on ELF); the Windows half maps the owner-write
+  bit to `FILE_ATTRIBUTE_READONLY`, querying `FileBasicInformation` first so
+  the set does not blank the file's timestamps. Two notes from building it:
+  0o200 is 128, not 512 (masking with 512 read 0o600 as "no write bit" and
+  made every file `write_file(..., 0o600)` touched read-only), and **Wine
+  cannot clear the attribute** -- with READONLY set it answers
+  STATUS_ACCESS_DENIED to the `NtOpenFile` that FILE_WRITE_ATTRIBUTES needs
+  (FILE_OPEN_FOR_BACKUP_INTENT does not help; measured), where Windows allows
+  it, `attrib -r` being exactly that call. The direction std depends on is
+  unaffected (a fresh file is never read-only), and pe-fs asserts that path.
 - **`std/math.y` is not embedded, and that is correct.** Only the four packed units
   (`rt`, `prelude`, `exec`, `str`) are in `STD_EMBEDS`; `std/math.y` is spliced
   from source per target like `fs.y`/`net.y`, so the pack never carries it and

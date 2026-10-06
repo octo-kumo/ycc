@@ -79,5 +79,16 @@ print("dot=" + tostring(fs.chdir(".")));
 print("up=" + tostring(fs.chdir("..")));
 print("back=" + tostring(fs.cwd().ends_with("pegcwd")));
 print("rmb=" + tostring(fs.remove_file("peg_b.txt")));
+
+// set_mode, through write_bytes: a mode WITH the owner-write bit (0o600 = 384)
+// must leave the file deletable -- that is y_os_set_mode's normal path, the one
+// fs.write_file(p, s, mode) takes. The READONLY direction it also implements
+// is NOT asserted here: Wine refuses FILE_WRITE_ATTRIBUTES on a file that
+// already carries READONLY, so it could not be cleared again there (Windows
+// allows it -- see wsys.s and ideas/WINDOWS.md).
+let b3: [byte] = [1, 2, 3];
+print("wbmode=" + tostring(fs.write_bytes("peg_mode.bin", b3, 384)));
+print("modesize=" + tostring(fs.file_size("peg_mode.bin")!));
+print("moderm=" + tostring(fs.remove_file("peg_mode.bin")));
 print("rmd=" + tostring(fs.remove_dir("pegcwd")));
 print("dgone=" + tostring(fs.exists("pegcwd")));

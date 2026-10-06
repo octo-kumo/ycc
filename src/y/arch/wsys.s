@@ -2457,6 +2457,138 @@ yolq_out:
     mov %rbp, %rsp
     pop %rbp
     ret
+# y_os_set_mode(path, len, mode) -> 0, or -1. NT has no mode bits; what a
+# chmod can mean here is FILE_ATTRIBUTE_READONLY, so this maps "no write bit"
+# (mode & 0o200 == 0 -- 0o200 is 128, NOT 512, which is 0o1000, the sticky
+# bit: masking with 512 read 0o600 as "no write bit" and made every file
+# write_file(..., 0o600) touched read-only, so the remove_file after it
+# failed) to setting that attribute and a write bit to clearing it, leaving
+# the rest of the file. The 40-byte FILE_BASIC_INFORMATION
+# is QUERIED first and written back unchanged apart from the attribute, because
+# a set with zeroed times would blank the file's timestamps.
+#
+# WINE CANNOT CLEAR THE ATTRIBUTE. With READONLY already set, Wine answers
+# STATUS_ACCESS_DENIED to the NtOpenFile below, so the write bit cannot be put
+# back there (adding FILE_OPEN_FOR_BACKUP_INTENT does not help; measured).
+# Windows allows it -- that is how `attrib -r` works, with this same access
+# mask -- so the code is the Windows one and this is a Wine difference, in the
+# same class as console handles and CreateProcess (ideas/WINDOWS.md, Risks).
+# The direction that MATTERS for std is unaffected: fs.write_file(p, s, mode)
+# calls this on a fresh file, which is never read-only.
+#=== replace: y_os_set_mode ===
+y_os_set_mode:
+    push %rbp
+    mov %rsp, %rbp
+    sub $2264, %rsp
+    mov 32(%rbp), %rax
+    mov %rax, -8(%rbp)
+    mov 24(%rbp), %rax
+    mov %rax, -16(%rbp)
+    mov 16(%rbp), %rax
+    mov %rax, -24(%rbp)
+    mov -8(%rbp), %rax
+    push %rax
+    mov -16(%rbp), %rax
+    push %rax
+    lea -2176(%rbp), %rax
+    push %rax
+    call y_w_path
+    add $24, %rsp
+    cmp $0, %rax
+    jl yosm_fail
+    mov %rax, %rcx
+    shl $16, %rax
+    add %rcx, %rax
+    mov %rax, -48(%rbp)
+    lea -2176(%rbp), %rax
+    mov %rax, -40(%rbp)
+    mov $48, %rax
+    mov %rax, -112(%rbp)
+    mov $0, %rax
+    mov %rax, -104(%rbp)
+    lea -48(%rbp), %rax
+    mov %rax, -96(%rbp)
+    mov $0, %rax
+    mov %rax, -88(%rbp)
+    mov %rax, -80(%rbp)
+    mov %rax, -72(%rbp)
+    mov $7, %rax
+    mov %rax, 40(%rsp)
+    mov $96, %rax
+    mov %rax, 48(%rsp)
+    lea -152(%rbp), %r10
+    mov $1048832, %rdx
+    lea -112(%rbp), %r8
+    lea -144(%rbp), %r9
+    mov $51, %eax
+    syscall
+    test %eax, %eax
+    jns yosm_open
+    mov $33, %rax
+    mov %rax, 48(%rsp)
+    lea -152(%rbp), %r10
+    mov $1048832, %rdx
+    lea -112(%rbp), %r8
+    lea -144(%rbp), %r9
+    mov $51, %eax
+    syscall
+    test %eax, %eax
+    js yosm_fail
+yosm_open:
+    mov -152(%rbp), %r10
+    lea -144(%rbp), %rdx
+    lea -208(%rbp), %r8
+    mov $40, %r9d
+    mov $4, 40(%rsp)
+    mov $17, %eax
+    syscall
+    test %eax, %eax
+    js yosm_cfail
+# FileAttributes at +32 = -176; zero-extended with two shifts, because a 32-bit
+# and-immediate will not encode
+    mov -176(%rbp), %rax
+    shl $32, %rax
+    shr $32, %rax
+    mov -24(%rbp), %rcx
+    and $128, %rcx
+    cmp $0, %rcx
+    jne yosm_clear
+    mov %rax, %rcx
+    and $1, %rcx
+    cmp $0, %rcx
+    jne yosm_put
+    add $1, %rax
+    jmp yosm_put
+yosm_clear:
+    mov %rax, %rcx
+    and $1, %rcx
+    sub %rcx, %rax
+yosm_put:
+    mov %rax, -176(%rbp)
+    mov -152(%rbp), %r10
+    lea -144(%rbp), %rdx
+    lea -208(%rbp), %r8
+    mov $40, %r9d
+    mov $4, 40(%rsp)
+    mov $39, %eax
+    syscall
+    test %eax, %eax
+    js yosm_cfail
+    mov -152(%rbp), %r10
+    mov $15, %eax
+    syscall
+    mov $0, %rax
+    jmp yosm_out
+yosm_cfail:
+    mov -152(%rbp), %r10
+    mov $15, %eax
+    syscall
+yosm_fail:
+    mov $-1, %rax
+yosm_out:
+    mov %rbp, %rsp
+    pop %rbp
+    ret
 # y_os_close(fd) -> 0, or -1. The other half of the shared close above.
 #=== replace: y_os_close ===
 # A POSIX close(2) returns 0 and leaves errno for the failure; NtClose answers
