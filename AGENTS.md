@@ -26,12 +26,12 @@ same semantics.
 - The std units the compiler links into programs are plain Y in
   `src/y/std/rt.y`, `prelude.y`, `exec.y`, `str.y`, embedded into both
   compilers when they are built (`embed` in native.y, `Y_EMBED` in
-  native.c — PORTING.md rule 10). Edit those files directly; there is no
+  native.c — PORTING.md rule 11). Edit those files directly; there is no
   generator (`make ycc`/`ynew` rebuild the pack). `str.y` must not
   contain string literals (see NATIVE.md, "Runtime library").
 - The compiler's own **assembly** is in `src/y/arch/*.s`, embedded the
   same way (`embed PRELUDE_ASM from "./arch/prelude.s";` in arch_x64.y,
-  `Y_EMBED` in arch_x64.c — PORTING.md rule 11), so there is one copy of
+  `Y_EMBED` in arch_x64.c — PORTING.md rule 12), so there is one copy of
   it rather than one per compiler. Whole-line `#` comments are allowed
   there and dropped before the in-tree assembler sees the text;
   `make asm-check` reads the files with GNU `as`. Edit the `.s` files
@@ -206,22 +206,140 @@ very build was just compared (`make test`, `check`, `rebless` do);
   with each suite and an RSA and an ECDSA certificate (skipped without
   openssl).
 - `test_math.sh` [math] — the accuracy gate for `std/math.y`: reads
-  `test/math/ulp_table.txt` (2695 cases — the pinned edges, the overflow and
-  flush points, both sides of 1, the poles, the signed zeros, a seeded
-  1884-case spread (1540 of one argument, 344 of two or three), and a seeded
-  240-case spread over [-1, 1] for `asin` and `acos`, the only two with a
-  bounded domain — each line the function, its
+  `test/math/ulp_table.txt` (**8340 cases**, 7285 of them taking one argument
+  and 1055 taking two or three — the pinned edges, the overflow and flush
+  points, both sides of 1, the poles, the signed zeros, and then seeded spreads
+  over each function's own domain: uniform in the DECADES for `log2`, `log10`
+  and `exp2`, where the structure is in the exponent; over [-1, 1] for `asin`
+  and `acos`, the only two with a bounded domain; over |x| ≤ 1/2 for `tanh`'s
+  polynomial branch; and a general [-8, 8] for the rest. A pinned list is not a
+  spread, and the arguments BETWEEN the pins are where the defects live — four
+  of the five found here sat between two values somebody had already written
+  down — each line the function, its
   argument(s) and the reference answer as IEEE-754 bit patterns), evaluates
   every case with both compilers and
   **fails on anything more than 1 ulp from the reference**. The gap is counted
   through the monotone key of a double's bits, so it is exact at zero, across a
   sign change, for a subnormal, and infinite for a NaN. The worst gap and the
   function it came from are printed, so a regression names itself.
+
+  Two things about that gate that are worth knowing before changing it. It ends
+  in `exit(main())`, and it used to end in a bare `main();` — a statement whose
+  value is discarded — so the 1 a failure produced went nowhere, the process
+  always exited 0, and the "0 over 1" this module is held to was a number the
+  harness counted correctly and then threw away. **The gate could not fail**,
+  while its own header said a kernel that drifted past it would. And the `OVER`
+  line printed only the *first* argument, so a two-argument failure could not be
+  located in the table at all. Both are fixed; both are the kind of thing that
+  reads as coverage right up until it is measured.
+
+  And the two-argument functions got the sweep this suite did not have.
+  `audit_float.py`'s header said of `hypot` and `atan2`: "covered by the table
+  and by t325". That was load-bearing and wrong — `hypot` had **fourteen** table
+  cases and `t325` pinned one corner. The omission had a cause worth naming
+  rather than excusing: a sweep needs a reference, and Python 3.14's `decimal`
+  has `exp`, `ln`, `log10`, `sqrt` and `power` and **no inverse trig**, with
+  mpmath not installed. There was no `atan2` to call.
+  `test/math/audit_pairs.py` writes one — arctangent by two exact identities plus
+  the alternating series — and checks it against libm on all **557** two-argument
+  table cases *before* the sweep runs, because a hand-written reference is the
+  one thing that must not be trusted on its own. That check caught two bugs in the
+  reference on its first run. The sweep is **20 000 pairs with each argument
+  uniform in the decades and the two drawn independently** (independently is the
+  point: a correlated draw makes `y == x` the common case, which is one point of a
+  two-dimensional range rather than the shape of it). Both functions within
+  1 ulp; pointed at the pre-fix module it reports 4 over for `hypot` and 18 for
+  `atan2`. `YPAIRS` sets the count (4000 in the suite).
+
+  That sweep was then shown **blind to a whole class**, and the reason generalises.
+  `hypot` answered `+inf` for every `m` in `(9.4808e153, 1e154)` when `s` was
+  comparable to it, because the direct path's `m*m + s*s` overflows while the
+  answer does not. Of 20000 independently drawn pairs, 6 landed in that decade and
+  **none** of the six had `s` within a factor of ten of `m`; the expected number
+  where both conditions hold is `(1/628) x (2/600)`, so `20000 x that = 0.11` —
+  about one chance in nine. Independent draws and correlated draws are not two
+  settings of one knob, they are opposite: drawing the exponents independently is
+  what makes *wide* ratios common and it is exactly what makes `s == m` rare.
+  `audit_pairs.py` now carries both families.
+
+  The defect was found instead by **pinned boundary cases**, and the rule that
+  came out of it is the one to reuse: *every numeric literal a comparison in
+  `std/math.y` tests against gets itself and its two neighbouring doubles,
+  crossed with a partner close enough to it that the second condition also
+  holds.* A sweep finds defects by **area** — it finds what is spread over the
+  decades and is blind to a sliver of one — while a threshold is only findable if
+  something names it. `gen_ulp_table.py` pins the code's constants **and** the
+  true seam `sqrt(DBL_MAX/2)`, because the module's `1e153` stands well inside it
+  and the reasoning that produced `1e154` is the reasoning a reader will repeat.
+  Both catch the wrong bound: 2 cases, exit 1.
+
+  **And that rule is now a gate over every seam at once.**
+  `test/math/audit_thresholds.py` reads every comparison `std/math.y` makes
+  against one of its own float **parameters** — literals and named constants
+  alike — and reports how far the nearest table argument is from each, in ulps of
+  the threshold. Restricted to parameters on purpose: "is there an argument near
+  this threshold" is the right question for a value the caller passes and the
+  wrong one for a derived quantity, since `hypot_scaled` tests `s/m < 1e-4`, a
+  **ratio**, and no single argument is ever near 1e-4. 16 edge thresholds; 14 of
+  them now have an argument within **1 ulp**. Wired into `test_math.sh` with its
+  own selftest, and proved to fail by planting a seam.
+
+  Its first run named two more, and pinning them found a defect in the
+  **reference**: `sinh`'s overflow lambda returned `+inf` for a *negative*
+  argument past the bound, where `sinh` is odd and the answer is `−inf`. Nothing
+  had noticed because no case in the table was a negative argument beyond the
+  bound — the pinned list and the overflow strip were all positive or small.
+  That is the seventh time this work's own reference has been the thing that was
+  wrong, and the shape is always the same: **a reference written for the cases
+  that existed rather than for the function.**
+
+  Two thresholds remain far from the table and both are **oracle** seams the
+  table cannot reach — `exp_y`'s `exp_lo` and `pow_y`'s ±1024, inside functions
+  that are not exported. Each is pinned once by the fixture that compares the
+  oracle against the assembly kernel it stands in for, and each `KNOWN` entry
+  names that fixture rather than asserting that it is fine.
+
+  The three thinnest **rounding** functions were then grown, on the reasoning
+  that an exact function needs few cases (finitely many answers) and a rounding
+  function does not: `sqrt` had 23, `atan2` 35 and `hypot` **14**, and fourteen
+  cases cannot gate a function whose difficulty is the ratio between its two
+  arguments. Each pair's two exponents are drawn **independently**, which is
+  what makes the ratios wide. The 768 cases that added found `atan2` dropping the
+  sign of `y` at an infinite `x`, the same sign dropped twice in the *reference*
+  (so the table agreed with the module on a case where the module was right), and
+  `hypot` 2 ulps out on 0.75% of wide-ratio pairs.
   `test/math/ulp_check.y` says in its own header why the tolerance is 1 and what
   the four cases that used to sit over it were; `gen_ulp_table.py` wrote the
   table from this platform's libm (mpmath is not installed here, and a platform
   libm is the *relevant* reference anyway — the promise is to match what C
   gives), and `gen_kernel.py` fits and checks the kernels' coefficients.
+  Three more things run here, and none of them is the ulp table:
+
+  - `test/y/native/t328_split_unrolled.y`, which asks each of the module's eight
+    **generated** polynomial kernels (`poly_exp`, `poly_log`, `poly_sinh`,
+    `poly_tanh`, `poly_atan`, `poly_asin`, `poly_sin`, `poly_cos`) and
+    `poly_split`, the loop each replaced, the same 32024 questions and requires
+    the same **bits**. The chains perform the same operations in the same order,
+    so anything but equality is a defect. The table cannot catch this class: it
+    sees answers, and a kernel that drifts half an ulp hides inside the final
+    rounding. Run under both compilers here, so a port that emitted a different
+    chain would show as a disagreement rather than as nothing.
+  - `gen_split_unroll.py --verify`, the other question: does `src/y/std/math.y`
+    still hold byte-for-byte what the generator writes? It catches what t328
+    cannot — a chain hand-edited after generation, or a banner whose caller list
+    has gone stale, still answers within an ulp, because the coefficients are
+    right and only the arrangement moved.
+  - `test/math/find_repeats.py`, a **ratchet** on repeated computations, and the
+    one static check in this suite. The defect class it looks for is "a behaviour
+    decided by an accident of expression order", where the accident is in the
+    *spelling* rather than the order: two places meaning the same thing and
+    written differently, so a change reaches one and not the other. That is how
+    `sin_cos_k` came to compute `x * x` three times. Its findings are in its
+    `KNOWN` with the reason each is acceptable (two today, one a branch-
+    disjointness false positive) and anything new fails; its `--selftest` plants
+    one of each thing it claims to find, because a detector that silently stops
+    detecting would leave the ratchet reading as coverage.
+
 - `test_std_suites.sh` [std-suites] — the self-test suites for the std units
   that have one, in `test/std/`: `fx_test.y` (292 checks, the vendored `fx.y`),
   `args_test.y` (61, `std/args.y` and the pacer it paces with),
@@ -303,8 +421,25 @@ base build (normally the blessed `refs/ycc.ref`) with the new one
 
 Keep both binaries on the same filesystem. Under WSL, a binary run from
 `/mnt/c` pages in through drvfs and measured ~30% slower in every phase,
-which is easy to mistake for a regression. `bench/y/*.y` are benchmarks,
-**not tests**. Times are wall clock on a shared machine:
+which is easy to mistake for a regression.
+
+**And run both from the same tree.** The std pack carries only the four units
+`make` embeds — `rt`, `prelude`, `exec`, `str` (`STD_EMBEDS`) — and every other
+std unit is read from the filesystem at compile time: `std_units` unpacks what
+the pack has and, for anything else, `std_compile` asks `std_unit_src` for
+`std/<name>.y` under **the directory the compiler is running in**. So a compiler
+built in one tree and run from another silently compiles the *other* tree's
+`math.y`. Two consequences worth knowing before a measurement surprises you:
+- a cross-build comparison run from one tree compiles the *same* std sources
+  with both compilers, so a `std/` change shows up in no `compile_ir` delta —
+  only the emitter change does;
+- and a base compiler built in a worktree, measured from the main tree, answers
+  with the main tree's behaviour and looks like it already had the fix. This
+  cost an hour of chasing a phantom: a "before" binary produced the corrected
+  answers, which is only explicable by the pack not carrying `math.y`.
+
+`bench/y/*.y` are benchmarks, **not tests**. Times are wall clock on a shared
+machine:
 - a SCORE within 100 ± 2.5 is no change (two copies of one build scored
   99.7–100.6 in six runs; one real pair scored 99.8 and 102.3);
 - a row of 40 ms or more agrees to ~8%;
@@ -438,7 +573,7 @@ replaces the std one at link time).
   (`prelude.s`: allocator, traps, string/array cores, `y_fmod`, float
   formatting), the float primitives `math.s` (`y_sqrt`, `y_to_int`, `y_fbits`,
   `y_bitsf` — what a `native def` reaches for), and the thread runtime
-  (`threads.s`) — embedded by both copies, see PORTING.md rule 11.
+  (`threads.s`) — embedded by both copies, see PORTING.md rule 12.
 - `src/y/` — the Y compiler: `ycc.y` (driver), `pkg.y` (`ycc build`:
   `y.toml`, the dependency graph, git, `y.lock`), `lexer.y`, `parser.y`,
   `rename.y`, `types.y` (checker), `lint.y` (warnings), `native.y`
@@ -482,7 +617,8 @@ replaces the std one at link time).
   `examples/` regression corpus, `ycc/` unit fixtures, `net/` servers
   for `test_net.sh`), `test/std/` (the std self-test suites + their
   goldens and the pty driver; `test_std_suites.sh`), `test/math/`
-  (`ulp_table.txt` + `ulp_check.y` + the generators; `test_math.sh`),
+  (`ulp_table.txt` + `ulp_check.y` + the generators + `find_repeats.py`;
+  `test_math.sh`),
   `test/COVERAGE.md` (feature → test matrix).
 - `bench/` — benchmarks + `compare.sh` + `profile.sh` + `compile_ir.sh`
   (see the workflow above).

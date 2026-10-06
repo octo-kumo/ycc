@@ -4,7 +4,7 @@
 // and says which suite it got and what came back.
 import tls;
 import fs;
-let port = tonum(argv()[1]);
+let port = tolong(argv()[1]);
 let pem = fs.read_file(argv()[2])!;
 let host = argv()[3];
 let c = tls.connect_with(host, port, { anchors: pem, alpn: "http/1.1", timeout: 10 });

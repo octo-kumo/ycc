@@ -118,9 +118,10 @@ def y_shift_neg() -> long {
     0
 };
 
-// tonum(s): optional '-', then digits; anything else stops the
-// scan and is ignored (exactly the old asm behaviour).
-def y_str_tonum(s: str) -> long {
+// tolong(s): optional '-', then digits; anything else stops the
+// scan and is ignored (exactly the old asm behaviour). This was `tolong` until
+// it grew a float arm, and a name that says "number" cannot say which.
+def y_str_tolong(s: str) -> long {
     let n = len(s);
     let neg = false;
     let i = 0;
@@ -144,6 +145,87 @@ def y_str_tonum(s: str) -> long {
         } else { go = false; };
     };
     if (neg) { 0 - acc } else { acc }
+};
+
+// tofloat(s): the same scan, with a fraction. Deliberately NOT strtod and
+// deliberately not exact: it accumulates in double as it goes, so "3.14" comes
+// back as the double nearest 3.14 and "0.1" as the double nearest 0.1, which
+// is what every other language's parser returns and what this module's own
+// literals are. It reads what it can and stops at the first byte that is not
+// part of a number -- the same tolerance as tolong, because a value that has
+// been through one should behave the same way through the other. Exponents
+// ("1e9") are not read; a program that wants them wants math.log10 and
+// pow_mod, not a parser with a different answer per platform.
+def y_str_tofloat(s: str) -> float {
+    let n = len(s);
+    let neg = false;
+    let i = 0;
+    if (n > 0) {
+        if (byte_at(s, 0) == 45) {
+            neg = true;
+            i = 1;
+        }
+    };
+    let acc = 0.0;
+    let scale = 0.1;
+    let dot = false;
+    let any = false;
+    while (i < n) {
+        let c = byte_at(s, i);
+        if (c >= 48) {
+            if (c <= 57) {
+                if (dot) {
+                    acc = acc + (c - 48) * scale;
+                    scale = scale * 0.1;
+                } else {
+                    acc = acc * 10.0 + (c - 48);
+                };
+                any = true;
+                i = i + 1;
+            } else { i = n; };
+        } else {
+            if (c == 46 && !dot) {
+                dot = true;
+                i = i + 1;
+            } else { i = n; };
+        };
+    };
+    if (!any) {
+        0.0
+    } else if (neg) {
+        0.0 - acc
+    } else {
+        acc
+    }
+};
+
+// The bare truncating cast, and a `native def` is what makes it reachable from
+// here: naming the label puts it in this program's references, which is how
+// uses_math decides whether math.s is in the program at all. One instruction of
+// machine code, already written and already gated -- not a second copy of it.
+native def trunc_to_long(x: float) -> long = "y_to_int";
+
+// tolong(x) for a float: truncated toward zero, and CHECKED. A float with no
+// long answer -- a NaN, or |x| at or past 2^63 -- traps here rather than coming
+// back as the machine's "integer indefinite" value, which is a perfectly good
+// index and an utterly misleading one. math.to_int makes the same promise for
+// the same reason, and one rule in a language is worth more than four
+// instructions.
+def y_f2l(x: float) -> long {
+    // 2^63 as a double: the first float with no long answer. It is exact, which
+    // matters -- an inexact bound would reject x = 2^63 - 1024 for no reason.
+    // A LOCAL, deliberately: a module-level `let` here becomes a .bss cell and
+    // an _init thunk in every binary, because rt.y is linked by every program
+    // and so its globals are the one thing the shaker cannot drop. Inside the
+    // function the bound is materialised only by a program that calls it.
+    let two63: float = 9223372036854775808.0;
+    if (x != x || x >= two63 || x < 0.0 - two63) {
+        y_put_hstr("runtime error: tolong: this float has no long value\n");
+        exit(1);
+    };
+    // The cast is where the truncation happens: cvttsd2si rounds toward zero,
+    // which is what "truncate" means and what floor does not.
+    trunc_to_long(x)
 };
 
 // last_index_of: the last match of needle in hay, -1 when absent; an

@@ -409,8 +409,17 @@ if __name__ == "__main__":
            lambda k, w: math.sqrt(w) * (1.0 + w * k))
     report("cos kernel", cosexact, 7, dec_frac(QMAX),
            lambda k, w: 1.0 - w * k)
-    report("tanh kernel", tanexact, 11, TANH_MAX * TANH_MAX,
-           lambda k, w: math.tanh(math.sqrt(w)))
+    # The compose matters as much as the degree, and it was wrong here: this
+    # reported the KERNEL's value against tanh(x), i.e. a number near -1/3
+    # against an answer near 0.46, and so measured the wrong quantity and said
+    # 0.000 ulp. tanexact returns the CORRECTION -- tanexact(w) is
+    # (tanh(x) - x)/(x*w) -- so the answer is x*(1 + w*k) with x = sqrt(w), and
+    # that is what the error has to be measured on. Reading the coefficient
+    # table would have caught it: c0 = -1/3 is the x^3 term of tanh, not its
+    # constant.
+    report("tanh kernel in w=x^2, tanh(x) = x*(1 + w*P(w)), |x| <= 1/2",
+           tanexact, 11, TANH_MAX * TANH_MAX,
+           lambda k, w: math.sqrt(w) * (1.0 + w * k))
 
     report("sinh kernel", sexact, 7, SMAX * SMAX,
            lambda k, w: math.sinh(math.sqrt(w)))

@@ -880,10 +880,10 @@ static Yv *label_addr_off(Yv *lmap, long code_len, long pad, Yv *name, long plus
             return yr(2, "ok", yv_bool(0), "addr", yv_long(0));
         } else if (yv_l(yr_get(e, "sec")) == 0) {
             return yr(2, "ok", yv_bool(1), "addr",
-                      yv_long(yv_l(yr_get(e, "off")) + ys_tonum(off)));
+                      yv_long(yv_l(yr_get(e, "off")) + ys_tolong(off)));
         } else {
             return yr(2, "ok", yv_bool(1), "addr",
-                      yv_long(code_len + pad + yv_l(yr_get(e, "off")) + ys_tonum(off)));
+                      yv_long(code_len + pad + yv_l(yr_get(e, "off")) + ys_tolong(off)));
         }
     }
 }
@@ -1236,7 +1236,7 @@ static Yv *asm_loc(long lno, long sec, Yv *offs, Yv *rest) {
         ;
     }
     if (!is_num_text(fs) || !is_num_text(ls) ||
-        ys_tonum(fs) < 1 || ys_tonum(ls) < 0) {
+        ys_tolong(fs) < 1 || ys_tolong(ls) < 0) {
         return yr(4,
                   "err", ys_cat(ys_cat(ys_cat(ys("L"), ys_long(lno)),
                                        ys(": bad .loc '")),
@@ -1256,9 +1256,9 @@ static Yv *asm_loc(long lno, long sec, Yv *offs, Yv *rest) {
     } else {
         Yv *fx = yav(
             2,
-            yr(4, "off", yv_long(ys_tonum(fs)), "kind", ys("file"),
+            yr(4, "off", yv_long(ys_tolong(fs)), "kind", ys("file"),
                "lbl", ys(""), "lbl2", ys("")),
-            yr(4, "off", yv_long(ys_tonum(ls)), "kind", ys("line"),
+            yr(4, "off", yv_long(ys_tolong(ls)), "kind", ys("line"),
                "lbl", ys(""), "lbl2", ys("")));
         return yr(4, "err", ys(""), "sec", yv_long(sec), "offs", offs,
                   "item", yr(7, "sec", yv_long(0), "off", ya_get(offs, 0),
@@ -1281,7 +1281,7 @@ static Yv *asm_file(long lno, long sec, Yv *offs, Yv *rest) {
         d = decode_str(ys_slice(q, 1, yv_len(q) - 1));
         ;
     }
-    if (!is_num_text(ns) || ys_tonum(ns) < 1 || asm_strdata_bad(q) ||
+    if (!is_num_text(ns) || ys_tolong(ns) < 1 || asm_strdata_bad(q) ||
         !yv_b(yr_get(d, "ok"))) {
         return yr(4,
                   "err", ys_cat(ys_cat(ys_cat(ys("L"), ys_long(lno)),
@@ -1297,7 +1297,7 @@ static Yv *asm_file(long lno, long sec, Yv *offs, Yv *rest) {
                            "lbl2", ys("")));
         return yr(4, "err", ys(""), "sec", yv_long(sec), "offs", offs,
                   "item", yr(7, "sec", yv_long(-1), "off",
-                             yv_long(ys_tonum(ns)), "len", yv_long(0),
+                             yv_long(ys_tolong(ns)), "len", yv_long(0),
                              "kind", ys("file"), "bytes", yav(0), "fix", fx, "br", yv_long(-1)));
     }
 }
@@ -1381,7 +1381,7 @@ static Yv *asm_quad_err(Yv *line, long lno, long sec, Yv *offs, Yv *rest) {
 
 static Yv *asm_quad_go(long sec, Yv *offs, Yv *rest) {
     /* (split: data-item shape built ONLY here.) */
-    Yv *bytes = le64(ys_tonum(rest));
+    Yv *bytes = le64(ys_tolong(rest));
     Yv *item = yr(7, "sec", yv_long(sec), "off", ya_get(offs, sec), "len", yv_long(yv_len(bytes)),
                   "kind", ys("data"), "bytes", bytes, "fix", yav(0), "br", yv_long(-1));
     ya_set(offs, sec, yv_long(yv_l(ya_get(offs, sec)) + yv_len(bytes)));
@@ -1402,7 +1402,7 @@ static Yv *asm_zero(Yv *line, long lno, long sec, Yv *offs, Yv *rest) {
                              "kind", ys(""), "bytes", yav(0), "fix", yav(0), "br", yv_long(-1)));
     } else {
         (void)line;
-        long n = ys_tonum(rest);
+        long n = ys_tolong(rest);
         Yv *zb = yav(0);
         if (sec != 2) {
             long i = 0;

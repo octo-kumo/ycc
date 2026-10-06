@@ -1,0 +1,26 @@
+-- tolong on a str: parse, stopping at the first non-digit
+42 -42 0 0 0
+42 -42  (the string method is the same function)
+-- tolong on a float: TOWARD ZERO, not floor
+3 -3 0 0 2
+-- tofloat on a str: the same scan, with a fraction
+3.140000 -0.500000 2.500000 
+3.140000  (the string method again)
+1.000000  <- an exponent is not read: stops at the 'e'
+0.000000 0.000000  <- no digits at all reads as 0.0
+-- tofloat on a long: the widening, made explicit
+7.000000 -7.000000 0.000000 
+  and it agrees with the implicit widening
+-- the round trip, which is what the pair is for
+  0 -> 0.000000 -> 0
+  1 -> 1.000000 -> 1
+  -1 -> -1.000000 -> -1
+  12345 -> 12345.000000 -> 12345
+  3.75 -> 3.750000 -> 3
+  -0.0625 -> -0.062500 -> 0
+    9   -> 0.000000 -> 0
+-- the ends of the range
+  -2^63        -> -9223372036854775808
+  2^63-2048    -> 9223372036854773760  (the last double below 2^63)
+  2^53         -> 9007199254740992  <- exact, as every double is here
+  2^63-1024 is not a double a program can pass: it rounds to 2^63

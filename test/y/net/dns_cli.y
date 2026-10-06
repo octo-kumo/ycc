@@ -4,7 +4,7 @@
 // no server: a dotted quad and /etc/hosts.
 import net;
 
-let port = tonum(argv()[1]);
+let port = tolong(argv()[1]);
 def ask(name: str) -> [str] { net.resolve_with(name, "127.0.0.1", port) };
 print(ask("two.test"));
 print(ask("trunc.test"));

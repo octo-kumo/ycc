@@ -22,6 +22,14 @@ below(n) stays inside its bound
           got 0, want 0
   ok    below(-5) is 0
           got 0, want 0
+  ok    below(2^62) is served -- it is the largest bound that is
+          inside its own bound
+  ok    below(2^62 + 1) answers 0 rather than hanging
+          got 0, want 0
+  ok    and below(LONG_MAX) too
+          got 0, want 0
+  ok    below(LONG_MIN) too
+          got 0, want 0
   ok    2000 draws from below(10) all land in 0..9
           got 0, want 0
   ok    and 2000 from below(1000000) in 0..999999
@@ -42,6 +50,16 @@ range(lo, hi) is INCLUSIVE on both ends
           got 9, want 9
   ok    an inverted range answers lo, not a trap
           got 9, want 9
+  ok    range(5, LONG_MAX) answers lo instead of hanging
+          got 5, want 5
+  ok    and it does return
+          in the range
+  ok    range(LONG_MIN, LONG_MAX) is one of its endpoints
+          the width is 2^64 and cannot be drawn
+  ok    and it is inside the range
+          a 2^64 span has no drawable width, so an endpoint
+  ok    the widest drawable range stays inside itself
+          500 draws from a range of width 2^62, all inside
 
 chance(pct)
   ok    chance(0) is never true
@@ -77,4 +95,30 @@ a whole sequence is reproducible
   ok    a different seed gives a different sequence
           not one draw in fifty the same
 
-32 of 32 checks passed
+the VALUES, against splitmix64 in exact 64-bit arithmetic
+  ok    seed 1, first six draws
+          splitmix64 with the seed offset applied twice
+  ok    seed 2, first three
+          a second seed, a third stream
+  ok    seed 0, first three
+          seed 0 is not a fixed point and mixes like any other
+  ok    a negative seed
+          the shifts are >>> so the sign does not change the mixer
+  ok    seed 2^62
+          the sign bit set, which >>> must ignore
+  ok    seed LONG_MIN
+          every bit set: a >> would carry the sign down and fail this
+
+below(n), derived from the raw stream
+  ok    below(4) from seed 42
+          masked to 62 bits, then modulo, with rejection
+  ok    below(1000) from seed 42
+          a modulus that does not divide the span, so rejection runs
+  ok    below(2^61) from seed 42
+          the sign bit of the masked draw is where the difference is
+  ok    state after seed(1) is the offset seed
+          got -7046029254386353130, want -7046029254386353130
+  ok    and after one draw it has advanced by the golden ratio
+          got 4354685564936845355, want 4354685564936845355
+
+52 of 52 checks passed

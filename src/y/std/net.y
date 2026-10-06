@@ -48,10 +48,10 @@ def addr_set(a: [byte; 16], host: str, port: long) -> long {
     a[7] = 0;
     let d = split(host, ".");
     if (len(d) == 4) {
-        a[4] = tonum(d[0]);
-        a[5] = tonum(d[1]);
-        a[6] = tonum(d[2]);
-        a[7] = tonum(d[3]);
+        a[4] = tolong(d[0]);
+        a[5] = tolong(d[1]);
+        a[6] = tolong(d[2]);
+        a[7] = tolong(d[3]);
         0
     }
     0
@@ -299,7 +299,7 @@ def is_quad(s: str) -> bool {
             if (p[i] < c'0' || p[i] > c'9') { ok = false; };
             i = i + 1;
         };
-        if (ok && tonum(p) > 255) { ok = false; };
+        if (ok && tolong(p) > 255) { ok = false; };
     };
     ok
 };

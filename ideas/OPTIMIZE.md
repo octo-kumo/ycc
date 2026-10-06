@@ -233,7 +233,7 @@ std functions that tree-shaking already removed:
 "runtime error: no match arm matched"               ← y_match_fail, dead
 "runtime error: negative shift count"               ← dead
 "0123456789abcdef"                                  ← y_bytes_repr, dead
-"true" / "false" / "x" / "b" / "n" / "r" / "t"      ← y_str_tonum etc, dead
+"true" / "false" / "x" / "b" / "n" / "r" / "t"      ← y_str_tolong etc, dead
 ```
 
 **Why it is nearly free.** The reachability data already exists. `line_refs_b`

@@ -155,7 +155,25 @@ ported, so they may use the whole native surface -- `&x`, `*p`,
   or more gets a mapping of its own.
   Nothing is ever freed (arena); no GC to write until something needs it.
 - Expression values in `%rax`; operands that must survive nested evaluation are
-  **pushed** (nothing live in caller-saved regs across a call).
+  **pushed** (nothing live in caller-saved regs across a call). Two places relax
+  that, and they share one predicate — `leaf_expr` in `native.y`, true for a
+  literal, an identifier, or a unary operator over either, which is all a
+  `mov $imm, %rax` or a `mov off(%rbp), %rax`:
+  - a **float** binary operator. The leaf cannot write an SSE register, so the
+    left operand stays in `%xmm0` across the right one's evaluation. Worth 25%
+    of a fitted polynomial kernel — a Horner chain is nothing but such
+    operators.
+  - an **integer comparison that branches on flags** (`gen_cmp_flags`, which is
+    what `if x < 1` compiles to). The leaf clobbers neither `%rcx` nor the
+    stack, so the left goes straight into `%rcx` where the right one lands.
+    This is the hottest shape in the language: 3660 such comparisons in `ycc`'s
+    own output. `cmp` is dst-minus-src either way, so which register holds
+    which operand does not move the flags.
+
+  Both are guarded by a predicate rather than by a flag, because getting the
+  predicate wrong would produce a *wrong answer*, not a slow one. Anything that
+  may call (`gen_eq_vals`'s left operand, an array read whose bounds check can
+  call `y_oob`, a field read, a nested float operator) still pushes.
 - Y functions use a private convention: args pushed on the stack left to
   right, caller cleans up, result in `%rax`. The last-pushed arg sits at
   `rbp+16`, so param `k` of an `n`-arg function lives at
@@ -307,7 +325,7 @@ writing a kernel.
   as sixty labels would cost every program ~120K instructions forever.
 * **`.quad` is a 64-bit bit pattern**, so a negative value is a legitimate one
   and half of every double's pattern is negative (that is the sign bit). A
-  range check cannot replace the old non-negativity rule either: `tonum` wraps
+  range check cannot replace the old non-negativity rule either: `tolong` wraps
   at 64 bits, so 2^63 comes back as -2^63 and the eight bytes stored are the
   same ones.
 
@@ -539,7 +557,7 @@ All of these are lowered early, so the checker and emitter see little new:
   both the checker (`typeof_method`: arity, argument types, result) and
   the emitter (`gen_method`). Builtin-backed methods are the builtin with
   the receiver as its first argument: `split`, `trim`/`strip`,
-  `index_of`, `last_index_of`, `bytes`, `tonum`, `ord`, `byte_at`, and
+  `index_of`, `last_index_of`, `bytes`, `tolong`, `ord`, `byte_at`, and
   `join`, whose receiver is the separator and goes last
   (`", ".join(xs)`). The rest are Y helpers in `std/str.y`, called by
   fixed label (`y_str_pad_left`, …):
@@ -635,7 +653,7 @@ conversion, the generic array cores (`y_arr_push`/`y_arr_prepend`/`y_arr_slice`/
 `y_arr_eq`/`y_arr_extend` — one implementation each, parameterized by element width,
 because Y has no generics), long and float formatting, and argv
 materialization. Everything else —
-the whole print/put/eput family, `ord`/`chr`/`tonum`/
+the whole print/put/eput family, `ord`/`chr`/`tolong`/
 `last_index_of`, `range`, time, files — is Y. (`join` went
 back to assembly: in Y it pushed one byte at a time through a `[byte]`
 accumulator, and the compiler joins megabytes of asm text per

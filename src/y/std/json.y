@@ -26,7 +26,7 @@
 // `stringify` takes the bare map.
 //
 // NUMBERS ARE TEXT. A number holds its literal text, not a number, because Y
-// has no string-to-float conversion at all: `tonum` returns a long and there is
+// has no string-to-float conversion at all: `tolong` returns a long and there is
 // no `tofloat` anywhere. So `{"x": 1.5}` parses to a `Num` holding "1.5", which
 // prints back byte for byte. `as_long` gives the integer part; `as_float` does
 // not exist yet.
@@ -141,7 +141,7 @@ def as_str(v: Val) -> str? {
 
 def as_long(v: Val) -> long? {
     let out: long? = none;
-    if let Num n = v { out = some(tonum(n.num)); };
+    if let Num n = v { out = some(tolong(n.num)); };
     out
 }
 
@@ -746,7 +746,7 @@ def get_long(o: Val, key: str, dflt: long) -> long {
     let out = dflt;
     let f = field(o, key);
     if (f != none) {
-        if let Num n = f! { out = tonum(n.num) };
+        if let Num n = f! { out = tolong(n.num) };
     };
     out
 }

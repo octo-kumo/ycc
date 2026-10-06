@@ -46,7 +46,7 @@ int is_radix_ch(long c, long radix) {
 }
 
 // A decimal literal's text without its `_` digit separators: its num token
-// carries this, so whatever reads the literal (tonum, norm_num, the float
+// carries this, so whatever reads the literal (tolong, norm_num, the float
 // helpers) sees plain digits. A radix literal keeps them (norm_num skips
 // them).
 Yv *strip_seps(Yv *s) {

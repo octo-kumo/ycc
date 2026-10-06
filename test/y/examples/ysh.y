@@ -155,7 +155,7 @@ def calc(rpn: [str]) -> long {
             sp = sp - 1;
             st[sp - 1] = op_apply(tok, a, b);
         } else {
-            st[sp] = tonum(tok);
+            st[sp] = tolong(tok);
             sp = sp + 1;
         };
     };
@@ -191,7 +191,7 @@ def cmd_seq(args: [str]) -> long {
         puts("usage: seq <n>\n");
         return 1;
     };
-    foreach (i in range(tonum(args[1]))) {
+    foreach (i in range(tolong(args[1]))) {
         puts(tostring(i + 1) + "\n");
     };
     0
@@ -210,7 +210,7 @@ def cmd_fib(args: [str]) -> long {
         puts("usage: fib <n>\n");
         return 1;
     };
-    puts(tostring(fib(tonum(args[1]))) + "\n");
+    puts(tostring(fib(tolong(args[1]))) + "\n");
     0
 };
 
@@ -266,7 +266,7 @@ def cmd_run_line(line: str) -> long {
     let tokens = split(trimmed, " ");
     if (tokens[0] == "exit" || tokens[0] == "quit") {
         if (len(tokens) > 1) {
-            return tonum(tokens[1]);
+            return tolong(tokens[1]);
         };
         return 0;
     };

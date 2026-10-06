@@ -387,8 +387,8 @@ def parse_size(s: str) -> long {
     let a = s[0:at];
     let b = s[at + 1:];
     if (!args.num_ok(a) || !args.num_ok(b)) { return 0; };
-    let w = tonum(a);
-    let h = tonum(b);
+    let w = tolong(a);
+    let h = tolong(b);
     if (w < 1) { w = 1; };
     if (h < 1) { h = 1; };
     if (w > render.MAXC) { w = render.MAXC; };
@@ -682,7 +682,7 @@ if (NOTTY != 0) {
         for k in 0..len(parts) {
             let p = parts[k];
             if (len(p) > 0 && args.num_ok(p)) {
-                let v = tonum(p);
+                let v = tolong(p);
                 // A frame the run will not reach is not a frame it can dump,
                 // and listing it in the header would promise something the
                 // output does not contain.

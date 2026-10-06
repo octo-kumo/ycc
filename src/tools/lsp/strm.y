@@ -42,7 +42,8 @@ import types from "../../y/types.y";
 const MIRROR: [str] = ["split", "join", "trim", "strip", "trim_start", "lstrip",
     "trim_end", "rstrip", "pad_left", "pad_right", "center", "starts_with",
     "ends_with", "contains", "index_of", "last_index_of", "count", "replace",
-    "upper", "lower", "repeat", "lines", "bytes", "tonum", "ord", "byte_at"];
+    "upper", "lower", "repeat", "lines", "bytes", "tolong", "tofloat", "ord",
+    "byte_at"];
 //
 // No `length`: `s.length` is a PROPERTY (NATIVE.md, "Owned strings"), not a
 // method, and str_method does not list it -- putting it in the mirror would make

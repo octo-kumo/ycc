@@ -137,7 +137,7 @@ def parse(src: str) -> Rle {
                         e.msg = "the header key '" + key + "' wants a number";
                         return e
                     };
-                    let v = tonum(src[d0:i]);
+                    let v = tolong(src[d0:i]);
                     if (key == "x") { rw = v; };
                     if (key == "y") { rh = v; }
                 } else if (key == "rule") {

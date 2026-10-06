@@ -617,8 +617,8 @@ def parse_size(spec: str) -> long {
     let a = spec[0:at];
     let b = spec[at + 1:];
     if (!args.num_ok(a) || !args.num_ok(b)) { return 0; };
-    let w = tonum(a);
-    let h = tonum(b);
+    let w = tolong(a);
+    let h = tolong(b);
     if (w < 1 || w > sim.MAXW || h < 1 || h > sim.MAXH) { return 0; };
     w * 1000000 + h
 };

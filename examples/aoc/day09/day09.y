@@ -29,7 +29,7 @@
 //
 // Y has no `sort` (hand-rolled insertion sort below), no `break`/
 // `continue` (explicit terminal conditions), no `float`->`long`, and
-// `[0; n]` needs a literal size (so `zeros_long` grows one).  `tonum` is
+// `[0; n]` needs a literal size (so `zeros_long` grows one).  `tolong` is
 // LENIENT -- it stops at the first non-digit and ignores the rest -- so
 // every field is gated on `all_digits` before it is converted.
 
@@ -167,8 +167,8 @@ def parse_pair(line: str, out: [long]) -> bool {
   if (parts.length != 2) { return false };
   if (!all_digits(parts[0].trim())) { return false };
   if (!all_digits(parts[1].trim())) { return false };
-  out += parts[0].trim().tonum();
-  out += parts[1].trim().tonum();
+  out += parts[0].trim().tolong();
+  out += parts[1].trim().tolong();
   return true
 };
 
@@ -852,7 +852,7 @@ def reversed(flat: [long]) -> [long] {
 };
 
 // ---- oracle D: an independent reader.
-// A byte-at-a-time scan that never calls split() or tonum(), so a defect in
+// A byte-at-a-time scan that never calls split() or tolong(), so a defect in
 // the parser cannot hide behind the parser.  Returns the number of
 // malformed bytes it saw (a line must hold exactly two integer fields, and
 // the stream must end on a line boundary); non-exiting so `--check` can
@@ -1160,7 +1160,7 @@ def run_check(path: str) -> long {
             solve_part2(tight, build_band(tight), sqw2) < solve_part1(tight, sqw1) ? 1 : 0, 1);
 
   // ---- the parser's accept/reject decisions, row by row.  These are the
-  // cases a strictly-gated parser exists for: `tonum` alone would happily
+  // cases a strictly-gated parser exists for: `tolong` alone would happily
   // return 12 for "12ab" and 1 for "1,2,3" would silently drop a field.
   print("");
   print("parser and reader decisions (what must be accepted, what must not):");

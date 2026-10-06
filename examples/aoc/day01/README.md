@@ -101,7 +101,7 @@ ok   clicks present   clicks=622933
 ok   rescan present   n=4432 clicks=622933
 ok   parse == rescan   4432/622933 vs 4432/622933
 ok   directions == rescan   L:2236/2236 R:2196/2196
-ok   distances == tonum   0 of 4432 disagree with tonum()
+ok   distances == tolong   0 of 4432 disagree with tolong()
 ok   part 1 present   part1=1066
 ok   part 2 present   part2=6223
 ok   part 1: walk == reverse   1066 vs 1066
@@ -203,7 +203,7 @@ either answer; it is asserted only to pin the behaviour down.
 | part 2 | `part2_per_click`: step every one of the 622 933 clicks and count | `part2_closed`: one exact division per rotation, no stepping | 6223 = 6223 |
 | rotations / total clicks | `parse_lines` over `fs.read_lines` | `rescan`, a raw-`[byte]` scan that pulls digit runs out directly and never calls the parser | 4432 / 622 933 both |
 | directions | `parse_lines` | the same byte scan counting `L` and `R` bytes | 2236 L / 2196 R both |
-| each distance | the hand-rolled digit loop in `digits_value` | the standard library's `tonum()` | 0 of 4432 disagree |
+| each distance | the hand-rolled digit loop in `digits_value` | the standard library's `tolong()` | 0 of 4432 disagree |
 
 The two part-1 methods differ in *accumulation order and direction*, so an
 off-by-one or a sign error in either shows up as a disagreement. The two

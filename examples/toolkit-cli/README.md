@@ -300,7 +300,7 @@ here so the next reader knows the odd-looking code is deliberate:
 |---|---|
 | no `break`, no `continue` | early exit is a guard flag with an explicit terminal assignment; a skip is a positive condition wrapping the body. Every scan loop in `csvio.y` and `jsonval.y` is written this way. |
 | no cast syntax at all | `long → byte` happens at exactly two annotated sites, `b64.put_byte()` and `jsonval.putb()` / `put_utf8()`, and nowhere else |
-| no `float → long`, no `tonum(tostring(f))` | nothing numeric is done in floating point. CSV numeric recognition is a hand-written check against the JSON number grammar (`csvio.num_token`), and a JSON number keeps its **text**, so `1.5e-3` is never rounded through six decimals. |
+| no `float → long`, no `tolong(tostring(f))` | nothing numeric is done in floating point. CSV numeric recognition is a hand-written check against the JSON number grammar (`csvio.num_token`), and a JSON number keeps its **text**, so `1.5e-3` is never rounded through six decimals. |
 | no character literals | `ord("a")` and `chr(65)`; `39` for a single quote |
 | no `sort`, no `push`, no `map_get` | `+=` and `*=` are the array interface; sorting is hand-written (`jsonval.sort_fields`, selection sort; `fs.sort_names` in std for a reference shape); lookups are linear scans |
 | no JSON, no CSV, no base64 encoder | written here; see below |

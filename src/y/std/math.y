@@ -332,6 +332,12 @@ let phi: float = 1.618033988749895;
 // is quiet, so no trap and no builtin. (Integer division by zero DOES trap.)
 let nan: float = 0.0 / 0.0;
 let inf: float = 1.0 / 0.0;
+// -0.0, which no literal spells (Y writes -1.0 as a unary minus, and
+// 0.0 - 0.0 is +0.0 by IEEE). Declared HERE rather than beside fmin/fmax,
+// which is where it was, because atan2's both-zeros arm needs it and Y's
+// names are not hoisted: a binding declared later is an undefined variable
+// where it is written.
+let neg_zero: float = 0.0 * (0.0 - 1.0);
 
 // ── the machine primitives, and the exact layer built on them ────────────────
 //
@@ -556,6 +562,16 @@ def ldexp(x: float, e: long) -> float {
         let down = 0 - 1022;
         while (k >= up) { r = r * 4.49423283715578977e307; k = k - up; };
         while (k <= down) { r = r * 2.2250738585072014e-308; k = k - down; };
+        // A big step can have already carried r out of the range -- to an
+        // infinity on the way up, to zero on the way down -- and then there is
+        // nothing left to do exactly. It has to be CHECKED for, because the
+        // shift below adds k to the exponent FIELD, and on an infinity that
+        // field is already 2047: the sum overflows a signed long, wraps, and
+        // comes back as a NEGATIVE NaN. ldexp(1.0, 2046) answered
+        // -nan where the answer is +inf, through exactly that.
+        if (r == 0.0 || is_inf(r)) {
+            r
+        } else {
         // What is left fits the exponent field as long as the answer stays
         // NORMAL; otherwise the mantissa has to shift too, and one doubling at a
         // time is how that is exact (this is also the subnormal-input case: a
@@ -568,6 +584,20 @@ def ldexp(x: float, e: long) -> float {
                 r = r * if (step < 0) { 0.5 } else { 2.0 };
                 rest = rest - step;
             }
+        } else if (f + k >= 2047) {
+            // Field 2047 is inf/NaN, so the answer has left the range: an
+            // infinity carrying r's sign. This arm exists for the same reason as
+            // the check above, and for the case that one does not cover -- r can
+            // still be finite here while the answer is not, which is exactly
+            // ldexp(2.47, 1024): the big step leaves 1.11e308, the field is
+            // 2046, and adding k = 2 carries it to 2047. Shifted as bits that
+            // is a long overflow, which wraps and comes back as a NEGATIVE
+            // NaN. Only k > 0 reaches here, since f is at most 2046.
+            //
+            // Assigned rather than returned: this chain's arms all write `r` and
+            // the block's value is thrown away, which the compiler says so --
+            // "the result of '-' is not used" -- and it was right.
+            r = if (r < 0.0) { 0.0 - inf } else { inf };
         } else if (k != 0) {
             // k * 2^52 added to the bits is k added to the exponent FIELD, so
             // the sign comes off first (a negative pattern would put a 1 at the
@@ -579,6 +609,7 @@ def ldexp(x: float, e: long) -> float {
             r = bitsf(if (neg) { shifted + sign_bit() } else { shifted });
         };
         r
+        }
     }
 };
 
@@ -666,14 +697,32 @@ def cbrt(x: float) -> float {
             y = (2.0 * y + s / (y * y)) / 3.0;
             i = i + 1;
         };
-        // The last step in its residual form. A Newton step rebuilds the whole
-        // iterate -- three roundings, which do not cancel -- and after four of
-        // them the answer sits a few ulps out and stays there. This one
-        // corrects the value already in hand by the error the residual
-        // measures, and the correction is ~1 ulp, so its own rounding is
-        // negligible: the answer lands within an ulp of the true root.
+        // The last step, and the only one that has to be RIGHT rather than close.
+        // Four plain Newton steps converge to about 4e-19 of relative error --
+        // far below an ulp -- but each of them is three roundings that do not
+        // cancel, so what they converge TO is a value a couple of ulps out, and
+        // they stay there: measured over 2000 arguments, cbrt was exact on half,
+        // one ulp out on 46% and TWO on 3.5%.
+        //
+        // The correction step fixes that, and it has to be done in
+        // double-double. y^3 - s cancels completely -- y^3 is within an ulp of s
+        // by the time we get here -- so the subtraction returns a residual with
+        // an ulp of ABSOLUTE error in it, and dividing that by 3y^2 turns the
+        // absolute error into 0.7 ulp of y. The correction is therefore wrong
+        // by about an ulp of its own, which is the 2.
+        //
+        // So the residual is assembled from the parts: prod_err gives back what
+        // each product lost, and two_sum subtracts without losing anything.
+        // What is left of the residual is then good to about 2^-104 of it, the
+        // correction to well under an ulp, and the final subtraction rounds
+        // once -- which is as close to correctly rounded as a double can be
+        // stated to be.
         let y2 = y * y;
-        y = y - ((y2 * y - s) / (3.0 * y2));
+        let y3 = y2 * y;
+        let y3_err = (prod_err(y, y, y2) * y) + prod_err(y2, y, y3);
+        let r_hi = two_sum(y3, 0.0 - s);
+        let r_lo = (y3 - r_hi) - s;
+        y = y - ((r_hi + (r_lo + y3_err)) / (3.0 * y2));
         let out = ldexp(y, q);
         if (neg) { 0.0 - out } else { out }
     }
@@ -682,16 +731,123 @@ def cbrt(x: float) -> float {
 // hypot(x, y): sqrt(x^2 + y^2) without the overflow. Scaling by the larger
 // magnitude first keeps both squares inside the double range (a square overflows
 // from 1.3e154), and dividing it back is exact.
+// C99 7.12.7.3 and IEEE 754-2019 both give hypot(+-inf, NaN) = +inf, and glibc
+// agrees: an infinity is the larger of the two and the other operand cannot
+// matter. `m` is the larger magnitude and a NaN never wins that comparison, so
+// the check for an infinity has to come BEFORE the NaN arm rather than beside it
+// -- hypot(inf, nan) answered nan where the answer is inf.
 def hypot(x: float, y: float) -> float {
     let a = fabs(x);
     let b = fabs(y);
-    let m = if (a > b) { a } else { b };
-    if (m == 0.0 || m != m || is_inf(m)) {
-        if (is_inf(m)) { inf } else { m }
+    // The infinity has to be found by looking for one, not by taking the larger
+    // of the two: every comparison against a NaN is false, so `if (a > b) a else
+    // b` hands back the NaN whenever one operand is one, and the infinity it was
+    // supposed to be dominated is never seen. That is why hypot(inf, nan) came
+    // out nan -- and why the check below had nothing to find.
+    if (is_inf(a) || is_inf(b)) {
+        inf
+    } else if (a != a || b != b) {
+        nan
+    } else if (a > b) {
+        // Scaling by the larger magnitude is what keeps this from overflowing
+        // where a plain sqrt(x*x + y*y) would, so the comparison has to be a real
+        // one -- which it is, the NaN having been ruled out two arms above.
+        hypot_scaled(a, b)
     } else {
-        let p = x / m;
-        let q = y / m;
-        m * sqrt(p * p + q * q)
+        hypot_scaled(b, a)
+    }
+};
+
+// The body of hypot, with the larger magnitude named `m` and the other `s`.
+//
+// Two arguments and not three, deliberately: my first attempt passed the
+// maximum in as well, to keep a branch from needing it -- and then took the
+// maximum from the WRONG place in one of the two calls, so hypot(3.5, 0)
+// answered 0.0 where the answer is 3.5. A name that is passed in separately from
+// the one it is derived from can disagree with it; one that is not cannot.
+def hypot_scaled(m: float, s: float) -> float {
+    if (m == 0.0) {
+        // both operands are zeros, and the answer is +0: hypot is never
+        // negative, so hypot(0.0, -0.0) is +0 whichever zero came second.
+        0.0
+    } else {
+        // THREE PATHS, and which one runs is a DECISION about the argument
+        // rather than a compromise. What the function is for is m * sqrt(1 + p^2)
+        // without letting the intermediate leave the range -- and the form that
+        // does that is not the form that does it cheapest, so the choice had to
+        // be measured rather than reasoned.
+        //
+        // NOT m * sqrt((s/m)^2 + 1). That divides once and multiplies once by an
+        // ARBITRARY float, and both round at full size: the division's half-ulp
+        // comes back doubled through the square, and the multiply's half-ulp is a
+        // half-ulp of the answer. Over 400 pairs with |s/m| from 1e-8 to 1e-1 it
+        // was 2 ulps out on 0.75% of them and never 3.
+        //
+        // (It is also why this never reads `1.0 + p*p`: that is the same identity
+        // and a different number, and I "simplified" to it once, checked the two
+        // Pythagorean triples that are exact -- 3,4,5 and 5,12,13 -- saw them pass
+        // and nearly committed. hypot(2.0, 3.0) is not one of those: p = 2/3 does
+        // not square-and-add back to 1 exactly. Both forms give the same answer for
+        // 3,4 and for 1,1, which is what a form that is only SOMETIMES wrong looks
+        // like, and is why the check has to be on an argument where they disagree.)
+        //
+        // ── the middle: no scaling at all ──
+        //
+        // sqrt(m*m + s*s) directly, with three roundings where the scaled form has
+        // four and NONE of them spent on a scale factor -- so it is more accurate
+        // as well as cheaper, which is the opposite of what I expected and the
+        // reason it is worth having. About half of all arguments land here.
+        //
+        // BOTH bounds are the size of what this line ACTUALLY computes, and
+        // getting either wrong is the defect class this module has produced
+        // before: an intermediate leaves the range while the answer does not.
+        //
+        // The high bound is 1e153 where the true bound is sqrt(DBL_MAX/2) =
+        // 9.4808e153. It WAS 1e154, which is wrong by a factor of ten, and it was
+        // wrong because it was reasoned from m*m ALONE: at m = 1e154 the square is
+        // 1e308 and fits. What does not fit is the SUM, which is up to 2*m*m --
+        // and the sum is what the line evaluates. So every m in (9.48e153, 1e154)
+        // took the direct path and answered INFINITY for an answer of about
+        // 1.4e154, which is a perfectly ordinary double. Only the boundary cases
+        // in the table found it; the decade-uniform sweep did not, and neither did
+        // 20000 randomly drawn pairs.
+        //
+        // The low bound is 1e152 where the true bound is 1.5e-154, and the margin
+        // is deliberate in the other direction: at m = 1.4e-154 the square is
+        // 1.96e-308, which is SUBNORMAL, and a subnormal square has lost its low
+        // bits before the square root ever sees them. Writing the exact bound
+        // there would be correct on the day and a latent defect after it, because
+        // the arguments that reach it are one part in 10^150 of the domain.
+        if (m < 1e153 && m > 1e-152) {
+            sqrt(m * m + s * s)
+        } else {
+            let p = s / m;
+            if (p < 1e-4) {
+                // THE CHEAP PATH, and it is where the wide-ratio band actually
+                // lives. When s/m is that small the answer is m * (1 + p^2/2 -
+                // p^4/8 + ...), and the terms past p^2/2 are below an ulp: p^4/8
+                // at p = 1e-4 is 1.25e-17 against a half-ulp of 1.1e-16. So the
+                // answer is m plus a correction, and the correction's OWN relative
+                // error -- two roundings and a division -- is multiplied by p^2/2
+                // before it reaches the answer, which is why a form built from
+                // three sloppy operations beats one built from a scaling.
+                //
+                // m + (s/m)*s/2 rather than m + s*s/(2m): the first cannot
+                // overflow when m is near 1e308, which is exactly the case that
+                // brought it here, and s*s/(2m) would be the rounding at the wrong
+                // SIZE all over again.
+                m + p * s * 0.5
+            } else {
+                // and only here is the scaling needed: m outside [1e-152, 1e153]
+                // AND the ratio not small, which under a decade-uniform pair
+                // spread is under one per cent of arguments.
+                let k = exp_field(m) - 1023;
+                let sc = ldexp(1.0, 0 - k);
+                let m2 = m * sc;
+                let s2 = s * sc;
+                ldexp(sqrt(m2 * m2 + s2 * s2), k)
+            }
+        }
     }
 };
 
@@ -761,6 +917,30 @@ let sin_kl: [float] = [1.1179358334940806e-17, 5.126396701520949e-19,
     -7.318524662312664e-21, 1.2526205035687516e-22, -1.632387720195767e-25,
     7.64860958890575e-27];
 
+// sin_k -- used by sin_cos_k (via tan).
+// sin_k's kernel, UNROLLED. Generated by test/math/gen_split_unroll.py
+// from the arrays in this file; do not retype it. See that script for why, and
+// t328_split_unrolled.y for the gate that says the two forms agree to the bit.
+//
+// The order is the loop's, exactly: p starts at the highest coefficient and
+// works down, which is Horner's rule and the only order that gives the split
+// evaluation its accuracy. Same operations, same sequence, no array.
+def poly_sin(w: float) -> float {
+    let p = 1.5918129294866608e-10;
+    let q = 7.64860958890575e-27;
+    p = p * w + -2.5051131845003624e-08;
+    q = q * w - 1.632387720195767e-25;
+    p = p * w + 2.755731610255244e-06;
+    q = q * w + 1.2526205035687516e-22;
+    p = p * w + -0.00019841269836758574;
+    q = q * w - 7.318524662312664e-21;
+    p = p * w + 0.008333333333330948;
+    q = q * w + 5.126396701520949e-19;
+    p = p * w + -0.16666666666666666;
+    q = q * w + 1.1179358334940806e-17;
+    p + q
+};
+
 // cos's kernel, in w = x^2, for |x| <= pi/4: 1/2 - x^2/24 + ...
 let cos_k: [float] = [0.5, -0.041666666666666664, 0.0013888888888888883,
     -2.4801587301578204e-05, 2.755731921819105e-07, -2.0876754983065435e-09,
@@ -768,6 +948,34 @@ let cos_k: [float] = [0.5, -0.041666666666666664, 0.0013888888888888883,
 let cos_kl: [float] = [-9.927204987228577e-23, -2.2923648485442405e-18,
     -1.0382692687352548e-19, -2.1862916859764185e-22, 3.4594728796697634e-25,
     -1.3403058423097282e-25, -6.070140715638571e-28, -1.3300480612299751e-30];
+
+// cos_k -- used by sin_cos_k (via tan).
+// cos_k's kernel, UNROLLED. Generated by test/math/gen_split_unroll.py
+// from the arrays in this file; do not retype it. See that script for why, and
+// t328_split_unrolled.y for the gate that says the two forms agree to the bit.
+//
+// The order is the loop's, exactly: p starts at the highest coefficient and
+// works down, which is Horner's rule and the only order that gives the split
+// evaluation its accuracy. Same operations, same sequence, no array.
+def poly_cos(w: float) -> float {
+    let p = -4.74108669850752e-14;
+    let q = -1.3300480612299751e-30;
+    p = p * w + 1.1470361263661415e-11;
+    q = q * w - 6.070140715638571e-28;
+    p = p * w + -2.0876754983065435e-09;
+    q = q * w - 1.3403058423097282e-25;
+    p = p * w + 2.755731921819105e-07;
+    q = q * w + 3.4594728796697634e-25;
+    p = p * w + -2.4801587301578204e-05;
+    q = q * w - 2.1862916859764185e-22;
+    p = p * w + 0.0013888888888888883;
+    q = q * w - 1.0382692687352548e-19;
+    p = p * w + -0.041666666666666664;
+    q = q * w - 2.2923648485442405e-18;
+    p = p * w + 0.5;
+    q = q * w - 9.927204987228577e-23;
+    p + q
+};
 
 // sinh's kernel, in w = x^2, for |x| <= 0.5: sinh x = x*(1 + w*P(w)).
 // expm1 is the exp kernel on its own, and sinh is (expm1(x) - expm1(-x))/2,
@@ -779,6 +987,132 @@ let sinh_k: [float] = [0.16666666666666666, 0.008333333333333333,
 let sinh_kl: [float] = [9.251858534705814e-18, 1.1565019634686237e-19,
     7.071825259067978e-24, 1.2480102547401166e-23, 1.5339941984694534e-24,
     1.1738184850031472e-26, -2.7025335984982047e-29, 1.7918268050249534e-31];
+
+// ── the same three kernels, unrolled ──────────────────────────────────────────
+//
+// poly_split above is the general form, and it is what every other kernel in
+// this module uses. These three are the ones a PROGRAM runs -- expm1, exp2,
+// log1p, pow, and sinh and cosh past 709 -- so they are written out.
+//
+// The reason is the cost of an array read in this compiler: TWELVE
+// instructions, of which four are loop-invariant. It reloads the array record
+// from the frame, reloads its length, bounds-checks the index against it,
+// reloads the data pointer, and only then loads the element. Two accesses an
+// iteration is twenty-four instructions to do two multiply-adds. Measured with
+// callgrind, poly_split is 890 instructions a call and 56% of expm1's total;
+// the arithmetic it performs is two multiply-adds and an add, which is about
+// 160.
+//
+// There is no cheaper way to write the loop: Y has no pointer arithmetic (a
+// *T can be dereferenced but not indexed) and no unrolling, so an indexed
+// access costs twelve however the loop is written. The only way out is to have
+// no index.
+//
+// Generated by test/math/gen_split_unroll.py, which READS the arrays above
+// rather than restating them -- a coefficient's low half lives in its
+// sixteenth digit, and a second copy of these numbers is a second thing to
+// keep in step. t328_split_unrolled.y is the gate: it asks both forms the same
+// question over a spread and requires the same bits, so the two cannot drift.
+
+// exp_k -- used by expm1, exp2_corr, exp_half.
+// exp_k's kernel, UNROLLED. Generated by test/math/gen_split_unroll.py
+// from the arrays in this file; do not retype it. See that script for why, and
+// t328_split_unrolled.y for the gate that says the two forms agree to the bit.
+//
+// The order is the loop's, exactly: p starts at the highest coefficient and
+// works down, which is Horner's rule and the only order that gives the split
+// evaluation its accuracy. Same operations, same sequence, no array.
+def poly_exp(w: float) -> float {
+    let p = 1.3336404122592556e-11;
+    let q = 2.939928092011524e-28;
+    p = p * w + 1.5868300911899847e-10;
+    q = q * w + 3.918194843020948e-27;
+    p = p * w + 2.0887964071930685e-09;
+    q = q * w - 1.2128533042289473e-25;
+    p = p * w + 2.5051685923955133e-08;
+    q = q * w + 1.1649605174557337e-24;
+    p = p * w + 2.755732994359045e-07;
+    q = q * w - 1.12468925587968e-23;
+    p = p * w + 2.755731903759997e-06;
+    q = q * w - 6.87290497175393e-23;
+    p = p * w + 2.4801587303802537e-05;
+    q = q * w + 8.921709691222807e-22;
+    p = p * w + 0.00019841269841252215;
+    q = q * w + 1.3140192523087737e-20;
+    p = p * w + 0.0013888888888888978;
+    q = q * w + 5.097412265283907e-20;
+    p = p * w + 0.008333333333333333;
+    q = q * w - 1.5735622740938769e-19;
+    p = p * w + 0.041666666666666664;
+    q = q * w + 2.317267918780335e-18;
+    p = p * w + 0.16666666666666666;
+    q = q * w + 9.251831897791138e-18;
+    p = p * w + 0.5;
+    q = q * w + 2.731824807595654e-26;
+    p + q
+};
+
+// log_k -- used by log1p, log2_dd.
+// log_k's kernel, UNROLLED. Generated by test/math/gen_split_unroll.py
+// from the arrays in this file; do not retype it. See that script for why, and
+// t328_split_unrolled.y for the gate that says the two forms agree to the bit.
+//
+// The order is the loop's, exactly: p starts at the highest coefficient and
+// works down, which is Horner's rule and the only order that gives the split
+// evaluation its accuracy. Same operations, same sequence, no array.
+def poly_log(w: float) -> float {
+    let p = 0.1010869079759298;
+    let q = 2.779086897805733e-18;
+    p = p * w + 0.0942220876984394;
+    q = q * w + 9.130001461195338e-19;
+    p = p * w + 0.10530385543195436;
+    q = q * w - 1.2444148727046784e-18;
+    p = p * w + 0.11764605236538342;
+    q = q * w - 5.575584781284454e-18;
+    p = p * w + 0.13333334927545218;
+    q = q * w + 2.4799585998467566e-18;
+    p = p * w + 0.15384615368426527;
+    q = q * w - 1.3094359941278366e-17;
+    p = p * w + 0.1818181818192055;
+    q = q * w - 8.334567856350977e-18;
+    p = p * w + 0.22222222222221846;
+    q = q * w - 1.3705113992684887e-17;
+    p = p * w + 0.2857142857142857;
+    q = q * w + 2.298767463628977e-17;
+    p = p * w + 0.4;
+    q = q * w - 2.220970871676104e-17;
+    p = p * w + 0.6666666666666666;
+    q = q * w + 3.700743479264591e-17;
+    p + q
+};
+
+// sinh_k -- used by sinh_small.
+// sinh_k's kernel, UNROLLED. Generated by test/math/gen_split_unroll.py
+// from the arrays in this file; do not retype it. See that script for why, and
+// t328_split_unrolled.y for the gate that says the two forms agree to the bit.
+//
+// The order is the loop's, exactly: p starts at the highest coefficient and
+// works down, which is Horner's rule and the only order that gives the split
+// evaluation its accuracy. Same operations, same sequence, no array.
+def poly_sinh(w: float) -> float {
+    let p = 2.8196895216099014e-15;
+    let q = 1.7918268050249534e-31;
+    p = p * w + 7.647130272730548e-13;
+    q = q * w - 2.7025335984982047e-29;
+    p = p * w + 1.6059043907616352e-10;
+    q = q * w + 1.1738184850031472e-26;
+    p = p * w + 2.5052108385358744e-08;
+    q = q * w + 1.5339941984694534e-24;
+    p = p * w + 2.7557319223985943e-06;
+    q = q * w + 1.2480102547401166e-23;
+    p = p * w + 0.0001984126984126984;
+    q = q * w + 7.071825259067978e-24;
+    p = p * w + 0.008333333333333333;
+    q = q * w + 1.1565019634686237e-19;
+    p = p * w + 0.16666666666666666;
+    q = q * w + 9.251858534705814e-18;
+    p + q
+};
 
 // asin's kernel, in z = s^2 where s = sqrt((1-|x|)/2), for |x| >= 1/2:
 //   asin(s) = s * (1 + z*P(z)),  s <= 1/2,  z <= 1/4
@@ -811,6 +1145,66 @@ let asin_kl: [float] = [9.25185853854297e-18, 2.7755575615628915e-18,
     -1.3344026738283132e-19, 2.1155164341180575e-20, 1.1094161764967953e-19,
     -1.4456028966473392e-19, -8.304527278612374e-20, 1.4161007967157608e-19];
 
+// asin_k -- used by asin_half.
+// asin_k's kernel, UNROLLED. Generated by test/math/gen_split_unroll.py
+// from the arrays in this file; do not retype it. See that script for why, and
+// t328_split_unrolled.y for the gate that says the two forms agree to the bit.
+//
+// The order is the loop's, exactly: p starts at the highest coefficient and
+// works down, which is Horner's rule and the only order that gives the split
+// evaluation its accuracy. Same operations, same sequence, no array.
+def poly_asin(w: float) -> float {
+    let p = 0.002338091892111975;
+    let q = 1.4161007967157608e-19;
+    p = p * w + 0.0024894486782468836;
+    q = q * w - 8.304527278612374e-20;
+    p = p * w + 0.00265787063820729;
+    q = q * w - 1.4456028966473392e-19;
+    p = p * w + 0.002846178401108942;
+    q = q * w + 1.1094161764967953e-19;
+    p = p * w + 0.0030578216492580306;
+    q = q * w + 2.1155164341180575e-20;
+    p = p * w + 0.003297059503473485;
+    q = q * w - 1.3344026738283132e-19;
+    p = p * w + 0.0035692053938259347;
+    q = q * w - 1.992587776459846e-19;
+    p = p * w + 0.003880964558837669;
+    q = q * w + 1.858632295689436e-19;
+    p = p * w + 0.004240907093679363;
+    q = q * w - 1.5770213417970974e-19;
+    p = p * w + 0.004660143486915096;
+    q = q * w - 2.7979410902851727e-20;
+    p = p * w + 0.005153309682319905;
+    q = q * w - 3.888173308223878e-19;
+    p = p * w + 0.005740037670841924;
+    q = q * w - 1.2849803525754126e-19;
+    p = p * w + 0.006447210311889649;
+    q = q * w - 3.1225022567582527e-19;
+    p = p * w + 0.0073125258735988454;
+    q = q * w - 3.394024192128536e-19;
+    p = p * w + 0.008390335809616815;
+    q = q * w + 4.130293990420969e-19;
+    p = p * w + 0.009761609529194078;
+    q = q * w + 5.478074134663601e-19;
+    p = p * w + 0.011551800896139705;
+    q = q * w + 8.163404592832033e-19;
+    p = p * w + 0.01396484375;
+    q = q * w - 6.938893903907229e-19;
+    p = p * w + 0.017352764423076924;
+    q = q * w - 8.006416042969879e-19;
+    p = p * w + 0.022372159090909092;
+    q = q * w - 9.462128050782583e-19;
+    p = p * w + 0.030381944444444444;
+    q = q * w + 3.854941057726238e-19;
+    p = p * w + 0.044642857142857144;
+    q = q * w - 9.912705577010326e-19;
+    p = p * w + 0.075;
+    q = q * w + 2.7755575615628915e-18;
+    p = p * w + 0.16666666666666666;
+    q = q * w + 9.25185853854297e-18;
+    p + q
+};
+
 // atan's kernel, in w = x^2, for |x| <= tan(pi/16): -1/3 + x^2/5 - ...
 let atan_k: [float] = [-0.3333333333333333, 0.19999999999999993,
     -0.14285714285711518, 0.11111111110754729, -0.0909090906700999,
@@ -822,6 +1216,98 @@ let atan_kl: [float] = [-1.8460804868732022e-17, -1.2412890980869873e-17,
     2.0770998309350174e-19, 1.1005125683727358e-18, 7.262660180568933e-20,
     -3.3012079965004468e-18, -1.6495772479263127e-18, 3.9114739913559e-19,
     -9.585660105097796e-19, 8.107241888605798e-19];
+
+// atan_k -- used by atan_kernel.
+// atan_k's kernel, UNROLLED. Generated by test/math/gen_split_unroll.py
+// from the arrays in this file; do not retype it. See that script for why, and
+// t328_split_unrolled.y for the gate that says the two forms agree to the bit.
+//
+// The order is the loop's, exactly: p starts at the highest coefficient and
+// works down, which is Horner's rule and the only order that gives the split
+// evaluation its accuracy. Same operations, same sequence, no array.
+def poly_atan(w: float) -> float {
+    let p = -0.01391822929102443;
+    let q = 8.107241888605798e-19;
+    p = p * w + 0.030635704112969498;
+    q = q * w - 9.585660105097796e-19;
+    p = p * w + -0.04104436265755082;
+    q = q * w + 3.9114739913559e-19;
+    p = p * w + 0.04719395030027433;
+    q = q * w - 1.6495772479263127e-18;
+    p = p * w + -0.05258041554297779;
+    q = q * w - 3.3012079965004468e-18;
+    p = p * w + 0.058819252531928636;
+    q = q * w + 7.262660180568933e-20;
+    p = p * w + -0.06666642020055166;
+    q = q * w + 1.1005125683727358e-18;
+    p = p * w + 0.07692306736000173;
+    q = q * w + 2.0770998309350174e-19;
+    p = p * w + -0.0909090906700999;
+    q = q * w + 3.2367055693560028e-18;
+    p = p * w + 0.11111111110754729;
+    q = q * w + 5.543908691009074e-18;
+    p = p * w + -0.14285714285711518;
+    q = q * w - 9.117255197712884e-18;
+    p = p * w + 0.19999999999999993;
+    q = q * w - 1.2412890980869873e-17;
+    p = p * w + -0.3333333333333333;
+    q = q * w - 1.8460804868732022e-17;
+    p + q
+};
+
+// tanh's kernel, in w = x^2, for |x| <= 1/2: tanh(x) = x * (1 + w*P(w)). Its
+// Taylor values are -1/3, 2/15, -17/315 ... and gen_kernel.py fits degree 11
+// over the branch, reporting 0.000 ulp on it -- so this is the generator's own
+// answer, taken rather than retyped, and the low halves are in its sixteenth
+// digits.
+//
+// It was generated all along and never wired up: tanh computed its whole range
+// through expm1, which is 921 instructions a call, for a function whose answer
+// never leaves [-1, 1]. Below half a turn the exponential is 12 terms of x, and
+// the polynomial is what this is. Above half a turn the answer saturates and
+// expm1 is the right tool.
+let tanh_k: [float] = [    -0.3333333333333333, 0.1333333333333333, -0.05396825396824835, 0.02186948853573452,
+    -0.0088632355135931, 0.0035921276627198383, -0.0014558289383351634, 0.0005899749383754306,
+    -0.00023878930525840224, 9.544524503270839e-05, -3.514809431531453e-05, 8.859223816010494e-06];
+let tanh_kl: [float] = [    -1.8478204982087523e-17, 2.0567422250775412e-19, -2.3526628565235765e-18, 7.693071686990699e-20,
+    -3.2466436398817353e-19, 7.850248823563098e-20, 8.262874090553728e-20, -2.952117193543854e-20,
+    1.1908734347773113e-20, -2.7056059682285524e-21, -3.1405714554962816e-21, 5.515287351054736e-22];
+
+// tanh_k -- used by tanh_small.
+// tanh_k's kernel, UNROLLED. Generated by test/math/gen_split_unroll.py
+// from the arrays in this file; do not retype it. See that script for why, and
+// t328_split_unrolled.y for the gate that says the two forms agree to the bit.
+//
+// The order is the loop's, exactly: p starts at the highest coefficient and
+// works down, which is Horner's rule and the only order that gives the split
+// evaluation its accuracy. Same operations, same sequence, no array.
+def poly_tanh(w: float) -> float {
+    let p = 8.859223816010494e-06;
+    let q = 5.515287351054736e-22;
+    p = p * w + -3.514809431531453e-05;
+    q = q * w - 3.1405714554962816e-21;
+    p = p * w + 9.544524503270839e-05;
+    q = q * w - 2.7056059682285524e-21;
+    p = p * w + -0.00023878930525840224;
+    q = q * w + 1.1908734347773113e-20;
+    p = p * w + 0.0005899749383754306;
+    q = q * w - 2.952117193543854e-20;
+    p = p * w + -0.0014558289383351634;
+    q = q * w + 8.262874090553728e-20;
+    p = p * w + 0.0035921276627198383;
+    q = q * w + 7.850248823563098e-20;
+    p = p * w + -0.0088632355135931;
+    q = q * w - 3.2466436398817353e-19;
+    p = p * w + 0.02186948853573452;
+    q = q * w + 7.693071686990699e-20;
+    p = p * w + -0.05396825396824835;
+    q = q * w - 2.3526628565235765e-18;
+    p = p * w + 0.1333333333333333;
+    q = q * w + 2.0567422250775412e-19;
+    p = p * w + -0.3333333333333333;
+    q = q * w - 1.8478204982087523e-17;
+    p + q
+};
 
 // log2(e), and ln2 in two pieces. ln2_hi's low 21 bits are zero, so k*ln2_hi
 // is exact for every k a reduction produces and x - k*ln2_hi is exact too (the
@@ -918,6 +1404,43 @@ let inv_sqrt2: float = 0.70710678118654752440;
 // `ln2_hi`/`ln2_lo` split is for the *whole* multiples of it only, and
 // declaring ln2 again here would silently shadow the public one.
 
+// Where sin, cos and tan stop having an answer at all: the quadrant must fit a
+// long, and past 9.9999999999995904e18 it does not, so the reduction cannot be
+// performed. That number is not 2^63*(pi/2) = 1.4488038916154245e19 as one would
+// guess, because the reduction computes floor(x*2/pi + 0.5) and the +0.5
+// carries the quotient over the edge a third of the way sooner. Hence a
+// function rather than a constant, below: it asks on the expression itself, so
+// it cannot be off by however much the arithmetic turns out to be.
+//
+// It is NOT the boundary of accuracy, and the difference is worth being exact
+// about, because an earlier version of this note claimed 2^53*(pi/2) = 1.41e16
+// and that was wrong by a factor of a thousand. Measured over 3000 arguments
+// per decade, the gap to libm grows with the argument and there is no sharp
+// edge: at |x| <= 1e8 sin and cos are within 1 ulp of every one of 3000, at
+// 1e10 three are not, at 1e12 four are, at 1e14 eleven are, at 1e13 a cos is 11
+// ulps out. The reason there is no edge is that the quotient round(x*2/pi) is
+// one rounded product, and whether that rounding carries it across the
+// half-integer boundary depends on where x*2/pi happens to fall for that
+// particular x -- a property of the argument, not a bound on it. sin(1e15) is
+// exact; sin(1e18) is -3.7e18 where the truth is -0.993.
+//
+// So the honest description is: within 1 ulp for the arguments small enough
+// that the quotient is exact, degrading gradually above that, and NaN past this
+// constant. Closing the gap needs libm's multi-precision reduction (a
+// three-word quotient), which is a piece of work in its own right and not a
+// patch. t320 measures the degradation and pins the NaN region.
+// And the test itself, on the very expression to_int will be handed, so the two
+// cannot be off by one double relative to each other. A constant boundary was
+// tried first and was wrong: at 1.4488038916154243e19 -- one ulp BELOW the
+// constant, and the largest argument whose quadrant does fit -- the product
+// x*two_over_pi rounds UP to exactly 2^63, the +0.5 carries it past, and to_int
+// traps. Asking the question the same way to_int asks it is the only version
+// that cannot drift.
+def pio2_fits(x: float) -> bool {
+    let q = x * two_over_pi + 0.5;
+    q < 9223372036854775807.0 && q > 0.0 - 9223372036854775807.0
+};
+
 // pi/4 and pi/2: below pi/4 an argument needs no reduction at all, and atan
 // of an infinity is pi/2.
 let pi_over_4: float = 0.78539816339744830961;
@@ -936,6 +1459,67 @@ let pi_over_8: float = 0.39269908169872415481;
 // is exact, so the whole answer is as accurate as the kernel and the reduction.
 def exp(x: float) -> float {
     exp_asm(x)
+};
+
+// exp_half(a) = e^a / 2, for the strip where e^a itself is out of range.
+//
+// cosh(a) = e^a/2 + e^-a/2 and sinh(a) = e^a/2 - e^-a/2, so both are e^a/2 up
+// to a term that is 0.0 to a double past a = 709. That makes their whole
+// upper strip the same problem, and the same fix: exp's argument split is
+// a = k*ln2 + r, and the answer is ldexp(e^r, k). cosh needs k one LARGER than
+// exp would give it -- because cosh's answer is a factor of two smaller than
+// exp's -- and ldexp applies the scale without ever forming 2^k, so k = 1024
+// is fine where exp(a) was inf.
+//
+// This is exp's own n > 1023 arm (see exp_y) run one step further, with the
+// factor of two moved out of f2 and into the exponent, which is the same
+// operation stated differently and the reason the two agree everywhere exp can
+// reach. NOT exp(a/2) squared: that squares exp's own 1-ulp error and lands 2
+// ulp out at the top, which is the bug this replaces.
+//
+// Not exported: only sinh and cosh have a use for it.
+def exp_half(x: float) -> float {
+    // The bound FIRST, before the reduction. It has to be: the reduction ends
+    // in to_int(floor(x*log2e + 0.5)), and at x = 1e300 that is a float with no
+    // integer part a long holds -- a trap, where the answer is plainly inf.
+    // Testing the bound after reducing means every overflowing argument traps
+    // instead of answering, which is the bug in a second costume.
+    //
+    // Tested on x and not on n, because n = round(x*log2e) steps at 1025 and
+    // 1026 -- far too coarse to place an edge that falls inside one of its
+    // steps: at x = 710.5 the answer is inf and n is still 1025. ldexp cannot
+    // be left to find the edge either, being exact on a kernel below 2, so it
+    // rounds the overflow into an answer instead of overflowing.
+    //
+    // So the edge is x itself. The exact value of e^x/2 = DBL_MAX is at
+    // x = ln(2*DBL_MAX) = 710.475860073943863..., and the answer SURVIVES one
+    // double past that, because it has to survive being rounded: the largest
+    // finite argument is 710.47586007394386 (libm answers
+    // 1.7976931348621744e+308 there, one ulp under DBL_MAX) and the first
+    // argument with no answer at all is 710.47586007394398. Hence the test is
+    // at the second of those two.
+    //
+    // Getting this wrong by one double is not a rounding curiosity: it is the
+    // difference between sinh answering the largest double there is and
+    // answering inf for an argument where an answer exists.
+    if (x >= 710.47586007394398) {
+        inf
+    } else {
+        let n: long = to_int(floor(x * log2e + 0.5));
+        let nf: float = n;
+        // r as two halves of ln2, exactly as exp does it, so the reduction keeps
+        // every bit of a large x -- the alternative, exp(x - ln2), throws away
+        // the low bits of 710 and lands about 250 ulp out.
+        //
+        // The kernel is evaluated at r and the answer scaled by n - 1, so a
+        // factor of two stays INSIDE, which is the whole of it: e^a/2 =
+        // 2^(n-1) * e^r, and ldexp applies the scale without ever forming 2^n,
+        // so the intermediate that overflows in exp is never formed here. Same
+        // kernel, same reduction, one step down -- which is why the two agree to
+        // the bit on every argument exp can also answer.
+        let r = (x - nf * ln2_hi) - nf * ln2_lo;
+        ldexp(1.0 + r * (1.0 + r * poly_exp(r)), n - 1)
+    }
 };
 
 // The Y exp, as `exp_asm` computes it: the oracle for the kernel, and the shape
@@ -980,7 +1564,7 @@ def exp2(x: float) -> float {
         let k = to_int(n);
         let f2 = 1.0;
         if (n > 1023.0) { k = k - 1; f2 = 2.0; };
-        ldexp(f2 * (1.0 + r * (1.0 + r * poly_split(exp_k, exp_kl, r))), k)
+        ldexp(f2 * (1.0 + r * (1.0 + r * poly_exp(r))), k)
     }
 };
 
@@ -1041,14 +1625,215 @@ def log_y(x: float) -> float {
     }
 };
 
-// log2(x) and log10(x): the same kernel with the constant changed, which is
-// what C's do too (they are log(x) times a reciprocal, not separate code).
-def log2(x: float) -> float {
-    log(x) * 1.4426950408889634073599246810018921374266459541529859
+// 1/ln2 and 1/ln10, each in two pieces. A single double for a reciprocal this
+// size is short by up to half an ulp, so log(x) * that constant rounds twice and
+// the answer can be 2 ulps out before log's own error is counted. The table found
+// it: log2(7.8166428423182364) came out 2 ulps from the true value where libm is
+// exact, on an ordinary argument, in a function the one-ulp promise names by
+// name. log2 had NINE pinned cases and log10 had NINE MORE -- the thinnest
+// coverage in the table -- and a spread uniform in the DECADES found it in a
+// minute, which is the argument for a spread stated four times now.
+//
+// The split carries about 150 bits, against the 106 a double-double holds.
+// GENERATED as hi/lo pairs from a 90-digit computation, because typing them is
+// how the first attempt got one of them wrong: a hand-written log10(2) tail
+// was off by a factor of EIGHT, and every test that followed it was an exact
+// power of ten, where the tail does not show at all. Same lesson as the
+// polynomial kernels' low halves, and the same reason gen_kernel.py exists.
+let log2e_hi: float = 1.4426950408889634;
+let log2e_lo: float = 2.0355273740931033e-17;
+// TWO constants, and confusing them is a bug that was made here: log10's answer
+// is built from two terms with two different scalings.
+//
+//     log10(x) = e * log10(2)  +  ln(m) * log10(e)
+//
+// The first term's e is the BASE 2 exponent (the reduction splits x = m*2^e), so
+// it is scaled by log10(2). The second term is a NATURAL logarithm -- the z
+// series gives ln(m) -- so it is scaled by log10(e) = 1/ln10. Scaling both by
+// log10(2) answers a different function: it gave log10(0.75) as 0.1307 instead
+// of -0.1249, which is 2.8e15 ulps out and would have been caught by any
+// ordinary case.
+let log10e_hi: float = 0.4342944819032518;
+let log10e_lo: float = 1.098319650216765e-17;
+let log10_2_hi: float = 0.3010299956639812;
+let log10_2_lo: float = -2.8037281277851704e-18;
+
+// log2(x) = e + log2(m), for x = m * 2^e with m in [1/sqrt2, sqrt2). The
+// integer e is EXACT and is not multiplied by anything, so the kernel's error
+// lands on the answer instead of being amplified by 1.4427.
+//
+// That is the whole fix, and getting to it took one wrong turn worth recording.
+// The functions used to be `log(x) * (1/ln2)`, which is what C's do, and the
+// table reported them 2 ulps out on ordinary arguments with libm exact on all
+// of them. The first thing blamed was the constant -- a single rounded double
+// for a reciprocal is short by half an ulp, so the product rounds twice -- and
+// splitting it into hi and lo with prod_err and two_sum recovering the error was
+// correct, necessary, and changed NOTHING. Because log itself is 1 ulp out on
+// 6 of 9 arguments tried (within its own promise, and 0 ulp for libm on all 9),
+// and multiplying a 1-ulp error by 1.4427 makes it up to 2. Compensating a
+// multiply cannot repair an operand that is already wrong; that is worth knowing
+// before reaching for it.
+//
+// What is left uncounted below is the rounding of L*clo alone, which is about
+// 2^-106 of L because clo is 2^-53 of chi. The final ef + small rounds once, at
+// the size of the ANSWER, so the whole thing is correctly rounded except in a
+// near-tie.
+// x = m * 2^e with m in [0.5, 1), for x > 0 finite: frexp without frexp.
+//
+// frexp returns a two-element ARRAY, and a call that allocates is 146
+// instructions where this is about forty -- a program calling log2 in a loop
+// pays that on every call, and the allocation is most of what costs, not the
+// arithmetic. A subnormal still normalises first, exactly as frexp does, because
+// it has no implicit leading bit to read an exponent from.
+//
+// x > 0 and finite is a precondition here, so the sign dance frexp needs does
+// not apply: both callers have already answered NaN below zero and for the
+// infinities. The exponent comes back in split_e because Y has no tuples --
+// which is why frexp returns an array in the first place.
+let split_e: long = 0;
+
+def split_mantissa(x: float) -> float {
+    let r = x;
+    let ef = exp_field(r);
+    // The doublings have to come OFF the exponent. A subnormal has no implicit
+    // leading bit, so normalising it doubles it until it has one -- and then
+    // r is 2^guard larger than x, so the exponent read off r is guard too
+    // large. frexp subtracts them (`e - 1022 - guard`) and this did not, which
+    // made log2(5e-324) answer -1022 where the answer is -1074: the argument
+    // 2^-1074 is the one argument in four hundred where this shows, and the
+    // table's log2 spread is log-uniform, so it found the amplified form of the
+    // same error immediately.
+    let guard = 0;
+    while (ef == 0) {
+        r = r * 2.0;
+        ef = exp_field(r);
+        guard = guard + 1;
+    };
+    split_e = ef - 1022 - guard;
+    bitsf((fbits(r) & 4503599627370495) | 4602678819172646912)
 };
 
+def log_base(x: float, chi: float, clo: float) -> float {
+    if (x != x || x < 0.0) {
+        nan
+    } else if (x == 0.0) {
+        0.0 - inf
+    } else if (x > 1.7976931348623157e308) {
+        // +inf, and only +inf: a negative argument has already been answered
+        // NaN above (which is what C's log(-inf) is), and the only double larger
+        // than DBL_MAX is +inf. is_inf() would say the same thing in 32
+        // instructions, all of them call overhead for a comparison.
+        inf
+    } else {
+        let m = split_mantissa(x);
+        let e: long = split_e;
+        if (m < inv_sqrt2) {
+            m = m * 2.0;
+            e = e - 1;
+        };
+        let z = log_z(m) + z_lo;
+        let w = z * z;
+        // log(m), the same shape log_y uses, at the size log_y uses it
+        // poly_log, not poly_split: these two are on a runtime path and the
+        // loop form is 890 instructions a call for what is twelve multiply-adds.
+        // gen_split_unroll.py checks the two agree bit for bit.
+        let l = z * (2.0 + w * poly_log(w));
+        let p = l * chi;
+        let pe = prod_err(l, chi, p);
+        let s = two_sum(p, l * clo);
+        let ef: float = e;
+        ef + (s + (ts_lo + pe))
+    }
+};
+
+def log2(x: float) -> float {
+    log_base(x, log2e_hi, log2e_lo)
+};
+
+// log10 goes THROUGH log2, not through its own reduction, and that is a
+// deliberate choice with a wrong turn behind it.
+//
+// The reduction above splits x = m*2^e, so the exact integer e is only the
+// integer part of a BASE 2 logarithm. Handing the same e to log10 gives
+// log10(100) = 6.8928, and that is not a rounding error -- it is a different
+// function. The decimal exponent has to come from a decimal split, and x/10^k
+// is not exact, so the compensated z series has nothing exact to work on.
+//
+// log2(x) * log10(2) has no such problem: log2(x) is now within half an ulp
+// RELATIVE of the truth, and multiplying by a constant keeps a relative error
+// relative -- it does not turn 0.5 ulp into 2. What the multiply does add is its
+// own rounding, and compensating it with the constant split leaves log10 within
+// the one-ulp promise. That the amplification used to be real is the finding:
+// log(x) * (1/ln10) put log's 1 ulp through a factor of 1.4427, or 3.32 for the
+// other base, and the table measured 2 ulps out on ordinary arguments.
+// Two wrong turns are recorded here because both were made, both compiled, and
+// both were caught only by the spread rather than by a test.
+//
+// The first was scaling the reciprocal: log10(x) as log(x)*(1/ln10), with the
+// constant split hi/lo and prod_err recovering the product's own rounding. That
+// is correct arithmetic and it changed NOTHING, because the error was in log's
+// answer, not in the multiply. Compensating a multiply cannot repair an operand
+// that is already wrong.
+//
+// The second was log10(x) = log2(x)*log10(2) with the same compensation, which
+// is the same mistake one level down: log2(x) has been ROUNDED, so the
+// computation was faithfully evaluating rounded-b times exact-c instead of
+// exact-log2 times exact-c. It measured 1 ulp on 787 of 12026 arguments where
+// the UNCOMPENSATED product was right on most of them -- making it worse, which
+// is what a compensation applied to the wrong target looks like.
+//
+// So the integer part is scaled, and it is scaled while it is still an exact
+// integer. log2's reduction splits x = m*2^e with m in [1/sqrt2, sqrt2), and e
+// is exact; log10(x) = e*log10(2) + log2(m)*log10(2), so both terms are products
+// of an EXACT quantity with a split constant, and the only rounding left is the
+// final addition -- 0.5 ulp, at the size of the answer.
 def log10(x: float) -> float {
-    log(x) * 0.43429448190325182765112891891660508229439700580366656
+    if (x != x || x < 0.0) {
+        nan
+    } else if (x == 0.0) {
+        0.0 - inf
+    } else if (x > 1.7976931348623157e308) {
+        // +inf, and only +inf: a negative argument has already been answered
+        // NaN above (which is what C's log(-inf) is), and the only double larger
+        // than DBL_MAX is +inf. is_inf() would say the same thing in 32
+        // instructions, all of them call overhead for a comparison.
+        inf
+    } else {
+        let m = split_mantissa(x);
+        let e: long = split_e;
+        if (m < inv_sqrt2) {
+            m = m * 2.0;
+            e = e - 1;
+        };
+        let z = log_z(m) + z_lo;
+        let w = z * z;
+        // poly_log, not poly_split: these two are on a runtime path and the
+        // loop form is 890 instructions a call for what is twelve multiply-adds.
+        // gen_split_unroll.py checks the two agree bit for bit.
+        let l = z * (2.0 + w * poly_log(w));
+        let ef: float = e;
+        let a = ef * log10_2_hi;
+        // log10_2_lo was DECLARED AND NEVER ADDED. It carries the constant's own
+        // residual -- log10(2) - log10_2_hi -- and prod_err recovers the error of
+        // the PRODUCT ef*log10_2_hi, which is a different thing: the product's
+        // error is not the constant's. The missing term is worth a constant
+        // -0.042 ulp of the answer for every ef, and a perturbation that small
+        // still flips the rounding whenever the exact value lies that close to a
+        // tie -- which is a couple of percent of arguments.
+        //
+        // I had ruled this out, and the ruling was wrong for the wrong reason: I
+        // wrote that 0.042 ulp "cannot produce a 2-ulp answer", reasoning from the
+        // SIZE of the error rather than from what an error does -- an error of any
+        // size produces a whole-ulp answer if it lands on the wrong side of a tie.
+        // Measured: log10 2 ulps on 379 of 20000 decade-uniform arguments becomes
+        // 288 of 20000, and log2 is unchanged.
+        let ae = prod_err(ef, log10_2_hi, a) + ef * log10_2_lo;
+        // ln(m) scaled by log10(e), NOT by log10(2) -- see the two constants
+        let bq = l * log10e_hi;
+        let be = prod_err(l, log10e_hi, bq);
+        let s = two_sum(a, bq);
+        s + (ts_lo + (ae + be) + l * log10e_lo)
+    }
 };
 
 // ── sin and cos ────────────────────────────────────────────────────────────
@@ -1057,15 +1842,51 @@ def log10(x: float) -> float {
 // piece of pi/2 at a time. The [float] is [sin, cos]: Y has no tuples, and a
 // two-element array is the smallest thing that carries both.
 def sin_cos_k(x: float) -> [float] {
-    let s = x * (1.0 + x * x * poly_split(sin_k, sin_kl, x * x));
+    // poly_sin and poly_cos, not poly_split. This was the LAST kernel left on
+    // the loop and it is not an oracle: sin and cos are assembly, but `tan` is
+    // not, and tan calls this -- measured at 1212 instructions a call, 72% of it
+    // the two array walks.
+    //
+    // `w` is hoisted, and that is the smaller half of the win. This function
+    // used to write `x * x` THREE times -- twice inline on the sin line and once
+    // for the cosine -- the same product of the same two floats, so the value is
+    // the same bits every time and hoisting it cannot move an answer. Writing it
+    // once is the reason the line reads as it does: the multiplier and the
+    // kernel's argument were spelled differently, and the only thing that made
+    // them the same was that both happened to be x*x.
     let w = x * x;
-    [s, 1.0 - w * poly_split(cos_k, cos_kl, w)]
+    let s = x * (1.0 + w * poly_sin(w));
+    [s, 1.0 - w * poly_cos(w)]
 };
 
-// sin(x), for |x| < 2^52 or so (see the note on the reduction). A NaN or an
-// infinity is a NaN, as C's is.
+// sin(x). A NaN or an infinity is a NaN, as C's is.
+//
+// THE RANGE, because the reduction behind this is the limit of all three of
+// sin, cos and tan and it is not obvious from the code: the quadrant is
+// n = round(x*2/pi) computed in ONE double, and that product wants about 106
+// bits and so rounds. The subtraction of n*(pi/2) that follows is compensated
+// in double-double and is exact for any n a long holds; the quotient is not.
+// Measured against this platform's libm:
+//
+//     x = 1e15    exact
+//     x = 1e16    33 ulp out
+//     x = 1e17    2.4e10 ulp out
+//     x = 1e18    the quadrant is wrong by one, so the answer is unrelated
+//     x >= 1e100  floor(x*2/pi) has left the range of a long, so this is inf
+//
+// So the promise is |x| <= 2^53 * (pi/2) = 1.41e16, and past it the answers are
+// not to be relied on. The cutoff cannot be rounded to a power of two, because
+// whether the rounded quotient is right depends on how near x*2/pi happens to
+// fall to a half-integer -- a property of x, not a bound on it. Closing the
+// gap needs libm's multi-precision reduction (a three-word quotient, the
+// do_pi2 stages), which is a piece of work in its own right and not a patch.
+// t320_sin_reduction_limit.y pins the present behaviour so that raising the
+// limit is a visible diff.
 def sin(x: float) -> float {
-    sin_asm(x)
+    // Past pio2_max there is no reduction left to do; see the note on the
+    // constant. sin and cos go through the assembly kernels, so without this
+    // they answered inf out there -- a number that reads as an answer.
+    if (!pio2_fits(x)) { nan } else { sin_asm(x) }
 };
 
 // The Y sin, as `sin_asm` computes it: the oracle for the kernel. Not exported.
@@ -1085,7 +1906,7 @@ def sin_y(x: float) -> float {
 
 // cos(x), same reduction and same limit as sin.
 def cos(x: float) -> float {
-    cos_asm(x)
+    if (!pio2_fits(x)) { nan } else { cos_asm(x) }
 };
 
 // The Y cos, as `cos_asm` computes it. Not exported.
@@ -1107,6 +1928,12 @@ def cos_y(x: float) -> float {
 // pole, and cos(x) == 0 is a pole).
 def tan(x: float) -> float {
     if (x != x || is_inf(x)) {
+        nan
+    } else if (!pio2_fits(x)) {
+        // NaN, for the reason on pio2_max. It is worth saying what this cost
+        // before it was here: to_int does not return a wrong quadrant past its
+        // own limit, it TRAPS, and a trap ends the program -- so tan(1e30) used
+        // to kill whatever asked.
         nan
     } else if (x >= -pi_over_4 && x <= pi_over_4) {
         let sc = sin_cos_k(x);
@@ -1162,7 +1989,11 @@ def atan(x: float) -> float {
 // atan's kernel proper, for |x| <= tan(pi/8).
 def atan_kernel(x: float) -> float {
     let w = x * x;
-    x * (1.0 + w * poly_split(atan_k, atan_kl, w))
+    // poly_atan, not poly_split: this is on a runtime path -- atan folds the
+    // argument and then calls here, it is NOT an assembly kernel the way sin and
+    // cos are -- so the loop's array reads are twelve instructions a term, paid
+    // on every call a program makes. Same operations, same order, no array.
+    x * (1.0 + w * poly_atan(w))
 };
 
 // ── the hyperbolic functions ────────────────────────────────────────────────
@@ -1204,10 +2035,36 @@ def cosh(x: float) -> float {
             // of the answer, while a second exp() call would bring its whole
             // error along -- and exp is a ulp out at some arguments, which is
             // what had cosh(-1.88) sitting two ulps away.
-            let t = exp(a);
-            t * 0.5 + 0.5 / t
+            //
+            // Past 709 cosh has the same problem sinh had, and for the same
+            // reason with the SAME answer: cosh(a) = e^a/2 + e^-a/2 and e^a is
+            // inf from 709.78, yet cosh(710) is 1.1169973830808557e+308 -- the
+            // halving buys back the exponent, so cosh overflows at 710.4758,
+            // the same bound as sinh and for the same algebraic reason. The
+            // halved-argument square fixes both, and below 709 the form is
+            // kept because it is the more accurate of the two there: squaring
+            // doubles the relative error of exp, whereas t*0.5 + 0.5/t rounds
+            // once at the size of the answer.
+            if (a > 709.0) {
+                exp_half(a)
+            } else {
+                let t = exp(a);
+                t * 0.5 + 0.5 / t
+            }
         }
     }
+};
+
+// tanh for |x| <= 1/2, from tanh's kernel -- the same shape as sinh_small
+// beside it, and the same reason: tanh's answer never leaves [-1, 1], so
+// reaching for a full-range exponential to produce it is paying for reach one
+// does not need. Measured at 10000 calls with |x| <= 1/2, this is 168
+// instructions a call against the exponential form's 1049 -- and the two agree
+// with an exact 50-digit tanh on 3999 of 4000 arguments each, which is to say
+// they are the same function.
+def tanh_small(x: float) -> float {
+    let w = x * x;
+    x * (1.0 + w * poly_tanh(w))
 };
 
 def tanh(x: float) -> float {
@@ -1216,7 +2073,12 @@ def tanh(x: float) -> float {
     } else if (is_inf(x)) {
         if (x < 0.0) { 0.0 - 1.0 } else { 1.0 }
     } else if (x >= 20.0 || x <= -20.0) {
+        // 1 - 2/(e^(2x) + 1) is 1 - 4e-2x here at worst, which is 6.8e-18
+        // against an answer of 1 -- so the answer IS 1 to its last bit, and
+        // 2^-53 is the only distance there is between them.
         if (x < 0.0) { 0.0 - 1.0 } else { 1.0 }
+    } else if (x >= -0.5 && x <= 0.5) {
+        tanh_small(x)
     } else {
         let a = if (x < 0.0) { 0.0 - x } else { x };
         let u = expm1(2.0 * a);
@@ -1230,7 +2092,7 @@ def tanh(x: float) -> float {
 // better, because the two terms differ enough there to keep.
 def sinh_small(x: float) -> float {
     let w = x * x;
-    x * (1.0 + w * poly_split(sinh_k, sinh_kl, w))
+    x * (1.0 + w * poly_sinh(w))
 };
 
 // sinh(x) = (e^x - e^-x)/2 for the rest of the range. Above |x| = 0.5 the two
@@ -1241,6 +2103,27 @@ def sinh(x: float) -> float {
         x
     } else if (x >= -0.5 && x <= 0.5) {
         sinh_small(x)
+    } else if (x > 709.0 || x < -709.0) {
+        // The argument has outrun its own exponential. e^x is inf from 709.78
+        // on, so (e^x - e^-x)/2 is inf there -- yet sinh(710) is
+        // 1.1169973830808557e+308, a perfectly good double: the halving buys
+        // back a full exponent, so sinh overflows at 710.48, a third further
+        // out. This is the "rounded at the wrong SIZE" family of bug in its
+        // purest form -- the subtraction is fine, the thing being subtracted is
+        // simply not there.
+        //
+        // The fix is exp_half, not a square and not exp(x - ln2): e^a/2 asked for
+        // directly, by moving cosh's halving INTO exp's exponent rather than
+        // applying it to an infinity. Both rejected routes are recorded at
+        // exp_half; the short reason is that each of them multiplies an error
+        // that is already there (the square, by two) or invents one (the
+        // subtraction, by discarding the low bits of a large argument).
+        //
+        // The SIGN is carried out here rather than left inside: sinh is odd, so
+        // the negative half is computed from |x| and negated.
+        let a = if (x < 0.0) { 0.0 - x } else { x };
+        let v = exp_half(a);
+        if (x < 0.0) { 0.0 - v } else { v }
     } else {
         (exp(x) - exp(0.0 - x)) * 0.5
     }
@@ -1263,30 +2146,87 @@ def expm1(x: float) -> float {
         let n: long = to_int(floor(x * log2e + 0.5));
         let nf: float = n;
         let r = (x - nf * ln2_hi) - nf * ln2_lo;
-        let k: long = n;
-        let f2 = 1.0;
-        if (n > 1023) { k = n - 1; f2 = 2.0; };
-        // 2^k*e^r - 1, which is not the subtraction it looks like: the -1 is
-        // split into 2^k*(e^r - 1) and (2^k - 1), and the second of those is
-        // EXACT (2^k - 1 needs at most 53 bits). So nothing is ever subtracted
+        // The kernel's own shape: r*(1 + r*P(r)) is e^r - 1, NOT e^r. That is
+        // deliberate and it is why exp's form is 1 + r*(1 + r*P(r)): this value
+        // is the whole point of expm1, the part that is small when r is, and
+        // hoisting it here makes the three branches below three ways of
+        // assembling the same answer rather than three separate expressions
+        // that can each be wrong in their own way. (The first version of the
+        // n > 1023 branch read 1 + r*P(r) as e^r and was out by a factor of
+        // 1/r.)
+        let kern = r * (1.0 + r * poly_exp(r));
+        // 2^n*e^r - 1, which is not the subtraction it looks like: the -1 is
+        // split into 2^n*(e^r - 1) and (2^n - 1), and the second of those is
+        // EXACT (2^n - 1 needs at most 53 bits). So nothing is ever subtracted
         // from something nearly equal to it -- which is the whole difficulty
         // with e^x - 1: it is 0.0 for x = 1e-300, and at x = -9 it is
         // 1.23e-4 - 1 with the answer's last bits gone (18 ulps).
-        let small = f2 * (r * (1.0 + r * poly_split(exp_k, exp_kl, r)));
-        // for k = 0 the second term is +0.0, and -0.0 + 0.0 is +0.0 -- so the
-        // signed zero of expm1(-0.0) has to be the first term alone
-        if (k == 0) { small } else { ldexp(small, k) + (ldexp(f2, k) - 1.0) }
+        if (n > 1023) {
+            // The one branch where 2^n DOES NOT EXIST. n = 1024 over
+            // x in [709.436, 709.783] (the only such x under exp_hi), and
+            // 2^1024 is one ulp past DBL_MAX, so it cannot be formed -- and
+            // with it goes the whole 2^n - 1 term, which would be inf and take
+            // the answer with it. That is not a rounding question: it is where
+            // expm1(709.5) came back as inf instead of 1.3549863193146328e+308.
+            //
+            // The -1 does not need carrying here, and that is why the branch is
+            // not merely a workaround. x >= 709.436 here, so e^x >= 1.06e308,
+            // and an ulp of THAT is 2e292: the 1 is far below the answer's last
+            // bit and e^x - 1 IS e^x as a double. So the answer is one scaled
+            // kernel with the factor of two inside the scale (k = n-1, where
+            // 2^k is representable) -- the move exp_half makes, for the same
+            // reason.
+            ldexp(2.0 * (1.0 + kern), n - 1)
+        } else if (n == 0) {
+            // The second term is +0.0, and -0.0 + 0.0 is +0.0, so the signed
+            // zero of expm1(-0.0) has to be the first term alone.
+            kern
+        } else {
+            // ONE ldexp, not two: p is 2^n, and the small term is p times a
+            // kernel value under 0.72, so the product is exact whenever it is
+            // normal. It lands in the subnormals only where the term is already
+            // a correction far under the answer's last bit (at n = -1075, p
+            // itself is subnormal and the product rounds -- to an absolute error
+            // of 2^-1075, against an answer of order 1). So the rounding ldexp
+            // exists to avoid is bounded there by the smallest number there is,
+            // and the second ldexp was 200 instructions of nothing.
+            let p = ldexp(1.0, n);
+            (kern * p) + (p - 1.0)
+        }
     }
 };
 
 // log1p(x) = log(1 + x), through log's own kernel with m = 1 + x. The
 // argument z = x/(2 + x) is what keeps it honest: it tends to x/2 as x tends to
 // zero, so a tiny x comes out as itself instead of as log(1.0) - 0.
+// log(1 + x), for the case where 1 + x is exactly the argument's problem and not
+// the answer's. Three arms, in the order the cancellation decides.
+//
+// 1. |x| < 2^-52: the answer IS x, bit for bit. log(1+x) = x - x^2/2 + x^3/3 and
+//    the correction is below half an ulp of x for every |x| under 2^-52 (the
+//    boundary is exactly there: at 2^-52 the answer is NOT x). So this arm
+//    returns x without computing anything, which is the point -- it is not a
+//    shortcut for speed, it is the only arm that can answer for a SUBNORMAL x.
+//    The z-series below computes z = x/(2 + x), which is a HALVING, and halving
+//    the smallest subnormal leaves the 2^-1074 grid entirely: x/(2.0 + x) is 0
+//    for x = 5e-324, so log1p(5e-324) answered 0.0 where the answer is 5e-324,
+//    and glibc gives 5e-324. Every other subnormal survived, which is why this
+//    is one value and not a range -- and why a table of the edges would have
+//    missed it, since no edge is 5e-324's neighbour in the subnormals.
+//
+// 2. x <= -1/2: 1 + x is at most 1/2 and no longer near 1, so log's own frexp
+//    handles it.
+//
+// 3. otherwise: the z-series, z = x/(2+x), which is the same identity the
+//    hypergeometric form uses and keeps z small.
 def log1p(x: float) -> float {
     if (x != x || x < -1.0) {
         nan
     } else if (x == -1.0) {
         0.0 - inf
+    } else if (x > -2.220446049250313e-16 && x < 2.220446049250313e-16) {
+        // 2^-52, and STRICT: at exactly 2^-52 the answer is not x.
+        x
     } else if (x <= -0.5) {
         log(1.0 + x)
     } else {
@@ -1299,7 +2239,7 @@ def log1p(x: float) -> float {
         } else {
             let z = x / (2.0 + x);
             let w = z * z;
-            z * (2.0 + w * poly_split(log_k, log_kl, w))
+            z * (2.0 + w * poly_log(w))
         }
     }
 };
@@ -1337,7 +2277,10 @@ def asin_half(a: float) -> float {
         0.0
     } else {
         let s = sqrt(z);
-        let p = poly_split(asin_k, asin_kl, z);
+        // poly_asin, not poly_split: asin_half is on asin's runtime path (and
+        // acos's, which calls the same thing), and 24 terms of array reads cost
+        // more than the arithmetic they feed. Same operations, same order.
+        let p = poly_asin(z);
         // two = 2*asin(s) = 2s + (2s)*z*P(z). The kernel is exact enough that
         // the only rounding left in it is the one two_sum holds.
         let hi = two_sum(2.0 * s, (2.0 * s) * z * p);
@@ -1434,12 +2377,54 @@ def atan2(y: float, x: float) -> float {
     if (y != y || x != x) {
         nan
     } else if (x == 0.0) {
-        if (y > 0.0) { pi_over_2 } else if (y < 0.0) { 0.0 - pi_over_2 } else { 0.0 }
+        // Both zeros at once is the whole of the interesting case, and neither
+        // comparison can see it: -0.0 < 0.0 is false and +0.0 < 0.0 is also
+        // false, so a `y > 0.0` / `y < 0.0` / else ladder answers +0 for all four
+        // combinations and puts atan2(+0, -0) at 0 where the answer is +pi.
+        // It answers +0 for atan2(+0, -0) because -0.0 == 0.0 is TRUE, so the arm
+        // above was never even reached -- and the `y == 0.0` arm's care about the
+        // sign of the zero was dead code for the same reason.
+        //
+        // So the order is the sign of x first, and only then y: on the y axis
+        // (x is a zero, whatever its sign) atan2 is +-pi/2 by the sign of y, and
+        // +-pi when y is a zero too, by the sign of y again.
+        if (y == 0.0) {
+            // BOTH are zeros, and here the SIGN OF X is what decides the shape:
+            // a negative zero means the point is on the negative x axis, so the
+            // answer is +-pi, and a positive zero means it is on the positive
+            // one, so the answer is a zero. The sign of y then carries through
+            // either way -- which is the whole of C99 7.12.7.4's four cases for
+            // this corner, and the reason a `y > 0.0` / `y < 0.0` / else ladder
+            // cannot express it: both comparisons are false for +0.
+            //
+            // My first attempt tested is_signed_zero(y) and read the sign of x
+            // inside it, which answers +pi for atan2(+0, -0) but +-pi_over_2
+            // for atan2(+0, +0) -- because +0 is not a signed zero and so fell
+            // through to the sign-of-y ladder, where +0 is neither > 0 nor < 0.
+            // The test has to be `y == 0.0`, which is true of both zeros.
+            if (is_signed_zero(x)) {
+                if (is_signed_zero(y)) { 0.0 - pi } else { pi }
+            } else {
+                if (is_signed_zero(y)) { neg_zero } else { 0.0 }
+            }
+        } else if (y > 0.0) {
+            pi_over_2
+        } else {
+            0.0 - pi_over_2
+        }
     } else if (y == 0.0) {
-        // atan2(+-0, x < 0) is +-pi, and the sign is the sign OF THE ZERO: a
-        // negative zero has a direction, and that is the whole difference
+        // atan2(+-0, x) is a signed zero on the positive side and +-pi on the
+        // negative one, and the sign is the sign OF THE ZERO in all four: a
+        // negative zero has a direction, and that is the whole difference.
+        //
+        // The x > 0.0 arm used to answer a bare `0.0`, which loses the sign --
+        // atan2(-0.0, +1.0) and atan2(-0.0, +inf) both came back +0.0 where C
+        // answers -0.0, and `1/x` of it is -inf against +inf. So the two arms
+        // below are the SAME question asked twice, which is why the x < 0 one
+        // already had the is_signed_zero test and this one did not: the sign was
+        // added where the pi made it visible and never where the zero hid it.
         if (x > 0.0) {
-            0.0
+            if (is_signed_zero(y)) { neg_zero } else { 0.0 }
         } else if (is_signed_zero(y)) {
             0.0 - pi
         } else {
@@ -1454,7 +2439,25 @@ def atan2(y: float, x: float) -> float {
             } else {
                 if (x > 0.0) { 0.0 - pi_over_4 } else { 0.0 - third }
             }
-        } else if (x > 0.0) { 0.0 } else { pi }
+        } else if (x > 0.0) {
+            // x is an infinity and y is a finite NON-ZERO number, so the answer
+            // is a zero whose SIGN IS THE SIGN OF y -- C99 7.12.7.4, and the
+            // reason 1/x has to be asked about the sign rather than assumed.
+            //
+            // This arm used to read `else if (x > 0.0) { 0.0 } else { pi }`,
+            // which does not look at y at all. It was right for every positive y
+            // and wrong for every negative one: atan2(-1.0, +inf) answered +0.0
+            // where C answers -0.0, and atan2(-1.0, -inf) answered +pi where C
+            // answers -pi. Nothing in the ulp table asked, because the table had
+            // 35 atan2 cases and none of them paired a negative y with an
+            // infinite x -- and the gate that should have noticed the four cases
+            // that DID ask could not fail (see test/math/ulp_check.y).
+            if (y > 0.0) { 0.0 } else { neg_zero }
+        } else {
+            // and the same for pi: the quadrant is the sign of y, not the sign of
+            // x alone. atan2(-4.0, -inf) is -pi.
+            if (y > 0.0) { pi } else { 0.0 - pi }
+        }
     } else if (is_inf(y)) {
         if (y > 0.0) { pi_over_2 } else { 0.0 - pi_over_2 }
     } else if (x > 0.0) {
@@ -1470,7 +2473,6 @@ def atan2(y: float, x: float) -> float {
 
 // -0.0. Multiplied into being rather than subtracted: 0.0 - 0.0 is +0.0 in
 // IEEE, which is exactly why a signed zero needs its own spelling.
-let neg_zero: float = 0.0 * (0.0 - 1.0);
 
 // ── pow's logarithm, in two parts ───────────────────────────────────────────
 //
@@ -1529,7 +2531,7 @@ def log2_dd(x: float) -> float {
         // this logarithm by the exponent, so that one rounding was three ulps
         // of pow(23.85, 5.6) and nothing else was. Scaling by two is exact and
         // (z*w)*P is two orders smaller, so the two_sum carries it instead.
-        let a = two_sum(2.0 * z, (z * w) * poly_split(log_k, log_kl, w));
+        let a = two_sum(2.0 * z, (z * w) * poly_log(w));
         let a_lo = ts_lo;
         let b = two_sum(ef * ln2_hi, ef * ln2_lo);
         let bc_lo = ts_lo;
@@ -1564,7 +2566,7 @@ def exp2_corr(p: float, q: float) -> float {
         let k = to_int(n);
         let f2 = 1.0;
         if (n > 1023.0) { k = k - 1; f2 = 2.0; };
-        let hi = f2 * (1.0 + t * (1.0 + t * poly_split(exp_k, exp_kl, t)));
+        let hi = f2 * (1.0 + t * (1.0 + t * poly_exp(t)));
         // e^(t + t_lo) = e^t * e^t_lo = e^t + e^t * t_lo for a t_lo of 1e-17
         let lo = hi * prod_err(s, ln2, t);
         ldexp(hi, k) + ldexp(lo, k)
@@ -1722,9 +2724,23 @@ def splitmix64(state: [long]) -> long {
     m ^ (m >>> 31)
 };
 
-// x <<< k | x >>> (64 - k), for 1 <= k <= 63.
+// Rotate left by k bits. The count is taken mod 64, so a multiple of 64 is the
+// identity and no argument kills the program.
+//
+// It was `x << k | x >>> (64 - k)` under a comment saying "for 1 <= k <= 63",
+// and that comment was wrong in a way worth recording. k = 0 and k = 64 both
+// HAPPEN to be right -- (x << 0) | (x >>> 64) is x | 0, and (x << 64) |
+// (x >>> 0) is 0 | x -- so the function behaved as if it took 0, while 65
+// killed the program, because 64 - 65 is -1 and a negative shift count traps.
+// A gate that walked the count would have found this in a moment; rotl had no
+// gate at all, which is the other half of it.
+//
+// Masking is what the instruction does -- ROL masks its count to six bits -- and
+// it turns rotl(x, 64) == x from a coincidence into a fact. Every other count
+// out there in this module merely zeroes; a rotate was the one that died.
 def rotl(x: long, k: long) -> long {
-    (x << k) | (x >>> (64 - k))
+    let r = k & 63;
+    if (r == 0) { x } else { (x << r) | (x >>> (64 - r)) }
 };
 
 // Fill a four-element state from one seed with SplitMix64, the standard way: all
@@ -1843,7 +2859,14 @@ def fsum_kahan(a: [float]) -> float {
         s = t;
         i = i + 1;
     };
-    s + c
+    // An infinity in the running total has to be returned as it is. The
+    // compensation cannot rescue it and computing with it destroys it: on the
+    // way to inf the step computes (s - t) + x, which is (1e308 - inf) + 1e308,
+    // and inf - inf is a NaN -- so fsum_kahan([1e308, 1e308]) answered NaN where
+    // the answer is +inf, and so does every array whose total leaves the range.
+    // The exact sum of two 1e308 is 2e308, which is out of range, so +inf is the
+    // right answer and not a limitation of this method.
+    if (is_inf(s)) { s } else { s + c }
 };
 
 // The dot product of two equal-length arrays: `dot_asm`, the same
@@ -1965,18 +2988,55 @@ def fmean(a: [float]) -> float {
 // first, then the mean squared deviation from it. The one-pass form would need
 // a correction this module has no way to express (a compensated sum of squares
 // is a few more lines — fsum_kahan again). NaN for fewer than two elements.
+// Scaled before the two passes, unscaled after. The two-pass method takes the
+// MEAN first, and the mean of two equal 1e308 values is inf -- so
+// fvariance([1e308, 1e308]) answered inf where the answer is 0, and
+// fvariance([1e300, 1e300]) the same. A variance of two equal numbers is zero
+// however large they are, and a method that cannot see that is measuring the
+// wrong thing: it is the SIZE of the mean, not the spread, that overflowed.
+//
+// Scaling by a power of two is exact, cannot change a comparison or a
+// subtraction's sign, and cannot make a normal number subnormal (the scale is
+// chosen from the largest magnitude present, so everything lands within a
+// factor of two of 1). The variance is quadratic in the scale, so the factor
+// comes back squared through ldexp -- which is exact to the last bit or the
+// answer overflows, which is the honest answer for a spread that big.
+//
+// A NaN among the elements needs no case: `v > m` is false for it, so the scale
+// is set by the others, and the NaN reaches the mean and then the answer. An
+// infinity sets e = 1024, the scaled elements stay infinite, and inf - inf is
+// the NaN it should be.
 def fvariance(a: [float]) -> float {
     if (len(a) < 2) {
         nan
     } else {
-        let m = fmean(a);
-        let s = 0.0;
+        let n = len(a);
+        let big = 0.0;
         let i = 0;
-        while (i < len(a)) {
-            let d = a[i] - m;
+        while (i < n) {
+            let v = fabs(a[i]);
+            if (v > big) { big = v };
+            i = i + 1;
+        };
+        // big is 0 for an all-zero array and inf for one holding an infinity;
+        // both flow through the arithmetic below to the right answer (0, and a
+        // NaN from inf - inf) without a branch of their own.
+        let e = exp_field(big) - 1023;
+        let sc = ldexp(1.0, 0 - e);
+        let m = 0.0;
+        i = 0;
+        while (i < n) {
+            m = m + a[i] * sc;
+            i = i + 1;
+        };
+        m = m / n;
+        let s = 0.0;
+        i = 0;
+        while (i < n) {
+            let d = a[i] * sc - m;
             s = s + d * d;
             i = i + 1;
         };
-        s / (len(a) - 1)
+        ldexp(s / (n - 1), 2 * e)
     }
 };

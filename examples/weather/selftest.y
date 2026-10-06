@@ -211,7 +211,7 @@ def ask(port: long, target: str) -> Seen {
         let te = header(r, "transfer-encoding");
         let cl = header(r, "content-length");
         { status: r.status, reason: r.reason, body: body,
-          clen: cl.length > 0 ? tonum(cl) : 0 - 1,
+          clen: cl.length > 0 ? tolong(cl) : 0 - 1,
           chunked: te == "chunked", err: r.err }
     }
 };
@@ -321,7 +321,7 @@ def errpaths(c: Count, port: long, verbose: bool) -> Count {
     let head = wxsrv.response_text(wxsrv.route("GET /v1/forecast?city=quito HTTP/1.1\r\n\r\n"));
     let claimed = 0;
     let mark = index_of(head, "Content-Length: ");
-    if (mark >= 0) { claimed = tonum(claim_after(head, mark + 16)) };
+    if (mark >= 0) { claimed = tolong(claim_after(head, mark + 16)) };
     c = verdict(c, claimed == wxsrv.route("GET /v1/forecast?city=quito HTTP/1.1\r\n\r\n").body.length,
                 "the declared length is the length of the body beside it",
                 "header " + tostring(claimed));

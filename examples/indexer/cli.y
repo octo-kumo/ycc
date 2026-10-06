@@ -57,7 +57,7 @@ const USAGE =
 
 def usage_here() -> str { USAGE };
 
-// A decimal number, or -1.  Rejects "12x", "", "-3", "+3" and " 7": tonum on
+// A decimal number, or -1.  Rejects "12x", "", "-3", "+3" and " 7": tolong on
 // junk is a silent 0, and a silent 0 here is `--head 0` on nonsense, which
 // reads downstream as "the indexer found no first lines".
 def num_arg(s: str) -> long {
@@ -67,7 +67,7 @@ def num_arg(s: str) -> long {
         let c = byte_at(s, i);
         if (c < 48 || c > 57) { ok = false } else { i = i + 1 };
     };
-    if (ok) { tonum(s) } else { -1 }
+    if (ok) { tolong(s) } else { -1 }
 };
 
 // -1 = --help/--version was printed, 7 = --check, 0 = carry on, 1 = usage error.

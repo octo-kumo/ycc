@@ -208,7 +208,7 @@ that the segments are well formed and partition the ranges.
   line and never calls the parser. Agreement on 182 ranges, 1000 IDs, the sum
   of raw lengths, the sum of IDs, the dash count and both extremes is
   independent evidence that the parser read the file the same way twice.
-- **Every ID through `tonum`** as well as through the hand-rolled acceptance
+- **Every ID through `tolong`** as well as through the hand-rolled acceptance
   test in `num_reason`.
 
 ### 3. Whole-state-space proofs, not samples

@@ -1156,7 +1156,7 @@ def run_editor(ks: str, path: str) -> long {
 def child_rc() -> long {
     let s = slurp(TDIR + "/rc.txt");
     if (len(s) < 1) { return 0 - 1 };
-    tonum(s)
+    tolong(s)
 };
 
 def p_missing() -> long {

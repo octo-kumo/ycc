@@ -104,7 +104,7 @@ def main() -> long {
     while (i < n) {
         if (av[i] == "--no-display") { nodisp = true }
         else if (av[i] == "--repeat" && i + 1 < n) {
-            rep = tonum(av[i + 1]);
+            rep = tolong(av[i + 1]);
             i = i + 1
         };
         i = i + 1;

@@ -412,7 +412,7 @@ Yv *ys_long(long v) {
     return ys_cstr(buf);
 }
 
-long ys_tonum(const Yv *x) {
+long ys_tolong(const Yv *x) {
     if (!x) return 0;
     if (x->tag == Y_LONG) return x->u.l;
     if (x->tag == Y_FLOAT) return (long)x->u.f;
@@ -540,6 +540,22 @@ Yv *yav(size_t n, ...) {
         va_end(ap);
         v->u.a.len = n;
     }
+    return v;
+}
+
+/* yavs(first, ..., NULL): the same array, with the length derived from a
+ * sentinel rather than stated by the caller. yav(n, ...) above drops values
+ * past n without a word, so a hand-written count that forgets to grow is
+ * silent -- the array is just shorter than its author believed, and whatever
+ * name sat last is the one that disappears. */
+Yv *yavs(Yv *first, ...) {
+    Yv *v = yarr_new();
+    va_list ap;
+    va_start(ap, first);
+    for (Yv *x = first; x != NULL; x = va_arg(ap, Yv *)) {
+        v = ya_push(v, x);
+    }
+    va_end(ap);
     return v;
 }
 

@@ -41,7 +41,7 @@ a document parses, and every shape reads back
   ok    and an index in range is the element
           6 chars
 
-as_long is tonum over the text, and is not a conversion
+as_long is tolong over the text, and is not a conversion
   ok    "3.9" is 3
           got 3, want 3
   ok    "-3.9" is -3

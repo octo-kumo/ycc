@@ -691,8 +691,8 @@ def main() {
             if (len(parts) == 2 && args.num_ok(parts[0]) && args.num_ok(parts[1])) {
                 // WxH, width first, as the help says: 80x24 is eighty columns
                 // by twenty-four rows.
-                cols = tonum(parts[0]);
-                rows = tonum(parts[1]);
+                cols = tolong(parts[0]);
+                rows = tolong(parts[1]);
             };
         };
         if (rows < 3 || rows > tui.MAX_ROWS || cols < 8 || cols > tui.MAX_COLS) {

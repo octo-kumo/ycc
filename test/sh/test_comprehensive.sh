@@ -123,12 +123,29 @@ run_test "tostring: none" 'print(tostring(none));' 'none'
 run_test "tostring: array" 'print(tostring([1,2]));' '[1, 2]'
 run_test "tostring: map" 'print(tostring({a:1}));' '{a: 1}'
 
-# ── Builtins: tonum ──
+# ── Builtins: tolong ──
 echo ""
-echo "── Builtins: tonum ──"
-run_test "tonum: integer string" 'print(tonum("123"));' '123'
-run_test "tonum: float string" 'print(tonum("3.14"));' '3'
-run_test "tonum: negative" 'print(tonum("-42"));' '-42'
+echo "── Builtins: tolong ──"
+run_test "tolong: integer string" 'print(tolong("123"));' '123'
+run_test "tolong: float string" 'print(tolong("3.14"));' '3'
+run_test "tolong: negative" 'print(tolong("-42"));' '-42'
+# print separates its arguments with a space only when they are strings, so
+# two longs come out as "2-2": the point here is that -2.75 gives -2 and not
+# -3, which is what separates truncation from floor.
+run_test "tolong: float truncates toward zero" 'print(tolong(2.75), tolong(-2.75));' '2-2'
+run_test "tolong: method form" 'print("17".tolong());' '17'
+
+# ── Builtins: tofloat ──
+echo ""
+echo "── Builtins: tofloat ──"
+run_test "tofloat: fraction" 'print(tofloat("3.14"));' '3.140000'
+run_test "tofloat: negative" 'print(tofloat("-0.5"));' '-0.500000'
+run_test "tofloat: long widens" 'print(tofloat(7));' '7.000000'
+run_test "tofloat: method form" 'print("2.5".tofloat());' '2.500000'
+# An exponent is not read: the scan stops at the 'e', the same way tolong
+# stops at the '.' -- one tolerance for both, so a value cannot behave
+# differently depending on which conversion it went through.
+run_test "tofloat: no exponent" 'print(tofloat("1e9"));' '1.000000'
 
 # ── Builtins: len ──
 echo ""

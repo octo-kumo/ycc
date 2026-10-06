@@ -942,6 +942,29 @@ def num_is_float(s: str) -> bool {
     }
 };
 
+// Whether a float literal's MANTISSA is zero -- every character before the
+// exponent is a '0', whatever the exponent says.
+//
+// Zero times anything is zero: `0e999999` is exactly zero, C's strtod takes it,
+// and the range check in typeof_expr_go rejects it because it looks at the
+// exponent alone. That check exists to catch "a mistake, not a value", and a zero
+// written with a huge exponent is not a magnitude anybody could have meant.
+def num_mantissa_zero(s: str) -> bool {
+    let end = len(s);
+    let eb = index_of(s, "e");
+    if (eb < 0) { eb = index_of(s, "E"); };
+    if (eb >= 0) { end = eb };
+    let i = 0;
+    if (s[0:1] == "-" || s[0:1] == "+") { i = 1 };
+    let all = true;
+    while (all && i < end) {
+        let c = s[i:i + 1];
+        if (c != "0" && c != ".") { all = false };
+        i = i + 1
+    };
+    all
+};
+
 // Merge one field into a record literal's field list, in place: the array is
 // the caller's (every call site assigns the result straight back) and Y arrays
 // are references. A name the list does not have yet -- all but a repeated key
@@ -1734,8 +1757,12 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
             if (dp > 100000 || dp < 0 - 100000) {
                 // out of range by thousands of decades: a mistake, not a
                 // value. A literal merely past the double's range (1e400) is
-                // still accepted and becomes inf, as IEEE says.
-                st = fail(st, "float literal magnitude out of range (a double holds 10^-308 to 10^308)", lit.line, lit.col);
+                // still accepted and becomes inf, as IEEE says. And a zero
+                // mantissa is exempt however large the exponent, because 0 times
+                // anything is 0 -- `0e999999` is exactly zero and C takes it.
+                if (!num_mantissa_zero(lit.v)) {
+                    st = fail(st, "float literal magnitude out of range (a double holds 10^-308 to 10^308)", lit.line, lit.col);
+                }
             };
             tc_res(type_node({ k: K.tfloat }), st)
         } else {
@@ -2830,6 +2857,7 @@ def str_method(m: str) -> StrMethod {
     let s = sm_t(K.tstr);
     let l = sm_t(K.tlong);
     let b = sm_t(K.tbool);
+    let f = sm_t(K.tfloat);
     let no: [Type] = [];
     if (m == "split") { sm_mk("split", [s], 1, sm_arr(s), "", false) }
     else if (m == "join") { sm_mk("join", [sm_arr(sm_any())], 1, s, "", true) }
@@ -2851,7 +2879,8 @@ def str_method(m: str) -> StrMethod {
     else if (m == "repeat") { sm_mk("y_str_repeat", [l], 1, s, "", false) }
     else if (m == "lines") { sm_mk("y_str_lines", no, 0, sm_arr(s), "", false) }
     else if (m == "bytes") { sm_mk("bytes", no, 0, sm_arr(sm_t(K.tbyte)), "", false) }
-    else if (m == "tonum") { sm_mk("tonum", no, 0, l, "", false) }
+    else if (m == "tolong") { sm_mk("tolong", no, 0, l, "", false) }
+    else if (m == "tofloat") { sm_mk("tofloat", no, 0, f, "", false) }
     else if (m == "ord") { sm_mk("ord", no, 0, l, "", false) }
     else if (m == "byte_at") { sm_mk("byte_at", [l], 1, l, "", false) }
     else { sm_mk("", no, 0, t_unk(), "", false) }
@@ -3541,15 +3570,40 @@ def typeof_call_go(st: TcSt, node: Call) -> TcRes {
                 st = expect_type(st, r.typ, { k: K.tlong }, "chr code", node.line, node.col);
                 tc_res(type_node({ k: K.tstr }), st)
             }
-        } else if (name == "tonum") {
+        } else if (name == "tolong") {
             if (len(cargs) != 1) {
-                st = fail(st, "tonum takes exactly 1 argument", node.line, node.col);
+                st = fail(st, "tolong takes exactly 1 argument", node.line, node.col);
                 tc_res(t_unk(), st)
             } else {
                 let r = typeof_expr(st, cargs[0]);
                 st = r.st;
-                st = expect_type(st, r.typ, { k: K.tstr }, "tonum string", node.line, node.col);
-                tc_res(type_node({ k: K.tlong }), st)
+                // A str is parsed; a float is truncated. Two types rather than
+                // one is what makes the name worth changing.
+                if (r.typ.k != K.tstr && r.typ.k != K.tfloat) {
+                    st = fail(st, "tolong needs a str to parse or a float to truncate, got "
+                           + tstr(r.typ), node.line, node.col);
+                    tc_res(t_unk(), st)
+                } else {
+                    tc_res(type_node({ k: K.tlong }), st)
+                }
+            }
+        } else if (name == "tofloat") {
+            if (len(cargs) != 1) {
+                st = fail(st, "tofloat takes exactly 1 argument", node.line, node.col);
+                tc_res(t_unk(), st)
+            } else {
+                let r = typeof_expr(st, cargs[0]);
+                st = r.st;
+                // A str is parsed; a long is widened, which the language already
+                // does implicitly -- so this arm exists for SYMMETRY with
+                // tolong, not because it needs to.
+                if (r.typ.k != K.tstr && r.typ.k != K.tlong) {
+                    st = fail(st, "tofloat needs a str to parse or a long to widen, got "
+                           + tstr(r.typ), node.line, node.col);
+                    tc_res(t_unk(), st)
+                } else {
+                    tc_res(type_node({ k: K.tfloat }), st)
+                }
             }
         } else if (name == "tostring") {
             if (len(cargs) != 1) {

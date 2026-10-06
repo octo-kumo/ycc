@@ -313,7 +313,7 @@ def xref_for(text: str, dir: str, path: str, pack: str) -> Prepared? {
             foreach (pair in xref.tops_pairs(x)) {
                 let tab = index_of(pair, "\t");
                 let nm = pair[0:tab];
-                let ln = tonum(pair[tab + 1:len(pair)]);
+                let ln = tolong(pair[tab + 1:len(pair)]);
                 lines[nm] = ln;
                 files[nm] = file_of(nr.origin, ln);
                 names += nm;

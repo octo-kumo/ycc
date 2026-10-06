@@ -393,12 +393,12 @@ def check_real(path: str, bytes: [byte]) -> long {
 
     // Every distance also has to read the same through the standard
     // builtin as through the hand-rolled digit loop.
-    let tonum_bad = 0;
+    let tolong_bad = 0;
     for i in 0..n {
-        if (tonum(lines![i][1:]) != r.dists[i]) { tonum_bad = tonum_bad + 1 };
+        if (tolong(lines![i][1:]) != r.dists[i]) { tolong_bad = tolong_bad + 1 };
     };
-    f = f + expect("distances == tonum", tonum_bad == 0,
-                   f"{tonum_bad} of {n} disagree with tonum()");
+    f = f + expect("distances == tolong", tolong_bad == 0,
+                   f"{tolong_bad} of {n} disagree with tolong()");
 
     let p1 = part1_walk(r);
     let p1b = part1_reverse(r);

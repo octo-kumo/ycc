@@ -432,7 +432,7 @@ def range_reason(line: str) -> str {
             "lower end " + ra
         } else if (rb != "") {
             "upper end " + rb
-        } else if (tonum(low) > tonum(high)) {
+        } else if (tolong(low) > tolong(high)) {
             "lower end " + low + " is above the upper end " + high
         } else {
             ""
@@ -511,14 +511,14 @@ def parse_db(lines: [str]) -> Db? {
     for i in 0..(b - 1) {
         let s = strip_cr(lines[i]);
         let d = s.index_of("-");
-        let a = tonum(s[0:d]);
-        let z = tonum(s[d + 1:]);
+        let a = tolong(s[0:d]);
+        let z = tolong(s[d + 1:]);
         lo += a;
         hi += z;
         raw_total = raw_total + (z - a + 1);
     };
     let ids: [long] = [];
-    for i in b..n { ids += tonum(strip_cr(lines[i])) };
+    for i in b..n { ids += tolong(strip_cr(lines[i])) };
 
     let rlo: [long] = [];
     let rhi: [long] = [];
@@ -1089,20 +1089,20 @@ def check_real(path: str, bytes: [byte]) -> long {
 
     // Every ID must also read the same through the builtin as through the
     // hand-rolled acceptance in num_reason.
-    let tonum_bad = 0;
+    let tolong_bad = 0;
     let id_sum = 0;
     let distinct = 0;
     let b = find_blank(lines!, eff_lines(lines!));
     for i in b..eff_lines(lines!) {
-        let v = tonum(strip_cr(lines![i]));
-        if (v != d.ids[i - b]) { tonum_bad = tonum_bad + 1 };
+        let v = tolong(strip_cr(lines![i]));
+        if (v != d.ids[i - b]) { tolong_bad = tolong_bad + 1 };
         id_sum = id_sum + v;
         let seen = 0;
         let upto = i - b;
         for j in 0..upto { if (d.ids[j] == v) { seen = seen + 1 } };
         if (seen == 0) { distinct = distinct + 1 };
     };
-    f = f + expect("ids == tonum", tonum_bad == 0, f"{tonum_bad} of {n_id} disagree with tonum()");
+    f = f + expect("ids == tolong", tolong_bad == 0, f"{tolong_bad} of {n_id} disagree with tolong()");
     f = f + expect("parse == rescan: id sum", sc.id_sum == id_sum, f"{sc.id_sum} vs {id_sum}");
     f = f + expect("ids distinct", distinct == X_DISTINCT_IDS && distinct == n_id,
                    f"{distinct} distinct of {n_id}, outside says {X_DISTINCT_IDS}");

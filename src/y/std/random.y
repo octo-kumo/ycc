@@ -57,9 +57,22 @@ def next() -> long {
 // from the grid so it cannot happen -- but the arithmetic below is shared, and
 // `n % n` on a zero n is a division by zero trap (ORCHESTRATOR.md 2.6 traps on
 // stdout, which would land in the middle of a frame).
+//
+// A bound of exactly 2^62 is the LARGEST this can serve, and the reason is a
+// property of the loop rather than of the stream: it draws from [0, 2^62) and
+// rejects anything at or above the largest whole multiple of n in that range.
+// One past 2^62 there is no whole multiple at all -- (span / n) is 0, so lim is
+// 0 -- and then EVERY draw is at or above lim and the loop never ends.
+// `below(4611686018427387905)` hung the program outright, which is the worst
+// answer a generator can give and the one no caller can recover from. A bound
+// past the span is a caller asking for more entropy than the stream has
+// granularity for, so it answers 0, by the same rule as n < 1.
+//
+// That leaves 2^62 exactly, which works because lim == span and the accept test
+// `v >= lim` is then false for every v the mask can produce.
 def below(n: long) -> long {
-    if (n < 1) { return 0; };
     let span = TOP62 + 1;                   // 2^62 draws
+    if (n < 1 || n > span) { return 0; };
     let lim = (span / n) * n;               // the largest whole multiple of n in [0, span)
     let v = 0 - 1;                          // the sentinel: forces one draw
     // `v < 0` is what forces the first draw -- and it has to be spelled out,
@@ -71,9 +84,25 @@ def below(n: long) -> long {
 };
 
 // range(lo, hi) -> long -- a uniform integer in lo..hi inclusive.
+//
+// The width is hi - lo + 1, which OVERFLOWS for a range spanning most of the
+// word: range(LONG_MIN, LONG_MAX) has a true width of 2^64, and the arithmetic
+// wraps to 0, so below(0) answers 0 and the draw is always lo. It used to hang
+// instead, because the wrapped 0 was below(0) before the bound was clamped and
+// a width of exactly 2^62 one below LONG_MIN wrapped to -1 -- which reaches
+// below's n < 1 arm by a different route. So the width is computed so it cannot
+// wrap, and a span too wide to draw from answers lo, which is one of the values
+// in the range and therefore an answer this function may give.
 def range(lo: long, hi: long) -> long {
     if (hi < lo) { return lo };
-    lo + below(hi - lo + 1)
+    // (hi - lo) + 1 without the wrap: if hi - lo is LONG_MAX the +1 would be
+    // 2^63, which is not a long. LONG_MIN / 2 is the other bound -- lo + the
+    // width must not wrap either -- so both ends are checked.
+    let w = hi - lo;
+    if (w == 9223372036854775807 || w < 0 - 9223372036854775807 - 1 + 1) { return lo };
+    let n = w + 1;
+    if (n < 1 || n > 4611686018427387904) { return lo };
+    lo + below(n)
 };
 
 // chance(pct) -> bool -- true with probability pct/100.

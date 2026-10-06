@@ -23,7 +23,7 @@ past the end: true
 -- completion after a `.` is the object's OWN members
 p. with `a` typed offers: a
 p. with `b` typed offers: b
-a str offers the methods: split,join,trim,strip,trim_start,lstrip,trim_end,rstrip,pad_left,pad_right,center,starts_with,ends_with,contains,index_of,last_index_of,count,replace,upper,lower,repeat,lines,bytes,tonum,ord,byte_at
+a str offers the methods: split,join,trim,strip,trim_start,lstrip,trim_end,rstrip,pad_left,pad_right,center,starts_with,ends_with,contains,index_of,last_index_of,count,replace,upper,lower,repeat,lines,bytes,tolong,tofloat,ord,byte_at
 an array offers not the string methods: 
-the string methods would have been: split,join,trim,strip,trim_start,lstrip,trim_end,rstrip,pad_left,pad_right,center,starts_with,ends_with,contains,index_of,last_index_of,count,replace,upper,lower,repeat,lines,bytes,tonum,ord,byte_at
+the string methods would have been: split,join,trim,strip,trim_start,lstrip,trim_end,rstrip,pad_left,pad_right,center,starts_with,ends_with,contains,index_of,last_index_of,count,replace,upper,lower,repeat,lines,bytes,tolong,tofloat,ord,byte_at
 done

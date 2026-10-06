@@ -171,8 +171,8 @@ def parse_size(s: str) -> long {
     let b = s[at + 1:];
     if (len(a) > 6 || len(b) > 6) { return 0; };
     if (!args.num_ok(a) || !args.num_ok(b)) { return 0; };
-    let w = tonum(a);
-    let h = tonum(b);
+    let w = tolong(a);
+    let h = tolong(b);
     if (w < dungeon.MIN_W || w > dungeon.MAX_W) { return 0; };
     if (h < dungeon.MIN_H || h > dungeon.MAX_H) { return 0; };
     w * 1000000 + h

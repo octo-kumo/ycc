@@ -116,7 +116,7 @@ integers, which is the reason the shipped
 fixed point — a real cost in both clarity and accuracy, taken purely
 to route around the missing conversion.
 
-The escape hatch today is `tonum(tostring(f))`, which truncates
+The escape hatch today is `tolong(tostring(f))`, which truncates
 toward zero (`3.7` → `3`, `-3.7` → `-3`) — but it routes through a
 6-decimal string, so it is both slow and lossy, and it silently
 rounds a value like `0.9999999` up to `1`.
@@ -153,7 +153,7 @@ library author who wanted `sqrt`. It also explains the shape of the fix: it
 is a **language** change (a conversion, or a cast syntax), not a library
 change, so no amount of std work can route around it. That is why this entry
 says what it costs and why the campaign's own escape hatch
-(`tonum(tostring(f))`, 6 decimals, truncation toward zero) is the worst
+(`tolong(tostring(f))`, 6 decimals, truncation toward zero) is the worst
 available answer rather than a good one.
 ## 3. A `term` module — raw mode, window size, keys
 
@@ -208,14 +208,14 @@ list and the one with the widest reach: every terminal example in
 the backlog depends on it, and `test/std/term.y` is where
 the shared, tested version lives today.
 
-## 4. A checked integer parse — `tonum` that answers `none` instead of guessing
+## 4. A checked integer parse — `tolong` that answers `none` instead of guessing
 
-**Useful because** `tonum` is deliberately forgiving (the manual, §9
+**Useful because** `tolong` is deliberately forgiving (the manual, §9
 builtins: "a prefix is used and the rest ignored"), which is right for
 `"3.14"` → `3` and wrong for every command line. `--seed=12abc` is `12`,
 `--width= 7` is `0`, and a 20-digit value silently wraps
-(`tonum("999999999999999999999")` is `3875820019684212735`,
-`tonum("9223372036854775808")` is `-9223372036854775808`). A typo in a
+(`tolong("999999999999999999999")` is `3875820019684212735`,
+`tolong("9223372036854775808")` is `-9223372036854775808`). A typo in a
 number therefore yields a *different number* with no diagnostic at all,
 and the program runs to completion on it. Every program in this campaign
 that takes `--seed=N`, `--width=N`, `--iters=N` or `--zoom=N` has to
@@ -243,18 +243,18 @@ def num_ok(s: str) -> bool {
 };
 
 if (!num_ok(v)) { eputs("prog: --seed wants a number, got '" + v + "'\n"); exit(2); };
-let seed = tonum(v);
+let seed = tolong(v);
 ```
 
 Wanted — the same shape as `fs.read_file(path) -> str?`, and a natural
-addition to the str-method table beside `tonum` (`types.y` `str_method`),
+addition to the str-method table beside `tolong` (`types.y` `str_method`),
 because `none` already says "there was nothing here":
 
 ```y
-let seed = v.tonum_opt();          // long? — none unless v is a whole number
+let seed = v.tolong_opt();         // long? — none unless v is a whole number
 if (seed == none) { eputs("prog: --seed wants a number, got '" + v + "'\n"); exit(2); };
 // or with the builtin spelling, for a value out of reach of a method:
-let seed = tonum_opt(v);
+let seed = tolong_opt(v);
 ```
 
 `none` should cover a value outside the `long` range too, so
@@ -264,9 +264,9 @@ let seed = tonum_opt(v);
 the string and reports whether it consumed all of it (plus a range check),
 a `none`/`some` result, one entry in `str_method` in `types.y` and its C
 twin, and the body beside the `y_str_*` helpers in `src/y/std/str.y`. The
-only real question is the boundary — `tonum` stops at the first byte that
-is not a digit, so should this be `tonum_strict`, or should `tonum` itself
-change and gain an argument? Leaving `tonum` as it is documented to behave
+only real question is the boundary — `tolong` stops at the first byte that
+is not a digit, so should this be `tolong_strict`, or should `tolong` itself
+change and gain an argument? Leaving `tolong` as it is documented to behave
 and adding the option-returning form breaks nothing.
 
 ### Environment
@@ -510,7 +510,7 @@ def f6(n: long) -> long {            // the control: re-bind a module-level valu
     s
 };
 
-let n = 1000; let sink = 0; let form = tonum(argv()[1]);
+let n = 1000; let sink = 0; let form = tolong(argv()[1]);
 let h0 = heap_used();
 if (form == 1) { sink = f1(n); };
 if (form == 2) { sink = f2(n); };

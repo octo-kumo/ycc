@@ -5,8 +5,8 @@ import parser from "../../../src/y/parser.y";
 import vm from "./vm.y";
 
 // Builtins the VM exposes to user programs (native Y functions, passed by ref).
-let builtin_names = ["print", "len", "push", "tostring", "typeof", "range", "index_of", "arr_index_of", "ord", "chr", "join", "split", "trim", "tonum", "puts", "map_set", "map_get", "last_index_of", "scope_new", "scope_def", "scope_find", "scope_get", "scope_set"];
-let builtin_vals = [print, len, push, tostring, typeof, range, index_of, arr_index_of, ord, chr, join, split, trim, tonum, puts, map_set, map_get, last_index_of, scope_new, scope_def, scope_find, scope_get, scope_set];
+let builtin_names = ["print", "len", "push", "tostring", "typeof", "range", "index_of", "arr_index_of", "ord", "chr", "join", "split", "trim", "tolong", "puts", "map_set", "map_get", "last_index_of", "scope_new", "scope_def", "scope_find", "scope_get", "scope_set"];
+let builtin_vals = [print, len, push, tostring, typeof, range, index_of, arr_index_of, ord, chr, join, split, trim, tolong, puts, map_set, map_get, last_index_of, scope_new, scope_def, scope_find, scope_get, scope_set];
 
 def run(src: str) -> null {
     let toks = lexer.tokenize(src);

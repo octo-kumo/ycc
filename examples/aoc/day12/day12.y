@@ -214,13 +214,13 @@ def is_region_line(s: str) -> bool {
 
 def dim_first(s: str) -> long {
     let x = s.index_of("x");
-    if (is_digits(s, 0, x)) { tonum(s[0:x]) } else { -1 }
+    if (is_digits(s, 0, x)) { tolong(s[0:x]) } else { -1 }
 }
 
 def dim_second(s: str) -> long {
     let x = s.index_of("x");
     let c = s.index_of(":");
-    if (is_digits(s, x + 1, c)) { tonum(s[x + 1:c]) } else { -1 }
+    if (is_digits(s, x + 1, c)) { tolong(s[x + 1:c]) } else { -1 }
 }
 
 // The numbers after the ':', whitespace-separated, in order.  Byte level, so
@@ -235,7 +235,7 @@ def numbers(rest: str) -> [long] {
         while (i < n && (rest[i] & 255) > CH_SPACE) { i = i + 1 };
         if (i > lo) {
             let tok = rest[lo:i];
-            if (is_digits(tok, 0, len(tok))) { out += tonum(tok) } else { out += -1 };
+            if (is_digits(tok, 0, len(tok))) { out += tolong(tok) } else { out += -1 };
         };
     };
     out
@@ -1996,7 +1996,7 @@ def main() -> long {
                 return 1;
             };
             i = i + 1;
-            inj = tonum(args[i]);
+            inj = tolong(args[i]);
             if (inj < 1 || inj > INJECT_MAX) {
                 eputs("day12: --inject takes 1.." + tostring(INJECT_MAX)
                       + ", not " + args[i] + "\n");

@@ -95,7 +95,7 @@ Two further measurements shape the algorithm choices:
 
 The complete set of names `typeof_call` recognises as intrinsics (`types.y`,
 `typeof_call` + the `name ==` chain): `print keys len some is_some unwrap trim
-ord byte_at chr tonum tostring typeof last_index_of join fork spawn wait_pid
+ord byte_at chr tolong tostring typeof last_index_of join fork spawn wait_pid
 mutex sem try_lock lock wait split range eputs clock_us time_us heap_used sleep
 puts exit argv bytes from_bytes ptr_addr syscall substr`. Float support is
 exactly: `+ - * /` (`%` lowers to `y_fmod`), the six comparisons, `tostring` and

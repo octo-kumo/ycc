@@ -347,7 +347,7 @@ def sec_hexdigits() {
     test.ck("both digits of every byte value match the literal table",
         bad == 0,
         badv == 0 ? "clean" : "first wrong at " + tostring(badv));
-    // The parser refuses what it does not understand -- `tonum` would answer 0.
+    // The parser refuses what it does not understand -- `tolong` would answer 0.
     test.ck_eq("hexval refuses 'zz'", hx.hexval("zz"), 0 - 1);
     test.ck_eq("hexval refuses '0z'", hx.hexval("0z"), 0 - 1);
     test.ck_eq("hexval refuses 'z0'", hx.hexval("z0"), 0 - 1);

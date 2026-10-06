@@ -44,6 +44,28 @@ def main() -> long {
     test.ck_eq("below(0) is 0, not a division by zero", random.below(0), 0);
     test.ck_eq("below(1) is 0", random.below(1), 0);
     test.ck_eq("below(-5) is 0", random.below(0 - 5), 0);
+    // A bound past the 2^62 the loop draws from is the other end of the same
+    // rule. It is here because it HUNG: (span / n) is 0 one past 2^62, so lim is
+    // 0, so `v >= lim` rejects every draw and the loop never ends. The worst
+    // answer a generator can give, and the one no caller can recover from.
+    test.ck("below(2^62) is served -- it is the largest bound that is", {
+        random.seed(42);
+        let v = random.below(4611686018427387904);
+        v >= 0 && v < 4611686018427387904
+    }, "inside its own bound");
+    test.ck_eq("below(2^62 + 1) answers 0 rather than hanging",
+        {
+            random.seed(42);
+            random.below(4611686018427387905)
+        }, 0);
+    test.ck_eq("and below(LONG_MAX) too", {
+        random.seed(42);
+        random.below(9223372036854775807)
+    }, 0);
+    test.ck_eq("below(LONG_MIN) too", {
+        random.seed(42);
+        random.below(0 - 9223372036854775807 - 1)
+    }, 0);
 
     random.seed(7);
     let bad = 0;
@@ -121,6 +143,47 @@ def main() -> long {
             random.seed(4);
             random.range(9, 2)
         }, 9);
+
+    // The width is hi - lo + 1, and that WRAPS for a range spanning most of the
+    // word. range(5, LONG_MAX) has a true width of 2^63 - 4, which is above
+    // below's 2^62 span and so reached the hanging path: this used to never
+    // return at all. range(LONG_MIN, LONG_MAX) is the 2^64 case, where the wrap
+    // lands on 0 and the answer was always lo -- inside the range, so not wrong
+    // on its own terms, but for an accident of arithmetic rather than a decision.
+    test.ck_eq("range(5, LONG_MAX) answers lo instead of hanging",
+        random.range(5, 9223372036854775807 - 1), 5);
+    test.ck("and it does return", {
+        let v = random.range(5, 9223372036854775807 - 1);
+        v >= 5 && v <= 9223372036854775807 - 1
+    }, "in the range");
+    test.ck("range(LONG_MIN, LONG_MAX) is one of its endpoints", {
+        random.seed(1);
+        let v = random.range(0 - 9223372036854775807 - 1, 9223372036854775807 - 1);
+        v == 0 - 9223372036854775807 - 1 || v == 9223372036854775807 - 1
+    }, "the width is 2^64 and cannot be drawn");
+    test.ck("and it is inside the range", {
+        random.seed(1);
+        let v = random.range(0 - 9223372036854775807 - 1, 9223372036854775807 - 1);
+        v >= 0 - 9223372036854775807 - 1 && v <= 9223372036854775807 - 1
+    }, "a 2^64 span has no drawable width, so an endpoint");
+    // A range whose width is exactly below's 2^62 span is the widest one that
+    // draws. Its width is 2^62 over 500 draws, so the two ends are simply not
+    // going to come up -- asserting otherwise asks for a coincidence -- and the
+    // property worth asserting is that every answer is inside. A narrower range
+    // is where both ends are checkable, which is what the 5..7 case above does.
+    test.ck("the widest drawable range stays inside itself", {
+        random.seed(9);
+        let lo = 0 - 4611686018427387904;
+        let hi = 0 - 1;
+        let ok = true;
+        let i = 0;
+        while (i < 500) {
+            let v = random.range(lo, hi);
+            if (v < lo || v > hi) { ok = false };
+            i = i + 1
+        };
+        ok
+    }, "500 draws from a range of width 2^62, all inside");
 
     // ─────────────────────────────────────────── chance(pct)
     test.group("chance(pct)");
@@ -219,6 +282,92 @@ def main() -> long {
     test.ck("a different seed gives a different sequence", differs > 40,
         "not one draw in fifty the same");
 
+    // ─────────────────────────────────────────── against splitmix64 itself
+    //
+    // Every check above is a PROPERTY: two draws differ, a seed replays, the
+    // counts come out even. Each of those would also hold for a generator that is
+    // wrong in some way nobody thought to ask about, and a property cannot tell
+    // you which. So this block pins the VALUES -- and the reference is
+    // splitmix64 computed in exact 64-bit arithmetic, not a golden file written
+    // from this module's own output, which would only certify that it has not
+    // changed.
+    //
+    // The reference needs the module's convention spelled out. splitmix64 mixes
+    // the state it is handed, and this module both offsets the seed by the
+    // golden ratio (in seed) and advances before mixing (in next), so the draw
+    // for seed(v) is mix(v + 2*GOLDEN), the second mix(v + 3*GOLDEN), and so on.
+    // An earlier draft of this block seeded twice and compared against
+    // mix(v + GOLDEN), which is why the first line below is the FIRST draw and
+    // not a repeat of it -- the module advances st inside next(), so seeding once
+    // and drawing twice is one stream, and re-seeding is draw one again.
+    test.group("the VALUES, against splitmix64 in exact 64-bit arithmetic");
+    test.ck("seed 1, first six draws", stream_of(1, 6) == [
+        -4689498862643123097, -534904783426661026, 8196980753821780235,
+        8195237237126968761, -4373826470845021568, -2262517385565684571
+    ], "splitmix64 with the seed offset applied twice");
+    test.ck("seed 2, first three", stream_of(2, 3) == [
+        -4627371582388691390, -7459160825568275665, -4327252827158612380
+    ], "a second seed, a third stream");
+    test.ck("seed 0, first three", stream_of(0, 3) == [
+        7960286522194355700, 487617019471545679, -537132696929009172
+    ], "seed 0 is not a fixed point and mixes like any other");
+    test.ck("a negative seed", stream_of(0 - 5, 2) == [
+        -8161798454662654712, -2167467587980096447
+    ], "the shifts are >>> so the sign does not change the mixer");
+    test.ck("seed 2^62", stream_of(4611686018427387904, 2) == [
+        -4798756103566256131, -305740179795585657
+    ], "the sign bit set, which >>> must ignore");
+    test.ck("seed LONG_MIN", stream_of(0 - 9223372036854775807 - 1, 2) == [
+        -4292029157624213486, 7036458801432265024
+    ], "every bit set: a >> would carry the sign down and fail this");
+
+    // below(n) is the raw stream masked to 62 bits and rejected above the largest
+    // whole multiple of n -- so its values follow from the stream, and the
+    // expected ones are computed from it the same way.
+    test.group("below(n), derived from the raw stream");
+    test.ck("below(4) from seed 42", bounded_of(42, 4, 20) == [
+        3, 2, 0, 2, 2, 1, 0, 1, 2, 3, 2, 2, 3, 0, 2, 1, 1, 3, 0, 0
+    ], "masked to 62 bits, then modulo, with rejection");
+    test.ck("below(1000) from seed 42", bounded_of(42, 1000, 6) == [
+        291, 954, 860, 250, 350, 925
+    ], "a modulus that does not divide the span, so rejection runs");
+    test.ck("below(2^61) from seed 42", bounded_of(42, 2305843009213693952, 4) == [
+        643983082913198339, 527597730035375954, 1737512041830867860, 701532786141963250
+    ], "the sign bit of the masked draw is where the difference is");
+
+    // state() is st itself, so these two pin the offset arithmetic rather than
+    // the mixer.
+    random.seed(1);
+    test.ck_eq("state after seed(1) is the offset seed", random.state(),
+        -7046029254386353130);
+    random.next();
+    test.ck_eq("and after one draw it has advanced by the golden ratio",
+        random.state(), 4354685564936845355);
+
     return test.report();
+};
+
+// n draws from one seed, so a block can be compared as a list.
+def stream_of(v: long, n: long) -> [long] {
+    random.seed(v);
+    let out: [long] = [];
+    let i = 0;
+    while (i < n) {
+        out += random.next();
+        i = i + 1
+    };
+    out
+};
+
+// n draws of below(k) from one seed.
+def bounded_of(v: long, k: long, n: long) -> [long] {
+    random.seed(v);
+    let out: [long] = [];
+    let i = 0;
+    while (i < n) {
+        out += random.below(k);
+        i = i + 1
+    };
+    out
 };
 exit(main());

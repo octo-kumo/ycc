@@ -143,7 +143,7 @@ def self_pack() -> str {
             let k = syscall(0, fd, &buf[0], 16);
             if (k == 16) {
                 let tail = from_bytes(buf[0:16]);
-                let n = tonum(tail[:8]);
+                let n = tolong(tail[:8]);
                 if (tail[8:] == pack_magic() && n > 0 && n <= size - 16) {
                     syscall(8, fd, size - 16 - n, 0);
                     let pieces: [str] = [];

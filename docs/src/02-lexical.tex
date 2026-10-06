@@ -87,8 +87,22 @@ both were a ulp out before. Magnitude past the range becomes \ic{inf} or
 \ic{0.0}, as IEEE says (\ic{1e400}, \ic{-1e-400}); a magnitude nobody
 means --- a net power of ten (the exponent less the digits after the dot)
 past 100000 --- is an error instead, since it is a slip and not a value.
-A literal is a constant: the generated code holds its bits, and no
-decimal is parsed at runtime.
+A \emph{zero} mantissa is exempt however large that exponent, because
+zero times anything is zero: \ic{0e999999} is exactly \ic{0.0} and C's
+\ic{strtod} takes it. A literal is a constant: the generated code holds
+its bits, and no decimal is parsed at runtime.
+
+That rounding is exact everywhere measured except one band, which is
+recorded rather than claimed: a literal between about \ic{1e-327} and
+\ic{1e-367} is mis-parsed into a nonzero \emph{subnormal} where the
+value is exactly zero. Over 725 literals spanning those exponents, 302
+are wrong and every one of the 302 should be zero. It is a band and not
+a threshold --- \ic{1e-327} is wrong and \ic{1e-326} right, and both
+\ic{1e-367} and \ic{1e-400} are right. Nothing outside it is affected: the
+whole subnormal range from \ic{5e-324} up rounds correctly, and so does
+every ordinary literal. The wrong answers are subnormals with a mantissa
+near $2^{30}$, one whole step of the 32-bit-at-a-time narrowing that
+makes \ic{1e300} cheap.
 
 \paragraph{Strings.} Double-quoted byte strings:
 

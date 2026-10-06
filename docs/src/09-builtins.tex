@@ -59,7 +59,7 @@ a record still calls the field. \ic{s.length} is a property, so
 \begin{description}[style=nextline,leftmargin=5.2em]
 \item[Builtins as methods] \ic{s.split(sep)}, \ic{s.trim()} (also
   \ic{s.strip()}), \ic{s.index\_of(sub)}, \ic{s.last\_index\_of(sub)},
-  \ic{s.ord()}, \ic{s.byte\_at(i)}, \ic{s.tonum()} and \ic{s.bytes()} are
+  \ic{s.ord()}, \ic{s.byte\_at(i)}, \ic{s.tolong()} and \ic{s.bytes()} are
   the builtins of the same name with \ic{s} as the first argument.
 \item[\ic{sep.join(xs)}] \ic{join(xs, sep)}: the receiver is the
   separator.
@@ -97,11 +97,25 @@ a record still calls the field. \ic{s.length} is a property, so
   \ic{"\{k: v, ...\}"}, maps as \ic{"\{"k": v, ...\}"} (string keys
   quoted). A function is \emph{not} accepted here (only \ic{print} takes
   one, Section~\ref{sec:builtin-io}).
-\item[\ic{tonum(s)}] Parse a decimal integer. The scan takes an optional
+\item[\ic{tolong(x)}] A \ic{long} from either a \ic{str} or a \ic{float}.
+  On a \ic{str} it parses a decimal integer: the scan takes an optional
   \ic{-} and then digits, and \emph{stops} at the first byte that is
-  neither: a prefix is used and the rest ignored (\ic{tonum("12x")} is
-  \ic{12}, \ic{tonum("3.14")} is \ic{3}), and only a string with no such
-  prefix at all gives \ic{0}.
+  neither, so a prefix is used and the rest ignored (\ic{tolong("12x")} is
+  \ic{12}, \ic{tolong("3.14")} is \ic{3}), and only a string with no such
+  prefix at all gives \ic{0}. On a \ic{float} it \emph{truncates toward
+  zero} --- \ic{tolong(-3.99)} is \ic{-3}, not \ic{-4}, which is
+  \ic{floor} and not \ic{trunc}. A float with no long answer at all traps:
+  a NaN, or a magnitude at or past \ic{2\textasciicircum 63} (\ic{-2\textasciicircum 63}
+  \emph{is} a long, and comes back as such).
+\item[\ic{tofloat(x)}] A \ic{float} from either a \ic{str} or a \ic{long}.
+  On a \ic{str} it reads the same scan with a fraction, stopping where
+  \ic{tolong} stops, and accumulating in \ic{double} as it goes --- so
+  \ic{tofloat("3.14")} is the double nearest \ic{3.14}, the same answer the
+  literal \ic{3.14} has and the same one every other language's parser
+  gives. An exponent is not read (\ic{tofloat("1e9")} is \ic{1.0}). On a
+  \ic{long} it is the widening the language already does implicitly, made
+  explicit so that \ic{tolong} and \ic{tofloat} are a pair; a long beyond
+  \ic{2\textasciicircum 53} rounds to the nearest double, as widening always does.
 \item[\ic{typeof(v)}] The static type as a printable value
   (\ic{typeof(none)} is \ic{"none"}). The rendering is the one the
   compiler's own diagnostics use, character for character, so what
@@ -167,6 +181,22 @@ read, or does not suit the field's static type, is a compile-time error;
 \begin{center}
 \ic{format spec 'd': type 'd' needs an integer, not float}
 \end{center}
+
+A float shows six decimals, and that rule has a seam and an end, both pinned
+rather than left to the reader. The seam is at $5\cdot10^{-7}$: bisecting against
+Python's \ic{\%.6f} puts the last \ic{0.000000} at
+$4.9999999999999998\cdot10^{-7}$ and the first \ic{0.000001} at
+$5.0000000000000008\cdot10^{-7}$, so \ic{5e-7} itself is \emph{below} it and the
+seam is one representable step above --- not where a reader would guess it.
+Below the seam the rule degenerates: every float under it prints as
+\ic{0.000000}, \ic{1e-300} and the least subnormal included. That is what six
+decimals means and it is not a defect, but it is a place a program can lose a
+value, so it is written down. Given a precision the rule rounds \emph{half away
+from zero}, not half to even: \ic{f"\{3.5:.0f\}"} is \ic{4} and
+\ic{f"\{-2.5:.0f\}"} is \ic{-2}. And a zero keeps its sign --- which this
+language has got wrong three times elsewhere --- so \ic{f"\{-0.0:.0f\}"} is
+\ic{-0} and \ic{f"\{-0.0\}"} is \ic{-0.000000}
+(\ic{t331\_float\_print\_seams.y}).
 
 Where Y differs from Python: a field without a spec is \ic{tostring}, so
 a float shows six decimals (\ic{f"\{2.5\}"} is \ic{2.500000}); a float
@@ -282,7 +312,7 @@ $\pi$ is \num{1.2e-16} from it and a reduction good to \num{1e-26} is already a
 hundred thousand ulps of \ic{math.sin(math.pi)}.
 
 \emph{How close.} \ic{test/sh/test\_math.sh} is the gate: a checked-in table of
-IEEE-754 bit patterns (\ic{test/math/ulp\_table.txt}, \num{2695} cases, written
+IEEE-754 bit patterns (\ic{test/math/ulp\_table.txt}, \num{2713} cases, written
 by \ic{test/math/gen\_ulp\_table.py} from this platform's libm) and a program
 that reads it, calls this module, and measures the gap in ulps. Two NaNs count as
 the same answer however their signs differ --- a sign bit is not an ulp --- and any
@@ -296,6 +326,38 @@ inside [-1, 1] about one time in eight, so the general one left each of them wit
 eight interior arguments --- which is not a gate on a 24-term polynomial, and
 which was how \ic{acos} went on cancelling eight digits near \ic{x = 1} for a
 forty-ulp answer that nothing in the suite could see.
+
+\emph{One limit, and it is not a number.} \ic{sin}, \ic{cos} and \ic{tan}
+reduce their argument in one step: the quadrant is \ic{round(x*2/$\pi$)} as a
+single \ic{double}, and the subtraction of \ic{n*($\pi$/2)} that follows is
+compensated in double-double and is exact. The quotient is not. That product
+wants about \num{106} bits and rounds, and whether the rounding carries it
+across the half-integer boundary is a property of the particular \ic{x} and not
+a bound on it --- \ic{sin(1e15)} is exact and \ic{sin(1e16)} is \num{33} ulps out.
+
+So there is no sharp edge, and saying otherwise would be worse than admitting
+it. Measured against this platform's libm over \num{3000} arguments per decade:
+\ic{sin} and \ic{cos} are within one ulp of every one of \num{3000} arguments up
+to \ic{1e8}; at \ic{1e10} three are not, at \ic{1e12} four are, at \ic{1e14}
+eleven are and the worst is eight ulps, and at \ic{1e18} the quadrant is wrong
+by one and the answer is unrelated (\ic{-3.7e18}, where the truth is
+\num{-0.993}). One earlier draft of this section claimed the limit was
+\ic{$2^{53}\cdot(\pi/2)$}, about \num{1.41e16}; it was wrong by a factor of a
+thousand, and a limit asserted without a measurement behind it is the thing this
+section exists to avoid.
+
+What \emph{is} a boundary is where the reduction cannot be performed at all: the
+quadrant stops fitting a \ic{long} at \num{9.9999999999995904e18}, and all three
+answer \ic{nan} from there --- \ic{tan} used to \emph{kill the program} instead,
+because the cast it uses traps rather than returning a wrong number, and a trap
+ends the program. The guard asks on the expression itself rather than against a
+constant, so it cannot be out by a double: the constant one would guess is
+\ic{$2^{63}\cdot(\pi/2)$ = \num{1.4488038916154245e19}}, but the reduction
+computes \ic{floor(x*2/$\pi$ + 0.5)} and the \ic{+0.5} moves the edge a third of
+the way sooner. Closing the accuracy gap needs the multi-precision reduction
+\ic{libm} uses, a three-word quotient;
+\ic{test/y/native/t320\_sin\_reduction\_limit.y} records all of it, so that
+changing any of this is a diff rather than a silence.
 
 A third gap of the same shape was still open after that: nine functions this
 module exports had \emph{no cases at all} --- \ic{fmin}, \ic{fmax},
@@ -361,11 +423,61 @@ computed by squaring).
   17\% of the answer: a cube root's iteration is only locally convergent, and
   the obvious seed --- a fourth root --- is off by a factor of $a^{1/12}$, which
   is \num{1e27} for a subnormal.
-\item[\ic{math.hypot(x, y)}] $\sqrt{x^2+y^2}$ without the overflow: the larger
-  magnitude divides both out first, and that is exact.
+\item[\ic{math.hypot(x, y)}] $\sqrt{x^2+y^2}$ without the overflow. Which form
+  computes it is decided by the argument, because the form that is accurate
+  everywhere and the form that is cheap everywhere turned out to be nearly the
+  same cost once the argument was looked at.
+
+  The form to avoid is $m\sqrt{(s/m)^2+1}$: it divides by an arbitrary float and
+  multiplies by one, and both of those round at full size, which measured it 2
+  ulps from this platform's \ic{libm} on \num{0.75} per cent of pairs with
+  $|s/m|$ between $10^{-8}$ and $10^{-1}$. So what the module does instead is:
+
+  \begin{itemize}
+  \item $m$ in $[10^{-152}, 10^{154}]$: $\sqrt{m^2+s^2}$ directly, with no
+    scaling at all. Three roundings where the ratio form had four, and none of
+    them spent on a scale factor --- so it is \emph{more} accurate as well as
+    cheaper, and about half of all arguments land here.
+  \item otherwise, and $s/m < 10^{-4}$: $m + (s/m)s/2$. When the ratio is that
+    small the terms past $s^2/2m$ are below an ulp of the answer, and the
+    correction's own rounding is multiplied by $p^2/2$ before it arrives --- so a
+    form built from three sloppy operations beats one built from a scaling. It is
+    written $(s/m)s$ rather than $s^2/2m$ because the first cannot overflow when
+    $m$ is near $10^{308}$, which is the case that brought it here.
+  \item otherwise: both magnitudes divided by a \emph{power of two} bringing the
+    larger into $[1,2)$, the sum of squares taken there, and the answer scaled
+    back by $2^k$ --- exact, because multiplying by a power of two only changes
+    the exponent, and it is what puts $m^2$ where it cannot overflow. Under one
+    per cent of arguments.
+  \end{itemize}
+
+  Over \num{2044} pairs spanning every decade from $10^{-320}$ to
+  $1.8\cdot10^{308}$ and every ratio from $10^{-300}$ to $10^{300}$, and over
+  \num{20000} pairs with each argument drawn independently from the decades, the
+  answer is within one ulp of \ic{libm} --- against 2 ulps on \num{0.75} per
+  cent for the ratio form, for \num{2.2} per cent more instructions. The
+  Pythagorean triples are exact, and \ic{hypot(2.0, 3.0)} is still one ulp above
+  the correctly rounded $\sqrt{13}$, which no form here fixes.
+
+  An infinity is the larger of the two whatever else is beside it, so
+  \ic{hypot(inf, nan)} is $+\infty$ --- found by looking for one, not by taking
+  a maximum, since every comparison against a \ic{nan} is false. And the answer
+  is symmetric: the scaling takes the larger magnitude, so \ic{hypot(x, y)} and
+  \ic{hypot(y, x)} agree to the bit, which is a property the function has and
+  one the ratio form could have lost; t325 pins both.
 \item[\ic{math.ldexp(x, e)}] $x\cdot 2^e$, exactly. Scaling by a power of two
   is exact while the result stays normal, so this is the one scaling that never
-  rounds.
+  rounds --- and it has to be checked where it stops being exact, which is when
+  the answer leaves the range. It used not to be, in two distinct ways, and both
+  gave a \ic{nan}: after the big steps the running value can already be an
+  infinity, and the exponent-field shift then \emph{adds} $e$ to a field that is
+  already \num{2047}, which overflows a signed \ty{long}, wraps, and comes back
+  with the sign bit set --- \ic{ldexp(1.0, 2046)} answered that where the answer
+  is $+\infty$. And the running value can stay finite while the answer does not,
+  which is \ic{ldexp(2.47, 1024)}: the big step leaves \num{1.11e308}, the field
+  is \num{2046}, and adding $e=2$ carries it to \num{2047}. Both now answer an
+  infinity carrying $x$'s sign, and the underflow end is checked for the same
+  reason.
 \item[\ic{math.frexp(x)}] $[\,\ty{fraction\ bits}, \;\ty{exponent}\,]$: the
   fraction's IEEE-754 pattern, a value in $[0.5, 1)$, and the exponent, such that
   %
@@ -416,7 +528,14 @@ computed by squaring).
     so \ic{two\_sum} takes its residual out and one more divide turns it into the
     low part of the quotient. \ic{log1p} is \ic{log}'s kernel with $m = 1+x$ and
     $z = x/(2+x)$, so a tiny \ic{x} comes out as itself instead of as
-    \ic{math.log(1.0)} $-$ \ic{0}.
+    \ic{math.log(1.0)} $-$ \ic{0}. That claim had one hole in it: $z$ is a
+    \emph{halving} of \ic{x}, and halving the smallest subnormal leaves the
+    $2^{-1074}$ grid on a tie to even, so \ic{math.log1p(5e-324)} answered
+    \ic{0.0} where the answer is \ic{5e-324}. It is one value and not a range ---
+    $2^{-1073}$ halved is still on the grid --- which is why no edge is its
+    neighbour and only a spread uniform in the decades found it. The arm that
+    answers \ic{x} outright now sits below $2^{-52}$, where the series' first
+    correction $x^2/2$ is under half an ulp of \ic{x}.
     \ic{log} is machine code (\texttt{src/y/arch/math.s}), reached through
     \ic{native def} and \emph{bit-identical} to the loop it replaced ---
     \texttt{test/y/native/t312\_math\_log\_asm.y} says so over
@@ -426,6 +545,76 @@ computed by squaring).
     \ic{0.0}/\ic{0.0}, so the assembly's is a divide rather than a stored
     constant: the default NaN carries the sign bit, and the one you would write
     down is a different double from the one the Y returns.
+  \item[\ic{math.log2(x)}, \ic{math.log10(x)}] \emph{Not} \ic{math.log}'s answer
+    times a constant, which is what C does and what these used to do here. That
+    was \emph{wrong}: \ic{math.log} is inside its own one-ulp promise but is one
+    ulp out on six of every nine arguments tried, and multiplying that by
+    \num{1.4427} --- or by \num{3.32} for the other base --- makes it two. Over
+    \num{12026} arguments drawn log-uniformly from \num{5e-324} to
+    \ic{DBL\_MAX}, against a \num{60}-digit logarithm, the old code was two ulps
+    out on a fraction of a percent of them. Nine pinned cases each had let it
+    stand; the thinnest coverage in the table, for two functions the promise names.
+
+    That spread is log-uniform, and a spread uniform in the \emph{decades} is
+    what finds these --- and it gives a different and less flattering figure for
+    what replaced it. Over \num{20000} decade-uniform arguments \ic{log2} is
+    within an ulp on every one, and \ic{log10} is still two ulps out on
+    \num{1.9} percent of them, across every decade rather than concentrated near
+    zero. The difference is not the reduction, which they share, nor the
+    z-series, which they share: it is that \ic{log10}'s two terms are of
+    comparable size --- $e\log_{10}2$ beside $\ln(m)\log_{10}e$ --- so
+    \ic{ln(m)}'s own error is not diluted, where in \ic{log2} the integer part is
+    a thousand times the small one and no error in the small one can move the
+    rounding --- and the measurement says something sharper than that. Swept by
+    binary exponent, all 62 arguments with a non-zero exponent are exact and the
+    failures sit entirely at exponent \emph{zero}, where the first term vanishes
+    and the answer is $\ln(m)\log_{10}e$ alone: 5 of 14 arguments in $[1,2)$ are
+    one ulp out. Five compensations left those five bit for bit unchanged, and the
+    fourth proves why --- the terms are exact to far below the last bit, so the
+    residual is the rounding of the final sum, which no compensation of a term
+    reaches. Reordering the sum does not fix it either, and the reason is worth
+    the space: sorting the four corrections smallest-first takes the sweep from
+    \num{288} to \num{467} (a partial sort, \num{619}), and choosing the order by
+    the argument --- sort only where \ic{e} is zero --- gives \num{290} with the
+    worst gap rising to 3, because for
+    every argument with a non-zero exponent the term that needs to go first is
+    \emph{already} first --- it is the residual of the \ic{two\_sum}, and
+    \ic{two\_sum} puts it last in the expression and first in the sum. The two
+    orders cannot both be had, because the answer's dominant term is absent exactly
+    where the order is wrong. It wants the pieces held apart across the sum, in
+    one extra-precision accumulator, which is a different algorithm rather than a
+    sixth compensation of this one. Recorded in t322 and
+    pinned by t327, which also carries the six \emph{non-negative} powers of ten
+    (exact integers) and why no negative one is: \ic{1e-323} is $2^{-1073}$, not
+    $10^{-323}$.
+
+    What replaced it keeps \ic{log}'s reduction and scales the \emph{exact}
+    integer part:
+    \[
+      \log_2 x = e + \log_2 m, \qquad
+      \log_{10} x = e\log_{10} 2 + \ln m \cdot \log_{10} e,
+      \qquad x = m\,2^e.
+    \]
+    Each product's own rounding is taken back out with \ic{prod\_err} and
+    \ic{two\_sum}, and the two constants are carried as hi/lo pairs \emph{generated}
+    from a \num{90}-digit computation --- typing them is how the first attempt got
+    one of them wrong by a factor of eight, on a test that then turned out to be
+    an exact power of ten where the tail cannot show. Note the two different
+    scalings: $e$ is a \emph{base 2} exponent, so it takes $\log_{10} 2$, while
+    the other term is a \emph{natural} logarithm and takes $\log_{10} e$. Scaling
+    both by $\log_{10} 2$ answers a different function, and did --- it gave
+    $\log_{10} 0.75 = \num{0.1307}$ where the answer is $-\num{0.1249}$.
+
+    Measured on the same \num{12026} arguments: \ic{log2} within one ulp of
+    \emph{every one}, \ic{log10} within one ulp of all but one
+    (\num{0.76939152581348347}, where $\ln m$ is itself half an ulp out).
+    \ic{test/y/native/t322\_math\_log\_base.y} records it.
+
+    This cost \num{5.5}$\times$ the instructions: log through assembly and a
+    multiply is \num{149} a call, this is \num{817}. A deliberate trade, named as
+    one --- the promise is one ulp, and on a Y path that is what holding it
+    costs. Closing it means writing these two kernels in assembly, which is a
+    piece of work in its own right rather than a patch.
   \item[\ic{math.sin(x)}, \ic{math.cos(x)}, \ic{math.tan(x)}] The trigonometry,
     reduced modulo $\pi/2$ with \ic{two\_sum} taking out the two products that can
     round (the first piece's product needs more than 53 bits once $n$ passes
@@ -435,7 +624,22 @@ computed by squaring).
     normalized --- C's \% keeps the sign of the dividend, so a negative count
     comes out negative. The range is $|x| \lesssim 2^{52}$: like every library
     without Payne--Hanek reduction, a larger argument reduces to something near
-    $x$ rather than to its own angle. \ic{cos}'s coefficient table is \ic{sin}'s rotated left by one, which is what
+    $x$ rather than to its own angle.
+
+    \ic{tan} has no pole it can reach. Both of its infinity arms are guarded on
+    the computed cosine being \emph{exactly} zero, and no double gets there: the
+    cosine is \ic{sin\_cos\_k}'s \ic{1 - w*poly\_cos(w)}, which is \ic{cos(x)}
+    for $|x| \le \pi/4$, where its magnitude is at least \num{0.7071}. So
+    \ic{tan(pi/2)} is not an infinity but \num{1.633123935319537e16} --- what this
+    platform's \ic{libm} gives, and correct: the double nearest $\pi/2$ is not
+    $\pi/2$, its cosine is \num{6.1e-17} and not zero, and the tangent of that is
+    finite and enormous. The guards stay, because they are what would turn a
+    future broken reduction into an infinity rather than a \ic{nan} from
+    dividing by zero --- and because deleting a branch that cannot fire is how the
+    day it can fire arrives with no guard at all
+    (\ic{t320\_sin\_reduction\_limit.y}).
+
+    \ic{cos}'s coefficient table is \ic{sin}'s rotated left by one, which is what
     lets one routine answer both: \ic{sin} and \ic{cos} are two instructions
     each that set a register and fall into the same body, and the quadrant picks
     between the two halves at the end with two tests of the index rather than
@@ -459,8 +663,13 @@ computed by squaring).
     is lost however close $x$ is to 1; \ic{acos} is $\pi/2 - \arcsin x$ with the
     subtraction corrected afterwards, because $\pi/2$ minus something an ulp off
     is an ulp off. \ic{atan2} is the quadrant of $(y,x)$, with every zero and
-    infinity spelled out --- and the sign of a \emph{zero} is a direction:
-    \ic{math.atan2(-0.0, -1.0)} is $-\pi$.
+    infinity spelled out --- and the sign of a \emph{zero} is a direction, which
+    is the whole of the four cases where both arguments are a zero
+    (C99~7.12.7.4): a negative \ic{x} means the negative axis and a signed
+    $\pi$, a positive one means the positive axis and a signed zero, and the
+    sign of \ic{y} carries through either way. So \ic{math.atan2(-0.0, -1.0)}
+    is $-\pi$, and \ic{math.atan2(0.0, -0.0)} is $\pi$ where it used to be
+    \ic{0.0}.
   \item[\ic{math.sinh(x)}, \ic{math.cosh(x)}, \ic{math.tanh(x)}] One formula
     each, out of \ic{expm1}:
     $\cosh x = 1 + (\operatorname{expm1} x + \operatorname{expm1}(-x))/2$ and
@@ -468,7 +677,15 @@ computed by squaring).
     $(e^x+e^{-x})/2$ and $\sinh/\cosh$ --- are a rounding or two worse, because
     each of their terms is computed to its own last bit and then added.
     \ic{sinh} needs a polynomial of its own below \num{0.5}, where $(e^x-e^{-x})/2$
-    is a subtraction of nearly equal numbers.
+    is a subtraction of nearly equal numbers, and \ic{tanh} now does the same for
+    the same reason: its answer never leaves $[-1, 1]$, so reaching for a
+    full-range exponential to produce it is paying for reach it does not need.
+    Measured at \num{10000} calls with $|x| \leq \num{0.5}$, the polynomial is
+    \num{577} instructions against the exponential form's \num{1008}, and the two
+    agree with an exact \num{50}-digit \ic{tanh} on \num{3999} of \num{4000}
+    arguments each --- which is to say they are the same function. The degree-11
+    coefficients come from \ic{gen\_kernel.py}'s own fit, reporting
+    \num{1.000} ulp over the branch.
   \item[\ic{math.pow(x, y)}] $x^y$, with C's cases. An integer exponent is
     computed by repeated squaring, which is exact --- so every integer exponent
     below \num{1024} comes out exactly, and it is the only way a negative base
@@ -509,6 +726,18 @@ computed by squaring).
   \ic{math.popcount(-1)} is \ic{64} and \ic{math.clz(-1)} is \ic{0}.
 \item[\ic{math.next\_pow2(x)}] The smallest power of two $\geq$ \ty{x}; \ic{1}
   for $x \leq 1$, and \ic{0} past \ic{2\^{}62}, where no such power fits.
+\item[\ic{math.rotl(x, k)}] \ty{x} rotated left by $k$ bits, with $k$ taken
+  modulo \num{64}: a multiple of \num{64} is the identity, and no argument ends
+  the program. That last part is the whole point, and it was not true. The
+  function was \ic{x << k | x >>> (64 - k)} under a comment saying
+  \emph{for $1 \leq k \leq 63$}, and \ic{k = 0} and \ic{k = 64} both
+  \emph{happened} to be right --- \ic{x | 0} and \ic{0 | x} --- so it read as
+  though it took \ic{0}, while \ic{k = 65} \emph{killed the program}, because
+  \ic{64 - 65} is \ic{-1} and a negative shift count traps. Every other count out
+  of range in this section merely zeroes; the rotation was the one that died.
+  Masking is what \ic{ROL} does, and it makes \ic{rotl(x, 64) == x} a fact rather
+  than a coincidence. \ic{t321\_math\_rotl.y} holds it down, including the
+  identity at \ic{0}, \ic{64} and \ic{128} and both directions.
 \item[\ic{math.mul\_mod(a, b, m)}, \ic{math.pow\_mod(b, e, m)}] \ic{a * b} and
   \ic{b\^{}e} reduced modulo \ic{m}, for \ic{0 < m <= 2147483647}: the operands
   are reduced first, so the product cannot overflow a \ty{long}. A larger
@@ -517,10 +746,13 @@ computed by squaring).
 \item[\ic{math.inv\_mod(a, m)}] The inverse of \ty{a} modulo \ic{m}, or \ic{0}
   when there is none.
 \item[\ic{math.fmin(a, b)}, \ic{math.fmax(a, b)}] The smaller or larger float,
-  with C's rule that a NaN loses to the other operand.
+  with C's rule that a NaN loses to the other operand. The tie between the two
+  signed zeros goes to \ic{-0.0} for \ic{fmin} and to \ic{+0.0} for \ic{fmax},
+  which is what \ic{minNum}/\ic{maxNum} say and what any caller dividing by the
+  answer needs --- C99 permits either sign, and \ic{1.0/fmax(0.0, -0.0)} is
+  \ic{+inf} rather than \ic{-inf}.
 \item[\ic{math.fabs(x)}, \ic{math.fsign(x)}] \ic{|x|}, with \ic{-0.0} coming
   back as \ic{+0.0}; and \ic{-1.0}, \ic{0.0} or \ic{1.0}.
-\item[\ic{math.lerp(a, b, t)}] \ic{a + (b - a) * t}.
 \item[\ic{math.is\_nan(x)}, \ic{math.is\_inf(x)}, \ic{math.is\_finite(x)}]
   The three IEEE classifications, as \ty{bool}.
 \item[\ic{math.pi}, \ic{e}, \ic{tau}, \ic{ln2}, \ic{ln10}, \ic{sqrt2},
@@ -539,7 +771,16 @@ computed by squaring).
   want the four-element state.
 \item[\ic{math.fsum(a)}, \ic{math.fsum\_kahan(a)}] The sum of a \ic{[float]},
   the second with Neumaier compensation, which keeps the error near one ulp of
-  the total however long the array is. \ic{fsum}, \ic{fdot}, \ic{fmin\_of},
+  the total however long the array is --- measured, \ic{fsum\_kahan} is within
+  one ulp of the exact rational sum on \num{21} of \num{22} adversarial arrays
+  where \ic{fsum}, which is the plain left-to-right sum, is \num{18} ulps out on
+  a \num{500}-element one. That is the trade, and the name is the trap:
+  \ic{fsum} is \emph{not} the accurate one, and
+  \ic{fsum([1e16, 1, -1e16])} is \ic{0} where the answer is \ic{1}. An infinity in
+  the running total is returned rather than computed with: on the way to one the
+  compensation evaluates \ic{(s - t) + x}, which is \ic{inf - inf}, so
+  \ic{fsum\_kahan([1e308, 1e308])} used to answer \ic{nan} where the answer is
+  \ic{+inf} --- the accurate sum unable to answer where the plain one could. \ic{fsum}, \ic{fdot}, \ic{fmin\_of},
   \ic{fmax\_of}, \ic{fscale} and \ic{faxpy} are machine code
   (\texttt{src/y/arch/math.s}), reached through \ic{native def}; each returns
   exactly what the equivalent Y loop would, which is what makes it a
@@ -552,7 +793,61 @@ computed by squaring).
   \ic{y += k * x}, in place.
 \item[\ic{math.fmean(a)}, \ic{math.fvariance(a)}] The arithmetic mean and the
   sample variance (dividing by $n-1$), the latter by the two-pass method; NaN
-  for an empty array, and NaN for a variance of fewer than two elements.
+  for an empty array, and NaN for a variance of fewer than two elements --- which
+  is a \emph{single} element as much as none is, since $n-1$ is zero there too.
+  \ic{fsum} of an empty array is $+0$ rather than NaN: there is nothing to be
+  inaccurate about, and a one-element sum is that element
+  (\ic{t332\_bulk\_empty.y}, which pins the empty and one-element cases together
+  for exactly that reason).
+
+  \ic{fvariance} scales by a power of two before the two passes and multiplies
+  the answer back by its square, because the plain two-pass takes the mean
+  \emph{first} and the mean of two equal \ic{1e308} values is \ic{inf} --- so
+  \ic{fvariance([1e308, 1e308])} answered \ic{inf} for an array whose spread is
+  exactly zero. It is the SIZE of the mean that overflowed, not the spread, and
+  a method that cannot see that is measuring the wrong thing. The scale is a
+  power of two, so it is exact, changes no comparison or sign, and cannot push a
+  normal number into the subnormals. A spread that genuinely overflows is still
+  \ic{inf}: \ic{fvariance([1e308, -1e308])} is \num{4e616} and has no double.
+\item[\textnormal{(the polynomial kernels)}] Every kernel in the module is a
+  split Horner evaluation --- the high coefficients and their low halves carried
+  side by side --- and each one is written \emph{twice}: once as a loop over two
+  arrays, and once unrolled with the coefficients as literals. An array read
+  costs twelve instructions in this compiler, of which the arithmetic the read
+  feeds needs about eight, so the loop spends \num{68} per cent of its time
+  fetching coefficients. It is \emph{not} the bounds check that costs:
+  \ic{y\_oob} is three instructions a call, because the index runs from
+  \ic{len-1} down to \ic{0} and is never out of range. It is the read sequence
+  itself --- reload the record, reload its length, check, reload the data
+  pointer, load --- four steps of which are loop-invariant. The unrolled form is
+  therefore the one a program runs, and there are eight of them: \ic{exp},
+  \ic{log}, \ic{sinh}, \ic{tanh}, \ic{atan}, \ic{asin}, \ic{sin} and \ic{cos}.
+
+  Measured, this is the largest single saving in the module's arithmetic:
+  \ic{atan} goes from \num{982} to \num{489} instructions a call, \ic{asin}
+  from \num{1124} to \num{631}, \ic{tan} from \num{1212} to \num{666} ---
+  between \num{45} and \num{50} per cent each --- and a benchmark loop over
+  \ic{atan}, \ic{asin} and \ic{tan} from \num{47.5} million instructions to
+  \num{36.6}. Wall-clock numbers on a shared machine are indicative only; these
+  are callgrind instruction counts, which are exact and independent of load. The
+  price is code: a chain is longer than a loop, some \num{5.5} KB of binary on a
+  program using all of them, so this is a good trade for a function called in a
+  loop and a poor one for a program that calls it once and exits.
+
+  The chains are \emph{generated}, by \texttt{test/math/gen\_split\_unroll.py},
+  which reads the coefficient arrays out of this module rather than restating
+  them --- a coefficient's low half lives in its sixteenth digit, and a second
+  copy of these numbers is a second thing to keep in step. Two gates ask
+  different questions of the result, and both had to be added because each was
+  missing. \texttt{test/y/native/t328\_split\_unrolled.y} asks every chain and
+  \ic{poly\_split}, the loop it replaced, the same \num{32024} questions and
+  requires the same \emph{bits} --- the two perform the same operations in the
+  same order, so anything but equality is a defect. The generator's
+  \texttt{-{}-verify} asks the other question: whether this module still holds
+  byte-for-byte what the generator writes. That is the one which catches what the
+  first cannot --- a chain hand-edited after generation, or a banner whose
+  caller list has gone stale, still answers within an ulp, because the
+  coefficients are right and only the arrangement moved.
 \end{description}
 
 \subsection{Options}
@@ -1154,11 +1449,19 @@ private stream can make one.
   sampling --- not \ic{\% n}, which is measurably biased for an \ic{n} that does
   not divide the range. An \ic{n} below 1 answers 0 rather than trapping: a
   caller dividing by an empty frontier has already lost, and a trap prints to
-  stdout.
+  stdout. So does an \ic{n} above $2^{62}$, which is the largest bound that can
+  be served, and which used to \emph{hang}: the draws come from $[0, 2^{62})$
+  and are rejected at or above the largest whole multiple of \ic{n} in that
+  range, and one past $2^{62}$ there is no such multiple --- the quotient is 0,
+  the limit is 0, and every draw is rejected. A range that spans more than the
+  stream has granularity for is answered \ic{lo} instead, by the same rule.
 \item[\ic{random.range(lo, hi)}] Uniform in \ic{lo..hi} --- \emph{both} ends
   inclusive, so a one-wide range is that one value and an inverted range
   answers \ic{lo} rather than trapping --- and
-  \ic{random.chance(pct)} a \ty{bool} true \ic{pct} times in 100.
+  \ic{random.chance(pct)} a \ty{bool} true \ic{pct} times in 100. The width is
+  computed so it cannot wrap: \ic{hi - lo + 1} overflows for a range spanning
+  most of the word, and such a range answers an endpoint rather than reaching
+  \ic{below} with a width that is no longer a width.
 \item[\ic{random.state()}, \ic{random.set\_state(v)}] Read and write the state,
   for a save file or for a second independent stream.
 \end{description}
@@ -1337,7 +1640,7 @@ the text away would have nothing to hand back.
 \item[\ic{json.as\_str(v)}, \ic{json.as\_long(v)}, \ic{json.as\_bool(v)},
   \ic{json.as\_arr(v)}, \ic{json.as\_obj(v)}, \ic{json.is\_null(v)}] The shape
   asked for, or \ic{none} if \ic{v} is another one. \ic{as\_long} is
-  \ic{tonum} over the literal text and is emphatically \emph{not} a numeric
+  \ic{tolong} over the literal text and is emphatically \emph{not} a numeric
   conversion: it stops at the point, so \ic{"3.9"} is \ic{3} and \ic{"1e10"} is
   \ic{1}, and it wraps past 64 bits.
 \item[\ic{json.get\_long(o, k, d)}, \ic{json.get\_str(o, k, d)},

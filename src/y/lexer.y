@@ -47,7 +47,7 @@ def is_radix_ch(c: byte, radix: long) -> bool {
 };
 
 // A decimal literal's text without its `_` digit separators: its num token
-// carries this, so whatever reads the literal (tonum, norm_num, the float
+// carries this, so whatever reads the literal (tolong, norm_num, the float
 // helpers) sees plain digits. A radix literal keeps them (norm_num skips
 // them).
 def strip_seps(s: str) -> str {

@@ -1181,7 +1181,7 @@ def s7_cli() -> long {
     };
     eq("S7 every bad flag line is rejected", missed, 0, "of " + tostring(len(cases)) + " cases" + detail);
 
-    // num_arg itself: tonum on junk is a silent 0, which is how a `--head`
+    // num_arg itself: tolong on junk is a silent 0, which is how a `--head`
     // of nonsense becomes "no first lines".
     eq("S7 num_arg accepts digits", cli.num_arg("42"), 42, "\"42\"");
     eq("S7 num_arg rejects junk", cli.num_arg("4 2"), -1, "\"4 2\"");

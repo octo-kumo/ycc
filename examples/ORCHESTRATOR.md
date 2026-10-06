@@ -208,7 +208,7 @@ fixed point for exactly this reason. `test/std/fx.y` is
 the shared integer-math module.
 
 Escape hatch when a float genuinely arises:
-`tonum(tostring(f))` truncates toward zero (`3.7`→`3`, `-3.7`→`-3`),
+`tolong(tostring(f))` truncates toward zero (`3.7`→`3`, `-3.7`→`-3`),
 but carries only 6 decimals of precision.
 
 **(b) No math functions.** No `sin cos tan asin acos atan atan2

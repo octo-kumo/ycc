@@ -1,0 +1,29 @@
+sin 4605905853608283834 at index 0
+cos -4620574379056966849 at index 0
+sin 4605198024777317318 at index 1
+cos -4619556795581932548 at index 1
+sin -4621332162693965837 at index 2
+cos -4617220426044097272 at index 2
+sin -4338681244542387663 at index 3
+cos 4929892689140315454 at index 3
+sin -4207532964264881738 at index 4
+cos 5091160586559869154 at index 4
+sin -2251799813685248 at index 5
+cos -2251799813685248 at index 5
+sin -2251799813685248 at index 6
+cos -2251799813685248 at index 6
+sin -2251799813685248 at index 7
+cos -2251799813685248 at index 7
+sin -2251799813685248 at index 8
+cos -2251799813685248 at index 8
+exact zeros in sin_cos_k's cosine over the reduced range: 0
+  its smallest magnitude there: -0.707096
+  infinities tan returned over 200001 arguments across the pole: 0
+  and the pole, which is FINITE and matches libm:
+    tan(pi/2)          16331239353195370.000000
+    tan(-pi/2)         -16331239353195370.000000
+    tan(pi/2 + 1e-300) 16331239353195370.000000
+    cos(pi/2)          6.12323399573676604e-17
+      its bits          4364452196894661639
+    tan(1e300) is the QUADRANT guard, not the pole: nan
+  and -0.0 through the same path: -0.000000
