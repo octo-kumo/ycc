@@ -1,9 +1,9 @@
 import net;
 
 let args = argv();
-let port = tolong(args[1]);
+let port = tolong(args[1])!;
 let limit = 2;
-if (len(args) > 2) { limit = tolong(args[2]); 0 } else { 0; };
+if (len(args) > 2) { limit = tolong(args[2])!; 0 } else { 0; };
 let requests = 0;
 
 def handler(fd: long) -> long {

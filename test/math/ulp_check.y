@@ -199,7 +199,7 @@ def main() -> long {
             let name = f[0];
             // a one-argument line is `name arg want`, a two-argument one
             // `name arg1 arg2 want`
-            let a = math.bitsf(f[1].tolong());
+            let a = math.bitsf(f[1].tolong()!);
             let want: long = 0;
             let got: float = math.nan;
             // Every argument, spelled, because a failure you cannot LOCATE is a
@@ -211,18 +211,18 @@ def main() -> long {
             // reconstruction from that half turned out to be a case that passed.
             let args = f[1];
             if (is_three_arg(name)) {
-                let b = math.bitsf(f[2].tolong());
-                let t = math.bitsf(f[3].tolong());
+                let b = math.bitsf(f[2].tolong()!);
+                let t = math.bitsf(f[3].tolong()!);
                 args = args + " " + f[2] + " " + f[3];
-                want = f[4].tolong();
+                want = f[4].tolong()!;
                 got = apply3(name, a, b, t);
             } else if (is_two_arg(name)) {
-                let b = math.bitsf(f[2].tolong());
+                let b = math.bitsf(f[2].tolong()!);
                 args = args + " " + f[2];
-                want = f[3].tolong();
+                want = f[3].tolong()!;
                 got = apply2(name, a, b);
             } else {
-                want = f[2].tolong();
+                want = f[2].tolong()!;
                 got = apply1(name, a);
             };
             let gap = two_nan_ok(got, want);

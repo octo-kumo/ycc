@@ -203,8 +203,15 @@ def self_pack() -> str {
             let k = syscall(0, fd, &buf[0], 16);
             if (k == 16) {
                 let tail = from_bytes(buf[0:16]);
-                let n = tolong(tail[:8]);
-                if (tail[8:] == pack_magic() && n > 0 && n <= size - 16) {
+                // tolong answers an OPTION now, and this is the site that
+                // shows why that is the right shape: a binary with no pack has
+                // whatever the linker left in its last 16 bytes, so the size
+                // field is not a number at all (measured: eight spaces). The
+                // old tolong read that as 0 and the `n > 0` below rejected it,
+                // which worked by accident; with `!` it would TRAP instead.
+                let nopt = tolong(tail[:8]);
+                if (nopt != none && tail[8:] == pack_magic() && nopt! > 0 && nopt! <= size - 16) {
+                    let n = nopt!;
                     syscall(8, fd, size - 16 - n, 0);
                     let pieces: [str] = [];
                     let left = n;

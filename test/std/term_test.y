@@ -167,7 +167,7 @@ def starts(s: str, p: str) -> bool {
 def opt_rows(s: str) -> long {
     let v = -1;
     if (starts(s, "--expect-rows=")) {
-        v = tolong(s[14:len(s)]);
+        v = tolong(s[14:len(s)])!;
     };
     v
 };
@@ -175,7 +175,7 @@ def opt_rows(s: str) -> long {
 def opt_cols(s: str) -> long {
     let v = -1;
     if (starts(s, "--expect-cols=")) {
-        v = tolong(s[14:len(s)]);
+        v = tolong(s[14:len(s)])!;
     };
     v
 };
@@ -200,7 +200,7 @@ let exit_code = -1;
 for i in 1..len(ARGS) {
     if (ARGS[i] == "--wd-crash") { wd_crash = true; };
     if (ARGS[i] == "--wd-crash-nowatch") { wd_nowatch = true; };
-    if (starts(ARGS[i], "--exit=")) { exit_code = tolong(ARGS[i][7:len(ARGS[i])]); };
+    if (starts(ARGS[i], "--exit=")) { exit_code = tolong(ARGS[i][7:len(ARGS[i])])!; };
 };
 
 if (wd_crash || wd_nowatch) {

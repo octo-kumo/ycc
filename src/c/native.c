@@ -4093,13 +4093,19 @@ Yv *infer_call(Yv *st, Yv *node) {
                the checker; native.c check_os_call_names makes sure each name is
                a label the arch lines really define). */
             return yr(1, "k", yv_long(K_tlong));
-        } else if (ys_eq_lit(name, "tolong") || ys_eq_lit(name, "ord") ||
-                   ys_eq_lit(name, "byte_at") || ys_eq_lit(name, "mod") ||
-                   ys_eq_lit(name, "index_of") ||
+        } else if (ys_eq_lit(name, "tolong")) {
+            /* tolong returns an OPTION: a fully valid input is required, and a
+               value outside the long range or a float with no long answer is
+               none rather than a wrap or a trap. */
+            return yr(2, "k", yv_long(K_topt), "of",
+                      yr(1, "k", yv_long(K_tlong)));
+        } else if (ys_eq_lit(name, "tofloat")) {
+            return yr(2, "k", yv_long(K_topt), "of",
+                      yr(1, "k", yv_long(K_tfloat)));
+        } else if (ys_eq_lit(name, "ord") || ys_eq_lit(name, "byte_at") ||
+                   ys_eq_lit(name, "mod") || ys_eq_lit(name, "index_of") ||
                    ys_eq_lit(name, "last_index_of")) {
             return yr(1, "k", yv_long(K_tlong));
-        } else if (ys_eq_lit(name, "tofloat")) {
-            return yr(1, "k", yv_long(K_tfloat));
         } else if (ys_eq_lit(name, "clock_us") || ys_eq_lit(name, "time_us") || ys_eq_lit(name, "heap_used")) {
             return yr(1, "k", yv_long(K_tlong));
         } else if (ys_eq_lit(name, "keys")) {
@@ -11348,7 +11354,10 @@ Yv *gen_tofloat(Yv *st, Yv *node) {
     if (yv_l(yr_get(infer(st, a0), "k")) == K_tlong) {
         st = gen(st, a0);
         st = emit_insn(st, F_CVTSI2SD_R_R, R_RAX, 64, R_XMM0, 128, 0, 0, 0);
-        return emit_insn(st, F_MOVQ_R_R, R_XMM0, 128, R_RAX, 64, 0, 0, 0);
+        st = emit_insn(st, F_MOVQ_R_R, R_XMM0, 128, R_RAX, 64, 0, 0, 0);
+        /* tofloat answers an OPTION now, so the widened value is boxed the same
+           way some(v) is: a pointer with the value at offset 0. */
+        return gen_box_rax(st);
     } else {
         st = gen_push_args(st, targs);
         st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_str_tofloat"))), 0, 0, 0, 0, 0, 0);

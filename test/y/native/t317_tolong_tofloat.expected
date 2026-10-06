@@ -1,13 +1,14 @@
--- tolong on a str: parse, stopping at the first non-digit
-42 -42 0 0 0
+-- tolong on a str: a whole number and NOTHING else, so junk is none
+42 -42 42 42  <- whitespace is fine
+true true true true true
 42 -42  (the string method is the same function)
 -- tolong on a float: TOWARD ZERO, not floor
 3 -3 0 0 2
 -- tofloat on a str: the same scan, with a fraction
 3.140000 -0.500000 2.500000 
 3.140000  (the string method again)
-1.000000  <- an exponent is not read: stops at the 'e'
-0.000000 0.000000  <- no digits at all reads as 0.0
+true  <- an exponent is not read, and is none rather than truncated
+true true  <- no digits at all is none
 -- tofloat on a long: the widening, made explicit
 7.000000 -7.000000 0.000000 
   and it agrees with the implicit widening
@@ -18,7 +19,7 @@
   12345 -> 12345.000000 -> 12345
   3.75 -> 3.750000 -> 3
   -0.0625 -> -0.062500 -> 0
-    9   -> 0.000000 -> 0
+    9   -> 9.000000 -> 9
 -- the ends of the range
   -2^63        -> -9223372036854775808
   2^63-2048    -> 9223372036854773760  (the last double below 2^63)

@@ -214,6 +214,10 @@ static Yv *dotassign_union(Yv *st, Yv *t, Yv *node);
 static Yv *typeof_sliceassign(Yv *st, Yv *node);
 static Yv *typeof_prop(Yv *st, Yv *t, Yv *key, ylong line, ylong col);
 static Yv *typeof_field(Yv *st, Yv *t, Yv *dkey, ylong line, ylong col);
+/* native.c owns this: the C twin of types.y's normtype. Declared here
+   because the str_method table wraps a type in an option. */
+Yv *normnode(Yv *anode);
+
 static Yv *sm_mk(Yv *fn, Yv *params, ylong nreq, Yv *ret, Yv *dflt, int last);
 static Yv *sm_t(Yv *k);
 static Yv *sm_arr(Yv *of);
@@ -3766,9 +3770,11 @@ Yv *str_method(Yv *m) {
         return sm_mk(ys("bytes"), no, 0,
                      sm_arr(sm_t(yv_long(K_tbyte))), ys(""), 0);
     } else if (ys_eq_lit(m, "tolong")) {
-        return sm_mk(ys("tolong"), no, 0, l, ys(""), 0);
+        return sm_mk(ys("tolong"), no, 0,
+                     normnode(yr(2, "k", yv_long(K_topt), "of", l)), ys(""), 0);
     } else if (ys_eq_lit(m, "tofloat")) {
-        return sm_mk(ys("tofloat"), no, 0, f, ys(""), 0);
+        return sm_mk(ys("tofloat"), no, 0,
+                     normnode(yr(2, "k", yv_long(K_topt), "of", f)), ys(""), 0);
     } else if (ys_eq_lit(m, "ord")) {
         return sm_mk(ys("ord"), no, 0, l, ys(""), 0);
     } else if (ys_eq_lit(m, "byte_at")) {
@@ -4817,7 +4823,9 @@ static Yv *typeof_call_go(Yv *st, Yv *node) {
                               yv_l(yr_get(node, "col")));
                     return yr(2, "typ", t_unk(), "st", st);
                 } else {
-                    return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
+                    return yr(2, "typ",
+                              yr(2, "k", yv_long(K_topt), "of",
+                                 yr(1, "k", yv_long(K_tlong))), "st", st);
                 }
             }
         } else if (ys_eq_lit(name, "tofloat")) {
@@ -4841,7 +4849,9 @@ static Yv *typeof_call_go(Yv *st, Yv *node) {
                               yv_l(yr_get(node, "col")));
                     return yr(2, "typ", t_unk(), "st", st);
                 } else {
-                    return yr(2, "typ", yr(1, "k", yv_long(K_tfloat)), "st", st);
+                    return yr(2, "typ",
+                              yr(2, "k", yv_long(K_topt), "of",
+                                 yr(1, "k", yv_long(K_tfloat))), "st", st);
                 }
             }
         } else if (ys_eq_lit(name, "tostring")) {

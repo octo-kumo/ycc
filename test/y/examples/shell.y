@@ -127,7 +127,7 @@ def rpn_eval(rpn: [str]) -> long {
             sp = sp - 1;
             stack[sp - 1] = a % b;
         } else {
-            stack[sp] = tolong(tok);
+            stack[sp] = tolong(tok)!;
             sp = sp + 1;
         };
         i = i + 1;
@@ -196,7 +196,7 @@ def cmd_seq(args: [str]) {
     if (len(args) < 2) {
         puts("usage: seq <n>\n");
     } else {
-        let n = tolong(args[1]);
+        let n = tolong(args[1])!;
         let i = 1;
         while (i <= n) {
             puts(tostring(i) + "\n");

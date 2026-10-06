@@ -324,7 +324,12 @@ def xref_for(text: str, dir: str, path: str, pack: str) -> Prepared? {
             foreach (pair in xref.tops_pairs(x)) {
                 let tab = index_of(pair, "\t");
                 let nm = pair[0:tab];
-                let ln = tolong(pair[tab + 1:len(pair)]);
+                // tolong answers long? now, and the text after the tab is not
+                // guaranteed to be a number: a missing tab makes tab -1 and
+                // this reads the whole pair. 0 is the read it had before.
+                let ln = 0;
+                let lv = tolong(pair[tab + 1:len(pair)]);
+                if (lv != none) { ln = lv!; };
                 lines[nm] = ln;
                 files[nm] = file_of(nr.origin, ln);
                 names += nm;

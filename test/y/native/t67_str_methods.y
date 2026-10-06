@@ -27,7 +27,7 @@ print("Hello, World 123".upper(), " ", "Hello, World 123".lower());
 print("ab".repeat(3), "|", "x".repeat(0), "|", "y".repeat(0 - 2), "|");
 print("one\ntwo\r\nthree\n".lines());
 print(len("".lines()), " ", len("\n".lines()), " ", len("a\n\nb".lines()), " ", len("a\nb".lines()));
-print("42".tolong() + 1, " ", "A".ord(), " ", "AB".byte_at(1));
+print("42".tolong()! + 1, " ", "A".ord(), " ", "AB".byte_at(1));
 print(len("hi".bytes()));
 // chains, and methods on any str-valued expression
 print("  a,b ,c  ".trim().split(",")[1].trim().upper());

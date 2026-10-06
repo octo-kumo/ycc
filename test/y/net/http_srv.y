@@ -7,7 +7,7 @@
 // it listens.
 import net;
 
-let port = tolong(argv()[1]);
+let port = tolong(argv()[1])!;
 let conns = 0;
 let quit = false;
 
@@ -39,7 +39,11 @@ def serve(fd: long) {
             let end = index_of(buf, "\r\n\r\n");
             let head = buf[0:end];
             buf = buf[end + 4:len(buf)];
-            let n = tolong(header_of(head, "content-length"));
+            // A request without a Content-Length (chunked, or a GET) has no
+            // number here; tolong answers none now, and 0 is the read this had.
+            let n = 0;
+            let nv = tolong(header_of(head, "content-length"));
+            if (nv != none) { n = nv!; };
             while (len(buf) < n && go) {
                 let more = net.recv_str(fd, 4096);
                 if (more == none) { go = false; } else { buf = buf + more!; };

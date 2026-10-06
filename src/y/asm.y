@@ -645,9 +645,9 @@ def label_addr_off(lmap: [AsmLabel], code_len: long, pad: long, name: str, plus:
         if (e.sec < 0) {
             { ok: false, addr: 0 }
         } else if (e.sec == 0) {
-            { ok: true, addr: e.off + tolong(off) }
+            { ok: true, addr: e.off + tolong(off)! }
         } else {
-            { ok: true, addr: code_len + pad + e.off + tolong(off) }
+            { ok: true, addr: code_len + pad + e.off + tolong(off)! }
         }
     }
 };
@@ -967,13 +967,13 @@ def asm_loc(lno: long, sec: long, offs: [long], rest: str) -> AsmContent {
         fs = rest[0:sp];
         ls = trim(rest[sp + 1:]);
     }
-    if (!is_num_text(fs) || !is_num_text(ls) || tolong(fs) < 1 || tolong(ls) < 0) {
+    if (!is_num_text(fs) || !is_num_text(ls) || tolong(fs)! < 1 || tolong(ls)! < 0) {
         { err: "L" + tostring(lno) + ": bad .loc '" + rest + "'", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [], br: -1 } }
     } else if (sec != 0) {
         { err: "L" + tostring(lno) + ": .loc outside .text", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [], br: -1 } }
     } else {
-        let fx = [{ off: tolong(fs), kind: "file", lbl: "", lbl2: "" },
-                  { off: tolong(ls), kind: "line", lbl: "", lbl2: "" }];
+        let fx = [{ off: tolong(fs)!, kind: "file", lbl: "", lbl2: "" },
+                  { off: tolong(ls)!, kind: "line", lbl: "", lbl2: "" }];
         { err: "", sec: sec, offs: offs, item: { sec: 0, off: offs[0], len: 0, kind: "loc", bytes: [], fix: fx, br: -1 } }
     }
 };
@@ -990,11 +990,11 @@ def asm_file(lno: long, sec: long, offs: [long], rest: str) -> AsmContent {
     if (!asm_strdata_bad(q)) {
         d = decode_str(q[1:len(q) - 1]);
     }
-    if (!is_num_text(ns) || tolong(ns) < 1 || asm_strdata_bad(q) || !d.ok) {
+    if (!is_num_text(ns) || tolong(ns)! < 1 || asm_strdata_bad(q) || !d.ok) {
         { err: "L" + tostring(lno) + ": bad .file '" + rest + "'", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [], br: -1 } }
     } else {
         let fx = [{ off: 0, kind: "file", lbl: from_bytes(d.bytes), lbl2: "" }];
-        { err: "", sec: sec, offs: offs, item: { sec: -1, off: tolong(ns), len: 0, kind: "file", bytes: [], fix: fx, br: -1 } }
+        { err: "", sec: sec, offs: offs, item: { sec: -1, off: tolong(ns)!, len: 0, kind: "file", bytes: [], fix: fx, br: -1 } }
     }
 };
 
@@ -1063,7 +1063,7 @@ def asm_quad_err(line: str, lno: long, sec: long, offs: [long], rest: str) -> As
 
 def asm_quad_go(sec: long, offs: [long], rest: str) -> AsmContent {
     // (split: data-item shape built ONLY here.)
-    let bytes = enc.le64(tolong(rest));
+    let bytes = enc.le64(tolong(rest)!);
     let item: AsmItem = { sec: sec, off: offs[sec], len: len(bytes), kind: "data", bytes: bytes, fix: [], br: -1 };
     offs[sec] = offs[sec] + len(bytes);
     { err: "", sec: sec, offs: offs, item: item }
@@ -1074,7 +1074,7 @@ def asm_zero(line: str, lno: long, sec: long, offs: [long], rest: str) -> AsmCon
     if (asm_quad_bad(rest)) {
         { err: "L" + tostring(lno) + ": bad .zero size '" + rest + "'", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [], br: -1 } }
     } else {
-        let n = tolong(rest);
+        let n = tolong(rest)!;
         let zb: [byte] = [];
         if (sec != 2) {
             let i = 0;

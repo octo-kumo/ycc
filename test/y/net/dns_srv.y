@@ -6,7 +6,7 @@
 // are bound, and serves until it is killed.
 import net;
 
-let port = tolong(argv()[1]);
+let port = tolong(argv()[1])!;
 
 // The name a query asks for (its first question), labels joined by dots.
 def qname(q: [byte]) -> str {
