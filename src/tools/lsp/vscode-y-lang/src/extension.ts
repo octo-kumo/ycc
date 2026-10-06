@@ -139,6 +139,12 @@ async function start(context: vscode.ExtensionContext, why: string): Promise<voi
             initializationOptions: {
                 rootPath: root ?? null,
                 checkOnChange: cfg.checkOnChange,
+                // Per-request timing lines in the Y output channel. On by default,
+                // off with y.lsp.timing: false. They are the only way to see whether
+                // the server or the editor is the slow side, so they are worth two
+                // appendLine calls on the extension host, and it should be the user's
+                // call to turn them off rather than mine to remove them.
+                timing: cfg.timing,
             },
         };
 

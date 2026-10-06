@@ -91,7 +91,12 @@
                         "verbose"
                     ],
                     "default": "off",
-                    "description": "Log the JSON-RPC traffic between VS Code and yserve to the Y output channel."
+                    "description": "Log the JSON-RPC traffic between VS Code and yserve to the Y output channel. The per-request timing lines are separate -- see y.lsp.timing."
+                },
+                "y.lsp.timing": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Write a line per LSP request to the Y output channel: the method, how long yserve spent on it, and how long it was parked waiting. This is how you see whether the server or the editor is the slow side, so it is on by default. Each line is work on the extension host, which is the thread a slow editor is made of -- turn it off to A/B whether it is contributing."
                 }
             }
         },
