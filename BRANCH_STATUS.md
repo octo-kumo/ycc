@@ -285,6 +285,34 @@ branch-disjointness false positive.
   harness has no tty for wine, so a console handle (as opposed to a pipe) is
   unverified, and `test_std_suites.sh`'s `term_test` needs a pty and only runs
   against ELF.
+- **`t345_list_dir_twice` FAILS ONLY UNDER THE HARNESS, and the harness now
+  prints what it saw (round 58).** The fixture compares three consecutive
+  `fs.list_dir(".")` calls; `pe-fixtures.sh` reports it PE-only, consistently
+  (five runs), and the harness's own kept output says exactly which:
+  `want [true|true|true|] got [false|false|true|]` -- THE FIRST TWO RESULTS
+  DIFFER FROM EACH OTHER, while the later calls are fine. So it is an ordering
+  or content difference *between two listings inside one process*, not a crash,
+  not a startup failure and not a wrong length.
+  **Everything I could reproduce by hand passes**, and that is the finding:
+  the real fixture; two-call and three-call variants of it; in a byte-for-byte
+  copy of the harness's own directory (8 entries, same names); under the same
+  `ulimit -v 3670016`; under `timeout`; with `WINEARCH=win64`; with stdout
+  redirected to a file INSIDE the listed directory, three times; with
+  `</dev/null`; invoked relatively and absolutely. All `true`.
+  Ruled out along the way, each by reading rather than guessing:
+  directory contents, its path, the filesystem, the memory cap, the redirects,
+  fd reuse (the scan position lives on the handle, and `fs.list_dir` sets
+  `first` as a LOCAL, so every call restarts the scan), and my own
+  `y_os_list`'s status handling (it loops on PENDING/MORE_ENTRIES and takes
+  NO_MORE_FILES as the end). One anomaly did appear once: `wine ./x.exe`
+  returned 53 with no output while the absolute path worked -- an intermittent
+  wine-side startup failure exists here too, but the harness's symptom is an
+  output difference, so it is not that.
+  **The open question is therefore narrow**: what does `pe-fixtures.sh`'s
+  process do that none of those reproductions does? The harness now answers the
+  half of it that matters by printing `want [...] got [...]` and the PE's first
+  non-MESA stderr line, because "output differs from .expected" with the
+  evidence deleted from `$T` at exit is what made this cost an hour.
 - **`./ytest` COULD NOT FAIL, and its coverage measured nothing silently
   (round 57).** Two bugs in Y's own test framework, both the same shape as
   things this project has already been bitten by:

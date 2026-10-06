@@ -80,8 +80,13 @@ for src in $files; do
   # stderr is deliberately NOT a criterion: wine emits MESA-EGL and winediag
   # noise there on a perfectly successful run.
   why=""
+  # SHOW THE DIFFERENCE. "output differs from .expected" cost an hour of
+  # hand-reproduction that never reproduced it: the PE's actual bytes were in
+  # $T/p.out the whole time and the harness was deleting them. A harness that
+  # reports a mismatch without showing it is asking the next reader to guess.
   if [ "$pec" = 124 ]; then why="no exit within ${pto}s (HUNG)"
-  elif [ -f "$exp" ] && ! diff -q "$exp" "$T/p.out" >/dev/null 2>&1; then why="output differs from .expected"
+  elif [ -f "$exp" ] && ! diff -q "$exp" "$T/p.out" >/dev/null 2>&1; then
+    why="output differs: want [$(head -3 "$exp" | tr '\n' '|')] got [$(head -3 "$T/p.out" | tr '\n' '|')] [stderr: $(grep -av 'MESA\|pci id' "$T/p.err" 2>/dev/null | head -1 | tr -d '\r')]"
   elif [ "$pec" != "$ec" ]; then why="exit $pec, want $ec"
   fi
   if [ -n "$why" ]; then
