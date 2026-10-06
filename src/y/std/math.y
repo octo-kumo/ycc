@@ -1965,11 +1965,34 @@ def expm1(x: float) -> float {
 // log1p(x) = log(1 + x), through log's own kernel with m = 1 + x. The
 // argument z = x/(2 + x) is what keeps it honest: it tends to x/2 as x tends to
 // zero, so a tiny x comes out as itself instead of as log(1.0) - 0.
+// log(1 + x), for the case where 1 + x is exactly the argument's problem and not
+// the answer's. Three arms, in the order the cancellation decides.
+//
+// 1. |x| < 2^-52: the answer IS x, bit for bit. log(1+x) = x - x^2/2 + x^3/3 and
+//    the correction is below half an ulp of x for every |x| under 2^-52 (the
+//    boundary is exactly there: at 2^-52 the answer is NOT x). So this arm
+//    returns x without computing anything, which is the point -- it is not a
+//    shortcut for speed, it is the only arm that can answer for a SUBNORMAL x.
+//    The z-series below computes z = x/(2 + x), which is a HALVING, and halving
+//    the smallest subnormal leaves the 2^-1074 grid entirely: x/(2.0 + x) is 0
+//    for x = 5e-324, so log1p(5e-324) answered 0.0 where the answer is 5e-324,
+//    and glibc gives 5e-324. Every other subnormal survived, which is why this
+//    is one value and not a range -- and why a table of the edges would have
+//    missed it, since no edge is 5e-324's neighbour in the subnormals.
+//
+// 2. x <= -1/2: 1 + x is at most 1/2 and no longer near 1, so log's own frexp
+//    handles it.
+//
+// 3. otherwise: the z-series, z = x/(2+x), which is the same identity the
+//    hypergeometric form uses and keeps z small.
 def log1p(x: float) -> float {
     if (x != x || x < -1.0) {
         nan
     } else if (x == -1.0) {
         0.0 - inf
+    } else if (x > -2.220446049250313e-16 && x < 2.220446049250313e-16) {
+        // 2^-52, and STRICT: at exactly 2^-52 the answer is not x.
+        x
     } else if (x <= -0.5) {
         log(1.0 + x)
     } else {

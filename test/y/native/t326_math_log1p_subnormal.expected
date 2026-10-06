@@ -1,0 +1,45 @@
+── the value that was wrong ──
+log1p(5e-324)  1
+  and x is:      1
+log1p(-5e-324) -9223372036854775807
+  and -x is:     -9223372036854775807
+  (a negative subnormal is not writable as a literal, so it is the unary
+   minus of the positive one; -0.0 times it would be -0.0 and not this)
+
+── the neighbours, which were already right and must stay right ──
+log1p(1e-323)  2   2^-1073
+log1p(1e-322)  20   2^-1072
+log1p(1e-320)  2024   = x
+log1p(1e-310)  20240225330731   = x
+log1p(1e-100)  3110860544497550640   = x
+log1p(1e-60)   3709195899275879974   = x
+log1p(1e-40)   4008604054463141788   = x
+
+── the boundary of the new arm, which is 2^-52 ──
+log1p(2^-52)   4372995238176751616
+  and 2^-52 is:  4372995238176751616
+  the tie goes to the argument, which is why this line agrees either way: true
+log1p(2^-53)   4368491638549381120
+  and 2^-53 is:  4368491638549381120
+  so here it is:  true
+log1p(-2^-53)  -4854880398305394688
+  and it is the negative of it: true
+
+── the signed zeros, which the arm must not flatten ──
+log1p(+0.0) is +0.0: true
+log1p(-0.0) is -0.0: true
+expm1(-0.0) is -0.0: true
+
+── the rest of the function, unchanged ──
+log1p(-1.0) is -inf  true
+log1p(-2.0) is NaN   true
+log1p(-0.75)        -4614449902913963537   ln(0.25) = -1.3862943611198906
+  and -2*ln(2):      -4614449902913963537
+log1p(-0.5)         -4618953502541334033   ln(0.5)
+log1p(0.0)          0
+log1p(1.0) is ln(2) true
+log1p(2.0) is ln(3)  4607626529066517259   4607626529066517259
+log1p(-1.5) is ln(-0.5)? no, NaN true
+log1p(1e10)         4627174418536405071   ln(1e10 + 1)
+log1p(-1e10)        -2251799813685248   ln(1 - 1e10)
+log1p(inf) is inf   true

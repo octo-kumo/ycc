@@ -21,10 +21,36 @@
 //     log2    worst 1 ulp, over 1 ulp on 0     (libm: correctly rounded on all)
 //     log10   worst 2 ulp, over 1 ulp on 1     (libm: correctly rounded on 12016)
 //
-// log10's single exception is x = 0.76939152581348347, where ln(m) is itself
-// half an ulp out and the scaling cannot move it back; closing that needs the
-// z-series compensated too, six more instructions on a path already at 817
-// against the assembly kernel's 149.
+// log10 is NOT within an ulp everywhere, and the honest figure is the one
+// measured over a spread UNIFORM IN THE DECADES rather than log-uniformly: the
+// 1-in-12026 above is a log-uniform number, and a decade-uniform spread of
+// 20000 arguments (test/math/audit_float.py) finds log10 2 ulps out on 379 of
+// them -- 1.9%, spread across EVERY decade, not concentrated near zero.
+//
+// The cause is worth stating because it is not where I first looked. log10's
+// decomposition has two terms of COMPARABLE size:
+//
+//     log10(x) = e*log10(2) + ln(m)*log10(e)      e*0.301 and ln(m)*0.434
+//
+// so ln(m)'s own error is not diluted by the way it is in log2, where the answer
+// is |e| and the small part is ~0.4 -- there the small part's error is a
+// thousandth of an ulp of the answer and cannot move the rounding. That is why
+// log2 is within an ulp on all 20000 and log10 is not, on the SAME reduction and
+// the SAME z-series.
+//
+// Ruled out by measurement, so nobody repeats it:
+//   - log10_2_lo is declared and never added, and the term it carries is
+//     ef*(log10(2) - log10_2_hi) = -0.042 ulp of the answer for EVERY ef -- a
+//     constant fraction of an ulp, which cannot produce a 2-ulp answer.
+//   - the residual of the z-series' own `2 + w*P(w)`, bounded at ~0.1 ulp of
+//     log10, is too small to explain it either -- and log2 uses the identical
+//     z-series.
+//
+// So the fix is to compensate the z-series: two_sum for the 2 + w*P(w) add and
+// prod_err for the z multiply, six instructions on a path already at 817 against
+// the assembly kernel's 149. NOT done here, and the reason is recorded rather
+// than implied: 379 in 20000 is a promise gap the table does not catch and this
+// file now states.
 //
 // It also cost 5.5x the instructions: log through assembly plus a multiply is
 // 149 a call, and this is 817. That is a deliberate trade and it is worth naming
