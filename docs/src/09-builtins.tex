@@ -182,6 +182,22 @@ read, or does not suit the field's static type, is a compile-time error;
 \ic{format spec 'd': type 'd' needs an integer, not float}
 \end{center}
 
+A float shows six decimals, and that rule has a seam and an end, both pinned
+rather than left to the reader. The seam is at $5\cdot10^{-7}$: bisecting against
+Python's \ic{\%.6f} puts the last \ic{0.000000} at
+$4.9999999999999998\cdot10^{-7}$ and the first \ic{0.000001} at
+$5.0000000000000008\cdot10^{-7}$, so \ic{5e-7} itself is \emph{below} it and the
+seam is one representable step above --- not where a reader would guess it.
+Below the seam the rule degenerates: every float under it prints as
+\ic{0.000000}, \ic{1e-300} and the least subnormal included. That is what six
+decimals means and it is not a defect, but it is a place a program can lose a
+value, so it is written down. Given a precision the rule rounds \emph{half away
+from zero}, not half to even: \ic{f"\{3.5:.0f\}"} is \ic{4} and
+\ic{f"\{-2.5:.0f\}"} is \ic{-2}. And a zero keeps its sign --- which this
+language has got wrong three times elsewhere --- so \ic{f"\{-0.0:.0f\}"} is
+\ic{-0} and \ic{f"\{-0.0\}"} is \ic{-0.000000}
+(\ic{t331\_float\_print\_seams.y}).
+
 Where Y differs from Python: a field without a spec is \ic{tostring}, so
 a float shows six decimals (\ic{f"\{2.5\}"} is \ic{2.500000}); a float
 spec without a type means \ic{f}, so \ic{\{x:.2\}} gives two decimals
