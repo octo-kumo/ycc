@@ -285,6 +285,35 @@ branch-disjointness false positive.
   harness has no tty for wine, so a console handle (as opposed to a pipe) is
   unverified, and `test_std_suites.sh`'s `term_test` needs a pty and only runs
   against ELF.
+- **Y'S OWN TEST FRAMEWORK WAS NEVER IN THE REPOSITORY (round 54).**
+  `.gitignore` listed the build artifact `ytest` as a BARE pattern, and in
+  gitignore syntax a bare name matches a path component at ANY depth -- so it
+  matched the DIRECTORY `src/tools/ytest/` and hid the framework itself.
+  `git ls-files src/tools/ytest/` returned ZERO files while
+  `src/tools/lsp/` returned 81: `ytest.y` and its `README.md` existed only in
+  this working tree, so every `make ytest` in every round built them from an
+  uncommitted source, and the objective's "use Y to write Y's own test
+  framework" work was by construction uncommittable. The patterns are anchored
+  now (`/ycc`, `/cycc`, `/yserve`, `/ytest`, `/ytest-report.md`), which is what
+  they always meant -- the built binaries at the root -- and the framework is
+  committed.
+  A scan of EVERY bare pattern for the same hazard found one more: the bare
+  `ycc` also shadowed `test/y/ycc/`, whose fixtures the ycc-units suite reads.
+  They were tracked (an ignore does not affect tracked files) so nothing was
+  lost, but a NEW fixture added there would have been ignored silently. Both
+  are anchored. `git status --ignored` now lists exactly the artifacts.
+  Feeding the fix back through a plain string replace is what turned `cycc`
+  into `c/ycc` for one commit -- a bare-name pattern is a substring of a
+  longer one, so the fix has to match WHOLE LINES. That is the same lesson as
+  the suite list, one level down.
+- **`./ytest`'s suite list was a hand-kept copy, and it had drifted (round 54).**
+  `src/tools/ytest/ytest.y` carried its own list of the suites "run_all.sh
+  knows", and `./ytest suites` was running NINETEEN of the twenty-one:
+  `treeshake` had been missing for rounds, and `pe-port` was not added when it
+  joined `ALL` in round 53. It now READS the list out of `run_all.sh`'s `ALL=`
+  line, so there is one source of truth; `./ytest suites` reports 21 run, 0
+  failed. Every number `ytest` reported before was a number over 90% of the
+  suites.
 - **Where the PE target stands, and what is left (round 54).** Measured, not
   guessed:
     * the four thread fixtures (`t341_threads_slices`, `t342_threads_barrier`,
