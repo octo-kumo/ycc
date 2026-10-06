@@ -257,7 +257,7 @@ def y_sleep_us(us: long) -> long {
     // pointer before anything else can run on this thread.
     CLK_TS[0] = u / 1000000;
     CLK_TS[1] = (u % 1000000) * 1000;
-    syscall(35, &CLK_TS[0], 0)
+    os_call("y_os_nanosleep", &CLK_TS[0])
 };
 
 // b'...' -- Python-style byte-string repr: printable ASCII verbatim,

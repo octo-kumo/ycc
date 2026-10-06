@@ -484,7 +484,7 @@ y_os_clock_gettime:
 # was cut short, which rt.y's sleep ignores). nanosleep(2). The second argument
 # stays 0: `rem` is the remaining time and nothing here wants it.
 y_os_nanosleep:
-    mov 16(%rsp), %rdi
+    mov 8(%rsp), %rdi
     xor %esi, %esi
     mov $35, %eax
     syscall
