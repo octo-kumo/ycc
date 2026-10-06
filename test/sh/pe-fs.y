@@ -42,3 +42,22 @@ print("dirgone=" + tostring(fs.exists("peg_dir")));
 // and the file goes away
 print("rmfile=" + tostring(fs.remove_file(p)));
 print("gone=" + tostring(fs.exists(p)));
+
+// rename, cwd and chdir. The cwd's TEXT differs between the two hosts
+// ("/tmp/..." vs "Z:\..."), so only platform-neutral facts are printed: that
+// cwd is non-empty, and that a chdir is visible to a later relative path.
+print("wf2=" + tostring(fs.write_file("peg_a.txt", "r")));
+print("ren=" + tostring(fs.rename("peg_a.txt", "peg_b.txt")));
+print("went=" + tostring(fs.exists("peg_a.txt")));
+print("arrived=" + tostring(fs.exists("peg_b.txt")));
+let c0 = fs.cwd();
+print("cwd_nonempty=" + tostring(len(c0) > 0));
+print("mkd=" + tostring(fs.make_dir("pegcwd")));
+print("chdir=" + tostring(fs.chdir("pegcwd")));
+print("incwd=" + tostring(fs.cwd().ends_with("pegcwd")));
+print("dot=" + tostring(fs.chdir(".")));
+print("up=" + tostring(fs.chdir("..")));
+print("back=" + tostring(fs.cwd().ends_with("pegcwd")));
+print("rmb=" + tostring(fs.remove_file("peg_b.txt")));
+print("rmd=" + tostring(fs.remove_dir("pegcwd")));
+print("dgone=" + tostring(fs.exists("pegcwd")));

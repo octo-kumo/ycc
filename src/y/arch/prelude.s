@@ -1902,6 +1902,44 @@ younlink_file:
     mov $-1, %rax
 younlink_ret:
     ret
+# THE FRAMELESS ARGUMENT TABLE, because three bodies here got it wrong once by
+# copying a framed body's numbers: the last pushed argument is at 8(%rsp), so
+# with n arguments the pointers are  p1 8n, p2 8(n-1), ... pn 8.
+#   n=2: 16/8   n=3: 24/16/8   n=4: 32/24/16/8   n=5: 40/32/24/16/8
+# y_os_rename(from, fromlen, to, tolen) -> 0, or -1. FOUR arguments:
+# from at 32, to at 16 -- renameat(2). y_os_getcwd(buf, len) and
+# y_os_chdir(path, len) are TWO: the pointer at 16, len at 8.
+y_os_rename:
+    mov 16(%rsp), %r10
+    mov 32(%rsp), %rsi
+    mov $-100, %rdi
+    mov $-100, %rdx
+    mov $264, %eax
+    syscall
+    test %rax, %rax
+    jns yorename_ret
+    mov $-1, %rax
+yorename_ret:
+    ret
+y_os_getcwd:
+    mov 16(%rsp), %rdi
+    mov 8(%rsp), %rsi
+    mov $79, %eax
+    syscall
+    test %rax, %rax
+    jns yogetcwd_ret
+    mov $-1, %rax
+yogetcwd_ret:
+    ret
+y_os_chdir:
+    mov 16(%rsp), %rdi
+    mov $80, %eax
+    syscall
+    test %rax, %rax
+    jns yochdir_ret
+    mov $-1, %rax
+yochdir_ret:
+    ret
 # y_os_close(fd) -> 0, or -1. One contract on both kernels: zero for success,
 # negative for failure, which is what fs.close_file's `== 0` asks for and what
 # close(2) already returns. NtClose answers an NTSTATUS instead, so the Windows

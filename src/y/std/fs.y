@@ -199,7 +199,9 @@ def file_size(path: str) -> long? {
     if (os_call("y_os_stat", fs_at_cwd(), path, len(path), &st[0], 0) != 0) { none } else { some(st[6]) }
 };
 
-def rename(from: str, to: str) -> bool { syscall(264, fs_at_cwd(), from, fs_at_cwd(), to) == 0 };
+def rename(from: str, to: str) -> bool {
+    os_call("y_os_rename", from, len(from), to, len(to)) == 0
+};
 def remove_file(path: str) -> bool { os_call("y_os_unlink", path, len(path), 0) == 0 };
 // An empty directory.
 def remove_dir(path: str) -> bool { os_call("y_os_unlink", path, len(path), 1) == 0 };
@@ -282,10 +284,10 @@ def sort_names(xs: [str]) -> [str] {
 // The working directory ("" when it cannot be read).
 def cwd() -> str {
     let buf: [byte; 4096] = [0; 4096];
-    let n = syscall(79, &buf[0], 4096);
+    let n = os_call("y_os_getcwd", &buf[0], 4096);
     if (n <= 0) { "" } else { from_bytes(buf[0:n - 1]) }
 };
 
-def chdir(path: str) -> bool { syscall(80, path) == 0 };
+def chdir(path: str) -> bool { os_call("y_os_chdir", path, len(path)) == 0 };
 
 export { open_file, close_file, read_some, read_all, read_all_bytes, write_text, write_data, seek, read_file, read_bytes, read_lines, write_file, write_bytes, append_file, append_bytes, copy_file, set_mode, exists, is_file, is_dir, file_size, rename, remove_file, remove_dir, remove_all, make_dir, make_dirs, list_dir, cwd, chdir };

@@ -1828,6 +1828,402 @@ you_out:
     mov %rbp, %rsp
     pop %rbp
     ret
+# y_os_getcwd(buf, len) -> the bytes written INCLUDING the terminating NUL, or
+# -1 -- the same count getcwd(2) returns, which is what fs.cwd's `buf[0:n-1]`
+# expects. The DOS path lives in the PEB as UTF-16 and is converted here to
+# ASCII bytes, one unit at a time; a unit with a nonzero high byte is refused
+# (-1) rather than mangled, the same policy y_w_path applies to the other
+# direction.
+#=== replace: y_os_getcwd ===
+y_os_getcwd:
+    push %rbp
+    mov %rsp, %rbp
+    sub $64, %rsp
+    mov 24(%rbp), %rax
+    mov %rax, -8(%rbp)
+    mov 16(%rbp), %rax
+    mov %rax, -16(%rbp)
+    mov %gs:96, %rax
+    mov 32(%rax), %rax
+    mov 56(%rax), %rcx
+    and $65535, %rcx
+    mov 64(%rax), %rdx
+    mov %rcx, %rax
+    shr $1, %rax
+    add $1, %rax
+    mov -16(%rbp), %rbx
+    cmp %rbx, %rax
+    jg yogc_fail
+    mov $0, %r8
+yogc_loop:
+    mov %rcx, %rax
+    shr $1, %rax
+    cmp %rax, %r8
+    jge yogc_done
+    mov %r8, %rax
+    shl $1, %rax
+    add %rdx, %rax
+    movzbq 1(%rax), %r9
+    cmp $0, %r9
+    jne yogc_fail
+    movzbq (%rax), %rax
+    mov -8(%rbp), %rbx
+    add %r8, %rbx
+    mov %rax, (%rbx)
+    inc %r8
+    jmp yogc_loop
+yogc_done:
+    mov -8(%rbp), %rbx
+    add %r8, %rbx
+    mov $0, %rax
+    mov %rax, (%rbx)
+    mov %r8, %rax
+    inc %rax
+    jmp yogc_out
+yogc_fail:
+    mov $-1, %rax
+yogc_out:
+    mov %rbp, %rsp
+    pop %rbp
+    ret
+# y_os_chdir(path, len) -> 0, or -1. NT has no chdir; the process's directory
+# IS the PEB's RTL_USER_PROCESS_PARAMETERS.CurrentDirectory.DosPath, which is
+# what y_w_path reads to resolve a relative path -- so setting it is what makes
+# chdir visible to this runtime. A RELATIVE path is joined onto the current one
+# (with a separator, unless it already ends in one); an absolute "X:" path is
+# widened on its own. The new buffer comes from y_alloc, because the PEB
+# outlives this frame. Non-ASCII is refused (see y_os_getcwd).
+#=== replace: y_os_chdir ===
+y_os_chdir:
+    push %rbp
+    mov %rsp, %rbp
+    sub $128, %rsp
+    mov 24(%rbp), %rax
+    mov %rax, -8(%rbp)
+    mov 16(%rbp), %rax
+    mov %rax, -16(%rbp)
+    cmp $900, %rax
+    jg yocd_fail
+    mov %gs:96, %rax
+    mov 32(%rax), %rax
+    mov 56(%rax), %rcx
+    and $65535, %rcx
+    mov 64(%rax), %rdx
+    mov %rcx, -24(%rbp)
+    mov %rdx, -32(%rbp)
+    mov -16(%rbp), %rcx
+    cmp $2, %rcx
+    jl yocd_rel
+    mov -8(%rbp), %rdx
+    movzbq (%rdx), %rax
+    add $32, %rax
+    cmp $97, %rax
+    jl yocd_rel
+    cmp $123, %rax
+    jg yocd_rel
+    movzbq 1(%rdx), %rax
+    cmp $58, %rax
+    jne yocd_rel
+    mov -16(%rbp), %rax
+    shl $1, %rax
+    add $2, %rax
+    mov %rax, -48(%rbp)
+    mov $0, %rax
+    mov %rax, -40(%rbp)
+    jmp yocd_alloc
+yocd_rel:
+# "." and ".." are the two relative paths a program actually uses, and NT has
+# no dot components at all (the Win32 layer normalizes them away before NT
+# sees a name), so joining them onto the current directory would produce a
+# path whose "." or ".." component NT rejects. "." is a no-op; ".." drops the
+# last component of the current directory in place -- never below the drive
+# root, "X:\" -- by shortening the PEB's Length. A path with them EMBEDDED
+# ("a/../b") is still joined literally, and NT refuses the component, so the
+# call fails rather than opening some other file.
+    mov -16(%rbp), %rax
+    cmp $1, %rax
+    jne yocd_dotdot
+    mov -8(%rbp), %rdx
+    movzbq (%rdx), %rax
+    cmp $46, %rax
+    jne yocd_join
+    mov $0, %rax
+    jmp yocd_out
+yocd_dotdot:
+    mov -16(%rbp), %rax
+    cmp $2, %rax
+    jne yocd_join
+    mov -8(%rbp), %rdx
+    movzbq (%rdx), %rax
+    cmp $46, %rax
+    jne yocd_join
+    movzbq 1(%rdx), %rax
+    cmp $46, %rax
+    jne yocd_join
+    mov -24(%rbp), %rcx
+    mov -32(%rbp), %rdx
+    mov %rcx, %r8
+    sub $2, %r8
+yocd_up:
+    cmp $0, %r8
+    jl yocd_uproot
+    mov %rdx, %rax
+    add %r8, %rax
+    movzbq (%rax), %rax
+    cmp $92, %rax
+    je yocd_upfound
+    sub $2, %r8
+    jmp yocd_up
+yocd_upfound:
+    cmp $4, %r8
+    jle yocd_uproot
+    add $2, %r8
+    jmp yocd_upstore
+yocd_uproot:
+    mov $6, %r8
+yocd_upstore:
+    mov %r8, %rcx
+    mov %rcx, %rax
+    add $2, %rax
+    shl $16, %rax
+    add %rcx, %rax
+    mov %gs:96, %r9
+    mov 32(%r9), %r9
+    mov %rax, 56(%r9)
+    mov $0, %rax
+    jmp yocd_out
+yocd_join:
+    mov -24(%rbp), %rax
+    cmp $1024, %rax
+    jg yocd_fail
+    mov %rax, %rcx
+    add $2, %rcx
+    mov -16(%rbp), %rax
+    shl $1, %rax
+    add %rax, %rcx
+    add $2, %rcx
+    mov %rcx, -48(%rbp)
+    mov $1, %rax
+    mov %rax, -40(%rbp)
+yocd_alloc:
+    mov -48(%rbp), %rdi
+    call y_alloc
+    mov %rax, -56(%rbp)
+    mov -40(%rbp), %rax
+    cmp $0, %rax
+    je yocd_widen
+    mov -24(%rbp), %rcx
+    mov -32(%rbp), %rdx
+    mov $0, %r8
+yocd_cploop:
+    cmp %rcx, %r8
+    jge yocd_sep
+    mov %rdx, %rax
+    add %r8, %rax
+    movzbq (%rax), %rax
+    mov -56(%rbp), %r9
+    add %r8, %r9
+    mov %rax, (%r9)
+    inc %r8
+    jmp yocd_cploop
+yocd_sep:
+    mov %rcx, %rax
+    cmp $0, %rax
+    je yocd_addsep
+    mov %rdx, %rax
+    add %rcx, %rax
+    movzbq -2(%rax), %r9
+    cmp $92, %r9
+    je yocd_widen
+yocd_addsep:
+    mov -56(%rbp), %r9
+    add %rcx, %r9
+    mov $92, %rax
+    mov %rax, (%r9)
+    add $2, %rcx
+    mov %rcx, -24(%rbp)
+yocd_widen:
+    mov -56(%rbp), %r9
+    mov -40(%rbp), %rax
+    cmp $0, %rax
+    je yocd_wstart
+    mov -24(%rbp), %rax
+    add %rax, %r9
+yocd_wstart:
+    mov %r9, -64(%rbp)
+    mov $0, %r8
+yocd_wloop:
+    mov -16(%rbp), %rax
+    cmp %rax, %r8
+    jge yocd_set
+    mov -8(%rbp), %rax
+    add %r8, %rax
+    movzbq (%rax), %rax
+    cmp $47, %rax
+    jne yocd_wsep
+    mov $92, %rax
+yocd_wsep:
+    cmp $128, %rax
+    jge yocd_fail
+    mov -64(%rbp), %r9
+    mov %rax, (%r9)
+    add $2, %r9
+    mov %r9, -64(%rbp)
+    inc %r8
+    jmp yocd_wloop
+yocd_set:
+    mov -64(%rbp), %rcx
+    mov -56(%rbp), %rax
+    sub %rax, %rcx
+    mov %rcx, %rax
+    add $2, %rax
+    shl $16, %rax
+    add %rcx, %rax
+    mov %gs:96, %rdx
+    mov 32(%rdx), %rdx
+    mov %rax, 56(%rdx)
+    mov -56(%rbp), %rax
+    mov %rax, 64(%rdx)
+    mov $0, %rax
+    jmp yocd_out
+yocd_fail:
+    mov $-1, %rax
+yocd_out:
+    mov %rbp, %rsp
+    pop %rbp
+    ret
+# y_os_rename(from, fromlen, to, tolen) -> 0, or -1. Both names are built by
+# y_w_path (the destination in full, because FILE_RENAME_INFORMATION carries an
+# absolute NT name); the source is opened with DELETE|SYNCHRONIZE (the handle
+# needs DELETE), once as a FILE and once as a DIRECTORY, and
+# NtSetInformationFile FileRenameInformation (class 10) does the move with
+# ReplaceIfExists, which is rename(2)'s behaviour. The 20-byte
+# FILE_RENAME_INFORMATION header is a BOOLEAN, a HANDLE, a ULONG length and the
+# name that many bytes long.
+#=== replace: y_os_rename ===
+y_os_rename:
+    push %rbp
+    mov %rsp, %rbp
+    sub $6400, %rsp
+    mov 40(%rbp), %rax
+    mov %rax, -8(%rbp)
+    mov 32(%rbp), %rax
+    mov %rax, -16(%rbp)
+    mov 24(%rbp), %rax
+    mov %rax, -24(%rbp)
+    mov 16(%rbp), %rax
+    mov %rax, -32(%rbp)
+    mov -8(%rbp), %rax
+    push %rax
+    mov -16(%rbp), %rax
+    push %rax
+    lea -2240(%rbp), %rax
+    push %rax
+    call y_w_path
+    add $24, %rsp
+    cmp $0, %rax
+    jl yorn_fail
+    mov %rax, -48(%rbp)
+    mov -24(%rbp), %rax
+    push %rax
+    mov -32(%rbp), %rax
+    push %rax
+    lea -4288(%rbp), %rax
+    push %rax
+    call y_w_path
+    add $24, %rsp
+    cmp $0, %rax
+    jl yorn_fail
+    mov %rax, -56(%rbp)
+    mov -48(%rbp), %rcx
+    mov %rcx, %rax
+    shl $16, %rax
+    add %rcx, %rax
+    mov %rax, -96(%rbp)
+    lea -2240(%rbp), %rax
+    mov %rax, -88(%rbp)
+    mov $48, %rax
+    mov %rax, -160(%rbp)
+    mov $0, %rax
+    mov %rax, -152(%rbp)
+    lea -96(%rbp), %rax
+    mov %rax, -144(%rbp)
+    mov $0, %rax
+    mov %rax, -136(%rbp)
+    mov %rax, -128(%rbp)
+    mov %rax, -120(%rbp)
+    mov $7, %rax
+    mov %rax, 40(%rsp)
+    mov $96, %rax
+    mov %rax, 48(%rsp)
+    lea -40(%rbp), %r10
+    mov $1114112, %rdx
+    lea -160(%rbp), %r8
+    lea -192(%rbp), %r9
+    mov $51, %eax
+    syscall
+    test %eax, %eax
+    jns yorn_open
+    mov $33, %rax
+    mov %rax, 48(%rsp)
+    lea -40(%rbp), %r10
+    mov $1114112, %rdx
+    lea -160(%rbp), %r8
+    lea -192(%rbp), %r9
+    mov $51, %eax
+    syscall
+    test %eax, %eax
+    js yorn_fail
+yorn_open:
+    mov $1, %rax
+    mov %rax, -6336(%rbp)
+    mov $0, %rax
+    mov %rax, -6328(%rbp)
+    mov -56(%rbp), %rax
+    mov %rax, -6320(%rbp)
+    mov $0, %r8
+yorn_cploop:
+    mov -56(%rbp), %rax
+    cmp %rax, %r8
+    jge yorn_set
+    lea -4288(%rbp), %rax
+    add %r8, %rax
+    movzbq (%rax), %rax
+# the name field is info+20 and grows UPWARD from there: rbp-6316+i, not
+# rbp-6316-i (the first cut walked down out of the structure, so NT saw a name
+# that was not the path and answered STATUS_OBJECT_PATH_SYNTAX_BAD)
+    mov %rbp, %r10
+    sub $6316, %r10
+    add %r8, %r10
+    mov %rax, (%r10)
+    inc %r8
+    jmp yorn_cploop
+yorn_set:
+    mov -56(%rbp), %r9
+    add $20, %r9
+    mov -40(%rbp), %r10
+    lea -192(%rbp), %rdx
+    lea -6336(%rbp), %r8
+    mov $10, 40(%rsp)
+    mov $39, %eax
+    syscall
+    test %eax, %eax
+    js yorn_cfail
+    mov -40(%rbp), %r10
+    mov $15, %eax
+    syscall
+    mov $0, %rax
+    jmp yorn_out
+yorn_cfail:
+    mov -40(%rbp), %r10
+    mov $15, %eax
+    syscall
+yorn_fail:
+    mov $-1, %rax
+yorn_out:
+    mov %rbp, %rsp
+    pop %rbp
+    ret
 # y_os_close(fd) -> 0, or -1. The other half of the shared close above.
 #=== replace: y_os_close ===
 # A POSIX close(2) returns 0 and leaves errno for the failure; NtClose answers

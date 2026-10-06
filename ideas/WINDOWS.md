@@ -930,9 +930,18 @@ reason this section exists:
   work, build the name with ONE helper, `y_w_path` -- the `\??\` prefix,
   the PEB CurrentDirectory for a relative path, and the widening -- because
   the first three copies of that code are where the UTF-32 prefix and the
-  eight-bytes-per-unit widening hid. **Still raw `syscall(` in `fs.y`**:
-  `list_dir` (217/257), `rename` (264), `set_mode` (268), `cwd` (79),
-  `chdir` (80) -- the rest of the B2 slice.
+  eight-bytes-per-unit widening hid. `rename`, `cwd` and `chdir` are named
+  too: `y_os_rename` builds both names with y_w_path and moves with
+  `NtSetInformationFile` FileRenameInformation (class 10, ReplaceIfExists);
+  `y_os_getcwd` converts the PEB's UTF-16 `CurrentDirectory` to ASCII bytes;
+  and `y_os_chdir` REPLACES that `CurrentDirectory` (a heap copy from
+  `y_alloc`), joining a relative path onto the old one and handling `.` and
+  `..` there -- NT has no dot components at all, so `chdir("..")` cannot be
+  left in the stored path (the Win32 layer normalizes them away before NT
+  ever sees a name). An embedded `a/../b` is still joined literally and NT
+  refuses the component, so the call fails rather than opening another file.
+  **Still raw `syscall(` in `fs.y`**: `list_dir` (217/257), `set_mode` (268)
+  -- the rest of the B2 slice.
 - **`std/math.y` is not embedded, and that is correct.** Only the four packed units
   (`rt`, `prelude`, `exec`, `str`) are in `STD_EMBEDS`; `std/math.y` is spliced
   from source per target like `fs.y`/`net.y`, so the pack never carries it and
