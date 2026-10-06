@@ -653,7 +653,26 @@ of which an earlier draft called unsolvable and is not:
 | **`ulimit -v` has no equivalent** (W6). | Decided, and cheaper than the exemption it replaces: `JOB_OBJECT_LIMIT_JOB_VM_SIZE` reproduces the fixture, because every mapping here is read-write committed. It costs a ~40-line job-object launcher, not a rule change. |
 | **Wine is not Windows.** Good enough to prove a PE loads and runs; not good enough to trust `CreateProcess`, console handles, or the TLS-free thread scheme. | W6 on a real runner; Wine only as a fast inner loop. |
 | **The no-`.reloc` claim is load-bearing and silent if violated.** | See the deferred encoder guard. |
-| **SETTLED — the std pack bakes ONE target into every program built from it, and no flag on the consuming compiler can undo it.** `ycc --std-pack` never passes a target, so a target test compiled into `rt.y`/`fs.y`/`net.y`/… is baked into the pack and served to every program that links it. Measured both ways: with a conditional in `rt.y`, a PE built from the pack carried the ELF inline `write(2)` and printed nothing, while `--std-src` (which recompiles the units) worked. | **Hard rule, no exceptions: a std entry point names a label and none branches on the target.** `os_write` calls `y_os_write`, `exit` calls `y_os_exit`; the Windows bodies live in `src/y/arch/wsys.s` and the ELF bodies in `src/y/arch/prelude.s`, so the pack carries text correct for whichever compiler wrote it. The corollary for the port: `cycc` carries **no** pack at all, so it compiles the std units from source with its own `res_target` — which is why on the Windows path `cycc` and a pack-carrying `ynew` differ byte-for-byte on the 22 fixtures whose std code still has raw `syscall(` sites, and `cycc` is the correct one of the two. Those raw sites are the W5 work; the divergence disappears when they are gone. |
+| **SETTLED — the std pack bakes ONE target into every program built from it, and no flag on the consuming compiler can undo it.** `ycc --std-pack` never passes a target, so a target test compiled into `rt.y`/`fs.y`/`net.y`/… is baked into the pack and served to every program that links it. Measured both ways: with a conditional in `rt.y`, a PE built from the pack carried the ELF inline `write(2)` and printed nothing, while `--std-src` (which recompiles the units) worked. | **Hard rule, no exceptions: a std entry point names a label and none branches on the target.** `os_write` calls `y_os_write`, `exit` calls `y_os_exit`; the Windows bodies live in `src/y/arch/wsys.s` and the ELF bodies in `src/y/arch/prelude.s`, so the pack carries text correct for whichever compiler wrote it. The corollary for the port: `cycc` carries **no** pack at all, so it compiles the std units from source with its own `res_target` — which is why on the Windows path `cycc` and a pack-carrying `ynew` differ byte-for-byte on the 22 fixtures whose std code still has raw `syscall(` sites, and `cycc` is the correct one of the two. Those raw sites are the W5 work; the divergence disappears when they are gone. **Done for the four packed units** (rt, prelude, exec, str): the named syscall layer B1 replaced every `syscall(` in them, and `test/sh/pe-packinv.sh` now measures the invariant -- a PE built from the pack and a PE built with `--std-src`, over every fixture, 177 identical and 0 different. The other std files (fs, net, tls, crypto, http) are compiled per target from source, so they were never at risk from the pack; they are still raw-`syscall` sites, which is B2's `std/win/*` split. |
+
+## What the Windows assembly halves cost, measured
+
+Nine blocks in `wsys.s`, and four of the nine revisions of them were wrong in ways
+`make asm-check` cannot see (GNU as accepts all four). Every one is written down
+in the file next to the code with the symptom it produced, because in every case
+the symptom was further from the cause than the cause was from the code:
+
+| mistake | symptom |
+|---|---|
+| argument two in `%rsi` (the SysV order) instead of `%rdx` | the call still returns `STATUS_SUCCESS`; the out-parameter keeps whatever the stack held, so `CLOCK_MONOTONIC` froze at zero while `CLOCK_REALTIME` worked |
+| parameter *k* of *n* read at the wrong `16+8*(n-k)(%rbp)` | silent -- `8(%rbp)` is the return address, and the block runs |
+| `neg %eax` | "unary form in 'neg'" from the in-tree assembler, on one target only, in a block the ELF path never assembles |
+| `div` is unsigned, and a normalised timespec went in as `nsec - sec*10^9` | every sub-second sleep worked and every one-second sleep hung, for 54 years |
+| an `add:` marker in `wsys.s` for a name `prelude.s` also defines | the Linux block wins silently -- both reach the program and the label map keeps the wrong one |
+
+The last one is the most interesting, and it is a property of the substitution
+rather than of any block: `add:` and `replace:` are not interchangeable, and the
+distinction has to be re-derived for each new name.
 
 ## Open questions
 
