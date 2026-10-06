@@ -160,7 +160,7 @@ type WImport = { dll: str, funcs: [str] };
 def w_imports() -> [WImport] {
     [
         { dll: "KERNEL32.dll", funcs: ["GetCurrentProcessId"] },
-        { dll: "bcrypt.dll", funcs: ["BCryptGenRandom"] }
+        { dll: "advapi32.dll", funcs: ["SystemFunction036"] }
     ]
 };
 

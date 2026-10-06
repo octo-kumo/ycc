@@ -277,6 +277,32 @@ branch-disjointness false positive.
   2000, where stat's own layout has exactly 2000. `y_os_close` (NtClose, 15) was
   written the same round and reverted with it, untested, for the same reason:
   it is only reachable through a file handle that openat has to produce first.
+- **`std/crypto` RANDOMNESS WORKS ON NT (round 50), by NOT using bcrypt.** The
+  body is `RtlGenRandom`, which advapi32 exports by the name
+  `SystemFunction036`:
+
+      BOOLEAN SystemFunction036(PVOID RandomBuffer, ULONG RandomBufferLength)
+
+  ONE call -- no provider, no handle, no close -- which is exactly the dance
+  wine cannot do. Measured on a PE: `crypto.random_bytes(16)` gives 16 bytes,
+  non-zero, two draws that differ, `bytes_eq(a, a)` true and 0 bytes for a
+  zero-length request, byte-identical to the Linux run through getrandom(2).
+  `test/y/native/t349_random_bytes.y` is the dual-target fixture, so this is
+  now covered by the native suite as well as by hand.
+  The bcrypt import is GONE from `w_imports()`: nothing calls it, and a dead
+  IAT cell is dead weight. The goal's "std/crypto on BCrypt" is satisfied
+  functionally -- randomness works -- but not literally, and the reason is
+  measured rather than assumed: both routes into wine 11.17's bcrypt
+  page-fault with the arguments demonstrably right (see the entry below).
+  Two bugs on the way, both this project's own recurring ones:
+    * the C twin's `w_imports()` used `yav(2, ...)` while appending a THIRD
+      record, which SILENTLY DROPS it -- the exact hazard PORTING.md and
+      yv.h's comment warn about, and the reason `yavs(..., NULL)` exists. The
+      symptom was an assembler error naming an undefined `y_iat_SystemFunction036`,
+      i.e. a missing import cell, not a runtime surprise.
+    * and the first fix passed three records to `yavs` WITHOUT THE NULL
+      sentinel, which segfaults the compiler. A variadic list has two ways to be
+      wrong and both are silent until they are not.
 - **BCrypt on wine: `OpenAlgorithmProvider` WORKS and is MEASURED, so round
   35's diagnosis was wrong; `GenRandom` is what fails, and the next step is a
   different entry point entirely.**

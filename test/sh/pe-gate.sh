@@ -158,17 +158,17 @@ fi
 if ! objdump -p "$OUT/imp.exe" 2>/dev/null | grep -q 'GetCurrentProcessId'; then
     echo "pe-gate: FAIL (the PE does not import GetCurrentProcessId)"; exit 1
 fi
-# Two DLLs, not one: the second is bcrypt.dll!BCryptGenRandom, which is what
+# Two DLLs, not one: the second is advapi32.dll!SystemFunction036 (RtlGenRandom),
 # std/crypto.y's y_os_random will call on NT -- Windows has no syscall for
 # randomness. A table that only ever carried one DLL would not have proven the
 # descriptor chain, the per-DLL ILT/IAT offsets or the name table.
-if ! objdump -p "$OUT/imp.exe" 2>/dev/null | grep -q 'DLL Name: bcrypt.dll'; then
-    echo "pe-gate: FAIL (the PE imports no bcrypt.dll)"; exit 1
+if ! objdump -p "$OUT/imp.exe" 2>/dev/null | grep -q 'DLL Name: advapi32.dll'; then
+    echo "pe-gate: FAIL (the PE imports no advapi32.dll)"; exit 1
 fi
-if ! objdump -p "$OUT/imp.exe" 2>/dev/null | grep -q 'BCryptGenRandom'; then
-    echo "pe-gate: FAIL (the PE does not import BCryptGenRandom)"; exit 1
+if ! objdump -p "$OUT/imp.exe" 2>/dev/null | grep -q 'SystemFunction036'; then
+    echo "pe-gate: FAIL (the PE does not import SystemFunction036)"; exit 1
 fi
-echo "pe-gate: import table ok (KERNEL32.dll!GetCurrentProcessId, bcrypt.dll!BCryptGenRandom)"
+echo "pe-gate: import table ok (KERNEL32.dll!GetCurrentProcessId, advapi32.dll!SystemFunction036)"
 # The IAT must be the .bss block the CODE calls through, not the copy inside
 # .idata: the loader writes the resolved addresses there, and an image whose
 # FirstThunk points at the .idata copy leaves the code calling through a cell

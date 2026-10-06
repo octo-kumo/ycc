@@ -482,36 +482,57 @@ y_os_wait4:
 y_os_fork:
     mov $-38, %rax
     ret
-# y_os_random(buf, len) -> a negative errno.
+# y_os_random(buf, len) -> the number of bytes written, or a negative errno.
 #
-# NOT IMPLEMENTED YET. The PLUMBING is in and verified -- the import table, the
-# .bss IAT cells the code calls through (deterministic offsets: the block is
-# the first thing in .bss) and `call *%rax` -- and the call path is proven: a
-# body that called y_iat_GetCurrentProcessId returned the process id under wine
-# with no fault.
+# RtlGenRandom, which advapi32 exports by the name SystemFunction036:
 #
-# WHAT THE BCrypt ATTEMPT ESTABLISHED, so the next one does not re-learn it:
-#   * the three-call sequence is required. The documented pseudo-handle
-#     (BCRYPT_USE_SYSTEM_PREFERRED_RNG = 2) page-faults inside wine's
-#     bcrypt.dll, which dereferences it as a real handle.
-#   * L"RNG" must be built on the stack, and with DECIMAL immediates: the
-#     in-tree assembler's text parser takes no 0x literals (every 0x in these
-#     files is inside a comment) and no 32-bit register-to-memory form
-#     ("bad operand" for both).
-#   * the status test must be `jne`, not `js`: success is 0 in both the
-#     NTSTATUS and the Win32 convention, and a small positive error code is
-#     not a sign-bit failure.
-#   * and the frame offsets: args arrive at 16(%rsp)/8(%rsp), so after
-#     `push %rbp; mov %rsp, %rbp` they are 24(%rbp) and 16(%rbp).
-# The body below got as far as building and running, and then faulted inside
-# bcrypt on a handle of -1: BCryptOpenAlgorithmProvider returned 0 (success)
-# and the slot it was handed still held nothing, which says THE CALL THAT RAN
-# WAS NOT THE FUNCTION THE LABEL NAMES -- i.e. the cells and the offsets
-# disagree somewhere, and that is the first thing to prove or disprove next
-# (dump the cell's contents, or the address `objdump -p` resolves).
+#     BOOLEAN SystemFunction036(PVOID RandomBuffer, ULONG RandomBufferLength)
+#
+# ONE call, and that is the whole point of using it. The obvious API here is
+# BCryptGenRandom, and rounds 34 through 49 established that wine 11.17 cannot
+# be driven through it: the documented pseudo-handle
+# (BCRYPT_USE_SYSTEM_PREFERRED_RNG = 2) page-faults, and so does a REAL handle
+# from a real BCryptOpenAlgorithmProvider -- measured, with status 0 and handle
+# 227328 coming back from the open, so the import table, the .bss IAT cell and
+# the Win64 call are all working and the fault is inside the library. This entry
+# point has no provider, no handle and no close, so none of that dance happens.
+#
+# TWO ARGUMENTS, FRAMELESS in the ELF body: len (arg2) at 8(%rsp) -> 16(%rbp),
+# buf (arg1) at 16 -> 24.
+#
+# THE RESULT IS A BOOLEAN, i.e. the LOW BYTE of %rax, and everything above it is
+# undefined after the call -- so it is masked to 255 and only then tested. `test
+# %al, %al` would be the natural spelling and this assembler has no 8-bit test;
+# testing %eax whole would read the garbage above the byte.
+#
+# THE WIN64 CALL: two arguments in rcx and rdx. At entry rsp is 8 mod 16 (the
+# return address), push %rbp makes it 0, and the 32 bytes reserved here are the
+# callee's shadow space. There are no stack arguments -- this is a DLL call, not
+# a syscall -- so the frame-depth rule that NtCreateFile needs does not apply.
+#
+# A TRUE answer means the buffer was filled, so the return value is the length
+# and std/crypto.y's loop is satisfied on the first pass; anything else is -1,
+# which std/crypto.y treats as failure and reports.
 #=== replace: y_os_random ===
 y_os_random:
-    mov $-38, %rax
+    push %rbp
+    mov %rsp, %rbp
+    sub $32, %rsp
+    mov 24(%rbp), %rcx
+    mov 16(%rbp), %rdx
+    mov y_iat_SystemFunction036(%rip), %rax
+    call *%rax
+    and $255, %rax
+    test %rax, %rax
+    je yor_fail
+    mov 16(%rbp), %rax
+    mov %rbp, %rsp
+    pop %rbp
+    ret
+yor_fail:
+    mov $-1, %rax
+    mov %rbp, %rsp
+    pop %rbp
     ret
 #=== add: y_w_path ===
 y_w_path:

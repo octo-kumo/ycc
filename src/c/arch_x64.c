@@ -243,11 +243,20 @@ Yv *arch_global_cell(Yv *label) {
    writer (pe.c) emits the descriptor, ILT and name table that fills those
    cells. One list, or the two would drift. */
 Yv *w_imports(void) {
-    return yav(2,
+    /* yavs, not yav: the count in yav() is a number that has to be kept in step
+       with the list by hand, and it silently DROPS anything appended past it --
+       which is exactly what happened here when advapi32 was added below and the
+       2 was not. yavs(..., NULL) is terminated by the sentinel. */
+    return yavs(
         yr(2, "dll", ys("KERNEL32.dll"),
               "funcs", yav(1, ys("GetCurrentProcessId"))),
-        yr(2, "dll", ys("bcrypt.dll"),
-              "funcs", yav(1, ys("BCryptGenRandom"))));
+        /* RtlGenRandom: the classic Windows RNG, and the one this layer uses.
+           bcrypt's provider/handle/close dance is what wine cannot do (rounds
+           34-49), while this is a single call: BOOLEAN SystemFunction036(PVOID,
+           ULONG), exported by name from advapi32. */
+        yr(2, "dll", ys("advapi32.dll"),
+              "funcs", yav(1, ys("SystemFunction036"))),
+        NULL);
 }
 
 /* The .bss cell the loader writes an imported function's address into. The
