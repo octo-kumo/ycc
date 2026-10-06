@@ -97,7 +97,7 @@ WHAT IT FINDS, AND WHAT IT DOES NOT
     ulps out -- one argument in 20000, which is recorded as a limit rather than
     chased, and glibc is not better there either.
 
-FOUR THINGS THIS FILE GOT WRONG FIRST
+FIVE THINGS THIS FILE GOT WRONG FIRST
 
     audit_exact.py has the list for the exact tier. The two that apply here cost
     the most time, and both are about BITS:
@@ -119,6 +119,18 @@ FOUR THINGS THIS FILE GOT WRONG FIRST
        three separate slips came out of them. `Decimal` does this correctly
        rounded and for free; the only judgement left is the precision, and that
        is one function with a comment.
+    5. Not in this file -- in a probe written beside it -- but the same species,
+       and it nearly became a committed "defect". A probe asserted
+       `log10(1e-323) == -323` and got -323.0051853474518, a 9.1e10-ulp error
+       by the monotone key, which reads exactly like the catastrophic findings
+       this file exists to make. It is not one: **no negative power of ten below
+       1 is a dyadic rational**, so `1e-323` is not 10^-323 but the nearest
+       multiple of 2^-1074, which is 2^-1073, whose logarithm IS -323.00518.
+       libm agrees with the module to the bit on every one of those arguments.
+       A literal in the subnormal range is a nearby multiple of 2^-1074, and
+       asserting a power of ten there is asserting something false. Only the
+       NON-negative powers are exact, and those are worth asserting -- log10 of
+       1, 10, 100, 1e10, 1e100, 1e300 is an exact integer and all six hold.
 """
 
 import decimal
