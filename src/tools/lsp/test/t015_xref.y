@@ -49,6 +49,24 @@ const MAIN = [
     "print(helper.TOP + v);"
 ];
 
+// The SAME module, imported BY NAME instead of by path -- a different shape, and
+// broken.
+//
+// `import mod;` resolves through `std_resolve` (next to the importer), and a
+// module imported by name KEEPS ITS NAMESPACE, so `mod.TOP` stays a qualified
+// Dot and the spliced top level spells the name `mod.TOP`. A PATH import is
+// flattened by `strip_ns` instead, so the same name is spliced as `TOP`.
+//
+// `serve.resolve_name` looked up the bare spelling only, so every member of a
+// by-name import was unreachable: ctrl-click answered null, and the hover had a
+// type with no declaration under it. `examples/bignum` is this shape -- `bn` is
+// not a std unit, it is the file next to it -- and the user reported that.
+const MAIN3 = [
+    "import mod;",
+    "",
+    "print(mod.TOP + mod.helper(2));",
+];
+
 def fresh() -> State { serve.server_state(WS, "", 0) }
 
 def did_open(uri: str, text: str, version: long) -> { str => json.Val } {
@@ -117,6 +135,10 @@ def str_of(v: json.Val) -> str {
 // are about the compiler's output and not about the server's request handling.
 fs.make_dirs(WS);
 fs.write_file(WS + "/mod.y", join(MOD, "\n"));
+
+// The by-name import's own buffer. Opened as a SECOND document so what is under
+// test is the shape of the NAME, not the index cache.
+const MAIN3_URI = "file://" + WS + "/main3.y";
 let main_text = join(MAIN, "\n");
 let nr = native_resolve_x(main_text, WS, 0, true, WS + "/main.y");
 let ast = parse_program(tokenize(scan.repair(nr.src).text));
@@ -229,6 +251,22 @@ let d2 = ask(st, 2, "textDocument/definition", at(MAIN_URI, 3, 13));
 print("definition of helper.TOP -> " + loc_str(d2));
 let d3 = ask(st, 3, "textDocument/definition", at(MAIN_URI, 3, 20));
 print("definition of v (the buffer's own) -> " + loc_str(d3));
+
+// ── the same module imported BY NAME: the names keep their namespace ──────
+//
+// Line 2 is `print(mod.TOP + mod.helper(2));` -- `mod` at 6, `TOP` at 10, and
+// `helper` at 20. Written out rather than found, which is the mistake this file's
+// own header warns about; a wrong column here answers about `mod` and the test
+// passes for the wrong reason, so the two that matter are asserted by content too.
+serve.note_open(st, did_open(MAIN3_URI, join(MAIN3, "\n"), 1));
+let n1 = ask(st, 4, "textDocument/definition", at(MAIN3_URI, 2, 10));
+print("definition of mod.TOP -> " + loc_str(n1));
+let n2 = ask(st, 5, "textDocument/definition", at(MAIN3_URI, 2, 20));
+print("definition of mod.helper -> " + loc_str(n2));
+// And the hover carries the SIGNATURE, not just the call's return type -- which is
+// what "hovering bn_from_long shows long instead of the header" was.
+let n3 = ask(st, 6, "textDocument/hover", at(MAIN3_URI, 2, 20));
+print("hover of mod.helper carries the signature: " + tostring(index_of(hover_str(n3), "helper(n: long) -> long") >= 0));
 
 let h1 = ask(st, 4, "textDocument/hover", at(MAIN_URI, 2, 21));
 print("hover on helper.helper: " + hover_str(h1));

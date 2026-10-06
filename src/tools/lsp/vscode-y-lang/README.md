@@ -17,10 +17,16 @@ is `../LSP.md`.
   unresolvable `import` by printing and exiting; `yserve` finds it first.
 - **Formatting.** *Format Document* (or **Y: Format Document**) rewrites the
   whole file with `src/tools/lsp/fmt.y`.
-- **Syntax highlighting**, from the server's semantic tokens. The TextMate
-  grammar is **unregistered** — it was the highlighter until M2 landed, and
-  `scan.y` now does that job from the real lexer's rules rather than a
-  hand-kept copy.
+- **Syntax highlighting**, from the server's semantic tokens. There is **no
+  TextMate grammar registered at all** — this extension contributes no
+  `grammars` key, so every colour in a `.y` file comes from
+  `textDocument/semanticTokens/full`, and `scan.y` does that job from the real
+  lexer's rules rather than a hand-kept copy.
+- **Bracket pair colourisation is off for `.y`**, contributed as a
+  `configurationDefaults` default. A `//` comment is one token, so nothing inside
+  it is painted by the server, and VS Code's own bracket pairing colours matching
+  brackets anywhere in the line — comments and strings included. Every other
+  language is untouched.
 - **An outline**: `def`, `const`, `let`, `type`, `import` and `export`, nested,
   in the breadcrumb bar and the symbol picker. A `let` inside a loop is
   deliberately not an entry.
@@ -77,6 +83,24 @@ The extension looks for it, in this order:
 `PATH` is deliberately **not** searched: `spawn` resolving a bare name works in a
 shell and fails in VS Code, or picks up something unrelated. If it is on your
 `PATH`, set `y.lsp.serverPath`.
+
+## Colours
+
+The legend has fourteen entries. VS Code's built-in fallback colours the LSP's
+*standard* token type names; four of ours are not standard — `selfNone`,
+`punctuation`, `error` and `builtin` — and nothing colours those unless the
+extension says so. It does, in `contributes.semanticTokenTypes`, each with a
+`superType`: `builtin` falls back to `function`, `punctuation` to `operator`,
+`selfNone` and `error` to `keyword`.
+
+A `superType` is the theme-independent way to do this. VS Code scores a theme rule
+against the token type's superType *chain*, so an exact rule in your theme still
+wins and the parent is only the fallback — which means these four follow whatever
+theme you use rather than arriving as one hard-coded hex. To change one:
+
+```jsonc
+"editor.semanticTokenTypes.builtin": "#4EC9B0"
+```
 
 ## Settings
 
