@@ -556,6 +556,16 @@ def ldexp(x: float, e: long) -> float {
         let down = 0 - 1022;
         while (k >= up) { r = r * 4.49423283715578977e307; k = k - up; };
         while (k <= down) { r = r * 2.2250738585072014e-308; k = k - down; };
+        // A big step can have already carried r out of the range -- to an
+        // infinity on the way up, to zero on the way down -- and then there is
+        // nothing left to do exactly. It has to be CHECKED for, because the
+        // shift below adds k to the exponent FIELD, and on an infinity that
+        // field is already 2047: the sum overflows a signed long, wraps, and
+        // comes back as a NEGATIVE NaN. ldexp(1.0, 2046) answered
+        // -nan where the answer is +inf, through exactly that.
+        if (r == 0.0 || is_inf(r)) {
+            r
+        } else {
         // What is left fits the exponent field as long as the answer stays
         // NORMAL; otherwise the mantissa has to shift too, and one doubling at a
         // time is how that is exact (this is also the subnormal-input case: a
@@ -568,6 +578,20 @@ def ldexp(x: float, e: long) -> float {
                 r = r * if (step < 0) { 0.5 } else { 2.0 };
                 rest = rest - step;
             }
+        } else if (f + k >= 2047) {
+            // Field 2047 is inf/NaN, so the answer has left the range: an
+            // infinity carrying r's sign. This arm exists for the same reason as
+            // the check above, and for the case that one does not cover -- r can
+            // still be finite here while the answer is not, which is exactly
+            // ldexp(2.47, 1024): the big step leaves 1.11e308, the field is
+            // 2046, and adding k = 2 carries it to 2047. Shifted as bits that
+            // is a long overflow, which wraps and comes back as a NEGATIVE
+            // NaN. Only k > 0 reaches here, since f is at most 2046.
+            //
+            // Assigned rather than returned: this chain's arms all write `r` and
+            // the block's value is thrown away, which the compiler says so --
+            // "the result of '-' is not used" -- and it was right.
+            r = if (r < 0.0) { 0.0 - inf } else { inf };
         } else if (k != 0) {
             // k * 2^52 added to the bits is k added to the exponent FIELD, so
             // the sign comes off first (a negative pattern would put a 1 at the
@@ -579,6 +603,7 @@ def ldexp(x: float, e: long) -> float {
             r = bitsf(if (neg) { shifted + sign_bit() } else { shifted });
         };
         r
+        }
     }
 };
 
@@ -2456,7 +2481,14 @@ def fsum_kahan(a: [float]) -> float {
         s = t;
         i = i + 1;
     };
-    s + c
+    // An infinity in the running total has to be returned as it is. The
+    // compensation cannot rescue it and computing with it destroys it: on the
+    // way to inf the step computes (s - t) + x, which is (1e308 - inf) + 1e308,
+    // and inf - inf is a NaN -- so fsum_kahan([1e308, 1e308]) answered NaN where
+    // the answer is +inf, and so does every array whose total leaves the range.
+    // The exact sum of two 1e308 is 2e308, which is out of range, so +inf is the
+    // right answer and not a limitation of this method.
+    if (is_inf(s)) { s } else { s + c }
 };
 
 // The dot product of two equal-length arrays: `dot_asm`, the same
@@ -2578,18 +2610,55 @@ def fmean(a: [float]) -> float {
 // first, then the mean squared deviation from it. The one-pass form would need
 // a correction this module has no way to express (a compensated sum of squares
 // is a few more lines — fsum_kahan again). NaN for fewer than two elements.
+// Scaled before the two passes, unscaled after. The two-pass method takes the
+// MEAN first, and the mean of two equal 1e308 values is inf -- so
+// fvariance([1e308, 1e308]) answered inf where the answer is 0, and
+// fvariance([1e300, 1e300]) the same. A variance of two equal numbers is zero
+// however large they are, and a method that cannot see that is measuring the
+// wrong thing: it is the SIZE of the mean, not the spread, that overflowed.
+//
+// Scaling by a power of two is exact, cannot change a comparison or a
+// subtraction's sign, and cannot make a normal number subnormal (the scale is
+// chosen from the largest magnitude present, so everything lands within a
+// factor of two of 1). The variance is quadratic in the scale, so the factor
+// comes back squared through ldexp -- which is exact to the last bit or the
+// answer overflows, which is the honest answer for a spread that big.
+//
+// A NaN among the elements needs no case: `v > m` is false for it, so the scale
+// is set by the others, and the NaN reaches the mean and then the answer. An
+// infinity sets e = 1024, the scaled elements stay infinite, and inf - inf is
+// the NaN it should be.
 def fvariance(a: [float]) -> float {
     if (len(a) < 2) {
         nan
     } else {
-        let m = fmean(a);
-        let s = 0.0;
+        let n = len(a);
+        let big = 0.0;
         let i = 0;
-        while (i < len(a)) {
-            let d = a[i] - m;
+        while (i < n) {
+            let v = fabs(a[i]);
+            if (v > big) { big = v };
+            i = i + 1;
+        };
+        // big is 0 for an all-zero array and inf for one holding an infinity;
+        // both flow through the arithmetic below to the right answer (0, and a
+        // NaN from inf - inf) without a branch of their own.
+        let e = exp_field(big) - 1023;
+        let sc = ldexp(1.0, 0 - e);
+        let m = 0.0;
+        i = 0;
+        while (i < n) {
+            m = m + a[i] * sc;
+            i = i + 1;
+        };
+        m = m / n;
+        let s = 0.0;
+        i = 0;
+        while (i < n) {
+            let d = a[i] * sc - m;
             s = s + d * d;
             i = i + 1;
         };
-        s / (len(a) - 1)
+        ldexp(s / (n - 1), 2 * e)
     }
 };

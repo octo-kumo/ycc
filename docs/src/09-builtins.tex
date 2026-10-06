@@ -411,7 +411,17 @@ computed by squaring).
   magnitude divides both out first, and that is exact.
 \item[\ic{math.ldexp(x, e)}] $x\cdot 2^e$, exactly. Scaling by a power of two
   is exact while the result stays normal, so this is the one scaling that never
-  rounds.
+  rounds --- and it has to be checked where it stops being exact, which is when
+  the answer leaves the range. It used not to be, in two distinct ways, and both
+  gave a \ic{nan}: after the big steps the running value can already be an
+  infinity, and the exponent-field shift then \emph{adds} $e$ to a field that is
+  already \num{2047}, which overflows a signed \ty{long}, wraps, and comes back
+  with the sign bit set --- \ic{ldexp(1.0, 2046)} answered that where the answer
+  is $+\infty$. And the running value can stay finite while the answer does not,
+  which is \ic{ldexp(2.47, 1024)}: the big step leaves \num{1.11e308}, the field
+  is \num{2046}, and adding $e=2$ carries it to \num{2047}. Both now answer an
+  infinity carrying $x$'s sign, and the underflow end is checked for the same
+  reason.
 \item[\ic{math.frexp(x)}] $[\,\ty{fraction\ bits}, \;\ty{exponent}\,]$: the
   fraction's IEEE-754 pattern, a value in $[0.5, 1)$, and the exponent, such that
   %
@@ -642,7 +652,16 @@ computed by squaring).
   want the four-element state.
 \item[\ic{math.fsum(a)}, \ic{math.fsum\_kahan(a)}] The sum of a \ic{[float]},
   the second with Neumaier compensation, which keeps the error near one ulp of
-  the total however long the array is. \ic{fsum}, \ic{fdot}, \ic{fmin\_of},
+  the total however long the array is --- measured, \ic{fsum\_kahan} is within
+  one ulp of the exact rational sum on \num{21} of \num{22} adversarial arrays
+  where \ic{fsum}, which is the plain left-to-right sum, is \num{18} ulps out on
+  a \num{500}-element one. That is the trade, and the name is the trap:
+  \ic{fsum} is \emph{not} the accurate one, and
+  \ic{fsum([1e16, 1, -1e16])} is \ic{0} where the answer is \ic{1}. An infinity in
+  the running total is returned rather than computed with: on the way to one the
+  compensation evaluates \ic{(s - t) + x}, which is \ic{inf - inf}, so
+  \ic{fsum\_kahan([1e308, 1e308])} used to answer \ic{nan} where the answer is
+  \ic{+inf} --- the accurate sum unable to answer where the plain one could. \ic{fsum}, \ic{fdot}, \ic{fmin\_of},
   \ic{fmax\_of}, \ic{fscale} and \ic{faxpy} are machine code
   (\texttt{src/y/arch/math.s}), reached through \ic{native def}; each returns
   exactly what the equivalent Y loop would, which is what makes it a
@@ -656,6 +675,16 @@ computed by squaring).
 \item[\ic{math.fmean(a)}, \ic{math.fvariance(a)}] The arithmetic mean and the
   sample variance (dividing by $n-1$), the latter by the two-pass method; NaN
   for an empty array, and NaN for a variance of fewer than two elements.
+
+  \ic{fvariance} scales by a power of two before the two passes and multiplies
+  the answer back by its square, because the plain two-pass takes the mean
+  \emph{first} and the mean of two equal \ic{1e308} values is \ic{inf} --- so
+  \ic{fvariance([1e308, 1e308])} answered \ic{inf} for an array whose spread is
+  exactly zero. It is the SIZE of the mean that overflowed, not the spread, and
+  a method that cannot see that is measuring the wrong thing. The scale is a
+  power of two, so it is exact, changes no comparison or sign, and cannot push a
+  normal number into the subnormals. A spread that genuinely overflows is still
+  \ic{inf}: \ic{fvariance([1e308, -1e308])} is \num{4e616} and has no double.
 \end{description}
 
 \subsection{Options}
