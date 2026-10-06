@@ -42,6 +42,7 @@ from decimal import Decimal, getcontext
 getcontext().prec = 60
 import sys
 import os
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
@@ -251,8 +252,14 @@ def libm_ref(name, x):
 
 def main():
     fns = [f for f, _ in UNARY]
-    src = os.path.join(HERE, "sweep.y")
-    exe = os.path.join(HERE, "sweep")
+    # The generated driver and its binary go to a scratch DIRECTORY, not into
+    # test/math beside the sources. They used to be written here, which is how
+    # `git add -A` twice committed a compiled binary and its generated source
+    # into the tree: a harness that leaves artifacts where its sources live is a
+    # harness that gets committed.
+    tmp = tempfile.mkdtemp(prefix="y-sweep-")
+    src = os.path.join(tmp, "sweep.y")
+    exe = os.path.join(tmp, "sweep")
     with open(src, "w") as fh:
         fh.write(y_program(fns))
     r = subprocess.run([YCC, "-o", exe, src], capture_output=True, text=True)
