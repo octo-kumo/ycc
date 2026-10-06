@@ -132,6 +132,13 @@ ported, so they may use the whole native surface -- `&x`, `*p`,
   exactly. Owned buffers are `[cap][len][bytes][NUL]` (the value points
   at `len`, so to everything else it is an ordinary `str`). 10,000
   one-byte appends: 50 MB of heap and 22.7 ms → 23 KB and 0.18 ms.
+  The value-used form is `y_str_cat`, which allocates exactly
+  `len(s) + len(t)` — that is what makes the copy necessary (a string read
+  out of `s` before the append must not see the append, so the result
+  cannot be the old buffer), but it also makes a loop of them quadratic:
+  10,000 iterations building 120 KB allocate 1.2 GB. `lint.y` warns on the
+  shape (`isvused`/`dropnext` mirror `gen_block_as`'s `dropped`), and the
+  one-character fix is the `;`.
 - **Arrays and records are reference values**: a binding stores the address,
   never a copy. `let b = a`, passing, returning and storing all share, and
   `a[i] = v` / `s.f = v` are observable through every alias. Both
@@ -380,6 +387,48 @@ annotated site, `str`→`*T` and `none`-unification. There is no `null`:
 `none` is the empty option and postfix `x!` is `unwrap(x)`. Error messages
 strip rename's `$N` suffixes and carry line/col (LSP feeds on these).
 Later: generics, borrow rules, methods/traits if Y grows them.
+
+### What the checker keeps, for a caller that asks
+
+The checker computes the type of every expression, and it and the renamer both
+know where every binding was defined. All of it used to be dropped on the way out;
+these are the three doors back in, added for the language server
+(`src/tools/lsp/LSP.md` §9.2) and useful to anything else that has to answer a
+question about a program without re-deriving it.
+
+**`types.Binding` carries `line` and `col`** — the **name's** position, not the
+keyword's, because a diagnostic wants the keyword (`let` is where the reader looks)
+and a go-to-definition wants the name, and one pair of fields cannot be both. So
+the AST keeps the keyword's in `Decl.line/col` and the name's in `Decl.nline/ncol`
+(and the member key's in `Dot`/`DotAssign`), and `st_bind` records the latter.
+**−1 means the binding has no position in the source at all** — an intrinsic, or a
+name the program links against from another unit — and no consumer may read it as
+line 1. A parameter records the `Func`'s own position: the parser keeps no position
+per parameter, and the imprecision is one token's worth.
+
+**`types.type_index_on()` / `expr_type(line, col)`** — the type inferred for every
+EXPRESSION, keyed by position. **Off by default**, because `typeof_expr` is the
+checker's hottest loop and an ordinary compile has no use for the table; the flag
+costs it one predictable branch, and `bench/compile_ir.sh` says what that is worth
+(+0.09% on `ycc.y`). The table is shaped like `inferred_ret`'s — 1024 buckets of
+indices into parallel key/type arrays, keyed `line * 65536 + col` — because that
+one is read by `native.y` on every compile and the shape is therefore proven at
+this scale. `check_program` empties it, and only while the flag is on.
+
+`expr_type` returns **`tunk()` when nothing is indexed**, not `tnone`: `tnone` is
+a type a program can write, and a caller must be able to tell "the checker says
+none" from "there is nothing here", or it will print a type the checker never gave
+it. A member access also records at the KEY's position, since `a.b` parses with
+the `Dot` at the `.` and the field's name is where a cursor goes.
+
+**`rename.rename_program_x2(ast, …) -> { ast, defs }`** — the def site of every
+binding, `defs` being a `parser.NameIx` of `uniq -> line * 65536 + col`. A SECOND
+`NameIx` beside the `types.tc_ix` that already indexes bindings, not a new
+container. `rename_program_x` is a thin wrapper returning the `ast`, so the
+compiler's own callers are unchanged. The map holds the bindings of the unit passed
+in, since a program is checked one unit at a time. Read it with `rn_def_site` /
+`rn_def_line` / `rn_def_col` rather than unpacking the packing yourself.
+
 
 ## Newer language features
 
@@ -987,7 +1036,35 @@ names, then the program's. `fs.x` is resolved there too (`rn_qualified`):
 when `fs` is a module and no binding named `fs` is in scope, it is the
 name `fs.x`; a local `fs` keeps its field. find_dup qualifies the same
 way, so only files imported by path, which share the program's
-namespace (strip_ns rewrites `util.f` to `f`), can collide. A module's
+namespace (strip_ns rewrites `util.f` to `f`), can collide.
+
+**A path import flattens types as well as expressions.** `strip_ns` has two
+entry points and they used to disagree: `strip_ns` for nodes, and
+`strip_type` for the annotations on them (`Decl.typ`, `Func.ptypes`,
+`Func.ret`), reached from `strip_decl` and the `K.func` arm. A module
+imported by path contributes no name to the origin map's `mods` — its
+names are already flat — so `rn_stmt_mod` returns `""` for its
+statements and `rn_prepass_one` registers its type aliases under their
+BARE names. A reference written `m.T` arrives from the parser as a tname
+spelled `"m.T"` (`parse_type`, `m.T` branch), and before `strip_type`
+nothing rewrote it: `let p: m.Pair` was `unknown type 'm.Pair'` while
+`let p: Pair` compiled. Two spellings of one declaration in a language
+that documents a path import as flattened.
+
+So `strip_ns_name` drops the `m.` from `m.T` when `m` is in the import
+list, and `strip_type` applies it through every arm of the type union —
+`tname`, `tptr`, `tarr`, `tarrfix`, `topt`, `tmap`, `tparams`, `tunion`,
+`tfunc`, `trec` — so a nested annotation flattens at any depth. A
+PACKAGE-qualified name is left alone: a package is linked as a unit of
+its own, so `pkg_ns` keeps its qualification on purpose.
+
+Cost: one extra walk of every annotation the program writes, whether or
+not any of them is qualified. `bench/compile_ir.sh` on the fix:
++0.03% of the instructions `ycc.y` takes to compile itself, +0.05% at
+the most (std_struct.y), +0.01% at the least. `native/t216_strip_ns_types.y`
+checks every arm.
+
+A module's
 type aliases are scoped the same way: `rn_prepass_one` registers one as
 `m.T`, the names of the module's other top-level aliases in its type
 qualified too (`rn_qual_type`, from the list `rn_top` makes), and

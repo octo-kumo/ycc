@@ -80,46 +80,51 @@ static Yv *unescape(Yv *raw, int braces);
 long lit_end(Yv *src, long q, long *closed);
 
 // Scan a quoted literal at src[i] (a `"` or `'` quote): returns the
-// decoded text and the position just past the closing quote, the line and
-// column there, and `closed` (0 when the quote never came, which is fatal
-// below). Escapes: \n \t \r, \xHH, and `\<c>` drops the backslash (the Y
-// literal rules). The scan itself is lit_end's; this only counts lines and
-// columns and decodes, so the two copies of it (this and words_scan in
-// native.c) cannot drift from the one lit_end.
-Yv *lex_quoted(Yv *src, long i, long line, long col) {
+// decoded text and the position just past the closing quote. Escapes:
+// \n \t \r, \xHH, and `\<c>` drops the backslash (the Y literal rules).
+Yv *lex_quoted(Yv *src, long i, long line, long col, Yv *what) {
+    Yv *q = ys_slice(src, i, i + 1);
+    long n = yv_len(src);
+    i = i + 1;
     col = col + 1;
-    long start = i + 1;
-    long cl = 0;
-    long end = lit_end(src, i, &cl);
-    /* Walk lit_end's span to advance line/col and find whether an escape
-     * occurred; lit_end has already fixed where the literal ends. */
-    long raw_end = end - 1;
+    long start = i;
+    int open = 1;
+    int closed = 0;
     int hasesc = 0;
-    long j = start;
-    while (j < raw_end) {
-        Yv *ch = ys_slice(src, j, j + 1);
-        if (ys_eq_lit(ch, "\\")) { hasesc = 1; j = j + 2; col = col + 2; ; }
-        else {
-            if (ys_eq_lit(ch, "\n")) { line = line + 1; col = 1; ; }
-            else { col = col + 1; ; };
-            j = j + 1;
-        };
+    while (open) {
+        if (i < n) {
+            Yv *ch = ys_slice(src, i, i + 1);
+            if (ys_eq_lit(ch, "\\")) { hasesc = 1; i = i + 2; col = col + 2; ; }
+            else if (ys_eq(ch, q)) { open = 0; closed = 1; ; }
+            else {
+                if (ys_eq_lit(ch, "\n")) { line = line + 1; col = 1; ; }
+                else { col = col + 1; ; };
+                i = i + 1;
+                ;
+            };
+            ;
+        } else { open = 0; ; }
     };
-    if (cl == 0) {
-        /* ran off the end with the quote still open */
-        puts_(ys("error: unterminated string literal\n"));
-        exit_(1);
+    if (closed) {
+        ;
+    } else {
+        /* ran off the end with the quote still open: said in `err` below */
         ;
     }
+    Yv *raw = ys_slice(src, start, i);
+    i = i + 1;  // skip closing quote
     col = col + 1;
-    Yv *raw = ys_slice(src, start, raw_end);
     Yv *buf = raw;
     if (hasesc) {
         buf = unescape(raw, 0);
         ;
     }
-    return yr(5, "text", buf, "end", yv_long(end), "line", yv_long(line),
-              "col", yv_long(col), "closed", yv_long(1));
+    Yv *err = ys("");
+    if (!closed) {
+        err = ys_cat(ys("unterminated "), what);
+        ;
+    }
+    return yr(5, "text", buf, "end", yv_long(i), "line", yv_long(line), "col", yv_long(col), "err", err);
 }
 
 /* A literal's text from its raw source: \n \t \r, \xHH, and `\<c>` drops
@@ -188,8 +193,10 @@ static int wordbyte(long c) {
  * closed -- the two cases this used to report as one, which a caller that
  * only wanted the end did not care about and the meta pass does (an
  * unterminated string is its own diagnostic, not a scan that runs to EOF).
- * THE one literal scanner in the tree: lex_quoted above and words_scan in
- * native.c both call it. */
+ * THE one literal scanner in the tree: words_scan in native.c and the meta
+ * pass both call it. lex_quoted does NOT: it counts line and column as it
+ * scans and reports an unterminated literal in `err` (so the fault lands on
+ * the offending token), which is why it carries its own loop above. */
 long lit_end(Yv *src, long q, long *closed) {
     long n = yv_len(src);
     long qc = ys_byte_at(src, q);
@@ -748,19 +755,18 @@ Yv *tokenize(Yv *src) {
                 // as [byte], spelled like a Python bytes literal.
                 long bline = line;
                 Yv *qch = ys_slice(src, i, i + 1);
-                if (ys_eq_lit(qch, "\"")) {
-                    Yv *bq = lex_quoted(src, i, line, col);
+                if (ys_eq_lit(qch, "\"") || ys_eq_lit(qch, "'")) {
+                    Yv *bq = lex_quoted(src, i, line, col, ys("byte string"));
                     i = yv_l(yr_get(bq, "end"));
                     line = yv_l(yr_get(bq, "line"));
                     col = yv_l(yr_get(bq, "col"));
-                    toks = ya_push(toks, mktok(ys("bstr"), yr_get(bq, "text"), bline, startcol));
-                    ;
-                } else if (ys_eq_lit(qch, "'")) {
-                    Yv *bq2 = lex_quoted(src, i, line, col);
-                    i = yv_l(yr_get(bq2, "end"));
-                    line = yv_l(yr_get(bq2, "line"));
-                    col = yv_l(yr_get(bq2, "col"));
-                    toks = ya_push(toks, mktok(ys("bstr"), yr_get(bq2, "text"), bline, startcol));
+                    if (!ys_eq_lit(yr_get(bq, "err"), "")) {
+                        toks = ya_push(toks, mktok(ys("ferr"), yr_get(bq, "err"), bline, startcol));
+                        ;
+                    } else {
+                        toks = ya_push(toks, mktok(ys("bstr"), yr_get(bq, "text"), bline, startcol));
+                        ;
+                    };
                     ;
                 } else {
                     toks = ya_push(toks, mktok(ty, word, line, startcol));
@@ -770,11 +776,17 @@ Yv *tokenize(Yv *src) {
             } else if (ys_eq_lit(word, "c") && ys_eq_lit(ys_slice(src, i, i + 1), "'")) {
                 // c'a' -- a character literal: one byte, typed `byte`.
                 long cline = line;
-                Yv *cq = lex_quoted(src, i, line, col);
+                Yv *cq = lex_quoted(src, i, line, col, ys("character literal"));
                 i = yv_l(yr_get(cq, "end"));
                 line = yv_l(yr_get(cq, "line"));
                 col = yv_l(yr_get(cq, "col"));
-                toks = ya_push(toks, mktok(ys("char"), yr_get(cq, "text"), cline, startcol));
+                if (!ys_eq_lit(yr_get(cq, "err"), "")) {
+                    toks = ya_push(toks, mktok(ys("ferr"), yr_get(cq, "err"), cline, startcol));
+                    ;
+                } else {
+                    toks = ya_push(toks, mktok(ys("char"), yr_get(cq, "text"), cline, startcol));
+                    ;
+                }
                 ;
             } else if (ys_eq_lit(word, "f") &&
                        ys_eq_lit(ys_slice(src, i, i + 1), "\"")) {
@@ -795,11 +807,17 @@ Yv *tokenize(Yv *src) {
             // slash arms only ever see real comment openers or operators.
             long startline = line;
             long startcol = col;
-            Yv *q = lex_quoted(src, i, line, col);
+            Yv *q = lex_quoted(src, i, line, col, ys("string literal"));
             i = yv_l(yr_get(q, "end"));
             line = yv_l(yr_get(q, "line"));
             col = yv_l(yr_get(q, "col"));
-            toks = ya_push(toks, mktok(ys("str"), yr_get(q, "text"), startline, startcol));
+            if (!ys_eq_lit(yr_get(q, "err"), "")) {
+                toks = ya_push(toks, mktok(ys("ferr"), yr_get(q, "err"), startline, startcol));
+                ;
+            } else {
+                toks = ya_push(toks, mktok(ys("str"), yr_get(q, "text"), startline, startcol));
+                ;
+            }
             ;
         } else if (c == slashb()) {
             // Slash: comment opener, block comment, or division operator.
@@ -884,6 +902,35 @@ Yv *tokenize(Yv *src) {
                 toks = ya_push(toks, mktok(ys("op"), op, line, col));
                 i = i + yv_len(op);
                 col = col + yv_len(op);
+                ;
+            } else if (c == 0x27) {
+                /* A bare apostrophe: Y spells a character literal c'a' and a
+                 * byte string b'a', so no token starts with one, and every
+                 * apostrophe reaching here is a mistake. Said here, where it
+                 * is, naming the spelling -- and as ONE token over the run
+                 * the reader wrote, because 'a' is one mistake: as two
+                 * tokens the closing quote became a name the parser charged
+                 * a message to (`expected ')', got 'q'`), and a second pair
+                 * in a file made the next b or c word take the byte-string
+                 * arm and scan to end of file, the position-less fatal
+                 * "unterminated string literal". lex_quoted walks the run and
+                 * says whether it closed; an unclosed one is a second fault
+                 * on top of this one, and this is the message that helps. */
+                long aline = line;
+                long acol = col;
+                Yv *aq = lex_quoted(src, i, line, col, ys("character literal"));
+                i = yv_l(yr_get(aq, "end"));
+                line = yv_l(yr_get(aq, "line"));
+                col = yv_l(yr_get(aq, "col"));
+                Yv *txt = yr_get(aq, "text");
+                Yv *t1 = ys_cat(ys("a character literal is spelled c'"), txt);
+                Yv *t2 = ys_cat(t1, ys("' (a byte string b'"));
+                Yv *msg = ys_cat(ys_cat(t2, txt), ys("'); a bare ' is not one"));
+                if (!ys_eq_lit(yr_get(aq, "err"), "")) {
+                    msg = ys_cat(msg, ys(" (and the quote is never closed)"));
+                    ;
+                }
+                toks = ya_push(toks, mktok(ys("ferr"), msg, aline, acol));
                 ;
             } else if (issingleop(c)) {
                 toks = ya_push(toks, mktok(ys("op"), ys_slice(src, i, i + 1), line, col));

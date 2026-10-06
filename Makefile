@@ -261,7 +261,7 @@ rebless: cycc
 clean:
 	rm -f $(CYC_SRCS:src/c/%.c=src/c/%.o) cycc cycc-asan ycc _ycc _ycc0 _ycc0.pack ycc.pack a.out
 	rm -f ynew _ynew1 _ynew2 _ynew3 _ynewp _ynewp.pack _rb1 _rb2 _rbp _rbp.pack
-	rm -rf _check
+	rm -rf _check docs/build
 
 # Memcheck the C copy on a real input. NOTE: no --leak-check=full: the Y
 # value model (src/c/yv.c) never frees, so a leak gate could never be clean
@@ -271,4 +271,50 @@ clean:
 valgrind: cycc
 	valgrind --error-exitcode=1 --quiet ./cycc -o /tmp/cycc-vg test/y/examples/helloworld.y
 
-.PHONY: all clean valgrind test test-fast test-compile asan test-asan asm-check ycc yserve lsp-ext lsp-vsix lsp-e2e check port-check corpus-diff bench bench-ir rebless
+# ── The reference manual (docs/src/), typeset with tectonic ────────────────
+# `make docs` -> docs/build/manual.pdf.
+#
+# Tectonic takes exactly ONE input, and docs/Tectonic.toml names three:
+# _preamble, index, _postamble. Those three entries say what the document is --
+# one file, in that order, with index.tex \input-ing the ten chapters -- so the
+# recipe does the concatenation itself and pipes the result in on stdin, which
+# is `tectonic -`. That is why there is no _all.tex driver in docs/src: this
+# recipe is the driver, and the document's structure stays in the config where
+# it belongs. Run from docs/src so the chapters' \input paths resolve.
+#
+# The recipe FAILS on an error and on a warning, both counted out of the log
+# tectonic keeps. A warning here is a line running into the margin or one
+# stretched to nothing; the manual last typeset with none, and a target that
+# only printed them is how 205 sat unnoticed for a while. The warning count is
+# DISTINCT: tectonic runs XeTeX three times, so the same one appears in the log
+# once but three times on stderr, and the log is what is read here.
+#
+# Not part of `make test`: it needs tectonic and, on a first run, the bundle in
+# docs/Tectonic.toml fetched over the network. Nothing else in the build does,
+# and the compiler must never depend on a TeX distribution.
+DOC_OUT = docs/build
+DOC_PDF = $(DOC_OUT)/manual.pdf
+DOC_LOG = $(DOC_OUT)/manual.log
+DOC_SRC = $(wildcard docs/src/*.tex)
+
+docs: $(DOC_PDF)
+
+$(DOC_PDF): $(DOC_SRC) docs/Tectonic.toml
+	@command -v tectonic >/dev/null 2>&1 || { echo "make docs: no tectonic, skipped"; exit 0; }
+	@mkdir -p $(DOC_OUT)
+	cd docs/src && (cat _preamble.tex index.tex _postamble.tex \
+	    | tectonic --outdir $(CURDIR)/$(DOC_OUT) --keep-logs -) \
+	  || { echo "make docs: tectonic failed; its own diagnostics are above"; exit 1; }
+	@mv $(DOC_OUT)/texput.pdf $(DOC_PDF)
+	@mv $(DOC_OUT)/texput.log $(DOC_LOG)
+	@if grep -q '^! ' $(DOC_LOG); then \
+	    echo "make docs: $$(grep -c '^! ' $(DOC_LOG)) LaTeX error(s), see $(DOC_LOG)"; \
+	    exit 1; \
+	fi
+	@if grep -qE '^(Overfull|Underfull) \\hbox' $(DOC_LOG); then \
+	    echo "make docs: $$(grep -cE '^(Overfull|Underfull) \\hbox' $(DOC_LOG)) over/underfull \\hbox, see $(DOC_LOG)"; \
+	    exit 1; \
+	fi
+	@echo "manual: $(DOC_PDF) ($$(stat -c%s $(DOC_PDF)) bytes, $$(grep -o '([0-9]* pages' $(DOC_LOG) | tail -1 | tr -d '()' | cut -d' ' -f1) pages), no errors and no warnings"
+
+.PHONY: all clean valgrind test test-fast test-compile asan test-asan asm-check ycc yserve lsp-ext lsp-vsix lsp-e2e check port-check corpus-diff bench bench-ir rebless docs

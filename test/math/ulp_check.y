@@ -85,6 +85,18 @@ def apply1(name: str, x: float) -> float {
     else if (name == "acos") { math.acos(x) }
     // a predicate, so the answer is a float carrying 1.0 or 0.0
     else if (name == "is_signed_zero") { if (math.is_signed_zero(x)) { 1.0 } else { 0.0 } }
+    // The five below had NO cases at all until the table grew to carry them,
+    // and fmin/fmax are why that mattered: their zeros' signs were decided by
+    // whichever operand came last, so fmax(0.0, -0.0) answered -0.0 and
+    // 1.0/fmax(0.0, -0.0) came out -inf. C99 allows either sign from fmin and
+    // fmax on a +-0 pair; IEEE 754-2019's minNum/maxNum does not, and neither
+    // does this platform's libm, which is the reference this table is written
+    // against. The pinned cases are the four orderings.
+    else if (name == "is_nan") { if (math.is_nan(x)) { 1.0 } else { 0.0 } }
+    else if (name == "is_inf") { if (math.is_inf(x)) { 1.0 } else { 0.0 } }
+    else if (name == "is_finite") { if (math.is_finite(x)) { 1.0 } else { 0.0 } }
+    else if (name == "fabs") { math.fabs(x) }
+    else if (name == "fsign") { math.fsign(x) }
     else { math.nan }
 };
 
@@ -93,28 +105,77 @@ def apply2(name: str, x: float, y: float) -> float {
     else if (name == "nextafter") { math.nextafter(x, y) }
     else if (name == "pow") { math.pow(x, y) }
     else if (name == "atan2") { math.atan2(x, y) }
+    else if (name == "fmin") { math.fmin(x, y) }
+    else if (name == "fmax") { math.fmax(x, y) }
     else { math.nan }
+};
+
+// lerp is the one function here with three arguments, so it gets its own
+// dispatcher rather than a third slot in apply2 -- the table's lines are
+// positional and a four-argument apply would have made every reader wonder
+// which of the two middle fields is the weight.
+def apply3(name: str, x: float, y: float, t: float) -> float {
+    if (name == "lerp") { math.lerp(x, y, t) }
+    else { math.nan }
+};
+
+def is_three_arg(name: str) -> bool {
+    name == "lerp"
 };
 
 def is_two_arg(name: str) -> bool {
     name == "hypot" || name == "nextafter" || name == "pow" || name == "atan2"
+        || name == "fmin" || name == "fmax"
 };
 
-// The tolerance, and why it is not one.
+// The tolerance. One.
 //
-// Every function here is within ONE ulp of the edge cases this table pins down
-// -- the overflows, the flushes, the poles, the signed zeros, both sides of 1
-// -- and of more than 99% of its 1500-case spread. Six cases out of that spread
-// sit at two or three, and all six are the same two reasons: an answer that is a
-// sum of two accurately computed terms (cosh, asin, tanh), or the logarithm's
-// own error multiplied by an exponent (pow). Those would need either a fused
-// multiply-add or a fully compensated Horner -- both of which cost four times
-// the arithmetic in every kernel to move a handful of cases -- so they are
-// measured and bounded instead.
+// It was three, over four cases, and the harness's own header claimed one while
+// the code enforced three -- which is the worst kind of test: a comment that
+// says something the code does not check. All four are closed now, and what
+// closed them is the same lesson each time: the question is never WHICH line
+// rounds, it is AT WHAT SIZE.
 //
-// The bound is a measured one, not a wish: the worst gap and the function it
-// came from are printed, so anything past this is a regression and says so.
-let tolerance: long = 3;
+//   * cosh summed two exponentials. For a >= 0.5, e^-a is 1.2% of the answer,
+//     so its own rounding is a hundredth of an ulp, while a second exp() call
+//     brings a whole kernel's error along and exp is a ulp out at some
+//     arguments. One exponential and its reciprocal is enough.
+//
+//   * pow's logarithm formed z*(2.0 + w*P), whose brackets round AT THE SIZE OF
+//     2.0 -- a whole ulp of the logarithm, which pow then multiplies by the
+//     exponent. Written as a two_sum of 2*z and (z*w)*P it is 2.3 times more
+//     accurate, and both pow cases went with it.
+//
+//   * acos was `pi/2 - asin(x)`, and near x = 1 that answer is 3e-8 against a
+//     pi/2 -- eight digits cancel before the answer exists, and
+//     acos(1 - 4e-17) was FORTY ulps out. Its large half now takes the
+//     half-angle quantity asin's kernel already computes, which is also FASTER
+//     (77.3 ns/call against 93.3, and 1255 Ir against 1975) because it skips
+//     asin's sign handling and the subtraction.
+//
+//   * asin used to reach atan, whose own ulp lands inside the answer whole, and
+//     then needed `two = 2*asin(s)` to be a double before the pi/2 subtraction,
+//     whose half-ulp is a whole ulp of the answer. Its own 24-term kernel on the
+//     Taylor values C(2k,k)/(4^k(2k+1)) -- what sinh_k is too -- plus the
+//     square root's own residual put back, plus `two` carried in two parts
+//     THROUGH the subtraction, brings it inside. An earlier version of that
+//     measurement said it could not be done, and it could: the low part had
+//     been added after the 2-sum instead of folded into a compensated
+//     three-term subtraction.
+//
+//   * and the table had nine of this module's functions missing from it entirely
+//     -- fmin, fmax, fabs, fsign, lerp and the three predicates, because it only
+//     ever carried the functions with rounding in them. fmin and fmax were the
+//     ones that mattered: the tie between the two zeros went to whichever
+//     operand came LAST, so fmax(0.0, -0.0) answered -0.0 and
+//     1.0/fmax(0.0, -0.0) came out -inf. C99 allows either sign there; minNum
+//     and maxNum, this platform's libm, and any caller dividing by the answer do
+//     not. The tie now goes by sign, and all four orderings are pinned.
+//
+// One is the number C promises and the number the manual quotes, so one is what
+// the gate is: a kernel that drifts past it fails here, and the printed worst
+// gap says by how much and from which function.
+let tolerance: long = 1;
 
 def main() -> long {
     let path = "";
@@ -141,7 +202,12 @@ def main() -> long {
             let a = math.bitsf(f[1].tonum());
             let want: long = 0;
             let got: float = math.nan;
-            if (is_two_arg(name)) {
+            if (is_three_arg(name)) {
+                let b = math.bitsf(f[2].tonum());
+                let t = math.bitsf(f[3].tonum());
+                want = f[4].tonum();
+                got = apply3(name, a, b, t);
+            } else if (is_two_arg(name)) {
                 let b = math.bitsf(f[2].tonum());
                 want = f[3].tonum();
                 got = apply2(name, a, b);

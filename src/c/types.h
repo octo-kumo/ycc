@@ -30,6 +30,9 @@ Yv *t_mutex(void);                   /* the type `mutex` */
 Yv *t_sem(void);                     /* the type `sem` */
 Yv *tcanon(Yv *t);            /* a type's canonical form */
 Yv *tsig(Yv *t);              /* its signature: recursive aliases by name */
+Yv *expr_type(long line, long col);
+void type_index_on(void);
+void type_index_off(void);
 Yv *inferred_ret(long line, long col); /* typeof_def's inferred return type */
 Yv *str_sorted(Yv *xs);       /* [str] sorted */
 Yv *rec_names(Yv *fs);        /* a record's field names, sorted */

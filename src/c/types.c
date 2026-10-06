@@ -74,7 +74,7 @@ static int t_poisoned(Yv *t);
 static int t_poisoned_go(Yv *t, long d);
 static int is_hash_key(Yv *t);
 static Yv *lookup(Yv *bindings, Yv *name);
-static Yv *st_bind(Yv *st, Yv *name, Yv *typ, Yv *kind);
+static Yv *st_bind(Yv *st, Yv *name, Yv *typ, Yv *kind, Yv *line, Yv *col);
 static Yv *st_errors(Yv *st, Yv *errs);
 static Yv *st_self(Yv *st, Yv *selfv);
 static Yv *st_ret(Yv *st, Yv *ret);
@@ -132,7 +132,9 @@ static int field_opt(Yv *t, Yv *key);
 static Yv *typeof_lit(Yv *st, Yv *node, Yv *target);
 static Yv *typeof_expr_go(Yv *st, Yv *node);
 static Yv *typeof_decl(Yv *st, Yv *node);
-static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col, int isnat);
+static Yv *ret_inferred_hint(Yv *rt);
+static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col, Yv *nline, Yv *ncol,
+                       int isnat);
 static long ret_note(Yv *rl, Yv *typ, long line, long col);
 static long set_inferred_ret(Yv *func, Yv *ret);
 static Yv *st_fdepth(Yv *st, long d);
@@ -1362,10 +1364,11 @@ static Yv *lookup(Yv *bindings, Yv *name) {
     }
 }
 
-static Yv *st_bind(Yv *st, Yv *name, Yv *typ, Yv *kind) {
+static Yv *st_bind(Yv *st, Yv *name, Yv *typ, Yv *kind, Yv *line, Yv *col) {
     Yv *bindings = ya_push(yr_get(st, "bindings"),
-                           yr(4, "name", name, "typ", typ, "kind", kind,
-                              "fdepth", yv_long(yv_l(yr_get(st, "fdepth")))));
+                           yr(6, "name", name, "typ", typ, "kind", kind,
+                              "fdepth", yv_long(yv_l(yr_get(st, "fdepth"))),
+                              "line", line, "col", col));
     if (yv_len(bindings) > 256) {
         if (tc_ixn == 0) {
             tc_ix = nameix_new(1024);
@@ -1972,6 +1975,135 @@ static int arr_lit_adopts_go(Yv *got, Yv *want, Yv *n) {
 
 // The type of an expression (typeof_expr_go), a recursive alias unfolded
 // (unfold): the checker looks into it.
+/* ── the expression type index (LSP.md 9.2 A2) ─────────────────────────────
+ *
+ * The type the checker inferred for every EXPRESSION, keyed by position, for a
+ * caller that has to show one: the language server's hover, and the record-field
+ * lookup behind completion after a `.`. Both need exactly what typeof_expr
+ * computed and then dropped, so it is kept -- behind a flag, because the checker
+ * is the compiler's hottest loop and a normal compile has no use for it.
+ *
+ * The shape is inferred_ret's, deliberately: 1024 buckets of indices into
+ * parallel key/type arrays, keyed `line * 65536 + col`. That table is read by
+ * native.c on every compile, so the shape and the packing are proven at this
+ * scale in this codebase.
+ *
+ * OFF by default. A file-scope `int` cannot be hoisted, so this costs the hot
+ * loop one predictable branch that is never taken in a real compile;
+ * bench/compile_ir.sh is what says what that is worth. */
+static int tc_index;
+static Yv *tci_keys;
+static Yv *tci_typs;
+static Yv *tci_bkts;
+
+static void tci_reset(void) {
+    tci_keys = yav(0);
+    tci_typs = yav(0);
+    Yv *bkts = yav(0);
+    long i = 0;
+    while (i < 1024) {
+        bkts = ya_push(bkts, yav(0));
+        i = i + 1;
+    }
+    tci_bkts = bkts;
+}
+
+/* Turn it on for one check_program, and start a fresh table. check_program resets
+ * it again on the way out, so two calls cannot see each other's types. */
+void type_index_on(void) {
+    tc_index = 1;
+    tci_reset();
+}
+
+void type_index_off(void) { tc_index = 0; }
+
+/* One entry, unless the key is already there -- the FIRST type wins, as above. */
+static void tci_note_key(long key, Yv *t) {
+    Yv *bkt = ya_get(tci_bkts, key % 1024);
+    int seen = 0;
+    long i = 0;
+    while (i < yv_len(bkt) && !seen) {
+        if (yv_l(ya_get(tci_keys, yv_l(ya_get(bkt, i)))) == key) {
+            seen = 1;
+        }
+        i = i + 1;
+    }
+    if (!seen) {
+        tci_keys = ya_push(tci_keys, yv_long(key));
+        tci_typs = ya_push(tci_typs, t);
+        ya_push(bkt, yv_long(yv_len(tci_keys) - 1));
+    }
+}
+
+/* Only ever called when tc_index is set: the flag is tested at the call site in
+ * typeof_expr rather than here, so the off path costs a load and a branch and
+ * not a call. Measured: testing it inside made the call itself the cost, and the
+ * call is per EXPRESSION, which is the checker's hottest path. */
+static void tci_note(Yv *node, Yv *t) {
+    if (tci_bkts != NULL) {
+        Yv *ln = yr_get(node, "line");
+        Yv *co = yr_get(node, "col");
+        if (yv_l(ln) > 0 && yv_l(co) >= 0) {
+            long key = yv_l(ln) * 65536 + yv_l(co);
+            Yv *bkt = ya_get(tci_bkts, key % 1024);
+            /* FIRST wins. An expression is checked more than once when it is a
+             * function literal's value (the checker infers, then re-checks with
+             * the return type known), and the first type is the one the source
+             * says rather than the one the second pass settled on. */
+            int seen = 0;
+            long i = 0;
+            while (i < yv_len(bkt) && !seen) {
+                if (yv_l(ya_get(tci_keys, yv_l(ya_get(bkt, i)))) == key) {
+                    seen = 1;
+                }
+                i = i + 1;
+            }
+            if (!seen) {
+                tci_keys = ya_push(tci_keys, yv_long(key));
+                tci_typs = ya_push(tci_typs, t);
+                ya_push(bkt, yv_long(yv_len(tci_keys) - 1));
+            }
+        }
+        /* A member access records its type at the KEY's position too.
+         *
+         * `a.b` parses with the Dot at the `.`, so the table holds the FIELD's
+         * type under the dot and nothing under the field's own name -- which is
+         * where an editor puts the cursor and what go-to-highlight asks about. The
+         * parser keeps the key's position for exactly this (Decl/Dot `nline`/
+         * `ncol`, 9.2 A5), so it is recorded as well.
+         *
+         * Only when the index is on, so a real compile pays nothing: this is
+         * inside tci_note, which typeof_expr does not even call. */
+        long nk = yv_l(yr_get(node, "k"));
+        if ((nk == K_dot || nk == K_dotassign) && yv_l(yr_get(node, "nline")) > 0 &&
+            yv_l(yr_get(node, "ncol")) > 0) {
+            tci_note_key(yv_l(yr_get(node, "nline")) * 65536 + yv_l(yr_get(node, "ncol")), t);
+        }
+    }
+}
+
+
+/* The type inferred for the expression at (line, col), or tunk() when nothing was
+ * indexed there. tunk rather than tnone: tnone is a real type a program can write,
+ * and a consumer must be able to tell "the checker says none" from "there is
+ * nothing here", or it will print a type it did not get from the checker. */
+Yv *expr_type(long line, long col) {
+    Yv *found = yr(1, "k", yv_long(K_tunk));
+    if (tci_bkts != NULL) {
+        long key = line * 65536 + col;
+        Yv *bkt = ya_get(tci_bkts, key % 1024);
+        long i = 0;
+        while (i < yv_len(bkt)) {
+            if (yv_l(ya_get(tci_keys, yv_l(ya_get(bkt, i)))) == key) {
+                found = ya_get(tci_typs, yv_l(ya_get(bkt, i)));
+                break;
+            }
+            i = i + 1;
+        }
+    }
+    return found;
+}
+
 static Yv *typeof_expr(Yv *st, Yv *node) {
     yv_nest++;
     if (yv_nest > MAX_NEST) {
@@ -1981,8 +2113,18 @@ static Yv *typeof_expr(Yv *st, Yv *node) {
     yv_nest--;
     Yv *t = yr_get(r, "typ");
     if (yv_l(yr_get(t, "k")) == K_tref) {
-        return yr(2, "typ", unfold(t), "st", yr_get(r, "st"));
+        Yv *out = yr(2, "typ", unfold(t), "st", yr_get(r, "st"));
+        /* the UNWRAPPED type: a tref is the checker's own recursive-alias
+         * placeholder, and a hover that printed one would be showing the
+         * implementation rather than the answer. */
+        if (tc_index) {
+            tci_note(node, yr_get(out, "typ"));
+        }
+        return out;
     } else {
+        if (tc_index) {
+            tci_note(node, t);
+        }
         return r;
     }
 }
@@ -2409,7 +2551,7 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                       yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
             ;
         }
-        st = st_bind(st, yr_get(node, "name"), elt, ys("local"));
+        st = st_bind(st, yr_get(node, "name"), elt, ys("local"), yr_get(node, "line"), yr_get(node, "col") );
         long eloops = yv_l(yr_get(st, "loops"));
         long efd = yv_l(yr_get(st, "loop_fd"));
         st = st_loop(st, eloops + 1, yv_l(yr_get(st, "fdepth")));
@@ -2427,7 +2569,7 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                          yr(1, "k", yv_long(K_tlong)), ys("'for' range end"),
                          yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
         st = st_bind(st, yr_get(node, "name"), yr(1, "k", yv_long(K_tlong)),
-                     ys("local"));
+                     ys("local"), yr_get(node, "line"), yr_get(node, "col") );
         long rloops = yv_l(yr_get(st, "loops"));
         long rfd = yv_l(yr_get(st, "loop_fd"));
         st = st_loop(st, rloops + 1, yv_l(yr_get(st, "fdepth")));
@@ -2725,7 +2867,8 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
         // like a named def would be, and give the expression its tfunc type;
         // the emitter closure-converts it with a generated label.
         Yv *ra = typeof_def(st, ys(""), node, yv_l(yr_get(node, "line")),
-                            yv_l(yr_get(node, "col")), 0);
+                            yv_l(yr_get(node, "col")), yr_get(node, "line"),
+                            yr_get(node, "col"), 0);
         return yr(2, "typ", yr_get(ra, "typ"), "st", yr_get(ra, "st"));
     } else if (yv_l(k) == K_arrrep) {
         // [v; n]: n stack slots filled with v (the native array form)
@@ -2849,6 +2992,20 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                 // reports at its own site.
                 Yv *ri = typeof_expr(st, yr_get(node, "idx"));
                 st = yr_get(ri, "st");
+                return yr(2, "typ", t_unk(), "st", st);
+            } else if (yv_l(yr_get(yr_get(br, "typ"), "k")) == K_tvoid &&
+                       (yv_l(yr_get(barr, "k")) == K_kw_if ||
+                        yv_l(yr_get(barr, "k")) == K_block)) {
+                /* An `if` or a block in expression position, with no value:
+                 * `if (c) { A }["k"]` indexes the `if`, and A's arms are
+                 * statements (or disagree, so the `if` is void), so there is
+                 * nothing there to index. As the ordinary message it names
+                 * neither the base nor the fix, and nothing near it in the
+                 * source shows an index of an `if` — the `[` reads as a
+                 * literal. Name the base and the `;`. */
+                Yv *m1 = ys_cat(ys("cannot index this '"), ktag(yv_l(yr_get(barr, "k"))));
+                Yv *m2 = ys_cat(m1, ys("', which has no value: add a ';' after it to make it a statement"));
+                st = fail(st, m2, yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
                 return yr(2, "typ", t_unk(), "st", st);
             } else {
                 st = fail(st,
@@ -5263,13 +5420,13 @@ static Yv *typeof_decl(Yv *st, Yv *node) {
     if (ys_eq_lit(yr_get(node, "kind"), "def")) {
         // named function: full check (signature + body)
         return typeof_def(st, yr_get(node, "name"), yr_get(node, "v"),
-                          yv_l(yr_get(node, "line")),
-                          yv_l(yr_get(node, "col")), 0);
+                          yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")),
+                          yr_get(node, "nline"), yr_get(node, "ncol"), 0);
     } else if (ys_eq_lit(yr_get(node, "kind"), "native")) {
         // native def: the signature, and three rules of its own
         return typeof_def(st, yr_get(node, "name"), yr_get(node, "v"),
-                          yv_l(yr_get(node, "line")),
-                          yv_l(yr_get(node, "col")), 1);
+                          yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")),
+                          yr_get(node, "nline"), yr_get(node, "ncol"), 1);
     } else {
         // let/const. A literal def on the right names a function WITHOUT
         // going through typeof_expr (a bare func value is only legal bound).
@@ -5281,8 +5438,8 @@ static Yv *typeof_decl(Yv *st, Yv *node) {
         }
         if (yv_l(yr_get(yr_get(node, "v"), "k")) == K_func) {
             Yv *fr = typeof_def(st, yr_get(node, "name"), yr_get(node, "v"),
-                                yv_l(yr_get(node, "line")),
-                                yv_l(yr_get(node, "col")), 0);
+                                yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")),
+                                yr_get(node, "nline"), yr_get(node, "ncol"), 0);
             st = yr_get(fr, "st");
             if (yv_l(yr_get(yr_get(node, "typ"), "k")) != K_tnone) {
                 st = expect_type(st, yr_get(fr, "typ"), yr_get(node, "typ"),
@@ -5294,13 +5451,13 @@ static Yv *typeof_decl(Yv *st, Yv *node) {
                 ;
             }
             st = st_bind(st, yr_get(node, "name"), yr_get(fr, "typ"),
-                         ys("func"));
+                         ys("func"), yr_get(node, "nline"), yr_get(node, "ncol") );
             return yr(2, "typ", yr_get(fr, "typ"), "st", st);
         } else if (yv_l(yr_get(yr_get(node, "v"), "k")) == K_arrrep) {
             Yv *r = typeof_expr(st, yr_get(node, "v"));
             st = yr_get(r, "st");
             if (yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tunk) {
-                st = st_bind(st, yr_get(node, "name"), t_unk(), bk);
+                st = st_bind(st, yr_get(node, "name"), t_unk(), bk, yr_get(node, "nline"), yr_get(node, "ncol") );
                 return yr(2, "typ", t_unk(), "st", st);
             } else {
                 Yv *at = yr_get(r, "typ");
@@ -5321,7 +5478,7 @@ static Yv *typeof_decl(Yv *st, Yv *node) {
                     at = yr_get(node, "typ");
                     ;
                 }
-                st = st_bind(st, yr_get(node, "name"), at, bk);
+                st = st_bind(st, yr_get(node, "name"), at, bk, yr_get(node, "nline"), yr_get(node, "ncol") );
                 return yr(2, "typ", at, "st", st);
             }
         } else {
@@ -5412,7 +5569,7 @@ static Yv *typeof_decl(Yv *st, Yv *node) {
                           yv_l(yr_get(node, "col")));
                 ;
             }
-            st = st_bind(st, yr_get(node, "name"), t, bk);
+            st = st_bind(st, yr_get(node, "name"), t, bk, yr_get(node, "nline"), yr_get(node, "ncol") );
             return yr(2, "typ", t, "st", st);
         }
     }
@@ -5484,10 +5641,27 @@ Yv *inferred_ret(long line, long col) {
 // Check a func value bound to `name` (def decl, let-bound anonymous def, or
 // an anonymous literal). Returns { typ, st }: `typ` is the def's tfunc (with
 // an inferred return filled in), and `name` ends up bound as kind "func".
+/* The tail of the inferred-return diagnostic, for a `return` with no value.
+ * The type the message quotes is one the reader never wrote -- it comes
+ * from the body's tail -- so this case says what does resolve it: one word
+ * on the def's head makes the inferred type a written one, and the void
+ * return then is what the def says it does. Every other disagreement is an
+ * ordinary type error and closes the parenthesis as before. */
+static Yv *ret_inferred_hint(Yv *rt) {
+    if (yv_l(yr_get(rt, "k")) == K_tvoid) {
+        return ys("; write '-> void' on the def to return nothing)");
+    }
+    return ys(")");
+}
+
 /* `isnat` is a `native def`: the signature is checked exactly as a def's,
  * but there is no body -- the return type must be written, the label must be
  * a `y_` one, and the declaration must be at the top level. */
-static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col, int isnat) {
+/* `line`/`col` are the KEYWORD's, for the diagnostics inside; `nline`/`ncol` are
+ * the NAME's, and are what st_bind records. They differ by however much
+ * whitespace `let`/`def` was followed by. */
+static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col, Yv *nline, Yv *ncol,
+                       int isnat) {
     if (yv_len(yr_get(func, "params")) != yv_len(yr_get(func, "ptypes"))) {
         st = fail(st, ys("internal: params/ptypes length mismatch"), line, col);
         return yr(2, "typ", t_unk(), "st", st);
@@ -5571,7 +5745,7 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col, int isnat
         }
         Yv *ft = yr(3, "k", yv_long(K_tfunc), "args", args, "ret", ret);
         // bind early so recursion via `self`/name works
-        st = st_bind(st, name, ft, ys("func"));
+        st = st_bind(st, name, ft, ys("func"), nline, ncol );
         // check the body one level deeper. Outer locals/params stay in the
         // flat map (one shape per name), so a nested def reading one is a
         // capture — legal, and closure-converted by the emitter.
@@ -5581,7 +5755,7 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col, int isnat
         st = st_fdepth(st, saved_depth + 1);
         long j = 0;
         while (j < yv_len(fparams)) {
-            st = st_bind(st, ya_get(fparams, j), ya_get(args, j), ys("param"));
+            st = st_bind(st, ya_get(fparams, j), ya_get(args, j), ys("param"), nline, ncol );
             j = j + 1;
         }
         st = st_self(st, ft);
@@ -5617,13 +5791,12 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col, int isnat
             while (ri < yv_len(rets)) {
                 Yv *rn = ya_get(rets, ri);
                 if (!tcompat(yr_get(rn, "typ"), br)) {
-                    st = fail(st,
-                              ys_cat(ys_cat(ys_cat(ys_cat(ys_cat(ys_cat(ys("'return': expected "), tstr(br)),
-                                                                 ys(", got ")),
-                                                          tstr(yr_get(rn, "typ"))),
-                                                   ys(" (the return type is inferred from ")),
-                                            rsrc),
-                                     ys(")")),
+                    Yv *m1 = ys_cat(ys("'return': expected "), tstr(br));
+                    Yv *m2 = ys_cat(m1, ys(", got "));
+                    Yv *m3 = ys_cat(m2, tstr(yr_get(rn, "typ")));
+                    Yv *m4 = ys_cat(m3, ys(" (the return type is inferred from "));
+                    Yv *m5 = ys_cat(m4, rsrc);
+                    st = fail(st, ys_cat(m5, ret_inferred_hint(yr_get(rn, "typ"))),
                               yv_l(yr_get(rn, "line")), yv_l(yr_get(rn, "col")));
                     ;
                 }
@@ -5646,7 +5819,7 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col, int isnat
                 // pass's errors go; this one reports them).
                 st = st_errors(st, ya_slice(yr_get(st, "errors"), 0, nerr));
                 Yv *ft2 = yr(3, "k", yv_long(K_tfunc), "args", args, "ret", br);
-                st = st_bind(st, name, ft2, ys("func"));
+                st = st_bind(st, name, ft2, ys("func"), nline, ncol );
                 st = st_self(st, ft2);
                 Yv *rets2 = yav(0);
                 st = st_ret(st, yr(2, "k", yv_long(K_tinfer), "rets", rets2));
@@ -5659,13 +5832,12 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col, int isnat
                 while (ri2 < yv_len(rets2)) {
                     Yv *rn2 = ya_get(rets2, ri2);
                     if (!tcompat(yr_get(rn2, "typ"), br)) {
-                        st = fail(st,
-                                  ys_cat(ys_cat(ys_cat(ys_cat(ys_cat(ys_cat(ys("'return': expected "), tstr(br)),
-                                                                     ys(", got ")),
-                                                              tstr(yr_get(rn2, "typ"))),
-                                                       ys(" (the return type is inferred from ")),
-                                                rsrc),
-                                         ys(")")),
+                        Yv *n1 = ys_cat(ys("'return': expected "), tstr(br));
+                        Yv *n2 = ys_cat(n1, ys(", got "));
+                        Yv *n3 = ys_cat(n2, tstr(yr_get(rn2, "typ")));
+                        Yv *n4 = ys_cat(n3, ys(" (the return type is inferred from "));
+                        Yv *n5 = ys_cat(n4, rsrc);
+                        st = fail(st, ys_cat(n5, ret_inferred_hint(yr_get(rn2, "typ"))),
                                   yv_l(yr_get(rn2, "line")), yv_l(yr_get(rn2, "col")));
                         ;
                     }
@@ -5674,7 +5846,7 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col, int isnat
                 ;
             }
             ft = yr(3, "k", yv_long(K_tfunc), "args", args, "ret", br);
-            st = st_bind(st, name, ft, ys("func"));
+            st = st_bind(st, name, ft, ys("func"), nline, ncol );
             if (yv_l(yr_get(br, "k")) != K_tunk) {
                 set_inferred_ret(func, br);
                 ;
@@ -5701,7 +5873,7 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col, int isnat
             return yr(2, "typ", ft, "st", st);
         } else {
             // poison the binding so follow-on errors don't cascade weirdly
-            st = st_bind(st, name, t_unk(), ys("func"));
+            st = st_bind(st, name, t_unk(), ys("func"), nline, ncol );
             return yr(2, "typ", t_unk(), "st", st);
         }
     }
@@ -5720,6 +5892,11 @@ static Yv *st_fdepth(Yv *st, long d) {
 Yv *check_program(Yv *ast, Yv *ext) {
     // the inferred-return table is made when first written (inf_reset)
     inf_bkts = yav(0);
+    /* Only when it is on: emptying 1024 buckets on every compile of every
+     * program would be a cost paid for a feature no compiler run uses. */
+    if (tc_index) {
+        tci_reset();
+    }
     tc_ixn = 0;
     // pass 1: collect top-level def signatures (allows mutual recursion).
     Yv *defs = yav(0);
@@ -5751,8 +5928,8 @@ Yv *check_program(Yv *ast, Yv *ext) {
     st = st_bind(st, ys("print"),
                  yr(3, "k", yv_long(K_tfunc), "args", yav(1, yr(1, "k", yv_long(K_tlong))),
                     "ret", yr(1, "k", yv_long(K_tvoid))),
-                 ys("intrinsic"));
-    st = st_bind(st, ys("syscall"), yr(1, "k", yv_long(K_tlong)), ys("intrinsic"));
+                 ys("intrinsic"), yv_long(-1), yv_long(-1) );
+    st = st_bind(st, ys("syscall"), yr(1, "k", yv_long(K_tlong)), ys("intrinsic"), yv_long(-1), yv_long(-1) );
     // Every intrinsic is matched BY NAME in typeof_call (print, len, some,
     // ... syscall), so these two bindings are never consulted by a call; they
     // exist only so `print`/`syscall` read as defined when they appear as
@@ -5765,13 +5942,13 @@ Yv *check_program(Yv *ast, Yv *ext) {
             kind = ys("const");
             ;
         }
-        st = st_bind(st, yr_get(xe, "name"), yr_get(xe, "typ"), kind);
+        st = st_bind(st, yr_get(xe, "name"), yr_get(xe, "typ"), kind, yv_long(-1), yv_long(-1) );
         x = x + 1;
     }
     long d = 0;
     while (d < yv_len(defs)) {
         st = st_bind(st, yr_get(ya_get(defs, d), "name"),
-                     yr_get(ya_get(defs, d), "typ"), ys("func"));
+                     yr_get(ya_get(defs, d), "typ"), ys("func"), yv_long(-1), yv_long(-1) );
         d = d + 1;
     }
     Yv *r = typeof_block(st, ast);

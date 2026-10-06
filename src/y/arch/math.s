@@ -1902,7 +1902,12 @@ ypow_l2_m_ok:
     movsd %xmm0, %xmm3
 # w = z * z
     mulsd %xmm0, %xmm3                      
-# a = z * (2.0 + w * poly_split(log_k, log_kl, w))
+# a = two_sum(2.0 * z, (z * w) * P), NOT z * (2.0 + w * P) -- the Y's
+# change, and the reason pow was three ulps out at some arguments. The
+# brackets in the other form round at the size of 2.0, which is a whole ulp
+# of the logarithm, and pow multiplies the logarithm by the exponent. The
+# scaling by two here is exact and (z*w)*P is two orders smaller, so the
+# two_sum carries what the brackets used to drop.
     movsd ylog_tab+144(%rip), %xmm2
     movsd ylog_tab+232(%rip), %xmm9
     mulsd %xmm3, %xmm2
@@ -1946,14 +1951,34 @@ ypow_l2_m_ok:
     mulsd %xmm3, %xmm9
     addsd ylog_tab+152(%rip), %xmm9
     addsd %xmm9, %xmm2
-    movsd %xmm3, %xmm7
-    movsd ypow_tab+32(%rip), %xmm4
-# w * P
-    mulsd %xmm2, %xmm7                      
-# 2.0 + w * P
-    addsd ypow_tab+32(%rip), %xmm7                        
-# a
-    mulsd %xmm7, %xmm0                      
+    movsd %xmm0, %xmm4
+# a = 2.0 * z, and exact: it is a
+    mulsd ypow_tab+32(%rip), %xmm4                        
+# scaling by a power of two
+                                             
+# b = (z * w) * P
+    movsd %xmm3, %xmm7                       
+    mulsd %xmm0, %xmm7
+    mulsd %xmm2, %xmm7
+# two_sum(a, b) in the Y's order: bb = s - a, and the residual is
+  
+# (a - (s - bb)) + (b - bb) -- it lands in %xmm5 and rides into the pair
+  
+    movsd %xmm4, %xmm5
+# s
+    addsd %xmm7, %xmm4                       
+    movsd %xmm4, %xmm8
+# bb = s - a
+    subsd %xmm5, %xmm8                      
+    movsd %xmm4, %xmm10
+# s - bb
+    subsd %xmm8, %xmm10                     
+# a - (s - bb)
+    subsd %xmm10, %xmm5                     
+    movsd %xmm7, %xmm11
+# b - bb
+    subsd %xmm8, %xmm11                     
+    addsd %xmm11, %xmm5
 # b = two_sum(ef * ln2_hi, ef * ln2_lo), and bc_lo what that summation lost.
 # The two terms are of very different sizes -- this one is e * ln 2 and the
 # small one is the kernel's -- and the rounding that matters is this one's, so
@@ -1981,24 +2006,43 @@ ypow_l2_m_ok:
 # bc_lo
     addsd %xmm12, %xmm7                     
 # t = two_sum(a, b), and the answer's low part is what this lost plus bc_lo
-    movsd %xmm0, %xmm13
+# `a` is %xmm4 -- it was %xmm0 until the two_sum above moved it, and this
+# block reading the wrong register is how the first version of that change
+# answered 86 cases of the table three orders of magnitude out
+    movsd %xmm4, %xmm13
 # t = a + b
     addsd %xmm9, %xmm13                     
     movsd %xmm13, %xmm14
 # bb2 = t - a
-    subsd %xmm0, %xmm14                     
+    subsd %xmm4, %xmm14                     
     movsd %xmm13, %xmm15
 # t - bb2
     subsd %xmm14, %xmm15                    
 # a - (t - bb2)
-    subsd %xmm15, %xmm0                     
+    subsd %xmm15, %xmm4                     
     movsd %xmm9, %xmm12
 # b - bb2
     subsd %xmm14, %xmm12                    
-    addsd %xmm12, %xmm0
-# lo = what t lost + bc_lo
-    addsd %xmm7, %xmm0                      
-    movsd %xmm0, %xmm1
+# The residual lands in %xmm4 and NOT %xmm0: `a` moved there when the
+  
+# two_sum above was introduced, and the Y puts the residual in the `a`
+  
+# variable. %xmm0 still holds z, and the version that summed into it
+  
+# returned lo = z -- a log2_dd pair whose low half was a quarter of the
+  
+# log, which is what put 85 of the table's pow cases over three ulps.
+  
+    addsd %xmm12, %xmm4
+# lo = (what t lost + what a lost) + bc_lo, the Y's order and not the
+  
+# other one: these three are of one size and their sum is not associative
+  
+# ts_lo + a_lo
+    addsd %xmm5, %xmm4                      
+# + bc_lo
+    addsd %xmm7, %xmm4                      
+    movsd %xmm4, %xmm1
 # hi = t
     movsd %xmm13, %xmm0                     
     ret

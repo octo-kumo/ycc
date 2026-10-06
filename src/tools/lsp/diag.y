@@ -20,6 +20,7 @@ import rename from "../../y/rename.y";
 import lint from "../../y/lint.y";
 import native from "../../y/native.y";
 import scan from "./scan.y";
+import xref from "./xref.y";
 
 // Named Finding, not Diag: a path import shares ONE namespace with everything
 // else the program imports, so `type Diag` here would shadow `types.Diag` and
@@ -196,7 +197,110 @@ def diagnose(text: str, dir: str, path: str, pack: str, wlevel: long) -> [Findin
     out
 }
 
+// ── cross-file navigation (LSP.md 11.4) ──────────────────────────────────
+//
+// The top-level declarations of the SPLICED program, resolved to a file and a
+// line in THAT file.
+//
+// `diagnose` throws the spliced program and the renamed AST away once it has the
+// findings, and both are exactly what go-to-definition needs (§11.4 has the
+// measurement): the renamer gives a binding a name of the form `orig$N` shared
+// by its definition and its uses, and a splice inlines a module at top level so
+// `origin.file` sends each of those lines back to the file it came from.
+//
+// It lives here rather than in xref.y because this file already has `file_of`,
+// and duplicating it would be a second answer to "which file is this line".
+//
+// `check_program` is NOT run: navigation needs no types, and the checker is the
+// expensive half of a compile. The trade is that a buffer with a type error
+// still navigates, which is what an editor wants -- the error is already in the
+// diagnostics channel.
+// `mine` is the buffer's own line -> the SPLICED line, which is what every
+// position in the compiler's tables is keyed by. It is built from the origin map
+// rather than guessed from the splice order, because a program can import the
+// same module twice, nest imports, or have an import whose own source declares
+// things -- the order is an implementation detail and the map is the truth.
+type Prepared = { names: [str], lines: { str => long }, files: { str => str }, mine: [long] };
+
+// The prepared index for `text`, or none when it cannot be resolved -- a missing
+// import, an unterminated literal, a path that does not exist. None is the
+// honest answer in each case, and it is not an error: `diagnose` reports those
+// separately and says so.
+def xref_for(text: str, dir: str, path: str) -> Prepared? {
+    let out: Prepared? = none;
+    let rp = scan.repair(text);
+    if (len(rp.bad) == 0) {
+        // No unterminated literal in the user's own buffer, so the program lexes
+        // and there is something to navigate. When there IS one, diagnose
+        // reports it and this answers none -- a program that does not lex has no
+        // scope to ask about.
+        let nr = native_resolve_x(rp.text, dir, 0, true, path);
+        if (len(nr.imports) > 0 || !missing_import_here(text, dir)) {
+            // nr.src, the SPLICED text -- NOT rp.text. Parsing the buffer on its
+            // own leaves every imported name undefined and yields a tree of one
+            // file's declarations, while the origin map below indexes the spliced
+            // program; the two then disagree and every name is attributed to
+            // whichever module's lines happen to sit at that number. That is what
+            // the first version of this did, and it produced exactly one name,
+            // attributed to the wrong file.
+            let ast = parser.parse_program(lexer.tokenize(nr.src));
+            let ast2: Block = strip_ns(ast, nr.imports);
+            // rename_program_x2, not rename_program_x, and only the tree is read
+            // back. The second half of its answer -- the def site of every
+            // binding, including the locals and parameters no LSP table has -- is
+            // not consumed here, and LSP.md 9.2 says why with the measurement:
+            // the cross-file definition path still re-reads the target file to get
+            // its declaration's SIGNATURE and doc comment, which a position does
+            // not carry, so a column the server already had is all the map would
+            // save. Binding it to a name would only have made the compiler warn.
+            let ast3: Block = rename.rename_program_x2(ast2, [], nr.origin.file, nr.origin.mods).ast;
+            let x = xref.tops_of(ast3);
+            let mine = xref.own_lines(
+                xref.nlines(nr.src),
+                xref.nlines(rp.text),
+                xref.first_own_line(rp.text, xref.nlines(rp.text)));
+            let lines: { str => long } = {};
+            let files: { str => str } = {};
+            let names: [str] = [];
+            foreach (pair in xref.tops_pairs(x)) {
+                let tab = index_of(pair, "\t");
+                let nm = pair[0:tab];
+                let ln = tonum(pair[tab + 1:len(pair)]);
+                lines[nm] = ln;
+                files[nm] = file_of(nr.origin, ln);
+                names += nm;
+            };
+            // check_program with the expression index ON. The table it leaves
+            // behind lives in types.y's module globals, which is where
+            // expr_type() reads it from -- so the LSP never copies a type, it
+            // asks the checker for the one it already computed.
+            type_index_on();
+            let errs = check_program(ast3, externs_none().ext);
+            type_index_off();
+            // The errors themselves are diagnose()'s job; xref_for only wants the
+            // side effect. A buffer that does not type-check still navigates and
+            // still hovers: the errors are already in the diagnostics channel, and
+            // refusing to answer because of them would make the editor feel broken
+            // in exactly the situation where a person is trying to fix it.
+            let _ = errs;
+            out = some({ names: names, lines: lines, files: files, mine: mine });
+        };
+    };
+    out
+}
+
+// Does the text name an import whose file is missing? A buffer with no imports
+// at all needs no splice and no rename, which is the common case for a scratch
+// file and worth not paying for.
+def missing_import_here(text: str, dir: str) -> bool {
+    let bad = false;
+    foreach (f in missing_imports(text, dir, "")) {
+        if (f.kind == SEV_ERROR) { bad = true; };
+    };
+    bad
+}
+
 export {
   Imp, Finding, SEV_ERROR, SEV_WARNING, check, imports_of,
-  missing_imports, externs_for, file_of
+  missing_imports, externs_for, file_of, Prepared, xref_for
 };

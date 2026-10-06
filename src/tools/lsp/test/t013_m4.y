@@ -223,8 +223,16 @@ print("range end char " + tostring(at_char(field(h1, "range"), "end")));
 // types. Pinned here because the bug looks like a missing feature.
 print("return type present: " + tostring(index_of(json.as_str(c1)!, ") -> long") > 0));
 
-// A `let` with no annotation has no signature to show, and the hover says just
-// the name rather than inventing a type.
+// A `let` with no annotation has no signature to show, so the hover shows the
+// name -- and, since the checker's type index (LSP.md 9.2 A2), the type the
+// checker INFERRED for the binding above it.
+//
+// The comment this replaces said the hover "says just the name rather than
+// inventing a type", and the not-inventing half is still the point and still the
+// test: `long` here is `types.expr_type` read out of the compiler's own table, not
+// anything this server worked out. It was absent because the server had no types at
+// all, which was a missing capability rather than a piece of honesty. The
+// declaration is still shown underneath, so a reader can tell the two apart.
 let h2 = ask(st, 10, "textDocument/hover", at(10, 13));
 print("base, no annotation: " + json.as_str(field(field(h2, "contents"), "value"))!);
 print("hover on nothing: " + tostring(is_null(ask(st, 11, "textDocument/hover", at(2, 0)))));
@@ -288,6 +296,39 @@ print("typable builtins " + tostring(typable) + ", missing from the list " + tos
 // And the ones that cannot be typed are NOT offered.
 print("no `opt$test` in the list: " + tostring(index_of(labels(c3), "opt$test") < 0));
 print("no `#fmt` in the list: " + tostring(index_of(labels(c3), "#fmt") < 0));
+
+print("-- and the PREDICATE agrees with the list");
+// The check above walks the list. This walks the other way, against the
+// predicate the objective names, because the two are separate exports and only
+// share a definition TODAY: is_intrinsic_name is `name_in(INTRINSICS, n)` and
+// intrinsic_names is the bare INTRINSICS. If that ever stops being true -- a
+// second list, a copy made for speed, a hashed INTRINSICS whose equality differs
+// from name_in's -- the server would be completing from one set of names while
+// the compiler answered for another, and the failure would be a builtin that
+// silently does not type.
+let agree = 0;
+let disagree = 0;
+foreach (b in bnames) {
+    if (is_intrinsic_name(b)) { agree = agree + 1; } else {
+        disagree = disagree + 1;
+        print("  IN LIST BUT NOT A PREDICATE: " + b);
+    };
+};
+print("names " + tostring(len(bnames)) + ", accepted by is_intrinsic_name " +
+      tostring(agree) + ", disagreed " + tostring(disagree));
+// And the predicate must be a predicate: names no program can bind must be
+// rejected, or `x` would shadow a builtin in the checker's eyes and not in the
+// server's.
+// `split` is deliberately NOT in this list, and that it is absent is the point:
+// it is both a builtin (`split(s, sep)` -- the method form is builtin-backed,
+// types.y's str_method) and a string method, so it is legitimately accepted here
+// AND offered after a dot. An earlier version of this line listed it as a
+// must-be-rejected name and the test correctly failed on it.
+let not_builtins = 0;
+foreach (n in ["", "printt", "not_a_builtin", "Printf", "len2", "PRINT"]) {
+    if (is_intrinsic_name(n)) { not_builtins = not_builtins + 1; print("  WRONGLY ACCEPTED " + n); };
+};
+print("non-builtins wrongly accepted: " + tostring(not_builtins));
 
 print("-- the index the requests agree on");
 // definition, hover and completion are three views of ONE lookup. If they

@@ -32,8 +32,8 @@ int is_radix_ch(long c, long radix); /* (c: byte, radix: long) -> bool */
 Yv *strip_seps(Yv *s);               /* (s: str) -> str */
 int isspace(long c);                 /* (c: byte) -> bool */
 int ispunct(long c);                 /* (c: byte) -> bool */
-Yv *lex_quoted(Yv *src, long i, long line, long col);
-                                     /* -> { text: str, end: long, line: long, col: long, closed: long } */
+Yv *lex_quoted(Yv *src, long i, long line, long col, Yv *what);
+                                     /* -> { text: str, end: long, line: long, col: long, err: str } */
 long lit_end(Yv *src, long q, long *closed);
                                      /* (src: str, q: long, closed: [long]) -> long */
 Yv *mktok(Yv *t, Yv *v, long line, long col);

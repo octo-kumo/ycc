@@ -139,7 +139,7 @@ def eval_split(coef, w):
     return p + q
 
 
-def report(name, fn, deg, hi, compose):
+def report(name, fn, deg, hi, compose, coef=None):
     """Fit, split, and check the worst error in ulps of the FINAL ANSWER.
 
     `compose(k, u)` turns the kernel's value into what the function returns, so
@@ -148,7 +148,16 @@ def report(name, fn, deg, hi, compose):
     argument's square (or cube), and an absolute-error figure would say a
     kernel is bad when it is irrelevant there.
     """
-    coef = [split(c) for c in fit(fn, deg, hi)]
+    # `coef` is for the kernels whose coefficients are EXACT -- a Taylor value,
+    # a term of the series -- rather than the output of an interpolation. Those
+    # are what the module ships, and printing the fit's near-neighbours instead
+    # is how a table gets retyped into something a few ulps worse: the fit
+    # agrees with the rational to fifteen digits and disagrees in the sixteenth,
+    # which is precisely where a coefficient's low half lives.
+    if coef is None:
+        coef = [split(c) for c in fit(fn, deg, hi)]
+    else:
+        coef = [split(c) for c in coef]
     hf = float(hi)
     worst_ulp = 0.0
     worst_at = 0.0
@@ -294,6 +303,91 @@ def sexact(w):
     return sx / (r * w)
 
 
+# ── asin's kernel, for the half of the argument above 1/2 ──
+#
+# asin(a) = pi/2 - 2*asin(sqrt((1-a)/2)) and the inner asin is small, so with
+# z = (1-a)/2 in (0, 1/4] the whole of it is 2*asin(sqrt(z)) = 2*sqrt(z)*(1 +
+# z*P(z)) -- the same shape as every other kernel here, with `2*sqrt(z)` the
+# term already in hand. asin used to reach atan instead, and inherited atan's
+# whole ulp on top of the sqrt's and the divide's, which is why asin(-0.719) sat
+# two ulps out while nothing else in the module did. The degree is the price of
+# the branch: the series converges at the rate z, which is a quarter at the wide
+# end, so each pair of terms buys sixteen -- 20 terms leave the answer 8 ulps
+# out and 22 bring it to 1, and 24 is 22 with room for arguments the sweep does
+# not land on.
+AZMAX = D("0.25")
+DEG_ASIN = 24
+PI2 = 1.57079632679489661923        # the module's pi_over_2
+
+
+def _two_sum(a, b):
+    """the module's two_sum, returning both the sum and its exact residual."""
+    s = a + b
+    bb = s - a
+    return s, (a - (s - bb)) + (b - bb)
+
+
+def asin_big(k, z):
+    """What math.y's large asin branch does with the kernel's value `k`.
+
+    The report below has to measure THIS and not `pi/2 - 2*asin(sqrt(z))`
+    written out longhand, because the two differ by the answer: the branch
+    keeps `two` in two parts through the subtraction and puts the square root's
+    own residual back, and those two steps are what took asin from two ulps to
+    one. Measuring the longhand form would report 2 for a kernel the module
+    gets 1 ulp out of, which is the kind of number that stops the next person
+    believing the better one.
+    """
+    s = math.sqrt(z)
+    two_hi, two_lo = _two_sum(2.0 * s, (2.0 * s) * z * k)
+    if s > 0.0:
+        two_lo = two_lo + 2.0 * ((z - s * s) / (2.0 * s)) * (1.0 + z * k)
+    d, e = _two_sum(PI2, -two_hi)
+    return d + (e - two_lo)
+
+
+def asin_series(r):
+    # asin r = sum_k C(2k,k)/(4^k (2k+1)) r^(2k+1). `term` below is
+    # C(2k,k)/4^k * r^(2k+1) and the summand is term/(2k+1); the ratio between
+    # terms is r^2 (2k+1)/(2k+2), because C(2k+2,k+1)/4^(k+1) over
+    # C(2k,k)/4^k is (2k+1)/(2k+2).
+    total = D(0)
+    term = r
+    k = 0
+    while True:
+        add = term / (2 * k + 1)
+        total += add
+        if k > 4 and abs(add) < D(10) ** -70:
+            return total
+        term = term * r * r * (2 * k + 1) / (2 * k + 2)
+        k = k + 1
+
+
+def asin_coef(i):
+    """Coefficient i of P, exactly: C(2k,k)/(4^k(2k+1)) with k = i+1.
+
+    The Taylor values of the same series sinh_k is taken from, which is why
+    this kernel needs no fitting at all -- see report's note on `coef`.
+    """
+    k = i + 1
+    return F(math.comb(2 * k, k), 4 ** k * (2 * k + 1))
+
+
+def asinexact(z):
+    """P(z) for asin(s) = s * (1 + z*P(z)) with s = sqrt(z).
+
+    NO leading two: the module gets 2*asin(s) by doubling, and the doubling is
+    exact, so the kernel that carries it would be twice this one -- which is how
+    the first version of this was wrong, and it made every degree look like a
+    disaster.
+    """
+    z = dec(z)
+    if z == 0:
+        return D(1) / 6
+    s = z.sqrt()
+    return (asin_series(s) / s - 1) / z
+
+
 # ── atan's kernel in w = x^2: atan x = x*(1 + w*P(w)), |x| <= tan(pi/8) ──
 TMAX = D("0.41421356237309504880168872420969807856967187537694807317668")
 
@@ -323,3 +417,6 @@ if __name__ == "__main__":
 
     report("atan kernel", atanexact, 12, dec_frac(TMAX * TMAX),
            lambda k, w: math.sqrt(w) * (1.0 + w * k))
+
+    report("asin kernel", asinexact, DEG_ASIN, AZMAX, asin_big,
+           coef=[asin_coef(i) for i in range(DEG_ASIN)])

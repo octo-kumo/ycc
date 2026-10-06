@@ -269,6 +269,9 @@ def m_prev(src: str, i: long) -> long {
 // expression, where a call cannot go (`def helper#{x++}#()`), and it is an
 // error rather than a feature: generating a NAME has no expression position
 // for the call to occupy.
+// It is also what marks a MID-TOKEN block: the call cannot go at the block's
+// own byte offset either (`def helper<call>()` is not a def), so such a block's
+// bytes are dropped from G and its call hoisted (see sg_open and sg_mids_move).
 def m_token_end(c: long) -> bool {
     if (c == 0) { false }
     else if (c == c')' || c == c']' || c == c'}' || c == c'.' || c == c'\'' || c == c'\"') { true }
@@ -1418,24 +1421,13 @@ def sg_region_close() -> long {
     sg_region_open()
 };
 
-// Whether the byte before src[i] ends a token -- a name, a number, a literal
-// or a closing bracket. Then the block has no operand position at its own byte
-// offset, and it is a MID-TOKEN block: the call cannot go there
-// (`def helper<call>()` is not a def), so its bytes are dropped from G and its
-// call is hoisted (see sg_open and sg_mids_move).
+// `#{` at i in code position: check it, record the block, open it, and read the
+// word after it (which may be an `import`). Returns where to carry on from, or
+// n when the block is refused.
 //
 // "Immediately before" -- a space is enough to make it a separate token, and a
 // separate token that starts an operand is not mid-token: `return #{ … }#`,
 // `f(#{ … }#, 2)` and `a[#{ … }#]` all keep the call in place.
-def m_token_end(c: long) -> bool {
-    if (c == 0) { false }
-    else if (c == c')' || c == c']' || c == c'}' || c == c'.' || c == c'\'' || c == c'\"') { true }
-    else { m_word(c) }
-};
-
-// `#{` at i in code position: check it, record the block, open it, and read the
-// word after it (which may be an `import`). Returns where to carry on from, or
-// n when the block is refused.
 def sg_open(i: long, n: long) -> long {
     let prev = 0;
     if (i > 0) { prev = byte_at(sg_src, i - 1); };

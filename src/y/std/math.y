@@ -243,14 +243,46 @@ def inv_mod(a: long, m: long) -> long {
 // ── floats ──────────────────────────────────────────────────────────────────
 
 // The smaller of two, with C's rule that a NaN loses to the other operand:
-// fmin(NaN, 2.0) is 2.0. (Which of -0.0 and 0.0 wins is not specified;
-// IEEE says either is correct.)
+// fmin(NaN, 2.0) is 2.0.
+//
+// Which of -0.0 and 0.0 wins used to be "not specified", and the strict `<`
+// made it DEPEND ON THE ORDER: fmin(+0.0, -0.0) was -0.0 and fmin(-0.0, +0.0) was
+// +0.0. C99 does allow either, so the table said nothing -- and a table case
+// then said the opposite of what the module did. On a tie the negative-signed
+// operand wins, which is IEEE 754-2019's minNum and what this platform's libm
+// does: 1.0/fmin(-0.0, 0.0) has to be -inf.
 def fmin(a: float, b: float) -> float {
-    if (a != a) { b } else if (b != b) { a } else if (a < b) { a } else { b }
+    if (a != a) {
+        b
+    } else if (b != b) {
+        a
+    } else if (a < b) {
+        a
+    } else if (b < a) {
+        b
+    } else {
+        // a == b, so the only thing left undecided is the two zeros' signs --
+        // and for every other tie the two are the same number anyway.
+        if (fbits(a) < 0) { a } else if (fbits(b) < 0) { b } else { a }
+    }
 };
 
+// The same, the other way round: on a tie the POSITIVE-signed operand wins, so
+// fmax(0.0, -0.0) is 0.0. The strict `>` it used to have returned -0.0 here,
+// which is not a defensible answer from a maximum: 1.0/fmax(0.0, -0.0) came
+// out -inf.
 def fmax(a: float, b: float) -> float {
-    if (a != a) { b } else if (b != b) { a } else if (a > b) { a } else { b }
+    if (a != a) {
+        b
+    } else if (b != b) {
+        a
+    } else if (a > b) {
+        a
+    } else if (b > a) {
+        b
+    } else {
+        if (fbits(a) < 0) { b } else { a }
+    }
 };
 
 // |x| as a float. Written so that -0.0 comes back as +0.0 (0.0 - (-0.0) is
@@ -748,6 +780,37 @@ let sinh_kl: [float] = [9.251858534705814e-18, 1.1565019634686237e-19,
     7.071825259067978e-24, 1.2480102547401166e-23, 1.5339941984694534e-24,
     1.1738184850031472e-26, -2.7025335984982047e-29, 1.7918268050249534e-31];
 
+// asin's kernel, in z = s^2 where s = sqrt((1-|x|)/2), for |x| >= 1/2:
+//   asin(s) = s * (1 + z*P(z)),  s <= 1/2,  z <= 1/4
+// The coefficients are the Taylor values C(2k,k)/(4^k(2k+1)) -- the same
+// rationals as sinh_k's, one step further out the same series -- so there is
+// nothing to fit: `test/math/gen_kernel.py`'s asinexact is the same function
+// and this is where its answer went.
+//
+// TWENTY-FOUR terms, and that many is the price of the branch: the series in z
+// converges at the rate z itself, which is a quarter at the wide end, so each
+// pair of terms buys sixteen and the kernel's own error has to be under an ulp
+// of pi/2. Measured over the branch, 20 terms leave the answer eight ulps out,
+// 22 bring it to one, and 24 leave the same one with room for arguments the
+// sweep did not land on -- which is why this is 24 and not 22.
+let asin_k: [float] = [0.16666666666666666, 0.075, 0.044642857142857144,
+    0.030381944444444444, 0.022372159090909092, 0.017352764423076924,
+    0.01396484375, 0.011551800896139705, 0.009761609529194078,
+    0.008390335809616815, 0.0073125258735988454, 0.006447210311889649,
+    0.005740037670841924, 0.005153309682319905, 0.004660143486915096,
+    0.004240907093679363, 0.003880964558837669, 0.0035692053938259347,
+    0.003297059503473485, 0.0030578216492580306, 0.002846178401108942,
+    0.00265787063820729, 0.0024894486782468836, 0.002338091892111975];
+let asin_kl: [float] = [9.25185853854297e-18, 2.7755575615628915e-18,
+    -9.912705577010326e-19, 3.854941057726238e-19, -9.462128050782583e-19,
+    -8.006416042969879e-19, -6.938893903907229e-19, 8.163404592832033e-19,
+    5.478074134663601e-19, 4.130293990420969e-19, -3.394024192128536e-19,
+    -3.1225022567582527e-19, -1.2849803525754126e-19,
+    -3.888173308223878e-19, -2.7979410902851727e-20,
+    -1.5770213417970974e-19, 1.858632295689436e-19, -1.992587776459846e-19,
+    -1.3344026738283132e-19, 2.1155164341180575e-20, 1.1094161764967953e-19,
+    -1.4456028966473392e-19, -8.304527278612374e-20, 1.4161007967157608e-19];
+
 // atan's kernel, in w = x^2, for |x| <= tan(pi/16): -1/3 + x^2/5 - ...
 let atan_k: [float] = [-0.3333333333333333, 0.19999999999999993,
     -0.14285714285711518, 0.11111111110754729, -0.0909090906700999,
@@ -850,9 +913,10 @@ let exp_lo: float = -745.133219101941074020;
 // |z| stays at sqrt(2)-1.
 let inv_sqrt2: float = 0.70710678118654752440;
 
-// ln2 as a plain constant: exp2's reduction multiplies the fractional part by
-// it, where the two-part split is for the *whole* multiples of it
-let ln2: float = 0.6931471805599453094172321214581765680755001343602553;
+// exp2's reduction multiplies the fractional part by ln2, which is the
+// constant in the public list above -- the same double, so the two-part
+// `ln2_hi`/`ln2_lo` split is for the *whole* multiples of it only, and
+// declaring ln2 again here would silently shadow the public one.
 
 // pi/4 and pi/2: below pi/4 an argument needs no reduction at all, and atan
 // of an infinity is pi/2.
@@ -921,6 +985,12 @@ def exp2(x: float) -> float {
 };
 
 // ── log ────────────────────────────────────────────────────────────────────
+
+// The cell two_sum leaves its exact residual in. It is declared HERE rather than
+// beside two_sum because the first thing that reads it is asin's, and a `let`
+// has to be in hand before the text that names it: a `def` may be called before
+// its body is checked, a cell may not.
+let ts_lo: float = 0.0;
 
 // z = (m-1)/(m+1) with m in [1/sqrt2, sqrt2), and the low part of the quotient
 // left in z_lo. m-1 is exact (Sterbenz) and the division rounds once, but m+1
@@ -1116,9 +1186,27 @@ def cosh(x: float) -> float {
         inf
     } else {
         let a = if (x < 0.0) { 0.0 - x } else { x };
-        // the sum, not the difference: the two expm1 terms cancel their
-        // leading parts and leave a^2, and what is left is what cosh is
-        1.0 + ((expm1(a) + expm1(0.0 - a)) * 0.5)
+        if (a < 0.5) {
+            // the sum, not the difference: the two expm1 terms cancel their
+            // leading parts and leave a^2, and what is left is what cosh is.
+            // Below half the two are small and near each other, so the absolute
+            // error of their sum is a fraction of an ulp of the answer.
+            1.0 + ((expm1(a) + expm1(0.0 - a)) * 0.5)
+        } else {
+            // HALF ON EACH TERM, not on the sum. e^a + e^-a is rounded at the
+            // size of e^a, which for a >= 0.5 is twice the size of cosh, so
+            // halving afterwards leaves an error of a whole ulp of the answer;
+            // halving each term first is exact and the sum is then rounded once
+            // at the size of the answer. One line, and cosh(-1.88) stopped
+            // being two ulps out.
+            // ONE exp and its reciprocal, not two exps: e^-a is 1.2% of the
+            // answer at a >= 0.5, so its own rounding is a hundredth of an ulp
+            // of the answer, while a second exp() call would bring its whole
+            // error along -- and exp is a ulp out at some arguments, which is
+            // what had cosh(-1.88) sitting two ulps away.
+            let t = exp(a);
+            t * 0.5 + 0.5 / t
+        }
     }
 };
 
@@ -1218,6 +1306,51 @@ def log1p(x: float) -> float {
 
 // ── asin, acos, atan2 ──────────────────────────────────────────────────────
 
+// 2*asin(sqrt((1-a)/2)) for 0.5 < a < 1, in TWO parts: the answer is
+// asin_half_hi and everything below it is asin_half_lo. It has to be two parts
+// because asin subtracts this from pi/2, and the subtraction's own rounding
+// would swallow the low half -- which is most of what makes asin an ulp
+// accurate rather than two.
+//
+// acos wants the same quantity and gets it whole, which is the whole reason it
+// is here rather than left inside asin: acos cannot go the other way round.
+// pi/2 - asin(x) cancels, because near x = 1 the answer is 3e-8 against a pi/2
+// and eight digits are gone before the answer is formed. acos(1 - 4e-17) came
+// out FORTY ulps out that way, and the reference table is what found it -- with
+// only eight arguments of its own inside [-1, 1] it had taken densifying the
+// spread to say so.
+let asin_half_hi: float = 0.0;
+let asin_half_lo: float = 0.0;
+
+def asin_half(a: float) -> float {
+    // 0.5 < a < 1 here, so z is in (0, 1/4] and s = sqrt(z) is never 0. `1 - a`
+    // is exact -- Sterbenz -- and halving is exact, so z is exact however close
+    // a is to 1: nothing is lost that a cleverer argument for the square root
+    // would have kept.
+    let z = (1.0 - a) * 0.5;
+    if (z == 0.0) {
+        // a == 1.0: the answer is 0, and the square root's residual below would
+        // be 0/0. asin never arrives here (it answers +-1 before this), but acos
+        // does -- acos(1.0) is 0, and it used to come back NaN.
+        asin_half_lo = 0.0;
+        asin_half_hi = 0.0;
+        0.0
+    } else {
+        let s = sqrt(z);
+        let p = poly_split(asin_k, asin_kl, z);
+        // two = 2*asin(s) = 2s + (2s)*z*P(z). The kernel is exact enough that
+        // the only rounding left in it is the one two_sum holds.
+        let hi = two_sum(2.0 * s, (2.0 * s) * z * p);
+        // The square root's own half-ulp, which (z - s*s)/(2s) is exactly: z -
+        // s*s is exact by Sterbenz again, and the first-order form is wrong by a
+        // relative 5e-17 of a number that is itself a fraction of an ulp -- so
+        // this is the sqrt put back, not an estimate of it.
+        asin_half_lo = ts_lo + 2.0 * ((z - s * s) / (2.0 * s)) * (1.0 + z * p);
+        asin_half_hi = hi;
+        hi
+    }
+};
+
 // asin(x) for |x| <= 0.5, as atan(x/sqrt(1-x*x)). The half-angle step below
 // handles the rest, and this range is where the division is well behaved.
 def asin_small(x: float) -> float {
@@ -1225,8 +1358,11 @@ def asin_small(x: float) -> float {
 };
 
 // asin(x), |x| <= 1. Above 0.5 the half-angle identity brings the argument
-// back inside: asin(x) = pi/2 - 2*asin(sqrt((1-|x|)/2)), one step, and the
-// sqrt is computed as sqrt((1-x)(1+x)) so that no precision is lost near 1.
+// back inside: asin(x) = pi/2 - 2*asin(sqrt((1-|x|)/2)), one step. That inner
+// asin is computed from its own kernel rather than by recursing into
+// asin_small, because asin_small goes through atan and atan's own ulp lands
+// inside the answer whole -- which is what used to leave asin two ulps out at
+// -0.719 while nothing else in the module was more than one.
 def asin(x: float) -> float {
     if (x != x || x > 1.0 || x < -1.0) {
         nan
@@ -1240,14 +1376,15 @@ def asin(x: float) -> float {
         let r = if (a <= 0.5) {
             asin_small(a)
         } else {
-            // asin(a) = pi/2 - 2*asin(sqrt((1-a)/2)), one step, and the sqrt is
-            // computed from 1 - a alone -- which Sterbenz makes exact -- so
-            // nothing is lost however close a is to 1. The subtraction is
-            // corrected afterwards; pi/2 minus something an ulp off is an ulp
-            // off, and acos wants its answer to the ulp.
-            let two = 2.0 * asin_small(sqrt((1.0 - a) * 0.5));
-            let d = pi_over_2 - two;
-            d + ((pi_over_2 - d) - two)
+            let two_hi = asin_half(a);
+            let two_lo = asin_half_lo;
+            // pi/2 - two, with `two` still in two parts: the two_sum answers
+            // pi/2 - two_hi exactly, and both corrections are then subtracted
+            // from the RESULT, which is where a few 1e-17s do not cancel
+            // against an 0.8 and leave nothing. One rounding finishes it.
+            let d = two_sum(pi_over_2, 0.0 - two_hi);
+            let f = ts_lo - two_lo;
+            d + f
         };
         if (neg) { 0.0 - r } else { r }
     }
@@ -1258,9 +1395,37 @@ def acos(x: float) -> float {
     if (x != x || x > 1.0 || x < -1.0) {
         nan
     } else {
-        let a = asin(x);
-        let d = pi_over_2 - a;
-        d + ((pi_over_2 - d) - a)
+        let neg = x < 0.0;
+        let a = if (neg) { 0.0 - x } else { x };
+        let r = if (a > 0.5) {
+            // acos(a) = 2*asin(sqrt((1-a)/2)), which is the half-angle quantity
+            // asin_half already computes -- taken whole, and formed directly.
+            // NOT pi/2 - asin(a): near a = 1 that answer is 3e-8 against a
+            // pi/2, so eight digits cancel and acos(1 - 4e-17) lands forty ulps
+            // out. One addition of the two parts, which are of very different
+            // sizes, so the rounding is the answer's own half-ulp.
+            //
+            // `hi` is bound before the cell is read: asin_half fills that cell
+            // as a side effect, and reading it inside the same expression would
+            // leave the order the two operands are evaluated in deciding the
+            // answer. Fifteen of the 2076 cases were that, before the binding.
+            let hi = asin_half(a);
+            hi + asin_half_lo
+        } else {
+            // Below the half there is nothing to cancel: the answer is between
+            // pi/3 and pi/2, and asin(a) is small, so the subtraction is
+            // corrected the same way asin's own is.
+            let s = asin_small(a);
+            let d = pi_over_2 - s;
+            d + ((pi_over_2 - d) - s)
+        };
+        // acos(-x) = pi - acos(x), and THAT is not a cancellation either way:
+        // the answer is in [pi/2, pi] whether r is 3e-8 or pi/2, so the
+        // subtraction costs its own half-ulp and nothing else. (Getting here
+        // wrong is cheap to do and the table catches it immediately: 130 of the
+        // 2076 cases were this one missing sign, answering acos(-0.461) with
+        // the value for +0.461.)
+        if (neg) { pi - r } else { r }
     }
 };
 
@@ -1319,7 +1484,6 @@ let neg_zero: float = 0.0 * (0.0 - 1.0);
 // two_sum(a, b) = a + b, with the exact rounding error left in ts_lo. The
 // three-operation form needs the operands ordered; this is the six-operation
 // one, which does not.
-let ts_lo: float = 0.0;
 let log2_hi: float = 0.0;
 let log2_lo: float = 0.0;
 
@@ -1358,12 +1522,20 @@ def log2_dd(x: float) -> float {
         // the two terms are of very different sizes -- the small one is the
         // kernel's, the big one is e*ln2 -- and the rounding that matters is
         // the big one's, so that is the one two_sum keeps track of
-        let a = z * (2.0 + w * poly_split(log_k, log_kl, w));
+        //
+        // `a` is two_sum(2.0 * z, (z * w) * P) and NOT z * (2.0 + w * P). They
+        // are the same function, but the brackets in the second one round at
+        // the SIZE OF 2.0 -- a whole ulp of the logarithm -- and pow multiplies
+        // this logarithm by the exponent, so that one rounding was three ulps
+        // of pow(23.85, 5.6) and nothing else was. Scaling by two is exact and
+        // (z*w)*P is two orders smaller, so the two_sum carries it instead.
+        let a = two_sum(2.0 * z, (z * w) * poly_split(log_k, log_kl, w));
+        let a_lo = ts_lo;
         let b = two_sum(ef * ln2_hi, ef * ln2_lo);
         let bc_lo = ts_lo;
         let t = two_sum(a, b);
         log2_hi = t;
-        log2_lo = ts_lo + bc_lo;
+        log2_lo = ts_lo + a_lo + bc_lo;
         t
     }
 };

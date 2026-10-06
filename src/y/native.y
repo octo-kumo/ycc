@@ -444,15 +444,25 @@ def seen_any(seen: [long], lo: long, hi: long, level: long) -> bool {
 
 // Collapse "/./" segments so the same file resolves to one key no matter
 // how deep the import nesting is (base dirs accumulate "/." per level:
-// "ycc/././enc64.y" vs "ycc/./././enc64.y"). Deterministic, so same-file
-// inputs always yield the same key (sufficient for seen-dedup).
+// "ycc/././enc64.y" vs "ycc/./././enc64.y"), and "/../" segments so one file
+// reached by two spellings is one key: without the fold, a tool outside
+// src/y/ that imports a std module by name and a sibling by a path with a
+// ".." in it splices that module twice -- once per spelling -- and every
+// name in it is reported as a duplicate definition against itself.
+// Deterministic, so same-file inputs always yield the same key (sufficient
+// for seen-dedup). Purely lexical, as the rest of it is: a ".." that would
+// leave the root is kept, because whether it exists is the filesystem's
+// answer and this runs before any file is read.
 def norm_path(p: str) -> str {
     let parts = split(p, "/");
     let out: [str] = [];
     let i = 0;
     while (i < len(parts)) {
         let seg = parts[i];
+        let n = len(out);
         if (seg == ".") {
+        } else if (seg == ".." && n > 0 && out[n - 1] != "..") {
+            out = out[:n - 1];
         } else {
             out += seg;
         };
@@ -1937,6 +1947,109 @@ def normtype(ty: Type) -> Type { ty };
 // strip_namespaces: dot(NAME, key) with NAME an import namespace -> id(key).
 // Full AST rebuild (only dot nodes change, but uniform rebuild is simplest).
 
+// `m.T` -> `T`, when `m` names a path import. Anything else unchanged: a
+// primitive name, a bare name, or a PACKAGE-qualified one, which `strip_ns`'s
+// own Dot arm keeps on purpose (pkg_ns) because a package is linked as a unit of
+// its own and its names stay qualified.
+def strip_ns_name(q: str, imports: [str]) -> str {
+    let out = q;
+    let dot = index_of(q, ".");
+    if (dot > 0) {
+        let ns = q[0:dot];
+        if (is_ns(ns, imports)) { out = q[dot + 1:len(q)]; };
+    };
+    out
+}
+
+// A type with a path-import namespace stripped.
+//
+// strip_ns has always done this for EXPRESSIONS -- `m.f(x)` is a call to `f` --
+// and the origin map documents the consequence: a file imported BY PATH
+// contributes no module name, because everything of its is already flat. That
+// was true of expressions and false of TYPES, and the asymmetry was a bug rather
+// than a decision.
+//
+// A `type` alias in a path-imported module is registered by rename under its
+// BARE name: rn_prepass_one qualifies a statement only when rn_stmt_mod names its
+// module, and rn_stmt_mod reads `mods`, which native_resolve fills with "" for
+// every path import (native.y 623, and the note above `type Origin` says so).
+// A reference to that alias is written `m.T`, which the parser keeps as a tname
+// spelled "m.T" (parser.y 1128) and which nothing had rewritten. So:
+//
+//     import m from "./mod.y";
+//     let p: m.Pair = m.mk(1, 2);      error: unknown type 'm.Pair'
+//     let p: Pair = m.mk(1, 2);        compiles
+//
+// Two spellings of one declaration in a language that documents a path import as
+// flattened. Stripping the prefix here makes a type behave like an expression,
+// which is what the ORIGIN MAP's own note already claimed.
+def strip_type(t: Type, imports: [str]) -> Type {
+    let k = t.k;
+    if (k == K.tname) {
+        let nm: TName = t;
+        let out: TName = { k: K.tname, name: strip_ns_name(nm.name, imports) };
+        let result: Type = out;
+        result
+    } else if (k == K.tptr) {
+        let ptr: TPtr = t;
+        let out: TPtr = { k: K.tptr, to: strip_type(ptr.to, imports) };
+        let result: Type = out;
+        result
+    } else if (k == K.tarr) {
+        let arr: TOf = t;
+        let out: TOf = { k: K.tarr, of: strip_type(arr.of, imports) };
+        let result: Type = out;
+        result
+    } else if (k == K.tarrfix) {
+        let arr: TFix = t;
+        let out: TFix = { k: K.tarrfix, of: strip_type(arr.of, imports), n: arr.n };
+        let result: Type = out;
+        result
+    } else if (k == K.topt) {
+        let opt: TOf = t;
+        let out: TOf = { k: K.topt, of: strip_type(opt.of, imports) };
+        let result: Type = out;
+        result
+    } else if (k == K.tmap) {
+        let map: TMap = t;
+        let out: TMap = { k: K.tmap, key: strip_type(map.key, imports), of: strip_type(map.of, imports) };
+        let result: Type = out;
+        result
+    } else if (k == K.tparams) {
+        let list: TList = t;
+        let out: TList = { k: K.tparams, ts: strip_type_list(list.ts, imports) };
+        let result: Type = out;
+        result
+    } else if (k == K.tunion) {
+        let list: TList = t;
+        let out: TList = { k: K.tunion, ts: strip_type_list(list.ts, imports) };
+        let result: Type = out;
+        result
+    } else if (k == K.tfunc) {
+        let func: TFunc = t;
+        let out: TFunc = { k: K.tfunc, args: strip_type_list(func.args, imports), ret: strip_type(func.ret, imports) };
+        let result: Type = out;
+        result
+    } else if (k == K.trec) {
+        let rec: TRec = t;
+        let fs: [Field] = [];
+        foreach (f in rec.fields) { fs += { name: f.name, opt: f.opt, typ: strip_type(f.typ, imports) }; };
+        let out: TRec = { k: K.trec, fields: fs };
+        let result: Type = out;
+        result
+    } else { t }
+}
+
+def strip_type_list(ts: [Type], imports: [str]) -> [Type] {
+    let out: [Type] = [];
+    let i = 0;
+    while (i < len(ts)) {
+        out += strip_type(ts[i], imports);
+        i = i + 1;
+    };
+    out
+}
+
 def strip_list(nodes: [Node], imports: [str]) -> [Node] {
     let out: [Node] = [];
     let i = 0;
@@ -1964,10 +2077,10 @@ def strip_ns(node: Node, imports: [str]) -> Node {
             } else if (is_ns(ov, pkg_ns)) {
                 normnode({ k: K.id, v: ov + "." + okey, line: oline, col: ocol })
             } else {
-                normnode({ k: K.dot, obj: obj, key: okey, line: oline, col: ocol })
+                normnode({ k: K.dot, obj: obj, key: okey, line: oline, col: ocol, nline: oline, ncol: ocol })
             }
         } else {
-            normnode({ k: K.dot, obj: obj, key: okey, line: oline, col: ocol })
+            normnode({ k: K.dot, obj: obj, key: okey, line: oline, col: ocol, nline: oline, ncol: ocol })
         }
     } else if (k == K.un) {
         let un: Un = node;
@@ -1995,7 +2108,7 @@ def strip_ns(node: Node, imports: [str]) -> Node {
         strip_decl(decl, imports)
     } else if (k == K.func) {
         let func: Func = node;
-        normnode({ k: K.func, params: func.params, ptypes: func.ptypes, ret: func.ret, body: strip_ns(func.body, imports), line: func.line, col: func.col, defs: func.defs, label: func.label })
+        normnode({ k: K.func, params: func.params, ptypes: strip_type_list(func.ptypes, imports), ret: strip_type(func.ret, imports), body: strip_ns(func.body, imports), line: func.line, col: func.col, defs: func.defs, label: func.label })
     } else if (k == K.assign) {
         let assign: Assign = node;
         normnode({ k: K.assign, name: assign.name, v: strip_ns(assign.v, imports), line: assign.line, col: assign.col })
@@ -2042,10 +2155,10 @@ def strip_ns(node: Node, imports: [str]) -> Node {
                 // (the checker says so of the qualified name)
                 normnode({ k: K.assign, name: id.v + "." + assign.key, v: strip_ns(assign.v, imports), line: assign.line, col: assign.col })
             } else {
-                normnode({ k: K.dotassign, obj: strip_ns(dao, imports), key: assign.key, v: strip_ns(assign.v, imports), line: assign.line, col: assign.col })
+                normnode({ k: K.dotassign, obj: strip_ns(dao, imports), key: assign.key, v: strip_ns(assign.v, imports), line: assign.line, col: assign.col, nline: assign.nline, ncol: assign.ncol })
             }
         } else {
-            normnode({ k: K.dotassign, obj: strip_ns(dao, imports), key: assign.key, v: strip_ns(assign.v, imports), line: assign.line, col: assign.col })
+            normnode({ k: K.dotassign, obj: strip_ns(dao, imports), key: assign.key, v: strip_ns(assign.v, imports), line: assign.line, col: assign.col, nline: assign.nline, ncol: assign.ncol })
         }
     } else if (k == K.kw_foreach) {
         let loop: Foreach = node;
@@ -2066,9 +2179,9 @@ def strip_ns(node: Node, imports: [str]) -> Node {
 
 def strip_decl(node: Decl, imports: [str]) -> Node {
     if (node.kind == "def") {
-        normnode({ k: K.decl, kind: "def", name: node.name, typ: normtype({ k: K.tnone }), v: strip_ns(node.v, imports), line: node.line, col: node.col })
+        normnode({ k: K.decl, kind: "def", name: node.name, typ: normtype({ k: K.tnone }), v: strip_ns(node.v, imports), line: node.line, col: node.col, nline: node.nline, ncol: node.ncol })
     } else {
-        normnode({ k: K.decl, kind: node.kind, name: node.name, typ: node.typ, v: strip_ns(node.v, imports), line: node.line, col: node.col })
+        normnode({ k: K.decl, kind: node.kind, name: node.name, typ: strip_type(node.typ, imports), v: strip_ns(node.v, imports), line: node.line, col: node.col, nline: node.nline, ncol: node.ncol })
     }
 };
 
@@ -2879,118 +2992,26 @@ def infer_decl(st: EmitSt, node: Decl) -> Type {
 };
 
 // ── feature-use scan (for conditional prologue) ───────────────────────
-// Walk the renamed AST for calls the _start prologue must serve: argv()
-// needs y_argv_init to materialize the [str] array from the raw stack.
-// Everything else (y_alloc, y_print_*, ...) is position-independent.
-// Returns { argv: bool }.
-
-def uses_scan_block(stmts: [Node], out: { argv: bool }) -> { argv: bool } {
+// Whether the _start prologue has to serve argv(): argv() needs
+// y_argv_init to materialize the [str] array from the raw stack. Everything
+// else (y_alloc, y_print_*, ...) is position-independent.
+//
+// The walk is `fv_walk` -- the one that collects the names a closure must
+// capture -- so no node kind can hide a call behind a gap in a second ladder.
+// The one this replaces had no arm for a `K.dot`, so `argv().length` (a
+// field read on a call) left this false: the prologue's y_argv_init was never
+// emitted, `y_argv` returned an untouched %r15, and the program died on
+// SIGSEGV with no output whenever the length was the only read of argv.
+// Matching the *name* rather than a call to it is the safe direction: a false
+// positive costs the prologue (a few hundred bytes), a false negative crashes.
+def uses_argv(stmts: [Node]) -> bool {
+    let reads: [str] = [];
     let i = 0;
     while (i < len(stmts)) {
-        out = uses_scan_node(stmts[i], out);
+        reads = fv_walk(stmts[i], reads, true);
         i = i + 1;
     };
-    out
-};
-
-def uses_scan_node(node: Node, out: { argv: bool }) -> { argv: bool } {
-    let k = node.k;
-    if (k == K.call) {
-        // scan callee + args (argv() could nest inside an argument).
-        // ncallee is read three times: the argv test, the id test, the walk.
-        let call: Call = node;
-        let ncallee = call.callee;
-        let nargs: [Node] = call.args;
-        let found = out;
-        if (ncallee.k == K.id) {
-            let id: Leaf = ncallee;
-            if (id.v == "argv") {
-                found = { argv: true };
-            }
-        }
-        let o2 = uses_scan_node(ncallee, found);
-        uses_scan_block(nargs, o2)
-    } else if (k == K.un) {
-        let child: NodeE = node;
-        uses_scan_node(child.e, out)
-    } else if (k == K.bin) {
-        let bin: Bin = node;
-        uses_scan_node(bin.r, uses_scan_node(bin.l, out))
-    } else if (k == K.addr || k == K.deref) {
-        let child: NodeE = node;
-        uses_scan_node(child.e, out)
-    } else if (k == K.kw_if) {
-        let branch: If = node;
-        uses_scan_node(branch.els, uses_scan_node(branch.then, uses_scan_node(branch.cond, out)))
-    } else if (k == K.kw_while) {
-        let loop: While = node;
-        uses_scan_node(loop.body, uses_scan_node(loop.cond, out))
-    } else if (k == K.block) {
-        let block: Block = node;
-        uses_scan_block(block.stmts, out)
-    } else if (k == K.decl) {
-        let decl: Decl = node;
-        uses_scan_node(decl.v, out)
-    } else if (k == K.func) {
-        let func: Func = node;
-        uses_scan_node(func.body, out)
-    } else if (k == K.assign) {
-        let assign: Assign = node;
-        uses_scan_node(assign.v, out)
-    } else if (k == K.incdec) {
-        let incdec: IncDec = node;
-        uses_scan_node(incdec.tgt, out)
-    } else if (k == K.opassign) {
-        let assign: OpAssign = node;
-        uses_scan_node(assign.v, uses_scan_node(assign.tgt, out))
-    } else if (k == K.store) {
-        let store: Store = node;
-        uses_scan_node(store.v, uses_scan_node(store.p, out))
-    } else if (k == K.ret) {
-        let child: NodeE = node;
-        uses_scan_node(child.e, out)
-    } else if (k == K.array) {
-        let array: ArrLit = node;
-        uses_scan_block(array.elems, out)
-    } else if (k == K.arrrep) {
-        let rep: ArrRep = node;
-        uses_scan_node(rep.v, out)
-    } else if (k == K.rec) {
-        let rec: RecLit = node;
-        uses_scan_block(rec.vals, out)
-    } else if (k == K.map) {
-        let map: RecLit = node;
-        uses_scan_block(map.vals, out)
-    } else if (k == K.index) {
-        let index: Index = node;
-        uses_scan_node(index.idx, uses_scan_node(index.arr, out))
-    } else if (k == K.slice) {
-        let slice: Slice = node;
-        uses_scan_node(slice.hi, uses_scan_node(slice.lo, uses_scan_node(slice.arr, out)))
-    } else if (k == K.idxassign) {
-        let assign: IdxAssign = node;
-        uses_scan_node(assign.v, uses_scan_node(assign.idx, uses_scan_node(assign.arr, out)))
-    } else if (k == K.dotassign) {
-        let assign: DotAssign = node;
-        uses_scan_node(assign.v, uses_scan_node(assign.obj, out))
-    } else if (k == K.kw_foreach) {
-        let loop: Foreach = node;
-        uses_scan_node(loop.body, uses_scan_node(loop.iter, out))
-    } else if (k == K.forrange) {
-        let loop: ForRange = node;
-        uses_scan_node(loop.body, uses_scan_node(loop.hi, uses_scan_node(loop.lo, out)))
-    } else if (k == K.kw_for) {
-        let loop: For = node;
-        uses_scan_node(loop.body, uses_scan_node(loop.step, uses_scan_node(loop.cond, uses_scan_node(loop.init, out))))
-    } else if (k == K.sliceassign) {
-        let assign: SliceAssign = node;
-        uses_scan_node(assign.v, uses_scan_node(assign.hi, uses_scan_node(assign.lo, uses_scan_node(assign.arr, out))))
-    } else if (k == K.rectest || k == K.narrow || k == K.matchend) {
-        let child: NodeE = node;
-        uses_scan_node(child.e, out)
-    } else {
-        out
-    }
+    name_in(reads, "argv")
 };
 
 // ── def collection (incl. hoisting) ────────────────────────────────────
@@ -4535,6 +4556,22 @@ def gen_cat(st: EmitSt, node: Bin, lt: Type, rt: Type) -> EmitSt {
             st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
             st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_cat"), 0, 0, 0, 0, 0, 0);
             st = emit_insn(st, insn.F_ADD_I_R, 16, insn.R_RSP, 64, 0, 0, 0, 0)
+        } else if (rt.k == K.tbyte) {
+            // A byte stringifies as the number it holds: `s[i]` is a byte, so
+            // this is the shape a glyph ramp or a lookup table builds a string
+            // with. Without the arm a byte fell through to the unknown-
+            // operand arm below, which pushes the VALUE where y_str_cat
+            // wants a pointer -- a dereference of 65, and SIGSEGV. `gen` leaves
+            // a byte zero-extended in %rax, so y_long_tostr takes it as it is.
+            st = gen(st, node.l);
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+            st = gen(st, node.r);
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_CALL_L, lbl_new("y_long_tostr"), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_cat"), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_ADD_I_R, 16, insn.R_RSP, 64, 0, 0, 0, 0)
         } else if (rt.k == K.tfloat) {
             st = gen(st, node.l);
             st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
@@ -4571,6 +4608,17 @@ def gen_cat(st: EmitSt, node: Bin, lt: Type, rt: Type) -> EmitSt {
             st = gen(st, node.l);
             st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
             st = emit_insn(st, insn.F_CALL_L, lbl_new("y_bool_tostr"), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+            st = gen(st, node.r);
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_cat"), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_ADD_I_R, 16, insn.R_RSP, 64, 0, 0, 0, 0)
+        } else if (lt.k == K.tbyte) {
+            // the mirror of the right-operand byte arm
+            st = gen(st, node.l);
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_CALL_L, lbl_new("y_long_tostr"), 0, 0, 0, 0, 0, 0);
             st = emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0);
             st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
             st = gen(st, node.r);
@@ -5640,10 +5688,10 @@ def gen_cat_conv(st: EmitSt, node: Bin, lt: Type) -> EmitSt {
     st = r.st;
     let t1 = "y_t" + tostring(r.uid);
     let noelems: [Node] = [];
-    let da: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "l", v: node.l, line: ln, col: cl };
-    let db: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "r", v: node.r, line: ln, col: cl };
+    let da: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "l", v: node.l, line: ln, col: cl, nline: ln, ncol: cl };
+    let db: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "r", v: node.r, line: ln, col: cl, nline: ln, ncol: cl };
     let arr_type: ArrTy = lt;
-    let dc: Decl = { k: K.decl, kind: "let", typ: type_node({ k: K.tarr, of: arr_type.of }), name: t1 + "c", v: { k: K.array, elems: noelems, line: ln, col: cl }, line: ln, col: cl };
+    let dc: Decl = { k: K.decl, kind: "let", typ: type_node({ k: K.tarr, of: arr_type.of }), name: t1 + "c", v: { k: K.array, elems: noelems, line: ln, col: cl }, line: ln, col: cl, nline: ln, ncol: cl };
     let pa: OpAssign = { k: K.opassign, tgt: n_id(t1 + "c", ln, cl), op: "+", v: n_id(t1 + "l", ln, cl), line: ln, col: cl };
     let pb: OpAssign = { k: K.opassign, tgt: n_id(t1 + "c", ln, cl), op: "+", v: n_id(t1 + "r", ln, cl), line: ln, col: cl };
     let panode: Node = pa;
@@ -8137,12 +8185,12 @@ def gen_incdec_desugar(st: EmitSt, node: IncDec, dropped: bool) -> EmitSt {
     if (node.pre) {
         // ++x -> { bind; let v = x + 1; x = v; v }
         let nv: Bin = { k: K.bin, op: binop, l: place, r: one, line: ln, col: cl };
-        let d2: Decl = { k: K.decl, kind: "let", typ: place_value_type(infer(st, tgt)), name: t1 + "v", v: nv, line: ln, col: cl };
+        let d2: Decl = { k: K.decl, kind: "let", typ: place_value_type(infer(st, tgt)), name: t1 + "v", v: nv, line: ln, col: cl, nline: ln, ncol: cl };
         let asg: Node = gen_place_assign(tgt, n_id(t1 + "v", ln, cl), t1, ln, cl);
         gen_incdec_end(st, bind, d2, asg, dropped, ln, cl)
     } else {
         // x++ -> { bind; let v = x; x = v + 1; v }
-        let d2: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "v", v: place, line: ln, col: cl };
+        let d2: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "v", v: place, line: ln, col: cl, nline: ln, ncol: cl };
         let nv: Bin = { k: K.bin, op: binop, l: n_id(t1 + "v", ln, cl), r: one, line: ln, col: cl };
         let asg: Node = gen_place_assign(tgt, nv, t1, ln, cl);
         gen_incdec_end(st, bind, d2, asg, dropped, ln, cl)
@@ -8268,7 +8316,7 @@ def gen_opassign_desugar(st: EmitSt, node: OpAssign, dropped: bool) -> EmitSt {
     let bind: Node = gen_place_bind(tgt, t1, ln, cl);
     let rd: Node = gen_place_read(tgt, t1, ln, cl);
     let bin: Bin = { k: K.bin, op: op, l: rd, r: node.v, line: ln, col: cl };
-    let d2: Decl = { k: K.decl, kind: "let", typ: place_value_type(infer(st, tgt)), name: t1 + "v", v: bin, line: ln, col: cl };
+    let d2: Decl = { k: K.decl, kind: "let", typ: place_value_type(infer(st, tgt)), name: t1 + "v", v: bin, line: ln, col: cl, nline: ln, ncol: cl };
     let asg: Node = gen_place_assign(tgt, n_id(t1 + "v", ln, cl), t1, ln, cl);
     let rest: [Node] = [];
     rest += d2;
@@ -8309,7 +8357,7 @@ def place_read_idx(tgt: Index, t1: str, ln: long, cl: long) -> Index {
 };
 
 def place_read_dot(tgt: Dot, t1: str, ln: long, cl: long) -> Dot {
-    { k: K.dot, obj: n_id(t1, ln, cl), key: tgt.key, line: ln, col: cl }
+    { k: K.dot, obj: n_id(t1, ln, cl), key: tgt.key, line: ln, col: cl, nline: ln, ncol: cl }
 };
 
 def gen_place_read(tgt: Node, t1: str, ln: long, cl: long) -> Node {
@@ -8337,7 +8385,7 @@ def place_asg_idx(tgt: Index, valnode: Node, t1: str, ln: long, cl: long) -> Idx
 };
 
 def place_asg_dot(tgt: Dot, valnode: Node, t1: str, ln: long, cl: long) -> DotAssign {
-    { k: K.dotassign, obj: n_id(t1, ln, cl), key: tgt.key, v: valnode, line: ln, col: cl }
+    { k: K.dotassign, obj: n_id(t1, ln, cl), key: tgt.key, v: valnode, line: ln, col: cl, nline: tgt.nline, ncol: tgt.ncol }
 };
 
 def gen_place_assign(tgt: Node, valnode: Node, t1: str, ln: long, cl: long) -> Node {
@@ -8361,14 +8409,14 @@ def place_bind_id(tgt: Leaf, t1: str, ln: long, cl: long) -> Block {
 };
 
 def place_bind_idx_id(tgt: Index, t1: str, ln: long, cl: long) -> Decl {
-    { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1, v: tgt.idx, line: ln, col: cl }
+    { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1, v: tgt.idx, line: ln, col: cl, nline: ln, ncol: cl }
 };
 
 def place_bind_idx_nest(tgt: Index, t1: str, ln: long, cl: long) -> Block {
     // nested base (`grid[0][1]`, `x.y[i]`, `f()[i]`): capture it in
     // `t1 + "a"` as well, so the place evaluates it exactly once.
-    let tba: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "a", v: tgt.arr, line: ln, col: cl };
-    let tib: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1, v: tgt.idx, line: ln, col: cl };
+    let tba: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "a", v: tgt.arr, line: ln, col: cl, nline: ln, ncol: cl };
+    let tib: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1, v: tgt.idx, line: ln, col: cl, nline: ln, ncol: cl };
     block2(tba, tib, ln, cl)
 };
 
@@ -8384,7 +8432,7 @@ def place_bind_idx(tgt: Index, t1: str, ln: long, cl: long) -> Node {
 };
 
 def place_bind_dot(tgt: Dot, t1: str, ln: long, cl: long) -> Decl {
-    { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1, v: tgt.obj, line: ln, col: cl }
+    { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1, v: tgt.obj, line: ln, col: cl, nline: ln, ncol: cl }
 };
 
 // The synthetic `let` that runs the target's index/base exactly once (a
@@ -8441,9 +8489,9 @@ def gen_opassign_arr(st: EmitSt, node: OpAssign, dropped: bool) -> EmitSt {
         // { let tv = v; let ti = 0; let tn = len(tv);
         //   while (ti < tn) { place += tv[ti]; ti = ti + 1 }
         //   place }
-        let tv: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "v", v: v, line: ln, col: cl };
-        let ti: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "i", v: n_num("0", ln, cl), line: ln, col: cl };
-        let tn: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "n", v: n_call1("len", n_id(t1 + "v", ln, cl), ln, cl), line: ln, col: cl };
+        let tv: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "v", v: v, line: ln, col: cl, nline: ln, ncol: cl };
+        let ti: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "i", v: n_num("0", ln, cl), line: ln, col: cl, nline: ln, ncol: cl };
+        let tn: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "n", v: n_call1("len", n_id(t1 + "v", ln, cl), ln, cl), line: ln, col: cl, nline: ln, ncol: cl };
         let elem: Index = { k: K.index, arr: n_id(t1 + "v", ln, cl), idx: n_id(t1 + "i", ln, cl), line: ln, col: cl };
         let put: Node = gen_place_assign(tgt, n_call2("push", gen_place_read(tgt, t1, ln, cl), elem, ln, cl), t1, ln, cl);
         let step: Assign = { k: K.assign, name: t1 + "i", v: { k: K.bin, op: "+", l: n_id(t1 + "i", ln, cl), r: n_num("1", ln, cl), line: ln, col: cl }, line: ln, col: cl };
@@ -10556,10 +10604,10 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
         if (len(name) == 0) {
             // Only pay for argv materialization when the program uses it
             // (or a package it links does).
-            let want = uses_scan_block(ast3.stmts, { argv: false });
+            let want_argv = uses_argv(ast3.stmts) || xt.argv;
             let main_body: Block = { k: K.block, stmts: main_stmts, line: 0, col: 0 };
             let start_fn: EmitMain = { params: [], ptypes: [], ret: type_node({ k: K.tvoid }), body: main_body, line: 0, col: 0 };
-            st = emit_one_fn(st, lbl_new("_start"), rm.uid, start_fn, true, want.argv || xt.argv, [], "");
+            st = emit_one_fn(st, lbl_new("_start"), rm.uid, start_fn, true, want_argv, [], "");
         } else if (len(main_stmts) > 0) {
             init = arch.arch_fn_label(rm.uid, "init");
             let init_body: Block = { k: K.block, stmts: main_stmts, line: 0, col: 0 };
@@ -11994,7 +12042,7 @@ def n_bool(v: str, line: long, col: long) -> Leaf {
 };
 
 def n_dot(obj: Node, key: str, line: long, col: long) -> Dot {
-    { k: K.dot, obj: obj, key: key, line: line, col: col }
+    { k: K.dot, obj: obj, key: key, line: line, col: col, nline: line, ncol: col }
 };
 
 def n_idx(arr: Node, idx: Node, line: long, col: long) -> Index {
@@ -12018,7 +12066,7 @@ def n_while(c: Node, b: Node, ln: long, cl: long) -> While {
 };
 
 def n_decl(name: str, v: Node, ln: long, cl: long) -> Decl {
-    { k: K.decl, kind: "let", typ: type_node({ k: K.tnone }), name: name, v: v, line: ln, col: cl }
+    { k: K.decl, kind: "let", typ: type_node({ k: K.tnone }), name: name, v: v, line: ln, col: cl, nline: ln, ncol: cl }
 };
 
 def n_assign(name: str, v: Node, ln: long, cl: long) -> Assign {

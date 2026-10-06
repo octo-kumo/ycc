@@ -1,7 +1,28 @@
 # LSP.md — a language server for Y, and the VS Code extension
 
-**Status: proposed, not implemented.** This document is the design and the
-requirement list. Nothing here has been built yet.
+**Status: built and running; §11's milestone table is the authority.** `yserve`
+exists, is driven by a VS Code extension in `vscode-y-lang/`, and is tested as a
+real process. M1 (R1, errors and warnings), M2 (R2, semantic tokens) and M3 (R3,
+formatting) are done; **M4's Stage A is done** (R4, R5, R6 — hover, go-to-
+definition, completion, from the open buffer's own declarations), measured at §11.3
+and costed at §9.2.
+
+This line used to read "proposed, not implemented … nothing here has been built
+yet", which was wrong from the moment M1 shipped and stayed wrong through four
+milestones. A design document that understates its own state is worse than one
+that has none: a reader checks whether it is real before reading it.
+
+What is **not** built, precisely:
+
+- **M4 Stage B / §9.2, the C2 compiler change** — for TYPES only: an inferred
+  type in a hover, and a record's own fields after a `.`. Cross-file navigation
+  used to be on this list and is **not**: §11.4 found it needs no compiler change
+  at all, and `xref.y` now does it. What remains is the semantic token classes
+  that say what a name *denotes*, which are the same missing thing.
+- **M5's packaging**, beyond the documentation rows: no `vsce` package, no
+  marketplace entry.
+- The requirement text below is unchanged and still the target; where a
+  requirement is partly delivered the status note at its head says which part.
 
 **On citations.** Compiler internals are named by **symbol** — `types.check_program`,
 `native.origin_file`, `rename.rn_reaches_go` — and never by line number. `src/y`
@@ -18,8 +39,9 @@ prints what it finds there:
 python3 src/tools/lsp/check-refs.py -v
 ```
 
-Run it after touching `src/y`. It is not wired into `make test`, because that is
-the compiler agent's file; §12 lists it as a follow-up.
+Run it after touching `src/y`. It used to say it was not wired into `make test`
+because that is the compiler agent's file; it is wired now, into
+`test/sh/test_lsp.sh` alongside `check-names.py`, so `make test` runs it.
 
 It supersedes the sketch at the end of `future.y`:
 
@@ -240,6 +262,7 @@ src/tools/lsp/sem.y           semantic tokens (M2)                R2
 src/tools/lsp/sym.y           documentSymbol / the outline        R2
 src/tools/lsp/scope.y         declarations, visibility            R4, R5, R6
 src/tools/lsp/nav.y           the word at the cursor, and its declaration  R4-R6
+src/tools/lsp/strm.y          the string methods, from types.str_method    R6
 src/tools/lsp/fmt.y           the formatter                       R3
 src/tools/lsp/diag.y          diagnostics: errors and warnings    R1
 src/tools/lsp/dispatch.y      the parent/child split              §4.2
@@ -406,10 +429,37 @@ source spans for an f-string.
 
 **R2.3** The legend covers, at minimum: comment, string, number, keyword,
 `self`/`none`, variable, parameter, function, method, type, builtin,
-operator, punctuation. The last six are **semantic** and require §9.2; until
-M4 they are omitted and those bytes are classified syntactically only. A
-`y.lsp.semantic` setting turns the semantic layer off for users who do not
-want two colours for the same identifier.
+operator, punctuation. **Delivered**, with one honest deviation: `method` is not a
+class, because nothing in the language distinguishes one — a method *is* a function
+called through a record field, and a name after a `.` is classified `property`
+whether or not what it names is callable. A `y.lsp.semantic` setting turns the
+semantic layer off for users who do not want two colours for the same identifier.
+
+The legend is 14 entries, the eight syntactic ones at their existing indices and
+the five semantic ones **appended** — an editor's theme is keyed on those numbers,
+so renumbering repaints every file in the user's project. `t009_proto` asserts the
+advertised list against `sem.token_types()` rather than against a literal, and
+`t010_sem` asserts each constant against `legend[index]` by name.
+
+Every class is resolved, none is inferred:
+
+| class | decided by |
+|---|---|
+| `builtin` | `native.intrinsic_names()` — the compiler's own list |
+| `parameter` / `function` / `type` | `scope`'s declaration kinds (`D_PARAM`, `D_DEF`, `D_TYPE`) |
+| `function` on a `let` | the text after the name: `: (long) -> long` is a function type, `= def (` is a function literal |
+| `property` | the name is after a `.` — a fact about the text |
+| `variable` | everything else, **including every name that resolves to nothing** |
+
+Two limits, both pinned by `t017_sem` rather than left to be discovered. A record
+LITERAL's field name is `variable`, not `property`: `a` in `{ a: 1 }` is followed
+by `:` exactly as `x` in `let x: T = 1` is, and what tells them apart — that the
+brace opens a record and not a block — is not something a span knows. And a
+declaration's own token is asked about differently from a *use* of it, because a
+parameter is not in scope at its own declaration (`in_scope` compares against the
+body's `{`, still to the right), so `nav.find_decl` answers nothing there;
+`nav.decl_at` asks the separate question "is this token some declaration's own
+name", which is what an editor wants painted.
 
 **R2.4** Tokens are emitted as an LSP delta against the previous document
 state, and must survive the round trip: for every fixture, re-deriving
@@ -475,7 +525,7 @@ outliers against 1651 padded ones: the formatter writes the house style.
 continuations of R3.6a, ~46 the tight-brace outliers of R3.6b, and the rest
 blank-line collapsing and a trailing-newline normalisation (`labels.y` and
 `tags.y` ship without a final newline; R3.6 adds one). Idempotence -- the actual
-requirement of R3.5 -- holds over all 487 files that lex.
+requirement of R3.5 -- holds over every file in the tree that lexes.
 
 **R3.7** Rules live in one table, overridable per `y.lsp.format.*` settings:
 indent width, column limit, operator spacing.
@@ -485,22 +535,32 @@ fuzzable from the shell without a client.
 
 ### R4 — Type information / hover (M4)
 
-> **Status: partly delivered, deliberately.** What shipped is the *declaration*
-> half — hover shows the declaration under the cursor (its signature as written,
-> plus the comment above it), resolved from this file's own declarations. The
-> *type* half (R4.1's `x + y` hovering as `long`) needs the checker's inference
-> recorded as it runs, which is §9.2 / C2 and a compiler change. It was left out
-> rather than approximated: a guessed type is worse than no type, because the
-> user cannot tell it from a real one. R4.4 is the case that decides it — a name
-> with no type shows the declaration and says so, which is what shipped.
+> **Status: delivered.** Both halves are here. Hover shows the checker's own
+> inferred type (§9.2 A2) and, underneath it, the declaration under the cursor
+> (its signature as written, plus the comment above it).
 >
-> The requirement text below is unchanged and still the target.
+> It was staged this way on purpose and the staging is worth keeping in mind when
+> extending it: the *declaration* half needed no compiler change, and the *type*
+> half was left out rather than approximated — a guessed type is worse than no
+> type, because the user cannot tell it from a real one. That rule survived the
+> change and now decides the edges instead of the whole feature (§9.2.2): where
+> the checker indexed nothing the answer is `null`, and where the server cannot
+> type a receiver it refuses rather than answering with something adjacent.
 
 **R4.1** `textDocument/hover` returns the type of the expression under the
 cursor, rendered with `types.tstr` — the one spelling of a type, the same one
 diagnostics print and `typeof` returns, so a hover and an error message read
 alike. `x + y` hovers as `long`; `a[i]` as the element type of `a`; `p.field` as
-the field's declared type.
+the field's declared type. **Delivered** (§9.2), with the three consequences that
+are part of the requirement rather than extras to it:
+
+- an expression that is **not a name** — a literal, an operator, a call's `(` —
+  answers too, with no `range`, which the protocol allows;
+- a record's **field** answers with its type and **no declaration**, because a
+  field is not a binding and there is nothing for the index to find. Asking for
+  a declaration *first* is what made the first version answer `null` here;
+- where the checker indexed nothing the answer is `null`, and `t016_types` pins
+  three such positions.
 
 **R4.2** Function hover shows the full signature: parameter names, parameter
 types, return type. The return type comes from `types.inferred_ret(line, col)`
@@ -516,8 +576,11 @@ shows the declaration instead, and says which.
 
 ### R5 — Go-to-definition (M4)
 
-> **Status: delivered for one file; cross-file (R5.1's "including imported
-> files") is not, and answers `null` rather than guessing.** Resolution is
+> **Status: delivered, including cross-file** (R5.1's "including imported
+> files"). The single-file index answers for the buffer's own declarations; a
+> name from an import is resolved through the SPLICED program the server already
+> builds for diagnostics, which is not the compiler's scope but the renamer's
+> (§11.4), and the answer can name a file the client does not have open. Resolution is
 > `nav.find_decl` over `scope.index_src`'s declarations, with the visibility
 > rules that matter: a `let` is visible only after its own line (Y does not
 > hoist one), a `def` is visible before it (mutual recursion depends on it), the
@@ -550,25 +613,76 @@ the `.`, a `Call` at the `(` (the parser's `Call` site, `407-408`, `447`, `1649-
 
 ### R6 — Auto-complete (M4)
 
-> **Status: delivered for this file's declarations and the builtins; R6.1's
-> "record fields of the expression before the dot" and R6.2's std/package
-> members are not, and the list says so** with `isIncomplete: true`, which is
-> the protocol's way of saying "ask me again as the user types". The builtins
-> are `native.intrinsic_names()` — read from the compiler, not copied here, so a
-> builtin added to the compiler appears without anything updated on this side.
-> Three entries in that list (`opt$test`, `opt$val`, `#fmt`) are the compiler's
-> own halves and are filtered out, because a `$` cannot appear in an identifier
-> and `#` starts a comment.
+> **Status: delivered for this file's declarations, the builtins, and the string
+> methods after a `.`; R6.1's record fields and R6.2's std/package members are
+> not, and the list says so** with `isIncomplete: true`, which is the protocol's
+> way of saying "ask me again as the user types".
+>
+> The builtins are `native.intrinsic_names()` — read from the compiler, not
+> copied here, so a builtin added to the compiler appears without anything
+> updated on this side. Three entries in that list (`opt$test`, `opt$val`,
+> `#fmt`) are the compiler's own halves and are filtered out, because a `$`
+> cannot appear in an identifier and `#` starts a comment.
+>
+> The string methods are the second of R6.2's three tables, and they are the one
+> that is genuinely answerable without §9.2: `types.str_method(m)` returns the
+> method's parameters, arity and result type, and `fn == ""` for a name it does
+> not know — a hover after a `.` reads the signature from the compiler's own
+> table, and completion offers the whole set. It cannot *enumerate*, because
+> `str_method` is a chain of comparisons, so `strm.y` mirrors the names and
+> filters them through `str_method` on every use; `t014_strm` is the ratchet.
+> The member list is the string methods and ONLY those: a record's own fields
+> are the other half of R6.1 and are not claimed. Mixing the two would be worse
+> than offering neither, since the user reads the list as "these go here".
+>
+> `native.unit_iface` is the third table and is still not offered, and reading
+> what it actually is is what settles it. It does not enumerate anything:
+> `pack_iface` (native.y 11315) packs `len(exports)`, then per export a
+> name / label / type-code triple, then the parameter defaults — an
+> order-dependent blob built to be COMPARED for equality, which is what the std
+> pack and `build/obj` staleness use it for. Asking it for "the std unit exports"
+> would mean parsing a fingerprint built for comparison to recover the one thing
+> it was derived from: `u.exports`, a `[Sym]` the compiler already has. So the
+> honest route is `u.exports` directly, and *that* is Stage B's cross-file work —
+> which is the same 84% the coverage measurement puts on Stage B (§11.3), reached
+> from the other end. The two are not two tasks: delivering either the index or
+> the externs delivers both.
 
 **R6.1** `textDocument/completion` offers, in scope at the cursor: locals,
 parameters, `self`, top-level bindings, `type` aliases, and record fields of
 the expression before the dot.
 
+**Delivered**, including the record fields (§9.2). Which members a `.` offers is
+decided by **the checker's type of the object**, never by guessing:
+
+| receiver | the list |
+|---|---|
+| a record | its own fields, filtered by the prefix |
+| a `str` | the string methods (`strm.y`) |
+| anything else | **nothing** |
+| *no type at all* | the string methods — the Stage A answer, honest because the server does not know the receiver |
+
+The last two rows are the requirement as much as the first. A member branch that
+answers everything after a dot would look like M4 working while being wrong, so
+both non-answers are pinned: `t016_types` for the array that must **not** get the
+26 string methods, and `t014_strm` for the unterminated `p.` that still gets them
+because nothing is known. A receiver that is not a single identifier (`a.b.c`) is
+refused rather than approximated — `serve.object_col` returns −1, because no
+position in the type table means "the object of *this* dot".
+
 **R6.2** Global items need no compiler change and come from the compiler's own
-tables: `native.is_intrinsic_name` (`native.is_intrinsic_name`) for builtins,
-`types.str_method` (`types.str_method`) for the 23 string methods,
-`native.unit_iface` (`native.unit_iface`) for std unit exports, and `nr.pkgs` for
-package-qualified names. Local scope is the only part needing §9.2.
+tables: `native.is_intrinsic_name` (`native.is_intrinsic_name`) for builtins —
+**delivered**, as `intrinsic_names()`; `types.str_method` (`types.str_method`)
+for the string methods — **delivered**, as `strm.y`; `native.unit_iface`
+(`native.unit_iface`) for std unit exports — **not**, see the status note above;
+and `nr.pkgs` for package-qualified names — **not**, same reason. Local scope is
+the only part needing §9.2.
+
+The count was 23 in an earlier draft of this line and is 26 now: `str_method`
+lists `lstrip`/`trim_start` and `rstrip`/`trim_end` as separate spellings of the
+same two helpers, and all four are names a program may write, so all four belong
+in a completion list. `length` is *not* among them — `s.length` is a property,
+not a method, and `str_method` does not list it.
 
 **R6.3** The list is filtered by prefix, and each item carries `sortText`,
 `detail` (the type) and `documentation` (the doc comment above the definition).
@@ -750,50 +864,140 @@ in **`BUGS.md`**, under *"`import fs;` twice resolves to two files"*. The fix is
 about five lines in `norm_path` and is worth doing before any other tool lands in
 `src/tools/`.
 
-### 9.2 C2 — an index of what the compiler already computes (M4)
+### 9.2 C2 — the checker's TYPES (M4) — DELIVERED
 
-The checker computes the type of every expression and the checker and renamer
-both know where every binding was defined. All of it is discarded:
+> **Rescoped by §11.4**, and **delivered**. This section was written as "an index
+> of what the compiler already computes", on the belief that cross-file navigation
+> needed it. It did not: `diag.y` already runs the renamer over the spliced
+> program and already holds the per-line origin map, which is the whole of what
+> go-to-definition needs (§11.4 has the measurement). Cross-file navigation was
+> built in `xref.y` instead, and what was left here — **types** — is what the
+> server now uses.
+
+What was discarded, and what each edit does about it:
 
 ```
-types.Binding     = { name: str, typ: Type, kind: str, fdepth: long };   ← no line, no col
-types.TcSt        = { bindings: [Binding], errors: [Diag], ret, self, fdepth };
-types.check_program(ast, ext) -> [Diag]                              ← bindings not returned
-types.typeof_expr  (st, node) -> TcRes                                 ← the type flows out, then drops
-rename.rn_bind     (st, orig) -> { st, uniq }                               ← the def site drops
+types.Binding     = { name, typ, kind, fdepth };              ← no line, no col
+types.st_bind     (st, name, typ, kind)                      ← no position to record
+types.typeof_expr (st, node) -> TcRes                        ← the type flows out, then drops
+rename.rn_bind    (st, orig) -> { st, uniq }                 ← the def site drops
 ```
 
-`Node` has no `typ` field, so there is no hover data, no go-to-definition data
-and no scope chain to complete from. The one exception is already free:
-`inferred_ret(line, col)` (`types.inferred_ret`) is exported.
+| | what it is | who reads it |
+|---|---|---|
+| **A5** `Decl`/`Dot`/`DotAssign` gain `nline`/`ncol` | the NAME's and the KEY's position, beside the keyword's | the type table, `rename` |
+| **A1** `Binding` gains `line`/`col`; `st_bind` two arguments | where each binding was defined | a caller's binding index |
+| **A3** `rename_program_x2(ast, …) -> { ast, defs }` | `defs`: a `NameIx` of `uniq -> line * 65536 + col` | **nobody yet — see below** |
+| **A2** `type_index_on()` / `expr_type(line, col)` | the type inferred for **every expression**, by position | `serve.inferred_at` → hover, and `serve.type_at` → members |
 
-Three edits:
+**A5 — the name's position, which `line`/`col` cannot be.** `Decl.line/col` is the
+KEYWORD's, because that is where a diagnostic points and where the reader looks. A
+go-to-definition and a semantic highlight want the NAME, and one pair of fields
+cannot be both, so the name's is carried *alongside*: 29 construction sites in
+`src/y` and the same 29 in `src/c`, and every rebuild in `rename.y`/`native.y`
+carries the pair through — which is the part that matters, because the renamer is
+what hands the tree on. `Dot` gets the same pair for the member's key, and this is
+what lets a member's own name carry its own type below.
 
-1. **`types.Binding` gains `line` and `col`.** Every `st_bind` site has the
-   node in hand. On `src/y/ycc.y` the binding list runs to several thousand
-   entries, so this is a real but small memory cost — `make bench` will say.
-2. **An expression type table behind a flag.** `let tc_index: bool = false;`
-   in `types.y`, following the existing `lint_ofile` / `dbg_lines` /
-   `rn_ofile` module-global pattern. When set, `typeof_expr` also records
-   `(line, col) -> Type` in a bucketed table shaped exactly like the one
-   `inferred_ret` already reads (`types.inferred_ret`, keyed
-   `line * 65536 + col`) — a pattern already proven at this scale in this
-   codebase. Reset it in `check_program` beside `inf_bkts`/`tc_ixn`.
-3. **`rename_program_x2` returns the def sites.** `rn_bind` records
-   `uniq -> (line, col)`. The new entry returns `{ ast, defs }`;
-   `rename_program_x` (`rename.rename_program_x`) becomes a thin wrapper returning
-   `ast`, so `ycc.y`, `native.y` and `pkg.y` do not change.
+**A1 — `Binding` positions.** `Binding` is *constructed* in one place (`st_bind`),
+so the 15 call sites are the whole of it. A `Decl` passes `node.nline/ncol`; a
+parameter passes the `Func`'s own, documented as the imprecision it is (the parser
+keeps no position per parameter); an intrinsic or an extern passes −1, which no
+consumer may read as line 1.
 
-Plus **name positions** where they are missing, for R5.4: `Decl` needs the
-name token's line/col, and `Dot` the key's. The parser has the token at both
-sites.
+**A3 — the def sites.** A SECOND `parser.NameIx` beside the `types.tc_ix` that
+already indexes bindings, not a new container, and the packing is the one
+`inferred_ret` already keys its table by. `rename_program_x` is now a thin wrapper
+returning `ast`, so `ycc.y`, `native.y` and `pkg.y` do not change.
 
-**The honest cost:** a module-level `bool` cannot be hoisted, so the
-checker's hottest loop gains a predictable branch. This is the one change in
-the plan that is not free, and it is why M4 is a separate milestone behind a
-measured M1–M3. `make bench-ir` gives the exact instruction delta per
-benchmark and for `ycc.y` itself; if it is material, that is a conversation
-before `make rebless`, not after.
+> **A3 has no consumer, and the reason is measured, not guessed.** The obvious one
+> was the cross-file definition path, which does re-read the target file and
+> re-index it (`scope.index_src` + `nav.find_decl_named`, `serve.y`). The map
+> cannot replace that: the answer needs the declaration's **signature and doc
+> comment** to render, which a position does not carry, so the map would save a
+> *column* the server already had — a no-op a test cannot even distinguish. It is
+> delivered and exported because it is the compiler's answer to "where was every
+> binding defined", including the locals and parameters no LSP table holds, but it
+> is not dressed up as something it is not.
+
+**A2 — the expression types**, which is the whole of R4.1 and R6.1. The table is
+shaped exactly like `inferred_ret`'s — 1024 buckets, parallel key/type arrays,
+`line * 65536 + col` — because that table is read by `native.y` on every compile
+and the shape is therefore proven *at this scale in this codebase*.
+`expr_type` returns `tunk()` when nothing is indexed, **not** `tnone`: `tnone` is
+a type a program can write, and a consumer must be able to tell "the checker says
+none" from "there is nothing here", or it prints a type the checker never gave it.
+`check_program` resets the table, and only when the flag is on.
+
+Two things the implementation had to add that the plan above did not name:
+
+- **A member access records its type at the key's position as well as the dot's.**
+  `a.b` parses with the `Dot` at the `.`, so the field's type lands under the dot
+  and nothing lands under the field's own name — which is where an editor puts the
+  cursor. A5's `nline`/`ncol` is exactly the position that fixes it. Inside the
+  flag, so it costs nothing: measured **+0.00%** on all thirteen benchmarks.
+- **`serve.inferred_at` falls back to the dot's column.** Belt and braces: the
+  request asks at the word's own position first and only then at the character
+  before it. Asking the *dot* first would answer `x.y`'s `y` with whatever `x`'s
+  type happens to be — which is why the order is that way round.
+
+### 9.2.1 The cost, measured
+
+```
+  arrays +1.25%   closures +1.62%   fib +2.03%   fmath +0.15%   hello +2.46%
+  lines +0.36%    maps +0.78%       scan +0.84%  std_io +0.39%  std_struct +0.30%
+  strings +1.25%  tmath +0.11%      ycc.y +0.09%
+  SCORE 98.88   (AGENTS.md: 100 +/- 2.5 is "no change")
+```
+
+`ycc.y` — the real workload, and where the binding list is longest — is **+0.09%**.
+The percentage is worst on the *smallest* benchmarks, which is what a per-expression
+branch looks like: `hello.y`'s own source is `print(1);` and nearly all of its
+4.6M instructions are the std units, so a fixed per-expression overhead is a large
+share of a small total. No emitted code changed at all (486 programs, byte-identical),
+so this is compile time only.
+
+The first version tested the flag *inside* `tci_note`, so every expression paid a
+call. Moving the test to the call site moved `hello.y` only 2.47% → 2.46%: **the
+branch, not the call, is the cost.** It is at the call site anyway, because that is
+the shape which scales, and the comment in `types.y` says so.
+
+### 9.2.2 What the server does with it, and what it refuses
+
+| capability | answer |
+|---|---|
+| hover on a name read | the checker's type, then the declaration |
+| hover on a name bound | the declaration (a `Decl` is not a reference, so nothing is indexed there) |
+| hover on an expression that is not a name — a literal, an operator | the type, with **no `range`**, which the protocol allows |
+| hover on a record's **field** | the field's type — and **no declaration**, because a field is not a binding and there is nothing to find |
+| completion after `.` on a record | the record's own fields, filtered by the prefix |
+| completion after `.` on a `str` | the string methods |
+| completion after `.` on anything else | **nothing** |
+| hover / completion where the checker has no answer | `null` / omitted |
+
+The last two rows are the honesty rules, and `t016_types` pins each one:
+
+- A **non-`str`, non-record receiver offers NOTHING, not the string methods.** This
+  was a real bug in the first version: the fallback fired whenever the record branch
+  produced no items, so an array's `.` offered all 26 string methods. A completion
+  list is read as "these are the things you can put here", so a wrong entry is worse
+  than an empty one. The fallback is now gated on the receiver's type being `str` —
+  or on there being **no type at all**, which is the Stage A answer and is honest
+  because the server does not know the receiver.
+- A member name whose object is **not a single identifier** (`a.b.c`) is refused,
+  not approximated: the object of that dot is `a.b`, and no position in the table
+  means "the object of *this* dot". `serve.object_col` states the rule and returns
+  −1 rather than answering with `a`'s type.
+- There is **no unfiltered record-field list**, and its absence is not a bug: a
+  member access must be followed by a name for the line to typecheck, so a buffer
+  that has one always has a prefix, and the prefix filters the list.
+
+Two coordinates, both of which cost an hour each and are now comments at the site:
+an LSP position is **0-based** and `Prepared.mine` is indexed by the compiler's
+**1-based** lines, so the line needs `+ 1`; and `pos.from_lsp` **already** returns a
+1-based byte column, so the column must **not** have a `+ 1`. Both failed by
+answering about *nothing* rather than something wrong, which is the good direction
+and still cost the time.
 
 ---
 
@@ -1010,8 +1214,12 @@ Each ends green on `make test`.
 | ~~**M0**~~ | ~~C1: the two exports~~ | **Dropped** — M1 does not need them (§9.1). Nothing was blocked on this, so no reblessing was needed. |
 | **M1** | R1 — errors and warnings | **Done, end to end.** `yserve` answers errors *and* warnings together, live, on an unsaved buffer, for the file **and each import** (one `publishDiagnostics` per file); survives an unterminated literal, a missing import and a 4000-line file; the VS Code extension activates, spawns it and reaches `Running` (`activation-check.js` 21/21), and the same server is driven by the JSON-RPC library VS Code uses (`client-check.js` 20/20). 39 process-level checks, 12 fixture runs under both compilers, registered in `make test`. |
 | **M2** | R2 — semantic tokens | **Done.** `sem.y` turns `scan.y`'s spans into the protocol's delta encoding; `textDocument/semanticTokens/full` is advertised and answered. The grammar is unregistered from `package.json`, so this IS the only highlighter. `t010_sem` pins the round trip (R2.4) over the whole corpus; `client-check.js` decodes the delta the way an editor does. **Not yet:** the semantic half of the legend (parameter / function / type / builtin need M4's symbol knowledge), and a user setting to turn the layer off. |
-| **M3** | R3 — formatting | **Formatter and the protocol handler done** (idempotent over 487 files; no edits on an unlexable buffer; no edits when already formatted). **Not yet:** wiring the VS Code command. |
-| **M4** | R4–R6 + C2 — hover, go-to-def, completion | **Stage A done, Stage B not started.** `scope.y` + `nav.y` answer all three from the declarations of the open buffer: definition points at the name (not the keyword), hover shows the signature as written plus the comment above it, completion offers the visible names and the builtins with `isIncomplete: true`. The builtins come from `native.intrinsic_names()`, which this work added to the compiler so the list cannot drift. `t012_scope` pins the visibility rules, `t013_m4` the wire shapes, `client-check.js` drives all three through the JSON-RPC library VS Code uses (53/53). **Not done:** cross-file navigation (a name from an import answers `null`), inferred types in a hover (§9.2 / C2), string methods and record fields after a `.`, and the semantic token legend's semantic classes. |
+| **M3** | R3 — formatting | **Formatter and the protocol handler done** (idempotent over every `.y` file in
+the tree — `test-fmt.sh` compares the number of files that are NOT idempotent,
+which must be zero, and only *prints* the total, so the total moves as `src/y`
+moves without anything failing; this row used to quote 487, a number nothing
+checks; no edits on an unlexable buffer; no edits when already formatted). **Not yet:** wiring the VS Code command. |
+| **M4** | R4–R6 + C2 — hover, go-to-def, completion | **Stage A done and measured; Stage B decided and not started** (§11.3). `scope.y` + `nav.y` answer all three from the declarations of the open buffer: definition points at the name (not the keyword), hover shows the signature as written plus the comment above it, completion offers the visible names and the builtins with `isIncomplete: true`. The builtins come from `native.intrinsic_names()`, which this work added to the compiler so the list cannot drift. `strm.y` answers the member position from the compiler's own `types.str_method`, so a hover on `"a,b".split` shows the signature the checker would use and completion after a `.` offers the methods and only the methods. `t012_scope` pins the visibility rules, `t013_m4` the wire shapes, `t014_strm` the string methods and the mirror's ratchet, and `client-check.js` drives all of it through the JSON-RPC library VS Code uses (**73/73**). `scope-coverage.y` measures what the index resolves over `src/y`: **61%** of identifier tokens, after two bugs that had it at 46% (§11.3), and `request-cost.y` what a request costs on the largest file in the tree — 20 ms, after a bug that had it at 5,499 ms. `xref.y` + `nav.find_decl_named` close the cross-file half: `helper.helper` jumps to `mod.y` at the name, with its signature and doc comment, and `helper.TOP` to the `let` that declares it. `t015_xref` pins the three compiler facts it rests on. §9.2 is **delivered**: the checker keeps its inferred types in a position-keyed table behind a flag (§9.2 A2, +0.09% instructions on `ycc.y`, +0.00% for the member-key addition), so a hover shows the type the checker computed — including on an expression that is not a name, and including a record's field, which has a type and no binding — and completion after a `.` offers a record's own fields. §9.2.2 lists what it refuses. The semantic classes are **delivered** too (R2.3): `sem`'s legend has five more entries and `serve.classify` resolves each identifier to one, from `scope`'s declaration kinds and `native.intrinsic_names()`. It needed **no** compiler change — this row's earlier note said it did, on the grounds that what a name denotes is the checker's answer; it is `scope`'s answer about DECLARATIONS, plus a dot's own text, and §9.2's type table is not involved. Three costs were found by measuring rather than by reading, and all three are now in `request-cost.y`: `classify` was **34.5 s** on `src/y/native.y` and is **115 ms**, and the two causes were a per-identifier position lookup that counted newlines from byte 0 (quadratic), and `scope_end` walking all ~7,000 scope pairs per candidate (linear in the file, per identifier). The second also made completion `visible()` **22x** faster, 7,576 us to 347 us on the same file, which nothing had asked about because a completion asks once. `t017_sem` pins the five classes and the four names that must stay `variable`, and `t010_sem` pins the one that was a whole line of tokens missing (§11.5). **Nothing is left undone in this row.** Cross-file navigation is **not** behind §9.2 as this row previously said — §11.4 measured that the renamer the server already runs produces the pairing it needs. Cross-file navigation is **not** behind §9.2 as this row previously said — §11.4 measured that the renamer the server already runs produces the pairing it needs. |
 | **M5** | packaging and docs | `PORTING.md` and `AGENTS.md` updated (§4, §10); `AGENTS.md`'s suite list gains `lsp`; the extension README documents `yserve` placement and every setting. |
 
 ### 11.1 Two bugs the work found in the compiler
@@ -1031,6 +1239,141 @@ Both are in `BUGS.md` with reproductions; the second is the expensive one.
 
 The second one is why `check-names.py` exists, and why it checks names rather than
 just definitions.
+
+### 11.3 The Stage B decision, on the number
+
+"Is Stage A good enough, or does Stage B (the C2 compiler change) earn its
+keep?" is a question about a number, so there is now a program that answers it:
+`src/tools/lsp/test/scope-coverage.y`, run over `src/y`. It reports what share
+of the corpus's identifier tokens `nav.find_decl` resolves, and — the part the
+decision turns on — how many of the misses are names that ARE declared, in
+another file.
+
+**The first number it gave was 46%, and that turned out to be two bugs rather
+than a limit.**
+
+1. **Parameters were never recorded at all.** The parameter branch required
+   `depth > 0`, but a parameter list opens *before* the body's `{`, so the brace
+   depth at a parameter is the depth of the def's own surroundings — zero at the
+   top level. The test threw away exactly what it was looking for, and every use
+   of every parameter missed. Measured, the most frequent name the index could
+   not resolve was `st`, 5,451 times, then `node`, `k`, `line`, `col`: the
+   compiler's own parameters. A parameter's scope is its function's *body*, which
+   opens after the list, so the brace stack is empty when the parameter is read;
+   the `{` that opens the body is recorded for the pending parameters as it
+   arrives, in the same pass.
+2. **`pos.to_lsp` rebuilt the whole line index on every call**, and
+   `index_src` calls it once per declaration. `line_bytes_from` already existed
+   for precisely this trap (see its comment: 4.8 s per call on parser.y), one
+   layer too low to catch `to_lsp`. So indexing `src/y/native.y` rebuilt an
+   11,000-entry table 3,576 times: **2,604 MB**, which is out of memory against
+   the 3.5 GB cap, and so no definition, hover or completion on any file that
+   size. `doc_to_lsp` takes the caller's `SrcDoc`; `to_lsp` delegates to it.
+   **32.6 MB**, and `sym.y` (the outline) had the same three call sites.
+
+   It was worse than the memory. Every request re-derives the index from scratch
+   — the protocol gives no notice that only a few lines changed — so this was
+   paid per keystroke. `request-cost.y` measures it per phase
+   (`./ycc src/tools/lsp/test/request-cost.y -o /tmp/rc && /tmp/rc`):
+
+   | file | size | `scan` | `index` before | `index` after | heap before → after |
+   |---|---|---|---|---|---|
+   | `tags.y` | 8 KB | 0 ms | 0 ms | 0 ms | 0.5 → 0.4 MB |
+   | `lint.y` | 42 KB | 1 ms | 65 ms | **2 ms** | 43 → 3.2 MB |
+   | `types.y` | 191 KB | 5 ms | 973 ms | **7 ms** | 584 → 12.7 MB |
+   | `native.y` | 497 KB | 13 ms | **5,499 ms** | **20 ms** | 2,541 → 31.8 MB |
+
+   **275x on the largest file in the tree.** Not because 20 ms is fast, but
+   because 5.5 s is not a slow feature, it is a frozen editor — and R1.1 and R6.4
+   say the server must not block. The tolerant tokeniser was never the problem;
+   `scan` is 13 ms on the same file throughout.
+
+46% → **61%** of 80,949 identifier tokens, and the corpus now indexes in 232 MB
+instead of dying.
+
+### 11.4 The premise was wrong: cross-file navigation needs no compiler change
+
+The measurement above says 84% of what Stage A misses is "declared in another
+file", and the obvious reading is that closing it needs the compiler's scope —
+which is what §9.2 and the Stage B decision assumed. **That reading is wrong,
+and the reason is in `diag.y`, which had been read past twice.**
+
+`diag.diagnose` already does, on every buffer it is asked about:
+
+1. `native_resolve_x` — splice the imports in, giving the whole program's text
+   (`nr.src`) **and `nr.origin.file`, a per-line map saying which file each
+   spliced line came from**;
+2. `strip_ns` — drop the module qualifiers;
+3. `rename.rename_program_x` — the compiler's own uniquifying pass;
+4. `types.check_program` and `lint.lint_unit`.
+
+So the LSP is already holding, per request, the whole program as one text, the
+map from every line of it back to a file, and — this is the part that matters —
+**an AST in which a definition and all its uses share one name.**
+
+Measured, on `main.y` importing `mod.y`, after step 3 alone:
+
+```
+top-level statements after rename: 4
+  line 1 kind decl     decl name helper$1      <- mod.y
+  line 4 kind decl     decl name TOP$3         <- mod.y
+  line 6 kind decl     decl name v$4           <- main.y
+  line 7 kind call     callee print @7 args v$4 @7 + TOP$3 @7    <- main.y
+origin map:  lines 1-4 -> file 1 (mod.y),  lines 5-7 -> file 0 (main.y)
+```
+
+`TOP$3` is *declared* on spliced line 4 and *read* on spliced line 7. One name,
+two files, and `origin.file` says which file each line belongs to. **That is
+exactly the pairing go-to-definition needs**, and it is produced by a pass the
+server already runs and discards.
+
+So the 84% is not behind a compiler change at all. It is behind:
+
+- indexing the **spliced** text rather than the buffer, so the imported
+  declarations are in the index;
+- the inverse of `origin.file` — a buffer line to its spliced line — to turn a
+  request position into an AST position;
+- `origin_file` on the declaration's line, to turn the answer back into a file
+  and a line in *that* file, and then reading that file to put the name in it.
+
+None of that touches `src/y`. It is all in `scope.y` / `nav.y` / `serve.y`.
+
+**What this does change.** §9.2 keeps its first half and loses its reason for
+existing: `types.Binding` line/col and a `(line, col) -> Type` table are still
+the only way to get a *type* — an inferred `long` under the cursor, a record's
+own fields after a `.` — and neither the renamer nor the splicer carries types.
+But "cross-file navigation is Stage B" was wrong, and it was wrong because the
+gap was measured on Stage A's index while the data was sitting in the next
+function. §9.2 is now scoped to types alone, and its measured cost (§9.2's own
+site counts, and the `bench/compile_ir.sh` baseline) stands for that much.
+
+**The lesson, since it cost a milestone's worth of work to get wrong:** a
+"missing capability" measured against one implementation is a statement about
+that implementation, not about the system. `scope-coverage.y` compares what
+`nav.find_decl` resolves; it cannot see what `diag.y` already resolved and threw
+away. The next version of that tool should measure the *served* answer — what a
+request returns — and not the index underneath it, because the index is not the
+product.
+
+**The original measurement stands, with the correction:** of the 832
+distinct names Stage A cannot resolve:
+
+| | count | |
+|---|---|---|
+| declared in another `src/y` file | **699 (84%)** | exactly what Stage B closes |
+| a primitive type name | 5 | neither stage declares it — they are built in |
+| declared nowhere in the corpus | 128 | not visible to a correct resolver either |
+
+Stage A reads one buffer, so a name from an import is invisible to it by
+construction. That 84% is Stage A's ceiling — and it is **not** the system's
+ceiling, which is the subject of §11.4, and much smaller.
+
+The order mattered, and the measurement is what set it: fix Stage A's two bugs
+first, because that was free by comparison and moved 15 points. **Then check
+where the remaining gap actually lives before paying for it** — which is what
+§11.4 does, and what this decision got wrong. `bench/compile_ir.sh` is still the
+instrument for it, and it says what it says: +0.00% on all thirteen benchmarks,
+`ycc.y` at 4,705,071,230 instructions.
 
 ### 11.2 Four bugs M4 found in the server
 
@@ -1130,7 +1473,7 @@ Reusable as-is, no compiler change:
 | `lexer.tokenize(src) -> [Tok]` (its export list) | the parser's lexer. Not usable for spans (R2.2). |
 | `parser.parse_program(toks) -> Block` (`parser.parse_program`'s export list) | error-recovering; plants `err` nodes, syncs at `;` and `}` (`parser.sync_stmt`). |
 | `types.check_program(ast, ext) -> [Diag]` (`types.check_program`) | all errors at once, via the `tunk` poison (`types.t_unk`, `teq` `:209`). |
-| `lint.lint_unit(ast, ast3, ofile, fmods, wlevel) -> [Diag]` | all warnings, sorted and deduped. |
+| `lint.lint_unit(ast, ast3, ofile, fmods, wlevel, ogen) -> [Diag]` | all warnings, sorted and deduped. `ogen` is the meta pass's "this file has a block" flag, so `lint_meta_top` can warn about a top-level statement that runs twice. |
 | `types.inferred_ret(line, col)` (`types.inferred_ret`) | exported already; function return types free. |
 | `native.native_resolve_x(src, base_dir, …)` (`native.native_resolve_x`) | takes **text**; the unsaved-buffer seam. |
 | `native.origin_file` / `origin_at` | spliced line → file + line. |
@@ -1546,6 +1889,60 @@ records are. It needs validating against the type-level code that consumes
 recursive aliases — `teq`'s 64-level unfold limit (`types.teq`),
 `tcanon`, `unfold`, and the emitter's record-type hashing
 (the emitter's record-hashing check) — plus bench and fuzz numbers.
+
+### 11.5 Five more bugs, from the checker's TYPES and the semantic classes
+
+Same shape as §11.2: each produced an answer a reader would believe, and each was
+found by running something rather than by reading it.
+
+1. **The last line of a buffer lost every one of its tokens.** `sem.split_lines`
+   bounded its loop with the first line-start past the span's last byte. A file
+   that ends with a newline has one more line than it has text, so there *is* a
+   start past it and the answer came out right by accident. A file that does NOT
+   end with a newline — which is what an editor sends for the line being typed
+   right now — has none, so the bound stayed at its initial value and the loop
+   never visited that line. A 17-line buffer produced **115 spans and 110 tokens**,
+   and the 5 missing were exactly the last line's. In an editor it reads as the
+   highlighter going blank on the current line. Every fixture here ended with a
+   newline, which is why it survived; a round trip cannot see a token that was
+   never produced. `t010_sem` pins both shapes now.
+2. **The buffer's own lines were mapped to the spliced program one line late.**
+   `Prepared.mine` filtered `origin.file == 0` and counted, but the import
+   STATEMENT's line is *replaced* by the imported module's lines, so the origin map
+   still has an entry for a line the splice does not. Every hover in a file with an
+   import asked about the line *above* the one under the cursor — so hovering the
+   blank line between an `import` and a `def` returned the function's own
+   signature. The first fixture had no imports, and the offset is 0 for those, so
+   it passed; `client-check.js`, whose buffer does import, is what caught it. The
+   map is now two line counts — `spliced - buffer + k` for every line at or after
+   the first non-import line, and 0 before it (`xref.own_lines`).
+3. **A completion list after a `.` offered `print`.** The member branch set a flag
+   and the name branch tested it, so a `str` — whose fields are none, so the flag
+   stayed false — got the string methods *and* every name in scope: 77 items where
+   there are 26. The two lists must be alternatives. Worse, the fallback fired for
+   *any* receiver, so an array's `.` offered all 26 string methods; a completion
+   list is read as "these are the things you can put here", so that is worse than
+   an empty one. It is now gated on the receiver's type actually being a `str`, or
+   on there being no type at all — which is the Stage A answer and is honest
+   because the server does not know the receiver.
+4. **A record field's hover asked for a declaration that does not exist.** The type
+   was read inside `if (is_some(found))`, and a field is not a binding — a field is
+   a name the program does not bind, so the index has nothing to find. So hovering
+   `p.a` showed nothing at all even though the checker had the answer. The type
+   answers on its own and the declaration, when there is one, goes underneath.
+5. **`classify` cost 34.5 seconds on the largest file in the tree.** Two causes,
+   both invisible until something asked about *every* identifier rather than one
+   position: the per-identifier position lookup counted newlines from byte 0, which
+   is quadratic in the file, and `scope_end` walked all ~7,000 scope pairs for
+   every candidate. `34,490 ms -> 115 ms`, and `visible()` — which a completion
+   calls once — went `7,576 us -> 347 us` from the same fix. `request-cost.y`
+   measures all four phases now, because "it is slow" is not a finding and
+   "here is the phase" is.
+
+A sixth, smaller, and worth one line: `pos.from_lsp` **already** returns a 1-based
+byte column, and the first version added a second `+1`. Every request then asked
+about the character *after* the one under the cursor — on an identifier, nothing
+indexed, so the type silently never appeared.
 
 C4 is a different project. It changes what a union *is* at runtime, and it
 should be argued for on its own merits rather than as LSP support.

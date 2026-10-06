@@ -296,10 +296,34 @@ pull apart: a block emits its **value**, not its **source**. So
 print(var2);
 ```
 
-compiles and prints nothing, because the enclosing block's value is the long `2` and
-`print(var2)` in the *program* has no `var2`. The nearest working form is for the
-enclosing block to return the text the program should get, with the generated name in
-it — `t202_meta_nest_mid_token.y`:
+The same block as the initializer of a top-level `let` is exactly the case, and it
+works — MEASURED, `ynew` and `ycc`, byte-identical binaries:
+
+```
+let x = #{ let var1=1; let var2=2; var#{ 1+1}# }#;
+print(x);                                       // prints 2
+```
+
+In **statement** position, though, it does not compile — this document used to claim it
+"compiles and prints nothing", and that is wrong. The mid-token block's call is hoisted to
+the statement that contains it (`sg_mids_move`), which for a bare top-level block is the
+block's own, so the call lands after `var2`; the block's value is then the hoisted
+`ycc_meta_stmt`, which returns void, and the enclosing `tostring(...)` is refused:
+
+```
+acc2.y.meta:2:26: error: tostring supports long/bool/float/str/array/record/map/option, got void
+error: the meta generator did not compile
+```
+
+It is the *last* statement that decides, which is the ordinary rule and nothing new: put
+anything after the mid-token block and the same statement-position block compiles (MEASURED,
+`#{ let var1=1; let var2=2; var#{ 1+1}#; 99 }#` compiles; as a `let` initializer it yields
+`99`, and `#{ …; 99; var#{ 1+1}# }#` yields `2`). Unchanged by the merge of master
+`d35af36`: the pre-merge build at `72f5ede` fails with the same message at the same position.
+
+The nearest working form for the statement-position case is for the enclosing block to
+return the text the program should get, with the generated name in it —
+`t202_meta_nest_mid_token.y`:
 
 ```
 #{ let var1 = 1; let var2 = 2;
@@ -320,7 +344,8 @@ collecting scan found nesting (`mg_nest`), a block with nothing inside it is nev
 *held* (its text is written straight into `G`, `sg_hold` is for a block that may have to
 give its text up), and its `G` is byte for byte the one the pass has always built —
 `test/sh/meta-identity.py` checks the weaker, sharper claim that the pass is the identity
-on a file with no blocks at all (381/381), and `make test` checks the rest.
+on a file with no blocks at all (393/393 after the merge of master `d35af36`, which grew
+the corpus from 381), and `make test` checks the rest.
 
 MEASURED, `ynew` on a generated program of 400 declarations (24 KB) with a nest of depth
 `d` appended, 8 runs each:
@@ -713,12 +738,21 @@ out running the guest on a `spawn`ed thread.
   at the closing quote, so "closing quote is the last byte" and "never closed" both
   return `n`. The pass needs that distinction, so `lit_end` gains a second out-param —
   a behavioural change for its other two callers;
-- and the tree already has **three** copies: `lit_end`, `lex_quoted`
-  (`lexer.y:80-115`, the one that lexes and `exit(1)`s on an unterminated string), and
-  an inline copy inside `words_scan`.
+- and the tree already has **three** copies: `lit_end`, `lex_quoted`, and an inline copy
+  inside `words_scan`.
 
-So the work is: export `lit_end`, add the out-param, collapse the three copies onto it —
+So the work is: export `lit_end`, add the out-param, collapse the copies onto it —
 3 edits × 2 trees under R1. Not "reuse it, do not copy it".
+
+**As built, the collapse is two of the three.** `lit_end` is exported with the out-param
+and `words_scan` calls it, so what the pass needs — a literal scan that says whether the
+literal closed — is one function. `lex_quoted` still carries its own loop, and it must:
+master's `0b48dad` gave it a `what` parameter and an `err` return, so an unterminated
+literal is a *token* the parser reports in place (`9:7: error: unterminated byte string`)
+instead of the bare `puts` + `exit(1)` this branch's version had. It counts line and
+column as it scans, which `lit_end` does not do. Merging master `d35af36` therefore took
+master's `lex_quoted` verbatim (its call sites pass five arguments) and left the out-param
+on `lit_end` for the pass and `words_scan`, which is where it is load-bearing.
 
 ### Delimiter safety
 
@@ -886,7 +920,8 @@ it is load-bearing for all of M2.
 ### M2 — the pass
 
 `src/y/meta.y`, exporting `lit_end` with the unterminated out-param first and collapsing
-the three copies onto it. Then the per-file scan at the top of `native_resolve_seen`,
+the `words_scan` copy onto it (the `lex_quoted` copy stayed, for the reason given above).
+Then the per-file scan at the top of `native_resolve_seen`,
 pieces accumulating across files, the three injected helpers, slot indices in source order,
 the line map. Then: build `G`, compile it for the host with the pass off, run it in a
 forked child via M1, splice the pieces into `P`, rebuild origins, hand `P` to the

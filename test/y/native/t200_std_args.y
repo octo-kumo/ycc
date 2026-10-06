@@ -212,6 +212,28 @@ def main() -> long {
     test.ck("usage() is non-empty with no failure at all",
         args.usage().length > 0, "so --help works with no error to report");
 
+    // print_usage writes the usage text, so its output lands in the .expected --
+    // which is the point: the text a caller prints is what is checked here.
+    args.print_usage();
+    test.ck("print_usage wrote the usage text above", args.usage().length > 0,
+        "the lines just before this group are it");
+
+    // parse_or_exit is the exiting form of parse: OK returns, HELP exits 0 and
+    // USAGE exits 2. Only the returning branch can be checked in-process, and it
+    // is the one a program depends on to reach its own body at all.
+    args.init("demo", "a table for the flag tests", T_OPTS, "[file...]");
+    test.ck_eq("parse_or_exit returns on a good command line",
+        {
+            args.parse_or_exit(["demo", "--fps", "1"]);
+            0
+        }, 0);
+    test.ck("and leaves the flags parsed",
+        args.get_long("fps", 30) == 1, "so the body can read them");
+    test.ck("and leaves no diagnostic", args.errmsg() == "",
+        "a clean parse has nothing to say");
+    // The two exiting branches are covered by the sibling fixture's exit codes
+    // rather than here, because checking them would end this process.
+
     // ─────────────────────────────────────────── init is not additive
     test.group("init replaces the table");
     args.init("first", "one flag", T_FLAGONLY, "");

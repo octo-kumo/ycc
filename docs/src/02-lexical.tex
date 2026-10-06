@@ -164,7 +164,7 @@ The prefix \ic{y\_} is \emph{reserved} for the compiler's own generated
 code, which calls its runtime helpers by those fixed names. A program may
 nevertheless define one: that is the override hook, and the program's own
 definition replaces the standard library's helper of that name for the
-whole program (Section~\ref{sec:builtin-pointers}).
+whole program, and it is the only way to reach the runtime's own copies.
 
 The keywords are:
 \begin{center}
@@ -243,7 +243,18 @@ data).
 string literals}: a \ic{[byte]} value spelled like a Python \ic{bytes}
 literal. The escapes are the string escapes above, so binary data writes
 naturally: \ic{b"\bs x7fELF"} is the four-byte ELF magic. Either quote
-spells the same type; single quotes exist only for byte strings.
+spells the same type; single quotes exist only for byte strings and
+character literals.
+
+\paragraph{Character literals.} \ic{c'a'} is a \emph{character
+literal}: exactly one byte, of type \ty{byte}, read with the string
+escapes above (\ic{c'\bs n'} is 10, \ic{c'\\'} is 92). It compares
+against a \ty{long} directly --- a \ty{byte} widens --- so a keypress
+test is \ic{k == c'q'}, and it needs an annotation to become a number:
+\ic{let q: long = c'q';}. Single quotes exist only for byte strings and
+character literals, and a \emph{bare} \ic{'a'} is neither: it is
+reported where it is written, naming the spelling
+(\ic{a character literal is spelled c'a' ...}).
 
 \paragraph{Format strings.} \ic{f"..."} is a string literal with
 \emph{fields}, as in Python:
@@ -315,7 +326,6 @@ that matches, exactly like C:
 the lexer and mean their keyword only where the syntax calls for one, so a
 program may bind a name like any of them and keep it:
 
-\begin{sloppypar}
 \begin{itemize}[nosep]
 \item \ic{none} is a predeclared name (Section~\ref{sec:type-options}), not
   a keyword at all;
@@ -332,4 +342,3 @@ program may bind a name like any of them and keep it:
 \item \ic{self} names the enclosing function inside a \ic{def} body, and
   is an error anywhere else (\ic{'self' outside of a function}).
 \end{itemize}
-\end{sloppypar}

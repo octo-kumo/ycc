@@ -247,7 +247,7 @@ def symbols(d: SrcDoc) -> [SymEntry] {
                 let done = open[len(open) - 1];
                 open = open[0:len(open) - 1];
                 body_depth = body_depth[0:len(body_depth) - 1];
-                let e = pos.to_lsp(src, s.line, s.col);
+                let e = pos.doc_to_lsp(d, s.line, s.col);
                 done.end_line = e.line;
                 done.end_ch = e.character;
             }
@@ -263,7 +263,7 @@ def symbols(d: SrcDoc) -> [SymEntry] {
                 if (nm != "") {
                     let bo = body_open(sps, src, i);
                     let detail = signature(sps, src, name_i, bo);
-                    let a = pos.to_lsp(src, sps[name_i].line, sps[name_i].col);
+                    let a = pos.doc_to_lsp(d, sps[name_i].line, sps[name_i].col);
                     let sym: SymEntry = {
                         name: nm, detail: detail, kind: K_FUNCTION,
                         line: a.line, ch: a.character,
@@ -290,7 +290,7 @@ def symbols(d: SrcDoc) -> [SymEntry] {
                     if (w == "const") { k = K_CONSTANT; }
                     if (w == "type") { k = K_TYPE; }
                     if (w == "import" || w == "export") { k = K_MODULE; }
-                    let a = pos.to_lsp(src, sps[name_i].line, sps[name_i].col);
+                    let a = pos.doc_to_lsp(d, sps[name_i].line, sps[name_i].col);
                     let sym: SymEntry = {
                         name: nm, detail: "", kind: k,
                         line: a.line, ch: a.character,

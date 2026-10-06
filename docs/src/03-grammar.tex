@@ -20,7 +20,11 @@ that: an import splices the imported file's text and drops every
 \ic{export} clause, so a clause anywhere in the file has the same
 effect. (A file's defs are spliced whole; namespaces are resolved by
 rewriting, not by the export list.) Paths resolve relative to the
-importing file's directory. A missing module is a fatal error. Without a
+importing file's directory, and \ic{.} and \ic{..} segments fold, so
+one file reached by two spellings --- \ic{"./m/sub/../m.y"} and
+\ic{"./m.y"} --- is spliced once. The fold is lexical: a \ic{..} that
+would leave the root is kept as written. A missing module is a fatal
+error. Without a
 path, \ic{import fs;} finds a module by name: \ic{fs.y} next to the
 importing file first, then the standard library's \ic{std/fs.y}. An
 import takes a line of its own: everything after \ic{import} on that
@@ -40,13 +44,22 @@ may declare a \ic{Pt} of its own, which the module's code never sees.
 
 The files imported by path share one namespace with the program:
 \ic{util.f} is rewritten to plain \ic{f}, and the alias only says which
-file a name comes from.
+file a name comes from. A \emph{type} alias from such a file is reachable
+both ways --- \ic{m.T} and bare \ic{T} are one declaration, checked in every
+position a type can appear --- which is the one respect in which the two kinds
+of import now behave alike. A module imported \emph{by name} still needs its
+prefix on a type, as above.
 A later top-level \ic{def} replaces an earlier one of the same name.
-Within one file that is deliberate (the last definition wins). Across
-files it would silently hand one file's callers another file's function,
-so a \ic{def} that replaces one from another file is an error, reported
-at the later definition and naming the other (\ic{duplicate definition
-'helper': m.y:4 defines it too}). The standard-library code the compiler
+Within one file that is deliberate (the last definition wins), and it is
+\emph{not} silent: declaring a name twice in one file is a warning that
+names the line the earlier declaration is on, because the case that
+matters is the one nobody notices --- an edit that left an old copy
+behind, shadowing the new one, where every read of the file shows the
+copy that is not the one called (\ic{'f' is declared more than once; the
+last declaration counts}). Across files it would silently hand one file's
+callers another file's function, so a \ic{def} that replaces one from
+another file is an error, reported at the later definition and naming the
+other (\ic{duplicate definition 'helper': m.y:4 defines it too}). The standard-library code the compiler
 splices in itself is the exception: a program's own \ic{readline}
 replaces the prelude's. Nested \ic{def}s and top-level \ic{let}s follow
 the usual scoping, as if the files were one text.
@@ -141,6 +154,7 @@ project's git dependencies into \ic{vendor/}, which then wins over the
 network. Git runs through \ic{/bin/sh} with the compiler's environment.
 
 \subsection{Declarations}
+\label{sec:declarations}
 
 \begin{align*}
 \ty{declaration} ::={}& \ic{let}~\ty{name}~[\ic{:}~\ty{type}]~\ic{=}~\ty{expr}~\ic{;} \\
@@ -171,7 +185,7 @@ same mark on a record field). Three rules keep the list readable, and
 each names the mistake:
 
 \begin{center}
-\begin{tabular}{ll}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.30\linewidth}@{\quad}>{\raggedright\arraybackslash}p{0.60\linewidth}@{}}
 \toprule
 mistake & message \\
 \midrule
@@ -203,7 +217,7 @@ does. \ic{label} is a string naming the symbol; left out, it is
 \ic{y\_} plus the declared name. Four rules, each with its own message:
 
 \begin{center}
-\begin{tabular}{ll}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.30\linewidth}@{\quad}>{\raggedright\arraybackslash}p{0.60\linewidth}@{}}
 \toprule
 mistake & message \\
 \midrule
@@ -220,9 +234,10 @@ another top-level name already taken &
 \end{center}
 
 \noindent The return type is required because there is no body to infer it
-from. A label with no assembly behind it is not found at link time:
-\ic{undefined label 'y\_f'} --- the same error a call to a missing symbol
-gives.
+from. A label with no assembly behind it is found when the code is assembled,
+which is as late as it can be found: \ic{error: assemble: undefined label 'y\_f'}.
+There is no linker here --- the compiler has its own assembler and ELF writer
+--- so the prefix is \ic{assemble}, not \ic{link}.
 
 A \ic{native def} is called with the ordinary convention (arguments pushed
 on the stack, the result in \ic{\%rax}), so it reaches the runtime's
@@ -234,9 +249,10 @@ is opaque, exactly as an \ic{extern} declaration in C is --- so the promise
 has to be kept by hand.
 
 \begin{lstlisting}
-native def hash2(s: str) -> long = "y_str_cmp";   // a promise about y_str_cmp
-native def heap_bytes() -> long;                 // means y_heap_bytes
-print(hash2("abc") < 0);
+native def hash2(a: str, b: str) -> long = "y_str_cmp";  // a promise
+native def heap_used() -> long;                          // means y_heap_used
+
+print(hash2("abc", "abd") < 0);
 \end{lstlisting}
 
 \subsection{Types}
@@ -306,8 +322,16 @@ def area(s: Shape) -> float { ... };
 
 \noindent \ty{block} is \ic{\{}~\ty{statement}\(^*\)~[\ty{expr}]~\ic{\}}:
 a block is an \emph{expression} whose value is its trailing expression
-(if any). An empty block \ic{\{\}} is legal and void; a trailing \ic{;}
-makes the block void. Statements are separated by \ic{;}, which may be
+(if any). A block with no statements is legal and void, and a trailing
+\ic{;} makes a block void whatever else is in it. Note that \ic{\{\}}
+in an \ic{expr} position is not this at all --- it is the empty record
+(Section~\ref{sec:type-records}) --- so a block used as a value
+has to hold a statement. A statement-form \ic{if} is an expression too, and a
+\ic{[} after it indexes that value --- \ic{if (c) \{ A \}["k"]} is
+\ic{A["k"]} --- so a \ic{;} after the block is what keeps the two apart.
+Indexing one that has no value (its arms are statements, or disagree) says
+so and names the \ic{;} rather than reporting the \ic{[}: \ic{cannot index
+this 'if', which has no value: add a ';' after it to make it a statement}. Statements are separated by \ic{;}, which may be
 left out only after a statement that ends in \ic{\}} (an \ic{if},
 loop, \ic{def} or block) or before the \ic{\}} closing the block:
 \ic{f() g()} is an error, and so is any token the grammar does not
@@ -384,12 +408,17 @@ the void value: nothing is computed, and using it as one is an error
 like any other (\ic{cannot bind a void value to 'x'}). \ic{[e; n]} is a
 fixed array of \ty{n} elements --- a \ic{[T; N]}, not a \ic{[T]}
 (Section~\ref{sec:type-arrays}).
+% The postfix row was one line 90pt overfull: an align* row is a box, so it
+% breaks only where the source puts a \\ there. Continuation rows carry no
+% left-hand side and line up under the first alternative, which is where a
+% reader looks for the rest of the rule.
 
 \begin{align*}
 \ty{postfix} ::={}& \ty{primary}
    ~\{~\ic{(}~[\ty{args}]~\ic{)} \mid \ic{[}~\ty{expr}~\ic{]}
-   \mid \ic{[}~\ty{expr}\,?\ic{:}\,\ty{expr}\,?~\ic{]} \mid \ic{.}~\ty{name}
-   \mid \ic{?.}~\ty{name} \mid \ic{?.}~\ic{[}~\ty{expr}\,?\ic{:}\,\ty{expr}\,?~\ic{]}
+   \mid \ic{[}~\ty{expr}\,?\ic{:}\,\ty{expr}\,?~\ic{]} \mid \ic{.}~\ty{name} \\
+ &\quad \mid \ic{.}~\ty{name} \mid \ic{?.}~\ty{name} \\
+ &\quad \mid \ic{?.}~\ic{[}~\ty{expr}\,?\ic{:}~\ty{expr}\,?~\ic{]}
    \mid \ic{!} \mid \ic{++} \mid \ic{--}~\} \\
 \ty{unary} ::={}& [\ic{!} \mid \ic{-} \mid \ic{\textasciitilde{}} \mid \ic{*} \mid \ic{\&}
    \mid \ic{++} \mid \ic{--}]~\ty{postfix}
@@ -411,7 +440,6 @@ In a record literal a bare name is shorthand for the field of that
 name: \ic{\{x, y\}} is \ic{\{x: x, y: y\}} (but \ic{\{ x \}} alone is a
 block whose value is \ic{x}).
 
-\begin{sloppypar}
 The forms of threads and processes (Section~\ref{sec:builtin-threads})
 are contextual: \ic{spawn} and \ic{fork} start one only before a
 \ic{\{}, the other words only before a name, which begins their
@@ -419,7 +447,6 @@ are contextual: \ic{spawn} and \ic{fork} start one only before a
 \ic{\{ \ldots\ \}}); anywhere else each is an ordinary name. A form is a
 call of the builtin of the same name, the block passed as a function of
 no parameters: \ic{lock m \{ e \}} is \ic{lock(m,} \ic{def () \{ e \})}.
-\end{sloppypar}
 
 \subsection*{Operator precedence}
 

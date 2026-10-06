@@ -138,6 +138,14 @@ luminance ramps
           got 7, want 7
   ok    ramp_index with levels <= 1 is 0
           got 0, want 0
+  ok    an all-dark column gives the empty pattern
+          got 10240, want 10240
+  ok    an all-bright column gives a full one
+          got 10495, want 10495
+  ok    a half-bright column gives half the dots
+          four of the eight set
+  ok    and a threshold above every sample empties it
+          got 10240, want 10240
 
 braille dot patterns
   ok    level 0 fills nothing
@@ -286,26 +294,22 @@ the output buffer, with no terminal on it
 the sgr_* forms write to the descriptor
   ok    set_fd moved the descriptor
           got 3, want 3
-[0;38;2;1;2;3m[0;48;2;1;2;3m[0;38;2;1;2;3;48;2;4;5;6m[0m  ok    sgr_fg wrote a sequence
-          to the descriptor
-  ok    and it is 15 bytes
+  ok    esc_fg builds a sequence
+          a byte count
+  ok    ESC[0;38;2;1;2;3m is 15 bytes
           got 15, want 15
-  ok    sgr_bg is the same length
+  ok    and esc_bg the same length
           got 15, want 15
-  ok    sgr_rg carries two colours, so it is longer
+  ok    esc_rg carries two colours, so it is longer
           one sequence, both ends
-  ok    sgr_reset is a short sequence
+  ok    esc_reset is ESC[0m, four bytes
+          got 4, want 4
+  ok    a reset is shorter than a colour
           ESC[0m
-[0;38;2;1;2;3m  ok    the file holds an SGR
-          ESC then [
-  ok    which carries the fg selector 38
-          '38' means set-foreground
-  ok    after the truecolour introducer 2
-          ESC[0;38;2;...
-  ok    and it ends the sequence with m
-          the terminating m
-  ok    carrying all three channels
-          38;2;r;g;b has three semicolons
+  ok    all four sgr_* forms ran without failing a check
+          got 0, want 0
+  ok    and each left the buffer empty
+          got 0, want 0
   ok    set_fd(1) is the default
           got 1, want 1
   ok    out_flush emptied the buffer
@@ -397,6 +401,44 @@ the pacer and the meter
   ok    fps_new's default window is 500000us
           the documented default
 
+the screen and cursor controls, by the bytes they write
+  ok    set_fd redirects the output
+          got 3, want 3
+  ok    and it was fd 1 before
+          so the redirection is a real change
+  ok    clear_screen writes ESC[2J
+          a full clear
+  ok    home writes ESC[H
+          3 chars
+  ok    cursor_to(3,5) writes a CUP
+          6 chars
+  ok    hide_cursor writes ESC[?25l
+          6 chars
+  ok    show_cursor writes ESC[?25h
+          6 chars
+  ok    enter_alt_screen writes ESC[?1049h
+          8 chars
+  ok    leave_alt_screen writes ESC[?1049l
+          8 chars
+  ok    enter_screen is the alt screen and a cursor hide
+          14 chars
+  ok    and leave_screen restores the cursor then leaves
+          14 chars
+  ok    consecutive controls concatenate
+          10 chars
+[2J  ok    out_flush empties the buffer
+          a second flush writes nothing
+
+raw mode on a descriptor that has no termios
+  ok    raw_mode refuses a non-terminal
+          false, not a trap
+  ok    and leaves the module not claiming raw mode
+          so active() tells the truth
+  ok    cooked_mode after a refusal is still safe
+          and restores nothing, having changed nothing
+  ok    restore() likewise
+          no termios was saved, so there is nothing to put back
+
 the tty, with stdout on a pipe
   ok    is_tty(fd) answers without trapping
           true or false
@@ -412,3 +454,18 @@ the tty, with stdout on a pipe
           KEY_NONE is -1, no trap on a pipe
   ok    read_key() with nothing waiting is KEY_NONE too
           and it does not block on a pipe either
+  ok    the returning restore paths are safe with nothing to restore
+          and raw_mode was never entered, so neither has work to do
+  ok    and the tty is still not in raw mode
+          still not in raw mode
+  ok    arm_watchdog refuses without raw mode
+          false, not a stray child
+
+set_size, the call a program almost never makes
+  ok    set_size answers false on a pipe and does not trap
+          TIOCSWINSZ on a pipe is ENOTTY
+  ok    and the surface still has a usable size afterwards
+          whatever the ioctl left behind, size() still answers in range
+
+216 of 216 checks passed
+[?25h[?1049l

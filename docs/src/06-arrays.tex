@@ -78,13 +78,11 @@ expression & result & effect on operands & value types \\
 \end{center}
 \endgroup
 
-\begin{sloppypar}
 \noindent The two \ic{rows} rows are the array-as-an-element case, and
 they say what \ic{[[T]]} plus a \ic{[T]} does: the array goes in
 \emph{whole}, as one element, because a \ic{[T]} is what that array
 holds. \ic{rows + rows} (both \ic{[[T]]}) concatenates as usual, and so
 does \ic{rows += row}, which appends the row in place.
-\end{sloppypar}
 
 \noindent In prose, matching the design intent exactly:
 
@@ -178,11 +176,13 @@ are legal: \ic{a[:]}, \ic{a[lo:]}, \ic{a[:hi]}, \ic{a[lo:hi]}. Strings
 slice the same way: \ic{s[lo:hi]} is a new \ic{str} of the bytes in that
 range, clamped alike. There is no \ic{substr}.
 
-\begin{sloppypar}
 \paragraph{Slice assignment.} \ic{a[lo:hi] = b} writes \ic{b} into \ic{a}
 in place, over the range \ic{[lo, hi)} --- the same clamped range a read
-would take, on either kind of array. It is a statement, so as the last
-one of a block it is that block's value (Section~\ref{sec:assignment}).
+would take, on either kind of array. It is a statement, and unlike \ic{=}
+and \ic{+=} --- which yield the new value of the place
+(Section~\ref{sec:assignment}) --- it is \ic{void}, so ending a
+block with one makes that block \ic{void}: \ic{let v = { a[lo:hi] = b };}
+is an error, for the same reason a block ending in a bare \ic{;} is.
 The target's subexpressions, the bounds and \ic{b} are each evaluated
 once, left to right (Section~\ref{sec:exactly-once}). The right side
 must be an array whose element type is the target's, a \ic{str} cannot
@@ -195,7 +195,7 @@ bounds}. The static failures name themselves:
 \begingroup
 \setlength{\tabcolsep}{4pt}
 \begin{center}
-\begin{tabular}{ll}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.30\linewidth}@{\quad}>{\raggedright\arraybackslash}p{0.60\linewidth}@{}}
 \toprule
 mistake & message \\
 \midrule
@@ -209,7 +209,6 @@ a \ic{str} target &
 \end{tabular}
 \end{center}
 \endgroup
-\end{sloppypar}
 
 \begin{lstlisting}
 let a = [1, 2, 3, 4, 5];
@@ -226,9 +225,9 @@ escaped, \ic{\bs n} \ic{\bs r} \ic{\bs t} as escapes, and every other
 byte as \ic{\bs xHH}:
 
 \begin{lstlisting}
-print(b"\bs x7fELF");     // b'\bs x7fELF'
-let hdr = b"AB" + b"\bs x00";
-print(hdr);              // b'AB\bs x00'
+print(b"\x7fELF");     // b'\x7fELF'
+let hdr = b"AB" + b"\x00";
+print(hdr);              // b'AB\x00'
 print(hdr[0:2]);         // b'AB'
 \end{lstlisting}
 
@@ -240,7 +239,7 @@ helpers for file headers and binary layouts (\ic{u32be}, \ic{get\_i16le},
 
 There are no array mutator functions: \ic{+=} and \ic{*=} \emph{are} push
 and prepend, and there is no \ic{push}, \ic{prepend}, \ic{map\_get} or
-\ic{map\_set} to call instead (Section~\ref{sec:builtin-pointers}).
+\ic{map\_set} to call instead (Section~\ref{sec:builtins}).
 \ic{len(a)} is the only builtin whose argument is an
 array \emph{as such}; \ic{join(xs, sep)} also takes an array but of any
 element type (each element is stringified), and \ic{bytes}/\ic{from\_bytes}

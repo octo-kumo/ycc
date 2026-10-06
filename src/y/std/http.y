@@ -22,10 +22,13 @@
 // reason, headers (names in lower case; a repeated one's values joined by
 // ", ", Set-Cookie's by newlines), size (Content-Length, or -1), url (after
 // redirects), and two functions that read the body: read(n) -- up to n
-// bytes, all the rest for n <= 0, [] at its end -- and text(). The body
-// arrives as it is read: by Content-Length, chunked, or up to the close.
-// Redirects are followed (5 by default: `redirects` in the options); https
-// URLs verify the server (std/tls), `insecure: true` skips the chain.
+// bytes, all of it for n <= 0 -- and text(). The body arrives as it is
+// read: by Content-Length, chunked, or up to the close. It is kept, so a
+// read that comes after the body has ended is answered from it: read(n)
+// twice gives the same bytes twice and text() twice the same text, and []
+// is only ever a body that was empty (a 204, a HEAD). Redirects are
+// followed (5 by default: `redirects` in the options); https URLs verify
+// the server (std/tls), `insecure: true` skips the chain.
 import net;
 import tls;
 
@@ -47,8 +50,11 @@ type Link = {
 
 // A body's framing and how far it has come: mode "none", "length" (left
 // bytes to go), "chunked" (left in this chunk; at 0 a size line is next)
-// or "close" (up to the end).
-type Body = { link: Link, mode: str, left: long, done: bool };
+// or "close" (up to the end). `buf` is everything read so far, kept so a
+// read that arrives after the body has ended can be answered from it
+// (see body_replay): the body is a value, and reading it twice must not
+// hand back nothing the second time.
+type Body = { link: Link, mode: str, left: long, done: bool, buf: [byte] };
 
 // A URL taken apart; ok false for one this client cannot reach.
 type Url = { ok: bool, secure: bool, host: str, port: long, path: str };
@@ -282,6 +288,23 @@ def body_take(b: Body, want: long) -> [byte] {
     out
 };
 
+// The first n bytes of the body so far, all of it for n <= 0 or an n past
+// its end -- so a read is repeatable: read(n) twice gives the same bytes
+// twice and text() twice the same text.
+def body_replay(buf: [byte], n: long) -> [byte] {
+    if (n <= 0 || n >= len(buf)) {
+        buf
+    } else {
+        let out: [byte] = [];
+        let i = 0;
+        while (i < n) {
+            out += buf[i];
+            i = i + 1;
+        };
+        out
+    }
+};
+
 // A chunk size line's number (hex, before any `;` extension); -1 if none.
 def hex_size(s: str) -> long {
     let v = 0;
@@ -405,20 +428,30 @@ def exchange(l: Link, method: str, url: str, u: Url, hdrs: {str => str}, body: s
     if (method == "HEAD" || h.status == 204 || h.status == 304) { mode = "none"; }
     else if (index_of(te, "chunked") >= 0) { mode = "chunked"; }
     else if (size >= 0) { mode = "length"; };
-    let b: Body = { link: l, mode: mode, left: size, done: false };
+    let b: Body = { link: l, mode: mode, left: size, done: false, buf: [] };
     if (mode == "chunked") { b.left = 0; };
     // the server will close after this response: the link is not used again
     let ends = false;
     if (headers["connection"] != none && index_of(headers["connection"]!.lower(), "close") >= 0) { ends = true; };
     if (mode == "none") { b.done = true; } else { l.busy = true; };
     if (ends && mode == "none") { link_close(l); };
+    // The body is buffered, not a stream: a read is answered from what has
+    // come, and only reaches for the link when it has to. So read(n) twice
+    // gives the same n bytes twice, text() twice the same text, and an
+    // empty read means an empty body -- which is not something a caller can
+    // tell from a body it has already read and thrown away, the way a
+    // drained socket looks.
     let read = def (n: long) -> [byte] {
-        let got = body_take(b, n);
+        if (n <= 0) {
+            b.buf += body_take(b, 0);
+        } else if (!b.done && len(b.buf) < n) {
+            b.buf += body_take(b, n - len(b.buf));
+        };
         if (b.done) {
             l.busy = false;
             if (ends) { link_close(l); };
         };
-        got
+        body_replay(b.buf, n)
     };
     let text = def () -> str { from_bytes(read(0)) };
     { status: h.status, reason: h.reason, headers: headers, size: size, url: url, err: "", read: read, text: text }

@@ -120,7 +120,7 @@ behavior or diagnostics), `make bench`, `make bench-ir` (see
 
 ## Test suites (`test/sh/`)
 
-Seventeen suites, run by `test/sh/run_all.sh` (named below in brackets). Most
+Eighteen suites, run by `test/sh/run_all.sh` (named below in brackets). Most
 compile each program with **both** compilers — the reference side is
 `refs/ycc.ref` — and require the outputs to agree (byte-identical
 binaries, the same warnings, identical program behavior). `test_native.sh`,
@@ -205,6 +205,22 @@ very build was just compared (`make test`, `check`, `rebless` do);
   the TLS 1.3 client (`tls_cli.y`, std/tls.y) against `openssl s_server`
   with each suite and an RSA and an ECDSA certificate (skipped without
   openssl).
+- `test_math.sh` [math] — the accuracy gate for `std/math.y`: reads
+  `test/math/ulp_table.txt` (2695 cases — the pinned edges, the overflow and
+  flush points, both sides of 1, the poles, the signed zeros, a seeded
+  1500-case spread, and a seeded 240-case spread over [-1, 1] for `asin` and
+  `acos`, the only two with a bounded domain — each line the function, its
+  argument(s) and the reference answer as IEEE-754 bit patterns), evaluates
+  every case with both compilers and
+  **fails on anything more than 1 ulp from the reference**. The gap is counted
+  through the monotone key of a double's bits, so it is exact at zero, across a
+  sign change, for a subnormal, and infinite for a NaN. The worst gap and the
+  function it came from are printed, so a regression names itself.
+  `test/math/ulp_check.y` says in its own header why the tolerance is 1 and what
+  the four cases that used to sit over it were; `gen_ulp_table.py` wrote the
+  table from this platform's libm (mpmath is not installed here, and a platform
+  libm is the *relevant* reference anyway — the promise is to match what C
+  gives), and `gen_kernel.py` fits and checks the kernels' coefficients.
 - `test_coverage.sh` [coverage] — static, compiles nothing: every
   diagnostic the compiler can print has its message in a test
   expectation, every builtin in the manual is called by a checked test,
@@ -280,7 +296,9 @@ Instruction counts are exact.
 
 splice imports, pick the std units → per unit (the program's, each
 package's under `ycc build` unless its object in `build/obj` is current,
-and each std unit unless the std pack has it): strip namespaces → rename
+and each std unit unless the std pack has it): strip namespaces (`strip_ns` for
+nodes, `strip_type` for the annotations on them — a path import flattens both,
+and a qualified `m.T` used to be rejected where the bare `T` compiled) → rename
 (uniquify) → typecheck (static, errors fatal) → lint (`lint.y`:
 warnings, to stderr; the program's unit and packages, never a std unit)
 → hoist → emit bodies →
@@ -437,7 +455,16 @@ replaces the std one at link time).
   and checks `cycc` and the reference agree byte for byte; `check-refs.py`
   and `check-names.py` (both in `test_lsp.sh`) police the citations and
   the shared namespace — the server path-imports the compiler, so every
-  name it defines lands in the compiler's vocabulary.
+  name it defines lands in the compiler's vocabulary. `check-names.py`
+  also tests each module's **basename**, because `strip_ns` rewrites any
+  `name.field` program-wide as a module reference (that is why `scope.y`
+  is not `index.y`; §5 of `LSP.md` has the 42 reads it broke).
+  `src/tools/lsp/test/` holds two **measurement programs** as well as the
+  fixtures: `scope-coverage.y` reports what share of a corpus's
+  identifier tokens the M4 index resolves, and `request-cost.y` what one
+  request costs per phase. Neither has an expectation — they print, so
+  the number can be quoted rather than remembered; run them by hand, as
+  the fixtures are for shapes and these are for sizes.
 - `refs/` — backed-up reference binaries for the port gate (see
   `PORTING.md` for where the current `ycc.ref` came from).
 - `test/` — `test/sh/` (suite drivers + `lib.sh` + `ytool.sh` +

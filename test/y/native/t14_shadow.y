@@ -1,6 +1,6 @@
 let x = 1;
 print(x);
-let x = 2;
+let x = 2; // expect-warning: 'x' is declared more than once; the last declaration counts (the earlier one at line 1)
 print(x);
 let y = x + 10;
 print(y);
