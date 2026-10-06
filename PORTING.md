@@ -132,11 +132,11 @@ requires byte-identical binaries).
    an `else` arm written `{ 0 }` or `{ 0; }` ports as the bare `;`/`0`
    form it has — do not refactor while porting.
 
-8. **Emitter peepholes port as themselves.** `gen_float_bin`'s `xmm_free` guard
+8. **Emitter peepholes port as themselves.** `gen_float_bin`'s `leaf_expr` guard
    is not a convenience: it is the only thing standing between a wrong answer
    and a fast one, because holding the left operand in `%xmm0` across the right
    operand's evaluation is unsound the moment the right one calls. In the C copy
-   it is `int xmm_free(Yv *n)` — a `bool` return becomes `int` — reading
+   it is `int leaf_expr(Yv *n)` — a `bool` return becomes `int` — reading
    `yr_get(n, "k")` against `K_num`, `K_id` and `K_un`, and recursing on
    `yr_get(n, "e")` for the unary arm. The forward declaration sits with the
    other `gen_*` ones near the top of `native.c`; a C99 implicit declaration
@@ -144,6 +144,16 @@ requires byte-identical binaries).
    is what notices, since the two copies then emit different assembly for every
    float operator and every corpus program that does float arithmetic changes
    its bytes.
+
+   `gen_cmp_flags` carries the same guard and it must be carried with it. That
+   one is not a float path, and the reason the predicate is safe there is
+   different: the leaf must not clobber `%rcx` (where the right operand lands)
+   and must not call. The answer is the same leaf set, which is why it is one
+   predicate and not two — but a C copy that ports `gen_float_bin`'s arm and
+   forgets `gen_cmp_flags`'s emits a push/pop the Y copy does not, and the two
+   differ on every program with an integer comparison in an `if`, which is most
+   of them. 187 of the corpus's 510 programs change their bytes when this lands,
+   and 0 of them change their behaviour; that split is the signature to look for.
 
 9. **Smaller mappings**: `next_uid(st)` hands out a unique id for emitter
    labels and table names by bumping the emit state's counter; it ports

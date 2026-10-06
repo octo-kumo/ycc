@@ -1440,7 +1440,7 @@ the text away would have nothing to hand back.
 \item[\ic{json.as\_str(v)}, \ic{json.as\_long(v)}, \ic{json.as\_bool(v)},
   \ic{json.as\_arr(v)}, \ic{json.as\_obj(v)}, \ic{json.is\_null(v)}] The shape
   asked for, or \ic{none} if \ic{v} is another one. \ic{as\_long} is
-  \ic{tonum} over the literal text and is emphatically \emph{not} a numeric
+  \ic{tolong} over the literal text and is emphatically \emph{not} a numeric
   conversion: it stops at the point, so \ic{"3.9"} is \ic{3} and \ic{"1e10"} is
   \ic{1}, and it wraps past 64 bits.
 \item[\ic{json.get\_long(o, k, d)}, \ic{json.get\_str(o, k, d)},

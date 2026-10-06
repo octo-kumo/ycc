@@ -155,17 +155,25 @@ ported, so they may use the whole native surface -- `&x`, `*p`,
   or more gets a mapping of its own.
   Nothing is ever freed (arena); no GC to write until something needs it.
 - Expression values in `%rax`; operands that must survive nested evaluation are
-  **pushed** (nothing live in caller-saved regs across a call). The one place
-  that is relaxed is a float binary operator whose right operand is a literal, a
-  variable or a unary minus over one of those (`xmm_free` in `native.y`): none
-  of the three can write an SSE register, so the left operand stays in `%xmm0`
-  across the right one's evaluation and the push/pop pair is not emitted. That
-  is worth 25% of a fitted polynomial kernel — a Horner chain is nothing but
-  such operators — and it is guarded by a predicate rather than by a flag,
-  because getting the predicate wrong would produce a *wrong answer*, not a slow
-  one. Anything that may call (`gen_eq_vals`'s left operand, an array read whose
-  bounds check can call `y_oob`, a field read, a nested float operator) still
-  pushes.
+  **pushed** (nothing live in caller-saved regs across a call). Two places relax
+  that, and they share one predicate — `leaf_expr` in `native.y`, true for a
+  literal, an identifier, or a unary operator over either, which is all a
+  `mov $imm, %rax` or a `mov off(%rbp), %rax`:
+  - a **float** binary operator. The leaf cannot write an SSE register, so the
+    left operand stays in `%xmm0` across the right one's evaluation. Worth 25%
+    of a fitted polynomial kernel — a Horner chain is nothing but such
+    operators.
+  - an **integer comparison that branches on flags** (`gen_cmp_flags`, which is
+    what `if x < 1` compiles to). The leaf clobbers neither `%rcx` nor the
+    stack, so the left goes straight into `%rcx` where the right one lands.
+    This is the hottest shape in the language: 3660 such comparisons in `ycc`'s
+    own output. `cmp` is dst-minus-src either way, so which register holds
+    which operand does not move the flags.
+
+  Both are guarded by a predicate rather than by a flag, because getting the
+  predicate wrong would produce a *wrong answer*, not a slow one. Anything that
+  may call (`gen_eq_vals`'s left operand, an array read whose bounds check can
+  call `y_oob`, a field read, a nested float operator) still pushes.
 - Y functions use a private convention: args pushed on the stack left to
   right, caller cleans up, result in `%rax`. The last-pushed arg sits at
   `rbp+16`, so param `k` of an `n`-arg function lives at

@@ -193,7 +193,7 @@
       "patterns": [
         {
           "name": "support.function.builtin.y",
-          "match": "\\b(print|puts|eputs|tostring|tonum|typeof|range|keys|len|trim|exit|argv|readline|clear_eof|join|split|ord|chr|index_of|last_index_of|byte_at|bytes|from_bytes|syscall|clock_us|time_us|heap_used|sleep|ptr_addr|some|is_some|unwrap|spawn|fork|mutex|sem|lock|try_lock|post|wait|wait_pid)\\b"
+          "match": "\\b(print|puts|eputs|tostring|tolong|tofloat|typeof|range|keys|len|trim|exit|argv|readline|clear_eof|join|split|ord|chr|index_of|last_index_of|byte_at|bytes|from_bytes|syscall|clock_us|time_us|heap_used|sleep|ptr_addr|some|is_some|unwrap|spawn|fork|mutex|sem|lock|try_lock|post|wait|wait_pid)\\b"
         }
       ]
     },

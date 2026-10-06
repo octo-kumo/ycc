@@ -1089,20 +1089,20 @@ def check_real(path: str, bytes: [byte]) -> long {
 
     // Every ID must also read the same through the builtin as through the
     // hand-rolled acceptance in num_reason.
-    let tonum_bad = 0;
+    let tolong_bad = 0;
     let id_sum = 0;
     let distinct = 0;
     let b = find_blank(lines!, eff_lines(lines!));
     for i in b..eff_lines(lines!) {
         let v = tolong(strip_cr(lines![i]));
-        if (v != d.ids[i - b]) { tonum_bad = tonum_bad + 1 };
+        if (v != d.ids[i - b]) { tolong_bad = tolong_bad + 1 };
         id_sum = id_sum + v;
         let seen = 0;
         let upto = i - b;
         for j in 0..upto { if (d.ids[j] == v) { seen = seen + 1 } };
         if (seen == 0) { distinct = distinct + 1 };
     };
-    f = f + expect("ids == tolong", tonum_bad == 0, f"{tonum_bad} of {n_id} disagree with tolong()");
+    f = f + expect("ids == tolong", tolong_bad == 0, f"{tolong_bad} of {n_id} disagree with tolong()");
     f = f + expect("parse == rescan: id sum", sc.id_sum == id_sum, f"{sc.id_sum} vs {id_sum}");
     f = f + expect("ids distinct", distinct == X_DISTINCT_IDS && distinct == n_id,
                    f"{distinct} distinct of {n_id}, outside says {X_DISTINCT_IDS}");

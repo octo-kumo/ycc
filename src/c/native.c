@@ -317,7 +317,7 @@ Yv *gen_elem_addr(Yv *st, Yv *node);
 Yv *gen_bin(Yv *st, Yv *node);
 Yv *gen_logic(Yv *st, Yv *node, int is_or);
 Yv *gen_cat(Yv *st, Yv *node, Yv *lt, Yv *rt);
-int xmm_free(Yv *n);
+int leaf_expr(Yv *n);
 Yv *gen_float_bin(Yv *st, Yv *node, Yv *lt, Yv *rt);
 Yv *gen_str_cmp(Yv *st, Yv *node, Yv *op);
 int eq_elem_loop(Yv *t);
@@ -5390,13 +5390,20 @@ Yv *gen_cat(Yv *st, Yv *node, Yv *lt, Yv *rt) {
     return st;
 }
 
-/* Whether generating `n` can leave an SSE register untouched.
+/* Whether generating `n` does nothing but leave a value in %rax.
  *
- * This exists for one narrow question: a float binary operator has to hold its
- * LEFT operand somewhere while the RIGHT one is generated, and every GPR is
- * caller-saved, so the general answer is the stack -- a push and a pop per
- * operator. If the right operand writes no SSE register at all, the left can sit
- * in %xmm0 across it instead and the pair is two instructions of pure waste.
+ * It answers two questions that happen to have the same answer, which is why it
+ * is one predicate and not two.
+ *
+ * For a FLOAT binary operator the question is "can this write an SSE register?",
+ * because the left operand has to be held across the right one's evaluation and
+ * the general answer is the stack -- a push and a pop per operator. If the right
+ * operand writes no SSE register at all, the left can sit in %xmm0 across it and
+ * the pair is two instructions of pure waste.
+ *
+ * For an INTEGER comparison that branches on flags (gen_cmp_flags) the question
+ * is "can this clobber %rcx, or call?", and a leaf does neither -- so the left
+ * can sit in %rcx and the push and pop go too.
  *
  * A numeric literal generates one `mov $bits, %rax`. An identifier generates one
  * load -- from the frame, from a global, or through a closure's cell, and all
@@ -5414,12 +5421,12 @@ Yv *gen_cat(Yv *st, Yv *node, Yv *lt, Yv *rt) {
  * a Horner chain is negative and `-1.2` is a unary minus over a literal rather
  * than a literal. Twelve of a chain's twenty-four operators were going the slow
  * way on that alone. */
-int xmm_free(Yv *n) {
+int leaf_expr(Yv *n) {
     long k = yv_l(yr_get(n, "k"));
     if (k == K_num || k == K_id) {
         return 1;
     } else if (k == K_un) {
-        return xmm_free(yr_get(n, "e"));
+        return leaf_expr(yr_get(n, "e"));
     } else {
         return 0;
     }
@@ -5448,7 +5455,7 @@ Yv *gen_float_bin(Yv *st, Yv *node, Yv *lt, Yv *rt) {
     /* A long on the right needs the widening cvtsi2sd, and that writes %xmm0 --
      * which is where the left would be living. So this arm requires the right to
      * be a float already; the slow arm below handles the rest. */
-    if (xmm_free(r) && yv_l(yr_get(rt, "k")) == K_tfloat) {
+    if (leaf_expr(r) && yv_l(yr_get(rt, "k")) == K_tfloat) {
         st = emit_insn(st, F_MOVQ_R_R, R_RAX, 64, R_XMM0, 128, 0, 0, 0);
         st = gen(st, r);
         st = emit_insn(st, F_MOVQ_R_R, R_RAX, 64, R_XMM1, 128, 0, 0, 0);
@@ -6863,12 +6870,31 @@ long int_cmp_jcc(Yv *st, Yv *node) {
    into %rcx -- so the `cmp %rcx, %rax` that follows reads left - right and the
    same setcc/jcc forms apply. */
 Yv *gen_cmp_flags(Yv *st, Yv *node) {
+    /* Same trade as gen_float_bin's, on the flags path: the left operand has to
+     * survive the right one's evaluation, every GPR is caller-saved, and %rcx --
+     * which is where the right one lands -- is caller-saved too, so the general
+     * answer is the stack. When the right operand is a leaf it touches neither
+     * %rcx nor the stack, so the left can go straight into %rcx.
+     *
+     * This is the hottest shape in the language: `if x < 1`, `if i < n`, `if k ==
+     * K.something`. ycc's own output has 3660 comparisons of this form.
+     *
+     * The cmp is written dst-minus-src either way, so moving the operands
+     * between the registers does not move the flags: left in %rcx and right in
+     * %rax gives `cmp %rax, %rcx`, the same subtraction as `cmp %rcx, %rax`. */
+    Yv *r = yr_get(node, "r");
     st = gen(st, yr_get(node, "l"));
-    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
-    st = gen(st, yr_get(node, "r"));
-    st = emit_insn(st, F_MOV_R_R, R_RAX, 64, R_RCX, 64, 0, 0, 0);
-    st = emit_insn(st, F_POP_R, R_RAX, 64, 0, 0, 0, 0, 0);
-    return emit_insn(st, F_CMP_R_R, R_RCX, 64, R_RAX, 64, 0, 0, 0);
+    if (leaf_expr(r)) {
+        st = emit_insn(st, F_MOV_R_R, R_RAX, 64, R_RCX, 64, 0, 0, 0);
+        st = gen(st, r);
+        return emit_insn(st, F_CMP_R_R, R_RAX, 64, R_RCX, 64, 0, 0, 0);
+    } else {
+        st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+        st = gen(st, r);
+        st = emit_insn(st, F_MOV_R_R, R_RAX, 64, R_RCX, 64, 0, 0, 0);
+        st = emit_insn(st, F_POP_R, R_RAX, 64, 0, 0, 0, 0, 0);
+        return emit_insn(st, F_CMP_R_R, R_RCX, 64, R_RAX, 64, 0, 0, 0);
+    }
 }
 
 Yv *gen_if(Yv *st, Yv *node) {

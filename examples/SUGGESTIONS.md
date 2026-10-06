@@ -251,10 +251,10 @@ addition to the str-method table beside `tolong` (`types.y` `str_method`),
 because `none` already says "there was nothing here":
 
 ```y
-let seed = v.tonum_opt();          // long? — none unless v is a whole number
+let seed = v.tolong_opt();         // long? — none unless v is a whole number
 if (seed == none) { eputs("prog: --seed wants a number, got '" + v + "'\n"); exit(2); };
 // or with the builtin spelling, for a value out of reach of a method:
-let seed = tonum_opt(v);
+let seed = tolong_opt(v);
 ```
 
 `none` should cover a value outside the `long` range too, so
@@ -265,7 +265,7 @@ the string and reports whether it consumed all of it (plus a range check),
 a `none`/`some` result, one entry in `str_method` in `types.y` and its C
 twin, and the body beside the `y_str_*` helpers in `src/y/std/str.y`. The
 only real question is the boundary — `tolong` stops at the first byte that
-is not a digit, so should this be `tonum_strict`, or should `tolong` itself
+is not a digit, so should this be `tolong_strict`, or should `tolong` itself
 change and gain an argument? Leaving `tolong` as it is documented to behave
 and adding the option-returning form breaks nothing.
 

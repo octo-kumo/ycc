@@ -84,7 +84,7 @@ def main() -> long {
         tostring(json.index(m_tags, 1))
     }, tostring(json.str("y")));
 
-    test.group("as_long is tonum over the text, and is not a conversion");
+    test.group("as_long is tolong over the text, and is not a conversion");
     // The manual says this outright, so it is asserted rather than described:
     // each of these is a reasonable assumption a caller would bring to a JSON
     // number, and every one of them is wrong.

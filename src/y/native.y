@@ -4374,20 +4374,28 @@ def gen_cat(st: EmitSt, node: Bin, lt: Type, rt: Type) -> EmitSt {
     st
 };
 
-// Whether generating `n` can leave an SSE register untouched.
+// Whether generating `n` does nothing but leave a value in %rax.
 //
-// This exists for one narrow question: a float binary operator has to hold its
-// LEFT operand somewhere while the RIGHT one is generated, and every GPR is
-// caller-saved, so the general answer is the stack -- a push and a pop per
-// operator. If the right operand writes no SSE register at all, the left can sit
-// in %xmm0 across it instead and the pair is two instructions of pure waste.
+// It answers two questions that happen to have the same answer, which is why it
+// is one predicate and not two.
 //
-// A numeric literal generates one `mov $bits, %rax`. An identifier generates one
-// load -- from the frame, from a global, or through a closure's cell, and all
-// three are GPR-only. A unary operator generates its operand and then flips the
-// sign bit or negates in a GPR: gen_un's float arm is `mov $1, %rcx; shl $63,
-// %rcx; xor %rcx, %rax`, with no xmm in it at all. Everything else may write
-// one: a call clobbers all of them, a nested float operator uses %xmm0 and
+// For a FLOAT binary operator the question is "can this write an SSE register?",
+// because the left operand has to be held across the right one's evaluation and
+// the general answer is the stack -- a push and a pop per operator. If the right
+// operand writes no SSE register at all, the left can sit in %xmm0 across it and
+// the pair is two instructions of pure waste.
+//
+// For an INTEGER comparison that branches on flags (gen_cmp_flags) the question
+// is "can this clobber %rcx, or call?", and a leaf does neither -- so the left
+// can sit in %rcx and the push and pop go too.
+//
+// What qualifies: a numeric literal, which is one `mov $bits, %rax`; an
+// identifier, which is one load -- from the frame, from a global, or through a
+// closure's cell, and all three are GPR-only; and a unary operator over either,
+// which generates its operand and then flips the sign bit or negates in a GPR
+// (gen_un's float arm is `mov $1, %rcx; shl $63, %rcx; xor %rcx, %rax`, with no
+// xmm in it at all). Everything else may write a register or call: a call
+// clobbers every xmm and every GPR, a nested float operator uses %xmm0 and
 // %xmm1 itself, a comparison uses them too, and an index expression can call
 // y_oob on its bounds check. Guessing wrong here would not make a slow program,
 // it would make a wrong one, so the predicate stays short of anything it cannot
@@ -4398,12 +4406,12 @@ def gen_cat(st: EmitSt, node: Bin, lt: Type, rt: Type) -> EmitSt {
 // a Horner chain is negative and `-1.2` is a unary minus over a literal rather
 // than a literal. Twelve of a chain's twenty-four operators were going the slow
 // way on that alone.
-def xmm_free(n: Node) -> bool {
+def leaf_expr(n: Node) -> bool {
     if (n.k == K.num || n.k == K.id) {
         true
     } else if (n.k == K.un) {
         let un: Un = n;
-        xmm_free(un.e)
+        leaf_expr(un.e)
     } else {
         false
     }
@@ -4428,7 +4436,7 @@ def gen_float_bin(st: EmitSt, node: Bin, lt: Type, rt: Type) -> EmitSt {
     // A long on the right needs the widening cvtsi2sd, and that writes %xmm0 --
     // which is where the left would be living. So this arm requires the right to
     // be a float already; the slow arm below handles the rest.
-    if (xmm_free(node.r) && rt.k == K.tfloat) {
+    if (leaf_expr(node.r) && rt.k == K.tfloat) {
         st = emit_insn(st, insn.F_MOVQ_R_R, insn.R_RAX, 64, insn.R_XMM0, 128, 0, 0, 0);
         st = gen(st, node.r);
         emit_insn(st, insn.F_MOVQ_R_R, insn.R_RAX, 64, insn.R_XMM1, 128, 0, 0, 0)
@@ -5725,12 +5733,30 @@ def int_cmp_jcc(st: EmitSt, node: Node) -> long {
 // into %rcx -- so the `cmp %rcx, %rax` that follows reads left - right and the
 // same setcc/jcc forms apply.
 def gen_cmp_flags(st: EmitSt, node: Bin) -> EmitSt {
+    // Same trade as gen_float_bin's, on the flags path: the left operand has to
+    // survive the right one's evaluation, every GPR is caller-saved, and %rcx --
+    // which is where the right one lands -- is caller-saved too, so the general
+    // answer is the stack. When the right operand is a leaf it touches neither
+    // %rcx nor the stack, so the left can go straight into %rcx.
+    //
+    // This is the hottest shape in the language: `if x < 1`, `if i < n`, `if k ==
+    // K.something`. ycc's own output has 3660 comparisons of this form.
+    //
+    // The cmp is written dst-minus-src either way, so moving the operands
+    // between the registers does not move the flags: left in %rcx and right in
+    // %rax gives `cmp %rax, %rcx`, the same subtraction as `cmp %rcx, %rax`.
     st = gen(st, node.l);
-    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
-    st = gen(st, node.r);
-    st = emit_insn(st, insn.F_MOV_R_R, insn.R_RAX, 64, insn.R_RCX, 64, 0, 0, 0);
-    st = emit_insn(st, insn.F_POP_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
-    emit_insn(st, insn.F_CMP_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0)
+    if (leaf_expr(node.r)) {
+        st = emit_insn(st, insn.F_MOV_R_R, insn.R_RAX, 64, insn.R_RCX, 64, 0, 0, 0);
+        st = gen(st, node.r);
+        emit_insn(st, insn.F_CMP_R_R, insn.R_RAX, 64, insn.R_RCX, 64, 0, 0, 0)
+    } else {
+        st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+        st = gen(st, node.r);
+        st = emit_insn(st, insn.F_MOV_R_R, insn.R_RAX, 64, insn.R_RCX, 64, 0, 0, 0);
+        st = emit_insn(st, insn.F_POP_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+        emit_insn(st, insn.F_CMP_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0)
+    }
 };
 
 def gen_if(st: EmitSt, node: If) -> EmitSt {
