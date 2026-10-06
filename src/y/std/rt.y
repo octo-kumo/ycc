@@ -203,15 +203,23 @@ def y_range(n: long) -> [long] {
 // same bytes on both targets. clock_us is CLOCK_MONOTONIC microseconds, time_us
 // CLOCK_REALTIME's: the wall clock, since the Unix epoch. (heap_used
 // reads the allocator's own counter: y_heap_used in arch_x64.y.)
+// ONE timespec for the whole runtime, not one per call.
+//
+// The obvious spelling -- `let ts: [long; 2] = [0; 2];` inside the function --
+// puts a fresh 2-element array on the arena every call, because &ts[0] needs an
+// address: 56 bytes a call, measured (1000 calls = 56000, and a frame loop
+// calling clock_us once a frame grows without bound).  A module-level `let` is
+// allocated once, so the syscall below borrows the same two words for ever.
+// Not thread-safe, and deliberately so: two threads racing here would both get
+// a time within a syscall of the right one, which is what clock_gettime is for.
+let CLK_TS: [long; 2] = [0; 2];
 def y_clock_us() -> long {
-    let ts: [long; 2] = [0; 2];
-    os_call("y_os_clock_gettime", 1, &ts[0]);
-    ts[0] * 1000000 + ts[1] / 1000
+    os_call("y_os_clock_gettime", 1, &CLK_TS[0]);
+    CLK_TS[0] * 1000000 + CLK_TS[1] / 1000
 };
 def y_time_us() -> long {
-    let ts: [long; 2] = [0; 2];
-    os_call("y_os_clock_gettime", 0, &ts[0]);
-    ts[0] * 1000000 + ts[1] / 1000
+    os_call("y_os_clock_gettime", 0, &CLK_TS[0]);
+    CLK_TS[0] * 1000000 + CLK_TS[1] / 1000
 };
 // wait_pid(pid): wait4 for a child (fork) -> its exit code, 128 + the
 // signal that ended it, or -1 when there is no such child.
@@ -228,6 +236,28 @@ def y_sleep(ms: long) -> long {
     ts[0] = m / 1000;
     ts[1] = (m % 1000) * 1000000;
     os_call("y_os_nanosleep", &ts[0])
+};
+// y_sleep_us(us): nanosleep in MICROSECONDS, where y_sleep takes whole
+// milliseconds.  The two differ by a factor of 1000 and there is no way to
+// express the smaller one with the larger one's signature, so a frame loop
+// that wants a 200 us nap cannot have one.  ORCHESTRATOR.md 0d asks for
+// "sub-millisecond pacing" by name, and three examples in examples/ carried
+// their own `nap_us` for it -- examples/badapple wrote it three times, once per
+// pipeline, rather than share it.
+//
+// The nanosecond field is the remainder in microseconds times 1000; there is no
+// way to ask for a fraction of a microsecond, so that is where the resolution
+// stops rather than silently rounding.
+def y_sleep_us(us: long) -> long {
+    let u = us;
+    if (u < 0) { u = 0; }
+    // the same borrowed timespec the clocks above use -- see CLK_TS for why it
+    // is not a local.  sleep is not reentrant with the clocks for the same
+    // reason, and it does not matter: the kernel has already been handed the
+    // pointer before anything else can run on this thread.
+    CLK_TS[0] = u / 1000000;
+    CLK_TS[1] = (u % 1000000) * 1000;
+    syscall(35, &CLK_TS[0], 0)
 };
 
 // b'...' -- Python-style byte-string repr: printable ASCII verbatim,

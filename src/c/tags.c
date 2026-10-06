@@ -15,7 +15,8 @@ static const char *const ktags[] = {
     "sliceassign", "store", "str", "t", "tarr", "tarrfix", "tbool", "tbyte",
     "terr", "tfloat", "tfunc", "tinfer", "tlong", "tmap", "tname", "tnone",
     "topt", "tparams", "tpat", "tpend", "tptr", "trec", "tref", "tstr",
-    "tunion", "tunk", "tvoid", "typedef", "un", "void", "while"
+    "tunion", "tunk", "tvoid", "typedef", "un", "void", "while",
+    "break", "continue"
 };
 
 Yv *ktag(long n) {
@@ -132,5 +133,7 @@ int tags_agree(void) {
     if (!ys_eq_lit(ktag(K_un), "un")) { return 0; }
     if (!ys_eq_lit(ktag(K_void), "void")) { return 0; }
     if (!ys_eq_lit(ktag(K_kw_while), "while")) { return 0; }
+    if (!ys_eq_lit(ktag(K_kw_break), "break")) { return 0; }
+    if (!ys_eq_lit(ktag(K_kw_continue), "continue")) { return 0; }
     return 1;
 }

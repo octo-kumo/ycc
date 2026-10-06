@@ -1,0 +1,14 @@
+# koch.turtle -- the Koch snowflake, first two levels, in three colours.
+#
+# Each side of the triangle is replaced by four segments with a bump in the
+# middle of it; `repeat 3` walks the three sides.  The second, finer pass draws
+# the same triangle subdivided once more.
+
+colour red
+repeat 3 [ forward 20  right 60  forward 20  left 120  forward 20  right 60  forward 20  right 120 ]
+
+colour orange
+repeat 3 [ forward 5  right 60  forward 5  left 120  forward 5  right 60  forward 5  right 60  forward 5  left 120  forward 5  right 60  forward 5  right 120 ]
+
+colour gold
+forward 1

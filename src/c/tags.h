@@ -108,6 +108,9 @@ enum {
     K_un             = 80,
     K_void           = 81,
     K_kw_while       = 82,
+    /* `break` and `continue` (2025): see src/y/tags.y. */
+    K_kw_break       = 83,
+    K_kw_continue    = 84,
 };
 
 #endif

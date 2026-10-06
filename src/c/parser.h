@@ -73,7 +73,7 @@ long parse_type_atom(Yv *toks, long p);
 long parse_type(Yv *toks, long p);
 
 /* ── function literal ───────────────────────────────────────────────────── */
-Yv *parse_func(Yv *toks, long p);
+Yv *parse_func(Yv *toks, long p, int isnat);
 
 /* ── block { stmt; stmt; ... } ──────────────────────────────────────────── */
 Yv *parse_block(Yv *toks, long p);
@@ -113,6 +113,7 @@ int is_id_named(Yv *node, Yv *name);
 Yv *parse_ternary(Yv *toks, Yv *cond, long q);
 Yv *block1(Yv *e, long ln, long cl);
 Yv *parse_type_full(Yv *toks, long p);
+Yv *type_word_names(void);
 Yv *lit_type(Yv *node);
 Yv *lit_type_neg(Yv *node);
 Yv *topt_of(Yv *t);

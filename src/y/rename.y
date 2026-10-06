@@ -140,10 +140,57 @@ def rn_lookup_to(st: RnSt, name: str, lo: long) -> str {
     found
 };
 
+// ── the def sites ────────────────────────────────────────────────────────
+//
+// Where every binding was DEFINED, as `uniq -> line * 65536 + col`, for a caller
+// that has to point at a name: the language server's go-to-definition (LSP.md
+// 9.2 A3). The renamer already knows both halves -- `uniq` because it makes it,
+// and the site because it is reading the declaration -- and was dropping both.
+//
+// A SECOND parser.NameIx beside types.tc_ix, not a new container: a NameIx is
+// already a string -> long open hash map with the growth rule, and inventing a
+// second one is the mistake that costs most to unpick later. `line * 65536 + col`
+// is the same packing types.inferred_ret already keys its table by.
+//
+// OFF by default. rn_bind is on the path of every binding in every compile, and a
+// caller that does not want the map should not pay for it; the branch is
+// predictable, but predictable is not free.
+let rn_defs: NameIx = parser.nameix_new(1024);
+let rn_want_defs: bool = false;
+
+// The name's position, or none. -1 is the sentinel and a consumer must treat it
+// as "no site in the source", never as line -1.
+def rn_def_site(uniq: str) -> long {
+    let out = 0 - 1;
+    if (rn_want_defs) {
+        let packed = parser.nameix_get(rn_defs, uniq);
+        if (packed >= 0) { out = packed; };
+    };
+    out
+}
+
+// The line of a def site, and its column. Two readers rather than one tuple so
+// the packing stays private to this file.
+def rn_def_line(st: long) -> long { st / 65536 }
+def rn_def_col(st: long) -> long { st % 65536 }
+
+// Only ever called when rn_want_defs is set: the flag is tested at rn_bind's
+// call site, for the same reason as tci_note -- a call on the path of every
+// binding in every compile is the cost, not the work inside it.
+def rn_note_def(uniq: str, line: long, col: long) {
+    if (line > 0 && col >= 0) {
+        parser.nameix_put(rn_defs, uniq, line * 65536 + col);
+    };
+};
+
 // Bind one name in the current scope, return {st, uniq}.
-def rn_bind(st: RnSt, orig: str) -> { st: RnSt, uniq: str } {
+//
+// `line`/`col` are the NAME's, not the keyword's, so they differ from the
+// declaration node's own position by however much whitespace followed `let`/`def`.
+def rn_bind(st: RnSt, orig: str, line: long, col: long) -> { st: RnSt, uniq: str } {
     let r = rn_fresh(st, orig);
     st = rn_define(r.st, orig, r.name);
+    if (rn_want_defs) { rn_note_def(r.name, line, col); };
     { st: st, uniq: r.name }
 };
 
@@ -206,10 +253,10 @@ def rn_prepass_decl(s: Decl, st: RnSt) -> RnSt {
     // decl shapes only (named def vs let-bound func): one `s.v.k` read in
     // this body (see parse_type_arrow note — two reads in one body merge).
     if (s.kind == "def") {
-        let r = rn_bind(st, s.name);
+        let r = rn_bind(st, s.name, s.nline, s.ncol);
         rn_note_defaults(r.st, r.uniq, s.v)
     } else if (s.v.k == K.func) {
-        let r = rn_bind(st, s.name);
+        let r = rn_bind(st, s.name, s.nline, s.ncol);
         rn_note_defaults(r.st, r.uniq, s.v)
     } else {
         st
@@ -767,11 +814,11 @@ def rn_rebuild_decl(s: Decl, newname: str) -> Decl {
 };
 
 def rn_rebuild_def(s: Decl, newname: str) -> Decl {
-    { k: K.decl, kind: "def", name: newname, typ: s.typ, v: s.v, line: s.line, col: s.col }
+    { k: K.decl, kind: "def", name: newname, typ: s.typ, v: s.v, line: s.line, col: s.col, nline: s.nline, ncol: s.ncol }
 };
 
 def rn_rebuild_let(s: Decl, newname: str) -> Decl {
-    { k: K.decl, kind: s.kind, name: newname, typ: s.typ, v: s.v, line: s.line, col: s.col }
+    { k: K.decl, kind: s.kind, name: newname, typ: s.typ, v: s.v, line: s.line, col: s.col, nline: s.nline, ncol: s.ncol }
 };
 
 def rn_block(stmts: [Node], st: RnSt) -> RnStmts {
@@ -1089,7 +1136,7 @@ def rn_dot(node: Dot, st: RnSt) -> RnRes {
         rn_id(st, q, node.line, node.col)
     } else {
         let o = rn_node(node.obj, st);
-        let dot: Dot = { k: K.dot, obj: o.node, key: node.key, line: node.line, col: node.col };
+        let dot: Dot = { k: K.dot, obj: o.node, key: node.key, line: node.line, col: node.col, nline: node.nline, ncol: node.ncol };
         let out: Node = dot;
         { st: o.st, node: out }
     }
@@ -1142,7 +1189,7 @@ def rn_dotassign(node: DotAssign, st: RnSt) -> RnRes {
 
 def rn_dotassign_val(node: DotAssign, o: Node, st: RnSt) -> RnRes {
     let v = rn_node(node.v, st);
-    { st: v.st, node: { k: K.dotassign, obj: o, key: node.key, v: v.node, line: node.line, col: node.col } }
+    { st: v.st, node: { k: K.dotassign, obj: o, key: node.key, v: v.node, line: node.line, col: node.col, nline: node.nline, ncol: node.ncol } }
 };
 
 def rn_foreach(node: Foreach, st: RnSt) -> RnRes {
@@ -1152,7 +1199,11 @@ def rn_foreach(node: Foreach, st: RnSt) -> RnRes {
 
 def rn_foreach_body(node: Foreach, iter: Node, st: RnSt) -> RnRes {
     let st1 = rn_push(st);
-    let nb = rn_bind(st1, node.name);
+    // The loop variable is not a Decl -- Foreach/ForRange carry the name as a
+    // bare string -- so it has no name position of its own and the loop's own is
+    // the honest one. It is a token or two from the name, which is the same
+    // imprecision a Decl's keyword position has and for the same reason.
+    let nb = rn_bind(st1, node.name, node.line, node.col);
     rn_foreach_block(node, iter, nb.uniq, nb.st)
 };
 
@@ -1175,7 +1226,8 @@ def rn_forrange_hi(node: ForRange, lo: Node, st: RnSt) -> RnRes {
 
 def rn_forrange_body(node: ForRange, lo: Node, hi: Node, st: RnSt) -> RnRes {
     let st1 = rn_push(st);
-    let nb = rn_bind(st1, node.name);
+    // The loop's own position, as in rn_foreach_body: no Decl, no name position.
+    let nb = rn_bind(st1, node.name, node.line, node.col);
     rn_forrange_block(node, lo, hi, nb.uniq, nb.st)
 };
 
@@ -1213,9 +1265,37 @@ def rn_decl(node: Decl, st: RnSt) -> RnRes {
     // its own shape's fields.
     if (node.kind == "def") {
         rn_decl_def(node, st)
+    } else if (node.kind == "native") {
+        rn_decl_native(node, st)
     } else {
         rn_decl_rest(node, st)
     }
+};
+
+// A native def renames like a def, but there is no body to walk: it holds no
+// code, only the header's errors, and the label it names is what the call
+// sites resolve to -- so it rides through untouched.
+def rn_decl_native(node: Decl, st: RnSt) -> RnRes {
+    rn_decl_native_lookup(node, rn_lookup(st, node.name), st)
+};
+
+def rn_decl_native_lookup(node: Decl, u: str, st: RnSt) -> RnRes {
+    if (u == "") {
+        let b = rn_bind(st, node.name, node.nline, node.ncol);
+        rn_decl_native_go(node, b.uniq, b.st)
+    } else {
+        rn_decl_native_go(node, u, st)
+    }
+};
+
+def rn_decl_native_go(node: Decl, u: str, st: RnSt) -> RnRes {
+    let f: Func = node.v;
+    // `ppos` carried through unchanged: the renamer renames names, not positions,
+    // and a native declaration's parameters are exactly where they were written.
+    let nf: Func = { k: K.func, params: f.params, ptypes: rn_types(st, f.ptypes),
+      ret: rn_type(st, f.ret), body: f.body, defs: f.defs, label: f.label,
+      line: f.line, col: f.col, ppos: f.ppos };
+    { st: st, node: { k: K.decl, kind: "native", name: u, typ: rn_type(st, node.typ), v: nf, line: node.line, col: node.col, nline: node.nline, ncol: node.ncol } }
 };
 
 def rn_decl_def(node: Decl, st: RnSt) -> RnRes {
@@ -1227,7 +1307,7 @@ def rn_decl_def(node: Decl, st: RnSt) -> RnRes {
 def rn_decl_def_lookup(node: Decl, u: str, st: RnSt) -> RnRes {
     // NOTE: both arms share the key set (kind/def/name/v) — teq holds.
     if (u == "") {
-        let b = rn_bind(st, node.name);
+        let b = rn_bind(st, node.name, node.nline, node.ncol);
         rn_decl_def_go(node, b.uniq, b.st)
     } else {
         rn_decl_def_go(node, u, st)
@@ -1236,7 +1316,7 @@ def rn_decl_def_lookup(node: Decl, u: str, st: RnSt) -> RnRes {
 
 def rn_decl_def_go(node: Decl, u: str, st: RnSt) -> RnRes {
     let f = rn_func(node.v, st);
-    { st: f.st, node: { k: K.decl, kind: "def", name: u, typ: rn_type(st, node.typ), v: f.node, line: node.line, col: node.col } }
+    { st: f.st, node: { k: K.decl, kind: "def", name: u, typ: rn_type(st, node.typ), v: f.node, line: node.line, col: node.col, nline: node.nline, ncol: node.ncol } }
 };
 
 def rn_decl_rest(node: Decl, st: RnSt) -> RnRes {
@@ -1254,7 +1334,7 @@ def rn_decl_func(node: Decl, st: RnSt) -> RnRes {
 def rn_decl_func_lookup(node: Decl, u: str, st: RnSt) -> RnRes {
     // NOTE: both arms share the key set — teq holds.
     if (u == "") {
-        let b = rn_bind(st, node.name);
+        let b = rn_bind(st, node.name, node.nline, node.ncol);
         rn_decl_func_go(node, b.uniq, b.st)
     } else {
         rn_decl_func_go(node, u, st)
@@ -1267,7 +1347,7 @@ def rn_decl_func_go(node: Decl, u: str, st: RnSt) -> RnRes {
 };
 
 def rn_decl_func_finish(node: Decl, u: str, fv: Node, st: RnSt) -> RnRes {
-    { st: st, node: { k: K.decl, kind: node.kind, name: u, typ: rn_type(st, node.typ), v: fv, line: node.line, col: node.col } }
+    { st: st, node: { k: K.decl, kind: node.kind, name: u, typ: rn_type(st, node.typ), v: fv, line: node.line, col: node.col, nline: node.nline, ncol: node.ncol } }
 };
 
 def rn_decl_val(node: Decl, st: RnSt) -> RnRes {
@@ -1276,7 +1356,7 @@ def rn_decl_val(node: Decl, st: RnSt) -> RnRes {
 };
 
 def rn_decl_val_bind(node: Decl, v: Node, st: RnSt) -> RnRes {
-    let b = rn_bind(st, node.name);
+    let b = rn_bind(st, node.name, node.nline, node.ncol);
     rn_decl_val_finish(node, v, b.uniq, b.st)
 };
 
@@ -1290,7 +1370,7 @@ def rn_decl_val_finish(node: Decl, v: Node, uniq: str, st: RnSt) -> RnRes {
         es += v;
         v2 = { k: K.block, stmts: es, line: node.line, col: node.col };
     }
-    { st: st, node: { k: K.decl, kind: node.kind, name: uniq, typ: rn_type(st, node.typ), v: v2, line: node.line, col: node.col } }
+    { st: st, node: { k: K.decl, kind: node.kind, name: uniq, typ: rn_type(st, node.typ), v: v2, line: node.line, col: node.col, nline: node.nline, ncol: node.ncol } }
 };
 
 // Rename a func value. `func` is annotated with the full func shape (the
@@ -1317,38 +1397,50 @@ def rn_func_p3(func: Func, fparams: [str], fptypes: [Type], fret: Type, st: RnSt
 };
 
 def rn_func_p4(func: Func, fparams: [str], fptypes: [Type], fret: Type, fbody: Block, st: RnSt) -> RnRes {
-    rn_func_p5(fparams, fptypes, fret, fbody, func.line, func.col, st)
+    rn_func_p5(fparams, fptypes, fret, fbody, func.line, func.col, func.ppos, st)
 };
 
-def rn_func_p5(fparams: [str], fptypes: [Type], fret: Type, fbody: Block, fline: long, fcol: long, st: RnSt) -> RnRes {
-    rn_func_params(fparams, fptypes, fret, fbody, fline, fcol, st)
+def rn_func_p5(fparams: [str], fptypes: [Type], fret: Type, fbody: Block, fline: long, fcol: long, fppos: [long], st: RnSt) -> RnRes {
+    rn_func_params(fparams, fptypes, fret, fbody, fline, fcol, fppos, st)
 };
 
-def rn_func_params(fparams: [str], fptypes: [Type], fret: Type, fbody: Block, fline: long, fcol: long, st: RnSt) -> RnRes {
-    rn_func_go(fparams, fptypes, fret, fbody, fline, fcol, [], 0, st)
+def rn_func_params(fparams: [str], fptypes: [Type], fret: Type, fbody: Block, fline: long, fcol: long, fppos: [long], st: RnSt) -> RnRes {
+    rn_func_go(fparams, fptypes, fret, fbody, fline, fcol, fppos, [], 0, st)
 };
 
-def rn_func_go(fparams: [str], fptypes: [Type], fret: Type, fbody: Block, fline: long, fcol: long, params: [str], i: long, st: RnSt) -> RnRes {
+def rn_func_go(fparams: [str], fptypes: [Type], fret: Type, fbody: Block, fline: long, fcol: long, fppos: [long], params: [str], i: long, st: RnSt) -> RnRes {
     // NOTE: recursion over the param list (replaces the while loop): the
     // loop's `st = b.st` rebind poisoned the merged-shape read of st.
     // fparams stays BARE (like res(node)): the single `fparams[i]` read
     // unifies via the tcompat law (tnone).
     if (i >= len(fparams)) {
-        rn_func_body(fptypes, fret, fbody, fline, fcol, params, st)
+        rn_func_body(fptypes, fret, fbody, fline, fcol, fppos, params, st)
     } else {
-        let b = rn_bind(st, fparams[i]);
+        // The parameter's OWN position, from the parser, when it has one. It used to
+        // be the Func's line for every parameter, which put every parameter's def
+        // site on the `def` keyword -- so a go-to-definition on a parameter landed on
+        // the function, not on the parameter. An empty `fppos` (a hand-built Func)
+        // falls back to the Func's own position, which is the imprecision rather
+        // than a wrong answer.
+        let pl = fline;
+        let pc = fcol;
+        if (i < len(fppos) && fppos[i] > 0) {
+            pl = fppos[i] / 65536;
+            pc = fppos[i] % 65536;
+        };
+        let b = rn_bind(st, fparams[i], pl, pc);
         params += b.uniq;
-        rn_func_go(fparams, fptypes, fret, fbody, fline, fcol, params, i + 1, b.st)
+        rn_func_go(fparams, fptypes, fret, fbody, fline, fcol, fppos, params, i + 1, b.st)
     }
 };
 
-def rn_func_body(fptypes: [Type], fret: Type, fbody: Block, fline: long, fcol: long, params: [str], st: RnSt) -> RnRes {
+def rn_func_body(fptypes: [Type], fret: Type, fbody: Block, fline: long, fcol: long, fppos: [long], params: [str], st: RnSt) -> RnRes {
     // NOTE: fbody read ONCE here (one read site — no merge).
     let b = rn_block(fbody.stmts, st);
-    rn_func_finish(fptypes, fret, fbody, fline, fcol, params, b.stmts, rn_pop(b.st))
+    rn_func_finish(fptypes, fret, fbody, fline, fcol, fppos, params, b.stmts, rn_pop(b.st))
 };
 
-def rn_func_finish(fptypes: [Type], fret: Type, fbody: Block, fline: long, fcol: long, params: [str], stmts: [Node], st: RnSt) -> RnRes {
+def rn_func_finish(fptypes: [Type], fret: Type, fbody: Block, fline: long, fcol: long, fppos: [long], params: [str], stmts: [Node], st: RnSt) -> RnRes {
     // NOTE: NO record reads here — all values are params already. `fbody`
     // rides along for signature parity with the C twin and is never read.
     let un = rn_unknown_list(st, fptypes);
@@ -1356,7 +1448,11 @@ def rn_func_finish(fptypes: [Type], fret: Type, fbody: Block, fline: long, fcol:
     let body: [Node] = [];
     if (un != "") { body += rn_unknown_err(un, fline, fcol); }
     body += stmts;
-    { st: st, node: { k: K.func, params: params, ptypes: rn_types(st, fptypes), ret: rn_type(st, fret), body: { k: K.block, stmts: body, line: fline, col: fcol }, line: fline, col: fcol, defs: [] } }
+    // `ppos` again: the parameter list is renamed in place, so each name keeps the
+    // position it was written at. Empty here rather than unknown -- this rebuild is
+    // for a function LITERAL, whose parameters the parser also recorded, so it is
+    // `fppos` below and not a literal [].
+    { st: st, node: { k: K.func, params: params, ptypes: rn_types(st, fptypes), ret: rn_type(st, fret), body: { k: K.block, stmts: body, line: fline, col: fcol }, line: fline, col: fcol, defs: [], label: "", ppos: fppos } }
 };
 
 
@@ -1470,4 +1566,19 @@ def rename_program_go(stmts: [Node], line: long, col: long, dfl: [Dfl]) -> Block
     { k: K.block, stmts: b.stmts, line: line, col: col }
 };
 
-export { rename_program, rename_program_x };
+// rename, AND the def sites of everything it renamed.
+//
+// rename_program_x is this minus the index: the compiler needs the tree and
+// nothing else, and three callers (ycc.y, native.y, pkg.y) should not have to
+// know an index exists. So the flag is set here and cleared on the way out, and
+// the map holds THIS call's bindings only -- which is the unit that was passed
+// in, since a program is checked one unit at a time.
+def rename_program_x2(ast: Block, dfl: [Dfl], ofile: [long], fmods: [str]) -> { ast: Block, defs: NameIx } {
+    rn_defs = parser.nameix_new(1024);
+    rn_want_defs = true;
+    let block = rename_program_x(ast, dfl, ofile, fmods);
+    rn_want_defs = false;
+    { ast: block, defs: rn_defs }
+};
+
+export { rename_program, rename_program_x, rename_program_x2, rn_def_site, rn_def_line, rn_def_col };

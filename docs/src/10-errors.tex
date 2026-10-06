@@ -22,9 +22,9 @@ through the enclosing uses. Typical families:
 \begin{itemize}[nosep]
 \item name errors: \ic{undefined variable 'x'};
 \item shape errors: \ic{record has no field 'f'};
-\item operator typing: \ic{'+=' appended elements: expected [long], got
-  long}, \ic{arrays support only '+=' and '*=' (in place), not '-='},
-  \ic{'++' needs a number target};
+\item operator typing: \ic{'++' needs a number target};
+\item array operators: \ic{'+=' appended elements: expected [long], got str};
+\item in-place only: \ic{arrays support only '+=' and '*=' (in place), not '-='};
 \item call errors: \ic{call takes 2 args, got 1};
 \item non-value use: \ic{cannot index long (only arrays and maps)};
 \item void use: \ic{cannot bind a void value to 'x'}.
@@ -34,8 +34,13 @@ through the enclosing uses. Typical families:
 walks the program recursively (the parser, then the renamer, the
 checker and the emitter), so an expression, a type or a block nested
 deeper than \textbf{1000} is refused with the position that was too
-deep, \ic{line:col: error: an expression nests deeper than 1000, the
-compiler's limit}. Both compilers share the number, so the same program
+deep. The message names what was nested, so there are three of them:
+\ic{an expression nests deeper than 1000, the
+compiler's limit},
+\ic{a type nests deeper than 1000, ...} and
+\ic{a statement nests deeper than 1000, ...} --- so a deep type says
+\ic{a type} and not \ic{an expression}.
+Both compilers share the number, so the same program
 is accepted or refused by each. A long chain counts too, once the
 walks reach it: \ic{1+1+1+...} parses in a loop, but the checker and
 the emitter follow it down, so a chain of a thousand terms is refused
@@ -56,7 +61,6 @@ each, positioned like errors (an imported file's naming that file),
 byte for byte, with them or without, and \ic{ycc -w} turns them off. The
 std units never warn; a package warns when it compiles. What draws one:
 
-\begin{sloppypar}
 \begin{itemize}[nosep]
 \item a local binding nothing reads: \ic{unused variable 'x'} (or
   \ic{unused constant}, \ic{unused function}), or one only assigned to:
@@ -70,8 +74,8 @@ std units never warn; a package warns when it compiles. What draws one:
   nothing);
 \item \ic{division by zero}: \ic{/}, \ic{\%}, \ic{/=} or \ic{\%=} by a
   literal integer \ic{0};
-\item a key given twice in a record or map literal: \ic{duplicate field
-  'a' in a record literal} (or \ic{duplicate key}); the last one wins;
+\item a key given twice in a record or map literal --- \ic{duplicate field
+  'a' in a record literal}, or \ic{duplicate key}. The last one wins;
 \item a type that \ic{type} could name once: a record of two or more
   fields, or a union, written out in full more than once (\ic{the type
   \{...\} is written out 2 times}) or where an alias names it already
@@ -80,7 +84,6 @@ std units never warn; a package warns when it compiles. What draws one:
   twice (\ic{type 'Tag' is declared more than once}), where the last
   declaration counts.
 \end{itemize}
-\end{sloppypar}
 
 \noindent Parameters, loop variables, top-level bindings and names
 starting with \ic{\_} are never unused: \ic{let \_x = f();} keeps a
@@ -94,7 +97,6 @@ habit rather than a mistake: a getter call or a bare \ic{a[i]} as a
 statement reads fine. Raise the warning level to turn them on -- \ic{ycc
 -W 1} (a project: \ic{ycc build -W 1}), which adds
 
-\begin{sloppypar}
 \begin{itemize}[nosep]
 \item \ic{the value of 'f()' is not used}: a call to a function that
   hands a value back, whose result nobody reads. A function that returns
@@ -108,7 +110,6 @@ statement reads fine. Raise the warning level to turn them on -- \ic{ycc
   unnecessary, so it can go; an \ic{else} that runs anything, and an
   \ic{if} with no \ic{else}, draw nothing.
 \end{itemize}
-\end{sloppypar}
 
 \noindent Level \ic{0} (the default) is the set above. \ic{-W} with no
 level, or one that is not a number, is an error. The level changes which
@@ -120,7 +121,7 @@ The compiled program traps --- writes a one-line message to stdout and
 exits with status 1 --- on:
 
 \begin{center}
-\begin{tabular}{ll}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.34\linewidth}@{\quad}>{\raggedright\arraybackslash}p{0.58\linewidth}@{}}
 \toprule
 condition & message \\
 \midrule
@@ -162,3 +163,43 @@ output on every run and in either implementation. This is checked
 continuously by comparing the two compilers' output binaries byte for
 byte, and by self-compilation (a compiler built by the compiler is
 identical to the one that built it).
+
+\section{The toolchain}
+\label{sec:toolchain}
+
+Everything above is the language. Two things ship beside it, and neither is part
+of what a program means, so neither has a section of its own earlier on.
+
+\subsection{Language server}
+
+\ic{make yserve} builds \ic{yserve}, the language server for
+\textsf{Y}. It is written in \textsf{Y} in the same tree (\ic{src/tools/lsp/}) It speaks the Language
+Server Protocol over its own standard streams, so an editor can ask it about a
+buffer it has not saved: the diagnostics the compiler itself would print for
+that text, semantic tokens, formatting, hover, go-to-definition and completion
+from the buffer's own declarations. It is driven by a VS Code extension in
+\ic{vscode-y-lang/}, and it runs in the checked suite, which compiles and runs
+its fixtures under both compilers and compares each against its
+\ic{.expected}.
+
+Two things follow from it being in the same tree and written in the language.
+It \emph{imports the compiler's own modules by path}, so every name it defines
+joins the compiler's vocabulary --- which is why a fixture in the language
+suites and a fixture in the server's cannot both be named the same thing. And
+it produces byte-identical output under either compiler, which \ic{make yserve}
+checks rather than assumes.
+
+\subsection{Building this document}
+
+\ic{make docs} builds this manual and nothing else needs to be run first. It
+needs \ic{t tectonic} on the path; without it the target says so and stops. The
+result is \ic{docs/build/manual.pdf}, with \ic{docs/build/manual.log} beside it.
+
+The target fails the build on any \LaTeX{} error \emph{or} on any over- or
+underfull box, so a clean run is the proof that the typesetting is sound rather
+than a claim about it. That is deliberate: a manual that merely compiles is a
+manual with lines running into the margin, and nothing in the build would say
+so. The three source files are concatenated in the order \ic{\_preamble.tex},
+\ic{index.tex}, \ic{\_postamble.tex} and piped to \ic{tectonic} on its standard
+input, because the installed version takes exactly one input file; the sources
+live in \ic{docs/src/}.

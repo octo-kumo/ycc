@@ -33,7 +33,6 @@ static long rex_rm(int w, long reg, Yv *m);
 static long put(Yv *buf, long at, long v);
 static long put2(Yv *buf, long at, long a, long b);
 static long put3(Yv *buf, long at, long a, long b, long c);
-static long put_le16(Yv *buf, long at, long v);
 static long put_le32(Yv *buf, long at, long v);
 static long put_le64(Yv *buf, long at, long v);
 static long put_rex(Yv *buf, long at, long r);
@@ -56,8 +55,13 @@ static Yv *enc_alu_imm(Yv *buf, long at, Yv *op, Yv *dst, long v);
 static Yv *enc_alu_imm_mem(Yv *buf, long at, Yv *op, Yv *dst, long v);
 static Yv *enc_alu_imm_go(Yv *buf, long at, Yv *op, Yv *dst, long v);
 static Yv *enc_alu_imm_body(Yv *buf, long at, Yv *op, Yv *dst, long v);
+static Yv *enc_test_imm(Yv *buf, long at, Yv *dst, long v);
+static Yv *enc_test_imm_body(Yv *buf, long at, Yv *dst, long v);
 static Yv *enc_shift(Yv *buf, long at, Yv *mn, Yv *dst, Yv *cnt);
 static Yv *enc_sse_arith(Yv *buf, long at, Yv *mn, Yv *dst, Yv *src);
+static long sse_op(Yv *mn);
+static Yv *enc_movsd(Yv *buf, long at, Yv *dst, Yv *src);
+static Yv *enc_sqrtsd(Yv *buf, long at, Yv *dst, Yv *src);
 static Yv *enc_ucomisd(Yv *buf, long at, Yv *dst, Yv *src);
 static Yv *enc_cvtsi2sd(Yv *buf, long at, Yv *dst, Yv *src);
 static Yv *enc_cvttsd2si(Yv *buf, long at, Yv *dst, Yv *src);
@@ -111,6 +115,16 @@ long reg_num(Yv *name) {
     else if (ys_eq_lit(name, "%xmm3")) { return 3; }
     else if (ys_eq_lit(name, "%xmm4")) { return 4; }
     else if (ys_eq_lit(name, "%xmm5")) { return 5; }
+    else if (ys_eq_lit(name, "%xmm6")) { return 6; }
+    else if (ys_eq_lit(name, "%xmm7")) { return 7; }
+    else if (ys_eq_lit(name, "%xmm8")) { return 8; }
+    else if (ys_eq_lit(name, "%xmm9")) { return 9; }
+    else if (ys_eq_lit(name, "%xmm10")) { return 10; }
+    else if (ys_eq_lit(name, "%xmm11")) { return 11; }
+    else if (ys_eq_lit(name, "%xmm12")) { return 12; }
+    else if (ys_eq_lit(name, "%xmm13")) { return 13; }
+    else if (ys_eq_lit(name, "%xmm14")) { return 14; }
+    else if (ys_eq_lit(name, "%xmm15")) { return 15; }
     else { return -1; }
 }
 
@@ -156,8 +170,9 @@ static long sib(long scale, long index, long base) {
 
 /* A little-endian run as its own array, for the callers outside the encoders
    (asm.y's .quad and its patcher). Inside an encoder use
-   put_le16/put_le32/put_le64, which write the same bytes through the cursor
-   and allocate nothing. */
+   put_le32/put_le64, which write the same bytes through the cursor
+   and allocate nothing. There is no put_le16: no encoder here writes a 16-bit
+   field, so it had no caller. */
 Yv *le16(long v) {
     return yav(2, yv_long(byte_of(v, 0)), yv_long(byte_of(v, 1)));
 }
@@ -257,10 +272,6 @@ static long put3(Yv *buf, long at, long a, long b, long c) {
     long n = put2(buf, at, a, b);
     ya_set(buf, n, yv_long(c));
     return n + 1;
-}
-
-static long put_le16(Yv *buf, long at, long v) {
-    return put2(buf, at, byte_of(v, 0), byte_of(v, 1));
 }
 
 static long put_le32(Yv *buf, long at, long v) {
@@ -386,7 +397,13 @@ static long rex_rm(int w, long reg, Yv *m) {
 
 /* Fixup record for label-relative fields, resolved in pass 2:
    {off, kind, lbl, lbl2} (off relative to instruction start).
-   kind: "rel32" (call/jmp/jcc), "rip32", "imm32diff". */
+   kind: "rel32" (call/jmp/jcc), "rip32", "imm32diff".
+   NOTE: do not add a field here. asm_loc/asm_file build four-field records for
+   the DWARF markers and hand them back where a Fixup is expected, and the
+   earlier attempt at a fifth field (`add`, the byte offset of `tab+8(%rip)`)
+   made Y and C disagree about the .debug_line table with no port-gate signal:
+   the gate builds ycc.y WITHOUT -g. The table offset rides in `lbl` instead,
+   and asm.c's label_addr evaluates it. */
 Yv *fixup(long at, Yv *kind, Yv *lbl, Yv *lbl2) {
     return yr(4, "off", yv_long(at), "kind", kind, "lbl", lbl, "lbl2", lbl2);
 }
@@ -764,6 +781,49 @@ static Yv *enc_alu_imm_body(Yv *buf, long at, Yv *op, Yv *dst, long v) {
     }
 }
 
+/* test $imm, %r32/%r64: F7 /0 id, always. The ALU group's other six mnemonics
+   have 83 and 81 to lean on -- one opcode for "an immediate that sign-extends
+   from a byte" and one for the 32-bit case -- and test has neither: its
+   immediate form is F6/F7, where the pair is the OPERAND's width rather than the
+   immediate's. F6 is the 8-bit-operand form, and x86 ignores REX.W on it, so
+   `test $1, %rax` written as F6 tests %al: the flag test of a value under 256
+   still agrees, which is how it stayed wrong through a whole kernel. F7 is the
+   32-or-64-bit form and takes the immediate as an imm32 whether or not it fits
+   in a byte. It is the one form that sets flags from a value without writing it
+   back, which is what a kernel wants when it is asking "which of these four"
+   rather than computing.
+
+   Registers only. F7 can name a memory operand, but a sizeless one carries no
+   width to encode, and guessing 64 bits (what enc_alu_imm_mem does, for the
+   reason it gives) would be right by luck rather than by reading. Nothing
+   reaches it: a kernel asks this of a value it computed. */
+static Yv *enc_test_imm(Yv *buf, long at, Yv *dst, long v) {
+    /* (split: this is the shape gate; the body sees a 32- or 64-bit register
+       and no merged-shape read, so it reads dst.n straight.) */
+    if (yv_l(yr_get(dst, "k")) != K_reg) {
+        return enc_err(at, ys("test imm dst"));
+    } else if (op_size(dst) != 64 && op_size(dst) != 32) {
+        return enc_err(at, ys("test imm dst"));
+    } else {
+        return enc_test_imm_body(buf, at, dst, v);
+    }
+}
+
+static Yv *enc_test_imm_body(Yv *buf, long at, Yv *dst, long v) {
+    /* (the shape gate lives in enc_test_imm; this one is on the value) */
+    long dn = yv_l(yr_get(dst, "n"));
+    long r = rex(op_size(dst) == 64, -1, -1, dn);
+    if (v < -2147483648L || v > 2147483647L) {
+        /* the same door enc_alu_imm_body has, and for the same reason: F7 takes
+           a sign-extended imm32 and put_le32 would keep the low four bytes. */
+        return enc_err(at, ys("an immediate does not fit in 32 bits"));
+    } else {
+        long n = put_rex(buf, at, r);
+        long m = put2(buf, n, 247, modrm(3, 0, dn));
+        return enc_ok(put_le32(buf, m, v), yav(0));
+    }
+}
+
 static Yv *enc_shift(Yv *buf, long at, Yv *mn, Yv *dst, Yv *cnt) {
     /* shl/shr/sar $imm8 (0-63) or %cl, %r64: C1 /ext ib and D3 /ext, where
        ext is shl 4, shr 5 (logical), sar 7 (arithmetic) */
@@ -799,38 +859,108 @@ static Yv *enc_shift(Yv *buf, long at, Yv *mn, Yv *dst, Yv *cnt) {
    comparison move them into %xmmN, so the rest of the backend (slots,
    pushes, calls) is unchanged. */
 
+static long sse_op(Yv *mn) {
+    /* addsd 58, subsd 5C, mulsd 59, divsd 5E */
+    long op = 88;
+    if (ys_eq_lit(mn, "subsd")) { op = 92; }
+    if (ys_eq_lit(mn, "mulsd")) { op = 89; }
+    if (ys_eq_lit(mn, "divsd")) { op = 94; }
+    return op;
+}
+
+/* F2 0F <op> /r, with the destination an xmm and the source either an xmm or
+ * memory.
+ *
+ * The memory form is the point. A transcendental's kernel is
+ * `mulsd %xmm0, c7(%rip)` over a table of coefficients, and the F2 is what
+ * makes it the SCALAR form: without it the same bytes are the packed mulps,
+ * which multiplies sixteen bytes at once -- and they assemble. */
 static Yv *enc_sse_arith(Yv *buf, long at, Yv *mn, Yv *dst, Yv *src) {
-    /* F2 0F <op> /r  — addsd 58, subsd 5C, mulsd 59, divsd 5E */
-    if (yv_l(yr_get(dst, "k")) != K_reg) {
+    if (yv_l(yr_get(dst, "k")) != K_reg || op_size(dst) != 128) {
         return enc_err(at, ys("sse dst"));
-    } else if (yv_l(yr_get(src, "k")) != K_reg) {
-        return enc_err(at, ys("sse src"));
-    } else {
-        long op = 88;
-        if (ys_eq_lit(mn, "subsd")) { op = 92; }
-        if (ys_eq_lit(mn, "mulsd")) { op = 89; }
-        if (ys_eq_lit(mn, "divsd")) { op = 94; }
+    } else if (yv_l(yr_get(src, "k")) == K_reg) {
         long n = put(buf, at, 242);
         long m = put_rex(buf, n, rex(0, yv_l(yr_get(dst, "n")), -1, yv_l(yr_get(src, "n"))));
-        return enc_ok(put3(buf, m, 15, op, modrm(3, yv_l(yr_get(dst, "n")), yv_l(yr_get(src, "n")))), yav(0));
+        return enc_ok(put3(buf, m, 15, sse_op(mn), modrm(3, yv_l(yr_get(dst, "n")), yv_l(yr_get(src, "n")))), yav(0));
+    } else if (yv_l(yr_get(src, "k")) == K_mem) {
+        Yv *t = mem_tail(src, yv_l(yr_get(dst, "n")));
+        long n = put_rex(buf, put(buf, at, 242), rex_rm(0, yv_l(yr_get(dst, "n")), src));
+        long m = put2(buf, n, 15, sse_op(mn));
+        return enc_mem_result(buf, mem_tail_put(buf, put(buf, m, yv_l(yr_get(t, "modrm"))), t), t);
+    } else {
+        return enc_err(at, ys("sse src"));
+    }
+}
+
+/* F2 0F 10 /r loads into an xmm (or moves xmm to xmm); F2 0F 11 /r stores.
+ * There is no REX.W: the value is eight bytes wide either way. */
+static Yv *enc_movsd(Yv *buf, long at, Yv *dst, Yv *src) {
+    if (yv_l(yr_get(dst, "k")) == K_reg && op_size(dst) == 128) {
+        if (yv_l(yr_get(src, "k")) == K_reg && op_size(src) == 128) {
+            long n = put(buf, at, 242);
+            long m = put_rex(buf, n, rex(0, yv_l(yr_get(dst, "n")), -1, yv_l(yr_get(src, "n"))));
+            return enc_ok(put3(buf, m, 15, 16, modrm(3, yv_l(yr_get(dst, "n")), yv_l(yr_get(src, "n")))), yav(0));
+        } else if (yv_l(yr_get(src, "k")) == K_mem) {
+            Yv *t = mem_tail(src, yv_l(yr_get(dst, "n")));
+            long n = put_rex(buf, put(buf, at, 242), rex_rm(0, yv_l(yr_get(dst, "n")), src));
+            long m = put2(buf, n, 15, 16);
+            return enc_mem_result(buf, mem_tail_put(buf, put(buf, m, yv_l(yr_get(t, "modrm"))), t), t);
+        } else {
+            return enc_err(at, ys("movsd src"));
+        }
+    } else if (yv_l(yr_get(dst, "k")) == K_mem && yv_l(yr_get(src, "k")) == K_reg
+               && op_size(src) == 128) {
+        Yv *t = mem_tail(dst, yv_l(yr_get(src, "n")));
+        long n = put_rex(buf, put(buf, at, 242), rex_rm(0, yv_l(yr_get(src, "n")), dst));
+        long m = put2(buf, n, 15, 17);
+        return enc_mem_result(buf, mem_tail_put(buf, put(buf, m, yv_l(yr_get(t, "modrm"))), t), t);
+    } else {
+        return enc_err(at, ys("movsd form"));
+    }
+}
+
+static Yv *enc_sqrtsd(Yv *buf, long at, Yv *dst, Yv *src) {
+    /* F2 0F 51 /r  — sqrtsd %xmm, %xmm */
+    if (yv_l(yr_get(dst, "k")) != K_reg) {
+        return enc_err(at, ys("sqrtsd dst"));
+    } else if (yv_l(yr_get(src, "k")) != K_reg) {
+        return enc_err(at, ys("sqrtsd src"));
+    } else {
+        long n = put(buf, at, 242);
+        long m = put_rex(buf, n, rex(0, yv_l(yr_get(dst, "n")), -1, yv_l(yr_get(src, "n"))));
+        return enc_ok(put3(buf, m, 15, 81, modrm(3, yv_l(yr_get(dst, "n")), yv_l(yr_get(src, "n")))), yav(0));
     }
 }
 
 static Yv *enc_ucomisd(Yv *buf, long at, Yv *dst, Yv *src) {
-    /* 66 0F 2E /r */
-    if (yv_l(yr_get(dst, "k")) != K_reg) {
+    /* 66 0F 2E /r, with the source an xmm or memory. The memory form is what a
+     * float kernel tests against -- `ucomisd tab+0(%rip), %xmm0` is "is the
+     * argument above exp_hi" -- and it is the comparison whose UNORDERED result
+     * (PF set) is how every float function first asks "was one of them a NaN". */
+    if (yv_l(yr_get(dst, "k")) != K_reg || op_size(dst) != 128) {
         return enc_err(at, ys("ucomisd dst"));
-    } else if (yv_l(yr_get(src, "k")) != K_reg) {
-        return enc_err(at, ys("ucomisd src"));
-    } else {
+    } else if (yv_l(yr_get(src, "k")) == K_reg) {
         long n = put(buf, at, 102);
         long m = put_rex(buf, n, rex(0, yv_l(yr_get(dst, "n")), -1, yv_l(yr_get(src, "n"))));
         return enc_ok(put3(buf, m, 15, 46, modrm(3, yv_l(yr_get(dst, "n")), yv_l(yr_get(src, "n")))), yav(0));
+    } else if (yv_l(yr_get(src, "k")) == K_mem) {
+        Yv *t = mem_tail(src, yv_l(yr_get(dst, "n")));
+        long n = put_rex(buf, put(buf, at, 102), rex_rm(0, yv_l(yr_get(dst, "n")), src));
+        long m = put2(buf, n, 15, 46);
+        return enc_mem_result(buf, mem_tail_put(buf, put(buf, m, yv_l(yr_get(t, "modrm"))), t), t);
+    } else {
+        return enc_err(at, ys("ucomisd src"));
     }
 }
 
 static Yv *enc_cvtsi2sd(Yv *buf, long at, Yv *dst, Yv *src) {
-    /* F2 REX.W 0F 2A /r  — cvtsi2sd %gpr, %xmm */
+    /* F2 REX.W 0F 2A /r  — cvtsi2sd %gpr, %xmm
+       F2 and not 66: on 0F 2A the mandatory prefix IS the choice of width, F2
+       for the double and F3 for the single, so the 66 belongs to the packed
+       form and adding it here would be a prefix this encoding does not have.
+       (Measured the other way round first — objdump takes `F2 66` for a
+       cvtsi2sd and the CPU runs it, but it is not the documented encoding, and
+       a kernel that wants a double conversion should ask for one.) */
     if (yv_l(yr_get(dst, "k")) != K_reg) {
         return enc_err(at, ys("cvtsi2sd dst"));
     } else if (yv_l(yr_get(src, "k")) != K_reg) {
@@ -843,7 +973,8 @@ static Yv *enc_cvtsi2sd(Yv *buf, long at, Yv *dst, Yv *src) {
 }
 
 static Yv *enc_cvttsd2si(Yv *buf, long at, Yv *dst, Yv *src) {
-    /* F2 REX.W 0F 2C /r  — cvttsd2si %xmm, %gpr (truncating) */
+    /* F2 REX.W 0F 2C /r  — cvttsd2si %xmm, %gpr (truncating). F2 for the
+       reason above: F3 here would be CVTTSS2SI. */
     if (yv_l(yr_get(dst, "k")) != K_reg) {
         return enc_err(at, ys("cvttsd2si dst"));
     } else if (yv_l(yr_get(src, "k")) != K_reg) {
@@ -862,6 +993,23 @@ static Yv *enc_movq(Yv *buf, long at, Yv *dst, Yv *src) {
         return enc_err(at, ys("movq dst"));
     } else if (yv_l(yr_get(src, "k")) != K_reg) {
         return enc_err(at, ys("movq src"));
+    } else if (op_size(dst) == 128 && op_size(src) == 128) {
+        /* xmm -> xmm: F3 0F 7E /r (MOVDQ2), the DESTINATION in the reg field.
+           This arm is not optional. Without it the gpr->xmm arm below took
+           the pair and read the SOURCE'S NUMBER as a GPR, so `movq %xmm2,
+           %xmm0` assembled to `movq %rdx, %xmm0` -- a silent miscompile, and
+           the first one this encoder had that the "be loud instead" rule
+           below is about.
+
+           It is F3 and not 66, and the reason is the one worth remembering: 66
+           0F 7E is MOVQ with a 64-bit GENERAL-PURPOSE register or memory operand,
+           so its rm field names a GPR -- `movq %xmm1, %xmm0` with a 66 prefix
+           reads %rcx. F3 0F 7E is the same instruction with a 32-bit operand, and
+           for a REGISTER source that is MOVDQ2, which moves all 64 bits. GNU as
+           spells it F3 too; measured here, after getting it wrong. */
+        long n = put(buf, at, 243);
+        long m = put_rex(buf, n, rex(0, yv_l(yr_get(dst, "n")), -1, yv_l(yr_get(src, "n"))));
+        return enc_ok(put3(buf, m, 15, 126, modrm(3, yv_l(yr_get(dst, "n")), yv_l(yr_get(src, "n")))), yav(0));
     } else if (op_size(dst) == 128) {
         /* into an xmm: the xmm is the reg field, the gpr the rm field */
         long n = put(buf, at, 102);
@@ -1040,6 +1188,9 @@ static Yv *need2(Yv *mn, Yv *ops) {
 /* `lng` is the branch form: 0 asks for the short (rel8) encoding, 1 for
    rel32. Only jmp and the jcc family read it; everything else ignores it.
    See enc_jmp for why it is a parameter and not the encoder's own decision. */
+/* The TEXT path: the mnemonic arrives as a string and the arm is a string
+ * compare. The emitter's own instructions come in as IR items and take
+ * enc_form below instead, which dispatches on the form id. */
 Yv *enc_insn(Yv *buf, long at, Yv *mn, Yv *ops, int lng) {
     if (ys_eq_lit(mn, "push")) {
         Yv *e = need1(mn, ops);
@@ -1079,7 +1230,9 @@ Yv *enc_insn(Yv *buf, long at, Yv *mn, Yv *ops, int lng) {
                 if (ys_eq_lit(mn, "add") || ys_eq_lit(mn, "sub") || ys_eq_lit(mn, "cmp") || ys_eq_lit(mn, "xor") || ys_eq_lit(mn, "and") || ys_eq_lit(mn, "or")) {
                     return enc_alu_imm(buf, at, mn, dst, yv_l(yr_get(src, "v")));
                 } else {
-                    return enc_err(at, ys_cat(mn, ys(" imm form")));
+                    /* test is the only mnemonic left in this arm, and its
+                       immediate form is the one that has no 81/83 to share. */
+                    return enc_test_imm(buf, at, dst, yv_l(yr_get(src, "v")));
                 }
             } else if (yv_l(yr_get(dst, "k")) == K_reg && yv_l(yr_get(src, "k")) == K_reg
                        && ys_eq_lit(mn, "xor") && op_size(dst) == 32 && op_size(src) == 32) {
@@ -1097,6 +1250,12 @@ Yv *enc_insn(Yv *buf, long at, Yv *mn, Yv *ops, int lng) {
     } else if (ys_eq_lit(mn, "addsd") || ys_eq_lit(mn, "subsd") || ys_eq_lit(mn, "mulsd") || ys_eq_lit(mn, "divsd")) {
         Yv *e = need2(mn, ops);
         if (!ys_eq_lit(e, "")) { return enc_err(at, e); } else { return enc_sse_arith(buf, at, mn, ya_get(ops, 1), ya_get(ops, 0)); }
+    } else if (ys_eq_lit(mn, "movsd")) {
+        Yv *e = need2(mn, ops);
+        if (!ys_eq_lit(e, "")) { return enc_err(at, e); } else { return enc_movsd(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }
+    } else if (ys_eq_lit(mn, "sqrtsd")) {
+        Yv *e = need2(mn, ops);
+        if (!ys_eq_lit(e, "")) { return enc_err(at, e); } else { return enc_sqrtsd(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }
     } else if (ys_eq_lit(mn, "ucomisd")) {
         Yv *e = need2(mn, ops);
         if (!ys_eq_lit(e, "")) { return enc_err(at, e); } else { return enc_ucomisd(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }
@@ -1124,6 +1283,24 @@ Yv *enc_insn(Yv *buf, long at, Yv *mn, Yv *ops, int lng) {
     } else if (ys_eq_lit(mn, "jz") || ys_eq_lit(mn, "je")) {
         Yv *e = need1(mn, ops);
         if (!ys_eq_lit(e, "")) { return enc_err(at, e); } else { return enc_jcc(buf, at, 132, ya_get(ops, 0), lng); }
+    } else if (ys_eq_lit(mn, "jp") || ys_eq_lit(mn, "jpe")) {
+        /* parity set: how an SSE comparison says "unordered", which is to say
+         * that one operand was a NaN -- the first test of every float function */
+        Yv *e = need1(mn, ops);
+        if (!ys_eq_lit(e, "")) { return enc_err(at, e); } else { return enc_jcc(buf, at, 138, ya_get(ops, 0), lng); }
+    } else if (ys_eq_lit(mn, "jnp") || ys_eq_lit(mn, "jpo")) {
+        /* parity clear: the same test, for the other side of the branch */
+        Yv *e = need1(mn, ops);
+        if (!ys_eq_lit(e, "")) { return enc_err(at, e); } else { return enc_jcc(buf, at, 139, ya_get(ops, 0), lng); }
+    } else if (ys_eq_lit(mn, "ja") || ys_eq_lit(mn, "jnbe")) {
+        Yv *e = need1(mn, ops);
+        if (!ys_eq_lit(e, "")) { return enc_err(at, e); } else { return enc_jcc(buf, at, 135, ya_get(ops, 0), lng); }
+    } else if (ys_eq_lit(mn, "jae") || ys_eq_lit(mn, "jnb") || ys_eq_lit(mn, "jnc")) {
+        Yv *e = need1(mn, ops);
+        if (!ys_eq_lit(e, "")) { return enc_err(at, e); } else { return enc_jcc(buf, at, 131, ya_get(ops, 0), lng); }
+    } else if (ys_eq_lit(mn, "jbe") || ys_eq_lit(mn, "jna")) {
+        Yv *e = need1(mn, ops);
+        if (!ys_eq_lit(e, "")) { return enc_err(at, e); } else { return enc_jcc(buf, at, 134, ya_get(ops, 0), lng); }
     } else if (ys_eq_lit(mn, "jnz") || ys_eq_lit(mn, "jne")) {
         Yv *e = need1(mn, ops);
         if (!ys_eq_lit(e, "")) { return enc_err(at, e); } else { return enc_jcc(buf, at, 133, ya_get(ops, 0), lng); }
@@ -1204,5 +1381,123 @@ Yv *enc_insn(Yv *buf, long at, Yv *mn, Yv *ops, int lng) {
         return enc_ok(put(buf, at, 195), yav(0));
     } else {
         return enc_err(at, ys_cat(ys_cat(ys("unknown mnemonic '"), mn), ys("'")));
+    }
+}
+
+/* The same encoders, dispatched on the IR's form id (Part 4 stage 2c): an item
+ * names a form, not a mnemonic, so the arm is an integer compare rather than
+ * a string one. Every arm is what enc_insn does for that mnemonic and those
+ * operand kinds -- the form says statically what enc_insn has to test -- and
+ * the ladder is generated from the form table and those rules (see the audit
+ * note in the commit), so the two cannot drift apart by hand. `mn` is the
+ * form's mnemonic: the ALU family, the shifts, the SSE arithmetic and the
+ * unary ops key on it. `ops` are the item's operands in enc_insn's order (the
+ * source first, as the assembly text spells them). */
+Yv *enc_form(Yv *buf, long at, long f, Yv *mn, Yv *ops, int lng) {
+    if (f == 0) { return enc_push(buf, at, ya_get(ops, 0)); }  // push O_REG
+    else if (f == 1) { return enc_pop(buf, at, ya_get(ops, 0)); }  // pop O_REG
+    else if (f == 2) { return enc_call(buf, at, ya_get(ops, 0)); }  // call O_LBL
+    else if (f == 3) { return enc_call(buf, at, ya_get(ops, 0)); }  // call O_IND
+    else if (f == 4) { return enc_jmp(buf, at, ya_get(ops, 0), lng); }  // jmp O_LBL
+    else if (f == 5) { return enc_ok(put(buf, at, 195), yav(0)); }  // ret
+    else if (f == 6) { return enc_jcc(buf, at, 132, ya_get(ops, 0), lng); }  // je O_LBL
+    else if (f == 7) { return enc_jcc(buf, at, 133, ya_get(ops, 0), lng); }  // jne O_LBL
+    else if (f == 8) { return enc_jcc(buf, at, 132, ya_get(ops, 0), lng); }  // jz O_LBL
+    else if (f == 9) { return enc_jcc(buf, at, 133, ya_get(ops, 0), lng); }  // jnz O_LBL
+    else if (f == 10) { return enc_jcc(buf, at, 136, ya_get(ops, 0), lng); }  // js O_LBL
+    else if (f == 11) { return enc_jcc(buf, at, 141, ya_get(ops, 0), lng); }  // jge O_LBL
+    else if (f == 12) { return enc_jcc(buf, at, 142, ya_get(ops, 0), lng); }  // jle O_LBL
+    else if (f == 13) { return enc_jcc(buf, at, 140, ya_get(ops, 0), lng); }  // jl O_LBL
+    else if (f == 14) { return enc_jcc(buf, at, 143, ya_get(ops, 0), lng); }  // jg O_LBL
+    else if (f == 15) { return enc_jcc(buf, at, 130, ya_get(ops, 0), lng); }  // jb O_LBL
+    else if (f == 16) { return enc_jcc(buf, at, 137, ya_get(ops, 0), lng); }  // jns O_LBL
+    else if (f == 17) { return enc_setcc(buf, at, 148, ya_get(ops, 0)); }  // sete O_REG
+    else if (f == 18) { return enc_setcc(buf, at, 149, ya_get(ops, 0)); }  // setne O_REG
+    else if (f == 19) { return enc_setcc(buf, at, 156, ya_get(ops, 0)); }  // setl O_REG
+    else if (f == 20) { return enc_setcc(buf, at, 159, ya_get(ops, 0)); }  // setg O_REG
+    else if (f == 21) { return enc_setcc(buf, at, 157, ya_get(ops, 0)); }  // setge O_REG
+    else if (f == 22) { return enc_setcc(buf, at, 158, ya_get(ops, 0)); }  // setle O_REG
+    else if (f == 23) { return enc_setcc(buf, at, 151, ya_get(ops, 0)); }  // seta O_REG
+    else if (f == 24) { return enc_setcc(buf, at, 147, ya_get(ops, 0)); }  // setae O_REG
+    else if (f == 25) { return enc_setcc(buf, at, 155, ya_get(ops, 0)); }  // setnp O_REG
+    else if (f == 26) { return enc_setcc(buf, at, 154, ya_get(ops, 0)); }  // setp O_REG
+    else if (f == 27) { return enc_mov(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // mov O_REG O_REG
+    else if (f == 28) { return enc_mov(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // mov O_REG O_MEM
+    else if (f == 29) { return enc_mov(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // mov O_REG O_MEM
+    else if (f == 30) { return enc_mov(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // mov O_REG O_MEM0
+    else if (f == 31) { return enc_mov(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // mov O_REG O_MEM
+    else if (f == 32) { return enc_mov(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // mov O_MEM O_REG
+    else if (f == 33) { return enc_mov(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // mov O_MEM O_REG
+    else if (f == 34) { return enc_mov(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // mov O_MEM0 O_REG
+    else if (f == 35) { return enc_mov(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // mov O_MEM O_REG
+    else if (f == 36) { return enc_mov(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // mov O_IMM O_REG
+    else if (f == 37) { return enc_mov(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // mov O_IMM O_MEM
+    else if (f == 38) { return enc_mov(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // mov O_IMM O_MEM0
+    else if (f == 39) { return enc_mov(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // mov O_IMM O_MEM
+    else if (f == 40) { return enc_mov(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // mov O_DIFF O_REG
+    else if (f == 41) { return enc_movb_reg(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // movb O_REG O_MEM
+    else if (f == 42) { return enc_movb_reg(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // movb O_REG O_MEM0
+    else if (f == 43) { return enc_movb_reg(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // movb O_REG O_MEM
+    else if (f == 44) { return enc_movb(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // movb O_IMM O_MEM
+    else if (f == 45) { return enc_movb(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // movb O_IMM O_MEM0
+    else if (f == 46) { return enc_movb(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // movb O_IMM O_MEM
+    else if (f == 47) { return enc_movq(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // movq O_REG O_REG
+    else if (f == 48) { return enc_movzbq(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // movzbq O_REG O_REG
+    else if (f == 49) { return enc_movzbq(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // movzbq O_MEM O_REG
+    else if (f == 50) { return enc_movzbq(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // movzbq O_MEM0 O_REG
+    else if (f == 51) { return enc_movzbq(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // movzbq O_MEM O_REG
+    else if (f == 52) { return enc_lea(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // lea O_MEM O_REG
+    else if (f == 53) { return enc_lea(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // lea O_MEM O_REG
+    else if (f == 54) { return enc_lea(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // lea O_MEM O_REG
+    else if (f == 55) { return enc_alu_imm(buf, at, mn, ya_get(ops, 1), yv_l(yr_get(ya_get(ops, 0), "v"))); }  // add O_IMM O_REG
+    else if (f == 56) { return enc_arith(buf, at, mn, ya_get(ops, 1), ya_get(ops, 0)); }  // add O_REG O_REG
+    else if (f == 57) { return enc_alu_imm(buf, at, mn, ya_get(ops, 1), yv_l(yr_get(ya_get(ops, 0), "v"))); }  // add O_IMM O_MEM
+    else if (f == 58) { return enc_alu_imm(buf, at, mn, ya_get(ops, 1), yv_l(yr_get(ya_get(ops, 0), "v"))); }  // sub O_IMM O_REG
+    else if (f == 59) { return enc_arith(buf, at, mn, ya_get(ops, 1), ya_get(ops, 0)); }  // sub O_REG O_REG
+    else if (f == 60) { return enc_alu_imm(buf, at, mn, ya_get(ops, 1), yv_l(yr_get(ya_get(ops, 0), "v"))); }  // sub O_IMM O_MEM
+    else if (f == 61) { return enc_alu_imm(buf, at, mn, ya_get(ops, 1), yv_l(yr_get(ya_get(ops, 0), "v"))); }  // xor O_IMM O_REG
+    else if (f == 62) {  // xor O_REG O_REG
+        if (op_size(ya_get(ops, 1)) == 32 && op_size(ya_get(ops, 0)) == 32) {
+        return enc_xor32(buf, at, ya_get(ops, 1), ya_get(ops, 0));
+        } else {
+        return enc_arith(buf, at, mn, ya_get(ops, 1), ya_get(ops, 0));
+        }
+    }
+    else if (f == 63) { return enc_alu_imm(buf, at, mn, ya_get(ops, 1), yv_l(yr_get(ya_get(ops, 0), "v"))); }  // xor O_IMM O_MEM
+    else if (f == 64) { return enc_alu_imm(buf, at, mn, ya_get(ops, 1), yv_l(yr_get(ya_get(ops, 0), "v"))); }  // and O_IMM O_REG
+    else if (f == 65) { return enc_arith(buf, at, mn, ya_get(ops, 1), ya_get(ops, 0)); }  // and O_REG O_REG
+    else if (f == 66) { return enc_alu_imm(buf, at, mn, ya_get(ops, 1), yv_l(yr_get(ya_get(ops, 0), "v"))); }  // and O_IMM O_MEM
+    else if (f == 67) { return enc_arith(buf, at, mn, ya_get(ops, 1), ya_get(ops, 0)); }  // or O_REG O_REG
+    else if (f == 68) { return enc_alu_imm(buf, at, mn, ya_get(ops, 1), yv_l(yr_get(ya_get(ops, 0), "v"))); }  // or O_IMM O_MEM
+    else if (f == 69) { return enc_shift(buf, at, mn, ya_get(ops, 1), ya_get(ops, 0)); }  // shl O_IMM O_REG
+    else if (f == 70) { return enc_shift(buf, at, mn, ya_get(ops, 1), ya_get(ops, 0)); }  // shl O_REG O_REG
+    else if (f == 71) { return enc_shift(buf, at, mn, ya_get(ops, 1), ya_get(ops, 0)); }  // sar O_IMM O_REG
+    else if (f == 72) { return enc_shift(buf, at, mn, ya_get(ops, 1), ya_get(ops, 0)); }  // sar O_REG O_REG
+    else if (f == 73) { return enc_shift(buf, at, mn, ya_get(ops, 1), ya_get(ops, 0)); }  // shr O_IMM O_REG
+    else if (f == 74) { return enc_shift(buf, at, mn, ya_get(ops, 1), ya_get(ops, 0)); }  // shr O_REG O_REG
+    else if (f == 75) { return enc_alu_imm(buf, at, mn, ya_get(ops, 1), yv_l(yr_get(ya_get(ops, 0), "v"))); }  // cmp O_IMM O_REG
+    else if (f == 76) { return enc_arith(buf, at, mn, ya_get(ops, 1), ya_get(ops, 0)); }  // cmp O_REG O_REG
+    else if (f == 77) { return enc_arith(buf, at, mn, ya_get(ops, 1), ya_get(ops, 0)); }  // test O_REG O_REG
+    else if (f == 78) { return enc_imul(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // imul O_REG O_REG
+    else if (f == 79) { return enc_unary(buf, at, mn, ya_get(ops, 0)); }  // idiv O_REG
+    else if (f == 80) { return enc_unary(buf, at, mn, ya_get(ops, 0)); }  // div O_REG
+    else if (f == 81) { return enc_unary(buf, at, mn, ya_get(ops, 0)); }  // neg O_REG
+    else if (f == 82) { return enc_unary(buf, at, mn, ya_get(ops, 0)); }  // not O_REG
+    else if (f == 83) { return enc_unary(buf, at, mn, ya_get(ops, 0)); }  // inc O_REG
+    else if (f == 84) { return enc_unary(buf, at, mn, ya_get(ops, 0)); }  // inc O_MEM
+    else if (f == 85) { return enc_unary(buf, at, mn, ya_get(ops, 0)); }  // dec O_REG
+    else if (f == 86) { return enc_unary(buf, at, mn, ya_get(ops, 0)); }  // dec O_MEM
+    else if (f == 87) { return enc_xchg(buf, at, ya_get(ops, 0), ya_get(ops, 1)); }  // xchg O_REG O_MEM
+    else if (f == 88) { return enc_ok(put2(buf, at, 15, 5), yav(0)); }  // syscall
+    else if (f == 89) { return enc_ok(put2(buf, at, 72, 153), yav(0)); }  // cqo
+    else if (f == 90) { return enc_mov(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // mov O_FS O_REG
+    else if (f == 91) { return enc_cvtsi2sd(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // cvtsi2sd O_REG O_REG
+    else if (f == 92) { return enc_sse_arith(buf, at, mn, ya_get(ops, 1), ya_get(ops, 0)); }  // divsd O_REG O_REG
+    else if (f == 93) { return enc_sse_arith(buf, at, mn, ya_get(ops, 1), ya_get(ops, 0)); }  // mulsd O_REG O_REG
+    else if (f == 94) { return enc_sse_arith(buf, at, mn, ya_get(ops, 1), ya_get(ops, 0)); }  // addsd O_REG O_REG
+    else if (f == 95) { return enc_sse_arith(buf, at, mn, ya_get(ops, 1), ya_get(ops, 0)); }  // subsd O_REG O_REG
+    else if (f == 96) { return enc_ucomisd(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // ucomisd O_REG O_REG
+    else {
+        return enc_err(at, ys_cat(ys_cat(ys("unknown form '"), mn), ys("'")));
     }
 }

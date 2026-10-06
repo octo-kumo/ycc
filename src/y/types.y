@@ -1047,12 +1047,22 @@ def is_hash_key(t: Type) -> bool {
 // never tested: a nested def reading an enclosing local is a capture, and
 // captures are legal (native.y box_capture).
 
-type Binding = { name: str, typ: Type, kind: str, fdepth: long };
+// line/col are the NAME's, not the keyword's: a go-to-definition and a
+// semantic-token highlight both want the name, and every diagnostic position
+// wants the keyword. -1 means the binding has no position in the source at
+// all -- an intrinsic, or a name the program links against from another unit.
+type Binding = { name: str, typ: Type, kind: str, fdepth: long, line: long, col: long };
 type Lookup = { typ: Type, kind: str, fdepth: long };
 // The state the checker threads (ret: the def's return type, see
 // typeof_def; self: what `self` is in it), and what the typeof_* return:
 // a type and the state after it.
-type TcSt = { bindings: [Binding], errors: [Diag], ret: Type, self: Type, fdepth: long };
+// `loops` is how many loops enclose this point, and `loop_fd` the function
+// depth of the INNERMOST of them. Both are there for `break` and `continue`
+// (2025): a jump is only legal if a loop encloses it AND that loop is in the
+// same function, and `loop_fd` is what says so -- a `def` nested inside a loop
+// bumps fdepth without changing `loops`, so a `break` inside the `def` sees
+// loops > 0 and still knows it may not jump out of the function.
+type TcSt = { bindings: [Binding], errors: [Diag], ret: Type, self: Type, fdepth: long, loops: long, loop_fd: long };
 type TcRes = { typ: Type, st: TcSt };
 
 def tc_res(typ: Type, st: TcSt) -> TcRes {
@@ -1103,8 +1113,8 @@ def lookup(bindings: [Binding], name: str) -> Lookup {
     }
 };
 
-def st_bind(st: TcSt, name: str, typ: Type, kind: str) -> TcSt {
-    st.bindings += { name: name, typ: typ, kind: kind, fdepth: st.fdepth };
+def st_bind(st: TcSt, name: str, typ: Type, kind: str, line: long, col: long) -> TcSt {
+    st.bindings += { name: name, typ: typ, kind: kind, fdepth: st.fdepth, line: line, col: col };
     let bindings = st.bindings;
     if (len(bindings) > 256) {
         if (tc_ixn == 0) { tc_ix = parser.nameix_new(1024); };
@@ -1114,7 +1124,7 @@ def st_bind(st: TcSt, name: str, typ: Type, kind: str) -> TcSt {
             tc_ixn = tc_ixn + 1;
         };
     };
-    { bindings: bindings, errors: st.errors, ret: st.ret, self: st.self, fdepth: st.fdepth }
+    { bindings: bindings, errors: st.errors, ret: st.ret, self: st.self, fdepth: st.fdepth, loops: st.loops, loop_fd: st.loop_fd }
 };
 
 // ── the checker ──────────────────────────────────────────────────────────
@@ -1125,13 +1135,26 @@ def st_bind(st: TcSt, name: str, typ: Type, kind: str) -> TcSt {
 // caller's st (same style as the rest of ycc). `fail` is the one place that
 // writes through: `st.errors += ...` appends to the LIVE array in place,
 // because arrays are reference values, and hands the record back here.
-def st_errors(st: TcSt, errs: [Diag]) -> TcSt { { bindings: st.bindings, errors: errs, ret: st.ret, self: st.self, fdepth: st.fdepth } };
+def st_errors(st: TcSt, errs: [Diag]) -> TcSt { { bindings: st.bindings, errors: errs, ret: st.ret, self: st.self, fdepth: st.fdepth, loops: st.loops, loop_fd: st.loop_fd } };
 // NOTE: the parameter is deliberately NOT named `self` — `self` is the
 // language's own name for the enclosing function (see the `id` and `call`
 // arms of typeof_expr/typeof_call), so the state field and the language's
 // reserved word must not read alike.
-def st_self(st: TcSt, selfv: Type) -> TcSt { { bindings: st.bindings, errors: st.errors, ret: st.ret, self: selfv, fdepth: st.fdepth } };
-def st_ret(st: TcSt, ret: Type) -> TcSt { { bindings: st.bindings, errors: st.errors, ret: ret, self: st.self, fdepth: st.fdepth } };
+def st_self(st: TcSt, selfv: Type) -> TcSt { { bindings: st.bindings, errors: st.errors, ret: st.ret, self: selfv, fdepth: st.fdepth, loops: st.loops, loop_fd: st.loop_fd } };
+// Entering a loop: one deeper, and the innermost loop's function depth is
+// this one's. `loop_fd: -1` means "no loop", so a stale depth can never be
+// mistaken for a live one.
+def st_loop(st: TcSt, n: long, fd: long) -> TcSt {
+    { bindings: st.bindings, errors: st.errors, ret: st.ret, self: st.self, fdepth: st.fdepth, loops: n, loop_fd: fd }
+};
+
+// Leaving one: back to whatever enclosed it. The caller's own `loops`/`loop_fd`
+// from before the loop are what it passes, so this is a plain restore.
+def st_unloop(st: TcSt, n: long, fd: long) -> TcSt {
+    { bindings: st.bindings, errors: st.errors, ret: st.ret, self: st.self, fdepth: st.fdepth, loops: n, loop_fd: fd }
+};
+
+def st_ret(st: TcSt, ret: Type) -> TcSt { { bindings: st.bindings, errors: st.errors, ret: ret, self: st.self, fdepth: st.fdepth, loops: st.loops, loop_fd: st.loop_fd } };
 
 def fail(st: TcSt, msg: str, line: long, col: long) -> TcSt {
     st.errors += err_at(msg, line, col);
@@ -1549,13 +1572,157 @@ def arr_lit_adopts_go(got: Type, want: Type, n: long) -> bool {
 // (unfold): the checker looks into it.
 // The checker's walk counts its depth (tags.y MAX_NEST): a `+` chain is a
 // loop in the parser and a recursion here.
+// ── the expression type index (LSP.md 9.2 A2) ───────────────────────────
+//
+// The type the checker inferred for every EXPRESSION, keyed by position, for a
+// caller that has to show one: the language server's hover, and the record-field
+// lookup behind completion after a `.`. Both need exactly what `typeof_expr`
+// computed and then dropped, so it is kept -- behind a flag, because the
+// checker is the compiler's hottest loop and a normal compile has no use for it.
+//
+// The shape is inferred_ret's, deliberately: 1024 buckets of indices into
+// parallel key/type arrays, keyed `line * 65536 + col`. That table is read by
+// native.y on every compile, so the shape and the packing are proven at this
+// scale in this codebase; a second design would be a second thing to get wrong.
+//
+// OFF by default. A module-level `bool` cannot be hoisted, so this costs the
+// hot loop one predictable branch that is never taken in a real compile.
+// bench/compile_ir.sh is what says what that is worth.
+let tc_index: bool = false;
+let tci_keys: [long] = [];
+let tci_typs: [Type] = [];
+let tci_bkts: [[long]] = [];
+
+def tci_reset() {
+    let keys: [long] = [];
+    let typs: [Type] = [];
+    let bkts: [[long]] = [];
+    let i = 0;
+    while (i < 1024) {
+        let b: [long] = [];
+        bkts += b;
+        i = i + 1;
+    };
+    tci_keys = keys;
+    tci_typs = typs;
+    tci_bkts = bkts;
+};
+
+// Turn it on for one check_program, and start a fresh table. check_program
+// resets it again on the way out, so two calls cannot see each other's types.
+def type_index_on() -> void {
+    tc_index = true;
+    tci_reset();
+};
+
+def type_index_off() -> void { tc_index = false };
+
+// One entry, unless the key is already there -- the FIRST type wins, as above.
+def tci_note_key(key: long, t: Type) {
+    let bkt: [long] = tci_bkts[key % 1024];
+    let seen = false;
+    let i = 0;
+    while (i < len(bkt)) {
+        if (tci_keys[bkt[i]] == key) { seen = true; i = len(bkt); }
+        else { i = i + 1; };
+    };
+    if (!seen) {
+        tci_keys += key;
+        tci_typs += t;
+        bkt += len(tci_keys) - 1;
+    };
+};
+
+// Only ever called when tc_index is set: the flag is tested at the call site in
+// typeof_expr rather than here, so the off path costs a load and a branch and
+// not a call. Measured: testing it inside made the call itself the cost, and
+// the call is per EXPRESSION, which is the checker's hottest path.
+def tci_note(node: Node, t: Type) {
+    if (len(tci_bkts) > 0) {
+        if (node.line > 0 && node.col >= 0) {
+            let key = node.line * 65536 + node.col;
+            let bkt: [long] = tci_bkts[key % 1024];
+            // FIRST wins. An expression is checked more than once when it is a
+            // function literal's value (the checker infers, then re-checks with
+            // the return type known), and the first type is the one the source
+            // says rather than the one the second pass settled on.
+            let seen = false;
+            let i = 0;
+            while (i < len(bkt)) {
+                if (tci_keys[bkt[i]] == key) { seen = true; i = len(bkt); }
+                else { i = i + 1; };
+            };
+            if (!seen) {
+                tci_keys += key;
+                tci_typs += t;
+                bkt += len(tci_keys) - 1;
+            };
+        };
+        // A member access records its type at the KEY's position too.
+        //
+        // `a.b` parses with the Dot at the `.`, so the table holds the FIELD's
+        // type under the dot and nothing under the field's own name -- which is
+        // where an editor puts the cursor and what go-to-highlight asks about. The
+        // parser keeps the key's position for exactly this (Decl/Dot `nline`/
+        // `ncol`, 9.2 A5), so it is recorded as well.
+        //
+        // Only when the index is on, so a real compile pays nothing: this is
+        // inside tci_note, which typeof_expr does not even call.
+        let nk = node.k;
+        if (nk == K.decl) {
+            // A `let`/`def` records its type at its NAME's position as well as the
+            // keyword's, for the same reason a member access does: the keyword is
+            // where the node sits and the name is where a cursor goes. Without this
+            // a hover on `b` in `let b = 1` showed the name and nothing else, while
+            // a hover on a USE of `b` showed `long` -- the same name, two answers.
+            let d: Decl = node;
+            if (d.nline > 0 && d.ncol > 0) { tci_note_key(d.nline * 65536 + d.ncol, t); };
+        };
+        if (nk == K.dot) {
+            let d: Dot = node;
+            if (d.nline > 0 && d.ncol > 0) { tci_note_key(d.nline * 65536 + d.ncol, t); };
+        } else if (nk == K.dotassign) {
+            let d: DotAssign = node;
+            if (d.nline > 0 && d.ncol > 0) { tci_note_key(d.nline * 65536 + d.ncol, t); };
+        };
+    };
+};
+
+// The type inferred for the expression at (line, col), or tunk() when nothing
+// was indexed there. tunk rather than tnone: tnone is a real type a program can
+// write, and a consumer must be able to tell "the checker says none" from "there
+// is nothing here", or it will print a type it did not get from the checker.
+def expr_type(line: long, col: long) -> Type {
+    let found: Type = t_unk();
+    if (len(tci_bkts) > 0) {
+        let key = line * 65536 + col;
+        let bkt: [long] = tci_bkts[key % 1024];
+        let i = 0;
+        while (i < len(bkt)) {
+            if (tci_keys[bkt[i]] == key) { found = tci_typs[bkt[i]]; i = len(bkt); }
+            else { i = i + 1; };
+        };
+    };
+    found
+};
+
 def typeof_expr(st: TcSt, node: Node) -> TcRes {
     nest = nest + 1;
     if (nest > MAX_NEST) { too_deep("an expression", node.line, node.col); };
     let r = typeof_expr_go(st, node);
     nest = nest - 1;
     let t: Type = r.typ;
-    if (t.k == K.tref) { tc_res(unfold(t), r.st) } else { r }
+    if (t.k == K.tref) {
+        let out = tc_res(unfold(t), r.st);
+        // the UNWRAPPED type: a tref is the checker's own recursive-alias
+        // placeholder, and a hover that printed one would be showing the
+        // implementation rather than the answer.
+        if (tc_index) { tci_note(node, out.typ); };
+        out
+    } else {
+        if (tc_index) { tci_note(node, t); };
+        r
+    }
 };
 
 def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
@@ -1803,8 +1970,16 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
         let loop: While = node;
         let c = typeof_expr(st, loop.cond);
         st = expect_type(c.st, c.typ, type_node({ k: K.tbool }), "'while' condition", loop.line, loop.col);
+        // The BODY is what `break` may leave. The condition is checked outside
+        // the loop context on purpose: `while break { }` is not a jump out of
+        // this loop, it is a jump out of an enclosing one, and treating it as
+        // this loop's would be a jump to a label that does not exist yet.
+        let saved_loops = st.loops;
+        let saved_fd = st.loop_fd;
+        st = st_loop(st, saved_loops + 1, st.fdepth);
         let b = typeof_block(st, loop.body);
-        tc_res(type_node({ k: K.tvoid }), b.st)
+        st = st_unloop(b.st, saved_loops, saved_fd);
+        tc_res(type_node({ k: K.tvoid }), st)
     } else if (k == K.kw_for) {
         let loop: For = node;
         // for (init; cond; step) body — init/step are statements, and the
@@ -1813,8 +1988,11 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
         st = fi.st;
         let fc = typeof_expr(st, loop.cond);
         st = expect_type(fc.st, fc.typ, type_node({ k: K.tbool }), "'for' condition", loop.line, loop.col);
+        let saved_loops = st.loops;
+        let saved_fd = st.loop_fd;
+        st = st_loop(st, saved_loops + 1, st.fdepth);
         let fb = typeof_block(st, loop.body);
-        st = fb.st;
+        st = st_unloop(fb.st, saved_loops, saved_fd);
         let fs = typeof_expr(st, loop.step);
         tc_res(type_node({ k: K.tvoid }), fs.st)
     } else if (k == K.kw_foreach) {
@@ -1829,9 +2007,13 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
         else {
             st = fail(st, "'foreach' needs an array, got " + tstr(fe.typ), loop.line, loop.col);
         };
-        st = st_bind(st, loop.name, elt, "local");
+        st = st_bind(st, loop.name, elt, "local", loop.line, loop.col);
+        let saved_loops = st.loops;
+        let saved_fd = st.loop_fd;
+        st = st_loop(st, saved_loops + 1, st.fdepth);
         let fbb = typeof_block(st, loop.body);
-        tc_res(type_node({ k: K.tvoid }), fbb.st)
+        st = st_unloop(fbb.st, saved_loops, saved_fd);
+        tc_res(type_node({ k: K.tvoid }), st)
     } else if (k == K.forrange) {
         let loop: ForRange = node;
         // for x in lo..hi { body } — x is a long.
@@ -1839,9 +2021,13 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
         st = expect_type(rl.st, rl.typ, type_node({ k: K.tlong }), "'for' range start", loop.line, loop.col);
         let rh = typeof_expr(st, loop.hi);
         st = expect_type(rh.st, rh.typ, type_node({ k: K.tlong }), "'for' range end", loop.line, loop.col);
-        st = st_bind(st, loop.name, type_node({ k: K.tlong }), "local");
+        st = st_bind(st, loop.name, type_node({ k: K.tlong }), "local", loop.line, loop.col);
+        let saved_loops = st.loops;
+        let saved_fd = st.loop_fd;
+        st = st_loop(st, saved_loops + 1, st.fdepth);
         let rb = typeof_block(st, loop.body);
-        tc_res(type_node({ k: K.tvoid }), rb.st)
+        st = st_unloop(rb.st, saved_loops, saved_fd);
+        tc_res(type_node({ k: K.tvoid }), st)
     } else if (k == K.block) {
         let block: Block = node;
         typeof_block(st, block)
@@ -1912,6 +2098,20 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
             st = fail(st, "store target must be *T, got " + tstr(p.typ), store.line, store.col);
             tc_res(t_unk(), st)
         }
+    } else if (k == K.kw_break || k == K.kw_continue) {
+        // `break` / `continue`: legal only inside a loop AND in the same
+        // function. Both are checked here rather than left to the emitter,
+        // because the emitter's answer would be a jump to a label that belongs
+        // to a different function -- which assembles, and then jumps into the
+        // middle of an unrelated body.
+        let word = "break";
+        if (k == K.kw_continue) { word = "continue"; };
+        if (st.loops <= 0) {
+            st = fail(st, "'" + word + "' outside of a loop", node.line, node.col);
+        } else if (st.loop_fd != st.fdepth) {
+            st = fail(st, "'" + word + "' cannot cross a function boundary", node.line, node.col);
+        };
+        tc_res(type_node({ k: K.tvoid }), st)
     } else if (k == K.ret) {
         let ret: Wrap = node;
         if (st.ret.k == K.tnone) {
@@ -2047,7 +2247,7 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
         // Anonymous function literal in expression position. Check the body
         // like a named def would be, and give the expression its tfunc type;
         // the emitter closure-converts it with a generated label.
-        let ra = typeof_def(st, "", func, func.line, func.col);
+        let ra = typeof_def(st, "", func, func.line, func.col, func.line, func.col, false);
         tc_res(ra.typ, ra.st)
     } else if (k == K.arrrep) {
         let rep: ArrRep = node;
@@ -2140,6 +2340,16 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
                 // reports at its own site.
                 let ri = typeof_expr(st, index.idx);
                 st = ri.st;
+                tc_res(t_unk(), st)
+            } else if (br.typ.k == K.tvoid && (barr.k == K.kw_if || barr.k == K.block)) {
+                // An `if` or a block in expression position, with no value:
+                // `if (c) { A }["k"]` indexes the `if`, and A's arms are
+                // statements (or disagree, so the `if` is void), so there is
+                // nothing there to index. As the ordinary message it names
+                // neither the base nor the fix, and nothing near it in the
+                // source shows an index of an `if` — the `[` reads as a
+                // literal. Name the base and the `;`.
+                st = fail(st, "cannot index this '" + ktag(barr.k) + "', which has no value: add a ';' after it to make it a statement", index.line, index.col);
                 tc_res(t_unk(), st)
             } else {
                 st = fail(st, "cannot index " + tstr(br.typ) + " (only arrays and maps)", index.line, index.col);
@@ -3082,7 +3292,32 @@ def os_call_names() -> [str] {
      "y_os_nanosleep", "y_os_wait4", "y_os_fork", "y_os_execve"]
 };
 
+
+// The call's own type, recorded at the CALLEE's position when the index is on.
+//
+// An intrinsic is matched by name inside the body below, so its callee identifier
+// is never an expression and `typeof_expr` never visits it -- which is why hovering
+// `clock_us` showed nothing at all while hovering a call's RESULT showed its type
+// perfectly. The return type is what is recorded, because that is what the name
+// means to a reader at that position; the argument types are in the manual and in
+// the compiler, and inventing a signature string here would be a second copy of
+// knowledge that already exists.
 def typeof_call(st: TcSt, node: Call) -> TcRes {
+    let r = typeof_call_go(st, node);
+    if (tc_index) {
+        let callee: Node = node.callee;
+        // A DOT callee records its own function type at the key's position in the
+        // `!id` arm below, where the signature is known; here only an id is filled
+        // in, so the two do not fight over one key.
+        if (callee.k == K.id) {
+            let leaf: Leaf = callee;
+            if (leaf.line > 0 && leaf.col > 0) { tci_note_key(leaf.line * 65536 + leaf.col, r.typ); };
+        };
+    };
+    r
+}
+
+def typeof_call_go(st: TcSt, node: Call) -> TcRes {
     // Two callee shapes: a plain id (the `else` arm below — a hoisted def,
     // an intrinsic, `self`, or a local holding a closure) and an arbitrary
     // expression (the `if` arm — an immediately-invoked literal, an element
@@ -3112,6 +3347,23 @@ def typeof_call(st: TcSt, node: Call) -> TcRes {
             cf = typeof_expr(st, ccal);
         };
         st = cf.st;
+        // A member call's own type, at the member NAME's position -- so hovering
+        // `exp` in `math.exp(0.0)` answers rather than showing nothing. Before this,
+        // `math.pi` answered `float` (a constant needs no extern) while every
+        // imported FUNCTION answered nothing, which is the shape of a bug that reads
+        // as "imports are not typed" and is really "calls are not indexed".
+        //
+        // The SIGNATURE, because the field's own type IS the function type here and
+        // it is what the name means. Recording the call's RETURN type instead made
+        // `mk` hover as `{ a: long, b: str }` -- the record `mk(1, "x")` produces --
+        // which reads as though `mk` were that record. An intrinsic has no such
+        // object (it is matched by name), so the id arm in `typeof_call` records its
+        // return type, which is the whole of what the checker knows about it; the
+        // asymmetry is the honest one and both are the checker's own answer.
+        if (tc_index && ccal.k == K.dot && !smeth) {
+            let cdot: Dot = ccal;
+            if (cdot.nline > 0 && cdot.ncol > 0) { tci_note_key(cdot.nline * 65536 + cdot.ncol, cf.typ); };
+        };
         if (smeth) {
             let dot: Dot = ccal;
             typeof_method(st, node, dot.key)
@@ -3991,7 +4243,10 @@ def typeof_lit(st: TcSt, node: RecLit, target: Type) -> TcRes {
 def typeof_decl(st: TcSt, node: Decl) -> TcRes {
     if (node.kind == "def") {
         // named function: full check (signature + body)
-        typeof_def(st, node.name, node.v, node.line, node.col)
+        typeof_def(st, node.name, node.v, node.line, node.col, node.nline, node.ncol, false)
+    } else if (node.kind == "native") {
+        // native def: the signature, and three rules of its own
+        typeof_def(st, node.name, node.v, node.line, node.col, node.nline, node.ncol, true)
     } else {
         // let/const. A literal def on the right names a function WITHOUT
         // going through typeof_expr (a bare func value is only legal bound).
@@ -4000,18 +4255,18 @@ def typeof_decl(st: TcSt, node: Decl) -> TcRes {
         let bk = "local";
         if (node.kind == "const") { bk = "const"; };
         if (node.v.k == K.func) {
-            let fr = typeof_def(st, node.name, node.v, node.line, node.col);
+            let fr = typeof_def(st, node.name, node.v, node.line, node.col, node.nline, node.ncol, false);
             st = fr.st;
             if (node.typ.k != K.tnone) {
                 st = expect_type(st, fr.typ, node.typ, "let '" + disp(node.name) + "'", node.line, node.col);
             }
-            st = st_bind(st, node.name, fr.typ, "func");
+            st = st_bind(st, node.name, fr.typ, "func", node.nline, node.ncol);
             { typ: fr.typ, st: st }
         } else if (node.v.k == K.arrrep) {
             let r = typeof_expr(st, node.v);
             st = r.st;
             if (r.typ.k == K.tunk) {
-                st = st_bind(st, node.name, t_unk(), bk);
+                st = st_bind(st, node.name, t_unk(), bk, node.nline, node.ncol);
                 { typ: t_unk(), st: st }
             } else {
                 let at = r.typ;
@@ -4023,7 +4278,7 @@ def typeof_decl(st: TcSt, node: Decl) -> TcRes {
                     };
                     at = node.typ;
                 }
-                st = st_bind(st, node.name, at, bk);
+                st = st_bind(st, node.name, at, bk, node.nline, node.ncol);
                 { typ: at, st: st }
             }
         } else {
@@ -4077,7 +4332,7 @@ def typeof_decl(st: TcSt, node: Decl) -> TcRes {
             } else if (has_free(t)) {
                 st = fail(st, "the type of '" + disp(node.name) + "' is not fully known (annotate it)", node.line, node.col);
             }
-            st = st_bind(st, node.name, t, bk);
+            st = st_bind(st, node.name, t, bk, node.nline, node.ncol);
             { typ: t, st: st }
         }
     }
@@ -4143,7 +4398,27 @@ def inferred_ret(line: long, col: long) -> Type {
 // Check a func value bound to `name` (def decl, let-bound anonymous def, or
 // an anonymous literal). Returns { typ, st }: `typ` is the def's tfunc (with
 // an inferred return filled in), and `name` ends up bound as kind "func".
-def typeof_def(st: TcSt, name: str, func: Func, line: long, col: long) -> TcRes {
+// The tail of the inferred-return diagnostic, for a `return` with no value.
+// The type the message quotes is one the reader never wrote -- it comes
+// from the body's tail -- so this case says what does resolve it: one word
+// on the def's head makes the inferred type a written one, and the void
+// return then is what the def says it does. Every other disagreement is an
+// ordinary type error and closes the parenthesis as before.
+def ret_inferred_hint(rt: Type) -> str {
+    if (rt.k == K.tvoid) {
+        "; write '-> void' on the def to return nothing)"
+    } else {
+        ")"
+    }
+};
+
+// `line`/`col` are the KEYWORD's, for the diagnostics inside; `nline`/`ncol` are
+// the NAME's, and are what st_bind records. They differ by however much
+// whitespace `let`/`def` was followed by.
+def typeof_def(st: TcSt, name: str, func: Func, line: long, col: long, nline: long, ncol: long, isnat: bool) -> TcRes {
+    // `isnat` is a `native def`: the signature is checked exactly as a def's
+    // is, but there is no body -- the return type must be written, the label
+    // must be a `y_` one, and the declaration must be at the top level.
     if (len(func.params) != len(func.ptypes)) {
         st = fail(st, "internal: params/ptypes length mismatch", line, col);
         tc_res(t_unk(), st)
@@ -4154,6 +4429,11 @@ def typeof_def(st: TcSt, name: str, func: Func, line: long, col: long) -> TcRes 
         // whatever shape the env holds for `func`).
         let fparams: [str] = func.params;
         let fptypes: [Type] = func.ptypes;
+        // Each parameter NAME's own position, when the parser recorded it. Empty
+        // for a hand-built Func, and then the binding falls back to the def's own
+        // position -- which is the imprecision, not a silent wrong answer, because
+        // the name is still bound and every use still resolves.
+        let fpos: [long] = func.ppos;
         let i = 0;
         let ok = true;
         while (i < len(fparams)) {
@@ -4170,6 +4450,23 @@ def typeof_def(st: TcSt, name: str, func: Func, line: long, col: long) -> TcRes 
             i = i + 1;
         };
         let ret: Type = func.ret;
+        if (isnat) {
+            // A native's body holds no code, so the return type has nothing to
+            // be inferred from and has to be written. A body that is NOT empty
+            // means the parser planted errors in it, which say better than this
+            // would -- so wait for them rather than piling on.
+            let nbody: Block = func.body;
+            if (ret.k == K.tnone && len(nbody.stmts) == 0) {
+                st = fail(st, "native def '" + disp(name) + "' needs a return type (there is no body to infer it from)", line, col);
+                ret = t_unk();
+            };
+            if (!func.label.starts_with("y_")) {
+                st = fail(st, "native label '" + disp(func.label) + "' must start with 'y_' (generated code calls it by that prefix)", line, col);
+            };
+            if (st.fdepth > 0) {
+                st = fail(st, "native def '" + disp(name) + "' must be at the top level (an assembly label has no place inside a function)", line, col);
+            };
+        };
         let ret_inferred = false;
         // An inferred def's `return`s are checked once its type is known:
         // while the body is checked, st.ret is a marker that notes each one
@@ -4186,7 +4483,7 @@ def typeof_def(st: TcSt, name: str, func: Func, line: long, col: long) -> TcRes 
         }
         let ft: Type = type_node({ k: K.tfunc, args: args, ret: ret });
         // bind early so recursion via `self`/name works
-        st = st_bind(st, name, ft, "func");
+        st = st_bind(st, name, ft, "func", nline, ncol);
         // check the body one level deeper. Outer locals/params stay in the
         // flat map (one shape per name), so a nested def reading one is a
         // capture — legal, and closure-converted by the emitter.
@@ -4196,7 +4493,25 @@ def typeof_def(st: TcSt, name: str, func: Func, line: long, col: long) -> TcRes 
         st = st_fdepth(st, saved_depth + 1);
         let j = 0;
         while (j < len(fparams)) {
-            st = st_bind(st, fparams[j], args[j], "param");
+            // The binding's position is the FUNCTION's, because a parameter has no
+            // node of its own -- but the parser does now keep each name's own
+            // position (`Func.ppos`), and that is where a hover, a semantic token
+            // and a go-to-definition all need to point. Binding at `nline`/`ncol`
+            // was the one thing `Binding.line/col` could not answer, and it is why
+            // hovering a parameter's own name showed nothing.
+            let pl = nline;
+            let pc = ncol;
+            if (j < len(fpos) && fpos[j] > 0) {
+                pl = fpos[j] / 65536;
+                pc = fpos[j] % 65536;
+            };
+            st = st_bind(st, fparams[j], args[j], "param", pl, pc);
+            // And into the type index, at the name's own position. A parameter is
+            // a bare string in `Func.params`, so there is no node for `typeof_expr`
+            // to visit and nothing else would ever record it -- which is why
+            // hovering the `p` in `def g(p: P)` showed nothing while hovering a USE
+            // of `p` showed `P`.
+            if (tc_index) { tci_note_key(pl * 65536 + pc, args[j]); };
             j = j + 1;
         };
         st = st_self(st, ft);
@@ -4231,7 +4546,7 @@ def typeof_def(st: TcSt, name: str, func: Func, line: long, col: long) -> TcRes 
             while (ri < len(rets)) {
                 let rn = rets[ri];
                 if (!tcompat(rn.typ, br)) {
-                    st = fail(st, "'return': expected " + tstr(br) + ", got " + tstr(rn.typ) + " (the return type is inferred from " + rsrc + ")", rn.line, rn.col);
+                    st = fail(st, "'return': expected " + tstr(br) + ", got " + tstr(rn.typ) + " (the return type is inferred from " + rsrc + ret_inferred_hint(rn.typ), rn.line, rn.col);
                 }
                 ri = ri + 1;
             };
@@ -4247,7 +4562,7 @@ def typeof_def(st: TcSt, name: str, func: Func, line: long, col: long) -> TcRes 
                 let kept: [Diag] = st.errors;
                 st = st_errors(st, kept[0:nerr]);
                 let ft2: Type = type_node({ k: K.tfunc, args: args, ret: br });
-                st = st_bind(st, name, ft2, "func");
+                st = st_bind(st, name, ft2, "func", nline, ncol);
                 st = st_self(st, ft2);
                 let rets2: [RetNote] = [];
                 st = st_ret(st, type_node({ k: K.tinfer, rets: rets2 }));
@@ -4258,18 +4573,20 @@ def typeof_def(st: TcSt, name: str, func: Func, line: long, col: long) -> TcRes 
                 while (ri2 < len(rets2)) {
                     let rn2 = rets2[ri2];
                     if (!tcompat(rn2.typ, br)) {
-                        st = fail(st, "'return': expected " + tstr(br) + ", got " + tstr(rn2.typ) + " (the return type is inferred from " + rsrc + ")", rn2.line, rn2.col);
+                        st = fail(st, "'return': expected " + tstr(br) + ", got " + tstr(rn2.typ) + " (the return type is inferred from " + rsrc + ret_inferred_hint(rn2.typ), rn2.line, rn2.col);
                     }
                     ri2 = ri2 + 1;
                 };
             }
             ft = type_node({ k: K.tfunc, args: args, ret: br });
-            st = st_bind(st, name, ft, "func");
+            st = st_bind(st, name, ft, "func", nline, ncol);
             if (br.k != K.tunk) {
                 set_inferred_ret(func, br);
             }
         }
-        if (!(ret_inferred)) {
+        if (isnat) {
+            // nothing to check: there is no body, only the header's errors
+        } else if (!(ret_inferred)) {
             // `-> void` discards the body's tail value (no value returns)
             let rtk: long = ret.k;
             if (rtk == K.tvoid) { } else {
@@ -4283,13 +4600,13 @@ def typeof_def(st: TcSt, name: str, func: Func, line: long, col: long) -> TcRes 
             tc_res(ft, st)
         } else {
             // poison the binding so follow-on errors don't cascade weirdly
-            st = st_bind(st, name, t_unk(), "func");
+            st = st_bind(st, name, t_unk(), "func", nline, ncol);
             tc_res(t_unk(), st)
         }
     }
 };
 
-def st_fdepth(st: TcSt, d: long) -> TcSt { { bindings: st.bindings, errors: st.errors, ret: st.ret, self: st.self, fdepth: d } };
+def st_fdepth(st: TcSt, d: long) -> TcSt { { bindings: st.bindings, errors: st.errors, ret: st.ret, self: st.self, fdepth: d, loops: st.loops, loop_fd: st.loop_fd } };
 
 // ── entry point ──────────────────────────────────────────────────────────
 
@@ -4299,6 +4616,9 @@ def check_program(ast: Block, ext: [Sym]) -> [Diag] {
     // the inferred-return table is made when first written (inf_reset)
     let nobkts: [[long]] = [];
     inf_bkts = nobkts;
+    // Only when it is on: emptying 1024 buckets on every compile of every
+    // program would be a cost paid for a feature no compiler run uses.
+    if (tc_index) { tci_reset(); };
     tc_ixn = 0;
     // pass 1: collect top-level def signatures (allows mutual recursion).
     let defs: [Field] = [];
@@ -4323,16 +4643,19 @@ def check_program(ast: Block, ext: [Sym]) -> [Diag] {
         i = i + 1;
     };
     // pass 2: check everything in order (depth 0 = top level)
-    let st: TcSt = { bindings: [], errors: [], ret: type_node({ k: K.tnone }), self: type_node({ k: K.tnone }), fdepth: 0 };
+    let st: TcSt = { bindings: [], errors: [], ret: type_node({ k: K.tnone }), self: type_node({ k: K.tnone }), fdepth: 0, loops: 0, loop_fd: -1 };
     // top-level defs are visible at top level
     let print_type: Type = type_node({ k: K.tfunc, args: [type_node({ k: K.tlong })], ret: type_node({ k: K.tvoid }) });
-    st = st_bind(st, "print", print_type, "intrinsic");
-    st = st_bind(st, "syscall", type_node({ k: K.tlong }), "intrinsic");
+// The intrinsics and the externs below have no position: the first two are the
+    // language's own, the rest are names the program links against from another
+    // unit. -1 is the honest answer and no consumer may read it as line 1.
+    st = st_bind(st, "print", print_type, "intrinsic", 0 - 1, 0 - 1);
+    st = st_bind(st, "syscall", type_node({ k: K.tlong }), "intrinsic", 0 - 1, 0 - 1);
     // (name: str, args...) -> long. The binding exists only so `os_call` reads
     // as defined when it appears as a value; typeof_call matches it by name and
     // checks the arity and the argument types itself (os_call takes a varying
     // number of arguments, so there is no single function type to bind).
-    st = st_bind(st, "os_call", type_node({ k: K.tlong }), "intrinsic");
+    st = st_bind(st, "os_call", type_node({ k: K.tlong }), "intrinsic", 0 - 1, 0 - 1);
     // Every intrinsic is matched BY NAME in typeof_call (print, len, some,
     // ... syscall), so these two bindings are never consulted by a call; they
     // exist only so `print`/`syscall` read as defined when they appear as
@@ -4344,12 +4667,12 @@ def check_program(ast: Block, ext: [Sym]) -> [Diag] {
         // is read-only to its importers
         let xk = "func";
         if (xe.label.starts_with("yg_")) { xk = "const"; }
-        st = st_bind(st, xe.name, xe.typ, xk);
+        st = st_bind(st, xe.name, xe.typ, xk, 0 - 1, 0 - 1);
         x = x + 1;
     };
     let d = 0;
     while (d < len(defs)) {
-        st = st_bind(st, defs[d].name, defs[d].typ, "func");
+        st = st_bind(st, defs[d].name, defs[d].typ, "func", 0 - 1, 0 - 1);
         d = d + 1;
     };
     let r = typeof_block(st, ast);
@@ -4373,4 +4696,4 @@ def def_sig(name: str, func: Func) -> Field {
     { name: name, opt: false, typ: type_node({ k: K.tfunc, args: args, ret: ret }) }
 };
 
-export { check_program, os_call_names, tstr, teq, leaf_of, field_pos, field_merge, narrow_type, union_member, unfold, members, union_parts, pat_members, lit_target, opt_wraps, t_mutex, t_sem, tcanon, tsig, inferred_ret, str_sorted, rec_names, type_names, str_method, fmt_spec, fmt_kind };
+export { check_program, os_call_names, tstr, teq, leaf_of, field_pos, field_merge, narrow_type, union_member, unfold, members, union_parts, pat_members, lit_target, opt_wraps, t_mutex, t_sem, tcanon, tsig, inferred_ret, str_sorted, rec_names, type_names, str_method, fmt_spec, fmt_kind, expr_type, type_index_on, type_index_off };

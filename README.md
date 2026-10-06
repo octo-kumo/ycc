@@ -151,3 +151,11 @@ are kept in lockstep — that is what "1:1 copy" means, see
 policy). A change that can affect performance gets a thorough bench and
 profiling at the end (`make bench`, `bench/compare.sh`), with the numbers
 in its commit message.
+
+See refs/ycc.ref for the pin.
+
+Build:
+
+    (ulimit -S -v 3670016; ../../refs/ycc.ref donut.y -o donut) </dev/null
+
+Toolkit fx.y fb.y term.y time.y args.y at 4b47a9bfef0c1e30 07135b31109fcecd 95a7663b7f1c7a90 6050605cfcfb35db c81a1460643babd2

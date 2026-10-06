@@ -14,11 +14,14 @@ embed THREADS_ASM from "./arch/threads.s";
 // second arch_x64.y could not coexist (arch_frame would be defined twice and
 // the second would win).
 embed W_SYS_ASM from "./arch/wsys.s";
+// The float primitives std/math.y's kernels reach for (`native def`s with no
+// body -- see NATIVE.md, "Backend"), one embedded copy like the rest.
+embed MATH_ASM from "./arch/math.s";
 
 // `text` as prelude lines: one per line, indentation kept (the -S output
 // shows it). Dropped: a whole-line '#' comment (the in-tree assembler treats a
 // comment as a backend bug and must never see one — every comment line in
-// src/y/arch/*.s starts at column 0 for exactly this reason) and the empty
+// .s files under src/y/arch start at column 0 for exactly this reason) and the empty
 // tail a trailing newline leaves behind.
 // TWO COSTS, both measured, both paid once per compiler process (emit_program
 // calls arch_prelude_lines exactly once):
@@ -397,6 +400,16 @@ def arch_prelude_threads_lines() -> [str] {
     arch_asm_lines(THREADS_ASM)
 };
 
+// The floating-point primitives (src/y/arch/math.s): the four a std module
+// reaches through `native def`, and the only machine code between Y and a
+// numeric library -- Y has no float-to-long conversion and no way to read a
+// float's bits. Always given to the shaking (they are a few lines, unlike the
+// thread runtime, so there is nothing to save by looking first).
+def arch_math_lines() -> [str] {
+    arch_asm_lines(MATH_ASM)
+};
+
+
 def arch_consts() -> str {
     // rodata literals emitted once at the end of the file (string headers,
     // error messages)
@@ -417,7 +430,9 @@ def arch_consts() -> str {
         "ystr_oom_end:",
         "ystr_opt: .ascii \"runtime error: unwrap of none\\n\"",
         "ystr_opt_end:",
+        "ystr_int: .ascii \"runtime error: a float with no integer part a long holds\\n\"",
+        "ystr_int_end:",
     ], "\n") + "\n"
 };
 
-export { arch_id, arch_word, arch_sysno, arch_fn_label, arch_global_label, arch_loc_label, arch_str_label, arch_header, arch_rodata, arch_text, arch_bss, arch_global_cell, arch_heap_cells, arch_prelude_lines, arch_prelude_threads_lines, arch_consts, arch_frame, arch_exit };
+export { arch_id, arch_word, arch_sysno, arch_fn_label, arch_global_label, arch_loc_label, arch_str_label, arch_header, arch_rodata, arch_text, arch_bss, arch_global_cell, arch_heap_cells, arch_prelude_lines, arch_prelude_threads_lines, arch_math_lines, arch_consts, arch_frame, arch_exit };

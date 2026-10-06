@@ -77,7 +77,11 @@ def ispunct(c: byte) -> bool {
 // Scan a quoted literal at src[i] (a `"` or `'` quote): returns the
 // decoded text and the position just past the closing quote. Escapes:
 // \n \t \r, \xHH, and `\<c>` drops the backslash (the Y literal rules).
-def lex_quoted(src: str, i: long, line: long, col: long) -> { text: str, end: long, line: long, col: long } {
+// `what` names the literal in the unterminated message, which comes back in
+// `err` instead of being printed here: a lexer that exits takes the whole
+// compilation down with a message carrying no line and no column, where a
+// token the parser turns into an error reports the fault in place.
+def lex_quoted(src: str, i: long, line: long, col: long, what: str) -> { text: str, end: long, line: long, col: long, err: str } {
     let q = src[i:i + 1];
     let n = len(src);
     i = i + 1;
@@ -100,9 +104,7 @@ def lex_quoted(src: str, i: long, line: long, col: long) -> { text: str, end: lo
     };
     if (closed) {
     } else {
-        // ran off the end with the quote still open
-        puts("error: unterminated string literal\n");
-        exit(1);
+        // ran off the end with the quote still open: said in `err` below
     };
     let raw = src[start:i];
     i = i + 1;  // skip closing quote
@@ -111,7 +113,11 @@ def lex_quoted(src: str, i: long, line: long, col: long) -> { text: str, end: lo
     if (hasesc) {
         buf = unescape(raw, false);
     };
-    { text: buf, end: i, line: line, col: col }
+    let err = "";
+    if (!closed) {
+        err = "unterminated " + what;
+    };
+    { text: buf, end: i, line: line, col: col, err: err }
 };
 
 // A literal's text from its raw source: \n \t \r, \xHH, and `\<c>` drops
@@ -613,6 +619,7 @@ def tokenize(src: str) -> [Tok] {
             if (word == "let") { ty = "kw"; }
             else if (word == "const") { ty = "kw"; }
             else if (word == "def") { ty = "kw"; }
+            else if (word == "native") { ty = "kw"; }
             else if (word == "if") { ty = "kw"; }
             else if (word == "else") { ty = "kw"; }
             else if (word == "while") { ty = "kw"; }
@@ -622,35 +629,39 @@ def tokenize(src: str) -> [Tok] {
             else if (word == "return") { ty = "kw"; }
             else if (word == "true") { ty = "kw"; }
             else if (word == "false") { ty = "kw"; }
+            else if (word == "break") { ty = "kw"; }
+            else if (word == "continue") { ty = "kw"; }
            ;
             if (word == "b") {
                 // b"..." / b'...' -- a byte-string literal: the same type
                 // as [byte], spelled like a Python bytes literal.
                 let bline = line;
                 let qch = src[i:i + 1];
-                if (qch == "\"") {
-                    let bq = lex_quoted(src, i, line, col);
+                if (qch == "\"" || qch == "'") {
+                    let bq = lex_quoted(src, i, line, col, "byte string");
                     i = bq.end;
                     line = bq.line;
                     col = bq.col;
-                    toks += mktok("bstr", bq.text, bline, startcol);
-                } else if (qch == "'") {
-                    let bq2 = lex_quoted(src, i, line, col);
-                    i = bq2.end;
-                    line = bq2.line;
-                    col = bq2.col;
-                    toks += mktok("bstr", bq2.text, bline, startcol);
+                    if (bq.err != "") {
+                        toks += mktok("ferr", bq.err, bline, startcol);
+                    } else {
+                        toks += mktok("bstr", bq.text, bline, startcol);
+                    };
                 } else {
                     toks += mktok(ty, word, line, startcol);
                 };
             } else if (word == "c" && src[i:i + 1] == "'") {
                 // c'a' -- a character literal: one byte, typed `byte`.
                 let cline = line;
-                let cq = lex_quoted(src, i, line, col);
+                let cq = lex_quoted(src, i, line, col, "character literal");
                 i = cq.end;
                 line = cq.line;
                 col = cq.col;
-                toks += mktok("char", cq.text, cline, startcol);
+                if (cq.err != "") {
+                    toks += mktok("ferr", cq.err, cline, startcol);
+                } else {
+                    toks += mktok("char", cq.text, cline, startcol);
+                };
             } else if (word == "f" && src[i:i + 1] == "\"") {
                 // f"..." -- an f-string (lex_fstring)
                 let fq = lex_fstring(src, i, line, startcol, toks);
@@ -666,11 +677,15 @@ def tokenize(src: str) -> [Tok] {
             // slash arms only ever see real comment openers or operators.
             let startline = line;
             let startcol = col;
-            let q = lex_quoted(src, i, line, col);
+            let q = lex_quoted(src, i, line, col, "string literal");
             i = q.end;
             line = q.line;
             col = q.col;
-            toks += mktok("str", q.text, startline, startcol);
+            if (q.err != "") {
+                toks += mktok("ferr", q.err, startline, startcol);
+            } else {
+                toks += mktok("str", q.text, startline, startcol);
+            };
         } else if (c == c'/') {
             // Slash: comment opener, block comment, or division operator.
             // (The string arm above consumed every slash inside quotes, so a
@@ -739,6 +754,30 @@ def tokenize(src: str) -> [Tok] {
                 toks += mktok("op", op, line, col);
                 i = i + len(op);
                 col = col + len(op);
+            } else if (c == c'\x27') {
+                // A bare apostrophe: Y spells a character literal c'a' and a
+                // byte string b'a', so no token starts with one, and every
+                // apostrophe reaching here is a mistake. Said here, where it
+                // is, naming the spelling -- and as ONE token over the run
+                // the reader wrote, because 'a' is one mistake: as two
+                // tokens the closing quote became a name the parser charged
+                // a message to (`expected ')', got 'q'`), and a second pair
+                // in a file made the next b or c word take the byte-string
+                // arm and scan to end of file, the position-less fatal
+                // "unterminated string literal". lex_quoted walks the run and
+                // says whether it closed; an unclosed one is a second fault
+                // on top of this one, and this is the message that helps.
+                let aline = line;
+                let acol = col;
+                let aq = lex_quoted(src, i, line, col, "character literal");
+                i = aq.end;
+                line = aq.line;
+                col = aq.col;
+                let msg = "a character literal is spelled c'" + aq.text + "' (a byte string b'" + aq.text + "'); a bare ' is not one";
+                if (aq.err != "") {
+                    msg = msg + " (and the quote is never closed)";
+                };
+                toks += mktok("ferr", msg, aline, acol);
             } else if (issingleop(c)) {
                 toks += mktok("op", src[i:i + 1], line, col);
                 i = i + 1;

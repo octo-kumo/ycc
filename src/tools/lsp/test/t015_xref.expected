@@ -1,0 +1,27 @@
+-- what the spliced program's top level actually holds
+top level: [decl helper$1][decl TOP$3][decl both$4][decl v$5][call]
+-- rename's naming scheme, which everything here rests on
+top-level declarations: 4, renamed 4, not renamed 0
+-- an imported module's declarations are TOP LEVEL of the spliced program
+helper found: true
+TOP found: true
+Pair (a `type` alias, hoisted out of the tree by rename): false
+both found: true
+helper is on spliced line 2, TOP on 6
+mod.y's lines come before main.y's: true
+-- the origin map sends each of them back to the right file
+helper's file: /tmp/opencode/t015_ws/mod.y
+TOP's file: /tmp/opencode/t015_ws/mod.y
+v is the buffer's own: /tmp/opencode/t015_ws/main.y
+-- one name, two files: the pairing itself
+the use is on spliced line 13: print(helper.TOP + v);
+the use carries the declaration's own unique name TOP$3: true
+-- what the server answers
+definition of helper.helper -> file:///tmp/opencode/t015_ws/mod.y:1:4
+definition of helper.TOP -> file:///tmp/opencode/t015_ws/mod.y:5:4
+definition of v (the buffer's own) -> file:///tmp/opencode/t015_ws/main.y:2:4
+hover on helper.helper: ```y|helper(n: long) -> long|```||doubles a number
+hover on helper.TOP: ```y|long|```||```y|TOP: long = 7|```
+-- and what it refuses
+a name no file declares: true
+done

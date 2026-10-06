@@ -152,12 +152,58 @@ Yv *rn_lookup_to(Yv *st, Yv *name, long lo) {
     return found;
 }
 
-/* Bind one name in the current scope, return {st, uniq}. */
-Yv *rn_bind(Yv *st, Yv *orig) {
+/* ── the def sites (LSP.md 9.2 A3) ─────────────────────────────────────────
+ *
+ * Where every binding was DEFINED, as `uniq -> line * 65536 + col`, for a caller
+ * that has to point at a name: the language server's go-to-definition. The
+ * renamer already knows both halves -- `uniq` because it makes it, and the site
+ * because it is reading the declaration -- and was dropping both.
+ *
+ * A SECOND NameIx beside types.c's tc_ix, not a new container, and the packing is
+ * the one types.inferred_ret already keys its table by.
+ *
+ * OFF by default: rn_bind is on the path of every binding in every compile, and a
+ * caller that does not want the map should not pay for it. */
+static Yv *rn_defs;
+static int rn_want_defs;
+
+/* Only ever called when rn_want_defs is set: the flag is tested at rn_bind's call
+ * site, for the same reason as tci_note -- a call on the path of every binding in
+ * every compile is the cost, not the work inside it. */
+static void rn_note_def(Yv *uniq, Yv *line, Yv *col) {
+    if (yv_l(line) > 0 && yv_l(col) >= 0) {
+        nameix_put(rn_defs, uniq, yv_l(line) * 65536 + yv_l(col));
+    }
+}
+
+/* Bind one name in the current scope, return {st, uniq}.
+ *
+ * `line`/`col` are the NAME's, not the keyword's, so they differ from the
+ * declaration node's own position by however much whitespace followed `let`/`def`. */
+Yv *rn_bind(Yv *st, Yv *orig, Yv *line, Yv *col) {
     Yv *r = rn_fresh(st, orig);
     st = rn_define(yr_get(r, "st"), orig, yr_get(r, "name"));
+    if (rn_want_defs) {
+        rn_note_def(yr_get(r, "name"), line, col);
+    }
     return yr(2, "st", st, "uniq", yr_get(r, "name"));
 }
+
+/* The def site of `uniq`, packed, or -1. -1 is the sentinel and a consumer must
+ * read it as "no site in the source", never as line -1. */
+long rn_def_site(Yv *uniq) {
+    long out = -1;
+    if (rn_want_defs) {
+        long packed = nameix_get(rn_defs, uniq);
+        if (packed >= 0) {
+            out = packed;
+        }
+    }
+    return out;
+}
+
+long rn_def_line(long st) { return st / 65536; }
+long rn_def_col(long st) { return st % 65536; }
 
 Yv *rn_list(Yv *nodes, Yv *st) {
     Yv *out = yav(0);
@@ -227,10 +273,10 @@ Yv *rn_prepass_decl(Yv *s, Yv *st) {
     /* decl shapes only (named def vs let-bound func): one `s.v.k` read in
      * this body (see parse_type_arrow note — two reads in one body merge). */
     if (ys_eq_lit(yr_get(s, "kind"), "def")) {
-        Yv *r = rn_bind(st, yr_get(s, "name"));
+        Yv *r = rn_bind(st, yr_get(s, "name"), yr_get(s, "nline"), yr_get(s, "ncol"));
         return rn_note_defaults(yr_get(r, "st"), yr_get(r, "uniq"), yr_get(s, "v"));
     } else if (yv_l(yr_get(yr_get(s, "v"), "k")) == K_func) {
-        Yv *r = rn_bind(st, yr_get(s, "name"));
+        Yv *r = rn_bind(st, yr_get(s, "name"), yr_get(s, "nline"), yr_get(s, "ncol"));
         return rn_note_defaults(yr_get(r, "st"), yr_get(r, "uniq"), yr_get(s, "v"));
     } else {
         return st;
@@ -910,15 +956,14 @@ Yv *rn_rebuild_decl(Yv *s, Yv *newname) {
 }
 
 Yv *rn_rebuild_def(Yv *s, Yv *newname) {
-    return yr(6, "k", yv_long(K_decl), "kind", ys("def"), "name", newname, "v",
-              yr_get(s, "v"), "line", yr_get(s, "line"), "col",
-              yr_get(s, "col"));
+    return yr(8, "k", yv_long(K_decl), "kind", ys("def"), "name", newname, "v",
+              yr_get(s, "v"), "line", yr_get(s, "line"), "col", yr_get(s, "col"), "nline", yr_get(s, "col"), "ncol", yr_get(s, "col"));
 }
 
 Yv *rn_rebuild_let(Yv *s, Yv *newname) {
-    return yr(7, "k", yv_long(K_decl), "kind", yr_get(s, "kind"), "name", newname,
+    return yr(9, "k", yv_long(K_decl), "kind", yr_get(s, "kind"), "name", newname,
               "typ", yr_get(s, "typ"), "v", yr_get(s, "v"), "line",
-              yr_get(s, "line"), "col", yr_get(s, "col"));
+              yr_get(s, "line"), "col", yr_get(s, "col"), "nline", yr_get(s, "col"), "ncol", yr_get(s, "col"));
 }
 
 Yv *rn_block(Yv *stmts, Yv *st) {
@@ -1300,9 +1345,8 @@ Yv *rn_dot(Yv *node, Yv *st) {
     } else {
         Yv *o = rn_node(yr_get(node, "obj"), st);
         return yr(2, "st", yr_get(o, "st"), "node",
-                  yr(5, "k", yv_long(K_dot), "obj", yr_get(o, "node"), "key",
-                     yr_get(node, "key"), "line", yr_get(node, "line"), "col",
-                     yr_get(node, "col")));
+                  yr(7, "k", yv_long(K_dot), "obj", yr_get(o, "node"), "key",
+                     yr_get(node, "key"), "line", yr_get(node, "line"), "col", yr_get(node, "col"), "nline", yr_get(node, "col"), "ncol", yr_get(node, "col")));
     }
 }
 
@@ -1368,9 +1412,9 @@ Yv *rn_dotassign(Yv *node, Yv *st) {
 Yv *rn_dotassign_val(Yv *node, Yv *o, Yv *st) {
     Yv *v = rn_node(yr_get(node, "v"), st);
     return yr(2, "st", yr_get(v, "st"), "node",
-              yr(6, "k", yv_long(K_dotassign), "obj", o, "key",
+              yr(8, "k", yv_long(K_dotassign), "obj", o, "key",
                  yr_get(node, "key"), "v", yr_get(v, "node"), "line",
-                 yr_get(node, "line"), "col", yr_get(node, "col")));
+                 yr_get(node, "line"), "col", yr_get(node, "col"), "nline", yr_get(node, "col"), "ncol", yr_get(node, "col")));
 }
 
 Yv *rn_foreach(Yv *node, Yv *st) {
@@ -1380,7 +1424,7 @@ Yv *rn_foreach(Yv *node, Yv *st) {
 
 Yv *rn_foreach_body(Yv *node, Yv *iter, Yv *st) {
     Yv *st1 = rn_push(st);
-    Yv *nb = rn_bind(st1, yr_get(node, "name"));
+    Yv *nb = rn_bind(st1, yr_get(node, "name"), yr_get(node, "line"), yr_get(node, "col"));
     return rn_foreach_block(node, iter, yr_get(nb, "uniq"), yr_get(nb, "st"));
 }
 
@@ -1408,7 +1452,7 @@ Yv *rn_forrange_hi(Yv *node, Yv *lo, Yv *st) {
 
 Yv *rn_forrange_body(Yv *node, Yv *lo, Yv *hi, Yv *st) {
     Yv *st1 = rn_push(st);
-    Yv *nb = rn_bind(st1, yr_get(node, "name"));
+    Yv *nb = rn_bind(st1, yr_get(node, "name"), yr_get(node, "line"), yr_get(node, "col"));
     return rn_forrange_block(node, lo, hi, yr_get(nb, "uniq"),
                              yr_get(nb, "st"));
 }
@@ -1458,9 +1502,43 @@ Yv *rn_decl(Yv *node, Yv *st) {
      * its own shape's fields. */
     if (ys_eq_lit(yr_get(node, "kind"), "def")) {
         return rn_decl_def(node, st);
+    } else if (ys_eq_lit(yr_get(node, "kind"), "native")) {
+        return rn_decl_native(node, st);
     } else {
         return rn_decl_rest(node, st);
     }
+}
+
+/* A native def renames like a def, but there is no body to walk: it holds no
+ * code, only the header's errors, and the label it names is what the call
+ * sites resolve to -- so it rides through untouched. */
+Yv *rn_decl_native(Yv *node, Yv *st) {
+    return rn_decl_native_lookup(node, rn_lookup(st, yr_get(node, "name")), st);
+}
+
+Yv *rn_decl_native_lookup(Yv *node, Yv *u, Yv *st) {
+    if (ys_eq_lit(u, "")) {
+        Yv *b = rn_bind(st, yr_get(node, "name"), yr_get(node, "nline"), yr_get(node, "ncol"));
+        return rn_decl_native_go(node, yr_get(b, "uniq"), yr_get(b, "st"));
+    } else {
+        return rn_decl_native_go(node, u, st);
+    }
+}
+
+Yv *rn_decl_native_go(Yv *node, Yv *u, Yv *st) {
+    Yv *f = yr_get(node, "v");
+    /* `ppos` carried through unchanged: the renamer renames names, not positions,
+     * and a native declaration's parameters are exactly where they were written. */
+    Yv *nf = yr(10, "k", yr_get(f, "k"), "params", yr_get(f, "params"),
+                "ptypes", rn_types(st, yr_get(f, "ptypes")),
+                "ret", rn_type(st, yr_get(f, "ret")),
+                "body", yr_get(f, "body"), "defs", yr_get(f, "defs"),
+                "label", yr_get(f, "label"), "line", yr_get(f, "line"),
+                "col", yr_get(f, "col"), "ppos", yr_get(f, "ppos"));
+    return yr(2, "st", st, "node",
+              yr(9, "k", yv_long(K_decl), "kind", ys("native"), "name", u,
+                 "typ", rn_type(st, yr_get(node, "typ")), "v", nf, "line",
+                 yr_get(node, "line"), "col", yr_get(node, "col"), "nline", yr_get(node, "col"), "ncol", yr_get(node, "col")));
 }
 
 Yv *rn_decl_def(Yv *node, Yv *st) {
@@ -1471,7 +1549,7 @@ Yv *rn_decl_def(Yv *node, Yv *st) {
 Yv *rn_decl_def_lookup(Yv *node, Yv *u, Yv *st) {
     /* NOTE: both arms share the key set (kind/def/name/v) — teq holds. */
     if (ys_eq_lit(u, "")) {
-        Yv *b = rn_bind(st, yr_get(node, "name"));
+        Yv *b = rn_bind(st, yr_get(node, "name"), yr_get(node, "nline"), yr_get(node, "ncol"));
         return rn_decl_def_go(node, yr_get(b, "uniq"), yr_get(b, "st"));
     } else {
         return rn_decl_def_go(node, u, st);
@@ -1481,9 +1559,8 @@ Yv *rn_decl_def_lookup(Yv *node, Yv *u, Yv *st) {
 Yv *rn_decl_def_go(Yv *node, Yv *u, Yv *st) {
     Yv *f = rn_func(yr_get(node, "v"), st);
     return yr(2, "st", yr_get(f, "st"), "node",
-              yr(6, "k", yv_long(K_decl), "kind", ys("def"), "name", u, "v",
-                 yr_get(f, "node"), "line", yr_get(node, "line"), "col",
-                 yr_get(node, "col")));
+              yr(8, "k", yv_long(K_decl), "kind", ys("def"), "name", u, "v",
+                 yr_get(f, "node"), "line", yr_get(node, "line"), "col", yr_get(node, "col"), "nline", yr_get(node, "col"), "ncol", yr_get(node, "col")));
 }
 
 Yv *rn_decl_rest(Yv *node, Yv *st) {
@@ -1501,7 +1578,7 @@ Yv *rn_decl_func(Yv *node, Yv *st) {
 Yv *rn_decl_func_lookup(Yv *node, Yv *u, Yv *st) {
     /* NOTE: both arms share the key set — teq holds. */
     if (ys_eq_lit(u, "")) {
-        Yv *b = rn_bind(st, yr_get(node, "name"));
+        Yv *b = rn_bind(st, yr_get(node, "name"), yr_get(node, "nline"), yr_get(node, "ncol"));
         return rn_decl_func_go(node, yr_get(b, "uniq"), yr_get(b, "st"));
     } else {
         return rn_decl_func_go(node, u, st);
@@ -1515,9 +1592,9 @@ Yv *rn_decl_func_go(Yv *node, Yv *u, Yv *st) {
 
 Yv *rn_decl_func_finish(Yv *node, Yv *u, Yv *fv, Yv *st) {
     return yr(2, "st", st, "node",
-              yr(7, "k", yv_long(K_decl), "kind", yr_get(node, "kind"), "name", u,
+              yr(9, "k", yv_long(K_decl), "kind", yr_get(node, "kind"), "name", u,
                  "typ", rn_type(st, yr_get(node, "typ")), "v", fv, "line",
-                 yr_get(node, "line"), "col", yr_get(node, "col")));
+                 yr_get(node, "line"), "col", yr_get(node, "col"), "nline", yr_get(node, "col"), "ncol", yr_get(node, "col")));
 }
 
 Yv *rn_decl_val(Yv *node, Yv *st) {
@@ -1526,7 +1603,7 @@ Yv *rn_decl_val(Yv *node, Yv *st) {
 }
 
 Yv *rn_decl_val_bind(Yv *node, Yv *v, Yv *st) {
-    Yv *b = rn_bind(st, yr_get(node, "name"));
+    Yv *b = rn_bind(st, yr_get(node, "name"), yr_get(node, "nline"), yr_get(node, "ncol"));
     return rn_decl_val_finish(node, v, yr_get(b, "uniq"), yr_get(b, "st"));
 }
 
@@ -1543,9 +1620,9 @@ Yv *rn_decl_val_finish(Yv *node, Yv *v, Yv *uniq, Yv *st) {
         ;
     }
     return yr(2, "st", st, "node",
-              yr(7, "k", yv_long(K_decl), "kind", yr_get(node, "kind"), "name",
+              yr(9, "k", yv_long(K_decl), "kind", yr_get(node, "kind"), "name",
                  uniq, "typ", rn_type(st, yr_get(node, "typ")), "v", v2,
-                 "line", yr_get(node, "line"), "col", yr_get(node, "col")));
+                 "line", yr_get(node, "line"), "col", yr_get(node, "col"), "nline", yr_get(node, "col"), "ncol", yr_get(node, "col")));
 }
 
 /* Rename a func value. `func` is annotated with the full func shape, so its
@@ -1573,46 +1650,61 @@ Yv *rn_func_p4(Yv *func, Yv *fparams, Yv *fptypes, Yv *fret, Yv *fbody,
                Yv *st) {
     return rn_func_p5(fparams, fptypes, fret, fbody,
                       yv_l(yr_get(func, "line")), yv_l(yr_get(func, "col")),
-                      st);
+                      yr_get(func, "ppos"), st);
 }
 
 Yv *rn_func_p5(Yv *fparams, Yv *fptypes, Yv *fret, Yv *fbody, long fline,
-               long fcol, Yv *st) {
-    return rn_func_params(fparams, fptypes, fret, fbody, fline, fcol, st);
+               long fcol, Yv *fppos, Yv *st) {
+    return rn_func_params(fparams, fptypes, fret, fbody, fline, fcol, fppos,
+                          st);
 }
 
 Yv *rn_func_params(Yv *fparams, Yv *fptypes, Yv *fret, Yv *fbody, long fline,
-                   long fcol, Yv *st) {
-    return rn_func_go(fparams, fptypes, fret, fbody, fline, fcol, yav(0), 0,
-                      st);
+                   long fcol, Yv *fppos, Yv *st) {
+    return rn_func_go(fparams, fptypes, fret, fbody, fline, fcol, fppos,
+                      yav(0), 0, st);
 }
 
 Yv *rn_func_go(Yv *fparams, Yv *fptypes, Yv *fret, Yv *fbody, long fline,
-               long fcol, Yv *params, long i, Yv *st) {
+               long fcol, Yv *fppos, Yv *params, long i, Yv *st) {
     /* NOTE: recursion over the param list (replaces the while loop): the
      * loop's `st = b.st` rebind poisoned the merged-shape read of st.
      * fparams stays BARE (like res(node)): the single `fparams[i]` read
      * unifies via the tcompat law (tnone). */
     if (i >= yv_len(fparams)) {
-        return rn_func_body(fptypes, fret, fbody, fline, fcol, params, st);
+        return rn_func_body(fptypes, fret, fbody, fline, fcol, fppos, params,
+                            st);
     } else {
-        Yv *b = rn_bind(st, ya_get(fparams, i));
-        return rn_func_go(fparams, fptypes, fret, fbody, fline, fcol,
+        /* The parameter's OWN position, from the parser, when it has one. It used
+         * to be the Func's line for every parameter, which put every parameter's
+         * def site on the `def` keyword -- so a go-to-definition on a parameter
+         * landed on the function, not on the parameter. An empty `fppos` (a
+         * hand-built Func) falls back to the Func's own position, which is the
+         * imprecision rather than a wrong answer. */
+        long pl = fline;
+        long pc = fcol;
+        if (i < yv_len(fppos) && yv_l(ya_get(fppos, i)) > 0) {
+            pl = yv_l(ya_get(fppos, i)) / 65536;
+            pc = yv_l(ya_get(fppos, i)) % 65536;
+            ;
+        }
+        Yv *b = rn_bind(st, ya_get(fparams, i), yv_long(pl), yv_long(pc));
+        return rn_func_go(fparams, fptypes, fret, fbody, fline, fcol, fppos,
                           ya_push(params, yr_get(b, "uniq")), i + 1,
                           yr_get(b, "st"));
     }
 }
 
 Yv *rn_func_body(Yv *fptypes, Yv *fret, Yv *fbody, long fline, long fcol,
-                 Yv *params, Yv *st) {
+                 Yv *fppos, Yv *params, Yv *st) {
     /* NOTE: fbody read ONCE here (one read site — no merge). */
     Yv *b = rn_block(yr_get(fbody, "stmts"), st);
-    return rn_func_finish(fptypes, fret, fbody, fline, fcol, params,
+    return rn_func_finish(fptypes, fret, fbody, fline, fcol, fppos, params,
                           yr_get(b, "stmts"), rn_pop(yr_get(b, "st")));
 }
 
 Yv *rn_func_finish(Yv *fptypes, Yv *fret, Yv *fbody, long fline, long fcol,
-                   Yv *params, Yv *stmts, Yv *st) {
+                   Yv *fppos, Yv *params, Yv *stmts, Yv *st) {
     /* NOTE: NO record reads here — all values are params already.
      * (fbody is kept for 1:1 signature parity but never read, as in Y.) */
     (void)fbody;
@@ -1632,11 +1724,15 @@ Yv *rn_func_finish(Yv *fptypes, Yv *fret, Yv *fbody, long fline, long fcol,
         i = i + 1;
     }
     return yr(2, "st", st, "node",
-              yr(7, "k", yv_long(K_func), "params", params, "ptypes", rn_types(st, fptypes),
+              /* `ppos` again: the parameter list is renamed in place, so each
+               * name keeps the position it was written at. */
+              yr(10, "k", yv_long(K_func), "params", params, "ptypes", rn_types(st, fptypes),
                  "ret", rn_type(st, fret), "body",
                  yr(4, "k", yv_long(K_block), "stmts", body, "line",
                     yv_long(fline), "col", yv_long(fcol)),
-                 "line", yv_long(fline), "col", yv_long(fcol)));
+                 "defs", yav(0), "label", ys(""),
+                 "line", yv_long(fline), "col", yv_long(fcol), "ppos",
+                 fppos));
 }
 
 Yv *rename_program(Yv *ast) {
@@ -1648,6 +1744,21 @@ Yv *rename_program(Yv *ast) {
  * and fmods say which lines belong to a module imported by name: line
  * i + 1 is in file ofile[i], and that file is module fmods[ofile[i]]
  * ("" for none). */
+/* rename, AND the def sites of everything it renamed (LSP.md 9.2 A3).
+ *
+ * rename_program_x is this minus the index: the compiler needs the tree and
+ * nothing else, and three callers (ycc.c, native.c, pkg.c) should not have to
+ * know an index exists. So the flag is set here and cleared on the way out, and
+ * the map holds THIS call's bindings only -- which is the unit that was passed
+ * in, since a program is checked one unit at a time. */
+Yv *rename_program_x2(Yv *ast, Yv *dfl, Yv *ofile, Yv *fmods) {
+    rn_defs = nameix_new(1024);
+    rn_want_defs = 1;
+    Yv *block = rename_program_x(ast, dfl, ofile, fmods);
+    rn_want_defs = 0;
+    return yr(2, "ast", block, "defs", rn_defs);
+}
+
 Yv *rename_program_x(Yv *ast, Yv *dfl, Yv *ofile, Yv *fmods) {
     rn_tref_ids = yav(0);
     rn_tref_nodes = yav(0);

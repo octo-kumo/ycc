@@ -39,7 +39,11 @@ const K = {
     tfloat: 61, tfunc: 62, tinfer: 63, tlong: 64, tmap: 65, tname: 66,
     tnone: 67, topt: 68, tparams: 69, tpat: 70, tpend: 71, tptr: 72,
     trec: 73, tref: 74, tstr: 75, tunion: 76, tunk: 77, tvoid: 78,
-    typedef: 79, un: 80, void: 81, kw_while: 82
+    typedef: 79, un: 80, void: 81, kw_while: 82,
+    // `break` and `continue` (2025): a jump out of, or to the next turn of, the
+    // innermost enclosing loop. Bare nodes -- no payload, so the shape is
+    // `Bare` and no union member is needed.
+    kw_break: 83, kw_continue: 84
 };
 
 const KTAGS: [str] = [
@@ -52,7 +56,8 @@ const KTAGS: [str] = [
     "sliceassign", "store", "str", "t", "tarr", "tarrfix", "tbool", "tbyte",
     "terr", "tfloat", "tfunc", "tinfer", "tlong", "tmap", "tname", "tnone",
     "topt", "tparams", "tpat", "tpend", "tptr", "trec", "tref", "tstr",
-    "tunion", "tunk", "tvoid", "typedef", "un", "void", "while"
+    "tunion", "tunk", "tvoid", "typedef", "un", "void", "while",
+    "break", "continue"
 ];
 
 // The name of a tag, for a diagnostic. The argument is always a tag the
@@ -133,7 +138,8 @@ def tags_agree() -> bool {
     ktag(K.trec) == "trec" && ktag(K.tref) == "tref" && ktag(K.tstr) == "tstr" &&
     ktag(K.tunion) == "tunion" && ktag(K.tunk) == "tunk" && ktag(K.tvoid) == "tvoid" &&
     ktag(K.typedef) == "typedef" && ktag(K.un) == "un" && ktag(K.void) == "void" &&
-    ktag(K.kw_while) == "while"
+    ktag(K.kw_while) == "while" &&
+    ktag(K.kw_break) == "break" && ktag(K.kw_continue) == "continue"
 };
 
 // MAX_NEST is the other number the two copies must hold the same: a limit

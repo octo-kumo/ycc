@@ -15,14 +15,15 @@ First target: **Linux x86_64**. Later: more arches.
 | `src/y/types.y` | static checker: AST → `[errors]` with line/col; the law |
 | `src/y/lint.y` | warnings: `lint_unit` reads a unit that typechecked (the renamed tree for unused or write-only locals, dropped values, unreachable code, `x = x`, `x < x`, a division by a literal zero, a key given twice; the parse tree for record and union types written out instead of named) → `[{msg,line,col}]`. Only the program's unit and packages' (never a std unit's); the driver prints them on stderr (`ycc.y` `print_native_warnings`) unless `-w`. Never fatal, and the output is the same bytes with or without them |
 | `src/y/arch_x64.y` | x86_64 behind the arch interface: `arch_id/word/sysno`, `arch_fn_label/loc_label/str_label`, `arch_header/rodata/text`, `arch_prelude`, `arch_consts`, `arch_frame` (16-align), `arch_exit`. The prelude is only the **primitives** that need raw machine state (allocator, traps, record lookup, the byte-moving string/array cores, float formatting, argv) |
-| `src/y/native.y` | pipeline driver: `native_resolve` (splice imports, pick the std units) → per compilation unit: strip namespaces → rename → check → lint (warnings) → hoist → frame layout → arch emit; then link the units (tree shake across them) |
+| `src/y/native.y` | pipeline driver: `native_resolve` (splice imports, pick the std units) → per compilation unit: strip namespaces → rename → check → lint (warnings) → hoist → frame layout → arch emit; then link the units (tree shake across them) into parts the assembler takes: the bodies as instruction items (`ir.y`), the header, the arch prelude, the rodata and the `.bss` cells as text (what `asm.y` still lexes) |
 | `src/y/rename.y` | uniquify pass: every binding gets `name$N`, killing scopes/shadowing downstream |
 | `src/y/enc64.y` | x86_64 instruction encoding for exactly the forms we emit |
 | `src/y/asm.y` | two-pass assembler over our asm dialect |
 | `src/y/elf.y` | minimal ELF64 writer: one PT_LOAD (R+E), plus a zero-filled RW one for `.bss` when a program has globals or a heap; static, entry `_start`; `-g` adds `.symtab`, the `.debug_*` line table and section headers |
 | `src/y/dwarf.y` | DWARF 4 line information for `-g`: `.debug_line` (a row per `.loc` marker) plus a minimal `.debug_info`/`.debug_abbrev` (one compile unit) |
 | `src/y/pkg.y` | `ycc build`/`ycc vendor`: the `y.toml` reader (a TOML subset), the dependency graph, git fetching, `y.lock`, vendoring, and the hash behind the package objects' keys (*Packages* below) |
-| `src/y/std/` | standard library **in Y**: `rt.y` (the runtime library, linked into every program), `prelude.y` (`readline`/`clear_eof`), `exec.y` (`exec`, its own file for `--no-exec`) and `str.y` (the helper-backed string methods) — those four embedded into the compiler and compiled as separate units (*Compilation units* below) — then the optional modules: `fs.y` (the file system: whole files as text or bytes, paths, directories, fds), `net.y` (TCP, DNS, an HTTP server), `struct.y` (pack/unpack helpers), `crypto.y` (SHA-2, HMAC/HKDF, ChaCha20-Poly1305, AES-GCM, X25519, RSA and ECDSA verification), `x509.y` (certificates, trust anchors, chain and name checks), `tls.y` (a TLS 1.3 client) |
+| `src/y/std/` | standard library **in Y**: `rt.y` (the runtime library, linked into every program), `prelude.y` (`readline`/`clear_eof`), `exec.y` (`exec`, its own file for `--no-exec`) and `str.y` (the helper-backed string methods) — those four embedded into the compiler and compiled as separate units (*Compilation units* below) — then the optional modules: `fs.y` (the file system: whole files as text or bytes, paths, directories, fds), `net.y` (TCP, DNS, an HTTP server), `struct.y` (pack/unpack helpers), `math.y` (integers, bits, float
+comparisons and constants, RNGs, `[float]` array work), `crypto.y` (SHA-2, HMAC/HKDF, ChaCha20-Poly1305, AES-GCM, X25519, RSA and ECDSA verification), `x509.y` (certificates, trust anchors, chain and name checks), `tls.y` (a TLS 1.3 client) |
 
 New Y modules under `src/y/` must get a **1:1 C twin** in `src/c/` (see
 `PORTING.md`) -- the two compilers are kept in lockstep. (`src/y/std/` is
@@ -65,6 +66,11 @@ ported, so they may use the whole native surface -- `&x`, `*p`,
   compare may recurse or call those cores. `gen_eq_vals` is the one
   dispatcher: left pushed, right in `%rax`, 0/1 back in `%rax`.
 - Locals live at fixed `rbp` offsets (one flat frame per function, 8 bytes/slot).
+  A block releases its slots as it ends and a statement releases its
+  temporaries as it does (`st_slots`/`st_temp` over `EmitSt.slots`/`temp`), so
+  the frame is the **deepest** the body ever reached (`frame_max`), not the sum
+  of every slot ever taken — the two counters are separate because a
+  statement's temporaries must outlive the blocks inside that statement.
   **Top-level variables are globals**: each gets an 8-byte `.bss` cell
   (`yg_<n>_<name>`, read and written `%rip`-relative), so every function —
   hoisted or not, called from anywhere — sees the same variable.
@@ -126,6 +132,13 @@ ported, so they may use the whole native surface -- `&x`, `*p`,
   exactly. Owned buffers are `[cap][len][bytes][NUL]` (the value points
   at `len`, so to everything else it is an ordinary `str`). 10,000
   one-byte appends: 50 MB of heap and 22.7 ms → 23 KB and 0.18 ms.
+  The value-used form is `y_str_cat`, which allocates exactly
+  `len(s) + len(t)` — that is what makes the copy necessary (a string read
+  out of `s` before the append must not see the append, so the result
+  cannot be the old buffer), but it also makes a loop of them quadratic:
+  10,000 iterations building 120 KB allocate 1.2 GB. `lint.y` warns on the
+  shape (`isvused`/`dropnext` mirror `gen_block_as`'s `dropped`), and the
+  one-character fix is the `;`.
 - **Arrays and records are reference values**: a binding stores the address,
   never a copy. `let b = a`, passing, returning and storing all share, and
   `a[i] = v` / `s.f = v` are observable through every alias. Both
@@ -205,6 +218,64 @@ source → lexer → parser (+types) → splice imports → strip namespaces
   "what would a reasonable scoped functional language do" (TypeScript/Rust
   intuition): lexical scope, `self` for recursion, no implicit coercions
   (except `str`→`*T` and `none` unification), exhaustiveness where cheap.
+- **The float primitives (`src/y/arch/math.s`)** are the other half of the same
+  story: four functions (`y_sqrt`, `y_to_int`, `y_fbits`, `y_bitsf`), each a
+  leaf reached through a `native def`, each written by hand because only the
+  machine can do it. `sqrtsd` is the hardware's own correctly-rounded root, so
+  sqrt is four instructions with no table and no tolerance; `cvttsd2si` is the
+  truncating conversion and returns the "integer indefinite" value for a NaN,
+  an infinity or an out-of-range magnitude, which the caller checks rather than
+  trusting; the two bit casts are moves. They live in `arch/*.s` like the rest
+  of the machine code (embedded by both copies, `make asm-check` reads them
+  with GNU `as`), and `native.y uses_math` looks at the program's references
+  before looking at them at all — a program that calls none of them pays
+  nothing, and one that does keeps the block through the ordinary shaking.
+  Their arguments come off the stack at `8(%rsp)` (leaf convention: the return
+  address is at `0(%rsp)`) and a float result goes back in `%rax` as its bits.
+- **The transcendental kernels (`src/y/arch/math.s`)** are a third kind of thing
+  in that file: not primitives, but whole functions that Y *can* write and the
+  machine writes several times faster. `y_exp`, `y_log`, `y_sin` and `y_cos` are
+  each generated from `std/math.y`'s own constants by a script under
+  `test/math/`, walk the same operations in the same order as the Y function
+  beside them, and are bit-identical to it — which is the whole promise, so each
+  is gated by a fixture that compares thousands of arguments bit for bit
+  (`t311`, `t312`, `t313`, `t315`). They are reached the same way, through a
+  `native def`, and each has its `*_y` oracle kept beside it in the module. The
+  generator exists because a retyped coefficient table would silently disagree
+  with the function it is meant to reproduce, and nothing else would notice.
+
+  `y_pow` is the fifth and the odd one out, because it is the first of them that
+  *calls*: the dispatch, the two-part logarithm, `exp2` of the pair and `ldexp`
+  are four routines rather than one leaf. Every SSE register is caller-saved, so
+  it is the only kernel with a frame, and two conventions fall out of that: a
+  routine that has to outlive a call keeps the value in its frame and reloads it,
+  and an internal helper answers a pair in *two registers* where the Y leaves it
+  in module-level cells. Its generator emits the same intermediate probes the
+  other three do (`l`, `lo`, `p`, `q`, `e1`, `e2`), each returning one
+  intermediate against the Y's own value at that point — which is what makes a
+  472-instruction routine debuggable at all, and `ideas/math.md` §8 has the
+  six bugs they found.
+- **`native def`: a declaration with no body.** `native def name(params) -> T
+  [= "label"];` declares a function whose implementation is an assembly
+  label. The parser makes a `Decl` with `kind: "native"` whose value is a
+  `Func` carrying the label in a new `label: str` field and an *empty* body —
+  the parser's own header errors, if any, live there, which is how they still
+  reach the diagnostics. The rules live in `types.y` (`typeof_def`'s `isnat`):
+  the return type must be written (nothing to infer it from), the label must
+  start with `y_`, and the declaration must be at the top level; the name
+  cannot be taken twice, which only `parser.y` can see, since renaming has
+  already made every name unique by then. `rename.y` passes the label through
+  untouched (`rn_decl_native`: there is no body to walk). In the emitter a
+  native is an ordinary hoisted `FnDef` that keeps the label it declared
+  (`native.y`, the hoisting loop) and gets **no body emitted** — the call
+  path already resolves through `env_find` → `e.label`, so `call y_label`
+  needs nothing new. A label with no assembly behind it surfaces as
+  `undefined label` from `asm_link`, which is the honest failure: the
+  declaration is a promise about the assembly, and nothing can check it (as
+  with an `extern` declaration in C). Because a native is called with the
+  ordinary convention — arguments pushed on the stack, result in `%rax` — it
+  can reach the runtime's string/array helpers but not one written for the
+  binary-float convention (`y_fmod`, which reads `%xmm0`/`%xmm1`).
 
 ## Output: our own executables
 
@@ -217,6 +288,29 @@ zero-fills: the `.bss` section (`.zero N` reserves space there; data or
 code in `.bss` is an assembler error). `-g` appends a symbol table, a DWARF
 line table and section headers past all of that (see "Debugging and
 profiling" below).
+### The asm dialect, in one paragraph
+
+`src/y/arch/*.s` is written in GNU as's **AT&T** spelling, which is what the
+encoder reads: source operand first, destination last (`movq %rax, %xmm0`,
+`mulsd tab+8(%rip), %xmm0`). Three things about it are worth knowing before
+writing a kernel.
+
+* **A comment is a whole line, or it is a bug.** The loader
+  (`arch_asm_lines`) drops a line only when its *first* byte is `#`, so a
+  comment trailing an instruction reaches the assembler, which reads it as an
+  operand: `L###: bad operand`, on a line whose opcode the prelude uses
+  everywhere. `make asm-check` passes such a line, because GNU as reads
+  trailing comments and this assembler does not.
+* **`label+N(%rip)` names the Nth eight-byte entry of a table.** One label per
+  table, not per entry: a label in `arch_consts` costs the shaker ~2K
+  instructions of label-map fixpoint on *every* compile, so sixty coefficients
+  as sixty labels would cost every program ~120K instructions forever.
+* **`.quad` is a 64-bit bit pattern**, so a negative value is a legitimate one
+  and half of every double's pattern is negative (that is the sign bit). A
+  range check cannot replace the old non-negativity rule either: `tonum` wraps
+  at 64 bits, so 2^63 comes back as -2^63 and the eight bytes stored are the
+  same ones.
+
 Verified byte-for-byte behaviorally against
 binutils-built binaries for the whole corpus. The assembled bytes go straight
 out through `fs.write_bytes` (std/fs.y: raw `openat`/`write`/`fchmodat`
@@ -283,12 +377,58 @@ written or its default's; return types and locals are inferred, and a
 call before the callee's body is checked needs its return type written
 -- there is no unknown type), captures resolved into closures, `if` cond must be
 `bool`, `if` arms that disagree make the `if` `void` (a statement; using it
-as a value errors), `while` is `void`-typed, and the only implicit
+as a value errors), `while` is `void`-typed, `break`/`continue` are
+`void`-typed and legal only inside a loop **and** in the same function
+(the closure-inside-a-loop case is a jump out of a function, which the
+checker refuses rather than the emitter, whose answer would be a jump to
+another function's label), and the only implicit
 conversions are `long`→`float`, `byte`→`long`/`float`, `long`→`byte` at an
 annotated site, `str`→`*T` and `none`-unification. There is no `null`:
 `none` is the empty option and postfix `x!` is `unwrap(x)`. Error messages
 strip rename's `$N` suffixes and carry line/col (LSP feeds on these).
 Later: generics, borrow rules, methods/traits if Y grows them.
+
+### What the checker keeps, for a caller that asks
+
+The checker computes the type of every expression, and it and the renamer both
+know where every binding was defined. All of it used to be dropped on the way out;
+these are the three doors back in, added for the language server
+(`src/tools/lsp/LSP.md` §9.2) and useful to anything else that has to answer a
+question about a program without re-deriving it.
+
+**`types.Binding` carries `line` and `col`** — the **name's** position, not the
+keyword's, because a diagnostic wants the keyword (`let` is where the reader looks)
+and a go-to-definition wants the name, and one pair of fields cannot be both. So
+the AST keeps the keyword's in `Decl.line/col` and the name's in `Decl.nline/ncol`
+(and the member key's in `Dot`/`DotAssign`), and `st_bind` records the latter.
+**−1 means the binding has no position in the source at all** — an intrinsic, or a
+name the program links against from another unit — and no consumer may read it as
+line 1. A parameter records the `Func`'s own position: the parser keeps no position
+per parameter, and the imprecision is one token's worth.
+
+**`types.type_index_on()` / `expr_type(line, col)`** — the type inferred for every
+EXPRESSION, keyed by position. **Off by default**, because `typeof_expr` is the
+checker's hottest loop and an ordinary compile has no use for the table; the flag
+costs it one predictable branch, and `bench/compile_ir.sh` says what that is worth
+(+0.09% on `ycc.y`). The table is shaped like `inferred_ret`'s — 1024 buckets of
+indices into parallel key/type arrays, keyed `line * 65536 + col` — because that
+one is read by `native.y` on every compile and the shape is therefore proven at
+this scale. `check_program` empties it, and only while the flag is on.
+
+`expr_type` returns **`tunk()` when nothing is indexed**, not `tnone`: `tnone` is
+a type a program can write, and a caller must be able to tell "the checker says
+none" from "there is nothing here", or it will print a type the checker never gave
+it. A member access also records at the KEY's position, since `a.b` parses with
+the `Dot` at the `.` and the field's name is where a cursor goes.
+
+**`rename.rename_program_x2(ast, …) -> { ast, defs }`** — the def site of every
+binding, `defs` being a `parser.NameIx` of `uniq -> line * 65536 + col`. A SECOND
+`NameIx` beside the `types.tc_ix` that already indexes bindings, not a new
+container. `rename_program_x` is a thin wrapper returning the `ast`, so the
+compiler's own callers are unchanged. The map holds the bindings of the unit passed
+in, since a program is checked one unit at a time. Read it with `rn_def_site` /
+`rn_def_line` / `rn_def_col` rather than unpacking the packing yourself.
+
 
 ## Newer language features
 
@@ -302,6 +442,30 @@ All of these are lowered early, so the checker and emitter see little new:
   an if/else that returns on every path) keeps its value. The emitter
   emits nothing for that `void`, and a tail call before it stays a tail
   call.
+- **`break` / `continue`** are a bare `jmp` to a label the enclosing loop
+  generator published (`brk_label` / `cont_label`, module state in
+  native.y; `emit_one_fn` clears both, so a closure body can never
+  inherit its creator's loop). All four loop kinds lower to the same
+  shape — head label, test, body, step, `jmp` back, exit label — so
+  `break` is the exit label everywhere. `continue` is the one place the
+  shapes differ, and the difference is a trap worth writing down: it
+  cannot be the head label for any loop with a step, because the step
+  sits at the *bottom*, after the body, so a `continue` that jumped to
+  the head would re-run the body on the same value and never end.
+  `for`, `for..in` and `foreach` therefore emit a third label between
+  the body and the step; only `while`, which has no step, continues to
+  the head. (For `for..in`/`foreach` the fresh per-turn `box_bound` cell
+  is made at the *top* of the next turn, which the `jmp` back after the
+  increment reaches — so the cell still refreshes.)
+
+  The third label is emitted for every counted loop, including the ones with
+  no `continue` in them: a label has to exist before the body that jumps to it
+  is generated, so deciding lazily would mean walking the body first (and
+  knowing which `continue`s belong to *this* loop, not a nested one or a
+  closure). Measured, the unconditional label costs 12 bytes of asm per
+  counted loop — 587 bytes, +0.01%, on ycc's own output, which has 49 of
+  them — against emitted code that is otherwise byte-identical. That is the
+  trade: 0.01% of asm for no extra walk and no extra state.
 - **`print(a, b, ...)`** is `print(tostring(a) + tostring(b) + ...)`.
 - **Default parameters** `def f(n: long, acc = 1)`: the default must be a
   literal, and gives an unannotated parameter its type; rename.y fills
@@ -615,11 +779,18 @@ shared without a lock: one thread at a time may read stdin.
 A program is **linked from units**: its own — the program file and the
 files it imports, spliced into one text — and the std units it needs, in
 link order `prelude`, `exec`, `str`, `rt` (`native_resolve_x` picks
-them, see above). `compile_unit` takes one unit from AST to assembly
-text — strip namespaces, rename, check, emit, one body per function —
-and `link_units` joins all the units' bodies and shakes them together
-(*Tree shaking* below), then appends the arch prelude, every unit's
-rodata and every unit's `.bss` cells.
+them, see above). `compile_unit` takes one unit from AST to its bodies as
+instruction **items** — strip namespaces, rename, check, emit, one body
+per function, each a flat `[long]` (`ir.y`: the form, then its field
+words) — and `link_units` shakes the units' bodies together (*Tree
+shaking* below) and hands the assembler the kept ones as parts: the
+header, the arch prelude and every unit's rodata and `.bss` cells are
+text (what `asm.y` still lexes), the bodies are items (`asm_assemble`
+walks both; `enc_form` encodes an item by its form's id rather than by a
+mnemonic string). Nothing is spelled as assembly text and lexed back on
+that path, which is what the items are for; `-S` is the one place a body
+becomes text again (`link_text` renders each item back to the line it
+replaces, byte for byte, so a `-S` listing still assembles with `as`).
 
 - **Labels** cannot collide: a unit numbers its uids (function, string
   and local labels) and its global cells from its own base
@@ -653,16 +824,26 @@ and writes them to FILE, and the build appends that file to the `ycc`
 that wrote it — `[ycc][pack][pack length, 8 digits][YCCPACK1]` (the
 Makefile's `PACK`). Each compile reads the pack back from
 `/proc/self/exe` (`self_pack` in ycc.y) and links the units it needs
-straight from it. The pack is text: a version line (`ycc-std-pack 5`),
-then each unit's name and fields as netstrings — its bodies, each
-body's label and the labels it references (so linking never rescans std
-code), rodata, globals, init label, and its exports with their types in
-a prefix code (`tcode`/`tdecode`: total over every type the checker
-produces, unions and the unknown type included), decoded only for the
-library units the program binds.
-What is precompiled is everything up to the assembler — the std units
-are stored as **assembly text**, not machine code: the assembler still
-encodes the std bodies a program keeps, along with the program's own.
+straight from it. The pack is netstrings: a version line
+(`ycc-std-pack 6`), then each unit's name and fields as netstrings —
+its bodies, each body's label and the labels it references (so linking
+never rescans std code), rodata, globals, init label, and its exports
+with their types in a prefix code (`tcode`/`tdecode`: total over every
+type the checker produces, unions and the unknown type included),
+decoded only for the library units the program binds.
+A body's field is its **instruction items**, the same ones the emitter
+writes for a unit it compiles itself (`pack_body`/`unpack_body` in
+native.y): one byte per item's form, then each operand's field words as
+they come — a register's two, a memory operand's five, an immediate's
+one — each word in one byte when it is small and a few more when it is
+not, and a label field as its *name* (ids are minted per run, and the
+pack is written by one build and read by the next). A body's raw lines,
+which its comment items index, travel beside them. A link decodes only
+the bodies the tree shaker keeps, and the assembler encodes items and
+text parts alike (see the emitter and linker below).
+What is precompiled is therefore everything up to the encoder: the std
+units are stored as items, not machine code, and the assembler still
+encodes the std bodies a program keeps along with the program's own.
 
 `--std-src` ignores the pack and compiles the std units from the
 embedded sources, as does a ycc whose pack is missing (cycc, or a ycc
@@ -671,8 +852,8 @@ same bytes either way (`test/sh/test_link.sh` checks it over programs
 that link every unit; `make ycc`, `ynew` and the fixpoint suite each
 compile the compiler with the pack and compare with a build from source).
 A hello world compiles in 5.1 ms instead of 13.8 ms from source (the
-spliced build before units took 14.1 ms). The pack adds 186 KB to
-`ycc`.
+spliced build before units took 14.1 ms). The pack adds 81 KB to `ycc`
+(it held 162 KB of assembly text before).
 
 ## Packages
 
@@ -716,6 +897,21 @@ cloned into `build/git` and pinned in `y.lock` (`pk_fetch`,
   (`lint.y`) come back from `compile_package` and print when it
   compiles (its files named as in its errors); one loaded from its
   object prints none. Bins warn on every build.
+- **Parallel levels**: the package order is topological, so every
+  dependency has a lower index than its importer and a run of packages
+  that depend only on what is already compiled is a *level* — the
+  packages in it are independent of each other, which is where a
+  project's build time is. `build_dispatch_level` hands each one to a
+  child compiler (`ycc build --one NAME`, through a single `exec` of a
+  shell line with `&` and `wait`, `BUILD_JOBS` at a time), and the loop
+  then reads the objects they wrote exactly as on a warm build. A child
+  that fails leaves no object and the loop compiles that package
+  itself, so the bytes and the diagnostics do not depend on the
+  dispatch; warnings come back in a sidecar named for the object's key
+  and print where the serial loop would have printed them. Not
+  `spawn`/`join`: a thread shares the address space and 51 module-level
+  lets with it. Nothing goes out for a level of one, for a package
+  whose object is there, or under `--std-src`.
 - **Linking**: each `[bin]` is resolved and compiled by `emit_program`
   with the units it reaches (`build_reach`: the packages it imports,
   through other packages too) and the std units all of them need.
@@ -797,9 +993,12 @@ allocator. `print(42)` adds `y_long_tostr` and `y_alloc` (232 lines); the
 splitter, the file layer and the float formatter are not there because the
 program does not use them.
 
-The scanners walk a `bytes()` copy of the emitted text and materialize only
-the symbols they reference; a per-character slice would cost an allocation
-per character.
+A body's own references come out of its items (`ir_refs`: every label
+operand, the label of a `lea lbl(%rip)`, both labels of a `mov $A-B` --
+the same set the text scan found). The scanners below walk the *text*
+parts -- the arch prelude and the rodata constants -- through a
+`bytes()` copy and materialize only the symbols they reference; a
+per-character slice would cost an allocation per character.
 
 ## Optional std modules
 
@@ -837,7 +1036,35 @@ names, then the program's. `fs.x` is resolved there too (`rn_qualified`):
 when `fs` is a module and no binding named `fs` is in scope, it is the
 name `fs.x`; a local `fs` keeps its field. find_dup qualifies the same
 way, so only files imported by path, which share the program's
-namespace (strip_ns rewrites `util.f` to `f`), can collide. A module's
+namespace (strip_ns rewrites `util.f` to `f`), can collide.
+
+**A path import flattens types as well as expressions.** `strip_ns` has two
+entry points and they used to disagree: `strip_ns` for nodes, and
+`strip_type` for the annotations on them (`Decl.typ`, `Func.ptypes`,
+`Func.ret`), reached from `strip_decl` and the `K.func` arm. A module
+imported by path contributes no name to the origin map's `mods` — its
+names are already flat — so `rn_stmt_mod` returns `""` for its
+statements and `rn_prepass_one` registers its type aliases under their
+BARE names. A reference written `m.T` arrives from the parser as a tname
+spelled `"m.T"` (`parse_type`, `m.T` branch), and before `strip_type`
+nothing rewrote it: `let p: m.Pair` was `unknown type 'm.Pair'` while
+`let p: Pair` compiled. Two spellings of one declaration in a language
+that documents a path import as flattened.
+
+So `strip_ns_name` drops the `m.` from `m.T` when `m` is in the import
+list, and `strip_type` applies it through every arm of the type union —
+`tname`, `tptr`, `tarr`, `tarrfix`, `topt`, `tmap`, `tparams`, `tunion`,
+`tfunc`, `trec` — so a nested annotation flattens at any depth. A
+PACKAGE-qualified name is left alone: a package is linked as a unit of
+its own, so `pkg_ns` keeps its qualification on purpose.
+
+Cost: one extra walk of every annotation the program writes, whether or
+not any of them is qualified. `bench/compile_ir.sh` on the fix:
++0.03% of the instructions `ycc.y` takes to compile itself, +0.05% at
+the most (std_struct.y), +0.01% at the least. `native/t216_strip_ns_types.y`
+checks every arm.
+
+A module's
 type aliases are scoped the same way: `rn_prepass_one` registers one as
 `m.T`, the names of the module's other top-level aliases in its type
 qualified too (`rn_qual_type`, from the list `rn_top` makes), and
@@ -873,6 +1100,21 @@ truncated; a malformed answer is no addresses, never a crash), so
 `http_read_head`, `http_serve_one`, `listen_http`), all Y over `syscall`
 (it imports `fs` for the two files). IPv4 only. A `ui` module would land
 the same way.
+
+`src/y/std/math.y` is the number module (`import math;`): integer and bit
+helpers (`min`/`max`/`abs`/`clamp`/`sign`, `gcd`/`lcm`, `isqrt`, `popcount`,
+`ctz`/`clz`, `next_pow2`, and `mul_mod`/`pow_mod`/`inv_mod` for a modulus up to
+2^31, where reducing the operands first keeps the product inside a `long`), the
+float comparisons and constants (`fmin`, `fmax`, `fabs`, `fsign`, `lerp`,
+`is_nan`/`is_inf`/`is_finite`, `pi` and friends, `nan`/`inf` as values), the
+SplitMix64 and xoshiro256**/+ generators over a caller-owned `[long]`, and
+whole-array work over `[float]` (`fsum`, the Neumaier-compensated `fsum_kahan`,
+`fdot`, `fmin_of`/`fmax_of`, in-place `fscale`/`faxpy`, `fmean`, `fvariance`).
+Y has no overloading, so the float flavours carry an `f`. There is deliberately
+**no** `sqrt`, `exp`, `log`, `pow` or `sin`: each needs a `float`→`long`
+conversion or a look at a float's bits, and Y has neither way to get at either
+(see the *Limits* note on `float` below), so they are not merely missing but
+unwritable until the machine primitives exist.
 
 `src/y/std/crypto.y`, `x509.y` and `tls.y` are a TLS 1.3 client in plain
 Y, each importing the one before it. crypto: SHA-256/384/512, HMAC, HKDF,
@@ -955,8 +1197,11 @@ if` test and per loop step (the back edge), each at the file and line
 the code was written on: an import keeps its own file name and lines, and
 the embedded std modules show as `std/rt.y`, `std/str.y`, …. native.y
 writes GNU as's own `.file N "path"` and `.loc FILE LINE` directives into
-the asm text — so `ycc -g -S` output still assembles with `as`, which
-builds the same table — asm.y records each marker's code offset, and
+the asm text — renumbered into the program's file table (a linked unit's
+own file numbers move by that unit's offset, in the assembler and in the
+`-S` listing alike, so the two agree) — so `ycc -g -S` output still
+assembles with `as`, which builds the same table — asm.y records each
+marker's code offset, and
 dwarf.y encodes `.debug_line` plus a minimal `.debug_info`/
 `.debug_abbrev` (one compile unit; relative paths are relative to its
 `DW_AT_comp_dir`, the directory `ycc` ran in). There are no types,
@@ -1044,6 +1289,19 @@ them starts compiling again, so the list can only shrink.
   2^63: `cvttsd2si` cannot take anything larger, and reproducing printf's
   exact expansion needs bignum arithmetic, so those print
   `<float magnitude >2^63>` rather than noise.
+- **There is no `float` → `long` conversion, and no way to read a float's
+  bits.** `cvttsd2si` exists (it is how `y_float_tostr` splits a double into
+  its integer and fractional parts) and `movq` moves a double between `%rax`
+  and an `%xmm` register, but nothing exposes either to a program: `long` →
+  `float` widens implicitly and that is the whole list. So a program cannot
+  take a `float`'s integer part, cannot pull an exponent out of one, and cannot
+  reinterpret one — which is exactly why `std/math.y` has no `sqrt`, `exp`,
+  `log`, `pow` or `sin` (see *Optional std modules*): each of those needs a
+  `float` → `long` conversion for its range reduction, and there is no
+  spelling of one. Three small machine primitives — a truncating conversion,
+  a bit cast each way, and `sqrtsd` — would unlock all of them, plus `floor`,
+  `ceil`, `round`, `ldexp` and `frexp`; that is the one thing standing between
+  this language and a numeric library.
 - `str` supports `<`, `>`, `<=`, `>=` (lexicographic, via `y_str_cmp`
   returning the sign), matching `strcmp` semantics.
 - **Embedded NUL bytes.** A `str` is length-prefixed (`{len, data..., NUL}`),

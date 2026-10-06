@@ -71,6 +71,7 @@ meaning:
 masks with the top bit set as they are (Section~\ref{sec:literals}).
 
 \subsection{Logic}
+\label{sec:logic}
 
 \ic{\&\&} and \ic{||} short-circuit: the right operand is evaluated
 only when the left does not decide the result. Operands are not
@@ -87,7 +88,9 @@ with fields (Sections~\ref{sec:literals} and~\ref{sec:format-spec}).
 Comparisons \ic{<} \ic{<=} \ic{>} \ic{>=} on two strings compare bytes
 lexicographically; \ic{==} compares contents.
 
-\paragraph{Appending.}\label{sec:str-append} \ic{s += t} means \ic{s = s + t}, but a loop of
+\subsection{Appending}
+\label{sec:str-append}
+\ic{s += t} means \ic{s = s + t}, but a loop of
 appends is linear, not quadratic: when \ic{s} is a variable whose
 address is never taken and that no closure captures, and \ic{s} still
 holds the string its own previous \ic{+=} built, the bytes of \ic{t} are
@@ -109,7 +112,7 @@ Section~\ref{sec:exactly-once}; only \ic{++} and \ic{--} nest). As the
 last statement of a block it gives the block its value, the value
 stored: \ic{let y = \{ x = 5 \};} sets both \ic{x} and \ic{y} to 5, and
 a function body ending in an assignment returns the assigned value.
-Section~\ref{sec:references}
+Section~\ref{sec:array-aliasing}
 defines what storing into arrays, records and variables means for
 aliasing.
 

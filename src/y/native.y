@@ -97,6 +97,22 @@ let ty_sig_bkts: [[long]] = [];
 // union_shared's answers in this unit, by the union's node.
 let ush_nodes: [Type] = [];
 let ush_vals: [[str]] = [];
+// The innermost enclosing loop's `break` and `continue` targets, -1 outside any
+// loop (2025). Labels are ids from labels.y, so -1 is the "none" marker and 0
+// would not do: it is a real id. Module state rather than an EmitSt field, for the same reason
+// the globals above are: EmitSt is rebuilt field by field at a dozen sites and
+// another pair would have to be threaded through all of them.
+//
+// Set by the four loop generators just before the body and restored after, so
+// nesting works -- an inner loop's targets are in force while its body is
+// generated and the outer loop's are back for whatever follows.
+//
+// types.y has already refused a `break` that would cross a function boundary,
+// so these are only ever read inside the function that set them; gen_func clears
+// them regardless, because relying on a check in another file to keep these two
+// consistent is how a jump ends up in an unrelated body.
+let brk_label: long = 0 - 1;
+let cont_label: long = 0 - 1;
 
 // ── native import resolution ───────────────────────────────────────────
 // An import is a COMPILE-TIME text splice, and the C copy splices the same
@@ -413,15 +429,25 @@ def seen_any(seen: [long], lo: long, hi: long, level: long) -> bool {
 
 // Collapse "/./" segments so the same file resolves to one key no matter
 // how deep the import nesting is (base dirs accumulate "/." per level:
-// "ycc/././enc64.y" vs "ycc/./././enc64.y"). Deterministic, so same-file
-// inputs always yield the same key (sufficient for seen-dedup).
+// "ycc/././enc64.y" vs "ycc/./././enc64.y"), and "/../" segments so one file
+// reached by two spellings is one key: without the fold, a tool outside
+// src/y/ that imports a std module by name and a sibling by a path with a
+// ".." in it splices that module twice -- once per spelling -- and every
+// name in it is reported as a duplicate definition against itself.
+// Deterministic, so same-file inputs always yield the same key (sufficient
+// for seen-dedup). Purely lexical, as the rest of it is: a ".." that would
+// leave the root is kept, because whether it exists is the filesystem's
+// answer and this runs before any file is read.
 def norm_path(p: str) -> str {
     let parts = split(p, "/");
     let out: [str] = [];
     let i = 0;
     while (i < len(parts)) {
         let seg = parts[i];
+        let n = len(out);
         if (seg == ".") {
+        } else if (seg == ".." && n > 0 && out[n - 1] != "..") {
+            out = out[:n - 1];
         } else {
             out += seg;
         };
@@ -823,6 +849,28 @@ def tok_push(out: [str], t: str) -> [str] {
     if (len(t) == 0) { out } else { out += t }
 };
 
+// Is this mnemonic one whose operands may name a label, other than `mov`? The
+// answer is every SSE form -- `mulsd c7(%rip), %xmm0` is the only mention of a
+// coefficient-table entry a kernel has, and without it the shaker drops the
+// table and the label comes back undefined at link time.
+//
+// Naming the ten forms instead costs a dozen string comparisons on EVERY line
+// of the emitted text, which measured +1.3% of compile instructions on its own.
+// They all end in "sd" or "ss" and nothing else in the language does, so two
+// byte reads replace those comparisons. A false match would be harmless in any
+// case -- the two tokens this pushes match no label -- so it is a speed gate,
+// not a correctness one.
+def sse_mnemonic(w: str) -> bool {
+    let n = len(w);
+    if (n < 5) {
+        false
+    } else {
+        let a = byte_at(w, n - 2);
+        let b = byte_at(w, n - 1);
+        (a == 115 && b == 100) || (a == 100 && b == 115)
+    }
+};
+
 // Every symbol one line [lo, hi) references: call/lea/jump operands and
 // both labels of a computed immediate (`mov $A-B, ...`). Dispatch on the
 // mnemonic — this walks every line of the emitted text, so no searching.
@@ -838,7 +886,7 @@ def line_refs_b(text: str, b: [byte], lo: long, hi: long, out: [str], want_jumps
             out = tok_push(out, tok_at_b(text, b, op, hi));
         } else if (w == "lea") {
             out = tok_push(out, tok_at_b(text, b, op, hi));
-        } else if (w == "mov") {
+        } else if (w == "mov" || sse_mnemonic(w)) {
             let q = p;
             let go = true;
             while (go) {
@@ -861,6 +909,33 @@ def line_refs_b(text: str, b: [byte], lo: long, hi: long, out: [str], want_jumps
                         out = tok_push(out, tok_at_b(text, b, after + 1, hi));
                     }
                 }
+            };
+            // The `mov` scan above only looks at a `$`-immediate, so an SSE
+            // form's operand was invisible here and the coefficient table was
+            // shaken away. Both operands are pushed: the syntax is AT&T, so the
+            // source is the FIRST one and `movsd`'s store form puts the memory
+            // SECOND, and a register name matches no label, so the extra token
+            // costs nothing.
+            if (w != "mov") {
+                let t1 = tok_at_b(text, b, op, hi);
+                if (t1 != "") {
+                    out = tok_push(out, t1);
+                };
+                let q2 = op;
+                let seen = false;
+                while (q2 < hi && !seen) {
+                    if (b[q2] == c',' || b[q2] == c'$') {
+                        seen = true;
+                    } else {
+                        q2 = q2 + 1;
+                    };
+                };
+                if (seen && b[q2] == c',') {
+                    let t2 = tok_at_b(text, b, skip_sp(b, q2 + 1, hi), hi);
+                    if (t2 != "") {
+                        out = tok_push(out, t2);
+                    }
+                }
             }
         } else {
             if (want_jumps) {
@@ -880,21 +955,144 @@ def refs_range(text: str, b: [byte], lo: long, hi: long, out: [str], want_jumps:
     let res = out;
     while (i < hi) {
         if (b[i] == c'\n') {
-            res = line_refs_b(text, b, ls, i, res, want_jumps);
+            if (!directive_line_b(b, ls)) {
+                res = line_refs_b(text, b, ls, i, res, want_jumps);
+            };
             ls = i + 1;
         }
         i = i + 1;
     };
     if (ls < hi) {
-        res = line_refs_b(text, b, ls, hi, res, want_jumps);
+        if (!directive_line_b(b, ls)) {
+            res = line_refs_b(text, b, ls, hi, res, want_jumps);
+        };
     }
     res
 };
 
-// Every symbol a whole asm text references.
-def text_refs(text: str, want_jumps: bool) -> [str] {
-    let b = bytes(text);
-    refs_range(text, b, 0, len(b), [], want_jumps)
+
+// A line that opens with `.` is a directive, and no directive this assembler
+// has names a label: `.text`/`.data`/`.bss`/`.section`/`.globl` take a section,
+// `.quad`/`.zero` a number, `.string`/`.ascii` text, and `.file`/`.loc` a DWARF
+// file and line -- the path in a `.file` goes in a fixup's label FIELD, which is
+// not a code reference and matches no label. Scanning them was pure cost, and
+// arch_consts is nearly all directives: a `.quad` of a float constant costs ~27
+// instructions per byte to scan, which is ~33K instructions on every compile of
+// a program that does not use math at all. The coefficient tables are the reason
+// that matters (P4's five tables are ~1 KB), and it is why the skip is worth a
+// measured 0.85% rather than a guess.
+def directive_line_b(b: [byte], ls: long) -> bool {
+    if (ls < len(b)) { b[ls] == c'.' } else { false }
+};
+
+// `text_refs` (the text scan that answered this over a body's text) is gone:
+// the items say all of it, and asking twice was the same answer twice. The
+// text scans below stay, because arch_consts and the arch asm are still text.
+
+// ── the same three questions, asked of a body's ITEMS ────────────────────
+// A body is a list of IR items, and everything the text scans answered is in
+// them: the label operands (call, jmp, jcc), the label of a `lea lbl(%rip)`
+// (the only form that can name a rodata literal), and both labels of a
+// `mov $A-B`. line_refs_b answered exactly this set from the text, so the
+// shake keeps and drops what it did.
+
+// Every symbol the items `ir` reference. A `mov lbl(%rip), %rax` names a
+// label too, but it did not when the answer came out of the text (the `mov`
+// arm only looks for `$A-B`), and the difference is what the shake prunes
+// with -- so the mnemonic decides, as it did.
+def ir_refs(ir: [long]) -> [str] {
+    let out: [str] = [];
+    let at = 0;
+    while (at < len(ir)) {
+        let f = ir[at];
+        if (f < insn.IR_LABEL) {
+            // a form: walk its operands by kind
+            out = ir_refs_item(ir, at, out);
+        };
+        at = at + insn.IR_W;
+    };
+    out
+};
+
+def ir_refs_item(ir: [long], at: long, out: [str]) -> [str] {
+    let f = ir[at];
+    let kinds = insn.ir_form(f).kinds;
+    let wp = at + 1;
+    let i = 0;
+    while (i < len(kinds)) {
+        let k = kinds[i];
+        if (k == insn.O_LBL) {
+            out = ir_refs_push(out, lname(ir[wp]));
+        } else if (k == insn.O_DIFF) {
+            out = ir_refs_push(out, lname(ir[wp]));
+            out = ir_refs_push(out, lname(ir[wp + 1]));
+        } else if (k == insn.O_MEM || k == insn.O_MEM0) {
+            if (insn.ir_form(f).mn == "lea") {
+                out = ir_refs_push(out, lname(ir[wp + 4]));
+            };
+        };
+        wp = wp + insn.ir_kind_words(k);
+        i = i + 1;
+    };
+    out
+};
+
+// tok_push's rule (an empty token is no name) -- which is how the text scans
+// dropped the pseudo-operands a non-label `lea` used to contribute.
+def ir_refs_push(out: [str], nm: str) -> [str] {
+    if (len(nm) == 0) { out } else { out += nm }
+};
+
+// Point a body's `lea` at the label its literal's text ended up with (see
+// rodata_intern). Only the `lea <label>(%rip)` form can name a literal, so
+// that is the only field this rewrites -- the label of an O_MEM operand under
+// a `lea`.
+def ir_relabel(ir: [long], m: [AsmLabel], dup_new: [str]) -> [long] {
+    let at = 0;
+    while (at < len(ir)) {
+        let f = ir[at];
+        if (f < insn.IR_LABEL) {
+            let kinds = insn.ir_form(f).kinds;
+            let wp = at + 1;
+            let i = 0;
+            while (i < len(kinds)) {
+                let k = kinds[i];
+                if (k == insn.O_LBL) {
+                    ir[wp] = ir_relabel_one(ir[wp], m, dup_new);
+                } else if (k == insn.O_DIFF) {
+                    ir[wp] = ir_relabel_one(ir[wp], m, dup_new);
+                    ir[wp + 1] = ir_relabel_one(ir[wp + 1], m, dup_new);
+                } else if (k == insn.O_MEM || k == insn.O_MEM0) {
+                    if (insn.ir_form(f).mn == "lea") {
+                        ir[wp + 4] = ir_relabel_one(ir[wp + 4], m, dup_new);
+                    };
+                };
+                wp = wp + insn.ir_kind_words(k);
+                i = i + 1;
+            };
+        };
+        at = at + insn.IR_W;
+    };
+    ir
+};
+
+def ir_relabel_one(id: long, m: [AsmLabel], dup_new: [str]) -> long {
+    // The label's own length is what is cut out: the winner's label is what
+    // gets longer or shorter.
+    let g = asm.labmap_get(m, lname(id));
+    if (g.sec > 0) { lbl_new(dup_new[g.off]) } else { id }
+};
+
+// A unit's bodies as the pack carries them: the items (pack_body), one
+// blob each.
+def pack_bodies(u: Unit) -> [str] {
+    let out: [str] = [];
+    let b = 0;
+    while (b < len(u.bodies)) {
+        out += pack_body(u, b);
+        b = b + 1;
+    };
+    out
 };
 
 // The label a line [lo, hi) defines, or "".
@@ -1372,9 +1570,18 @@ def shake_prelude(pb: PBlocks, roots: [str]) -> PShake {
     { text: join(pieces, ""), refs: out }
 };
 
-// The prelude's lines, the thread runtime's after them when it is used.
-def prelude_with(core: [str], threads: bool) -> [str] {
-    if (threads) { core + arch.arch_prelude_threads_lines() } else { core }
+// The prelude's lines, then the thread runtime's and the float primitives'
+// after them when a program's code calls into them.
+//
+// Appending one at a time is not just tidier: `+` on an array makes a NEW one,
+// so concatenating unconditionally copied the prelude's ~1500 lines for every
+// compile that wanted neither -- 52K instructions on hello.y, which is 99.9%
+// of what this module cost before the branches (callgrind, bench/compile_ir.sh).
+def prelude_with(core: [str], threads: bool, mathasm: bool) -> [str] {
+    let out: [str] = core;
+    if (threads) { out = out + arch.arch_prelude_threads_lines(); };
+    if (mathasm) { out = out + arch.arch_math_lines(); };
+    out
 };
 
 // The references (a kept prelude's) that name a body not kept.
@@ -1507,6 +1714,109 @@ def normtype(ty: Type) -> Type { ty };
 // strip_namespaces: dot(NAME, key) with NAME an import namespace -> id(key).
 // Full AST rebuild (only dot nodes change, but uniform rebuild is simplest).
 
+// `m.T` -> `T`, when `m` names a path import. Anything else unchanged: a
+// primitive name, a bare name, or a PACKAGE-qualified one, which `strip_ns`'s
+// own Dot arm keeps on purpose (pkg_ns) because a package is linked as a unit of
+// its own and its names stay qualified.
+def strip_ns_name(q: str, imports: [str]) -> str {
+    let out = q;
+    let dot = index_of(q, ".");
+    if (dot > 0) {
+        let ns = q[0:dot];
+        if (is_ns(ns, imports)) { out = q[dot + 1:len(q)]; };
+    };
+    out
+}
+
+// A type with a path-import namespace stripped.
+//
+// strip_ns has always done this for EXPRESSIONS -- `m.f(x)` is a call to `f` --
+// and the origin map documents the consequence: a file imported BY PATH
+// contributes no module name, because everything of its is already flat. That
+// was true of expressions and false of TYPES, and the asymmetry was a bug rather
+// than a decision.
+//
+// A `type` alias in a path-imported module is registered by rename under its
+// BARE name: rn_prepass_one qualifies a statement only when rn_stmt_mod names its
+// module, and rn_stmt_mod reads `mods`, which native_resolve fills with "" for
+// every path import (native.y 623, and the note above `type Origin` says so).
+// A reference to that alias is written `m.T`, which the parser keeps as a tname
+// spelled "m.T" (parser.y 1128) and which nothing had rewritten. So:
+//
+//     import m from "./mod.y";
+//     let p: m.Pair = m.mk(1, 2);      error: unknown type 'm.Pair'
+//     let p: Pair = m.mk(1, 2);        compiles
+//
+// Two spellings of one declaration in a language that documents a path import as
+// flattened. Stripping the prefix here makes a type behave like an expression,
+// which is what the ORIGIN MAP's own note already claimed.
+def strip_type(t: Type, imports: [str]) -> Type {
+    let k = t.k;
+    if (k == K.tname) {
+        let nm: TName = t;
+        let out: TName = { k: K.tname, name: strip_ns_name(nm.name, imports) };
+        let result: Type = out;
+        result
+    } else if (k == K.tptr) {
+        let ptr: TPtr = t;
+        let out: TPtr = { k: K.tptr, to: strip_type(ptr.to, imports) };
+        let result: Type = out;
+        result
+    } else if (k == K.tarr) {
+        let arr: TOf = t;
+        let out: TOf = { k: K.tarr, of: strip_type(arr.of, imports) };
+        let result: Type = out;
+        result
+    } else if (k == K.tarrfix) {
+        let arr: TFix = t;
+        let out: TFix = { k: K.tarrfix, of: strip_type(arr.of, imports), n: arr.n };
+        let result: Type = out;
+        result
+    } else if (k == K.topt) {
+        let opt: TOf = t;
+        let out: TOf = { k: K.topt, of: strip_type(opt.of, imports) };
+        let result: Type = out;
+        result
+    } else if (k == K.tmap) {
+        let map: TMap = t;
+        let out: TMap = { k: K.tmap, key: strip_type(map.key, imports), of: strip_type(map.of, imports) };
+        let result: Type = out;
+        result
+    } else if (k == K.tparams) {
+        let list: TList = t;
+        let out: TList = { k: K.tparams, ts: strip_type_list(list.ts, imports) };
+        let result: Type = out;
+        result
+    } else if (k == K.tunion) {
+        let list: TList = t;
+        let out: TList = { k: K.tunion, ts: strip_type_list(list.ts, imports) };
+        let result: Type = out;
+        result
+    } else if (k == K.tfunc) {
+        let func: TFunc = t;
+        let out: TFunc = { k: K.tfunc, args: strip_type_list(func.args, imports), ret: strip_type(func.ret, imports) };
+        let result: Type = out;
+        result
+    } else if (k == K.trec) {
+        let rec: TRec = t;
+        let fs: [Field] = [];
+        foreach (f in rec.fields) { fs += { name: f.name, opt: f.opt, typ: strip_type(f.typ, imports) }; };
+        let out: TRec = { k: K.trec, fields: fs };
+        let result: Type = out;
+        result
+    } else { t }
+}
+
+def strip_type_list(ts: [Type], imports: [str]) -> [Type] {
+    let out: [Type] = [];
+    let i = 0;
+    while (i < len(ts)) {
+        out += strip_type(ts[i], imports);
+        i = i + 1;
+    };
+    out
+}
+
 def strip_list(nodes: [Node], imports: [str]) -> [Node] {
     let out: [Node] = [];
     let i = 0;
@@ -1534,10 +1844,10 @@ def strip_ns(node: Node, imports: [str]) -> Node {
             } else if (is_ns(ov, pkg_ns)) {
                 normnode({ k: K.id, v: ov + "." + okey, line: oline, col: ocol })
             } else {
-                normnode({ k: K.dot, obj: obj, key: okey, line: oline, col: ocol })
+                normnode({ k: K.dot, obj: obj, key: okey, line: oline, col: ocol, nline: oline, ncol: ocol })
             }
         } else {
-            normnode({ k: K.dot, obj: obj, key: okey, line: oline, col: ocol })
+            normnode({ k: K.dot, obj: obj, key: okey, line: oline, col: ocol, nline: oline, ncol: ocol })
         }
     } else if (k == K.un) {
         let un: Un = node;
@@ -1565,7 +1875,9 @@ def strip_ns(node: Node, imports: [str]) -> Node {
         strip_decl(decl, imports)
     } else if (k == K.func) {
         let func: Func = node;
-        normnode({ k: K.func, params: func.params, ptypes: func.ptypes, ret: func.ret, body: strip_ns(func.body, imports), line: func.line, col: func.col, defs: func.defs })
+        // `ppos` through: stripping a namespace rewrites names and types, never
+        // positions, and a parameter's position is where an editor points at it.
+        normnode({ k: K.func, params: func.params, ptypes: strip_type_list(func.ptypes, imports), ret: strip_type(func.ret, imports), body: strip_ns(func.body, imports), line: func.line, col: func.col, defs: func.defs, label: func.label, ppos: func.ppos })
     } else if (k == K.assign) {
         let assign: Assign = node;
         normnode({ k: K.assign, name: assign.name, v: strip_ns(assign.v, imports), line: assign.line, col: assign.col })
@@ -1612,10 +1924,10 @@ def strip_ns(node: Node, imports: [str]) -> Node {
                 // (the checker says so of the qualified name)
                 normnode({ k: K.assign, name: id.v + "." + assign.key, v: strip_ns(assign.v, imports), line: assign.line, col: assign.col })
             } else {
-                normnode({ k: K.dotassign, obj: strip_ns(dao, imports), key: assign.key, v: strip_ns(assign.v, imports), line: assign.line, col: assign.col })
+                normnode({ k: K.dotassign, obj: strip_ns(dao, imports), key: assign.key, v: strip_ns(assign.v, imports), line: assign.line, col: assign.col, nline: assign.nline, ncol: assign.ncol })
             }
         } else {
-            normnode({ k: K.dotassign, obj: strip_ns(dao, imports), key: assign.key, v: strip_ns(assign.v, imports), line: assign.line, col: assign.col })
+            normnode({ k: K.dotassign, obj: strip_ns(dao, imports), key: assign.key, v: strip_ns(assign.v, imports), line: assign.line, col: assign.col, nline: assign.nline, ncol: assign.ncol })
         }
     } else if (k == K.kw_foreach) {
         let loop: Foreach = node;
@@ -1636,9 +1948,9 @@ def strip_ns(node: Node, imports: [str]) -> Node {
 
 def strip_decl(node: Decl, imports: [str]) -> Node {
     if (node.kind == "def") {
-        normnode({ k: K.decl, kind: "def", name: node.name, typ: normtype({ k: K.tnone }), v: strip_ns(node.v, imports), line: node.line, col: node.col })
+        normnode({ k: K.decl, kind: "def", name: node.name, typ: normtype({ k: K.tnone }), v: strip_ns(node.v, imports), line: node.line, col: node.col, nline: node.nline, ncol: node.ncol })
     } else {
-        normnode({ k: K.decl, kind: node.kind, name: node.name, typ: node.typ, v: strip_ns(node.v, imports), line: node.line, col: node.col })
+        normnode({ k: K.decl, kind: node.kind, name: node.name, typ: strip_type(node.typ, imports), v: strip_ns(node.v, imports), line: node.line, col: node.col, nline: node.nline, ncol: node.ncol })
     }
 };
 
@@ -1659,28 +1971,84 @@ type EmitFunc = Func | EmitMain;
 // `blabels` is parallel to `bodies`: the name each body's text opens with,
 // which the linker shakes by (Unit.labels). The emitter knows both -- it wrote
 // them -- so no scan of the text is needed to recover them.
-type EmitSt = { ir: [long], txt: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [Slot], slots: long, self_label: long, end_label: long, fns: FnTab, bodies: [str], blabels: [str] };
+// `bodies` is each body's IR items (ir.y) and `txt` the raw lines their
+// IR_TEXT items index -- the whole unit's, since the items index into it.
+// `bodies` is each body's IR items (ir.y), `btext` the raw lines its
+// IR_TEXT items index -- that body's own, since a function is emitted with a
+// fresh `txt` (emit_one_fn) -- and `txt` the lines the body being emitted now
+// writes to.
+// `slots` counts the frame slots a block's NAMES and loop state hold (a
+// stack of block depths: see gen_block_as); `temp` counts the slots ONE
+// statement's temporaries hold, released as that statement ends. Locals come
+// first, so a temporary sits below every local of the block -- which is what
+// keeps a statement's temporaries safe from the blocks inside it.
+type EmitSt = { ir: [long], txt: [str], rodata: [[str]], uid: long, fuid: long, loc: long, env: [Slot], slots: long, temp: long, self_label: long, end_label: long, fns: FnTab, bodies: [[long]], btext: [[str]], blabels: [str] };
 // The state after making a label (next_loc, ty_desc), and the label's id.
 type StLbl = { st: EmitSt, label: long };
 
 def st_new() -> EmitSt {
     { ir: [], txt: [], rodata: [], uid: 1, fuid: 0, loc: 1, env: [],
-      slots: 0, self_label: -1, end_label: -1, fns: fntab_of([], []), bodies: [],
+      slots: 0, temp: 0, self_label: -1, end_label: -1, fns: fntab_of([], []), bodies: [], btext: [],
       blabels: [] }
 };
 
 // The state with its IR buffer (and, where it changes, its raw lines)
 // replaced: every append to a body goes through one of these, the way every
 // append to `out` went through emit.
+// The DEEPEST frame the function being emitted ever needs: st.slots is a
+// stack of block depths (st_slots), so its value on the way out of a block is
+// a depth the frame has to cover whether or not the counter is there now.
+// Every allocation is either still counted when the function ends or released
+// by a block on the way, so this is the high-water mark; emit_one_fn resets it
+// and sizes the frame from it.
+let frame_max = 0;
+
 def st_with(st: EmitSt, b: [long], txt: [str]) -> EmitSt {
     { ir: b, txt: txt, rodata: st.rodata, uid: st.uid,
-      fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots,
+      fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots, temp: st.temp,
       self_label: st.self_label, end_label: st.end_label, fns: st.fns,
-      bodies: st.bodies, blabels: st.blabels }
+      bodies: st.bodies, btext: st.btext, blabels: st.blabels }
 };
 
 def st_ir(st: EmitSt, b: [long]) -> EmitSt {
     st_with(st, b, st.txt)
+};
+
+// The state with the frame counter set: what a block does on the way out, so
+// the counter is a stack of depths (see gen_block_as) rather than a running
+// total of every slot the body ever took.
+def st_slots(st: EmitSt, n: long) -> EmitSt {
+    // A block that took no slot of its own has nothing to release, and the
+    // depth it hands back is the one it was given -- which the mark already
+    // covers (every allocation is marked where it is taken).
+    if (n == st.slots) {
+        st
+    } else {
+        let deep = st.slots + st.temp;
+        if (deep > frame_max) { frame_max = deep; };
+        { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
+          fuid: st.fuid, loc: st.loc, env: st.env, slots: n, temp: st.temp,
+          self_label: st.self_label, end_label: st.end_label, fns: st.fns,
+          bodies: st.bodies, btext: st.btext, blabels: st.blabels }
+    }
+};
+
+// The state with a statement's temporaries released: they are dead once the
+// statement is (its value is in %rax or a local's slot), and the next
+// statement starts below them again. The high-water mark goes with them, so
+// the frame still covers the deepest a single statement reached.
+def st_temp(st: EmitSt, n: long) -> EmitSt {
+    // a statement that took no temporary, as above
+    if (n == st.temp) {
+        st
+    } else {
+        let deep = st.slots + st.temp;
+        if (deep > frame_max) { frame_max = deep; };
+        { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
+          fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots, temp: n,
+          self_label: st.self_label, end_label: st.end_label, fns: st.fns,
+          bodies: st.bodies, btext: st.btext, blabels: st.blabels }
+    }
 };
 
 // One instruction: form `f` and its seven field words (see ir.y). The shapes
@@ -1719,9 +2087,9 @@ def emit(st: EmitSt, line: str) -> EmitSt {
 def next_uid(st: EmitSt) -> { st: EmitSt, uid: long } {
     let u = st.uid;
     st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid + 1,
-      fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots,
+      fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots, temp: st.temp,
       self_label: st.self_label, end_label: st.end_label, fns: st.fns,
-      bodies: st.bodies, blabels: st.blabels };
+      bodies: st.bodies, btext: st.btext, blabels: st.blabels };
     { st: st, uid: u }
 };
 
@@ -1729,9 +2097,9 @@ def next_loc(st: EmitSt) -> StLbl {
     let n = st.loc;
     let id = lbl_fresh(arch.arch_loc_label(st.fuid, n));
     st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
-      fuid: st.fuid, loc: st.loc + 1, env: st.env, slots: st.slots,
+      fuid: st.fuid, loc: st.loc + 1, env: st.env, slots: st.slots, temp: st.temp,
       self_label: st.self_label, end_label: st.end_label, fns: st.fns,
-      bodies: st.bodies, blabels: st.blabels };
+      bodies: st.bodies, btext: st.btext, blabels: st.blabels };
     { st: st, label: id }
 };
 
@@ -1931,9 +2299,9 @@ def env_define(st: EmitSt, name: str, kind: str, off: long, label: long, mark: s
     env_index_add(env);
     let env = st.env;
     { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
-      fuid: st.fuid, loc: st.loc, env: env, slots: st.slots,
+      fuid: st.fuid, loc: st.loc, env: env, slots: st.slots, temp: st.temp,
       self_label: st.self_label, end_label: st.end_label, fns: st.fns,
-      bodies: st.bodies, blabels: st.blabels }
+      bodies: st.bodies, btext: st.btext, blabels: st.blabels }
 };
 
 // ── mini type inference (for print dispatch) ───────────────────────────
@@ -2199,6 +2567,8 @@ def infer_go(st: EmitSt, node: Node) -> Type {
         infer(st, store.v)
     } else if (k == K.kw_while) {
         normtype({ k: K.tvoid })
+    } else if (k == K.kw_break || k == K.kw_continue) {
+        normtype({ k: K.tvoid })
     } else if (k == K.ret) {
         let ret: Wrap = node;
         infer(st, ret.e)
@@ -2396,118 +2766,26 @@ def infer_decl(st: EmitSt, node: Decl) -> Type {
 };
 
 // ── feature-use scan (for conditional prologue) ───────────────────────
-// Walk the renamed AST for calls the _start prologue must serve: argv()
-// needs y_argv_init to materialize the [str] array from the raw stack.
-// Everything else (y_alloc, y_print_*, ...) is position-independent.
-// Returns { argv: bool }.
-
-def uses_scan_block(stmts: [Node], out: { argv: bool }) -> { argv: bool } {
+// Whether the _start prologue has to serve argv(): argv() needs
+// y_argv_init to materialize the [str] array from the raw stack. Everything
+// else (y_alloc, y_print_*, ...) is position-independent.
+//
+// The walk is `fv_walk` -- the one that collects the names a closure must
+// capture -- so no node kind can hide a call behind a gap in a second ladder.
+// The one this replaces had no arm for a `K.dot`, so `argv().length` (a
+// field read on a call) left this false: the prologue's y_argv_init was never
+// emitted, `y_argv` returned an untouched %r15, and the program died on
+// SIGSEGV with no output whenever the length was the only read of argv.
+// Matching the *name* rather than a call to it is the safe direction: a false
+// positive costs the prologue (a few hundred bytes), a false negative crashes.
+def uses_argv(stmts: [Node]) -> bool {
+    let reads: [str] = [];
     let i = 0;
     while (i < len(stmts)) {
-        out = uses_scan_node(stmts[i], out);
+        reads = fv_walk(stmts[i], reads, true);
         i = i + 1;
     };
-    out
-};
-
-def uses_scan_node(node: Node, out: { argv: bool }) -> { argv: bool } {
-    let k = node.k;
-    if (k == K.call) {
-        // scan callee + args (argv() could nest inside an argument).
-        // ncallee is read three times: the argv test, the id test, the walk.
-        let call: Call = node;
-        let ncallee = call.callee;
-        let nargs: [Node] = call.args;
-        let found = out;
-        if (ncallee.k == K.id) {
-            let id: Leaf = ncallee;
-            if (id.v == "argv") {
-                found = { argv: true };
-            }
-        }
-        let o2 = uses_scan_node(ncallee, found);
-        uses_scan_block(nargs, o2)
-    } else if (k == K.un) {
-        let child: NodeE = node;
-        uses_scan_node(child.e, out)
-    } else if (k == K.bin) {
-        let bin: Bin = node;
-        uses_scan_node(bin.r, uses_scan_node(bin.l, out))
-    } else if (k == K.addr || k == K.deref) {
-        let child: NodeE = node;
-        uses_scan_node(child.e, out)
-    } else if (k == K.kw_if) {
-        let branch: If = node;
-        uses_scan_node(branch.els, uses_scan_node(branch.then, uses_scan_node(branch.cond, out)))
-    } else if (k == K.kw_while) {
-        let loop: While = node;
-        uses_scan_node(loop.body, uses_scan_node(loop.cond, out))
-    } else if (k == K.block) {
-        let block: Block = node;
-        uses_scan_block(block.stmts, out)
-    } else if (k == K.decl) {
-        let decl: Decl = node;
-        uses_scan_node(decl.v, out)
-    } else if (k == K.func) {
-        let func: Func = node;
-        uses_scan_node(func.body, out)
-    } else if (k == K.assign) {
-        let assign: Assign = node;
-        uses_scan_node(assign.v, out)
-    } else if (k == K.incdec) {
-        let incdec: IncDec = node;
-        uses_scan_node(incdec.tgt, out)
-    } else if (k == K.opassign) {
-        let assign: OpAssign = node;
-        uses_scan_node(assign.v, uses_scan_node(assign.tgt, out))
-    } else if (k == K.store) {
-        let store: Store = node;
-        uses_scan_node(store.v, uses_scan_node(store.p, out))
-    } else if (k == K.ret) {
-        let child: NodeE = node;
-        uses_scan_node(child.e, out)
-    } else if (k == K.array) {
-        let array: ArrLit = node;
-        uses_scan_block(array.elems, out)
-    } else if (k == K.arrrep) {
-        let rep: ArrRep = node;
-        uses_scan_node(rep.v, out)
-    } else if (k == K.rec) {
-        let rec: RecLit = node;
-        uses_scan_block(rec.vals, out)
-    } else if (k == K.map) {
-        let map: RecLit = node;
-        uses_scan_block(map.vals, out)
-    } else if (k == K.index) {
-        let index: Index = node;
-        uses_scan_node(index.idx, uses_scan_node(index.arr, out))
-    } else if (k == K.slice) {
-        let slice: Slice = node;
-        uses_scan_node(slice.hi, uses_scan_node(slice.lo, uses_scan_node(slice.arr, out)))
-    } else if (k == K.idxassign) {
-        let assign: IdxAssign = node;
-        uses_scan_node(assign.v, uses_scan_node(assign.idx, uses_scan_node(assign.arr, out)))
-    } else if (k == K.dotassign) {
-        let assign: DotAssign = node;
-        uses_scan_node(assign.v, uses_scan_node(assign.obj, out))
-    } else if (k == K.kw_foreach) {
-        let loop: Foreach = node;
-        uses_scan_node(loop.body, uses_scan_node(loop.iter, out))
-    } else if (k == K.forrange) {
-        let loop: ForRange = node;
-        uses_scan_node(loop.body, uses_scan_node(loop.hi, uses_scan_node(loop.lo, out)))
-    } else if (k == K.kw_for) {
-        let loop: For = node;
-        uses_scan_node(loop.body, uses_scan_node(loop.step, uses_scan_node(loop.cond, uses_scan_node(loop.init, out))))
-    } else if (k == K.sliceassign) {
-        let assign: SliceAssign = node;
-        uses_scan_node(assign.v, uses_scan_node(assign.hi, uses_scan_node(assign.lo, uses_scan_node(assign.arr, out))))
-    } else if (k == K.rectest || k == K.narrow || k == K.matchend) {
-        let child: NodeE = node;
-        uses_scan_node(child.e, out)
-    } else {
-        out
-    }
+    name_in(reads, "argv")
 };
 
 // ── def collection (incl. hoisting) ────────────────────────────────────
@@ -2594,6 +2872,37 @@ def uses_threads(refs: [str]) -> bool {
     found
 };
 
+// The float primitives (src/y/arch/math.s), by the same rule as the thread
+// runtime: a `native def` names one as its body, so the call is a reference
+// like any other and the block stays. Looking first is what makes this cheap
+// -- split()ing the lines for every compile measured +2.6% instructions on
+// hello.y, against a few dozen lines (bench/compile_ir.sh).
+def uses_math(refs: [str]) -> bool {
+    let i = 0;
+    let found = false;
+    while ((i < len(refs)) && (!found)) {
+        let r: str = refs[i];
+        let n = len(r);
+        // y_sqrt 6, y_fbits 7, y_bitsf 7, y_to_int 8, y_int_trap 10, and the
+        // length-first names of the bulk kernels: y_dot/y_sum 5, y_exp/y_log/
+        // y_pow/y_sin/y_cos 5, y_min_of/y_max_of/y_scale/y_axpy 8
+        found = (n == 5 && (r == "y_exp" || r == "y_log" || r == "y_pow"
+                            || r == "y_sin" || r == "y_cos" || r == "y_dot"
+                            || r == "y_sum"))
+            || (n == 6 && r == "y_sqrt")
+            || (n == 7 && (r == "y_fbits" || r == "y_bitsf"))
+            || (n == 8 && (r == "y_to_int" || r == "y_min_of" || r == "y_max_of"
+                           || r == "y_scale" || r == "y_axpy"))
+            || (n == 10 && (r == "y_int_trap" || r == "y_len_stop"))
+            // the encoder's own form probes: y_sse_forms, y_sse_flags,
+            // y_test_imm
+            || (n == 11 && (r == "y_sse_forms" || r == "y_sse_flags"))
+            || (n == 10 && r == "y_test_imm");
+        i = i + 1;
+    };
+    found
+};
+
 def name_in(xs: [str], n: str) -> bool {
     let i = 0;
     let found = false;
@@ -2607,16 +2916,32 @@ def name_in(xs: [str], n: str) -> bool {
     found
 };
 
-// Builtins are resolved by name at the call site, never captured.
-def is_intrinsic_name(n: str) -> bool {
-    name_in(["print", "syscall", "len", "push", "some", "is_some", "unwrap",
+// The builtins, as a list rather than an inline argument, so that the ONE copy
+// can be handed out. The language server's completion list used to be its own
+// transcription of this, which is exactly the kind of copy that rots: adding a
+// builtin here would leave the server offering the old set, and nothing would
+// fail. `opt$test`/`opt$val` and `#fmt` are the compiler's own halves of the
+// option operators and the `#fmt` builtin -- internal, but they are what
+// is_intrinsic_name tests, so they are in the list.
+let INTRINSICS: [str] = ["print", "syscall", "len", "push", "some", "is_some", "unwrap",
              "opt$test", "opt$val",
              "trim", "ord", "byte_at", "chr", "tonum", "tostring", "index_of",
              "prepend",
              "last_index_of", "join", "split", "puts", "eputs", "clock_us",
              "time_us", "sleep", "heap_used", "keys", "spawn", "fork", "wait_pid",
              "mutex", "sem", "lock", "try_lock", "post", "wait", "exit", "argv", "range", "typeof", "bytes",
-             "from_bytes", "ptr_addr", "os_call", "self", "none", "#fmt"], n)
+             "from_bytes", "ptr_addr", "os_call", "self", "none", "#fmt"];
+
+// Builtins are resolved by name at the call site, never captured.
+def is_intrinsic_name(n: str) -> bool {
+    name_in(INTRINSICS, n)
+};
+
+// The same list, for a caller that needs to enumerate it rather than test one
+// name (the language server's completion list -- see LSP.md R5.3). Returns the
+// live array, so a caller must not modify it.
+def intrinsic_names() -> [str] {
+    INTRINSICS
 };
 
 // Every identifier READ in a subtree (callee names included: calling a
@@ -3088,6 +3413,14 @@ def gen_go(st: EmitSt, node: Node) -> EmitSt {
     } else if (k == K.store) {
         let store: Store = node;
         gen_store(st, store)
+    } else if (k == K.kw_break) {
+        // types.y has already refused a `break` with no loop to leave and one
+        // that would cross a function boundary, so `brk_label` is a live label
+        // here. Nothing is left in %rax: the merge label that follows needs no
+        // value (the same reason a loop's own does not -- see gen_while).
+        emit_insn(st, insn.F_JMP_L, brk_label, 0, 0, 0, 0, 0, 0)
+    } else if (k == K.kw_continue) {
+        emit_insn(st, insn.F_JMP_L, cont_label, 0, 0, 0, 0, 0, 0)
     } else if (k == K.ret) {
         let ret: Wrap = node;
         st = gen_as(st, ret.e, cur_fn_ret(st));
@@ -3133,9 +3466,9 @@ def gen_str_const(st: EmitSt, s: str) -> EmitSt {
     st.rodata += [rod0];
     let rod = st.rodata;
     st = { ir: st.ir, txt: st.txt, rodata: rod, uid: st.uid,
-      fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots,
+      fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots, temp: st.temp,
       self_label: st.self_label, end_label: st.end_label, fns: st.fns,
-      bodies: st.bodies, blabels: st.blabels };
+      bodies: st.bodies, btext: st.btext, blabels: st.blabels };
     emit_insn(st, insn.F_LEA_P_R, -1, -1, 1, 0, id, insn.R_RAX, 64)
 };
 
@@ -3253,9 +3586,9 @@ def box_capture(st: EmitSt, name: str) -> EmitSt {
         let boff = (st.slots + 1) * -8;
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, boff, -1);
         let st2 = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
-          fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 1,
+          fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 1, temp: st.temp,
           self_label: st.self_label, end_label: st.end_label, fns: st.fns,
-          bodies: st.bodies, blabels: st.blabels };
+          bodies: st.bodies, btext: st.btext, blabels: st.blabels };
         env_define(st2, name, "box", boff, -1, "", e.typ)
     }
 };
@@ -3478,9 +3811,9 @@ def bind_own(st: EmitSt, name: str, t: Type) -> EmitSt {
     st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, off, -1);
     st = emit_insn(st, insn.F_MOV_I_D, 0, insn.R_RBP, -1, 1, off - 8, -1, 0);
     let st2 = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
-      fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 2,
+      fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 2, temp: st.temp,
       self_label: st.self_label, end_label: st.end_label, fns: st.fns,
-      bodies: st.bodies, blabels: st.blabels };
+      bodies: st.bodies, btext: st.btext, blabels: st.blabels };
     env_define(st2, name, "own", off, -1, "", t)
 };
 
@@ -3997,6 +4330,22 @@ def gen_cat(st: EmitSt, node: Bin, lt: Type, rt: Type) -> EmitSt {
             st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
             st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_cat"), 0, 0, 0, 0, 0, 0);
             st = emit_insn(st, insn.F_ADD_I_R, 16, insn.R_RSP, 64, 0, 0, 0, 0)
+        } else if (rt.k == K.tbyte) {
+            // A byte stringifies as the number it holds: `s[i]` is a byte, so
+            // this is the shape a glyph ramp or a lookup table builds a string
+            // with. Without the arm a byte fell through to the unknown-
+            // operand arm below, which pushes the VALUE where y_str_cat
+            // wants a pointer -- a dereference of 65, and SIGSEGV. `gen` leaves
+            // a byte zero-extended in %rax, so y_long_tostr takes it as it is.
+            st = gen(st, node.l);
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+            st = gen(st, node.r);
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_CALL_L, lbl_new("y_long_tostr"), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_cat"), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_ADD_I_R, 16, insn.R_RSP, 64, 0, 0, 0, 0)
         } else if (rt.k == K.tfloat) {
             st = gen(st, node.l);
             st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
@@ -4033,6 +4382,17 @@ def gen_cat(st: EmitSt, node: Bin, lt: Type, rt: Type) -> EmitSt {
             st = gen(st, node.l);
             st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
             st = emit_insn(st, insn.F_CALL_L, lbl_new("y_bool_tostr"), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+            st = gen(st, node.r);
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_cat"), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_ADD_I_R, 16, insn.R_RSP, 64, 0, 0, 0, 0)
+        } else if (lt.k == K.tbyte) {
+            // the mirror of the right-operand byte arm
+            st = gen(st, node.l);
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_CALL_L, lbl_new("y_long_tostr"), 0, 0, 0, 0, 0, 0);
             st = emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0);
             st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
             st = gen(st, node.r);
@@ -5200,10 +5560,10 @@ def gen_cat_conv(st: EmitSt, node: Bin, lt: Type) -> EmitSt {
     st = r.st;
     let t1 = "y_t" + tostring(r.uid);
     let noelems: [Node] = [];
-    let da: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "l", v: node.l, line: ln, col: cl };
-    let db: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "r", v: node.r, line: ln, col: cl };
+    let da: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "l", v: node.l, line: ln, col: cl, nline: ln, ncol: cl };
+    let db: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "r", v: node.r, line: ln, col: cl, nline: ln, ncol: cl };
     let arr_type: ArrTy = lt;
-    let dc: Decl = { k: K.decl, kind: "let", typ: type_node({ k: K.tarr, of: arr_type.of }), name: t1 + "c", v: { k: K.array, elems: noelems, line: ln, col: cl }, line: ln, col: cl };
+    let dc: Decl = { k: K.decl, kind: "let", typ: type_node({ k: K.tarr, of: arr_type.of }), name: t1 + "c", v: { k: K.array, elems: noelems, line: ln, col: cl }, line: ln, col: cl, nline: ln, ncol: cl };
     let pa: OpAssign = { k: K.opassign, tgt: n_id(t1 + "c", ln, cl), op: "+", v: n_id(t1 + "l", ln, cl), line: ln, col: cl };
     let pb: OpAssign = { k: K.opassign, tgt: n_id(t1 + "c", ln, cl), op: "+", v: n_id(t1 + "r", ln, cl), line: ln, col: cl };
     let panode: Node = pa;
@@ -5585,7 +5945,15 @@ def gen_while(st: EmitSt, node: While) -> EmitSt {
         st = emit_insn(st, insn.F_TEST_R_R, insn.R_RAX, 64, insn.R_RAX, 64, 0, 0, 0);
         st = emit_insn(st, insn.F_JZ_L, r2.label, 0, 0, 0, 0, 0, 0);
     };
+    // A `while` has no step, so "the next turn" IS the head: continue goes to
+    // r1 and nothing else is needed.
+    let saved_brk = brk_label;
+    let saved_cont = cont_label;
+    brk_label = r2.label;
+    cont_label = r1.label;
     st = gen_discard(st, node.body);
+    brk_label = saved_brk;
+    cont_label = saved_cont;
     st = gen_loc_loop(st, node);
     st = emit_insn(st, insn.F_JMP_L, r1.label, 0, 0, 0, 0, 0, 0);
     emit_label(st, r2.label)
@@ -5622,7 +5990,20 @@ def gen_for(st: EmitSt, node: For) -> EmitSt {
         st = emit_insn(st, insn.F_TEST_R_R, insn.R_RAX, 64, insn.R_RAX, 64, 0, 0, 0);
         st = emit_insn(st, insn.F_JZ_L, r2.label, 0, 0, 0, 0, 0, 0);
     };
+    // `for` is the one loop where `continue` cannot go to the head: the step is
+    // between the body and the head, and skipping it would leave the loop
+    // variable where it was -- `for (i = 0; i < n; i++) { continue; }` would
+    // never end. So a third label sits between the body and the step.
+    let r3 = next_loc(st);
+    st = r3.st;
+    let saved_brk = brk_label;
+    let saved_cont = cont_label;
+    brk_label = r2.label;
+    cont_label = r3.label;
     st = gen_discard(st, node.body);
+    brk_label = saved_brk;
+    cont_label = saved_cont;
+    st = emit_label(st, r3.label);
     st = gen_loc_loop(st, node);
     st = gen(st, node.step);
     st = emit_insn(st, insn.F_JMP_L, r1.label, 0, 0, 0, 0, 0, 0);
@@ -5643,9 +6024,9 @@ def gen_forrange(st: EmitSt, node: ForRange) -> EmitSt {
     let voff = (st.slots + 1) * -8;
     let loff = (st.slots + 2) * -8;
     st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
-      fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 2,
+      fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 2, temp: st.temp,
       self_label: st.self_label, end_label: st.end_label, fns: st.fns,
-      bodies: st.bodies, blabels: st.blabels };
+      bodies: st.bodies, btext: st.btext, blabels: st.blabels };
     st = gen(st, node.hi);
     st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, loff, -1);
     st = gen(st, node.lo);
@@ -5660,10 +6041,28 @@ def gen_forrange(st: EmitSt, node: ForRange) -> EmitSt {
     st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, loff, -1, insn.R_RCX, 64);
     st = emit_insn(st, insn.F_CMP_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0);
     st = emit_insn(st, insn.F_JGE_L, r2.label, 0, 0, 0, 0, 0, 0);
-    // a captured loop variable gets a fresh cell per iteration (the
-    // counter itself stays in its raw slot)
+    // `continue` goes to a label just BEFORE the increment, not to the head.
+    //
+    // Two mistakes are available here and both were made before this was right.
+    // Jumping to the head looks right -- "the next turn" -- but the counter is
+    // incremented at the BOTTOM of the loop, after the body, so a `continue`
+    // that jumps to the head never advances it and the loop spins forever on one
+    // value. (`for x in 0..10 { if x < 5 { continue; } ... }` hung.) Jumping to
+    // the increment itself is correct, and the fresh per-turn cell is still
+    // made: box_bound runs at the TOP of the next turn, which the `jmp r1` after
+    // the increment reaches. So the label goes before the `inc`, and the reason
+    // it is not simply the `inc` is that nothing may run between them.
+    let r3 = next_loc(st);
+    st = r3.st;
+    let saved_brk = brk_label;
+    let saved_cont = cont_label;
+    brk_label = r2.label;
+    cont_label = r3.label;
     st = box_bound(st, node.name);
     st = gen_discard(st, node.body);
+    brk_label = saved_brk;
+    cont_label = saved_cont;
+    st = emit_label(st, r3.label);
     st = gen_loc_loop(st, node);
     // the counter in place: one instruction, not a load, an inc and a store
     st = emit_insn(st, insn.F_INC_D, insn.R_RBP, -1, 1, voff, -1, 0, 0);
@@ -5686,9 +6085,9 @@ def gen_foreach(st: EmitSt, node: Foreach) -> EmitSt {
     let aoff = (st.slots + 2) * -8;
     let ioff = (st.slots + 3) * -8;
     st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
-      fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 3,
+      fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 3, temp: st.temp,
       self_label: st.self_label, end_label: st.end_label, fns: st.fns,
-      bodies: st.bodies, blabels: st.blabels };
+      bodies: st.bodies, btext: st.btext, blabels: st.blabels };
     let elt: Type = infer(st, node.iter);
     let eltyp: Type = normtype({ k: K.tunk });
     if (elt.k == K.tarr) {
@@ -5721,8 +6120,18 @@ def gen_foreach(st: EmitSt, node: Foreach) -> EmitSt {
     // x = arr[i]
     st = elem_load(st, arr_elem_bytes(elt), insn.R_RDX, insn.R_RAX, insn.R_RCX);
     st = emit_insn(st, insn.F_MOV_R_D, insn.R_RCX, 64, insn.R_RBP, -1, 1, voff, -1);
+    // continue -> just before the increment, for the reason in gen_forrange
+    let r3 = next_loc(st);
+    st = r3.st;
+    let saved_brk = brk_label;
+    let saved_cont = cont_label;
+    brk_label = r2.label;
+    cont_label = r3.label;
     st = box_bound(st, node.name);
     st = gen_discard(st, node.body);
+    brk_label = saved_brk;
+    cont_label = saved_cont;
+    st = emit_label(st, r3.label);
     st = gen_loc_loop(st, node);
     // the counter in place: one instruction, not a load, an inc and a store
     st = emit_insn(st, insn.F_INC_D, insn.R_RBP, -1, 1, ioff, -1, 0, 0);
@@ -5774,13 +6183,10 @@ def gen_tail_call(st: EmitSt, node: Call) -> EmitSt {
         } else {
             st = gen(st, targs[i]);
         };
-        let off = (st.slots + 1) * -8;
+        let off = (st.slots + st.temp + 1) * -8;
+        st = st_temp(st, st.temp + 1);
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, off, -1);
         offs += off;
-        st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
-          fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 1,
-          self_label: st.self_label, end_label: st.end_label, fns: st.fns,
-          bodies: st.bodies, blabels: st.blabels };
         i = i + 1;
     };
     // copy the locals over the parameter slots (param k: 16 + 8*(n-1-k))
@@ -5830,10 +6236,12 @@ def gen_tail(st: EmitSt, node: Node) -> EmitSt {
         // a trailing `;` (void) leaves the statement before it in tail
         // position: the block's value is void either way
         if (m > 1 && is_void_node(tl[m - 1])) { m = m - 1; }
+        let tdepth = st.temp;
         let ti = 0;
         while (ti < m - 1) {
             st = gen_loc_stmt(st, tl[ti]);
             st = gen_stmt(st, tl[ti]);
+            st = st_temp(st, tdepth);
             ti = ti + 1;
         };
         if (m > 0) {
@@ -5882,12 +6290,18 @@ def gen_block(st: EmitSt, node: Block) -> EmitSt {
 
 // `dropped`: nobody takes the block's value (a loop body), so its last
 // statement is a statement (gen_stmt) as well as the ones before it.
-def gen_block_as(st: EmitSt, node: Block, dropped: bool) -> EmitSt {    // No scope push: names are unique post-rename, blocks share the frame.
+def gen_block_as(st: EmitSt, node: Block, dropped: bool) -> EmitSt {    // No scope push: names are unique post-rename, so a block reuses the slots of the blocks around it.
     let stmts = node.stmts;
     if (len(stmts) == 0) {
         emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0)
     } else {
-        // A trailing `;` (void) computes nothing: nothing to emit.
+        // The frame is the DEEPEST block's slots, not the sum of them all: the
+        // slots a block takes are released as it ends. Sound because nothing
+        // outside reads them -- a name it declared is out of scope there (the
+        // checker agrees), and a captured variable lives in a heap cell that a
+        // closure reaches through its own captures, not through this slot.
+        let depth = st.slots;
+        let tdepth = st.temp;
         let m = len(stmts);
         if (m > 1 && is_void_node(stmts[m - 1])) { m = m - 1; }
         let i = 0;
@@ -5898,9 +6312,12 @@ def gen_block_as(st: EmitSt, node: Block, dropped: bool) -> EmitSt {    // No sc
             } else {
                 st = gen(st, stmts[i]);
             };
+            // this statement's own temporaries are dead; the ones of the
+            // statement this block sits in are not, hence the depth and not 0.
+            st = st_temp(st, tdepth);
             i = i + 1;
         };
-        st
+        st_slots(st, depth)
     }
 };
 
@@ -6676,12 +7093,13 @@ def gen_closure_binding(st: EmitSt, name: str, func: Func, caps: [str]) -> EmitS
         bci = bci + 1;
     };
     st = gen_make_closure(st, lbl, caps);
+    // a NAME (let f = ...), so its slot lives to the end of the block
     let coff = (st.slots + 1) * -8;
     st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, coff, -1);
     let st3 = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
       fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 1,
-      self_label: st.self_label, end_label: st.end_label, fns: st.fns,
-      bodies: st.bodies, blabels: st.blabels };
+      temp: st.temp, self_label: st.self_label, end_label: st.end_label,
+      fns: st.fns, bodies: st.bodies, btext: st.btext, blabels: st.blabels };
     st3 = env_define(st3, name, "closure", coff, -1, "", func_type_in(st3, func));
     box_bound(st3, name)
 };
@@ -6783,9 +7201,9 @@ def bind_decl(st: EmitSt, name: str, t: Type) -> EmitSt {
         let off = (st.slots + 1) * -8;
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, off, -1);
         let st2 = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
-          fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 1,
+          fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 1, temp: st.temp,
           self_label: st.self_label, end_label: st.end_label, fns: st.fns,
-          bodies: st.bodies, blabels: st.blabels };
+          bodies: st.bodies, btext: st.btext, blabels: st.blabels };
         st2 = env_define(st2, name, "local", off, -1, "", t);
         box_bound(st2, name)
     }
@@ -7562,6 +7980,31 @@ def block3(a: Node, b: Node, c: Node, ln: long, cl: long) -> Block {
     { k: K.block, stmts: st, line: ln, col: cl }
 };
 
+// `first` (a place binding, which is a BLOCK for a nested place) then
+// `rest`, all in ONE block: the statements after it read the names the binding
+// declares, so a nested block would take their slots out of scope under them
+// (frame slots are released per block -- see gen_block_as).
+def block_bind(first: Node, rest: [Node], ln: long, cl: long) -> Block {
+    let st: [Node] = [];
+    if (first.k == K.block) {
+        let fb: Block = first;
+        let fs = fb.stmts;
+        let i = 0;
+        while (i < len(fs)) {
+            st += [fs[i]];
+            i = i + 1;
+        };
+    } else {
+        st += [first];
+    };
+    let j = 0;
+    while (j < len(rest)) {
+        st += [rest[j]];
+        j = j + 1;
+    };
+    { k: K.block, stmts: st, line: ln, col: cl }
+};
+
 def block4(a: Node, b: Node, c: Node, d: Node, ln: long, cl: long) -> Block {
     let st: [Node] = [];
     st += a;
@@ -7674,12 +8117,12 @@ def gen_incdec_desugar(st: EmitSt, node: IncDec, dropped: bool) -> EmitSt {
     if (node.pre) {
         // ++x -> { bind; let v = x + 1; x = v; v }
         let nv: Bin = { k: K.bin, op: binop, l: place, r: one, line: ln, col: cl };
-        let d2: Decl = { k: K.decl, kind: "let", typ: place_value_type(infer(st, tgt)), name: t1 + "v", v: nv, line: ln, col: cl };
+        let d2: Decl = { k: K.decl, kind: "let", typ: place_value_type(infer(st, tgt)), name: t1 + "v", v: nv, line: ln, col: cl, nline: ln, ncol: cl };
         let asg: Node = gen_place_assign(tgt, n_id(t1 + "v", ln, cl), t1, ln, cl);
         gen_incdec_end(st, bind, d2, asg, dropped, ln, cl)
     } else {
         // x++ -> { bind; let v = x; x = v + 1; v }
-        let d2: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "v", v: place, line: ln, col: cl };
+        let d2: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "v", v: place, line: ln, col: cl, nline: ln, ncol: cl };
         let nv: Bin = { k: K.bin, op: binop, l: n_id(t1 + "v", ln, cl), r: one, line: ln, col: cl };
         let asg: Node = gen_place_assign(tgt, nv, t1, ln, cl);
         gen_incdec_end(st, bind, d2, asg, dropped, ln, cl)
@@ -7689,10 +8132,14 @@ def gen_incdec_desugar(st: EmitSt, node: IncDec, dropped: bool) -> EmitSt {
 // `{ bind; let v = ...; target = v; v }` -- both `++x` and `x++`, whose value
 // is the trailing read of the temporary. As a statement that read is dead.
 def gen_incdec_end(st: EmitSt, bind: Node, d2: Node, asg: Node, dropped: bool, ln: long, cl: long) -> EmitSt {
+    let rest: [Node] = [];
+    rest += d2;
+    rest += asg;
+    rest += n_id_of(d2, ln, cl);
     if (dropped) {
-        gen_discard(st, block4(bind, d2, asg, n_id_of(d2, ln, cl), ln, cl))
+        gen_discard(st, block_bind(bind, rest, ln, cl))
     } else {
-        gen(st, block4(bind, d2, asg, n_id_of(d2, ln, cl), ln, cl))
+        gen(st, block_bind(bind, rest, ln, cl))
     }
 };
 
@@ -7713,10 +8160,13 @@ def n_id_of(d2: Node, ln: long, cl: long) -> Node {
 // dead, unless it is a named local: reading one clears a string's companion
 // cell (gen_id), which gen_stmt's frame test deliberately leaves alone.
 def gen_opassign_end(st: EmitSt, bind: Node, asg: Node, read: Node, dropped: bool, ln: long, cl: long) -> EmitSt {
+    let rest: [Node] = [];
+    rest += asg;
+    rest += read;
     if (dropped) {
-        gen_discard(st, block3(bind, asg, read, ln, cl))
+        gen_discard(st, block_bind(bind, rest, ln, cl))
     } else {
-        gen(st, block3(bind, asg, read, ln, cl))
+        gen(st, block_bind(bind, rest, ln, cl))
     }
 };
 
@@ -7798,12 +8248,16 @@ def gen_opassign_desugar(st: EmitSt, node: OpAssign, dropped: bool) -> EmitSt {
     let bind: Node = gen_place_bind(tgt, t1, ln, cl);
     let rd: Node = gen_place_read(tgt, t1, ln, cl);
     let bin: Bin = { k: K.bin, op: op, l: rd, r: node.v, line: ln, col: cl };
-    let d2: Decl = { k: K.decl, kind: "let", typ: place_value_type(infer(st, tgt)), name: t1 + "v", v: bin, line: ln, col: cl };
+    let d2: Decl = { k: K.decl, kind: "let", typ: place_value_type(infer(st, tgt)), name: t1 + "v", v: bin, line: ln, col: cl, nline: ln, ncol: cl };
     let asg: Node = gen_place_assign(tgt, n_id(t1 + "v", ln, cl), t1, ln, cl);
+    let rest: [Node] = [];
+    rest += d2;
+    rest += asg;
+    rest += n_id(t1 + "v", ln, cl);
     if (dropped) {
-        gen_discard(st, block4(bind, d2, asg, n_id(t1 + "v", ln, cl), ln, cl))
+        gen_discard(st, block_bind(bind, rest, ln, cl))
     } else {
-        gen(st, block4(bind, d2, asg, n_id(t1 + "v", ln, cl), ln, cl))
+        gen(st, block_bind(bind, rest, ln, cl))
     }
 };
 
@@ -7835,7 +8289,7 @@ def place_read_idx(tgt: Index, t1: str, ln: long, cl: long) -> Index {
 };
 
 def place_read_dot(tgt: Dot, t1: str, ln: long, cl: long) -> Dot {
-    { k: K.dot, obj: n_id(t1, ln, cl), key: tgt.key, line: ln, col: cl }
+    { k: K.dot, obj: n_id(t1, ln, cl), key: tgt.key, line: ln, col: cl, nline: ln, ncol: cl }
 };
 
 def gen_place_read(tgt: Node, t1: str, ln: long, cl: long) -> Node {
@@ -7863,7 +8317,7 @@ def place_asg_idx(tgt: Index, valnode: Node, t1: str, ln: long, cl: long) -> Idx
 };
 
 def place_asg_dot(tgt: Dot, valnode: Node, t1: str, ln: long, cl: long) -> DotAssign {
-    { k: K.dotassign, obj: n_id(t1, ln, cl), key: tgt.key, v: valnode, line: ln, col: cl }
+    { k: K.dotassign, obj: n_id(t1, ln, cl), key: tgt.key, v: valnode, line: ln, col: cl, nline: tgt.nline, ncol: tgt.ncol }
 };
 
 def gen_place_assign(tgt: Node, valnode: Node, t1: str, ln: long, cl: long) -> Node {
@@ -7887,14 +8341,14 @@ def place_bind_id(tgt: Leaf, t1: str, ln: long, cl: long) -> Block {
 };
 
 def place_bind_idx_id(tgt: Index, t1: str, ln: long, cl: long) -> Decl {
-    { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1, v: tgt.idx, line: ln, col: cl }
+    { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1, v: tgt.idx, line: ln, col: cl, nline: ln, ncol: cl }
 };
 
 def place_bind_idx_nest(tgt: Index, t1: str, ln: long, cl: long) -> Block {
     // nested base (`grid[0][1]`, `x.y[i]`, `f()[i]`): capture it in
     // `t1 + "a"` as well, so the place evaluates it exactly once.
-    let tba: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "a", v: tgt.arr, line: ln, col: cl };
-    let tib: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1, v: tgt.idx, line: ln, col: cl };
+    let tba: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "a", v: tgt.arr, line: ln, col: cl, nline: ln, ncol: cl };
+    let tib: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1, v: tgt.idx, line: ln, col: cl, nline: ln, ncol: cl };
     block2(tba, tib, ln, cl)
 };
 
@@ -7910,7 +8364,7 @@ def place_bind_idx(tgt: Index, t1: str, ln: long, cl: long) -> Node {
 };
 
 def place_bind_dot(tgt: Dot, t1: str, ln: long, cl: long) -> Decl {
-    { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1, v: tgt.obj, line: ln, col: cl }
+    { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1, v: tgt.obj, line: ln, col: cl, nline: ln, ncol: cl }
 };
 
 // The synthetic `let` that runs the target's index/base exactly once (a
@@ -7967,17 +8421,24 @@ def gen_opassign_arr(st: EmitSt, node: OpAssign, dropped: bool) -> EmitSt {
         // { let tv = v; let ti = 0; let tn = len(tv);
         //   while (ti < tn) { place += tv[ti]; ti = ti + 1 }
         //   place }
-        let tv: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "v", v: v, line: ln, col: cl };
-        let ti: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "i", v: n_num("0", ln, cl), line: ln, col: cl };
-        let tn: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "n", v: n_call1("len", n_id(t1 + "v", ln, cl), ln, cl), line: ln, col: cl };
+        let tv: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "v", v: v, line: ln, col: cl, nline: ln, ncol: cl };
+        let ti: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "i", v: n_num("0", ln, cl), line: ln, col: cl, nline: ln, ncol: cl };
+        let tn: Decl = { k: K.decl, kind: "let", typ: normtype({ k: K.tnone }), name: t1 + "n", v: n_call1("len", n_id(t1 + "v", ln, cl), ln, cl), line: ln, col: cl, nline: ln, ncol: cl };
         let elem: Index = { k: K.index, arr: n_id(t1 + "v", ln, cl), idx: n_id(t1 + "i", ln, cl), line: ln, col: cl };
         let put: Node = gen_place_assign(tgt, n_call2("push", gen_place_read(tgt, t1, ln, cl), elem, ln, cl), t1, ln, cl);
         let step: Assign = { k: K.assign, name: t1 + "i", v: { k: K.bin, op: "+", l: n_id(t1 + "i", ln, cl), r: n_num("1", ln, cl), line: ln, col: cl }, line: ln, col: cl };
         let loop: While = { k: K.kw_while, cond: { k: K.bin, op: "<", l: n_id(t1 + "i", ln, cl), r: n_id(t1 + "n", ln, cl), line: ln, col: cl }, body: block2(put, step, ln, cl), line: ln, col: cl };
+        let rest: [Node] = [];
+        rest += tv;
+        rest += ti;
+        rest += tn;
+        rest += loop;
+        rest += gen_place_read(tgt, t1, ln, cl);
+        let bnd: Node = gen_place_bind(tgt, t1, ln, cl);
         if (dropped) {
-            gen_discard(st, block6(gen_place_bind(tgt, t1, ln, cl), tv, ti, tn, loop, gen_place_read(tgt, t1, ln, cl), ln, cl))
+            gen_discard(st, block_bind(bnd, rest, ln, cl))
         } else {
-            gen(st, block6(gen_place_bind(tgt, t1, ln, cl), tv, ti, tn, loop, gen_place_read(tgt, t1, ln, cl), ln, cl))
+            gen(st, block_bind(bnd, rest, ln, cl))
         }
     } else {
         let fname = "push";
@@ -8128,14 +8589,11 @@ def gen_acc_cat_rax(st: EmitSt, aoff: long) -> EmitSt {
 // instead, a map nested in an array, an option or a record printed as its heap
 // address, which differs every run.
 def gen_map_repr_rax(st: EmitSt, t: Type, path: [Type]) -> EmitSt {
-    let moff = (st.slots + 1) * -8;
-    let aoff = (st.slots + 2) * -8;
-    let ioff = (st.slots + 3) * -8;
-    let koff = (st.slots + 4) * -8;
-    st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
-      fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 4,
-      self_label: st.self_label, end_label: st.end_label, fns: st.fns,
-      bodies: st.bodies, blabels: st.blabels };
+    let moff = (st.slots + st.temp + 1) * -8;
+    let aoff = (st.slots + st.temp + 2) * -8;
+    let ioff = (st.slots + st.temp + 3) * -8;
+    let koff = (st.slots + st.temp + 4) * -8;
+    st = st_temp(st, st.temp + 4);
     st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, moff, -1);
     st = gen_str_const(st, "{");
     st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, aoff, -1);
@@ -8196,13 +8654,10 @@ def gen_map_repr_rax(st: EmitSt, t: Type, path: [Type]) -> EmitSt {
 // Array header in %rax -> "[e0, e1, ...]" in %rax, the same form tostring()
 // gives. Slots: [src][acc][i].
 def gen_arr_tostr_rax(st: EmitSt, elty: Type, path: [Type]) -> EmitSt {
-    let soff = (st.slots + 1) * -8;
-    let aoff = (st.slots + 2) * -8;
-    let ioff = (st.slots + 3) * -8;
-    st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
-      fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 3,
-      self_label: st.self_label, end_label: st.end_label, fns: st.fns,
-      bodies: st.bodies, blabels: st.blabels };
+    let soff = (st.slots + st.temp + 1) * -8;
+    let aoff = (st.slots + st.temp + 2) * -8;
+    let ioff = (st.slots + st.temp + 3) * -8;
+    st = st_temp(st, st.temp + 3);
     st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, soff, -1);
     st = gen_str_const(st, "[");
     st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, aoff, -1);
@@ -8887,13 +9342,10 @@ def gen_join(st: EmitSt, node: Call) -> EmitSt {
 
 // Slots: [src][dst][i]. Builds dst = [tostr(src[0]), ...] then joins it.
 def gen_join_conv(st: EmitSt, node: Call, tostr_fn: str, esz: long) -> EmitSt {
-    let soff = (st.slots + 1) * -8;
-    let doff = (st.slots + 2) * -8;
-    let ioff = (st.slots + 3) * -8;
-    st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
-      fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 3,
-      self_label: st.self_label, end_label: st.end_label, fns: st.fns,
-      bodies: st.bodies, blabels: st.blabels };
+    let soff = (st.slots + st.temp + 1) * -8;
+    let doff = (st.slots + st.temp + 2) * -8;
+    let ioff = (st.slots + st.temp + 3) * -8;
+    st = st_temp(st, st.temp + 3);
     let jargs: [Node] = node.args;
     st = gen(st, jargs[0]);
     st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, soff, -1);
@@ -9145,10 +9597,22 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
     // fresh per-function state; uid/rodata/fns flow through and back.
     // Bodies see every hoisted function and global through st.fns
     // (env_find), like the checker's fresh_func_scope.
+    // frame_max is this function's: emit_one_fn nests (a hoisted def, a
+    // closure literal), so the caller's mark is put back on the way out.
+    let prev_max = frame_max;
+    frame_max = 0;
+    // No loop encloses this body: any loop the closure was made inside is in
+    // the CALLER's function, and a jump out of one into another is what the
+    // checker's function-boundary rule refuses. Clearing here makes the emitter
+    // right on its own terms rather than relying on that check in another file.
+    let prev_brk = brk_label;
+    let prev_cont = cont_label;
+    brk_label = 0 - 1;
+    cont_label = 0 - 1;
     let f: EmitSt = { ir: [], txt: [], rodata: st.rodata, uid: st.uid,
-      fuid: fuid, loc: 1, env: [], slots: 0,
+      fuid: fuid, loc: 1, env: [], slots: 0, temp: 0,
       self_label: label, end_label: lbl_new(arch.arch_loc_label(fuid, 0)),
-      fns: st.fns, bodies: st.bodies, blabels: st.blabels };
+      fns: st.fns, bodies: st.bodies, btext: st.btext, blabels: st.blabels };
     // The names nested functions capture (see box_names / box_bound).
     f = env_define(f, "", "frame", 0, -1, "", type_node({ k: K.tnone }));
     // This function's type, for the conversions at its returns and its
@@ -9235,7 +9699,11 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
         opi = opi + 1;
     };
     f = gen_tail(f, func.body);
-    let frame = arch.arch_frame(f.slots);
+    if (f.slots + f.temp > frame_max) { frame_max = f.slots + f.temp; };
+    let frame = arch.arch_frame(frame_max);
+    frame_max = prev_max;
+    brk_label = prev_brk;
+    cont_label = prev_cont;
     // The body is one IR stream: the prologue, what the body emitted, the
     // epilogue (see ir.y). The text the linker and -S read is rendered from
     // it, so nothing here is spelled twice.
@@ -9286,8 +9754,12 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
     // rebinds only f.bodies (see NATIVE.md "rebind: a = push(a, v)"), so the
     // two compilers disagreed and ycc emitted calls to labels it never
     // defined.
-    f.bodies += insn.ir_render_all(body, f.txt);
+    f.bodies += body;
+    // The raw lines this body's IR_TEXT items index are this function's own
+    // (f.txt is fresh per function), so they go with the body.
+    f.btext += f.txt;
     let bodies = f.bodies;
+    let btext = f.btext;
     // The body's own label, which the linker shakes by (Unit.labels): the
     // first line of the text, known here rather than scanned for (the old
     // body_label). Appended to f.blabels the way f.bodies is, for the same
@@ -9298,9 +9770,9 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
     f.blabels += lname(label);
     let blabels = f.blabels;
     { ir: st.ir, txt: st.txt, rodata: f.rodata, uid: f.uid,
-      fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots,
+      fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots, temp: st.temp,
       self_label: st.self_label, end_label: st.end_label, fns: st.fns,
-      bodies: bodies, blabels: blabels }
+      bodies: bodies, btext: btext, blabels: blabels }
 };
 
 // Build a tfunc type from a func node (params have annotations — checked).
@@ -9311,9 +9783,9 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
 // because a call's result type decides e.g. whether `+` must stringify.
 def infer_fn_ret(st: EmitSt, func: Func) -> Type {
     let f: EmitSt = { ir: [], txt: [], rodata: st.rodata, uid: st.uid,
-      fuid: 0, loc: 1, env: [], slots: 0,
+      fuid: 0, loc: 1, env: [], slots: 0, temp: 0,
       self_label: -1, end_label: -1, fns: st.fns, bodies: st.bodies,
-      blabels: st.blabels };
+      btext: st.btext, blabels: st.blabels };
     let params: [str] = func.params;
     let ptypes: [Type] = func.ptypes;
     let n = len(params);
@@ -9491,9 +9963,9 @@ def decl_name(d: Decl) -> str {
 // so two units' globals never share one.
 def global_entries(st: EmitSt, gdecls: [Node], gbase: long) -> [Sym] {
     let f: EmitSt = { ir: [], txt: [], rodata: st.rodata, uid: st.uid,
-      fuid: 0, loc: 1, env: [], slots: 0,
+      fuid: 0, loc: 1, env: [], slots: 0, temp: 0,
       self_label: -1, end_label: -1, fns: st.fns, bodies: st.bodies,
-      blabels: st.blabels };
+      btext: st.btext, blabels: st.blabels };
     let out: [Sym] = [];
     let i = 0;
     while (i < len(gdecls)) {
@@ -9672,7 +10144,11 @@ def phase_end(times: [Timing], name: str, t0: long, h0: long) -> { times: [Timin
 // exports: Syms (types.y). dfl: per top-level def with defaults,
 // rename.y's list of them (one lit_code per parameter, see lit_code).
 type DflCode = { name: str, vals: [str] };
-type Unit = { name: str, files: [str], exports: [Sym], init: str, bodies: [str], labels: [str], refs: [[str]], rodata: [[str]], globals: [str], dfl: [DflCode] };
+// `bodies` is each body's IR items and `btext` the raw lines its IR_TEXT
+// items index. A unit read from the std pack or an object cache carries them
+// PACKED instead: `blob` one blob per body (pack_body) and `btext` the lines,
+// and link_units decodes the bodies it keeps (unpack_body).
+type Unit = { name: str, files: [str], exports: [Sym], init: str, bodies: [[long]], btext: [[str]], blob: [str], labels: [str], refs: [[str]], rodata: [[str]], globals: [str], dfl: [DflCode] };
 // What compile_unit binds besides the unit's own names: the externs
 // (`ext`) and their parameter defaults (`dfl`, as rename.y takes them),
 // the package namespaces the unit imports (`pkgs`, see pkg_ns), the
@@ -9683,13 +10159,15 @@ type Externs = { ext: [Sym], dfl: [Dfl], pkgs: [str], inits: [str], argv: bool }
 def unit_empty(name: str) -> Unit {
     let fs: [str] = [];
     let xs: [Sym] = [];
-    let bs: [str] = [];
+    let bs: [[long]] = [];
+    let bt: [[str]] = [];
     let ls: [str] = [];
     let fr: [[str]] = [];
     let rs: [[str]] = [];
     let gs: [str] = [];
     let ds: [DflCode] = [];
-    { name: name, files: fs, exports: xs, init: "", bodies: bs, labels: ls, refs: fr, rodata: rs, globals: gs, dfl: ds }
+    { name: name, files: fs, exports: xs, init: "", bodies: bs, btext: bt,
+      blob: [], labels: ls, refs: fr, rodata: rs, globals: gs, dfl: ds }
 };
 
 // No externs at all (a std unit compiled on its own).
@@ -9926,9 +10404,9 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
         // unit's uids count from its base
         let st = st_new();
         st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: base + 1,
-          fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots,
+          fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots, temp: st.temp,
           self_label: st.self_label, end_label: st.end_label, fns: st.fns,
-          bodies: st.bodies, blabels: st.blabels };
+          bodies: st.bodies, btext: st.btext, blabels: st.blabels };
         let r = next_uid(st);
         st = r.st;
         let hsyms: [Sym] = [];
@@ -9940,7 +10418,10 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
                 hdefs += d;
                 let rl = next_uid(st);
                 st = rl.st;
-                let label = fn_label_of(rl.uid, d.name);
+                // A native def's label is the one it named -- the assembly it
+                // calls into. Everything else gets a generated label.
+                let label = "";
+                if (len(d.func.label) > 0) { label = d.func.label; } else { label = fn_label_of(rl.uid, d.name); };
                 let lid = lbl_new(label);
                 hsyms += { name: d.name, label: label, typ: func_type(d.func) };
                 hids += lid;
@@ -9958,9 +10439,9 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
         ids0 += hids;
         ids0 += xids;
         st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
-          fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots,
+          fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots, temp: st.temp,
           self_label: st.self_label, end_label: st.end_label,
-          fns: fntab_of(fns0, ids0), bodies: st.bodies, blabels: st.blabels };
+          fns: fntab_of(fns0, ids0), bodies: st.bodies, btext: st.btext, blabels: st.blabels };
         // Fill in the return type of every unannotated def, so call sites
         // know what a call yields; then type the globals with those, and
         // redo the defs that read a global (they now know its type).
@@ -9969,9 +10450,9 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
         fns1 += fixed1;
         fns1 += xfns;
         st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
-          fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots,
+          fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots, temp: st.temp,
           self_label: st.self_label, end_label: st.end_label,
-          fns: fntab_of(fns1, ids0), bodies: st.bodies, blabels: st.blabels };
+          fns: fntab_of(fns1, ids0), bodies: st.bodies, btext: st.btext, blabels: st.blabels };
         let gl = app_cells(global_entries(st, gdecls, base), ast3.stmts);
         let fixedfns: [Sym] = [];
         fixedfns += fixed1;
@@ -9983,10 +10464,10 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
         idsA += gids;
         if (len(gl) > 0) {
             st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
-              fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots,
+              fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots, temp: st.temp,
               self_label: st.self_label, end_label: st.end_label,
               fns: fntab_of(fixedfns, idsA), bodies: st.bodies,
-              blabels: st.blabels };
+              btext: st.btext, blabels: st.blabels };
             let fixed2 = fix_fn_types(st, hdefs, gnames);
             fixedfns = [];
             fixedfns += fixed2;
@@ -9994,17 +10475,21 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
             fixedfns += gl;
         }
         st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
-          fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots,
+          fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots, temp: st.temp,
           self_label: st.self_label, end_label: st.end_label,
           fns: fntab_of(fixedfns, idsA), bodies: st.bodies,
-          blabels: st.blabels };
-        // emit each hoisted body
+          btext: st.btext, blabels: st.blabels };
+        // emit each hoisted body. A native def has none: its label names
+        // assembly that is already in the output, so emitting anything under
+        // that label would duplicate it.
         i = 0;
         while (i < len(hdefs)) {
             let d = hdefs[i];
-            let rf = next_uid(st);
-            st = rf.st;
-            st = emit_one_fn(st, st.fns.ids[i], rf.uid, d.func, false, false, [], "");
+            if (len(d.func.label) == 0) {
+                let rf = next_uid(st);
+                st = rf.st;
+                st = emit_one_fn(st, st.fns.ids[i], rf.uid, d.func, false, false, [], "");
+            };
             i = i + 1;
         };
         pr = phase_end(times, "emit_fns", pt, ph);
@@ -10057,10 +10542,10 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
         if (len(name) == 0) {
             // Only pay for argv materialization when the program uses it
             // (or a package it links does).
-            let want = uses_scan_block(ast3.stmts, { argv: false });
+            let want_argv = uses_argv(ast3.stmts) || xt.argv;
             let main_body: Block = { k: K.block, stmts: main_stmts, line: 0, col: 0 };
             let start_fn: EmitMain = { params: [], ptypes: [], ret: type_node({ k: K.tvoid }), body: main_body, line: 0, col: 0 };
-            st = emit_one_fn(st, lbl_new("_start"), rm.uid, start_fn, true, want.argv || xt.argv, [], "");
+            st = emit_one_fn(st, lbl_new("_start"), rm.uid, start_fn, true, want_argv, [], "");
         } else if (len(main_stmts) > 0) {
             init = arch.arch_fn_label(rm.uid, "init");
             let init_body: Block = { k: K.block, stmts: main_stmts, line: 0, col: 0 };
@@ -10078,20 +10563,23 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
         };
         // Each body's label and the labels it references: what linking
         // shakes by (prune_bodies). The label the emitter recorded beside
-        // the body (emit_one_fn); the references are still read out of the
-        // text, which stage 2 fills during emission instead.
+        // the body (emit_one_fn); the references are read out of the ITEMS
+        // (the same set line_refs_b found in the text: every label operand,
+        // the label of a `lea lbl(%rip)`, both labels of a `mov $A-B`).
         let ubodies = st.bodies;
+        let ubtext: [[str]] = st.btext;
         let blabels: [str] = st.blabels;
         let brefs: [[str]] = [];
         let bk = 0;
         while (bk < len(ubodies)) {
-            let ub: str = ubodies[bk];
-            brefs += [text_refs(ub, true)];
+            let ub: [long] = ubodies[bk];
+            brefs += [ir_refs(ub)];
             bk = bk + 1;
         };
-        let unit = { name: name, files: origin.files, exports: exports, init: init,
-          bodies: ubodies, labels: blabels, refs: brefs, rodata: st.rodata,
-          globals: glabels, dfl: udfl };
+        let unit: Unit = { name: name, files: origin.files, exports: exports,
+          init: init, bodies: ubodies, btext: ubtext, blob: [],
+          labels: blabels, refs: brefs, rodata: st.rodata, globals: glabels,
+          dfl: udfl };
         { ok: true, errors: errors, warnings: warnings, times: times, unit: unit }
     }
 };
@@ -10360,11 +10848,12 @@ def relabel_dups(body: str, m: [AsmLabel], dup_new: [str]) -> str {
     join(lines, "\n")
 };
 
-// The program's assembly text: the bodies of the std units and of the
-// packages (`deps`, link order: each after those it imports) and then
-// the program's, shaken together; the arch prelude and constants the
-// kept bodies reach; every unit's rodata; the .bss cells.
-// Two units defining the same `y_`-prefixed name: say so, or return.
+// The program's assembly, as parts to assemble: the bodies of the std units
+// and of the packages (`deps`, link order: each after those it imports) and
+// then the program's, shaken together, as the emitter's items; then the arch
+// prelude and constants the kept bodies reach, every unit's rodata and the
+// .bss cells, as text (what asm.y still lexes). Two units defining the same
+// `y_`-prefixed name: say so, or return.
 //
 // That prefix is not a namespace: such a def is emitted under its bare name
 // because generated code calls it by a fixed label, so the name IS the
@@ -10410,7 +10899,7 @@ def dup_y_label(deps: [Unit], prog: Unit) -> long {
     0
 };
 
-def link_units(std: [Unit], deps: [Unit], prog: Unit) -> str {
+def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
     let units: [Unit] = [];
     units += std;
     units += deps;
@@ -10450,8 +10939,14 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> str {
         ou = ou + 1;
     };
     // Every body, with its label, its references, and the `.loc` offset
-    // of its unit (-1: the program's own, numbered as they are).
-    let all: [str] = [];
+    // of its unit (-1: the program's own, numbered as they are). A body's
+    // ITEMS for a unit compiled in this run (and the raw lines they index),
+    // or the TEXT a pack carries, in `btext`.
+    let all: [[long]] = [];
+    let alltxt: [[str]] = [];
+    // A pack unit's body, still packed (empty items); decoded in the parts
+    // loop below, once the shake has said it is kept.
+    let allblob: [str] = [];
     let labels: [str] = [];
     let refs: [[str]] = [];
     let fno: [long] = [];
@@ -10460,17 +10955,25 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> str {
         let u = units[j];
         let f = offs[j];
         let ub = u.bodies;
+        let ubl = u.blob;
         let ul = u.labels;
         let ur = u.refs;
         let b = 0;
-        while (b < len(ub)) {
+        while (b < len(ul)) {
             let lb: str = ul[b];
             let drop = false;
             if (j < len(std) && len(plabels) > 0) {
                 if (lb[:2] == "y_") { drop = name_in(plabels, lb); }
             }
             if (!drop) {
-                all += ub[b];
+                if (len(ub) > 0) {
+                    all += [ub[b]];
+                    allblob += "";
+                } else {
+                    all += [[]];
+                    allblob += ubl[b];
+                };
+                alltxt += [u.btext[b]];
                 labels += lb;
                 refs += [ur[b]];
                 fno += f;
@@ -10484,7 +10987,9 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> str {
     let prefs = prog.refs;
     let pb2 = 0;
     while (pb2 < len(pbodies)) {
-        all += pbodies[pb2];
+        all += [pbodies[pb2]];
+        allblob += "";
+        alltxt += [prog.btext[pb2]];
         labels += plab[pb2];
         refs += [prefs[pb2]];
         fno += -1;
@@ -10499,7 +11004,8 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> str {
     let body_refs = shaken.refs;
     let core_lines = check_os_call_names(arch.arch_prelude_lines());
     let thr = uses_threads(body_refs);
-    let pb = prelude_blocks(prelude_with(core_lines, thr));
+    let mth = uses_math(body_refs);
+    let pb = prelude_blocks(prelude_with(core_lines, thr, mth));
     let ps = shake_prelude(pb, body_refs);
     // A kept prelude block may call a Y helper (none does today): the
     // helper is kept too, and everything shaken again from there.
@@ -10510,9 +11016,10 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> str {
         shaken = prune_bodies(labels, refs, extra);
         keep = shaken.keep;
         body_refs = shaken.refs;
-        if (!thr && uses_threads(body_refs)) {
-            thr = true;
-            pb = prelude_blocks(prelude_with(core_lines, thr));
+        if ((!thr && uses_threads(body_refs)) || (!mth && uses_math(body_refs))) {
+            if (uses_threads(body_refs)) { thr = true; };
+            if (uses_math(body_refs)) { mth = true; };
+            pb = prelude_blocks(prelude_with(core_lines, thr, mth));
         };
         ps = shake_prelude(pb, body_refs);
         more = unkept_refs(ps.refs, bmap, keep);
@@ -10556,29 +11063,37 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> str {
     // Piece-list + single join: `asm = asm + piece` per iteration is
     // quadratic (each concat re-copies the whole 1.4MB+ accumulator —
     // the arena never frees), which OOMs on self-compilation.
-    let pieces: [str] = [];
+    // The header, then the prelude: the `.section .text` the bodies go in and
+    // the blocks they call. The bodies follow this part and precede the
+    // rodata, which is where they were in the text.
+    let parts: [LinkPart] = [];
+    let head = arch.arch_header();
+    if (dbg_lines) {
+        head = file_dirs(files) + head;
+    }
+    parts += [part_text(head + arch.arch_text() + ps.text)];
+    // The bodies, kept, as parts: their items, with the `.loc` markers moved
+    // to the unit's place in the program's file table. Every body is items
+    // now -- a unit read from a pack came with them (pack_body).
     let ab = 0;
     while (ab < len(all)) {
         if (keep[ab]) {
-            let kb: str = all[ab];
+            let kb: [long] = all[ab];
+            if (len(kb) == 0) { kb = unpack_body(allblob[ab]); };
             let kf = fno[ab];
-            if (kf >= 0) { kb = link_locs(kb, kf); };
-            if (len(dup_old) > 0) { kb = relabel_dups(kb, dupmap, interned.dup_new); };
-            pieces += kb;
-            pieces += "\n";
+            if (len(dup_old) > 0) {
+                kb = ir_relabel(kb, dupmap, interned.dup_new);
+            };
+            let off = 0;
+            if (kf >= 0) { off = kf; };
+            parts += [part_ir(kb, alltxt[ab], off, dbg_lines)];
         }
         ab = ab + 1;
     };
-    let body_text = join(pieces, "");
-    let asm = arch.arch_header();
-    if (dbg_lines) {
-        asm = file_dirs(files) + asm;
-    }
-    asm = asm + arch.arch_text() + ps.text;
-    asm = asm + body_text;
+    // The rodata, then the .bss cells: text.
     let consts_text = shake_refs(arch.arch_consts(), const_refs);
-    asm = asm + arch.arch_rodata() + consts_text;
-    asm = asm + join(rodpieces, "");
+    parts += [part_text(arch.arch_rodata() + consts_text)];
+    parts += [part_text(join(rodpieces, ""))];
     // .bss: the allocator's cells when the kept prelude still uses
     // them, then one cell per global.
     let heap_text = shake_refs(arch.arch_heap_cells(), const_refs);
@@ -10591,9 +11106,35 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> str {
             gpieces += arch.arch_global_cell(gls[gk]);
             gk = gk + 1;
         };
-        asm = asm + join(gpieces, "");
+        parts += [part_text(join(gpieces, ""))];
     }
-    asm
+    parts
+};
+
+// The parts as assembly text, what -S prints: the items rendered back to the
+// text they replace (ir_render_all), the text parts as they are.
+def link_text(parts: [LinkPart]) -> str {
+    let pieces: [str] = [];
+    let i = 0;
+    while (i < len(parts)) {
+        let p = parts[i];
+        if (len(p.ir) > 0) {
+            // the render has no newline of its own, so the line is closed here
+            pieces += insn.ir_render_all(p.ir, p.txt, p.loc, p.fno);
+            pieces += "\n";
+        } else {
+            // a text part already ends its lines (the arch text does; a body
+            // the pack carried does not, and gets one here)
+            let t = p.text;
+            if (len(t) > 0 && t[len(t) - 1:] != "\n") {
+                pieces += t + "\n";
+            } else {
+                pieces += t;
+            };
+        };
+        i = i + 1;
+    };
+    join(pieces, "")
 };
 
 // ── the std pack and package objects ──────────────────────────────────
@@ -10601,17 +11142,17 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> str {
 // itself (`ycc --std-pack FILE` writes them; the build appends that file
 // to the ycc that wrote it, see ycc.y self_pack): a program then links
 // them as they are instead of compiling the runtime from source every
-// time. A pack is text: a version line, the number of units, then each
-// unit as its name and its fields -- every field a netstring
-// (`<len>:<bytes>`), every list its count followed by its items, and a
-// unit's fields one netstring together, so a reader steps over a unit it
-// does not want. An export's type travels as its tcode, decoded only for
+// time. A pack is netstrings: a version line, the number of units, then each
+// unit as its name and its fields. A body's fields are its ITEMS (the codec
+// below), not the assembly text they render to: the pack used to carry the
+// text, 146,681 bytes of it, and a program that linked one lexed it back.
+// An export's type travels as its tcode, decoded only for
 // the units a program binds (std_unit_bound): nobody reads the types of
 // rt's or str's. A package's object (`ycc build`, unit_obj) holds one
 // unit's fields the same way.
 
 def pack_version() -> str {
-    "ycc-std-pack 5\n"
+    "ycc-std-pack 6\n"
 };
 
 def pack_put(out: [str], s: str) -> [str] {
@@ -10629,6 +11170,242 @@ def pack_strs(out: [str], xs: [str]) -> [str] {
         i = i + 1;
     };
     out
+};
+
+// A list of lists (a unit's bodies' raw lines): each item a count and its
+// own items, so a reader walks one body's lines without another's.
+def pack_strss(out: [str], xss: [[str]]) -> [str] {
+    out = pack_put(out, tostring(len(xss)));
+    let i = 0;
+    while (i < len(xss)) {
+        out = pack_strs(out, xss[i]);
+        i = i + 1;
+    };
+    out
+};
+
+// ── a body's ITEMS, as a pack or an object carries them ──────────────────
+// A body used to travel as the assembly text it renders to (unit_body_text):
+// the pack was 146,681 bytes of it, and a program that linked one lexed it
+// back. Since stage 2c the emitter's items are what the assembler wants, so
+// the pack carries those. Two things cannot travel as they are:
+//
+//   a label id. Ids are minted per run (labels.y's counter), and a pack is
+//   written by one build and read by the next, so an id means nothing to the
+//   reader. A label field travels as its NAME and the reader mints the id for
+//   it -- what the text path did with `call y_alloc`, and the only thing both
+//   builds agree on.
+//   a raw-line index. IR_TEXT items index a body's own lines (emit_one_fn
+//   emits each function with a fresh `txt`), and those lines are the unit's
+//   `btext`, which travels beside the items.
+//
+// The encoding: per item a byte for the form, then each operand's field words
+// in the order the form table lists them -- a register's two, a memory
+// operand's five, a label's, an immediate's one. So the reader needs no width
+// of its own. A word is one byte when it is 0..125, three when it is a small
+// negative or a 126..65535 positive (a 126 or 127 tag, then two bytes little
+// endian), and nine for anything wider (a 255 tag, then eight). Registers,
+// sizes, scales and the small displacements of a frame are one byte each.
+// (125, not 126: 126 and 127 are the tags, and a 126 written as its own byte
+// would read back as one -- the `.loc 1 126` of a std body, which desynced
+// the whole body by two bytes when it did.)
+def pack_word(out: [str], v: long) -> [str] {
+    if (v >= 0 && v < 126) {
+        out += chr(v);
+    } else if (v < 0 && v > -65536) {
+        let u = 65536 + v;
+        out += chr(127);
+        out += chr(u & 255);
+        out += chr((u >> 8) & 255);
+    } else if (v <= 65535) {
+        out += chr(126);
+        out += chr(v & 255);
+        out += chr((v >> 8) & 255);
+    } else {
+        out += chr(255);
+        let sh = 0;
+        let i = 0;
+        while (i < 8) {
+            out += chr((v >> sh) & 255);
+            sh = sh + 8;
+            i = i + 1;
+        };
+    };
+    out
+};
+
+def pack_lbl(out: [str], id: long) -> [str] {
+    if (id < 0) {
+        out += chr(0);
+    } else {
+        let nm = lname(id);
+        out += chr(1);
+        out = pack_word(out, len(nm));
+        out += nm;
+    };
+    out
+};
+
+// One body as the pack carries it: the items above, item by item.
+def pack_body(u: Unit, b: long) -> str {
+    let ir = u.bodies[b];
+    let out: [str] = [];
+    let at = 0;
+    while (at < len(ir)) {
+        let f = ir[at];
+        out += chr(f & 255);
+        if (f == insn.IR_LABEL) {
+            out = pack_lbl(out, ir[at + 1]);
+        } else if (f == insn.IR_LOC) {
+            out = pack_word(out, ir[at + 1]);
+            out = pack_word(out, ir[at + 2]);
+        } else if (f == insn.IR_TEXT) {
+            out = pack_word(out, ir[at + 1]);
+        } else {
+            let kinds = insn.ir_form(f).kinds;
+            let ki = 0;
+            let wp = at + 1;
+            while (ki < len(kinds)) {
+                let k = kinds[ki];
+                if (k == insn.O_LBL) {
+                    out = pack_lbl(out, ir[wp]);
+                } else if (k == insn.O_DIFF) {
+                    out = pack_lbl(out, ir[wp]);
+                    out = pack_lbl(out, ir[wp + 1]);
+                } else if (k == insn.O_MEM || k == insn.O_MEM0) {
+                    out = pack_word(out, ir[wp]);
+                    out = pack_word(out, ir[wp + 1]);
+                    out = pack_word(out, ir[wp + 2]);
+                    out = pack_word(out, ir[wp + 3]);
+                    out = pack_lbl(out, ir[wp + 4]);
+                } else {
+                    out = pack_word(out, ir[wp]);
+                    if (insn.ir_kind_words(k) > 1) { out = pack_word(out, ir[wp + 1]); };
+                };
+                wp = wp + insn.ir_kind_words(k);
+                ki = ki + 1;
+            };
+        };
+        at = at + insn.IR_W;
+    };
+    join(out, "")
+};
+
+// One body read back (unit_read): the same items, with a label name minted to
+// an id of this run and every field word the item does not use left 0, which
+// is what the emitter wrote in it.
+def unpack_body(blob: str) -> [long] {
+    let b = bytes(blob);
+    let n = len(b);
+    let ir: [long] = [];
+    let at = 0;
+    while (at < n) {
+        let f = b[at];
+        at = at + 1;
+        let w: [long] = [0, 0, 0, 0, 0, 0, 0];
+        if (f == insn.IR_LABEL) {
+            w[0] = unpack_lbl(b, at);
+            at = at + lbl_w(b, at);
+        } else if (f == insn.IR_LOC) {
+            w[0] = unpack_word(b, at);
+            at = at + word_w(b, at);
+            w[1] = unpack_word(b, at);
+            at = at + word_w(b, at);
+        } else if (f == insn.IR_TEXT) {
+            w[0] = unpack_word(b, at);
+            at = at + word_w(b, at);
+        } else {
+            let kinds = insn.ir_form(f).kinds;
+            let ki = 0;
+            let wp = 0;
+            while (ki < len(kinds)) {
+                let k = kinds[ki];
+                let nw = insn.ir_kind_words(k);
+                if (k == insn.O_LBL) {
+                    w[wp] = unpack_lbl(b, at);
+                    at = at + lbl_w(b, at);
+                } else if (k == insn.O_DIFF) {
+                    w[wp] = unpack_lbl(b, at);
+                    at = at + lbl_w(b, at);
+                    w[wp + 1] = unpack_lbl(b, at);
+                    at = at + lbl_w(b, at);
+                } else if (k == insn.O_MEM || k == insn.O_MEM0) {
+                    w[wp] = unpack_word(b, at);
+                    at = at + word_w(b, at);
+                    w[wp + 1] = unpack_word(b, at);
+                    at = at + word_w(b, at);
+                    w[wp + 2] = unpack_word(b, at);
+                    at = at + word_w(b, at);
+                    w[wp + 3] = unpack_word(b, at);
+                    at = at + word_w(b, at);
+                    w[wp + 4] = unpack_lbl(b, at);
+                    at = at + lbl_w(b, at);
+                } else {
+                    w[wp] = unpack_word(b, at);
+                    at = at + word_w(b, at);
+                    if (nw > 1) {
+                        w[wp + 1] = unpack_word(b, at);
+                        at = at + word_w(b, at);
+                    };
+                };
+                wp = wp + nw;
+                ki = ki + 1;
+            };
+        };
+        // word by word into `ir`: ir_push would hand back a whole new array
+        // per item, which for a pack's 7,713 items is 1.9GB of copying
+        ir += f;
+        ir += w[0];
+        ir += w[1];
+        ir += w[2];
+        ir += w[3];
+        ir += w[4];
+        ir += w[5];
+        ir += w[6];
+    };
+    ir
+};
+
+// How many bytes the word at `at` takes: its tag byte says (see pack_word).
+def word_w(b: [byte], at: long) -> long {
+    let t = b[at];
+    if (t < 126) { 1 } else if (t == 255) { 9 } else { 3 }
+};
+
+def unpack_word(b: [byte], at: long) -> long {
+    let t = b[at];
+    let v = 0;
+    if (t < 126) {
+        v = t;
+    } else if (t == 255) {
+        let sh = 0;
+        let i = 0;
+        while (i < 8) {
+            v = v + b[at + 1 + i] * (1 << sh);
+            sh = sh + 8;
+            i = i + 1;
+        };
+    } else {
+        v = b[at + 1] + b[at + 2] * 256;
+        if (t == 127) { v = v - 65536; };
+    };
+    v
+};
+
+// A label field: none (tag 0) or a name -- an id of this run, interned as the
+// text path interned `call y_alloc`'s operand.
+def unpack_lbl(b: [byte], at: long) -> long {
+    if (b[at] == 0) {
+        -1
+    } else {
+        let n = unpack_word(b, at + 1);
+        lbl_new(from_bytes(b[at + 1 + word_w(b, at + 1):at + 1 + word_w(b, at + 1) + n]))
+    }
+};
+
+// How many bytes the label field at `at` takes.
+def lbl_w(b: [byte], at: long) -> long {
+    if (b[at] == 0) { 1 } else { 1 + word_w(b, at + 1) + unpack_word(b, at + 1) }
 };
 
 // A type as text (for a pack or an object): a letter per kind, then its
@@ -10843,7 +11620,8 @@ def pack_unit_fields(u: Unit) -> str {
     out = pack_strs(out, u.files);
     out = pack_iface(out, u);
     out = pack_put(out, u.init);
-    out = pack_strs(out, u.bodies);
+    out = pack_strs(out, pack_bodies(u));
+    out = pack_strss(out, u.btext);
     out = pack_strs(out, u.labels);
     let rf = u.refs;
     out = pack_put(out, tostring(len(rf)));
@@ -10942,7 +11720,17 @@ def unit_read(cur: Cursor, name: str, bound: bool) -> Unit {
         j = j + 1;
     };
     let init = pack_get(cur);
-    let bodies = pack_get_strs(cur);
+    // The bodies stay packed: a link decodes only the ones the shake keeps
+    // (they are the only ones it assembles), which is what the text path did
+    // by reading a body's text only when it kept it.
+    let blob = pack_get_strs(cur);
+    let nb = pack_num(cur);
+    let btext: [[str]] = [];
+    let bi = 0;
+    while (bi < nb) {
+        btext += [pack_get_strs(cur)];
+        bi = bi + 1;
+    };
     let labels = pack_get_strs(cur);
     let refs: [[str]] = [];
     let nr = pack_num(cur);
@@ -10959,8 +11747,9 @@ def unit_read(cur: Cursor, name: str, bound: bool) -> Unit {
         j = j + 1;
     };
     let globals = pack_get_strs(cur);
-    { name: name, files: files, exports: xs, init: init, bodies: bodies,
-      labels: labels, refs: refs, rodata: rodata, globals: globals, dfl: dfl }
+    { name: name, files: files, exports: xs, init: init, bodies: [],
+      btext: btext, blob: blob, labels: labels, refs: refs, rodata: rodata,
+      globals: globals, dfl: dfl }
 };
 
 // The units `names` from a pack, in that order; [] for a pack of another
@@ -11001,7 +11790,7 @@ def std_unpack(pack: str, names: [str]) -> [Unit] {
 // fields, after a version line and the key it was compiled under (ycc.y
 // build_key) -- an object of another key, or a cut-off one, is no hit.
 def obj_version() -> str {
-    "ycc-unit 4\n"
+    "ycc-unit 5\n"
 };
 
 // An object carries a checksum over its own bytes, after them.
@@ -11126,7 +11915,7 @@ def compile_package(ast: Block, nr: Resolved, name: str, base: long, wlevel: lon
 // and the packages `deps` (`ycc build`: every package it links, each
 // after those it imports) and linked with them. `nr` is the program's
 // resolution: the std units it binds itself, the packages it imports.
-def emit_program(ast: Block, nr: Resolved, debug: bool, wlevel: long, std: [Unit], deps: [Unit]) -> { ok: bool, asm: str, errors: [Diag], warnings: [Diag], times: [Timing] } {
+def emit_program(ast: Block, nr: Resolved, debug: bool, wlevel: long, std: [Unit], deps: [Unit]) -> { ok: bool, asm: [LinkPart], errors: [Diag], warnings: [Diag], times: [Timing] } {
     let xt = unit_externs(std, nr.std, deps, nr.pkgs);
     let inits: [str] = [];
     let units: [Unit] = [];
@@ -11159,15 +11948,21 @@ def emit_program(ast: Block, nr: Resolved, debug: bool, wlevel: long, std: [Unit
         dup_y_label(deps, r.unit);
         let pt = clock_us();
         let ph = heap_used();
-        let asm = link_units(std, deps, r.unit);
-        let pr = phase_end(times, "asm_text", pt, ph);
-        { ok: true, asm: asm, errors: r.errors, warnings: r.warnings, times: pr.times }
+        let parts = link_units(std, deps, r.unit);
+        let pr = phase_end(times, "asm_parts", pt, ph);
+        { ok: true, asm: parts, errors: r.errors, warnings: r.warnings,
+          times: pr.times }
     } else {
-        { ok: false, asm: "", errors: r.errors, warnings: r.warnings, times: times }
+        { ok: false, asm: [], errors: r.errors, warnings: r.warnings,
+          times: times }
     }
 };
 
-export { emit_program, compile_package, std_units, std_unit_names, std_pack, unit_obj, unit_unobj, unit_iface, native_resolve, native_resolve_x, native_resolve_pk, origin_at, strip_ns, strip_list, strip_decl, phase_end };
+// is_intrinsic_name is exported for the language server's completion list: it
+// needs to KNOW whether a word is a builtin, and the list it keeps of them is
+// the one this predicate tests. Inert like the rest of the names here -- the
+// splicer deletes the export line, so nothing reaches codegen (LSP.md 9.1).
+export { emit_program, compile_package, std_units, std_unit_names, std_pack, unit_obj, unit_unobj, unit_iface, native_resolve, native_resolve_x, native_resolve_pk, origin_at, strip_ns, strip_list, strip_decl, phase_end, link_text, is_intrinsic_name, intrinsic_names };
 
 // ── maps: dynamic {K => V} ────────────────────────────────────────────
 // A map value is a two-field record -- {keys: [K], vals: [V]} -- and
@@ -11185,7 +11980,7 @@ def n_bool(v: str, line: long, col: long) -> Leaf {
 };
 
 def n_dot(obj: Node, key: str, line: long, col: long) -> Dot {
-    { k: K.dot, obj: obj, key: key, line: line, col: col }
+    { k: K.dot, obj: obj, key: key, line: line, col: col, nline: line, ncol: col }
 };
 
 def n_idx(arr: Node, idx: Node, line: long, col: long) -> Index {
@@ -11209,7 +12004,7 @@ def n_while(c: Node, b: Node, ln: long, cl: long) -> While {
 };
 
 def n_decl(name: str, v: Node, ln: long, cl: long) -> Decl {
-    { k: K.decl, kind: "let", typ: type_node({ k: K.tnone }), name: name, v: v, line: ln, col: cl }
+    { k: K.decl, kind: "let", typ: type_node({ k: K.tnone }), name: name, v: v, line: ln, col: cl, nline: ln, ncol: cl }
 };
 
 def n_assign(name: str, v: Node, ln: long, cl: long) -> Assign {

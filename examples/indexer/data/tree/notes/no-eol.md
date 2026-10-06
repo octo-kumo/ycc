@@ -1,0 +1,1 @@
+this text file's only line has no newline

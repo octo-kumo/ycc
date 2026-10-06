@@ -55,7 +55,8 @@ static PkGit pk_git_dir(PkSt st, PkDep d);
 static Yv *pk_q(Yv *s);
 static Yv *pk_env(void);
 static Yv *pk_read_environ(void);
-static long pk_exec(Yv *cmd);
+long pk_exec(Yv *cmd);       /* exec(cmd): fork, /bin/sh -c, wait4 */
+int pk_exists(Yv *path);     /* exists(path) */
 static long pk_exit_status(long raw);
 static PkGit pk_fetch(PkDep d, Yv *base, Yv *pin);
 static Yv *pk_lock_read(Yv *dir);
@@ -173,6 +174,12 @@ static int pk_is_file(Yv *path) {
     } else {
         return 0;
     }
+}
+
+/* fs.exists, for the callers outside this file (ycc.c's build_dispatch skips
+ * a package whose object is already there). */
+int pk_exists(Yv *path) {
+    return pk_is_file(path);
 }
 
 long pk_mkdir(Yv *path) {
@@ -984,8 +991,9 @@ static Yv *pk_env(void) {
     }
 }
 
-/* The twin of std/exec.y: fork, execve("/bin/sh", ..., NULL), wait4. */
-static long pk_exec(Yv *cmd) {
+/* The twin of std/exec.y: fork, execve("/bin/sh", ..., NULL), wait4.
+ * ycc.c's build_dispatch runs its children through it. */
+long pk_exec(Yv *cmd) {
     char shpath[] = "/bin/sh";
     char dashc[] = "-c";
     char *argv[] = {shpath, dashc, cmd->u.s.p, NULL};

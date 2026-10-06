@@ -51,8 +51,9 @@ def elf_memsz(filesz: long) -> long {
 // Where the .bss starts, as an offset from the rodata start: past the mapped
 // image's last page, to the page after it. Only the rodata's length and the
 // code's own length are involved -- rodata starts right after the code now
-// that nothing is padded.
-def elf_bss_from_ro(code_len: long, ro_len: long, bss_len: long) -> long {
+// that nothing is padded, and .bss has no bytes of its own to place (it is
+// zeroed by the loader), so there is no third length to take.
+def elf_bss_from_ro(code_len: long, ro_len: long) -> long {
     elf_mem_code(code_len, ro_len) + 4096 - code_len
 };
 

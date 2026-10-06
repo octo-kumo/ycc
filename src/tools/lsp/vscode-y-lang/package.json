@@ -1,15 +1,19 @@
 {
   "name": "y-lang",
   "displayName": "Y Language Support",
-  "description": "Syntax highlighting for the Y programming language (ycc / ysh)",
-  "version": "0.1.0",
+  "description": "Language server for the Y programming language (ycc): diagnostics, semantic highlighting, formatting",
+  "version": "0.2.0",
   "publisher": "yun",
   "license": "MIT",
   "engines": {
-    "vscode": "^1.70.0"
+    "vscode": "^1.75.0"
   },
   "categories": [
     "Programming Languages"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onLanguage:y"
   ],
   "contributes": {
     "languages": [
@@ -25,12 +29,59 @@
         "configuration": "./language-configuration.json"
       }
     ],
-    "grammars": [
+    "configuration": {
+      "title": "Y",
+      "properties": {
+        "y.lsp.serverPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Path to the `yserve` binary. Leave empty to search next to the extension, then the workspace root, then `$PATH`."
+        },
+        "y.lsp.rootPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Workspace root passed to `yserve` as `--root`. Imports in an open file resolve against the file's own directory first, so this only matters for files outside the workspace. Empty uses the server's working directory."
+        },
+        "y.lsp.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Log the JSON-RPC traffic between VS Code and yserve to the Y output channel."
+        }
+      }
+    },
+    "commands": [
       {
-        "language": "y",
-        "scopeName": "source.y",
-        "path": "./syntaxes/y.tmLanguage.json"
+        "command": "y.formatDocument",
+        "title": "Y: Format Document",
+        "category": "Y"
+      },
+      {
+        "command": "y.restartLanguageServer",
+        "title": "Y: Restart Language Server",
+        "category": "Y"
+      },
+      {
+        "command": "y.showServerOutput",
+        "title": "Y: Show Server Output",
+        "category": "Y"
       }
     ]
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.75.0",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
   }
 }

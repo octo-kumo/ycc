@@ -22,7 +22,10 @@ Yv *rn_pop(Yv *st);
 Yv *rn_define(Yv *st, Yv *orig, Yv *uniq);
 Yv *rn_lookup(Yv *st, Yv *name);
 Yv *rn_lookup_to(Yv *st, Yv *name, long lo);
-Yv *rn_bind(Yv *st, Yv *orig);
+Yv *rn_bind(Yv *st, Yv *orig, Yv *line, Yv *col);
+long rn_def_site(Yv *uniq);
+long rn_def_line(long st);
+long rn_def_col(long st);
 
 /* node lists and ids */
 Yv *rn_list(Yv *nodes, Yv *st);
@@ -95,6 +98,9 @@ Yv *rn_decl(Yv *node, Yv *st);
 Yv *rn_decl_def(Yv *node, Yv *st);
 Yv *rn_decl_def_lookup(Yv *node, Yv *u, Yv *st);
 Yv *rn_decl_def_go(Yv *node, Yv *u, Yv *st);
+Yv *rn_decl_native(Yv *node, Yv *st);
+Yv *rn_decl_native_lookup(Yv *node, Yv *u, Yv *st);
+Yv *rn_decl_native_go(Yv *node, Yv *u, Yv *st);
 Yv *rn_decl_rest(Yv *node, Yv *st);
 Yv *rn_decl_func(Yv *node, Yv *st);
 Yv *rn_decl_func_lookup(Yv *node, Yv *u, Yv *st);
@@ -112,20 +118,21 @@ Yv *rn_func_p3(Yv *func, Yv *fparams, Yv *fptypes, Yv *fret, Yv *st);
 Yv *rn_func_p4(Yv *func, Yv *fparams, Yv *fptypes, Yv *fret, Yv *fbody,
                Yv *st);
 Yv *rn_func_p5(Yv *fparams, Yv *fptypes, Yv *fret, Yv *fbody, long fline,
-               long fcol, Yv *st);
+               long fcol, Yv *fppos, Yv *st);
 Yv *rn_func_params(Yv *fparams, Yv *fptypes, Yv *fret, Yv *fbody, long fline,
-                   long fcol, Yv *st);
+                   long fcol, Yv *fppos, Yv *st);
 Yv *rn_func_go(Yv *fparams, Yv *fptypes, Yv *fret, Yv *fbody, long fline,
-               long fcol, Yv *params, long i, Yv *st);
+               long fcol, Yv *fppos, Yv *params, long i, Yv *st);
 Yv *rn_func_body(Yv *fptypes, Yv *fret, Yv *fbody, long fline, long fcol,
-                 Yv *params, Yv *st);
+                 Yv *fppos, Yv *params, Yv *st);
 Yv *rn_func_finish(Yv *fptypes, Yv *fret, Yv *fbody, long fline, long fcol,
-                   Yv *params, Yv *stmts, Yv *st);
+                   Yv *fppos, Yv *params, Yv *stmts, Yv *st);
 
 /* the module entry points (rename.y: export { rename_program,
  * rename_program_x }) */
 Yv *rename_program(Yv *ast);
 Yv *rename_program_x(Yv *ast, Yv *dfl, Yv *ofile, Yv *fmods);
+Yv *rename_program_x2(Yv *ast, Yv *dfl, Yv *ofile, Yv *fmods);
 Yv *rn_stmt_mod(Yv *s);
 Yv *rn_qualify(Yv *s);
 Yv *rn_top(Yv *stmts, Yv *st);

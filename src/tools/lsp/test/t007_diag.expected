@@ -1,0 +1,25 @@
+clean: 0
+errors+warnings file: 2
+  1 1:1 'f' body: expected long, got str
+  2 2:5 unused variable 'unused'
+several errors: 6
+syntactic: 2
+  1:8 expected a parameter name, got '{'
+  2:5 expected a name after 'let', got '='
+warnings only: 1
+  2 2:5 unused variable 'unused'
+wlevel 0: 0   wlevel 1: 1
+unterminated string: 1
+  1 1:9 unterminated error
+still alive
+unterminated comment: 1
+with an import: 1
+  src/tools/lsp/test/mod.y:7 unused variable 'spare'
+missing import: 1
+  1:18 cannot open import './no_such_file.y'
+and it does not take the server down
+good import still checks: 1 (unused variable 'spare')
+by-name import: 0
+readline: 0
+empty: 0
+blank: 0

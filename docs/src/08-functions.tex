@@ -108,7 +108,7 @@ while (k < 3) {
 tests, and \ic{unwrap(v)} --- or its postfix spelling \ic{v!} ---
 returns the payload and is a \emph{runtime error} on \ic{none} (it is a
 programmer error, loudly). \ic{x == none} is the is-empty check, and
-two options are equal when their payloads are (Section~\ref{sec:equality});
+two options are equal when both are \ic{none} or both hold equal payloads (Section~\ref{sec:equality});
 an option of an array is an optional reference, not a copied one.
 
 \begin{lstlisting}
@@ -144,9 +144,10 @@ let x = log("hi");         // error: cannot bind a void value to 'x'
 \item \ic{\&a[i]} --- address of an array element (any array expression:
   \ic{\&grid[0][i]} is legal);
 \item \ic{\&arr} on a whole array --- \emph{both} kinds, \ic{[T]} and
-  \ic{[T; N]} --- or \ic{\&} of any temporary, is a compile error
-  (``cannot take the address of a whole array''). A binding names the
-  array \emph{header}, not its first element, so \ic{\&arr} would hand
+  \ic{[T; N]} --- is a compile error
+  (``cannot take the address of a whole array``), and \ic{\&} of any
+  temporary is a different one (``'\&' needs a plain variable``). A binding names
+  the array \emph{header}, not its first element, so \ic{\&arr} would hand
   out the header; write \ic{\&arr[0]}, which works for either kind.
 \end{itemize}
 

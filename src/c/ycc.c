@@ -369,24 +369,30 @@ long print_native_errors(Yv *errors, Yv *origin, int bare) {
     return 0;
 }
 
-/* What lint.c found in a unit that compiled, as `at: warning: msg` on
- * stderr (a -S listing on stdout stays clean), each position as
- * print_native_errors gives it. lint_unit sorted them and dropped repeats. */
-long print_native_warnings(Yv *warnings, Yv *origin, int bare) {
+/* The warnings as the one string print_native_warnings used to write in
+ * pieces: a dispatched child carries it in a file and the parent prints it
+ * where the serial loop would have, so the bytes on stderr do not depend on
+ * which child finished first. Each position as print_native_errors gives it
+ * (lint_unit sorted them and dropped repeats). */
+Yv *warning_text(Yv *warnings, Yv *origin, int bare) {
+    Yv *out = ys("");
     long i = 0;
     while (i < yv_len(warnings)) {
         Yv *w = ya_get(warnings, i);
-        eputs_(ys_cat(
-            ys_cat(ys_cat(ys_cat(ys_cat(origin_at(origin,
-                                                  yv_l(yr_get(w, "line")),
-                                                  bare),
-                                        ys(":")),
-                                 ys_tostring(yr_get(w, "col"))),
-                          ys(": warning: ")),
-                   yr_get(w, "msg")),
-            ys("\n")));
+        Yv *at = origin_at(origin, yv_l(yr_get(w, "line")), bare);
+        Yv *one = ys_cat(ys_cat(at, ys(":")), ys_tostring(yr_get(w, "col")));
+        one = ys_cat(one, ys(": warning: "));
+        one = ys_cat(one, yr_get(w, "msg"));
+        out = ys_cat(out, ys_cat(one, ys("\n")));
         i = i + 1;
     }
+    return out;
+}
+
+/* What lint.c found in a unit that compiled, as `at: warning: msg` on
+ * stderr (a -S listing on stdout stays clean). */
+long print_native_warnings(Yv *warnings, Yv *origin, int bare) {
+    eputs_(warning_text(warnings, origin, bare));
     return 0;
 }
 
@@ -430,6 +436,7 @@ Yv *build_args(Yv *cmdline) {
     long wlevel = 0;
     int allow_exec = 1;
     int std_src = 0;
+    Yv *one = ys("");
     long i = 2;
     while (i < yv_len(cmdline)) {
         Yv *a = ya_get(cmdline, i);
@@ -444,6 +451,15 @@ Yv *build_args(Yv *cmdline) {
             allow_exec = 0;
         } else if (ys_eq_lit(a, "--std-src")) {
             std_src = 1;
+        } else if (ys_eq_lit(a, "--one")) {
+            /* build_dispatch's child: one package, then exit */
+            if (i + 1 >= yv_len(cmdline)) {
+                puts_(ys("ycc: --one needs a package name\n"));
+                exit_(1);
+                return 0;
+            }
+            one = ya_get(cmdline, i + 1);
+            i = i + 1;
         } else if (ys_eq_lit(ys_slice(a, 0, 1), "-")) {
             puts_(ys_cat(ys_cat(ys("ycc: unknown flag '"), a),
                          ys("' (see ycc -h)\n")));
@@ -463,10 +479,10 @@ Yv *build_args(Yv *cmdline) {
         dir = ys(".");
         ;
     }
-    return yr(6, "dir", dir, "debug", yv_bool(debug), "nowarn",
+    return yr(7, "dir", dir, "debug", yv_bool(debug), "nowarn",
               yv_bool(nowarn), "wlevel", yv_long(wlevel), "allow_exec",
               yv_bool(allow_exec), "std_src",
-              yv_bool(std_src));
+              yv_bool(std_src), "one", one);
 }
 
 Yv *build_resolve(Yv *path, int allow_exec, Yv *pkgs, Yv *roots) {
@@ -579,6 +595,250 @@ Yv *build_reach(Yv *direct, Yv *pkgs, Yv *nrs) {
     return reach;
 }
 
+/* ── `ycc build`: compiling a ready level of packages in parallel ─────────
+ *
+ * pk_load hands the packages back in topological order, so every dependency
+ * has a lower index than its importer. The loop below walks them in that
+ * order; a *level* is a run of packages that depend only on what is already
+ * compiled (all of their dependencies sit before the run), and a level's
+ * packages are independent of each other -- so it is where the time is.
+ *
+ * A level compiles out of process: one `ycc build --one NAME` child per
+ * package, through a single shell (exec() takes one command string, and `&`
+ * plus `wait` is all the parallelism that needs). Each child writes the
+ * object the loop would have written, build/obj/NAME.yo, keyed by build_key
+ * (this compiler, the package's place among the units, its text, and the
+ * *interfaces* of the packages it imports), and the loop then reads it back
+ * exactly as on a warm build. Nothing here is needed for a correct build: a
+ * child that fails leaves no object, and the loop compiles that package
+ * itself and reports the error as if nothing had been dispatched -- the
+ * diagnostics and the bytes are the same either way. Warnings ride along in a
+ * sidecar named for the object they belong to (the key), so they print in
+ * package order and a sidecar left by another key is never read. What does
+ * change is the order of the *lines*: a level's "compiling" lines all come
+ * from the dispatch, before the loop prints the warnings it collected.
+ *
+ * Deliberately not spawn/join. A thread shares the address space (CLONE_VM)
+ * and the compiler keeps 51 module-level lets -- the label table every
+ * body's label ids index, rename.c's and types.c's name caches, native.c's
+* dbg_file and pkg_ns -- so two packages compiling at once would race on all
+ * of them, and every later allocation would take y_alloc's %fs detour (+14
+ * instructions each, measured: +2.7% of a package's compile, since a 3.5k
+ * line unit allocates 615,000 times). Two processes race on nothing, and
+ * each one's arena holds one package instead of the whole project: 799 MB
+ * for eight 3.5k-line packages compiled in one process, 106 MB for the same
+ * build with children.
+ *
+ * The waves are capped so peak memory stays bounded: a package compile is
+ * ~30 ms, so even a wide graph does not want twenty of them at once. And
+ * nothing is dispatched for a level of one (a chain, or a project with a
+ * single package), for a package whose object is already there (a rebuild
+ * that compiles nothing spawns nothing), or under --std-src (a child would
+ * compile the std units from source before its own package).
+ */
+#define BUILD_JOBS 4
+
+/* `s` quoted for sh (pkg.c's pk_q, which is not exported, does the same). */
+static Yv *build_q(Yv *s) {
+    return ys_cat(ys_cat(ys("'"), ys_join(ys_split(s, ys("'")), ys("'\\''"))),
+                  ys("'"));
+}
+
+/* Where a dispatched child's warnings wait: one file per object, so a
+ * leftover from another key is never read. */
+static Yv *warn_path(Yv *odir, Yv *name, Yv *key) {
+    return ys_cat(ys_cat(ys_cat(ys_cat(odir, ys("/")), name), ys(".")),
+                  ys_cat(key, ys(".warn")));
+}
+
+/* This compiler's own path, which is what the children run: /proc/self/exe is
+ * absolute and resolved, where argv[0] need not be. readlink(2), not read:
+ * opening that path gives the binary itself, a megabyte of it. */
+static Yv *self_exe(void) {
+    char buf[4096];
+    long n = (long)readlink("/proc/self/exe", buf, sizeof(buf));
+    if (n <= 0) {
+        return ys("");
+    } else {
+        return ys_n(buf, (size_t)n);
+    }
+}
+
+/* The flags a child needs to compile its package exactly as this run would. */
+static Yv *build_child_flags(int debug, int nowarn, long wlevel, int allow_exec) {
+    Yv *out = ys("");
+    if (debug) { out = ys_cat(out, ys(" -g")); }
+    if (nowarn) { out = ys_cat(out, ys(" -w")); }
+    if (wlevel > 0) {
+        out = ys_cat(ys_cat(out, ys(" -W ")), ys_long(wlevel));
+        ;
+    }
+    if (!allow_exec) {
+        out = ys_cat(out, ys(" --no-exec"));
+        ;
+    }
+    return out;
+}
+
+/* Where `name` sits in the package order, or -1. */
+static long pkg_index(Yv *pkgs, Yv *name) {
+    long at = -1;
+    long i = 0;
+    while (i < yv_len(pkgs)) {
+        if (ys_eq(yr_get(ya_get(pkgs, i), "name"), name)) { at = i; }
+        i = i + 1;
+    }
+    return at;
+}
+
+/* `ycc build --one NAME`: compile exactly this one package of DIR and write
+ * its object. Only its dependencies' objects are read -- the loop hands out a
+ * package whose dependencies are all done, and this same compiler wrote them,
+ * so those units are the ones the loop would have compiled. The unit order is
+ * the topological one, so each dependency's own key hashes the same
+ * interfaces the loop gave it. */
+long build_one(Yv *dir, Yv *one, int debug, int nowarn, long wlevel,
+               int allow_exec, int std_src) {
+    /* `debug` and `nowarn` are part of the driver's one uniform build
+     * signature, and neither applies to a single package's object: a package
+     * carries no DWARF (the line table is the bin's, made when it links), and
+     * its warnings are written to build/obj/<pkg>.warn for the bin to replay on
+     * every build -- which is where -w is honoured. Kept in the signature so
+     * the call sites read alike; Y leaves unused parameters alone. */
+    (void)debug;
+    (void)nowarn;
+    Yv *g = pk_load(dir);
+    Yv *pkgs = yr_get(g, "pkgs");
+    Yv *odir = ys_cat(pk_join(dir, ys("build")), ys("/obj"));
+    long target = pkg_index(pkgs, one);
+    if (target < 0) {
+        puts_(ys_cat(ys_cat(ys_cat(ys("error: no package '"), one),
+                           ys("' in ")),
+                     ys_cat(dir, ys("\n"))));
+        exit_(1);
+        return 0;
+    }
+    Yv *cid = pk_self_id();
+    Yv *pack = ys("");
+    if (!std_src) {
+        pack = self_pack();
+        ;
+    }
+    Yv *want = yr_get(ya_get(pkgs, target), "deps");
+    Yv *units = yav(0);
+    long k = 0;
+    while (k < target) {
+        Yv *p = ya_get(pkgs, k);
+        if (pk_has(want, yr_get(p, "name"))) {
+            Yv *nr = build_resolve(yr_get(p, "lib"), allow_exec,
+                                   yr_get(p, "deps"), yr_get(p, "roots"));
+            long base = 5000000000L + k * 1000000000L;
+            Yv *key = build_key(cid, yr_get(p, "name"), base, allow_exec, nr,
+                                units);
+            Yv *ot = read_file(ys_cat(ys_cat(ys_cat(odir, ys("/")),
+                                               yr_get(p, "name")),
+                                      ys(".yo")));
+            if (yv_is_none(ot)) {
+                puts_(ys_cat(ys_cat(ys("error: package '"), yr_get(p, "name")),
+                             ys("' was not compiled first\n")));
+                exit_(1);
+                return 0;
+            }
+            Yv *uo = unit_unobj(yv_unwrap(ot), key);
+            if (!yv_b(yr_get(uo, "ok"))) {
+                puts_(ys_cat(ys_cat(ys("error: package '"), yr_get(p, "name")),
+                             ys("' has no current object\n")));
+                exit_(1);
+                return 0;
+            }
+            units = ya_push(units, yr_get(uo, "unit"));
+            want = ya_push(want, yr_get(p, "deps"));
+        }
+        k = k + 1;
+    }
+    Yv *p = ya_get(pkgs, target);
+    Yv *nr = build_resolve(yr_get(p, "lib"), allow_exec, yr_get(p, "deps"),
+                           yr_get(p, "roots"));
+    long base = 5000000000L + target * 1000000000L;
+    Yv *key = build_key(cid, yr_get(p, "name"), base, allow_exec, nr, units);
+    Yv *su = std_units(std_order(yr_get(nr, "std")), pack);
+    Yv *ast = parse_program(tokenize(yr_get(nr, "src")));
+    Yv *r = compile_package(ast, nr, yr_get(p, "name"), base, wlevel, su, units);
+    if (!yv_b(yr_get(r, "ok"))) {
+        print_native_errors(yr_get(r, "errors"), yr_get(nr, "origin"), 0);
+        exit_(1);
+        return 0;
+    }
+    Yv *wp = warn_path(odir, yr_get(p, "name"), key);
+    if (!write_file(wp, warning_text(yr_get(r, "warnings"), yr_get(nr, "origin"),
+                                     0))) {
+        exit_(1);
+        return 0;
+    }
+    Yv *op = ys_cat(ys_cat(odir, ys("/")), yr_get(p, "name"));
+    op = ys_cat(op, ys(".yo"));
+    if (!write_file(op, unit_obj(yr_get(r, "unit"), key))) {
+        puts_(ys_cat(ys_cat(ys("error: writing '"), op), ys("' failed\n")));
+        exit_(1);
+        return 0;
+    }
+    return 0;
+}
+
+/* Hand the level pkgs[lo..hi) out to child compilers, in waves of at most
+ * BUILD_JOBS; how many went out comes back (the callers here want the objects
+ * more than the count). A
+ * package whose object file is already there is left to the loop, so a
+ * rebuild that compiles nothing spawns nothing either. */
+static long build_dispatch_level(Yv *dir, Yv *pkgs, Yv *odir, long lo, long hi,
+                                 int debug, int nowarn, long wlevel,
+                                 int allow_exec, int std_src) {
+    long n = 0;
+    /* --std-src has no pack, so a child would compile the std units from
+     * source before its own package: far more than the package costs. */
+    if (!std_src && hi - lo > 1) {
+        Yv *exe = self_exe();
+        if (yv_len(exe) > 0) {
+            Yv *flags = build_child_flags(debug, nowarn, wlevel, allow_exec);
+            Yv *dirarg = ys("");
+            Yv *wave = yav(0);
+            long k = lo;
+            long w;
+            if (!ys_eq_lit(dir, ".")) {
+                dirarg = ys_cat(ys(" "), build_q(dir));
+            }
+            while (k < hi) {
+                Yv *name = yr_get(ya_get(pkgs, k), "name");
+                if (!pk_exists(ys_cat(ys_cat(ys_cat(odir, ys("/")), name),
+                                      ys(".yo")))) {
+                    wave = ya_push(wave, name);
+                }
+                k = k + 1;
+            }
+            w = 0;
+            while (w < yv_len(wave)) {
+                long take = yv_len(wave) - w;
+                long c = 0;
+                Yv *cmd = ys("");
+                if (take > BUILD_JOBS) { take = BUILD_JOBS; }
+                while (c < take) {
+                    Yv *nm = ya_get(wave, w + c);
+                    eputs_(ys_cat(ys_cat(ys("compiling "), nm), ys("\n")));
+                    /* quote the two paths, not the whole command: the flags
+                     * and the directory are already quoted */
+                    cmd = ys_cat(ys_cat(cmd, build_q(exe)), ys(" build --one "));
+                    cmd = ys_cat(cmd, build_q(nm));
+                    cmd = ys_cat(ys_cat(ys_cat(cmd, flags), dirarg), ys(" & "));
+                    n = n + 1;
+                    c = c + 1;
+                }
+                pk_exec(ys_cat(cmd, ys("wait")));
+                w = w + take;
+            }
+        }
+    }
+    return n;
+}
 long build_project(Yv *dir, int debug, int nowarn, long wlevel,
                    int allow_exec, int std_src) {
     Yv *g = pk_load(dir);
@@ -644,6 +904,29 @@ long build_project(Yv *dir, int debug, int nowarn, long wlevel,
     Yv *units = yav(0);
     k = 0;
     while (k < yv_len(pkgs)) {
+        /* A level: the longest run of packages from k that depend only on
+         * what is already compiled (every dependency has the lower index). A
+         * level wider than one package goes out to child compilers, and the
+         * loop below then reads their objects (build_dispatch_level). */
+        long hi = k;
+        int scanning = 1;
+        while (scanning && hi < yv_len(pkgs)) {
+            Yv *deps = yr_get(ya_get(pkgs, hi), "deps");
+            long d = 0;
+            int ready = 1;
+            while (d < yv_len(deps)) {
+                if (pkg_index(pkgs, ya_get(deps, d)) >= k) { ready = 0; }
+                d = d + 1;
+            }
+            if (ready) {
+                hi = hi + 1;
+            } else {
+                scanning = 0;
+            }
+        }
+        build_dispatch_level(dir, pkgs, odir, k, hi, debug, nowarn, wlevel,
+                             allow_exec, std_src);
+        while (k < hi) {
         Yv *p = ya_get(pkgs, k);
         Yv *nr = ya_get(nrs, k);
         long base = 5000000000L + k * 1000000000L;
@@ -661,7 +944,15 @@ long build_project(Yv *dir, int debug, int nowarn, long wlevel,
             }
             ;
         }
-        if (!hit) {
+        if (hit) {
+            /* a dispatched child's warnings, in package order like the rest */
+            Yv *wp = warn_path(odir, yr_get(p, "name"), key);
+            Yv *wt = read_file(wp);
+            if (!yv_is_none(wt)) {
+                if (!nowarn) { eputs_(yv_unwrap(wt)); }
+                remove_file(wp);
+            }
+        } else {
             eputs_(ys_cat(ys_cat(ys("compiling "), yr_get(p, "name")), ys("\n")));
             Yv *ast = parse_program(tokenize(yr_get(nr, "src")));
             Yv *r = compile_package(ast, nr, yr_get(p, "name"), base, wlevel,
@@ -684,6 +975,7 @@ long build_project(Yv *dir, int debug, int nowarn, long wlevel,
             ;
         }
         k = k + 1;
+        }
     }
 
     i = 0;
@@ -767,12 +1059,19 @@ long y_main(Yv *cmdline) {
         (ys_eq_lit(ya_get(cmdline, 1), "build") ||
          ys_eq_lit(ya_get(cmdline, 1), "vendor"))) {
         Yv *ba = build_args(cmdline);
-        if (ys_eq_lit(ya_get(cmdline, 1), "build")) {
+        Yv *one = yr_get(ba, "one");
+        if (ys_eq_lit(ya_get(cmdline, 1), "build") && yv_len(one) == 0) {
             build_project(yr_get(ba, "dir"), yv_b(yr_get(ba, "debug")),
                           yv_b(yr_get(ba, "nowarn")),
                           yv_l(yr_get(ba, "wlevel")),
                           yv_b(yr_get(ba, "allow_exec")),
                           yv_b(yr_get(ba, "std_src")));
+            ;
+        } else if (ys_eq_lit(ya_get(cmdline, 1), "build")) {
+            build_one(yr_get(ba, "dir"), one, yv_b(yr_get(ba, "debug")),
+                      yv_b(yr_get(ba, "nowarn")), yv_l(yr_get(ba, "wlevel")),
+                      yv_b(yr_get(ba, "allow_exec")),
+                      yv_b(yr_get(ba, "std_src")));
             ;
         } else {
             pk_vendor(yr_get(ba, "dir"));
@@ -883,7 +1182,7 @@ long y_main(Yv *cmdline) {
                 exit_(1);
                 return 1;
             } else if (yv_b(yr_get(pargs, "asm_only"))) {
-                Yv *rasm = yr_get(r, "asm");
+                Yv *rasm = link_text(yr_get(r, "asm"));
                 int wrote = 1;
                 if (yv_len(out) == 0) {
                     puts_(rasm);
@@ -923,9 +1222,12 @@ long y_main(Yv *cmdline) {
                  * executable DIRECTLY with the write_bytes builtin
                  * (binary-safe open/write/chmod, tinycc-style — NULs pass
                  * through as array elements, no shell, no exec/printf). */
-                Yv *rasm2 = yr_get(r, "asm");
-                Yv *ab = ycc_assemble(rasm2,
+                Yv *ab = ycc_assemble(yr_get(r, "asm"),
                                       yv_b(yr_get(pargs, "debug")));
+                /* The assembly text itself is not built on this path any more
+                 * (the assembler reads the emitter's items), so the size
+                 * counter here is the item count; -S still reports asm_bytes. */
+                Yv *abitems = yr_get(ab, "items");
                 ph = phase_end(dt, ys("assemble"), t0, h0);
                 dt = yr_get(ph, "times");
                 t0 = yv_l(yr_get(ph, "t"));
@@ -968,7 +1270,7 @@ long y_main(Yv *cmdline) {
                                               ys_cat(ys(" KB"), ys("\n")))))));
                         print_counter(ys("src_bytes"), yv_len(nrsrc));
                         print_counter(ys("tokens"), yv_len(toks));
-                        print_counter(ys("asm_bytes"), yv_len(rasm2));
+                        print_counter(ys("asm_items"), yv_l(abitems));
                         print_counter(ys("out_bytes"), yv_len(abbytes));
                         ;
                     }

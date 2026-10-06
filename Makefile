@@ -121,6 +121,63 @@ test-compile: cycc ycc
 	./cycc -o /tmp/hello_c test/y/examples/helloworld.y && /tmp/hello_c
 	./ycc -o /tmp/hello_y test/y/examples/helloworld.y && /tmp/hello_y
 
+# The language server (src/tools/lsp/, designed in src/tools/lsp/LSP.md). It is
+# a Y program like any other, so it builds with the compiler -- and it wants the
+# std pack, because a server that spent every request recompiling the std units
+# would be unusable. $(call PACK) attaches it exactly as for ./ycc.
+#
+# The two compilers must produce identical bytes. yserve imports the compiler's
+# own modules by path, so this is a real port check on top of a build: anything
+# that differed between the copies would show up here and nowhere else, since no
+# other program in the tree imports types.y, native.y and friends.
+#
+# $(YREF), not ./ycc: `make ycc` is the acceptance gate on the compiler itself
+# and rebuilds it, so depending on it would make building the server wait on --
+# and fail with -- whatever the compiler's own state happens to be.
+LSP_SRC := $(wildcard src/tools/lsp/*.y)
+# The reference compiler, as the suites call it: the last blessed build.
+YREF ?= $(CURDIR)/refs/ycc.ref
+yserve: $(LSP_SRC) src/y/std/json.y cycc
+	@rm -f yserve _yserve0 _yserve1 _yserve1p
+	ulimit -v $(CYCC_MEM_KB); ./cycc -o _yserve0 src/tools/lsp/yserve.y
+	$(call PACK,_yserve0,yserve)
+	ulimit -v $(CYCC_MEM_KB); $(YREF) -o _yserve1 src/tools/lsp/yserve.y
+	$(call PACK,_yserve1,_yserve1p)
+	@if cmp -s yserve _yserve1p; then \
+	  echo "verified: cycc output == $(YREF) output == yserve (byte-identical)"; \
+	else \
+	  echo "yserve: the two compilers DISAGREE (cycc vs $(YREF))"; \
+	  echo "  yserve is the only program that imports the compiler's own modules by"; \
+	  echo "  path -- types.y, native.y, parser.y, rename.y, lint.y -- so a C/Y"; \
+	  echo "  divergence shows up here first. It is the same failure as the"; \
+	  echo "  'cmp ycc refs/ycc.ref' in make ycc and the one test_port.sh reports,"; \
+	  echo "  NOT a bug in the server. Run 'make port-check' first."; \
+	  rm -f _yserve0 _yserve1 _yserve1p; exit 1; \
+	fi
+	rm -f _yserve0 _yserve1 _yserve1p
+
+# The extension's TypeScript. Separate from yserve because it needs node and npm,
+# which the compiler itself must never depend on. `npm ci` when a lockfile is
+# present so the build is reproducible, `npm install` otherwise.
+lsp-ext:
+	cd src/tools/lsp/vscode-y-lang && \
+	  { [ -f package-lock.json ] && npm ci || npm install; } && npm run compile
+
+# The installable .vsix. Depends on lsp-ext, and NOT on yserve: the extension
+# finds the server at runtime, so shipping one inside the package would bake in
+# the machine it was built on.
+lsp-vsix: lsp-ext
+	cd src/tools/lsp/vscode-y-lang && \
+	  npx -y @vscode/vsce package --no-git-tag-version --allow-missing-repository
+
+# The server driven as a process: framing, fork containment, state across
+# messages, and the extension's activation. Kept out of `make test` -- it needs a
+# process per case, so it is slow; test/sh/test_lsp.sh runs the fixtures and the
+# formatter instead. The two Node checks skip themselves when the extension's
+# node_modules are absent.
+lsp-e2e: yserve
+	sh src/tools/lsp/test/test-e2e.sh
+
 # ── The development loop (AGENTS.md, "Changing the compiler") ────────────
 # A change lands in src/y and, the same, in src/c. `make check` verifies it
 # and measures it against BASE in a few minutes; `make rebless` accepts it
@@ -204,7 +261,7 @@ rebless: cycc
 clean:
 	rm -f $(CYC_SRCS:src/c/%.c=src/c/%.o) cycc cycc-asan ycc _ycc _ycc0 _ycc0.pack ycc.pack a.out
 	rm -f ynew _ynew1 _ynew2 _ynew3 _ynewp _ynewp.pack _rb1 _rb2 _rbp _rbp.pack
-	rm -rf _check
+	rm -rf _check docs/build
 
 # Memcheck the C copy on a real input. NOTE: no --leak-check=full: the Y
 # value model (src/c/yv.c) never frees, so a leak gate could never be clean
@@ -214,4 +271,50 @@ clean:
 valgrind: cycc
 	valgrind --error-exitcode=1 --quiet ./cycc -o /tmp/cycc-vg test/y/examples/helloworld.y
 
-.PHONY: all clean valgrind test test-fast test-compile asan test-asan asm-check ycc check port-check corpus-diff bench bench-ir rebless
+# ── The reference manual (docs/src/), typeset with tectonic ────────────────
+# `make docs` -> docs/build/manual.pdf.
+#
+# Tectonic takes exactly ONE input, and docs/Tectonic.toml names three:
+# _preamble, index, _postamble. Those three entries say what the document is --
+# one file, in that order, with index.tex \input-ing the ten chapters -- so the
+# recipe does the concatenation itself and pipes the result in on stdin, which
+# is `tectonic -`. That is why there is no _all.tex driver in docs/src: this
+# recipe is the driver, and the document's structure stays in the config where
+# it belongs. Run from docs/src so the chapters' \input paths resolve.
+#
+# The recipe FAILS on an error and on a warning, both counted out of the log
+# tectonic keeps. A warning here is a line running into the margin or one
+# stretched to nothing; the manual last typeset with none, and a target that
+# only printed them is how 205 sat unnoticed for a while. The warning count is
+# DISTINCT: tectonic runs XeTeX three times, so the same one appears in the log
+# once but three times on stderr, and the log is what is read here.
+#
+# Not part of `make test`: it needs tectonic and, on a first run, the bundle in
+# docs/Tectonic.toml fetched over the network. Nothing else in the build does,
+# and the compiler must never depend on a TeX distribution.
+DOC_OUT = docs/build
+DOC_PDF = $(DOC_OUT)/manual.pdf
+DOC_LOG = $(DOC_OUT)/manual.log
+DOC_SRC = $(wildcard docs/src/*.tex)
+
+docs: $(DOC_PDF)
+
+$(DOC_PDF): $(DOC_SRC) docs/Tectonic.toml
+	@command -v tectonic >/dev/null 2>&1 || { echo "make docs: no tectonic, skipped"; exit 0; }
+	@mkdir -p $(DOC_OUT)
+	cd docs/src && (cat _preamble.tex index.tex _postamble.tex \
+	    | tectonic --outdir $(CURDIR)/$(DOC_OUT) --keep-logs -) \
+	  || { echo "make docs: tectonic failed; its own diagnostics are above"; exit 1; }
+	@mv $(DOC_OUT)/texput.pdf $(DOC_PDF)
+	@mv $(DOC_OUT)/texput.log $(DOC_LOG)
+	@if grep -q '^! ' $(DOC_LOG); then \
+	    echo "make docs: $$(grep -c '^! ' $(DOC_LOG)) LaTeX error(s), see $(DOC_LOG)"; \
+	    exit 1; \
+	fi
+	@if grep -qE '^(Overfull|Underfull) \\hbox' $(DOC_LOG); then \
+	    echo "make docs: $$(grep -cE '^(Overfull|Underfull) \\hbox' $(DOC_LOG)) over/underfull \\hbox, see $(DOC_LOG)"; \
+	    exit 1; \
+	fi
+	@echo "manual: $(DOC_PDF) ($$(stat -c%s $(DOC_PDF)) bytes, $$(grep -o '([0-9]* pages' $(DOC_LOG) | tail -1 | tr -d '()' | cut -d' ' -f1) pages), no errors and no warnings"
+
+.PHONY: all clean valgrind test test-fast test-compile asan test-asan asm-check ycc yserve lsp-ext lsp-vsix lsp-e2e check port-check corpus-diff bench bench-ir rebless docs

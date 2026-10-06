@@ -172,9 +172,9 @@ the SIB byte they need. That matters here, because Win64's 5th syscall argument
 lift.
 
 **The std pack is written by one compiler for one target, so nothing baked into a std
-unit may depend on the target.** This started as a risk row here and is now a
-**demonstrated constraint** (see Risks, "settled"), and it is the strongest argument
-for the per-target-module design this document already specifies. `ycc --std-pack` never passes a target, so a conditional
+unit may depend on the target.** This was a risk row here; it is now a **demonstrated
+constraint**, and it is the strongest argument for the per-target-module design this
+document already specifies. `ycc --std-pack` never passes a target, so a conditional
 compiled while building `rt.y` is baked into every program made from that pack, and
 `--target=windows` on the *consuming* compiler cannot undo it. Measured both ways: with
 a conditional in `rt.y`, a PE built from the pack carried the ELF inline `write(2)` and
@@ -182,10 +182,27 @@ printed nothing, while `--std-src` (which recompiles) worked.
 
 The consequence is a rule with no exceptions: **a std entry point names a label, it does
 not branch.** `os_write` calls `y_os_write`; `y_os_exit` calls `y_os_exit`; the Windows
-bodies live in the arch module and the ELF bodies in the arch prelude, and the pack
-carries text that is correct for whichever compiler wrote it. Any W5 entry point that
-tests `os` inside `rt.y`/`fs.y`/… reintroduces the bug, and the failure mode is a PE
+bodies live in the arch module and the ELF bodies in the arch prelude. Any W5 entry point
+that tests `os` inside `rt.y`/`fs.y`/… reintroduces the bug, and the failure mode is a PE
 that prints nothing.
+
+**Naming a label is also what makes the rule work, and the pack's representation decides
+how.** At the base commit (`bf8c20d`) the pack carried each body as **assembly text**, so
+a call was the text `call y_os_write` and the linker matched it against whatever arch half
+was linked in. Master has since moved the pack to carry the emitter's **items**
+(`9e1128d`, "the std pack carries items, not assembly text"; the assembler reads items
+since `7b7aa43`), and there a call is an item whose label field **travels as its name** —
+the ids are minted per run, so the reader mints them, exactly as the text path did with
+`call y_alloc`. Both representations resolve a label by name at link time, so the rule is
+the same shape either way.
+
+What the item pack changes is how much target-specific structure is frozen in: a body's
+**register choices, frame offsets and syscall numbers are all resolved items**, where the
+text pack froze them as text. So the constraint gets *stronger* with that change, not
+weaker — a pack built by a Linux-targeted `ycc` carries Linux decisions as items and no
+consumer can undo them. It also means the label-naming rule is not merely permitted but
+necessary: a *branch* on `os` would be a decided edge inside a frozen item, where a *label*
+is resolved at link time.
 
 **Do not branch on the target in `native.y` for any of this** — it all goes behind
 `arch_*` predicates.
@@ -227,21 +244,32 @@ compiler can be produced before any Windows machine is involved.
   (`y_cast_trap`, `src/y/arch/prelude.s:309`, reached by two `jmp`s from `native.y`),
   not faults — so there is no trampoline to port. The one "guard page" is an
   `mprotect(PROT_NONE)`, not a signal handler.
-- **The std pack is target-independent, and nothing enforces it.** `std_pack`
+- **The std pack carries no addresses — but it is NOT target-independent, and an earlier
+  draft here said it was.** The first half is still true and worth keeping: `std_pack`
   serializes `pack_version()` + per-unit `name` + `pack_unit_fields(u)` (renamed
-  globals, rodata, externs, iface, init) — **no machine code, no addresses, no
-  section layout**, because the pack stores assembly *text*. So one pack serves both
-  targets, *provided* the 4 embedded units are target-independent, which is what the
-  named syscall layer buys. That "provided" is load-bearing and **unenforced**: one
-  inline-assembly string, one hardcoded `/proc` path or one Linux syscall number
-  inside `rt.y`/`prelude.y`/`exec.y`/`str.y` is serialized into the Windows pack
-  just as happily as the ELF one, and nothing notices until a PE links it. Three
-  things follow, none of them a change to `--std-pack` itself: `make ycc` must append
-  a **second pack to `ycc.exe`** (the Makefile's `PACK` at `Makefile:71` does this
-  once, for one binary); `test_link.sh` needs a **cross-target pack fixture** that
-  diffs a PE's std bodies against the ELF's and fails on any difference outside the
-  units declared per-target (W5's `std/win/*` overrides); and `test_coverage.sh`'s
-  hard-coded file list (R11) does not see the new `std/win/*.y` until it is edited.
+  globals, rodata, externs, iface, init) — no addresses, no section layout, no relocations,
+  so nothing needs rebasing when the image moves. The second half was wrong, and it was
+  wrong in the direction that mattered: *"no machine code, because the pack stores
+  assembly text. So one pack serves both targets."* **One pack does not serve both
+  targets.** A body is a *compiled* artefact either way — text on `bf8c20d`, the
+  emitter's items after `9e1128d` — and it has the target's decisions baked into it:
+  its syscall numbers, its register choices, its frame offsets, whether a body is a
+  branch or a call. Measured, not argued: with a conditional in `rt.y`, a PE built from
+  an ELF pack carried the inline Linux `write(2)` and **printed nothing**, while
+  `--std-src` (which recompiles) worked, and `--target=windows` on the consuming compiler
+  could not undo it.
+
+  So this is no longer a risk row — it is the **hard design rule** in the syscall section
+  above: a std entry point **names a label, it does not branch**. That is what the named
+  syscall layer buys, and it is the only thing that makes a shared pack legitimate.
+
+  Two consequences remain, neither a change to `--std-pack` itself: `make ycc` must append
+  a **second pack to `ycc.exe`** (the Makefile's `PACK` at `Makefile:71` does this once,
+  for one binary), and `test_link.sh` needs a **cross-target pack fixture** that diffs a
+  PE's std bodies against the ELF's and fails on any difference outside the units declared
+  per-target (W5's `std/win/*` overrides) — which is the test that would have caught this.
+  `test_coverage.sh`'s hard-coded file list (R11) also does not see the new `std/win/*.y`
+  until it is edited.
 - **`exec` is not a builtin** — a std unit spliced in only when mentioned and
   `--no-exec` permits (`resolve_unit`'s std-unit selection; `std/exec.y:1-5`). The
   call then fails with *"undefined function 'exec'"*. **This is the existing
@@ -314,6 +342,15 @@ matters: **the 25 `arch_*` call sites in `native.y` need no edits at all.** The
 Windows names are private (`w_*`), so they never collide, and both preludes coexist
 in one binary — which is what makes cross-compilation work from the Linux build.
 Cost: ~100 lines in `arch_x64.y`, and its C twin (R1).
+
+**A fourth `src/y/arch/*.s` file arrived with the master merge and is not
+covered by this dispatch.** `math.s` (the float primitives `std/math.y`'s kernels
+reach for) is appended unconditionally by `native.y`'s `prelude_with`, and it
+carries Linux syscall numbers in its two trap blocks. It is the same class of
+work as `wsys.s` — the file needs a Windows half, or the label list needs the
+blocks routed through `y_os_*` — and it is now the *only* thing a PE can emit that
+reaches the kernel the ELF way. See
+[the merge section](#the-master-merge-2026-10-05-and-what-it-cost).
 
 Rejected: making the target a *build-time* choice (`make ycc` resolves
 `arch_x64.y`, `make ycc.exe` resolves `arch_win_x64.y`). Cheaper, but the Linux build
@@ -648,12 +685,12 @@ of which an earlier draft called unsolvable and is not:
 | **NT syscall numbers drift between Windows versions, and the failure mode is silent-wrong, not loud.** An earlier draft claimed a wrong number yields `STATUS_INVALID_SYSCALL`; it is worse than that. The Windows x64 syscall index range is dense and live, so a leftover Linux number does not land on "no such syscall" — it lands on a *different, real* `Nt*` function, and the symptom is wrong memory or wrong I/O much later, with nothing at the call site to say so. | Pin a documented target version (Windows 10 1607+ / 11) and record it in the manual; keep every number in **one** table in `arch_x64.y`'s dispatch (`arch_sysno`) so a future version is a small diff and a review can see the whole surface at once; and add the **startup self-test** of W3 — one `Nt*` call per class (memory, file, thread, process) with its status checked — so a bad table fails loudly at `ycc` startup on a Windows build instead of misbehaving later. Consider resolving a handful of names through `LdrGetProcedureAddress` if a specific call proves unstable. |
 | **`src/c` doubles every line** of W2–W5. | Inherent (R1). The arch half is string data, so its twin is mechanical and `make port-check` is low-risk. |
 | **The ABI estimate may be low.** An earlier draft said "7 emitter sites"; the measured set is 90 `F_CALL_L`/`F_CALL_IND` sites, and while only `gen_syscall`'s 5+-argument path has arguments that move, the hand-written `src/y/arch/*.s` routines make their own calls (`call y_alloc`, `call y_arr_push`, …) and are in no count at all. | Do W2 first and hand-inspect a real 4-argument call, a closure call and a 6-argument `syscall` under `--target=windows` before committing to W3's size. |
-| **`refs/ycc.ref` must be reblessed per phase**; the tree is red in between. | One phase → `make check` → `make rebless` → commit with numbers (R3). Do not stack. **Not done on this branch**: `refs/ycc.ref` stays the original bootstrap compiler so that `make ynew`'s three-generation fixpoint still means something, and the gate is "the C copy and `./ynew` agree with each other", not "either matches the reference". The measured cost is 272 code-diffs and **0** behaviour-diffs against the reference (`os_write` replaces an inline `syscall` with a call to `y_os_write`); 135 of those code-diffs pre-date this work. `refs/` is a real copy in each worktree, not a symlink, so a stray rebless cannot overwrite the main checkout's blessed binary. |
+| **`refs/ycc.ref` must be reblessed per phase**; the tree is red in between. | One phase → `make check` → `make rebless` → commit with numbers (R3). Do not stack. **Not done on this branch**: `refs/ycc.ref` stays the original bootstrap compiler so that `make ynew`'s three-generation fixpoint still means something, and the gate is "the C copy and `./ynew` agree with each other", not "either matches the reference". The measured cost is larger than it was in Phase A and that is upstream's doing, not this branch's: the reference predates `native def` and `std/math.y`, so after the merge it **cannot build the tree at all** and every suite run with the default `YREF` is red on the reference side (87 of 127 port cases, all of `examples`, 59 of 65 `audit`, …). `run_all.sh` therefore has to be given `YREF=$PWD/ynew` for a meaningful run on this branch, and `make ycc` still stops at `cmp ycc refs/ycc.ref`. `refs/` is a real copy in each worktree, not a symlink, so a stray rebless cannot overwrite the main checkout's blessed binary. |
 | **`argv()` on PE needs a command-line splitter, not a UTF-16 fixup**, and the W2 gate cannot see any of it (a hello-world that never calls `argv()` exercises none of it). | Build the parser in W4 — `RtlCommandLineToArgvW` or the MSVC rules, plus the UTF-16→UTF-8 policy for `y_cstr_to_str` — assert it in W5, and size W4 for it rather than leaving it as a footnote. |
 | **`ulimit -v` has no equivalent** (W6). | Decided, and cheaper than the exemption it replaces: `JOB_OBJECT_LIMIT_JOB_VM_SIZE` reproduces the fixture, because every mapping here is read-write committed. It costs a ~40-line job-object launcher, not a rule change. |
 | **Wine is not Windows.** Good enough to prove a PE loads and runs; not good enough to trust `CreateProcess`, console handles, or the TLS-free thread scheme. | W6 on a real runner; Wine only as a fast inner loop. |
 | **The no-`.reloc` claim is load-bearing and silent if violated.** | See the deferred encoder guard. |
-| **SETTLED — the std pack bakes ONE target into every program built from it, and no flag on the consuming compiler can undo it.** `ycc --std-pack` never passes a target, so a target test compiled into `rt.y`/`fs.y`/`net.y`/… is baked into the pack and served to every program that links it. Measured both ways: with a conditional in `rt.y`, a PE built from the pack carried the ELF inline `write(2)` and printed nothing, while `--std-src` (which recompiles the units) worked. | **Hard rule, no exceptions: a std entry point names a label and none branches on the target.** `os_write` calls `y_os_write`, `exit` calls `y_os_exit`; the Windows bodies live in `src/y/arch/wsys.s` and the ELF bodies in `src/y/arch/prelude.s`, so the pack carries text correct for whichever compiler wrote it. The corollary for the port: `cycc` carries **no** pack at all, so it compiles the std units from source with its own `res_target` — which is why on the Windows path `cycc` and a pack-carrying `ynew` differ byte-for-byte on the 22 fixtures whose std code still has raw `syscall(` sites, and `cycc` is the correct one of the two. Those raw sites are the W5 work; the divergence disappears when they are gone. **Done for the four packed units** (rt, prelude, exec, str): the named syscall layer B1 replaced every `syscall(` in them, and `test/sh/pe-packinv.sh` now measures the invariant -- a PE built from the pack and a PE built with `--std-src`, over every fixture, 177 identical and 0 different. The other std files (fs, net, tls, crypto, http) are compiled per target from source, so they were never at risk from the pack; they are still raw-`syscall` sites, which is B2's `std/win/*` split. |
+| **SETTLED — the std pack bakes ONE target into every program built from it, and no flag on the consuming compiler can undo it.** `ycc --std-pack` never passes a target, so a target test compiled into `rt.y`/`fs.y`/`net.y`/… is baked into the pack and served to every program that links it. Measured both ways: with a conditional in `rt.y`, a PE built from the pack carried the ELF inline `write(2)` and printed nothing, while `--std-src` (which recompiles the units) worked. | **Hard rule, no exceptions: a std entry point names a label and none branches on the target.** `os_write` calls `y_os_write`, `exit` calls `y_os_exit`; the Windows bodies live in `src/y/arch/wsys.s` and the ELF bodies in `src/y/arch/prelude.s`, so the pack carries text correct for whichever compiler wrote it. The corollary for the port: `cycc` carries **no** pack at all, so it compiles the std units from source with its own `res_target` — which is why on the Windows path `cycc` and a pack-carrying `ynew` can differ byte-for-byte on fixtures whose std code still has raw `syscall(` sites, and `cycc` is the correct one of the two. Those raw sites are the W5 work; the divergence disappears when they are gone. **Done for the four packed units** (rt, prelude, exec, str): the named syscall layer B1 replaced every `syscall(` in them, and `test/sh/pe-packinv.sh` measures the invariant — a PE built from the pack and a PE built with `--std-src`, over every fixture, **210 identical and 0 different** (177 before the master merge; master added fixtures). The other std files (fs, net, tls, crypto, http, **math**, tui, test, args, json, random) are compiled per target from source, so they were never at risk from the pack; they are still raw-`syscall` sites, which is B2's `std/win/*` split. |
 
 ## What the Windows assembly halves cost, measured
 
@@ -674,6 +711,104 @@ The last one is the most interesting, and it is a property of the substitution
 rather than of any block: `add:` and `replace:` are not interchangeable, and the
 distinction has to be re-derived for each new name.
 
+## The master merge (2026-10-05), and what it cost
+
+`master` (`b556e58`) merged in whole: 100 commits, including `native def`, the
+`native` keyword, `break`/`continue`, **`src/y/arch/math.s` and `src/y/std/math.y`**,
+the LSP, `test_math.sh`, and a path import that flattens *types* as well as
+expressions. Thirteen files conflicted. Four of the resolutions are the whole
+reason this section exists:
+
+- **`INTRINSICS` lost `os_call`.** Master hoisted `is_intrinsic_name`'s name list
+  out of the function into a `let` so the language server could enumerate it, and
+  the hoist **silently dropped** the branch's `os_call` — the merged `git` said
+  CONFLICT, and taking master's side wholesale would have compiled. `os_call` is
+  back in the list (47 names), and the C twin's `yav(47, …)` counts match. The
+  proof that it survived is `src/tools/lsp/test/t013_m4.expected`: it pins the
+  completion list, and it now reads `…,ptr_addr,os_call,self,none` — the server
+  enumerates the same array `is_intrinsic_name` tests, so the fixture would have
+  caught the loss on its own if anyone had looked at the diff instead of at the
+  conflict count.
+- **Every registration had to be re-derived, not trusted.** A `make cycc && make
+  ynew` after an auto-merge is not evidence: a green build proves the code
+  compiles, not that a name is still *registered*. The checks that matter are in
+  the list above (the `yav` count against its values, the two copies'
+  `INTRINSICS` matching name-for-name and in order, every `os_call_names` entry
+  being a label some `src/y/arch/*.s` defines) and they are all cheap.
+- **`src/y/arch/math.s` is a FOURTH arch file with no Windows half.** It is new
+  from master, it is embedded like the other three (so `ARCH_EMBEDS` — a wildcard
+  over `src/y/arch/*.s` — picked it up with no Makefile edit), and it is
+  **target-blind**: `y_int_trap` and `y_len_stop` write with Linux `syscall`
+  numbers (`mov $1, %rax` = `write(2)`, `mov $231, %rax` = `exit_group(2)`).
+  On a PE those numbers mean different `Nt*` calls, so `math.to_int(1.0/0.0)`
+  returns instead of trapping: `test/y/native/t307_math_trap` prints `0` and exits
+  0 where ELF prints `runtime error: a float with no integer part a long holds`
+  and exits 1. Verified in the `-S` output, where the block is byte-identical on
+  both targets. This is B2's `std/win/*` work, not a merge defect — but it is the
+  first thing that is *newly reachable* because of the merge, and it is the shape
+  every future `src/y/arch/*.s` must not have.
+- **`std/math.y` is not embedded, and that is correct.** Only the four packed units
+  (`rt`, `prelude`, `exec`, `str`) are in `STD_EMBEDS`; `std/math.y` is spliced
+  from source per target like `fs.y`/`net.y`, so the pack never carries it and
+  `--target` cannot be defeated by it. Worth stating because the intuition from
+  `math.s` is the opposite.
+
+`ideas/meta.md` and `ideas/meta.y` were taken from master wholesale: master's copies
+are a later revision of the same documents (M2 landed, mid-token blocks work, the
+coverage numbers are current), and the branch's copies were the state it forked with.
+
+## Windows gate numbers, 2026-10-05
+
+| gate | before the merge | after |
+|---|---|---|
+| `test/sh/pe-gate.sh` | ok (4100 bytes, wine exit 0) | ok (4100 bytes, wine exit 0) |
+| `test/sh/pe-packinv.sh` | 177 identical, 0 differ | **210 identical, 0 differ** |
+| `test/sh/pe-fixtures.sh ./ynew` | 133/162 pass, 28 PE-only, 1 baseline | **161/195 pass, 32 PE-only, 2 baseline** |
+| `make port-check` | 904/904 | **1010/1010** |
+
+The pass rate moves the right way (133/162 = 82% → 161/195 = 83%) and the four
+extra PE failures are all fixtures **master added**, not regressions: `t198`
+(`argv()`), `t199` (`std/tui`), `t203` (one POSIX path) and `t307` (`math.s`, above).
+Every remaining PE failure has one of these causes, and none of them is a Windows
+*writer* or *runtime* defect — the pe-gate hello-world passes:
+
+- **no `argv()` materialisation in the Windows prologue** — `t20_files_argv`,
+  `t198_argv_only_length` (which page-faults on a NULL read, because `%r15` was
+  never set). B6, as `wsys.s` says about `y_os_execve`.
+- **raw `syscall(` in a spliced std unit** — `std/tui.y` alone has `write`(1),
+  `ioctl`(16), `pipe`(22), `fork`(57), `setsid`(112); on a PE those numbers are
+  different `Nt*` calls. `t199_std_tui` (its captured control bytes come back
+  empty), `t30_net`, `t102_io_roundtrip`, `t167_read_dir_errors`,
+  `t177_fs_symlink_remove_all`.
+- **the raw `syscall()` builtin itself has no Windows half** — `t08_syscall`
+  returns `3221225474` (`STATUS_ACCESS_DENIED`) where ELF gets 0, and
+  `t72_match_fail` never traps because the Linux `read(0, …)` that zeroes the
+  record did not happen, so the match *succeeds*.
+- **`std/fs.y` paths** — `t10_filewrite`, `t12_cat`, `t150_fs`, `t151_module_scope`,
+  `t203_redeclared_global`: an absolute POSIX path has no meaning to the Windows
+  calls, so `fs.exists("/tmp")` is false.
+- **`std/net.y`** — `t30_net`, `t108`, `t109`, `t110`, `t185_listen_busy`.
+- **`std/crypto.y`** — `t158`, `t174`, `t175`, `t176` (no BCrypt).
+- **`exec()` / `readline`** — `t38_exec`, `t58_readline_exec`.
+- **threads and `fork`** — `t160_threads`, `t183_fork_lock`, `t184_fork_join`,
+  `t89`, `t90` (their thread halves).
+- **no memory cap on a PE** — `t71_out_of_memory` and `t186_pad_overflow` expect
+  `runtime error: out of memory`, which `ulimit -v` produces on ELF and nothing
+  produces on a PE. W6.
+
+Two **baseline** failures are *not* ELF defects: `t200_std_args` and
+`t73_builtins_misc` write their `args.parse` / `eputs` diagnostics to **stderr**,
+`test_native.sh` merges stderr into what it diffs (`2>&1`), and `pe-fixtures.sh`
+deliberately compares stdout only — it has to, because wine fills stderr with
+MESA noise. With stderr merged, both match `.expected` byte for byte.
+
+**What wine cannot validate here**, and this is the honest limit of the numbers
+above: it reproduces neither Windows commit-charge accounting nor its memory
+manager, so **the Job Object memory cap of W6 cannot be tested in wine at all** —
+`t71`/`t186` will stay red here for that reason alone. It also does not reproduce
+`CreateProcess`, console handle inheritance, or the commit-charge model the
+allocator's growth policy is tuned against.
+
 ## Open questions
 
 1. ~~`.pdata`/`.xdata` in W2 or with W6's `-g` work?~~ **Settled: `-g` stays for PE
@@ -686,7 +821,16 @@ distinction has to be re-derived for each new name.
 4. Does the emitted program ever need to hand a thread id to foreign code? If a
    callback from Win32 is ever wanted, `rdi`/`rsi` stop being scratch and
    `xmm6`–`xmm15` join the callee-saved set.
-5. Which Windows version is the pinned syscall-number target?
+5. ~~Which Windows version is the pinned syscall-number target?~~ **Half answered by
+   implementation.** The numbers are no longer guesses: every one in `arch_x64.y`'s
+   `w_sysno` was read out of a real `ntdll`'s stub rather than written from memory, so
+   the pin is "whatever that `ntdll` was". What is still open — and it is the half that
+   matters — is the **guard**: `w_self_test_lines()` returns `[]` while its comment
+   claims it probes one call per class, so a `ycc` built against a Windows version whose
+   numbers have drifted would fail silently rather than at startup. Until the self-test
+   exists, "pinned" means "pinned to one unverified sample", and the number-drift risk
+   below is the only thing standing between a wrong number and silently wrong memory or
+   I/O.
 
 ## Landing order
 

@@ -14,7 +14,7 @@ having on its own: it is the "can we do computation during compilation" question
 
 Everything below was read off this tree and audited against it three times; corrections
 from those audits are folded in. Two of them were fatal and are recorded under
-[Corrections](#corrections-two-fatal-and-they-changed-the-design).
+[Corrections](#corrections).
 
 **On citations.** `src/y/native.y` is in flux (there is an uncommitted refactor in the
 tree), and its line numbers have drifted from this document even against `HEAD`. So
@@ -273,15 +273,78 @@ cap is **~333** — measured: 332 nested `ycc_meta_expr({ … })` compile, 333 f
 pass gets its own lower cap so a runaway nest is a diagnostic pointing at the block,
 not `too_deep` firing inside a file that does not exist.
 
-### Mid-token blocks are not supported
+### Mid-token blocks: two cases, and the call does not have to be in place
 
-`def helper#{x++}#()` — a block between two tokens of an expression — is **an error**,
-not a feature. `G` is compiled, so the block's replacement must be syntactically valid
-there, and a call cannot sit between `helper` and `(`. Supporting it needs statement
-boundary knowledge in a text-level pass.
+`def helper#{x++}#()` — a block between two tokens of an expression — generates a **name**,
+and that is intended code. It works, and the reason it works is the thing the earlier
+draft of this document got wrong:
 
-This costs generating a *name*; generating a *body* is `def helper() { #{ … }# }`, which
-is expression position and works. The diagnostic names the block and says so.
+> **The call does not have to be at the block's own byte offset.** A block's text lands
+> at its recorded byte range in `P` regardless of where its call sits in `G`; the call
+> only has to *run* before `G` finishes.
+
+So the rule is two cases, decided by the byte before the `#{`:
+
+1. **An operand position.** The preceding non-space, non-comment byte is one of
+   `(` `,` `=` `[` `{` `;` `:` `?`, or a binary or unary operator, or the block is at the
+   start of a line, or after a keyword such as `return`. The call stays **in place** as
+   `ycc_meta_expr(SLOT, { T })`. This is `let count = #{ … }#`, `f(#{ … }#, 2)`,
+   `#{ T }#` alone on a line, and anything else already sitting where an operand goes.
+2. **Mid-token.** The preceding byte is an identifier character, `)`, `]`, or a literal,
+   so there is no operand position and a call cannot go there. The block's **bytes are
+   dropped from `G` entirely** and `ycc_meta_stmt(SLOT, { T });` is emitted as a
+   statement **immediately before the top-level statement that contains the block**.
+
+Case 2 is safe precisely because it is mid-token: the block is an adjunct between two
+adjacent tokens, and dropping it leaves them adjacent.
+
+| | `G` becomes | `P` becomes |
+|---|---|---|
+| `def helper#{nm}#() -> long { 7 }` | `ycc_meta_stmt(0, { nm });`<br>`def helper() -> long { 7 }` | `def helpergen() -> long { 7 }` |
+| `obj#{i}#.field` | `ycc_meta_stmt(1, { i });`<br>`obj.field` | `obj.field` |
+| `tag#{i}#` (whole tail) | `ycc_meta_stmt(1, { i });`<br>`tag` | `tag` |
+| `f(#{x}#, 2)` (case 1) | `f(ycc_meta_expr(2, { x }), 2)` | `f(<the piece>, 2)` |
+
+**The statement start is a byproduct of the state machine**: the position of the first
+byte that is neither a blank nor a comment since the last depth-0 `;`, `{` or `}`. That
+is exact, not an approximation — a top-level statement *can* begin mid-line (`let a =
+f(); def helper#{x}#() …`), and the anchor follows the `;`, so the hoisted call still
+comes after everything the statement before it initialised.
+
+**Ordering** is the load-bearing part, and it falls out of where the calls are recorded:
+a hoisted call is appended when its block **closes**, which is innermost-first and then
+siblings in source order — the order they have to run in. Within one statement they are
+therefore inserted back to front, each landing before the one already there; statements
+are done from the last to the first so an insertion never moves a position a later pass
+still has to read.
+
+Three limits, all measured, none of them silent:
+
+- **The fragment needs a character of the name on one side.** `def #{nm}#() -> long { … }`
+  is not mid-token (nothing ends a token there) and its call cannot go in place either
+  (a def header is not an operand position), and dropping its bytes would leave
+  `def () -> long`. It is refused. `def as#{nm}#()` works.
+- **`G` holds the def under the SHORT name.** So nothing in the *source* may call the
+  generated name — the generator's copy of a call to `assembled()` would not resolve.
+  The name and its call sites have to be generated together; that is the shape, and it
+  is what makes this usable.
+- **A block cannot be adjacent to another block.** `}##{` is two blocks but `}#{` is one
+  block followed by a brace: the closing `#` is consumed by the first. Write
+  `def a#{x}#b#{y}#()` — with literal text between the fragments — not `def a#{x}##{y}#()`.
+
+**One new diagnostic**, and it is the one shape where removal provably cannot work: a
+block in a `def` or `type` header that is not part of a name.
+
+> `a meta block in a def or type header must be part of a name, with a character of the
+> name beside it: a call cannot go in a header, and dropping the block's bytes would
+> leave nothing behind`
+
+(`e187_meta_header_whole_name.y`). It is worth its own message rather than the existing
+"inside a def or type body" one, because the block is **not** inside the body — the old
+message would have pointed at the wrong place. Everything else removal cannot fix is
+still caught by `G`'s own compile: the error is `the meta generator did not compile`
+naming the block's line, which is where a bad `import` or an undefined name in a block is
+reported too.
 
 ### Sharing: one block, or a module
 
@@ -338,11 +401,18 @@ belongs to.
 | a block inside a `def`/`type` body | — | **a diagnostic**; it is not in `G` at all |
 | everything else | verbatim | verbatim, shifted by the line map |
 
-**Two helpers, and the split is forced.** `ycc_meta_expr` returns `str` because
-expression position needs a value. `ycc_meta_stmt` is **void** because statement
-position must not warn: a statement whose value nobody reads warns at `-W 1` (*"the
-value of 'f()' is not used"*, measured). Both take the block's value as a `str`, so a
-non-`str` block is an existing type error, not a new diagnostic.
+**Three injected helpers, and the top-level split is forced.** `ycc_meta_expr` returns
+`str` because expression position needs a value. `ycc_meta_stmt` is **void** because
+statement position must not warn: a statement whose value nobody reads warns at `-W 1`
+(*"the value of 'f()' is not used"*, measured). Both take the block's value as a `str`, so
+a non-`str` block is an existing type error, not a new diagnostic.
+
+The third, `ycc_meta_emit(slot, body)`, is **void** and is what the other two call — it
+is the one place a piece is written, so the two forms cannot drift apart in how a piece is
+recorded. This doc said "two helpers" until the code was read: `ycc_meta_emit` was added
+during M2 and is invisible from the call sites, which is exactly the kind of helper a
+counting-the-call-sites approach misses. All three are in the reserved-name set, so a
+program that defines one is a diagnostic rather than a silent shadow.
 
 **`SLOT` is load-bearing.** An append-only accumulator cannot insert text at a source
 position, and generated text is unconstrained — it may be half a statement, a whole
@@ -399,6 +469,22 @@ file is invisible unless the list is edited (cheap, but it must be *remembered*)
 `src/tools/lsp/check.y` is a **second checker** that runs the lexer and types itself,
 so it will report `expected an expression, got '#'` for every meta file unless it can
 reach the same pass. One module, two callers, one implementation.
+
+**Both halves of that are now done rather than intended.** `meta.y` is in the scanned
+list, and `test_coverage.sh` passes with **all 409 diagnostic sites tested or excused**,
+113 builtins called, 12 keywords used, 84 manual sections with rows and 454 test
+references resolving — so the R11 chain (code → fixture → `COVERAGE.md` row) holds for
+the 19 new fixtures.
+
+The list is still not complete, and the gap is **pre-existing rather than ours**:
+`elf.y`, `asm.y`, `enc64.y` and `dwarf.y` are not scanned either, so every existing
+*writer* is invisible to the coverage suite on the same terms a new file is. Worth fixing
+in the same commit as the next new module rather than as a separate chore.
+
+The LSP half is **not** done: at this branch's base the language server lives at
+`tools/lsp/`, not `src/tools/lsp/`, and nothing there has been taught about blocks. So a
+meta file still draws `expected an expression, got '#'` there. That is the one part of
+this section that remains open.
 
 Pieces accumulate across files; `G` is built after the last resolve. `ycc build` keeps
 its shape — all units are resolved (`ycc.y:456-469`) before any is compiled — but a
@@ -492,7 +578,8 @@ byte offsets:
 | `'` char literals | same state machine as `"` |
 | `}#` in code position with no open block | **an error** — the one stray-delimiter diagnostic |
 | `#` at EOF, or `#x` in code position | **an error** |
-| a block **inside** a block, mid-token | an error (see [Mid-token](#mid-token-blocks-are-not-supported)) |
+| a block **inside** a block, mid-token | works: hoisted like any other mid-token block, in close order, so it runs before its parent (see [Mid-token](#mid-token-blocks-two-cases-and-the-call-does-not-have-to-be-in-place)) |
+| a mid-token block at the **start** of a `def` name | **an error** — nothing ends a token there, and dropping the bytes would leave `def () -> long` |
 
 **Generated text is unconstrained, by design.** A block that emits half a statement
 works, because the pass only needs to find its own delimiters and has no idea what
@@ -537,7 +624,8 @@ With one layer there is no earlier layer to inspect, so `-E` needs no level sele
 
 `e*.y` fixtures for: unterminated `#{` at EOF; stray `}#`; `#` at EOF; unknown `#x` in
 code position; unterminated string literal (the pass should report it rather than scan
-garbage with the state machine stuck); a **mid-token** block; nesting past the pass's
+garbage with the state machine stuck); a mid-token block at the start of a `def` name;
+nesting past the pass's
 own cap; a block whose output contains a NUL byte (a Y `str` can hold one —
 `fs.write_bytes` documents NULs passing through — so it would land in the program's
 source; reject it and name the block's line); emitted text past the size cap; a block
@@ -642,7 +730,7 @@ it is load-bearing for all of M2.
 
 `src/y/meta.y`, exporting `lit_end` with the unterminated out-param first and collapsing
 the three copies onto it. Then the per-file scan at the top of `native_resolve_seen`,
-pieces accumulating across files, the two injected helpers, slot indices in source order,
+pieces accumulating across files, the three injected helpers, slot indices in source order,
 the line map. Then: build `G`, compile it for the host with the pass off, run it in a
 forked child via M1, splice the pieces into `P`, rebuild origins, hand `P` to the
 existing lexer — unchanged.
@@ -709,10 +797,14 @@ inside a string, and re-compiling that dump gives the same bytes.
 
 ---
 
-## Corrections: two fatal, and they changed the design
+## Corrections
 
-Recorded because both were load-bearing enough to invalidate worked examples, including
-`ideas/meta.y`'s.
+This document was wrong twice while being written, and eight more times while being
+built. All ten are recorded, because a design that hides its corrections is a design you
+cannot check. The first two are [found by designing it](#found-by-designing-it-two-that-changed-the-design);
+the other eight are [found by building it](#found-by-building-it-eight-measured).
+
+### Found by designing it: two that changed the design
 
 **1. The generator program's layer order was self-contradictory.** An earlier draft said
 both "`G` = the text at depths *d* and *d+1*" (shallower first) and, in its own trace
@@ -810,11 +902,118 @@ deferred region is the sharing route, not a rewrite of block scoping.
 
 ---
 
+### Found by building it: eight, measured
+
+Written after the fact, so the design above can be read against what the code
+actually does. Each is a place this document was wrong, with the measurement.
+
+**1. The clone syscall does not transfer control, and the entry address is not
+in the stack.** [M1](#m1--run-an-image-in-a-child) says `sysretq` pops it. Under
+gdb the child comes back from `syscall(56, SIGCHLD, stack_top, 0, 0, 0)` with
+`%rax = 0`, `%rsp = stack_top`, RIP at the *next* instruction — still running
+ycc. So the transfer is one `jmp *%rax` later, which is why `jmp_at` exists
+(`ir.y` `F_JMP_IND`, `enc64.y`'s `enc_jmp` `K.ind`, `types.y`'s typeof arm): a
+`call` would push a return address onto the fabricated stack, and a process
+entry point reads its argv from there.
+
+**2. `MAP_FIXED` is unusable on this kernel.** `mmap(MAP_FIXED)` at a fresh
+address immediately above an existing mapping returns `EINVAL`. So the image is
+one `memfd` sized to the whole span (the ELF's bytes, then the `.bss` at its own
+offset, the gap page being part of the file's zeros), one `mmap` `PROT_RW`, then
+`mprotect(img, memsz, PROT_RX)`. The `.bss` is unusable until `ftruncate`, or
+`mmap` past the end of a file gives `SIGBUS` rather than zeros.
+
+**3. `split` drops ONE trailing empty element.** `split("a\n", "\n")` is `["a"]`.
+Two consequences this document did not see: `lit_end`'s `end = n` is ambiguous
+between "closed at the last byte" and "ran off the end" (hence the out-param, and
+the three copies collapsed onto the one in `lexer.y`); and anything that splits
+generated text to find its lines loses a trailing newline — the last line of
+every piece used to run into the next one.
+
+**4. An f-string is not `lit_end`.** A field holds one expression, and that
+expression may be a string literal, so `f"{d["k"]}"` has no `lit_end` answer:
+its closing quote is not the next quote in the source. The scanner calls the
+lexer's own `fstr_walk`, which already knows that (and falls back to `lit_end`
+when the f-string is broken, which is what the lexer does too).
+
+**5. "A keyword can only start after a newline, `;`, `{`, `}` or `#{`" is right
+about CODE, but a *word* inside a block is a position too.** `let t = spawn { … }`
+has `spawn` mid-expression, and refusing it is the whole value of the check. So
+the scanner stops at a word start as well — inside a block only, which is why a
+file with no blocks still costs one `index_of` per file.
+
+**6. `import` must not be tokenized, and the direction of the import graph is
+forced.** G's text is resolved before it is tokenized, so a hoisted import is
+spliced by the ordinary splicer with its dedup, its namespacing and its depth-32
+diagnostic. And `meta.y` must not import `native.y`: the splicer dedups only
+*downward*, so a cycle splices the file on the way back up a second time and
+every `def` collides. The compile and the run therefore live in `native.y` and
+take what they need through `mg_*` accessors (with `mg_setup` passing values,
+because `strip_ns` rewrites `K.dot` reads but not `K.dotassign`).
+
+**7. "The pass runs before the splicer's line loop, so `embed` is already
+expanded" is true but not for the reason given.** The reason it has to be before
+*that* loop is `std-unit selection`: `resolve_unit` picks the std units from the
+text after the loop, and a block's generated text must be able to mention
+`readline`. An embedded file's bytes land inside a string literal, and the
+scanner has already read that line, so nothing in them can be a block either way.
+
+**8. A block's slot must be its index in the block table, not a counter that
+keeps counting.** The two resolves of one unit (collecting, then splicing) rebuild
+the table, so a monotonic counter hands the second pass slots 4,5,6 for blocks
+that asked for 0,1,2 and the pieces are matched to nothing. The counter resets per
+pass (`mg_pass`), which is the one piece of state the second resolve has to reset.
+
+Corrected in `ideas/meta.y` itself, twice: the `let count` block wanted the number
+65 and got 65 as the *length* of the text the block generates (so it now yields
+the text), and a `str` value spliced as text needs `lit` — which escapes — not
+`quoted`, or it lands as bare code and the program's own parser sees
+`let count = let names = …`. The file says so.
+
+### What the measurements cost
+
+Base is the M1 commit's compiler, same machine, `bench/y/*` compiled with each:
+
+| | base | with the pass |
+|---|---|---|
+| `src/y/ycc.y` (self-compile) | 0.46 s / 1142080 KB | 0.47 s / 1157564 KB |
+| `bench/y/scan.y` | 0.00 s / ~17.2 MB | 0.00 s / ~19.4 MB |
+| `bench/y/hello.y` | 0.00 s / 2.25 MB | 0.00 s / 2.70 MB |
+| `resolve` phase of `src/y/ycc.y` | 19.5 ms | 24.6 ms |
+| `asm_bytes` of `src/y/ycc.y` | 5225719 | 5225719 |
+
+The `scan.y` row is an artefact, and worth naming rather than hiding: it is one
+benchmark crossing the 4 MiB heap-chunk boundary (five chunks instead of four,
+and RSS counts the half of the last one that was touched). The compiler's own
+`heap_used` for that file is 16326 KB before and 16334 KB after. Every benchmark
+takes the `index_of(src, "#") < 0` fast path — none of `bench/y/*.y` has a `#` in
+it at all — so the scanner itself is not in that number; the extra is the
+per-output-line `ogen` map and the resolve indirection, which is why the self-
+compile's resolve phase is the honest one to quote: **+5.1 ms and +15 MB on a
+1.3 MB self-compile**, and both are only paid by a program that *has* blocks.
+
+---
+
 ## Landing order
 
 ```
 M1   run an image in a child + ycc run     (no dependencies, useful alone)
 M2   the meta pass                          (needs M1)
+M3   the C twin, per PORTING.md             (needs M2; this is not optional)
+M4   the manual section in docs/src         (R11; COVERAGE.md already points at it)
 ```
 
-Then nothing. Windows does not wait on this — see [`WINDOWS.md`](WINDOWS.md).
+**M3 is not optional and is not a follow-on.** R1 makes the C twin 1:1, so a `src/y`
+change without its `src/c` mirror is an unbuildable compiler — `make cycc` would compile
+against a `native.c` that no longer matches the emitter's shapes. The gate is
+`make port-check`, which aims the port suite at `./ynew`: the C copy and the Y build must
+agree **byte for byte** on every `test/y/**.y` plus `src/y/ycc.y`, with identical
+warnings, and a program both reject must get identical diagnostics. With N new
+diagnostics that is N new two-compiler assertions, so every message is a byte-for-byte
+contract rather than a wording preference.
+
+**M4 exists because `test/COVERAGE.md` already carries rows pointing at `02-lexical` →
+"Meta blocks"** and no such section exists. The coverage suite cross-checks the manual's
+sections against `COVERAGE.md`, so the rows and the prose have to arrive together.
+
+Windows does not wait on any of this — see [`WINDOWS.md`](WINDOWS.md).

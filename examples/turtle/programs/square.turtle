@@ -1,0 +1,17 @@
+# square.turtle -- the closure demonstration, as a file rather than a built-in.
+#
+# Four 100-unit sides with a quarter turn between them.  The turtle ends at
+# (0, 0) facing exactly 0, and `turtle --check` asserts that vertex by vertex.
+# World y is UP and `right` is clockwise, so this square is drawn downwards
+# from the origin: (0,0) -> (100,0) -> (100,-100) -> (0,-100) -> (0,0).
+
+colour red
+
+forward 100
+right 90
+forward 100
+right 90
+forward 100
+right 90
+forward 100
+right 90

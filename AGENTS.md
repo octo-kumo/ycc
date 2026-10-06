@@ -120,8 +120,8 @@ behavior or diagnostics), `make bench`, `make bench-ir` (see
 
 ## Test suites (`test/sh/`)
 
-Sixteen suites, run by `test/sh/run_all.sh` (named below in brackets). Most
-compile each program with **both** compilers — the reference side is
+Nineteen suites, run by `test/sh/run_all.sh` (named below in brackets).
+Most compile each program with **both** compilers — the reference side is
 `refs/ycc.ref` — and require the outputs to agree (byte-identical
 binaries, the same warnings, identical program behavior). `test_native.sh`,
 `test_native_examples.sh`, `test_debug.sh`, `test_link.sh`, `test_pkg.sh`,
@@ -205,6 +205,43 @@ very build was just compared (`make test`, `check`, `rebless` do);
   the TLS 1.3 client (`tls_cli.y`, std/tls.y) against `openssl s_server`
   with each suite and an RSA and an ECDSA certificate (skipped without
   openssl).
+- `test_math.sh` [math] — the accuracy gate for `std/math.y`: reads
+  `test/math/ulp_table.txt` (2695 cases — the pinned edges, the overflow and
+  flush points, both sides of 1, the poles, the signed zeros, a seeded
+  1884-case spread (1540 of one argument, 344 of two or three), and a seeded
+  240-case spread over [-1, 1] for `asin` and `acos`, the only two with a
+  bounded domain — each line the function, its
+  argument(s) and the reference answer as IEEE-754 bit patterns), evaluates
+  every case with both compilers and
+  **fails on anything more than 1 ulp from the reference**. The gap is counted
+  through the monotone key of a double's bits, so it is exact at zero, across a
+  sign change, for a subnormal, and infinite for a NaN. The worst gap and the
+  function it came from are printed, so a regression names itself.
+  `test/math/ulp_check.y` says in its own header why the tolerance is 1 and what
+  the four cases that used to sit over it were; `gen_ulp_table.py` wrote the
+  table from this platform's libm (mpmath is not installed here, and a platform
+  libm is the *relevant* reference anyway — the promise is to match what C
+  gives), and `gen_kernel.py` fits and checks the kernels' coefficients.
+- `test_std_suites.sh` [std-suites] — the self-test suites for the std units
+  that have one, in `test/std/`: `fx_test.y` (292 checks, the vendored `fx.y`),
+  `args_test.y` (61, `std/args.y` and the pacer it paces with),
+  `fb_test.y` (41, the surface half of `std/tui.y`), `term_test.y` (108,
+  the terminal half — needs a real pty) and `time_test.y` (47, the pacer and
+  fps meter). Each is built with **both** compilers and must compile without
+  a diagnostic. `fx_test` and
+  `fb_test` are byte-deterministic, so the whole transcript is diffed against
+  `test/std/golden/`; `time_test` and `args_test` print measured clock values
+  that differ every run, so they are gated on exit status plus their PASS marker;
+  `term_test` runs under `term_pty_test.py`, which forks a real pty because
+  `TCGETS` and `TIOCGWINSZ` both return `ENOTTY` on a pipe. That driver is run
+  with `--skip-crash`: its two `SIGKILL`-watchdog cases failed 1 run in 6 on this
+  machine, and a gate that re-runs is worse than none. This folder was
+  `examples/_toolkit/` until 2026-10-05; it left the corpus because four of its
+  five modules had moved into `std` and what remained was a verification harness,
+  which `examples/.gitignore` says does not belong there. `fx.y` stays vendored
+  (14 examples hold a byte-identical copy, sha256 `4b47a9bfef0c1e30`, `wc -l` 694)
+  because 18 of its 36 functions have no `std/math` counterpart and it is integer
+  Q30 where `std/math` is float.
 - `test_coverage.sh` [coverage] — static, compiles nothing: every
   diagnostic the compiler can print has its message in a test
   expectation, every builtin in the manual is called by a checked test,
@@ -214,6 +251,14 @@ very build was just compared (`make test`, `check`, `rebless` do);
   suite. New diagnostic → new `e*.y` marker (a new warning: an
   `expect-warning` marker in a `t*.y`); new manual section → new
   row.
+- `test_lsp.sh` [lsp] — the language server, `src/tools/lsp/` (built by
+  `make yserve`, designed in `src/tools/lsp/LSP.md`): its `t*.y` fixtures
+  under both compilers against their `.expected` (which includes `std/json.y`
+  and the diagnostics pipeline), `check-refs.py` over every symbol `LSP.md`
+  cites, and the formatter over the whole corpus for idempotence.
+  `test-e2e.sh` drives the built `yserve` as a real process — framing, fork
+  containment, state across messages — and is **not** in `make test` (it needs
+  a process per case); run it by hand or with `make lsp-e2e`.
 
 ### Fuzzing (`test/fuzz/`, not part of `make test`)
 
@@ -272,7 +317,9 @@ Instruction counts are exact.
 
 splice imports, pick the std units → per unit (the program's, each
 package's under `ycc build` unless its object in `build/obj` is current,
-and each std unit unless the std pack has it): strip namespaces → rename
+and each std unit unless the std pack has it): strip namespaces (`strip_ns` for
+nodes, `strip_type` for the annotations on them — a path import flattens both,
+and a qualified `m.T` used to be rejected where the bare `T` compiled) → rename
 (uniquify) → typecheck (static, errors fatal) → lint (`lint.y`:
 warnings, to stderr; the program's unit and packages, never a std unit)
 → hoist → emit bodies →
@@ -298,6 +345,12 @@ replaces the std one at link time).
 - `&&` / `||` short-circuit, in both forms. Operands need not be `bool` —
   any non-zero value is true (`typeof_logic` in `types.y`).
 - Recursion uses `self`, not the function's own name.
+- **`native def f(params) -> T [= "label"];`** is a declaration with no body
+  whose implementation is an assembly label (docs `03-grammar.tex`, NATIVE.md
+  "Backend"). It is the way std modules reach raw machine primitives: the
+  return type must be written, the label must start with `y_`, and the
+  declaration must be at the top level under its own name. `native` is a
+  reserved keyword.
 - A nested `def` captures the enclosing bindings **that are already in
   scope where it is written** (a name declared later is an
   undefined-variable error — `let`s do not hoist, `rename.y`). Captures
@@ -381,9 +434,11 @@ replaces the std one at link time).
 
 ## Layout
 
-- `src/y/arch/*.s` — the compiler's own assembly (the arch prelude:
-  allocator, traps, string/array cores, `y_fmod`, float formatting, the
-  thread runtime), embedded by both copies — see PORTING.md rule 11.
+- `src/y/arch/*.s` — the compiler's own assembly: the arch prelude
+  (`prelude.s`: allocator, traps, string/array cores, `y_fmod`, float
+  formatting), the float primitives `math.s` (`y_sqrt`, `y_to_int`, `y_fbits`,
+  `y_bitsf` — what a `native def` reaches for), and the thread runtime
+  (`threads.s`) — embedded by both copies, see PORTING.md rule 11.
 - `src/y/` — the Y compiler: `ycc.y` (driver), `pkg.y` (`ycc build`:
   `y.toml`, the dependency graph, git, `y.lock`), `lexer.y`, `parser.y`,
   `rename.y`, `types.y` (checker), `lint.y` (warnings), `native.y`
@@ -393,11 +448,31 @@ replaces the std one at link time).
   in Y, `prelude.y` (`readline`), `exec.y` (`exec`), `str.y` (string
   methods) — the four embedded into the compiler — and `fs.y` (files,
   paths, directories: `import fs;`), `net.y` (TCP, DNS), `struct.y`,
-  `crypto.y`, `x509.y`, `tls.y` (a TLS 1.3 client), `regex.y` (patterns:
+  `math.y` (integers, bits, float comparisons and constants, RNGs, `[float]`
+  array work: `import math;` -- no transcendentals yet, they need machine
+  primitives Y cannot reach), `crypto.y`, `x509.y`, `tls.y` (a TLS 1.3 client), `regex.y` (patterns:
   `import regex;` — a Pike VM over bytes, linear time, no
   backreferences)).
 - `src/c/` — the 1:1 C copy of the above + `yv.c`/`yv.h` (the value
   model; no Y twin). `PORTING.md` is the contract.
+- `src/tools/lsp/` — the Y language server, `yserve` (an all-in-Y daemon:
+  a `Content-Length` framer, `fork(2)` per message, the compiler's own
+  diagnostics on an unsaved buffer), its VS Code extension under
+  `vscode-y-lang/`, its own `test/` (fixtures + four shell harnesses +
+  two node drivers), and `LSP.md` (the design). `make yserve` builds it
+  and checks `cycc` and the reference agree byte for byte; `check-refs.py`
+  and `check-names.py` (both in `test_lsp.sh`) police the citations and
+  the shared namespace — the server path-imports the compiler, so every
+  name it defines lands in the compiler's vocabulary. `check-names.py`
+  also tests each module's **basename**, because `strip_ns` rewrites any
+  `name.field` program-wide as a module reference (that is why `scope.y`
+  is not `index.y`; §5 of `LSP.md` has the 42 reads it broke).
+  `src/tools/lsp/test/` holds two **measurement programs** as well as the
+  fixtures: `scope-coverage.y` reports what share of a corpus's
+  identifier tokens the M4 index resolves, and `request-cost.y` what one
+  request costs per phase. Neither has an expectation — they print, so
+  the number can be quoted rather than remembered; run them by hand, as
+  the fixtures are for shapes and these are for sizes.
 - `refs/` — backed-up reference binaries for the port gate (see
   `PORTING.md` for where the current `ycc.ref` came from).
 - `test/` — `test/sh/` (suite drivers + `lib.sh` + `ytool.sh` +
@@ -405,7 +480,10 @@ replaces the std one at link time).
   which is `make check`), `test/y/`
   (`native/` fixtures with expected/exit/stdin, `audit/` edge cases,
   `examples/` regression corpus, `ycc/` unit fixtures, `net/` servers
-  for `test_net.sh`), `test/COVERAGE.md` (feature → test matrix).
+  for `test_net.sh`), `test/std/` (the std self-test suites + their
+  goldens and the pty driver; `test_std_suites.sh`), `test/math/`
+  (`ulp_table.txt` + `ulp_check.y` + the generators; `test_math.sh`),
+  `test/COVERAGE.md` (feature → test matrix).
 - `bench/` — benchmarks + `compare.sh` + `profile.sh` + `compile_ir.sh`
   (see the workflow above).
 
@@ -421,7 +499,10 @@ closures as `[code, caps...]` records; records laid out by field name
 (a member held in a union: the union's shared fields first),
 a pointer to their type's descriptor before the fields; `&x`, `*p`,
 `a[i]`, `a[lo:hi]`, `T?`, `x!`, `void`, `float`, `byte` types;
-`for`/`for..in`/`foreach`/`while`; block expressions; `type` aliases
+`for`/`for..in`/`foreach`/`while` with `break`/`continue` (a jump to a
+label the enclosing loop published; `continue` runs the step or increment
+first, and a jump out of a `def` nested in a loop is refused by the
+checker, not left to the emitter); block expressions; `type` aliases
 (recursive through a record field or a function type), record unions and
 `match`;
 threads (`spawn { }`, `join`, `mutex`/`lock`, `sem`/`post`/`wait`) as

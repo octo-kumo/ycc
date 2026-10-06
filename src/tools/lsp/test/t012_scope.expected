@@ -1,0 +1,28 @@
+-- the word under the cursor
+col 4 target
+col 9 (just past the last letter) target
+col 10 (past the word) target
+on the `def` keyword none
+-- plain resolution
+target used at top level (17:7) -> 0:4
+shared inside shadow (6:5) -> 5:8
+shared ABOVE its own let (9:11) -> 1:4
+shared BELOW its own let (11:5) -> 10:8
+later above its own def (14:5) -> 16:4
+-- shadowing: innermost wins
+dup from top level (17:7) -> 3:4
+dup asked at the FIRST dup (3:4) -> 3:4
+-- a name from inside a block is not visible before the block
+inner `shared`, asked from line 0 (before shadow opens) -> none
+`later`, asked from inside uses_before_def (13:5) -> 16:4
+zzz, never declared -> none
+-- what completion offers
+inside shadow(): target, shared, dup, shadow, uses_before_let, uses_before_def, later
+  with prefix sh: shared, shadow
+inside uses_before_let(): target, shared, dup, shadow, uses_before_let, uses_before_def, later
+  `shared` inside shadow() -> 5:8 (its own)
+  `shared` at 9:11, above the inner let -> 1:4 (the top-level one)
+  `shared` at 11:5, below the inner let -> 10:8 (the inner one)
+-- every visible name resolves back to itself
+round trip: 0 mismatches
+done
