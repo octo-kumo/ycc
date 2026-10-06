@@ -86,6 +86,45 @@ if [ -s "$out_cycc" ] && [ -s "$out_ycc" ] && ! cmp -s "$out_cycc" "$out_ycc"; t
     diff "$out_cycc" "$out_ycc" | head -20
 fi
 
+# The GENERATED polynomial kernels, against src/y/std/math.y itself.
+#
+# The ulp table below sees ANSWERS, so a kernel that drifts by half an ulp can
+# hide inside a final rounding; and a chain hand-edited out of step with the
+# arrays still answers within an ulp, because the coefficients are right and only
+# the arrangement moved. So two separate questions, both asked here:
+#
+#   --verify   is every generated chain still byte-identical to what
+#              gen_split_unroll.py writes? Four of the eight were carrying a
+#              signpost to a gate file that did not exist, and the generator was
+#              still emitting the dead name after the fix -- both invisible to
+#              every other check in this suite.
+#   t328      do all eight chains agree TO THE BIT with poly_split, the loop they
+#              replaced, over 32024 arguments? That is t328_split_unrolled.y,
+#              which runs under test_native.sh; here it is the same file through
+#              both compilers, so a port that made one of them emit a different
+#              chain would show up as a disagreement rather than as nothing.
+if ! python3 "$ROOT/test/math/gen_split_unroll.py" --verify; then
+    fail "the generated kernels have drifted from the generator"
+fi
+
+# Under mktemp, not _check/: that directory belongs to `make check` and to
+# whatever else is running in this tree, and a suite must not write into it.
+t328_tmp=$(mktemp -d)
+trap 'rm -rf "$t328_tmp"' EXIT
+for cc in "$CYCC" "$YCC"; do
+    name=$(basename "$cc")
+    # diffed as files, not compared as strings: $(cat) strips trailing newlines
+    # and tr leaves a trailing space, so the string form fails on whitespace
+    # alone -- which is how this check first reported FAIL on a correct answer.
+    if "$cc" "$ROOT/test/y/native/t328_split_unrolled.y" -o "$t328_tmp/$name" 2>"$t328_tmp/$name.err" \
+       && "$t328_tmp/$name" </dev/null >"$t328_tmp/$name.out" 2>&1 \
+       && diff -q "$t328_tmp/$name.out" "$ROOT/test/y/native/t328_split_unrolled.expected" >/dev/null; then
+        pass "$name: the 8 unrolled kernels match poly_split to the bit"
+    else
+        fail "$name: t328_split_unrolled: $(tr '\n' ' ' < "$t328_tmp/$name.out" 2>/dev/null) $(head -2 "$t328_tmp/$name.err" 2>/dev/null)"
+    fi
+done
+
 # A function in the table the harness cannot dispatch would pass silently, so
 # every name in the table has to be one it knows.
 missing=$(awk '!/^#/ && NF {print $1}' "$TABLE" | sort -u | while read -r fn; do

@@ -738,6 +738,45 @@ computed by squaring).
   power of two, so it is exact, changes no comparison or sign, and cannot push a
   normal number into the subnormals. A spread that genuinely overflows is still
   \ic{inf}: \ic{fvariance([1e308, -1e308])} is \num{4e616} and has no double.
+\item[\textnormal{(the polynomial kernels)}] Every kernel in the module is a
+  split Horner evaluation --- the high coefficients and their low halves carried
+  side by side --- and each one is written \emph{twice}: once as a loop over two
+  arrays, and once unrolled with the coefficients as literals. An array read
+  costs twelve instructions in this compiler, of which the arithmetic the read
+  feeds needs about eight, so the loop spends \num{68} per cent of its time
+  fetching coefficients. It is \emph{not} the bounds check that costs:
+  \ic{y\_oob} is three instructions a call, because the index runs from
+  \ic{len-1} down to \ic{0} and is never out of range. It is the read sequence
+  itself --- reload the record, reload its length, check, reload the data
+  pointer, load --- four steps of which are loop-invariant. The unrolled form is
+  therefore the one a program runs, and there are eight of them: \ic{exp},
+  \ic{log}, \ic{sinh}, \ic{tanh}, \ic{atan}, \ic{asin}, \ic{sin} and \ic{cos}.
+
+  Measured, this is the largest single saving in the module's arithmetic:
+  \ic{atan} goes from \num{982} to \num{489} instructions a call, \ic{asin}
+  from \num{1124} to \num{631}, \ic{tan} from \num{1212} to \num{666} ---
+  between \num{45} and \num{50} per cent each --- and a benchmark loop over
+  \ic{atan}, \ic{asin} and \ic{tan} from \num{47.5} million instructions to
+  \num{36.6}. Wall-clock numbers on a shared machine are indicative only; these
+  are callgrind instruction counts, which are exact and independent of load. The
+  price is code: a chain is longer than a loop, some \num{5.5} KB of binary on a
+  program using all of them, so this is a good trade for a function called in a
+  loop and a poor one for a program that calls it once and exits.
+
+  The chains are \emph{generated}, by \texttt{test/math/gen\_split\_unroll.py},
+  which reads the coefficient arrays out of this module rather than restating
+  them --- a coefficient's low half lives in its sixteenth digit, and a second
+  copy of these numbers is a second thing to keep in step. Two gates ask
+  different questions of the result, and both had to be added because each was
+  missing. \texttt{test/y/native/t328\_split\_unrolled.y} asks every chain and
+  \ic{poly\_split}, the loop it replaced, the same \num{32024} questions and
+  requires the same \emph{bits} --- the two perform the same operations in the
+  same order, so anything but equality is a defect. The generator's
+  \texttt{-{}-verify} asks the other question: whether this module still holds
+  byte-for-byte what the generator writes. That is the one which catches what the
+  first cannot --- a chain hand-edited after generation, or a banner whose
+  caller list has gone stale, still answers within an ulp, because the
+  coefficients are right and only the arrangement moved.
 \end{description}
 
 \subsection{Options}
