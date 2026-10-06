@@ -303,6 +303,37 @@ things it cost an hour to learn, so they are written down here):
     in `test/treeshake/costs.txt`. `math` must come down from 6705 to ~0 and
     the zeros for `fs` and `struct` must stay zero.
 
+**Second attempt (the marker design), and where it stopped.** The pass was
+written and it WORKS on the thing it is for: `gen_decl_marked` brackets each
+top-level global's initializer with `ygiS_<cell>` / `ygiE_<cell>` labels, the
+link step reads the kept bodies' cells (`cell_reads`: a load is an `O_LBL`
+operand -- `F_MOV_P_R`, not a memory one -- and only `mov <src>, <cell>` is a
+store) and deletes the range of every cell nobody reads. On a program with
+400 unused `[long; 8]` tables it takes **78173 bytes to 973**, byte for byte
+what the tables were. It was reverted anyway, because on its own self-build it
+silently broke the compiler and the cause was not found:
+
+  * the ranges are provably safe -- `ygiS_yg_133_R_RBX$3227` wraps exactly
+    `mov $3, %rax` / `mov %rax, cell`, and that cell has **no load anywhere**
+    in the compiler's output (checked by NAME: the uid in a label is
+    per-compile, so comparing full labels across two compiles is meaningless
+    and a grep that does it will "verify" anything);
+  * deleting any ONE of the six dead cells is fine; deleting all six produces
+    a `ycc` that exits 0 and writes nothing (no usage line, no `-S`, no
+    binary, no pack). Marks with the deletion disabled are fine, so it is the
+    item removal, not the labels;
+  * two traps found on the way, both now avoided in the design above: the
+    first cut appended the kept items WORD BY WORD, which is the quadratic
+    append the rodata comment in native.y warns about (1.4 MB copied 175,000
+    times -- the compiler ran out of memory); and a body that came from the
+    std pack carries no items, so its REFERENCES have to be counted as reads
+    (`refs[i]`) or a packed unit's cell looks dead;
+  * where to look next: the multi-deletion case only. Compare the two
+    generations' assembly of `src/y/ycc.y`, and check `at_item`/the assembler's
+    label map against an item list that is 27 items shorter -- single
+    deletions and a 400-table program both assemble correctly, so it is
+    something about the *combination*.
+
 **Cost.** Medium. The link step already computes each unit's `globals` and
 each kept body's label references (`native.y`, `Unit`); this adds "and the
 global cell labels", then filters `global_decls`/the init text by it. The
