@@ -624,7 +624,22 @@ computed by squaring).
     normalized --- C's \% keeps the sign of the dividend, so a negative count
     comes out negative. The range is $|x| \lesssim 2^{52}$: like every library
     without Payne--Hanek reduction, a larger argument reduces to something near
-    $x$ rather than to its own angle. \ic{cos}'s coefficient table is \ic{sin}'s rotated left by one, which is what
+    $x$ rather than to its own angle.
+
+    \ic{tan} has no pole it can reach. Both of its infinity arms are guarded on
+    the computed cosine being \emph{exactly} zero, and no double gets there: the
+    cosine is \ic{sin\_cos\_k}'s \ic{1 - w*poly\_cos(w)}, which is \ic{cos(x)}
+    for $|x| \le \pi/4$, where its magnitude is at least \num{0.7071}. So
+    \ic{tan(pi/2)} is not an infinity but \num{1.633123935319537e16} --- what this
+    platform's \ic{libm} gives, and correct: the double nearest $\pi/2$ is not
+    $\pi/2$, its cosine is \num{6.1e-17} and not zero, and the tangent of that is
+    finite and enormous. The guards stay, because they are what would turn a
+    future broken reduction into an infinity rather than a \ic{nan} from
+    dividing by zero --- and because deleting a branch that cannot fire is how the
+    day it can fire arrives with no guard at all
+    (\ic{t320\_sin\_reduction\_limit.y}).
+
+    \ic{cos}'s coefficient table is \ic{sin}'s rotated left by one, which is what
     lets one routine answer both: \ic{sin} and \ic{cos} are two instructions
     each that set a register and fall into the same body, and the quadrant picks
     between the two halves at the end with two tests of the index rather than
