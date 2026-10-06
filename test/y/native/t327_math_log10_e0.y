@@ -20,13 +20,19 @@
 //   3. prod_err for the inner w*poly_log(w)
 //   4. a THIRD part to the constant log10(e) -- 1.66e-29, what hi + lo leaves over
 //
+//   5. the constant log10(e) SPLIT into two exact pieces -- its nearest double
+//      and its exact remainder, which is itself a double -- so the product becomes
+//      two compensated ones, l*hi and l*lo each with prod_err, summed apart
+//
 // (4) is the one that PROVES it. `be` is already prod_err(l, log10e_hi, bq), the
 // product's exact residual, so `bq + be + l*log10e_lo` is a compensated product;
 // adding the third part makes the terms exact to far below the last bit of the
-// answer and the answer does not move. So nothing in the terms can be the error,
-// and the only way past a final sum's rounding is to keep the pieces apart longer
-// -- ln(m) and the SUM in one extra-precision accumulator, which is a different
-// algorithm from a compensated expression tree and is not attempted here.
+// answer and the answer does not move. And (5) follows from (4) rather than
+// needing its own argument: once the terms are exact, a sum of exact terms can
+// only be wrong in the ROUNDING OF THE SUM, which no compensation of a term
+// reaches. So the five of fourteen is the sum's, and closing it means holding the
+// pieces apart across the sum -- one extra-precision accumulator, a different
+// algorithm from a compensated expression tree -- rather than a sixth.
 //
 // What this file records is the CHARACTERIZATION, so that raising or lowering the
 // limit is a diff on one file, and so that nobody re-runs the four attempts.

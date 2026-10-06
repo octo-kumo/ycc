@@ -117,8 +117,21 @@
 // accumulator -- which is a different algorithm from a compensated expression
 // tree and is not attempted here.
 //
-// Four measured attempts that did not work, and one measurement that says where
-// to look, are worth more in this file than a fifth guess.
+// A FIFTH, which is the same argument made concrete and so is the last one.
+// log10(e) is a double whose exact remainder is ALSO a double, so the constant
+// splits into two exact pieces and the product into two compensated ones --
+// l*log10e_hi with prod_err, and l*inv_ln10_lo with prod_err, summed separately.
+// 5 of 14, bit for bit, unchanged.
+//
+// Five attempts, each removing more of the expression's own error, none moving
+// the answer. That is not five coincidences: it is what t327's fourth line says
+// measured -- the terms are exact to far below the last bit, so a sum of exact
+// terms can only be wrong in the ROUNDING OF THE SUM, and no compensation of a
+// term reaches that. Closing it needs the pieces held apart across the sum, which
+// is one extra-precision accumulator rather than a compensated expression tree.
+//
+// Five measured attempts that did not work, and a measurement that says why a
+// sixth would not either, are worth more in this file than a sixth.
 //
 // It also cost 5.5x the instructions: log through assembly plus a multiply is
 // 149 a call, and this is 817. That is a deliberate trade and it is worth naming
