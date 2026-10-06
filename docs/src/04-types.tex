@@ -180,6 +180,7 @@ and is an error at its declaration: \ic{type 'T' refers to itself}
 \ic{outside any record field or function type}.
 
 \subsection{Maps}
+\label{sec:type-maps}
 
 \ic{\{K => V\}} is a dynamic map from hashable keys \ty{K} to one
 value type \ty{V}. Reading \ic{m[k]} always yields \ic{V?}; see
@@ -380,7 +381,7 @@ yield \ic{long}; any other operand is an error naming it (\ic{'\&' left
 operand: expected long, got float}). Comparisons yield \ic{bool}; \ic{<}\,\ldots\ic{>=}
 on two strings is lexicographic byte order. \ic{\&\&}/\ic{||} accept any
 values: a non-zero value is true and the result is \ic{bool}
-(Section~\ref{sec:evaluation}). Equality works on any two values of the
+(Section~\ref{sec:logic}). Equality works on any two values of the
 same type; it is by content for scalars and strings, structural for
 heap arrays and options (at any depth), and by identity for records and
 maps (Section~\ref{sec:equality}).
@@ -399,7 +400,8 @@ numbers & \ic{+= -= *= /= \%=} & \ty{U} converts to \ty{T}; stored as \ty{T} \\
 integers & \ic{\&= |= \textasciicircum{}= <{}<= >{}>= >{}>{}>=} & \ty{U} an
   integer; a \ic{byte} keeps the low 8 bits \\
 \ic{str} & \ic{+=} only & \ty{U} $=$ \ty{str} \\
-array & \ic{+=}, \ic{*=} only & Section~\ref{sec:arrays} \\
+heap array & \ic{+=}, \ic{*=} only & Section~\ref{sec:arrays} \\
+\ic{[T; N]} & none & its length is part of its type, so it cannot grow \\
 \bottomrule
 \end{tabular}
 \end{center}
