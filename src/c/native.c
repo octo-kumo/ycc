@@ -1346,6 +1346,16 @@ static Yv *meta_compile_gen(void) {
      * and tokenizing gt would hand the parser a literal `import` line */
     Yv *toks = tokenize(yr_get(nr, "src"));
     Yv *ast = parse_program(toks);
+    /* THE GENERATOR'S IMAGE IS BUILT FOR THE HOST, NOT FOR THE PROGRAM'S
+       TARGET: it is EXECUTED (meta.c forks it and runs it) and the host can
+       only run an ELF, so with --target=windows the emitter and the linker
+       produced a PE and every meta fixture died with "the image is not an ELF
+       file". BOTH read the target (asm.c picks the object writer), so it is put
+       back only after the assemble. Both failure paths below exit(1), so
+       nothing returns with the target still changed. "linux" is the host by
+       construction: this compiler is a Linux binary. */
+    Yv *saved_target = res_target;
+    res_target = ys("linux");
     Yv *r = emit_program(ast, nr, 0, 0, su, yav(0));
     if (!yv_truth(yr_get(r, "ok"))) {
         Yv *seen = yav(0);
@@ -1367,6 +1377,7 @@ static Yv *meta_compile_gen(void) {
         (void)mg_report(ys("the meta generator did not compile"));
     };
     Yv *ab = ycc_assemble(yr_get(r, "asm"), 0);
+    res_target = saved_target;
     (void)mg_set(1);
     if (!yv_truth(yr_get(ab, "ok"))) {
         puts_(ys_cat(ys("error: the meta generator does not assemble: "),

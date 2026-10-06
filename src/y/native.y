@@ -668,6 +668,20 @@ def meta_compile_gen() -> [byte] {
     // and tokenizing gt would hand the parser a literal `import` line
     let toks = lexer.tokenize(nr.src);
     let ast = parser.parse_program(toks);
+    // THE GENERATOR'S IMAGE IS BUILT FOR THE HOST, NOT FOR THE PROGRAM'S
+    // TARGET. A meta block's generator is EXECUTED -- meta.y forks it and runs
+    // it -- and the host can only run an ELF, so with --target=windows the
+    // emitter and the linker produced a PE and every meta fixture died with
+    // "the image is not an ELF file". BOTH read the target (asm.y picks the
+    // object writer), so it is put back only after the assemble. Both failure
+    // paths inside this function exit(1), which is why the restore can sit
+    // where it does: nothing returns with the target still changed.
+    //
+    // "linux" is the host by construction: the compiler in src/y is a Linux
+    // binary, and src/c's cycc is too except for cycc.exe, whose meta gap is
+    // already recorded (AGENTS.md, cycc-win.sh).
+    let saved_target = res_target;
+    res_target = "linux";
     let r = emit_program(ast, nr, false, 0, su, []);
     if (!r.ok) {
         let seen: [str] = [];
@@ -685,6 +699,7 @@ def meta_compile_gen() -> [byte] {
         meta.mg_report("the meta generator did not compile");
     };
     let ab = nasm.ycc_assemble(r.asm, false);
+    res_target = saved_target;
     meta.mg_set(true);
     if (!ab.ok) {
         puts("error: the meta generator does not assemble: " + ab.error + "\n");

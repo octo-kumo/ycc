@@ -285,6 +285,28 @@ branch-disjointness false positive.
   harness has no tty for wine, so a console handle (as opposed to a pipe) is
   unverified, and `test_std_suites.sh`'s `term_test` needs a pty and only runs
   against ELF.
+- **THE META FIXTURES WORK ON PE NOW (round 56) -- 7 of the 41 PE-only
+  failures were one structural mistake.** A meta block's generator is
+  EXECUTED: `meta.y` forks it and runs it in the compiler's own process, and
+  the host can only run an ELF. `--target=windows` made that image a PE
+  (the emitter AND the linker both read the target), so `elf_img` rejected it
+  with "the image is not an ELF file" and every meta fixture died before doing
+  anything. The generator is now built with the target set to `"linux"` --
+  saved before `emit_program` and restored only after `nasm.ycc_assemble`,
+  because both read it -- in both copies.
+  The rule this is an instance of: **anything the compiler EXECUTES must be
+  built for the host, not for the program's target.** Nothing else in the
+  pipeline is in that category (the .text it writes is the program's), which is
+  why one save/restore is the whole fix.
+  Measured: all six meta fixtures pass on PE (`t197`, `t198`, `t199`, `t200`,
+  `t201`, `t202`), so the 41 PE-only failures are 34.
+  AND A METHOD NOTE THAT COST A BENCH RUN: `make bench-ir BASE=oldref
+  NEW=./cycc` compares the C COMPILER against a Y-BUILT reference -- two
+  implementations, not two revisions of one -- and reports +2038% on hello.y
+  and +95.77% on ycc.y. Those numbers are not wrong, they are answering a
+  different question. `NEW` must be `./ycc`, the Y binary the new compiler
+  built; with that, this change is +0.00% on both, as a fix that touches only
+  the meta path should be.
 - **THE PE-FIXTURE HARNESS COULD NOT FINISH, and now it can (round 55).**
   `test/sh/pe-fixtures.sh` had NO TIMEOUT ON EITHER RUN -- not on the ELF side
   and not on the wine one -- so a single fixture that hangs wedged the whole
