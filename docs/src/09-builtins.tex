@@ -231,6 +231,7 @@ unsigned as its name says, and an offset past the end of the array
   name that is not a field stops the program saying so.
 
 \begin{lstlisting}
+import struct;
 let hdr = struct.pack("u32be,i16le,pad,fill", [0x01020304, -2, 3, 65]);
 print(hdr);                 // b'\x01\x02\x03\x04\xfe\xff\x00\x00\x00A'
 print(struct.unpack("u32be,i16le", hdr));      // [16909060, -2]
@@ -784,6 +785,7 @@ value)} adds one), connections kept open and used again, and the cookies
 servers set, sent back:
 
 \begin{lstlisting}
+import http;
 let s = http.session({ base: "https://api.example.com",
                        headers: {"Authorization": "Bearer t0ken"} });
 let users = s.get("/users");
