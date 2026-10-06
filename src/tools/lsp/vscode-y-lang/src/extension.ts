@@ -40,8 +40,15 @@ let status: vscode.StatusBarItem;
 let starting = false;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+    // The FIRST line, before anything else can fail. Without it, "the extension
+    // did not activate" and "it activated and then hung" are the same silence.
+    activatedAt = Date.now();
     output = vscode.window.createOutputChannel('Y');
     context.subscriptions.push(output);
+    const ext = vscode.extensions.getExtension('yun.y-lang');
+    log(`activate: entry  ext ${vscode.version}  node ${process.versions.node}`
+        + `  activationKind ${ext?.isActive === true ? 'already' : 'onLanguage:y'}`
+        + `  folders ${vscode.workspace.workspaceFolders?.length ?? 0}`);
 
     status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 0);
     status.command = 'y.restartLanguageServer';
@@ -72,22 +79,32 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 export async function deactivate(): Promise<void> {
     const c = client;
     client = undefined;
+    const t0 = Date.now();
+    log(`deactivate: entered (alive for ${sinceActivation()}ms, client ${client ? 'up' : 'never started'})`);
     if (c) {
         // stop() sends shutdown + exit and waits. A server that has already died
         // rejects here; that is not worth reporting during deactivate.
         try {
             await c.stop();
-        } catch {
-            /* already gone */
+            log('deactivate: the language client stopped cleanly');
+        } catch (err) {
+            log(`deactivate: stop() rejected, which means the server was already gone: ${err}`);
         }
     }
+    log(`deactivate: done in ${Date.now() - t0}ms`);
 }
 
 async function start(context: vscode.ExtensionContext, why: string): Promise<void> {
     if (starting) {
+        log('start() called while a start is already in flight -- ignored');
         return;
     }
     starting = true;
+    const t0 = Date.now();
+    // Entry, before anything can fail: "the extension did not activate" and "it
+    // activated and then hung" look identical from outside, and only the first
+    // line here tells them apart.
+    log(`start(${why})  ext ${vscode.version}  node ${process.versions.node}`);
     try {
         const cfg = config();
         const bin = findServer({
@@ -110,11 +127,15 @@ async function start(context: vscode.ExtensionContext, why: string): Promise<voi
                 await vscode.commands.executeCommand('workbench.action.openSettings', 'y.lsp.serverPath');
             }
             setStatus('$(warning) Y: no server', 'yserve was not found');
+            log('no server binary -- nothing was started');
             return;
         }
 
         const root = workspaceRoot();
-        log(`starting ${bin} ${serverArgs(root, cfg.warnings).join(' ')} (${why})`);
+        log(`resolved  server=${bin}  root=${root}  warnings=${cfg.warnings}`
+            + `  checkOnChange=${cfg.checkOnChange}  timing=${cfg.timing}`
+            + `  trace=${cfg.trace}`);
+        log(`argv      ${serverArgs(root, cfg.warnings).join(' ')}`);
 
         const server: ServerOptions = {
             run: { command: bin, args: serverArgs(root, cfg.warnings), transport: TransportKind.stdio },
@@ -158,7 +179,9 @@ async function start(context: vscode.ExtensionContext, why: string): Promise<voi
         // start begins by showing the user an error.
         let everStarted = false;
         c.onDidChangeState((e) => {
-            log(`client state: ${e.newState}`);
+            // With the elapsed time, because a slow start is the thing worth seeing
+            // and the state names alone ("Running") do not say how long it took.
+            log(`client state: ${e.newState}  (+${sinceActivation()}ms since activation)`);
             if (e.newState === 3 /* Stopped */) {
                 if (everStarted) {
                     setStatus('$(error) Y: server stopped', 'the language server is not running');
@@ -167,12 +190,15 @@ async function start(context: vscode.ExtensionContext, why: string): Promise<voi
                 everStarted = true;
             }
         });
+        log('handing the server process to the language client');
 
         await c.start();
         setStatus('$(check) Y', 'the Y language server is running');
-        log('started');
+        log(`started and running  (${Date.now() - t0}ms in start())`);
         registerOptionalProviders(c);
+        log('optional providers registered; activate() returning');
     } catch (err) {
+        log(`start(${why}) FAILED after ${Date.now() - t0}ms: ${err}`);
         const message = err instanceof Error ? err.message : String(err);
         log(`failed to start: ${message}`);
         setStatus('$(error) Y: server failed', message);
@@ -243,7 +269,17 @@ function setStatus(text: string, tooltip: string): void {
     status.show();
 }
 
+/** `[hh:mm:ss.mmm] Y-client  ...` -- which side of the socket said it.
+ *
+ *  The server writes its own lines prefixed `yserve:` and they land in this same
+ *  channel, so an unmarked line was ambiguous: it was not obvious whether
+ *  "starting ..." came from here or from there. Every line here is the extension.
+ */
 function log(msg: string): void {
     const t = new Date().toISOString().slice(11, 23);
-    output.appendLine(`[${t}] ${msg}`);
+    output.appendLine(`[${t}] Y-client  ${msg}`);
 }
+
+/** The extension host can be busy for a long time; these say how long. */
+let activatedAt = 0;
+const sinceActivation = () => (activatedAt === 0 ? 0 : Date.now() - activatedAt);
