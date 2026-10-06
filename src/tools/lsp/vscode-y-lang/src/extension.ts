@@ -39,6 +39,65 @@ let output: vscode.OutputChannel;
 let status: vscode.StatusBarItem;
 let starting = false;
 
+// ── the heartbeat ──────────────────────────────────────────────────────────
+//
+// WHY THIS EXISTS. The server's own log is unambiguous: across a 43 second window
+// it spent 0.203s working and 43.055s parked in read_frame, so VS Code sent it
+// almost nothing. Uninstalling the extension makes the freeze go. Both true, and
+// together they only narrow the answer to "the extension host or VS Code proper" --
+// and that fork decides everything after it.
+//
+// The heartbeat is what decides it, from this side. It is a timer on the extension
+// host that says how long since the last message from yserve. If it keeps ticking
+// on schedule during a freeze, the extension host was responsive the whole time and
+// the time went into VS Code's main thread, which nothing in this extension can
+// reach. If it falls behind, the extension host was blocked and the cost is here.
+//
+// So: a delayed heartbeat is evidence, and silence would not have been.
+// How far behind schedule this timer is running.
+//
+// That number IS the measurement, and it needs no plumbing: a timer on a busy
+// event loop fires late by exactly the time the loop was blocked. So during a
+// freeze, the drift says whether the EXTENSION HOST was blocked or merely idle.
+// Drift near zero means the host was responsive throughout and the time went into
+// VS Code's main thread instead -- which is outside anything this extension can
+// reach, and is the single fork that decides where to look next.
+//
+// Which is why this is a heartbeat and not more instrumentation of the client's
+// own work: the client's own work is already logged, and it was silent through
+// every freeze. Silence from a thread you cannot instrument is not evidence, but a
+// late timer is.
+const HEARTBEAT_MS = 5000;
+let heartbeat: ReturnType<typeof setInterval> | undefined;
+let lastTick = 0;
+let tickCount = 0;
+
+function startHeartbeat(): void {
+    stopHeartbeat();
+    lastTick = Date.now();
+    tickCount = 0;
+    heartbeat = setInterval(() => {
+        const now = Date.now();
+        const drift = now - lastTick - HEARTBEAT_MS;
+        lastTick = now;
+        tickCount += 1;
+        // Only report drift worth acting on, and every tenth clean tick so a long
+        // quiet session is visible without a line every five seconds.
+        if (drift > 250 || tickCount % 10 === 0) {
+            log(`heartbeat ${tickCount}`
+                + `  ${(drift / 1000).toFixed(2)}s behind schedule`
+                + `  (${(tickCount * HEARTBEAT_MS / 1000 / 60).toFixed(1)}min uptime)`);
+        }
+    }, HEARTBEAT_MS);
+}
+
+function stopHeartbeat(): void {
+    if (heartbeat !== undefined) {
+        clearInterval(heartbeat);
+        heartbeat = undefined;
+    }
+}
+
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
     // The FIRST line, before anything else can fail. Without it, "the extension
     // did not activate" and "it activated and then hung" are the same silence.
@@ -81,6 +140,7 @@ export async function deactivate(): Promise<void> {
     client = undefined;
     const t0 = Date.now();
     log(`deactivate: entered (alive for ${sinceActivation()}ms, client ${client ? 'up' : 'never started'})`);
+    stopHeartbeat();
     if (c) {
         // stop() sends shutdown + exit and waits. A server that has already died
         // rejects here; that is not worth reporting during deactivate.
@@ -91,6 +151,7 @@ export async function deactivate(): Promise<void> {
             log(`deactivate: stop() rejected, which means the server was already gone: ${err}`);
         }
     }
+    stopHeartbeat();
     log(`deactivate: done in ${Date.now() - t0}ms`);
 }
 
@@ -212,6 +273,7 @@ async function start(context: vscode.ExtensionContext, why: string): Promise<voi
         log(`started and running  (${Date.now() - t0}ms in start())`);
         registerOptionalProviders(c);
         log('optional providers registered; activate() returning');
+        startHeartbeat();
     } catch (err) {
         log(`start(${why}) FAILED after ${Date.now() - t0}ms: ${err}`);
         const message = err instanceof Error ? err.message : String(err);
