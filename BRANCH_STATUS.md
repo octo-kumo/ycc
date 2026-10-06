@@ -220,9 +220,31 @@ branch-disjointness false positive.
   this divergence has been invisible. It is a real port-gate hole: a `-g` PE
   case belongs in `cycc-win.sh` once the C path works.
 
-- **`pe-gate.sh` cannot pass on this machine right now, and it is NOT the
-  tree.** Its file-path program (and every PE, at startup) dies in the W3
-  self-test with
+- **CORRECTION to the entry below, and it is the important one.** The claim
+  that the PE failure was environmental was WRONG, and the comparison it rested
+  on was invalid: I rebuilt the file-path program with `refs/ycc.ref` *after*
+  that ref had been reblessed with the import plumbing, so both sides carried
+  the change. Built instead from a worktree at the commit *before* any import
+  work (`0ca9cf9`), the same program runs to completion under wine -- 45 lines,
+  exit 0, matching the Linux output -- while the current tree aborts with a wine
+  crash dump and 108 lines of noise. So the plumbing did perturb it. What it
+  perturbed is an ACCIDENT, and that is the real finding:
+  **`wsys.s` has Windows bodies for only 2 of the 13 named-layer entries
+  `fs.y` uses** (`y_os_read`, `y_os_write`). The other eleven --
+  `y_os_openat y_os_close y_os_lseek y_os_stat y_os_mkdir y_os_unlink
+  y_os_rename y_os_getcwd y_os_chdir y_os_list y_os_set_mode` -- fall through to
+  their ELF bodies, which are raw LINUX syscall numbers, and on NT whatever
+  those numbers mean is what runs. Measured on the pre-import build:
+  `fs.cwd()` answers a non-empty string whose first byte is `'Z'` (90), not
+  `/`. The file-path check passed in rounds 31-33 because those accidents
+  happened to produce the Linux output; the plumbing moved the `.bss` under it
+  and the accident stopped being benign.
+  `pe-gate.sh` now REPORTS this instead of failing, naming the eleven entries,
+  so the rest of the file stays a gate. **Implementing those eleven NT bodies
+  is the concrete next B2 step**, and until they exist no PE file-I/O check
+  means anything.
+- **And the older entry, kept only because it is what a wrong comparison cost:**
+  its file-path program dies with
 
       wine: Call from 0000000140001A9B to unimplemented function
       ntdll.NtMapUserPhysicalPagesScatter, aborting
