@@ -37,6 +37,7 @@ fi
 pass() { echo "${GREEN}PASS${OFF} $1"; }
 fail() { echo "${RED}FAIL${OFF} $1"; rc=1; }
 rc=0
+TOL_ULP=1
 
 # Both compilers, and the two must say the same thing (the twin is 1:1, and a
 # divergence here is a bug in one of them rather than in the math).
@@ -142,6 +143,42 @@ if out=$(python3 "$ROOT/test/math/find_repeats.py" "$ROOT/src/y/std/math.y" 2>&1
 else
     echo "$out" | sed 's/^/  /'
     fail "a new repeated computation in src/y/std/math.y (above); it is a defect, or it needs a reason in KNOWN"
+fi
+
+# The two-argument sweep, which this suite did not have and audit_float.py said
+# it could not afford.
+#
+# audit_float.py's header said of hypot and atan2: "covered by the table and by
+# t325". That was load-bearing and wrong -- hypot had FOURTEEN table cases and
+# t325 pinned one corner -- and fourteen cases cannot gate a function whose whole
+# difficulty is the ratio between its two arguments. The omission had a cause
+# worth naming rather than excusing: a sweep needs a reference, and Python 3.14's
+# decimal has exp, ln, log10, sqrt and power and NO inverse trig, with mpmath not
+# installed. There was no atan2 to call.
+#
+# test/math/audit_pairs.py writes one -- arctangent by two exact identities and
+# the alternating series -- and then checks it against libm on all 557
+# two-argument cases in ulp_table.txt before the sweep runs. A hand-written
+# reference is the one thing that must not be trusted on its own, so it is not:
+# that check is what makes the 20000 pairs below mean anything, and it caught two
+# bugs in the reference itself on its first run.
+#
+# Both halves are proved able to fail: pointed at the pre-fix module it reports
+# 4 over tolerance for hypot (worst 2 ulps) and 18 for atan2 (worst 2^63, a sign
+# of zero). At a smaller pair count, so this stays inside the suite's time --
+# YPAIRS overrides it, and the full 20000 is the number quoted in a commit.
+#
+# Under the BUILT compiler only, and that is a decision rather than a default:
+# this sweep is about std/math.y, which both compilers read from the same file,
+# and the ulp table above already runs under both and would catch any codegen
+# difference between the twins on a float answer. Running it twice would buy
+# nothing about the math.
+if out=$(python3 "$ROOT/test/math/audit_pairs.py" "${YPAIRS:-4000}" 2>&1); then
+    echo "$out" | sed 's/^/  /'
+    pass "hypot and atan2 within $TOL_ULP over independently drawn decade pairs"
+else
+    echo "$out" | sed 's/^/  /'
+    fail "hypot or atan2 over $TOL_ULP on a decade-uniform pair"
 fi
 
 # Is every def in std/math.y reached by something a test checks? The ulp table

@@ -233,6 +233,24 @@ very build was just compared (`make test`, `check`, `rebless` do);
   located in the table at all. Both are fixed; both are the kind of thing that
   reads as coverage right up until it is measured.
 
+  And the two-argument functions got the sweep this suite did not have.
+  `audit_float.py`'s header said of `hypot` and `atan2`: "covered by the table
+  and by t325". That was load-bearing and wrong — `hypot` had **fourteen** table
+  cases and `t325` pinned one corner. The omission had a cause worth naming
+  rather than excusing: a sweep needs a reference, and Python 3.14's `decimal`
+  has `exp`, `ln`, `log10`, `sqrt` and `power` and **no inverse trig**, with
+  mpmath not installed. There was no `atan2` to call.
+  `test/math/audit_pairs.py` writes one — arctangent by two exact identities plus
+  the alternating series — and checks it against libm on all **557** two-argument
+  table cases *before* the sweep runs, because a hand-written reference is the
+  one thing that must not be trusted on its own. That check caught two bugs in the
+  reference on its first run. The sweep is **20 000 pairs with each argument
+  uniform in the decades and the two drawn independently** (independently is the
+  point: a correlated draw makes `y == x` the common case, which is one point of a
+  two-dimensional range rather than the shape of it). Both functions within
+  1 ulp; pointed at the pre-fix module it reports 4 over for `hypot` and 18 for
+  `atan2`. `YPAIRS` sets the count (4000 in the suite).
+
   The three thinnest **rounding** functions were then grown, on the reasoning
   that an exact function needs few cases (finitely many answers) and a rounding
   function does not: `sqrt` had 23, `atan2` 35 and `hypot` **14**, and fourteen
