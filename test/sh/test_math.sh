@@ -181,6 +181,45 @@ else
     fail "hypot or atan2 over $TOL_ULP on a decade-uniform pair"
 fi
 
+# THE SEAMS. audit_thresholds.py reads every comparison std/math.y makes against
+# one of its own float PARAMETERS -- literals and named constants alike -- and
+# asks how far the nearest table argument is from each, in ulps of the threshold.
+#
+# The rule it encodes came from a defect: hypot_scaled's upper bound was 1e154
+# where the truth is sqrt(DBL_MAX/2) = 9.4808e153, because it was reasoned from
+# m*m alone when the line evaluates m*m + s*s. For every m in between with s
+# comparable to it, hypot answered +inf for an answer of about 1.4e154. A
+# 20000-pair decade-uniform sweep could not have found it -- the defect is a
+# sliver of one decade AND needs a second condition, so the expected count where
+# both hold is 0.11.
+#
+# A SWEEP FINDS DEFECTS BY AREA. A threshold is only findable if something NAMES
+# it, which is why this and the pinned boundary block in gen_ulp_table.py are the
+# same idea: every numeric literal a comparison tests against gets itself and its
+# two neighbouring doubles, crossed with a partner near enough that the second
+# condition holds too.
+#
+# Restricted to comparisons on a PARAMETER on purpose. "Is there an argument near
+# this threshold" is the right question for a value the caller passes and the
+# wrong one for a derived quantity: hypot_scaled tests s/m < 1e-4, a RATIO, and no
+# single argument is ever near 1e-4 -- the table crosses it with a partner for
+# exactly that reason.
+if out=$(python3 "$ROOT/test/math/audit_thresholds.py" "$ROOT/src/y/std/math.y" 2>&1); then
+    echo "$out" | tail -3 | sed 's/^/  /'
+    pass "every seam a comparison in std/math.y branches on has a case beside it"
+else
+    echo "$out" | sed 's/^/  /'
+    fail "a threshold in std/math.y has no case within ${LIMIT:-1e6} ulps of it"
+fi
+
+# And the finder's own selftest, or the report above is a comment.
+if python3 "$ROOT/test/math/audit_thresholds.py" --selftest >/dev/null 2>&1; then
+    pass "the seam extractor finds a planted comparison"
+else
+    fail "the seam extractor stopped finding a planted comparison"
+    python3 "$ROOT/test/math/audit_thresholds.py" --selftest 2>&1 | sed 's/^/  /'
+fi
+
 # Is every def in std/math.y reached by something a test checks? The ulp table
 # pins 38 names and the module has 114, and the rest are helpers -- reachable only
 # through a pinned caller, where a wrong answer hides inside the final rounding.

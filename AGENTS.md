@@ -273,6 +273,32 @@ very build was just compared (`make test`, `check`, `rebless` do);
   and the reasoning that produced `1e154` is the reasoning a reader will repeat.
   Both catch the wrong bound: 2 cases, exit 1.
 
+  **And that rule is now a gate over every seam at once.**
+  `test/math/audit_thresholds.py` reads every comparison `std/math.y` makes
+  against one of its own float **parameters** — literals and named constants
+  alike — and reports how far the nearest table argument is from each, in ulps of
+  the threshold. Restricted to parameters on purpose: "is there an argument near
+  this threshold" is the right question for a value the caller passes and the
+  wrong one for a derived quantity, since `hypot_scaled` tests `s/m < 1e-4`, a
+  **ratio**, and no single argument is ever near 1e-4. 16 edge thresholds; 14 of
+  them now have an argument within **1 ulp**. Wired into `test_math.sh` with its
+  own selftest, and proved to fail by planting a seam.
+
+  Its first run named two more, and pinning them found a defect in the
+  **reference**: `sinh`'s overflow lambda returned `+inf` for a *negative*
+  argument past the bound, where `sinh` is odd and the answer is `−inf`. Nothing
+  had noticed because no case in the table was a negative argument beyond the
+  bound — the pinned list and the overflow strip were all positive or small.
+  That is the seventh time this work's own reference has been the thing that was
+  wrong, and the shape is always the same: **a reference written for the cases
+  that existed rather than for the function.**
+
+  Two thresholds remain far from the table and both are **oracle** seams the
+  table cannot reach — `exp_y`'s `exp_lo` and `pow_y`'s ±1024, inside functions
+  that are not exported. Each is pinned once by the fixture that compares the
+  oracle against the assembly kernel it stands in for, and each `KNOWN` entry
+  names that fixture rather than asserting that it is fine.
+
   The three thinnest **rounding** functions were then grown, on the reasoning
   that an exact function needs few cases (finitely many answers) and a rounding
   function does not: `sqrt` had 23, `atan2` 35 and `hypot` **14**, and fourteen

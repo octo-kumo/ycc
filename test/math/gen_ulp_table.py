@@ -464,10 +464,24 @@ REF1 = {
     # first argument with no answer, so >= is what libm agrees with. Both use a
     # real libm call below it -- Python's math module raises OverflowError past
     # the edge rather than returning inf, so the range test has to come first.
+    # AND THE SIGN IS CARRIED PAST THE BOUND, which it was not until the boundary
+    # was pinned. `abs(x) >= bound -> inf` answers +inf for sinh(-710.476), where
+    # the answer is -inf: sinh is ODD and its overflow inherits that, so the
+    # overflow is -inf on the negative side. Nothing noticed, because no case in
+    # the table was a negative argument beyond the bound -- the pinned list and the
+    # strip were all positive or small. cosh is even, so its +inf is right and is
+    # left alone.
+    #
+    # That is the seventh time this file's reference has been the thing that was
+    # wrong, and the shape is always the same: a reference written for the cases
+    # that existed rather than for the function. A boundary case is what exposes
+    # it, which is an argument for pinning boundaries rather than a footnote about
+    # pinning them.
     "sinh": lambda x: (float("nan") if math.isnan(x) else
                        (math.inf if x == math.inf else
                         (-math.inf if x == -math.inf else
-                         (float("inf") if abs(x) >= 710.47586007394398
+                         (math.copysign(float("inf"), x)
+                          if abs(x) >= 710.47586007394398
                           else math.sinh(x))))),
     "cosh": lambda x: (float("nan") if math.isnan(x) else
                        (math.inf if math.isinf(x) else
@@ -717,6 +731,35 @@ def decade_pair(seed, n, lo=-323.0, hi=308.0, signed=True):
 EXTRA = {name: spread(1000 + i, 60) for i, name in enumerate(
     ["exp", "expm1", "log", "log1p", "sinh", "cosh", "tanh", "asin", "acos",
      "atan", "sin", "cos", "tan"])}
+
+# THE SEAMS test/math/audit_thresholds.py found, by the rule rather than by
+# reading. That tool extracts every comparison std/math.y makes against one of its
+# own float PARAMETERS and asks how far the nearest table argument is, in ulps of
+# the threshold. Two came back with nothing within 1e6:
+#
+#   log1p's 2^-52   the branch is `x > -2^-52 && x < 2^-52`, and the module's own
+#                   comment says "STRICT: at exactly 2^-52 the answer is not x".
+#                   A comment about a boundary case, with no case at it. Nearest
+#                   table argument: 2.2e15 ulps.
+#   sinh's 709      `x > 709 || x < -709` selects a scaled path, and the comment
+#                   beside it explains that sinh overflows at 710.48 -- so the
+#                   branch at 709 is where the argument has outrun its own
+#                   exponential. Nearest table argument: 6.9e12 ulps.
+#
+# Both are STRICT comparisons, which is why the value itself and both neighbours
+# go in: at the threshold one path runs and one step past it another does, and a
+# decade-uniform spread lands on neither.
+EXTRA["log1p"] = EXTRA["log1p"] + [
+    math.copysign(1.0, s) * math.nextafter(abs(2.220446049250313e-16), t)
+    for s in (-1.0, 1.0) for t in (0.0, math.inf, -math.inf)
+]
+EXTRA["sinh"] = EXTRA["sinh"] + [
+    math.copysign(1.0, s) * math.nextafter(709.0, t)
+    for s in (-1.0, 1.0) for t in (0.0, math.inf, -math.inf)
+] + [
+    math.copysign(1.0, s) * math.nextafter(710.476, t)
+    for s in (-1.0, 1.0) for t in (0.0, math.inf, -math.inf)
+]
 # cbrt gets its own spread, and it needs far more than the 80 it had. Those 80
 # were added because the native fixture found 7.5 a trillion times out and the
 # pinned list had missed it -- and 80 was still not enough, because cbrt was 2
