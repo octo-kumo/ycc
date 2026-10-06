@@ -1,0 +1,21 @@
+-- the setting is READ, not ignored
+no options at all means on: true
+an empty options object means on: true
+null means on: true
+a string means on: true
+false means off: false
+-- ON, which is the default and the old behaviour
+  the flag: true
+  didOpen: 1 frame, 1 diagnostics
+  didChange: 1 frame, 1 diagnostics
+  and the buffer moved: v2, 31 bytes
+  didSave: 1 frame, 1 diagnostics
+-- OFF: nothing published on a change, and the buffer STILL moves
+  the flag: false
+  didOpen: 1 frame, 1 diagnostics
+  didChange: no frames
+  and the buffer moved anyway: v2, 31 bytes
+  didSave, which still checks: 1 frame, 1 diagnostics
+-- and the other features are not a keystroke behind, which is the half
+  a hover at line 2, which only V2 has: true
+done

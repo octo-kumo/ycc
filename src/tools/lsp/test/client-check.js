@@ -667,11 +667,25 @@ function main() {
             );
         }
 
-        // 8. shutdown/exit, and the process must end by itself
+        // 8. R1.8's `y.lsp.checkOnChange`, OFF. Its own session, because the
+        //    option is read once at `initialize` and a session cannot be
+        //    re-negotiated.
+        await checkOnChangeOff();
+
+        // 9. shutdown/exit, and the process must end by itself.
+        //
+        // `exit` alone. This used to end with `conn.dispose()` + `proc.stdin.end()`
+        // as well, and that pair is a write-after-end waiting to happen: dispose
+        // ends the writer's stream, and anything the connection still flushes --
+        // the queued `exit` above, or a reply to a message the server sent as it
+        // was dying -- lands on a stream that has been ended. It surfaced only once
+        // a second session existed (the checkOnChange one below), because that is
+        // what changed the timing, and it surfaced as an unhandled throw from
+        // inside a promise executor: no failed check, no `passed N, failed 0`
+        // line, just a non-zero exit. The server quits on `exit` by itself, which
+        // is what `finish()`'s exit handler has always relied on.
         await request('shutdown');
         conn.sendNotification('exit');
-        conn.dispose();
-        proc.stdin.end();
         // finish() runs from the exit handler
     })().catch((e) => {
         fail++;
@@ -681,6 +695,115 @@ function main() {
         } catch {
             /* gone */
         }
+    });
+}
+
+// R1.8 with the setting OFF, over the wire, against its own process.
+//
+// The claim being pinned is not "the flag is read" -- t019 does that in Y -- it
+// is the SPLIT: `didChange` must publish nothing while the buffer still moves, so
+// the features that read the buffer are never a keystroke behind. A session that
+// simply ignored changes would pass the first half and fail every real one, which
+// is why the hover at the end is the load-bearing check and not an extra.
+//
+// V1 has an error on line 1; V2 adds a line with a builtin on it. A hover at line
+// 2 can only answer if the change was taken.
+function checkOnChangeOff() {
+    return new Promise((resolve) => {
+        const proc = cp.spawn(bin, ['--root', ws], { stdio: ['pipe', 'pipe', 'pipe'] });
+        proc.on('exit', () => resolve());
+        // The `exit` notification below is fire-and-forget and this server quits
+        // on reading it, so the pipe closes while the writer still holds the frame.
+        // That surfaces as an UNHANDLED ERR_STREAM_WRITE_AFTER_END which kills node
+        // -- after every check has printed, so the run looks like a pass until the
+        // exit code says otherwise. Swallowing it here is the fix; the write it
+        // complains about is the `exit` the server has already acted on.
+        proc.stdin.on('error', () => undefined);
+        const conn = RPC.createMessageConnection(
+            new RPC.StreamMessageReader(proc.stdout),
+            new RPC.StreamMessageWriter(proc.stdin),
+        );
+        const seen = [];
+        conn.onNotification('textDocument/publishDiagnostics', (p) => {
+            if (p.uri === mainUri) {
+                seen.push((p.diagnostics || []).length);
+            }
+        });
+        conn.listen();
+        const send = (m, ...rest) => conn.sendNotification(m, ...rest);
+        const request = (m, ...rest) => conn.sendRequest(m, ...rest);
+        const settle = () => new Promise((r) => setTimeout(r, 250));
+        const V1 = 'let a = nosuchfn(1);\n';
+        const V2 = 'let a = nosuchfn(1);\nprint(a);\n';
+        const doc = (t, v) => ({ uri: mainUri, languageId: 'y', version: v, text: t });
+        (async () => {
+            const p = initParams();
+            p.initializationOptions = { rootPath: ws, checkOnChange: false };
+            const init = await request('initialize', p);
+            check(
+                'checkOnChange: initialize still answers with capabilities',
+                !!(init && init.capabilities),
+            );
+            send('textDocument/didOpen', { textDocument: doc(V1, 1) });
+            await settle();
+            const afterOpen = seen.slice();
+            check(
+                'checkOnChange off: didOpen still publishes',
+                afterOpen.length === 1 && afterOpen[0] >= 1,
+                'publishes: ' + JSON.stringify(afterOpen),
+            );
+            const before = seen.length;
+            send('textDocument/didChange', {
+                textDocument: { uri: mainUri, version: 2 },
+                contentChanges: [{ text: V2 }],
+            });
+            await settle();
+            check(
+                'checkOnChange off: didChange publishes nothing',
+                seen.length === before,
+                'publishes: ' + JSON.stringify(seen),
+            );
+            const hover = await request('textDocument/hover', {
+                textDocument: { uri: mainUri },
+                position: { line: 1, character: 0 },
+            });
+            const hv = JSON.stringify(hover || {});
+            check(
+                'checkOnChange off: the change still MOVED the buffer (a hover on line 2 answers)',
+                hv.includes('void'),
+                hv.slice(0, 160),
+            );
+            send('textDocument/didSave', { textDocument: { uri: mainUri } });
+            await settle();
+            check(
+                'checkOnChange off: didSave still publishes',
+                seen.length > before,
+                'publishes: ' + JSON.stringify(seen),
+            );
+            // `shutdown`, then kill. NOT `exit`: that notification is
+            // fire-and-forget, the server quits on reading it, and the pipe closes
+            // while the writer still holds the frame -- an unhandled
+            // ERR_STREAM_WRITE_AFTER_END inside vscode-jsonrpc that killed node
+            // AFTER every check had printed, so the run looked like a pass and the
+            // exit code disagreed. This session is not the graceful-shutdown test;
+            // the outer one above is, and it ends the way its own comments say.
+            await request('shutdown');
+            proc.kill();
+            // NO `conn.dispose()`. Disposing ends the writer's stream while the
+            // reader is still reacting to the pipe closing, and the write that
+            // follows lands on an ended stream: an unhandled
+            // ERR_STREAM_WRITE_AFTER_END thrown from inside a promise executor, so
+            // it is neither caught by this function's `.catch` nor reported as a
+            // failed check. The process is about to die anyway; the connection dies
+            // with it.
+        })().catch((e) => {
+            check('checkOnChange off: the session ran', false, e && e.message ? e.message : String(e));
+            try {
+                proc.kill();
+            } catch {
+                /* gone */
+            }
+        });
     });
 }
 

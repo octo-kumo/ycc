@@ -82,14 +82,19 @@ type State = {
     wlevel: long,       // 0 or 1, as `ycc -W`
     shutting: bool,     // a `shutdown` request has been answered
     exiting: bool,      // an `exit` notification has arrived
-    initialized: bool   // `initialize` has been answered
+    initialized: bool,  // `initialize` has been answered
+    // R1.8's `y.lsp.checkOnChange`, default ON. Off means "do not run the checker
+    // and the linter on every keystroke"; it does NOT mean "ignore the change",
+    // because every other feature reads this buffer and a stale one is worse than
+    // a slow check. See on_did_change.
+    check_on_change: bool
 };
 
 def server_state(root: str, pack: str, wlevel: long) -> State {
     let m: { str => Doc } = {};
     let e: { str => Prepared } = {};
     let v: { str => long } = {};
-    let s: State = { docs: m, open: [], xc: e, xc_none: [], xc_ver: v, root: root, pack: pack, wlevel: wlevel, shutting: false, exiting: false, initialized: false };
+    let s: State = { docs: m, open: [], xc: e, xc_none: [], xc_ver: v, root: root, pack: pack, wlevel: wlevel, shutting: false, exiting: false, initialized: false, check_on_change: true };
     s
 }
 
@@ -468,10 +473,19 @@ def on_did_open(st: State, p: { str => json.Val }) -> [str] {
 }
 
 // textDocument/didChange, reply only.
+//
+// The document has ALREADY been updated by `note_change` before this runs --
+// `doc_notification` does the state and this does the reply -- so with R1.8 off
+// this publishes nothing and the buffer stays current. That split is the whole
+// point: the other reading of the setting ("ignore changes") would leave hover,
+// completion, semantic tokens and formatting answering about text the user has
+// already replaced, which is worse than the slow check the switch exists for.
 def on_did_change(st: State, p: { str => json.Val }) -> [str] {
-    let uri = str_field(field_of(p, "textDocument"), "uri");
     let out: [str] = [];
-    if (doc_has(st, uri)) { out = refresh(st, uri); }
+    if (st.check_on_change) {
+        let uri = str_field(field_of(p, "textDocument"), "uri");
+        if (doc_has(st, uri)) { out = refresh(st, uri); }
+    };
     out
 }
 
@@ -502,6 +516,29 @@ def on_did_close(st: State, p: { str => json.Val }) -> [str] {
 // initialize: what this server can do. The flags are load-bearing, not
 // decoration -- an editor reads them and changes how it calls us, so claiming a
 // capability and not honouring it corrupts the client's own state.
+// R1.8: `initializationOptions.checkOnChange`, absent or not a bool meaning ON.
+//
+// The DEFAULT is on, which is the behaviour this server has always had, so a
+// client that sends nothing gets what it got before the setting existed. A
+// malformed value is also "on" rather than an error: this is a performance switch,
+// and refusing to start over it would be a worse outcome than checking when the
+// user asked not to.
+def read_check_on_change(p: { str => json.Val }) -> bool {
+    let out = true;
+    // `members_of` because `initializationOptions` is a `json.Val` -- a value
+    // that may not be an object at all -- and `field_of` wants a map.
+    let io = members_of(field_of(p, "initializationOptions"));
+    let got = field_of(io, "checkOnChange");
+    if let json.Bool b = got { out = b.b; };
+    out
+}
+
+// NOTE: `initialize` PARAMS are not an argument here, and R1.8's
+// `checkOnChange` is not read here. This runs in the CHILD, which dies with the
+// request; a setting recorded here would forget itself on the next keystroke,
+// which is exactly what happened when it was read here first time.
+// `dispatch.apply_state` reads it, in the parent, which is the only side of the
+// fork that survives (LSP.md section 4.2).
 def do_initialize(st: State, id: json.Val) -> str {
     st.initialized = true;
     let sync = json.obj();
@@ -1935,7 +1972,7 @@ export {
   diag_json, publish_params, publish_for, path_uri, refresh,
   note_open, note_change, note_close,
   on_did_open, on_did_change, on_did_save, on_did_close, on_exit,
-  do_initialize, do_shutdown, do_formatting,
+  do_initialize, read_check_on_change, do_shutdown, do_formatting,
   do_semantic_tokens, do_document_symbols, numbers, symbols_json,
   end_position, count_lines,
   field_of, members_of, str_field, long_field, params_of,
