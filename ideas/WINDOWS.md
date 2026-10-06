@@ -876,6 +876,31 @@ reason this section exists:
   both targets. This is B2's `std/win/*` work, not a merge defect — but it is the
   first thing that is *newly reachable* because of the merge, and it is the shape
   every future `src/y/arch/*.s` must not have.
+- **The NT file path works now (B2, in progress).** `fs.open_file` /
+  `read_some` / `write_text` / `close_file` / `seek` are `os_call`s into
+  `wsys.s` and they now do the right Nt calls. Getting there meant fixing
+  seven defects in code no generated PE had ever exercised successfully:
+  the `\??\` prefix was stored as four *bytes* (UTF-32) instead of four
+  UTF-16 units; the widening advanced 8 bytes per unit, so the name had a NUL
+  after every character; `Length`/`Buffer` left the `\??\` prefix out, so NT
+  saw a drive-letter path with no namespace root; `NtOpenFile` took
+  `DesiredAccess` from the UNICODE_STRING's `Buffer` slot and passed the same
+  address for the file handle AND the `IO_STATUS_BLOCK`; `NtCreateFile`'s
+  eleven arguments were shifted by one slot with `EaBuffer`/`EaLength`
+  uninitialized; the access masks lacked `SYNCHRONIZE`, which
+  `FILE_SYNCHRONOUS_IO_NONALERT` requires; `y_os_handle`'s `fd >= 3` path
+  returned whatever was in `%rax` instead of the descriptor; `y_os_close` read
+  its argument from the return-address slot and put the handle in `%rdi` where
+  the NT convention wants `%r10`; and `y_os_lseek` used syscall numbers 23/13
+  (NtWaitForDebugEvent / NtSetInformationThread) with
+  `FileDispositionInformation` as the class -- a "seek" that could have
+  deleted the file on close. The right numbers come from the `mov $N,%eax`
+  of Wine's own `ntdll.dll` stubs, the same way `w_sysno` was read from a real
+  one. Verified under wine: a PE writes, appends, reads back and seeks a
+  file with the same bytes as Linux. **Still raw `syscall(` in `fs.y`**:
+  `path_mode`/`exists`/`file_size` (262), `list_dir` (217/257), `make_dir`
+  (258), `remove_file`/`remove_dir` (263), `rename` (264), `set_mode` (268),
+  `cwd` (79), `chdir` (80) -- the rest of the B2 slice.
 - **`std/math.y` is not embedded, and that is correct.** Only the four packed units
   (`rt`, `prelude`, `exec`, `str`) are in `STD_EMBEDS`; `std/math.y` is spliced
   from source per target like `fs.y`/`net.y`, so the pack never carries it and

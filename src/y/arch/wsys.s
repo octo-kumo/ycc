@@ -111,6 +111,11 @@
 y_os_handle:
     cmp $3, %rdi
     jl yosh_map
+# fd >= 3 is already a real handle (fs.y's y_os_openat returns one): hand it
+# back. This used to `ret` with %rax holding whatever the caller left there,
+# so every read, write, lseek and close on a FILE went to a garbage handle --
+# the open worked and nothing after it did.
+    mov %rdi, %rax
     ret
 yosh_map:
     mov %gs:96, %rax
@@ -523,29 +528,60 @@ y_os_lseek:
     mov 32(%rbp), %rbx
     mov 24(%rbp), %r12
     mov 16(%rbp), %r13
+# Every number in this block was wrong, and two of them were dangerous:
+# NtQueryInformationFile is 17 (0x11), not 23, and NtSetInformationFile is 39
+# (0x27), not 13 -- 13 is NtSetInformationThread. The class was 1 and 13, not
+# FilePositionInformation = 14, and 13 is FileDispositionInformation: a
+# "seek" that landed there would have DELETED the file on close. The length
+# was 12 and 24; FilePositionInformation is a LARGE_INTEGER, so it is 8.
+# (Numbers read from the `mov $N,%eax` of Wine's own ntdll.dll stubs, the
+# same way arch_x64.y's table was read from a real one.)
     cmp $1, %r13
-    jne yol_seekset
-    cmp $0, %r12
-    jns yol_bad
+    je yol_cur
+    cmp $2, %r13
+    je yol_end
+# whence 0 (SEEK_SET): the position is the offset.
+    test %r12, %r12
+    js yol_bad
+    mov %r12, %rax
+    jmp yol_set
+# whence 1 (SEEK_CUR): read the current position, then add the offset. This is
+# the one y_stdin_sync uses, with a negative offset, to give back the bytes
+# readline buffered.
+yol_cur:
     mov %rbx, %rdi
     call y_os_handle
     mov %rax, -32(%rbp)
     lea -48(%rbp), %rdx
     lea -80(%rbp), %r8
-    mov $24, %r9d
-    mov $1, 40(%rsp)
+    mov $8, %r9d
+    mov $14, 40(%rsp)
     mov -32(%rbp), %r10
-    mov $23, %eax
+    mov $17, %eax
     syscall
     test %eax, %eax
     js yol_fail
-    mov -72(%rbp), %rax
+    mov -80(%rbp), %rax
     add %r12, %rax
     jmp yol_set
-yol_seekset:
-    test %r12, %r12
-    js yol_bad
-    mov %r12, %rax
+# whence 2 (SEEK_END): read EndOfFile out of FILE_STANDARD_INFORMATION
+# (class 5: AllocationSize at 0, EndOfFile at 8, then NumberOfLinks and the
+# two bytes), then add the offset.
+yol_end:
+    mov %rbx, %rdi
+    call y_os_handle
+    mov %rax, -32(%rbp)
+    lea -48(%rbp), %rdx
+    lea -120(%rbp), %r8
+    mov $24, %r9d
+    mov $5, 40(%rsp)
+    mov -32(%rbp), %r10
+    mov $17, %eax
+    syscall
+    test %eax, %eax
+    js yol_fail
+    mov -112(%rbp), %rax
+    add %r12, %rax
 yol_set:
     mov %rax, -96(%rbp)
     mov %rbx, %rdi
@@ -553,10 +589,10 @@ yol_set:
     mov %rax, -32(%rbp)
     lea -48(%rbp), %rdx
     lea -96(%rbp), %r8
-    mov $12, %r9d
-    mov $13, 40(%rsp)
+    mov $8, %r9d
+    mov $14, 40(%rsp)
     mov -32(%rbp), %r10
-    mov $13, %eax
+    mov $39, %eax
     syscall
     test %eax, %eax
     jns yol_out
@@ -1256,13 +1292,26 @@ y_os_openat:
     jne yoa_bad
     cmp $900, %r13
     jg yoa_bad
-# the Win32 namespace prefix, as four UTF-16 code units in one store:
-# '\' '?' '?' '\' -> 0x5C3F3F5C little-endian
+# The Win32 namespace prefix, as four UTF-16 code units in one 8-byte store:
+# '\' '?' '?' '\' is 5C 00 3F 00 3F 00 5C 00, i.e. 0x005C003F003F005C.
+# (It was 0x5C3F3F5C -- four BYTES -- before, which is four UTF-16 code units
+# only if the string is UTF-32: NT read the first unit as 0x3F5C and the path
+# came back STATUS_OBJECT_PATH_SYNTAX_BAD, which is what every generated PE's
+# first file open did.)
     lea -2096(%rbp), %r14
-    mov $1547648860, %rax
+    mov $25895968444448860, %rax
     mov %rax, (%r14)
     add $8, %r14
-# widen the path: one byte in, one UTF-16 unit out, '/' folded to '\'
+# Widen the path: one byte in, one UTF-16 unit out, '/' folded to '\'. The
+# in-tree assembler has no 16-bit store form (enc_mov's memory arm is 64-bit
+# only), so each store is 8 bytes with the unit in its low two; the cursor
+# advances TWO, not eight, and the next store overwrites the six zero bytes
+# the previous one left. (Advancing 8 per unit was the first bug here: the
+# name came out with a NUL after every character, which NT answers
+# STATUS_OBJECT_NAME_INVALID, 0xC0000033.) The last store's zeros sit past
+# Length and inside the buffer: rbp-2088 up to the OBJECT_ATTRIBUTES at
+# rbp-208 is 1880 bytes and the length cap above is 900 characters = 1800
+# bytes plus the 8-byte prefix and 6, so the two cannot meet.
     mov $0, %r15
 yoa_loop:
     cmp %r13, %r15
@@ -1271,30 +1320,32 @@ yoa_loop:
     add %r15, %rax
     movzbq (%rax), %rax
     cmp $47, %rax
-    jne yoa_nosep
+    jne yoa_sep0
     mov $92, %rax
-yoa_nosep:
+yoa_sep0:
     cmp $128, %rax
     jge yoa_bad
     mov %rax, (%r14)
-    add $8, %r14
+    add $2, %r14
     inc %r15
     jmp yoa_loop
 yoa_path_done:
-# UNICODE_STRING at rbp-32. Length and MaximumLength are 16-bit and equal, so one
-# 64-bit store carries both: Length | (Length << 16). %r14 is already a BYTE
-# cursor -- it advanced 8 per character -- so it is not shifted again; the only
-# subtraction is the 8-byte prefix, which is part of the name but not part of
-# its length. The Buffer points past that prefix, at rbp-2088.
-    mov %r14, %rax
-    sub %rbp, %rax
-    add $2096, %rax
-    sub $8, %rax
+# UNICODE_STRING at rbp-32. Length is in BYTES and a UTF-16 unit is two: the
+# name is the four-unit "\??\" prefix PLUS the path, so Length = 2*(n+4).
+# (It used to start the Buffer past the prefix and leave it out of Length,
+# which hands NT a DRIVE-LETTER path with no object-namespace root -- exactly
+# STATUS_OBJECT_PATH_SYNTAX_BAD, 0xC000003B, which is what every generated
+# PE's first open answered.) MaximumLength is the same: the buffer holds the
+# name plus the possible odd-length NUL. One 64-bit store carries both,
+# Length | (Length << 16).
+    mov %r13, %rax
+    shl $1, %rax
+    add $8, %rax
     mov %rax, %r15
     shl $16, %rax
     add %r15, %rax
     mov %rax, -32(%rbp)
-    lea -2088(%rbp), %rax
+    lea -2096(%rbp), %rax
     mov %rax, -24(%rbp)
 # OBJECT_ATTRIBUTES at rbp-208 (48 bytes, rbp-208..rbp-169)
     mov $48, %rax
@@ -1307,12 +1358,19 @@ yoa_path_done:
     mov %rax, -184(%rbp)
     mov %rax, -176(%rbp)
     mov %rax, -168(%rbp)
-# DesiredAccess from the access mode, unless this is an append. The masks are
-# the generic ones with SYNCHRONIZE and READ_CONTROL taken out: asking for
-# SYNCHRONIZE obliges the handle to be opened FILE_SYNCHRONOUS_IO_NONALERT, and
-# then every read and write must carry its own byte offset, because the file has
-# no shared position. y_os_read and y_os_write pass offset NULL, so the handle
-# keeps the file pointer and the Linux side's lseek behaviour carries over.
+# DesiredAccess from the access mode, unless this is an append. SYNCHRONIZE
+# (0x00100000) is REQUIRED, not optional: the options below carry
+# FILE_SYNCHRONOUS_IO_NONALERT, and NtOpenFile answers STATUS_INVALID_PARAMETER
+# (0xC000000D) for a synchronous open whose access mask lacks it -- which is
+# exactly what the first trace of a real PE showed. With the synchronous flag
+# the handle has a shared file position, so y_os_read and y_os_write pass a
+# NULL offset and lseek works, the same as on Linux. (An earlier note here
+# claimed the opposite and left SYNCHRONIZE out; READ_CONTROL stays out, it is
+# not needed to read a file.) The masks:
+#   read     FILE_READ_DATA|FILE_READ_EA|FILE_READ_ATTRIBUTES = 0x89
+#   write    FILE_WRITE_DATA|FILE_APPEND_DATA|FILE_WRITE_EA|FILE_WRITE_ATTRIBUTES = 0x116
+#   rdwr     0x19F
+#   append   FILE_APPEND_DATA = 0x4
     mov %rbx, %rax
     and $1024, %rax
     cmp $0, %rax
@@ -1323,16 +1381,16 @@ yoa_path_done:
     je yoa_acc_rd
     cmp $1, %rax
     je yoa_acc_wr
-    mov $415, %rax
+    mov $1048991, %rax
     jmp yoa_acc_set
 yoa_acc_rd:
-    mov $137, %rax
+    mov $1048713, %rax
     jmp yoa_acc_set
 yoa_acc_wr:
-    mov $278, %rax
+    mov $1048854, %rax
     jmp yoa_acc_set
 yoa_acc_app:
-    mov $4, %rax
+    mov $1048580, %rax
 yoa_acc_set:
     mov %rax, -40(%rbp)
 # ShareAccess: FILE_SHARE_READ|WRITE|DELETE, which is what a POSIX open wants
@@ -1378,8 +1436,16 @@ yoa_acc_set:
       jne yoa_create
 
 
-      lea -16(%rbp), %r10
-      mov -24(%rbp), %rdx
+# NtOpenFile(FileHandle, DesiredAccess, ObjectAttributes, IoStatusBlock,
+#            ShareAccess, OpenOptions). The trace of a real PE's first open
+# said what was wrong with this: FileHandle AND IoStatusBlock were both
+# lea -16(%rbp), so the kernel wrote the handle over the block it reports
+# through, and DesiredAccess came from -24(%rbp) -- the UNICODE_STRING's
+# Buffer -- so the ACCESS MASK arrived as a PATH POINTER (Wine's
+# +syscall trace: NtOpenFile(.., 0091f6c0, ..), STATUS_OBJECT_NAME_INVALID).
+# The handle now lives where NtCreateFile's does, at -272.
+      lea -272(%rbp), %r10
+      mov -40(%rbp), %rdx
       lea -208(%rbp), %r8
       lea -16(%rbp), %r9
       mov $7, %rcx
@@ -1390,9 +1456,13 @@ yoa_acc_set:
       syscall
       test %eax, %eax
       js yoa_diag
-      mov -16(%rbp), %rax
+      mov -272(%rbp), %rax
       jmp yoa_ret
+# NtOpenFile failed: the contract is -1, not the NTSTATUS. Returning it RAW
+# made 0xC00000XX a POSITIVE 64-bit value, so `fd >= 0` was true and the
+# status was used as a handle (the file then read as empty).
 yoa_diag:
+    mov $-1, %rax
     jmp yoa_ret
   yoa_create:
 
@@ -1402,16 +1472,30 @@ yoa_diag:
       mov -40(%rbp), %rdx
       lea -208(%rbp), %r8
       lea -16(%rbp), %r9
+# The eleven arguments of NtCreateFile, in order: FileHandle, DesiredAccess,
+# ObjectAttributes, IoStatusBlock (the four registers above), then
+# AllocationSize, FileAttributes, ShareAccess, CreateDisposition, CreateOptions,
+# EaBuffer, EaLength at 40(%rsp) upwards. They were SHIFTED by one slot before
+# -- ShareAccess landed in FileAttributes, CreateDisposition in ShareAccess,
+# and CreateOptions in CreateDisposition -- and EaBuffer/EaLength were never
+# written at all, so they held whatever the frame did.
       mov $0, %rax
       mov %rax, 40(%rsp)
-      mov -48(%rbp), %rax
+      mov -72(%rbp), %rax
       mov %rax, 48(%rsp)
-      mov -56(%rbp), %rax
+      mov -48(%rbp), %rax
       mov %rax, 56(%rsp)
-      mov -64(%rbp), %rax
+      mov -56(%rbp), %rax
       mov %rax, 64(%rsp)
-      mov -64(%rbp), %rax
+# FILE_NON_DIRECTORY_FILE(0x40) | FILE_SYNCHRONOUS_IO_NONALERT(0x20), not the
+# 64 that was there: without the synchronous flag NtReadFile/NtWriteFile with a
+# NULL offset (which is what y_os_read and y_os_write pass) is an error, and
+# the handle has no shared position for lseek to move.
+      mov $96, %rax
       mov %rax, 72(%rsp)
+      mov $0, %rax
+      mov %rax, 80(%rsp)
+      mov %rax, 88(%rsp)
       mov $85, %eax
       syscall
       test %eax, %eax
@@ -1435,9 +1519,17 @@ yoa_diag:
 y_os_close:
     push %rbp
     mov %rsp, %rbp
-    mov 8(%rbp), %rdi
+# 16, not 8: with `push %rbp; mov %rsp,%rbp` the return address is AT 8(%rbp)
+# and the first stack argument at 16(%rbp). Reading 8 closed the return
+# address, so close_file always answered false on a handle that was open.
+    mov 16(%rbp), %rdi
     call y_os_handle
-    mov %rax, %rdi
+# %r10, not %rdi: the NT convention below moves argument one out of ntdll's
+# %rcx into %r10 (see the file header), so a one-argument Nt call takes it
+# there. In %rdi, NtClose read %r10 -- which held whatever the last block left
+# and here was 0 -- and answered STATUS_INVALID_HANDLE for a handle that was
+# open.
+    mov %rax, %r10
     mov $15, %eax
     syscall
     test %eax, %eax
