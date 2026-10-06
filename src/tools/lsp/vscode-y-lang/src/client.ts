@@ -148,6 +148,7 @@ export function config(): {
     checkOnChange: boolean;
     warnings: boolean;
     trace: 'off' | 'messages' | 'verbose';
+    timing: boolean;
 } {
     const cfg = vscode.workspace.getConfiguration('y.lsp');
     return {
@@ -162,6 +163,12 @@ export function config(): {
         // `initializationOptions.checkOnChange` and treats anything that is not a
         // bool as ON, so the two defaults cannot drift apart silently.
         checkOnChange: cfg.get<boolean>('checkOnChange', true),
+        // ON by default, and spelled out rather than left to get<boolean>'s own:
+        // these lines are how a person tells whether the server or the editor is
+        // the slow side, so the default has to be the useful one. It was off by
+        // default once and that was wrong -- turning a requested diagnostic off
+        // because it might be costing something is a guess wearing a fix.
+        timing: cfg.get<boolean>('timing', true),
         trace: cfg.get<'off' | 'messages' | 'verbose'>('trace.server', 'off'),
     };
 }

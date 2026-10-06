@@ -139,18 +139,12 @@ async function start(context: vscode.ExtensionContext, why: string): Promise<voi
             initializationOptions: {
                 rootPath: root ?? null,
                 checkOnChange: cfg.checkOnChange,
-                // Per-request timing lines in the Y output channel, OFF unless the
-                // trace setting asks for them.
-                //
-                // They were on unconditionally at first, and that was a mistake worth
-                // recording: this extension was reported making a cold open freeze the
-                // editor, and these lines are two `appendLine`s per request on the
-                // extension host -- the thread every other language feature shares,
-                // and the one a visible output panel makes dearer. A diagnostic that
-                // is on by default can be the cause of what it is diagnosing, so it
-                // follows the trace setting like everything else. `messages` is
-                // enough; `verbose` adds nothing here.
-                timing: cfg.trace !== 'off',
+                // Per-request timing lines in the Y output channel. On by default,
+                // off with y.lsp.timing: false. They are the only way to see whether
+                // the server or the editor is the slow side, so they are worth two
+                // appendLine calls on the extension host, and it should be the user's
+                // call to turn them off rather than mine to remove them.
+                timing: cfg.timing,
             },
         };
 
