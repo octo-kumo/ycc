@@ -1290,11 +1290,19 @@ private stream can make one.
   sampling --- not \ic{\% n}, which is measurably biased for an \ic{n} that does
   not divide the range. An \ic{n} below 1 answers 0 rather than trapping: a
   caller dividing by an empty frontier has already lost, and a trap prints to
-  stdout.
+  stdout. So does an \ic{n} above $2^{62}$, which is the largest bound that can
+  be served, and which used to \emph{hang}: the draws come from $[0, 2^{62})$
+  and are rejected at or above the largest whole multiple of \ic{n} in that
+  range, and one past $2^{62}$ there is no such multiple --- the quotient is 0,
+  the limit is 0, and every draw is rejected. A range that spans more than the
+  stream has granularity for is answered \ic{lo} instead, by the same rule.
 \item[\ic{random.range(lo, hi)}] Uniform in \ic{lo..hi} --- \emph{both} ends
   inclusive, so a one-wide range is that one value and an inverted range
   answers \ic{lo} rather than trapping --- and
-  \ic{random.chance(pct)} a \ty{bool} true \ic{pct} times in 100.
+  \ic{random.chance(pct)} a \ty{bool} true \ic{pct} times in 100. The width is
+  computed so it cannot wrap: \ic{hi - lo + 1} overflows for a range spanning
+  most of the word, and such a range answers an endpoint rather than reaching
+  \ic{below} with a width that is no longer a width.
 \item[\ic{random.state()}, \ic{random.set\_state(v)}] Read and write the state,
   for a save file or for a second independent stream.
 \end{description}

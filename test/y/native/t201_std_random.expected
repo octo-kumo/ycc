@@ -22,6 +22,14 @@ below(n) stays inside its bound
           got 0, want 0
   ok    below(-5) is 0
           got 0, want 0
+  ok    below(2^62) is served -- it is the largest bound that is
+          inside its own bound
+  ok    below(2^62 + 1) answers 0 rather than hanging
+          got 0, want 0
+  ok    and below(LONG_MAX) too
+          got 0, want 0
+  ok    below(LONG_MIN) too
+          got 0, want 0
   ok    2000 draws from below(10) all land in 0..9
           got 0, want 0
   ok    and 2000 from below(1000000) in 0..999999
@@ -42,6 +50,16 @@ range(lo, hi) is INCLUSIVE on both ends
           got 9, want 9
   ok    an inverted range answers lo, not a trap
           got 9, want 9
+  ok    range(5, LONG_MAX) answers lo instead of hanging
+          got 5, want 5
+  ok    and it does return
+          in the range
+  ok    range(LONG_MIN, LONG_MAX) is one of its endpoints
+          the width is 2^64 and cannot be drawn
+  ok    and it is inside the range
+          a 2^64 span has no drawable width, so an endpoint
+  ok    the widest drawable range stays inside itself
+          500 draws from a range of width 2^62, all inside
 
 chance(pct)
   ok    chance(0) is never true
@@ -103,4 +121,4 @@ below(n), derived from the raw stream
   ok    and after one draw it has advanced by the golden ratio
           got 4354685564936845355, want 4354685564936845355
 
-43 of 43 checks passed
+52 of 52 checks passed
