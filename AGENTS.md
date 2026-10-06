@@ -124,8 +124,9 @@ for the `cmp` and the pack, and **8.4 s (87%) for the port suite** over 142
 fixtures, each compiled by both compilers, which is the gate. `make cycc` from
 a clean tree is 5.5 s and `make -j8 cycc` is the same 5.5 s —
 `src/c/native.c` is one 12,000-line translation unit and it *is* the build, so
-there is nothing to overlap. The full 21-suite run is ~45 s (20 suites were
-37 s; `pe-port` adds 37 s alone but is sharded 8 ways under `-j`), and `make
+there is nothing to overlap. The full 21-suite run is **46.8 s** (20 suites were
+37 s; `pe-port` is 37 s alone but sharded 8 ways under `-j`, so what it adds is
+one more shard, not one more suite), and `make
 check` adds the compare and bench phases on top of that; *those* are the slow
 steps, not the bless. `make rebless` runs the port suite only, so the Windows
 half does not slow the bless down. Numbers above the `rebless` target in the Makefile.
@@ -136,7 +137,7 @@ half does not slow the bless down. Numbers above the `rebless` target in the Mak
 - Same through the C copy: `./cycc file.y -o /tmp/t_bin && /tmp/t_bin`
 - Assembly only: `./ycc -S file.y > /tmp/t.s`
 - `make test` runs everything: the port gate + all `test/sh/*.sh`
-  suites, `JOBS` at a time (default: every CPU; ~50 s), each suite's
+  suites, `JOBS` at a time (default: every CPU; ~47 s), each suite's
   output printed whole when all are done; `JOBS=1` runs them one by one
   with live output. `./test/sh/run_all.sh [-j N] [suite ...]` runs a
   subset.
