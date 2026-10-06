@@ -124,9 +124,11 @@ for the `cmp` and the pack, and **8.4 s (87%) for the port suite** over 142
 fixtures, each compiled by both compilers, which is the gate. `make cycc` from
 a clean tree is 5.5 s and `make -j8 cycc` is the same 5.5 s —
 `src/c/native.c` is one 12,000-line translation unit and it *is* the build, so
-there is nothing to overlap. The full 20-suite run is 37 s, and `make check`
-adds the compare and bench phases on top of that; *those* are the slow steps,
-not the bless. Numbers above the `rebless` target in the Makefile.
+there is nothing to overlap. The full 21-suite run is ~45 s (20 suites were
+37 s; `pe-port` adds 37 s alone but is sharded 8 ways under `-j`), and `make
+check` adds the compare and bench phases on top of that; *those* are the slow
+steps, not the bless. `make rebless` runs the port suite only, so the Windows
+half does not slow the bless down. Numbers above the `rebless` target in the Makefile.
 
 ## Run / verify (use these exact forms)
 
@@ -134,7 +136,7 @@ not the bless. Numbers above the `rebless` target in the Makefile.
 - Same through the C copy: `./cycc file.y -o /tmp/t_bin && /tmp/t_bin`
 - Assembly only: `./ycc -S file.y > /tmp/t.s`
 - `make test` runs everything: the port gate + all `test/sh/*.sh`
-  suites, `JOBS` at a time (default: every CPU; ~45 s), each suite's
+  suites, `JOBS` at a time (default: every CPU; ~50 s), each suite's
   output printed whole when all are done; `JOBS=1` runs them one by one
   with live output. `./test/sh/run_all.sh [-j N] [suite ...]` runs a
   subset.
@@ -167,7 +169,7 @@ cannot do. What it IS good for is leaving no file behind and passing argv
 
 ## Test suites (`test/sh/`)
 
-Twenty suites, run by `test/sh/run_all.sh` (named below in brackets).
+Twenty-one suites, run by `test/sh/run_all.sh` (named below in brackets).
 Most compile each program with **both** compilers — the reference side is
 `refs/ycc.ref` — and require the outputs to agree (byte-identical
 binaries, the same warnings, identical program behavior). `test_native.sh`,
@@ -176,7 +178,7 @@ binaries, the same warnings, identical program behavior). `test_native.sh`,
 `run_all.sh` skips those **seven** when it is missing (`make test-fast`).
 
 `run_all.sh -j N` runs N suites at once and splits the long ones (port,
-comprehensive, native) into shards (`YSHARD=K/N`: every Nth case, see
+pe-port, comprehensive, native) into shards (`YSHARD=K/N`: every Nth case, see
 `next_case` in `lib.sh`). The suites take the compilers they test from
 the environment: `CYCC` (the C copy), `YREF` (the reference, default
 `refs/ycc.ref`), `YCC` (the built compiler driven by native,
@@ -194,6 +196,17 @@ export stub -- the independent check for `arch_x64.y`'s pinned `w_sysno` table,
 which otherwise only the W3 self-test verifies and only at runtime) and
 `./ytest` (times the suites; gcov line coverage). None is in `make test`.
 
+- `test/sh/pe-port.sh` [pe-port] — the WINDOWS half of the port gate: the
+  same corpus, `--target=windows`, and the C copy's PE must be byte-identical
+  to the reference's, WITH AND WITHOUT `-g`. It exists because the port suite
+  above compiles for Linux only and the PE walkers are invisible there:
+  round 52 found `asm.c`'s `pe_prologue_insn` reading `b[0]` before its
+  `n < 1` guard, so a zero-byte item — a line marker, which is exactly what
+  `-g` adds — trapped and `cycc --target=windows -g` failed on EVERY program
+  for ten rounds with every suite green. The gate was proved by planting that
+  bug back: 1138 checks, and every `-g` case fails while every plain case
+  passes. No wine (this is the writer, not the loader); ~37 s alone, sharded 8
+  ways under `-j`.
 - `test_port.sh` [port] — the port gate: every `test/y/**.y` (plus
   `src/y/ycc.y` itself) compile to byte-identical binaries with
   `cycc` and the reference `ycc`, with the same warnings; a program

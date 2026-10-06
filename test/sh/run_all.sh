@@ -31,10 +31,11 @@ if [ ! -x "${YREF:-$ROOT/refs/ycc.ref}" ]; then
 fi
 YSELF_BIN="${YSELF:-$ROOT/ycc}"
 
-ALL="port native native-examples examples audit ycc-units ycc fixpoint loops comprehensive debug link pkg stdin-eof net lsp math coverage treeshake std-suites"
+ALL="port pe-port native native-examples examples audit ycc-units ycc fixpoint loops comprehensive debug link pkg stdin-eof net lsp math coverage treeshake std-suites"
 SUITES="${*:-$ALL}"
 declare -A SCRIPT_FOR=(
     [port]="test_port.sh"
+    [pe-port]="pe-port.sh"
     [native]="test_native.sh"
     [native-examples]="test_native_examples.sh"
     [examples]="test_examples.sh"
@@ -55,9 +56,10 @@ declare -A SCRIPT_FOR=(
     [treeshake]="test_treeshake.sh"
     [std-suites]="test_std_suites.sh"
 )
-# Under -j these run as this many shards at once: alone they take ~80, ~40
-# and ~16 s, the others 13 s at most.
-declare -A SHARDS=([port]=8 [comprehensive]=3 [native]=2)
+# Under -j these run as this many shards at once: alone they take ~80, ~37,
+# ~40 and ~16 s, the others 13 s at most. pe-port is the Windows half of the
+# port gate (see test/sh/pe-port.sh) and shards the same way port does.
+declare -A SHARDS=([port]=8 [pe-port]=8 [comprehensive]=3 [native]=2)
 
 for s in $SUITES; do
     if [ -z "${SCRIPT_FOR[$s]:-}" ]; then

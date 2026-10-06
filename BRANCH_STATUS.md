@@ -285,6 +285,18 @@ branch-disjointness false positive.
   harness has no tty for wine, so a console handle (as opposed to a pipe) is
   unverified, and `test_std_suites.sh`'s `term_test` needs a pty and only runs
   against ELF.
+- **THE PORT GATE HAS A WINDOWS HALF NOW (round 53)**, which is the general
+  fix for the hole round 52 fell through: `test/sh/pe-port.sh` compiles the
+  whole `test/y/**.y` corpus with BOTH compilers for `--target=windows`, with
+  and without `-g`, and requires the PEs to be byte-identical. 1138 checks,
+  ~37 s alone, sharded 8 ways under `-j` so the parallel run barely moves.
+  It is in `run_all.sh`'s `ALL` list, so `make test` and `make check` run it;
+  `make rebless` does not (it runs the port suite only), which keeps the bless
+  at 9.5 s.
+  **Proved by planting the bug back**, which is the only way to trust a new
+  gate: with the hoisted `b[0]` restored, every `-g` case fails and every plain
+  case passes -- the exact round-52 signature -- and with the fix in place all
+  1138 pass.
 - **THE PORT DIVERGENCE IS FIXED (round 52), and pe-gate.sh now catches it.**
   `asm.c`'s `pe_prologue_insn` read `b[0]` BEFORE its own `n < 1` guard:
 
