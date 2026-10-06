@@ -577,11 +577,22 @@ def atan2_ref(y, x):
             return pi2 / 2 if y > 0 else -pi2 / 2
         return (3 * math.pi / 4 if y > 0 else -3 * math.pi / 4)
     if math.isinf(x):
-        if y > 0:
-            return math.pi if x < 0 else 0.0
-        if y < 0:
-            return -math.pi if x < 0 else 0.0
-        return math.pi if x < 0 else 0.0
+        # x is an infinity, so the answer is a signed zero (x > 0) or +-pi
+        # (x < 0), and the SIGN IS THE SIGN OF y -- including when y is a zero,
+        # which is the whole of C99 7.12.7.4's four zero cases and the reason a
+        # `y > 0` / `y < 0` / else ladder cannot express it: -0.0 is neither
+        # greater nor less than zero, and the else arm here used to answer +pi
+        # for atan2(-0.0, -inf) where C answers -pi.
+        #
+        # That was a reference bug, and it is worth recording how it survived: it
+        # made the table DISAGREE with the module on a case where the module was
+        # RIGHT, and the gate could not fail, so nothing complained. A wrong
+        # reference is worse than a missing one -- it turns a passing case into a
+        # failing one and the failure points at the code.
+        neg_y = math.copysign(1.0, y) < 0
+        if x < 0:
+            return -math.pi if neg_y else math.pi
+        return -0.0 if neg_y else 0.0
     if math.isinf(y):
         return pi2 if y > 0 else -pi2
     # Both zeros: C99 7.12.7.4, and the sign of x picks the SHAPE while the sign
@@ -607,10 +618,15 @@ def atan2_ref(y, x):
     if x == 0.0:
         return pi2 if y > 0 else -pi2
     if y == 0.0:
-        # the sign of the zero decides: atan2(-0.0, -1.0) is -pi
+        # The sign of the zero decides, on BOTH sides: atan2(-0.0, -1.0) is -pi
+        # and atan2(-0.0, +1.0) is -0.0. The positive arm used to answer a bare
+        # 0.0, which is the same missing is_signed_zero the module had -- two
+        # copies of one mistake, one in the code and one in the thing that is
+        # supposed to disagree with it, and the table agreed with both.
+        neg_y = math.copysign(1.0, y) < 0
         if x > 0:
-            return 0.0
-        return -math.pi if math.copysign(1.0, y) < 0 else math.pi
+            return -0.0 if neg_y else 0.0
+        return -math.pi if neg_y else math.pi
     return math.atan2(y, x)
 
 
@@ -669,6 +685,33 @@ def pair_spread(seed, n=80):
     for _ in range(n):
         out.append((rng.uniform(0.01, 40.0), rng.uniform(-6.0, 6.0)))
     return out
+
+
+def decade_pair(seed, n, lo=-323.0, hi=308.0, signed=True):
+    """n pairs whose two arguments are each drawn from the DECADES independently.
+
+    For a two-argument function the structure is in the RATIO between the
+    arguments, not in either of them, so a spread that draws x and y from the
+    same flat range never reaches the shapes that matter: hypot divides the
+    larger by the smaller to pick its scale, and only a wide ratio range
+    exercises both arms of that; atan2's answer depends on y/x through the
+    quadrant and on the magnitude ratio through the kernel.
+
+    Drawing the two exponents INDEPENDENTLY is what makes the ratios wide.
+    Drawing them from the same generator would correlate them, and then
+    hypot(x, x) is the common case -- which is one point of a two-dimensional
+    range, not the shape of it.
+    """
+    rng = random.Random(seed)
+
+    def one():
+        e = rng.uniform(lo, hi)
+        v = 10.0 ** e
+        if signed and rng.random() < 0.5:
+            v = -v
+        return v
+
+    return [(one(), one()) for _ in range(n)]
 
 
 EXTRA = {name: spread(1000 + i, 60) for i, name in enumerate(
@@ -790,6 +833,36 @@ TWO_EXTRA = {
 # the ordinary arguments, so the tables are not all edges
 TWO_EXTRA["fmin"] = TWO_EXTRA["fmin"] + pair_spread(1301, 60)
 TWO_EXTRA["fmax"] = TWO_EXTRA["fmax"] + pair_spread(1302, 60)
+# THE THREE THIN ROUNDING FUNCTIONS. Counting what each function had said three
+# of them were not thin by accident. sqrt had 23 cases, atan2 35, and hypot 14 --
+# and 14 cases is not a gate for a function whose whole difficulty is a ratio
+# between its two arguments. The predicates beside them in the same thin band
+# (is_nan, is_inf, is_finite, is_signed_zero, fabs, fsign, all exact, all 8 to 53
+# cases) are fine: an exact function has finitely many answers, so a case is
+# either right or it is not, and the thin band is an artefact of not needing
+# more. A ROUNDING function has no such property -- the answer is a function of
+# the argument, so fourteen of them leave the interesting regions unvisited.
+#
+# hypot is the one that had already been bitten: hypot(inf, nan) answered nan
+# because NaN won the maximum, and fourteen cases could not have said so.
+EXTRA["sqrt"] = (spread(1901, 60, 0.0, 8.0)
+                 + [abs(x) for (_x, x) in decade_pair(1902, 200, -323.0, 308.0, False)])
+TWO_EXTRA["hypot"] = decade_pair(1903, 200) + [
+    # the shapes a decade-uniform draw reaches rarely and that matter: the
+    # diagonal (equal arguments, so the scale is chosen by neither), the widest
+    # ratio the two decades allow in each direction, and a result that lands in
+    # the subnormals where hypot's division is at its most delicate
+    (a, b) for a in (1.0, 1e300, 1e-300, 5e-324, 1e308, float("inf"))
+    for b in (1.0, 1e-300, 1e300, 5e-324, 1e308, float("inf"))
+]
+TWO_EXTRA["atan2"] = decade_pair(1904, 200) + [
+    # every quadrant at every scale, which the independent draw gives in
+    # proportion but not in position: the four axis pairs and the four diagonals
+    # are single points without saying so
+    (a, b) for a in (0.0, -0.0, 1.0, -1.0, 1e300, -1e300, 1e-300, float("inf"), float("-inf"))
+    for b in (0.0, -0.0, 1.0, -1.0, 1e-300, 1e300, float("inf"), float("-inf"))
+]
+
 THREE = {
     # lerp: the two ends are EXACT, which is the property a caller interpolating
     # a frame depends on, and neither is true of a formula that forgets them

@@ -771,29 +771,38 @@ def hypot_scaled(m: float, s: float) -> float {
         // negative, so hypot(0.0, -0.0) is +0 whichever zero came second.
         0.0
     } else {
-        let p = s / m;
-        // BOTH squares, not 1.0 + p*p. The one-square form is the same identity
-        // and a different number: with m = 3 and s = 2, p = 2/3 and 1 + p*p
-        // rounds once BEFORE the sqrt, so the two forms differ by up to an ulp
-        // and disagree on which side.
+        // BOTH squares, and never `1.0 + p*p`. That was the form before this
+        // one, and getting rid of it is a story worth keeping because the reason
+        // is the whole lesson: I "simplified" m*sqrt(1 + p*p) to m*sqrt(p*p + 1),
+        // checked the two Pythagorean triples that are exact (3,4,5 and 5,12,13),
+        // saw them pass, and nearly committed it. hypot(2.0, 3.0) is not one of
+        // those: p = 2/3 does not square-and-add back to 1 exactly, so the 1.0
+        // form rounds it. Both forms give the same answer for 3,4 and for 1,1 --
+        // which is what a form that is only SOMETIMES wrong looks like, and is
+        // why the check has to be on an argument where the two disagree.
+        // Scale BOTH operands by a power of two, not one by a ratio.
         //
-        // This is worth being exact about, because I "simplified" it to
-        // 1.0 + p*p, checked the two Pythagorean triples that are exact (3,4,5
-        // and 5,12,13), saw them pass, and almost committed it. hypot(2.0, 3.0)
-        // is not one of those: p = 2/3 does not square-and-add back to 1
-        // exactly, so the 1.0 form rounds it. Both forms give the same answer for
-        // 3,4 and for 1,1 -- which is what a form that is only SOMETIMES wrong
-        // looks like, and is why the check has to be on an argument where the two
-        // forms disagree.
+        // m * sqrt((s/m)^2 + 1) divides once and multiplies once by an ARBITRARY
+        // float, and both of those round at full size: the division's half-ulp
+        // comes back doubled through the square, and the multiply's half-ulp is a
+        // half-ulp of the answer. Measured over 400 pairs with |s/m| from 1e-8 to
+        // 1e-1, that form was 2 ulps out on 0.75% of them and never 3.
         //
-        // Neither form is correctly rounded in general: hypot(2.0, 3.0) is one
-        // ulp above the correctly rounded sqrt(13) in both, and so it was before
-        // any of this. That is a known limit of the scaled form rather than a
-        // defect of it -- the table pins what hypot does, and making it correctly
-        // rounded would mean a second-pass correction, which is a different piece
-        // of work from the two corner cases here. Recorded in t325.
-        let q = m / m;
-        m * sqrt(p * p + q * q)
+        // Scaling by 2^-k instead puts m in [1, 2) -- so m*m is in [1, 4) and
+        // CANNOT overflow, which the ratio form never had to worry about -- and
+        // scaling the ANSWER back by 2^k is exact, because multiplying by a power
+        // of two only changes the exponent. So one of the two full-size roundings
+        // is gone rather than compensated, which is the cheaper of the two fixes
+        // and the one that cannot be argued with.
+        //
+        // s2 may underflow to zero, and that is right rather than lucky: s2 is
+        // s/m to within the scale, so s2 == 0 means (s/m)^2 is below 2^-1074 and
+        // contributes nothing a double can hold. Its square would be zero anyway.
+        let k = exp_field(m) - 1023;
+        let sc = ldexp(1.0, 0 - k);
+        let m2 = m * sc;
+        let s2 = s * sc;
+        ldexp(sqrt(m2 * m2 + s2 * s2), k)
     }
 };
 
@@ -2359,10 +2368,18 @@ def atan2(y: float, x: float) -> float {
             0.0 - pi_over_2
         }
     } else if (y == 0.0) {
-        // atan2(+-0, x < 0) is +-pi, and the sign is the sign OF THE ZERO: a
-        // negative zero has a direction, and that is the whole difference
+        // atan2(+-0, x) is a signed zero on the positive side and +-pi on the
+        // negative one, and the sign is the sign OF THE ZERO in all four: a
+        // negative zero has a direction, and that is the whole difference.
+        //
+        // The x > 0.0 arm used to answer a bare `0.0`, which loses the sign --
+        // atan2(-0.0, +1.0) and atan2(-0.0, +inf) both came back +0.0 where C
+        // answers -0.0, and `1/x` of it is -inf against +inf. So the two arms
+        // below are the SAME question asked twice, which is why the x < 0 one
+        // already had the is_signed_zero test and this one did not: the sign was
+        // added where the pi made it visible and never where the zero hid it.
         if (x > 0.0) {
-            0.0
+            if (is_signed_zero(y)) { neg_zero } else { 0.0 }
         } else if (is_signed_zero(y)) {
             0.0 - pi
         } else {
@@ -2377,7 +2394,25 @@ def atan2(y: float, x: float) -> float {
             } else {
                 if (x > 0.0) { 0.0 - pi_over_4 } else { 0.0 - third }
             }
-        } else if (x > 0.0) { 0.0 } else { pi }
+        } else if (x > 0.0) {
+            // x is an infinity and y is a finite NON-ZERO number, so the answer
+            // is a zero whose SIGN IS THE SIGN OF y -- C99 7.12.7.4, and the
+            // reason 1/x has to be asked about the sign rather than assumed.
+            //
+            // This arm used to read `else if (x > 0.0) { 0.0 } else { pi }`,
+            // which does not look at y at all. It was right for every positive y
+            // and wrong for every negative one: atan2(-1.0, +inf) answered +0.0
+            // where C answers -0.0, and atan2(-1.0, -inf) answered +pi where C
+            // answers -pi. Nothing in the ulp table asked, because the table had
+            // 35 atan2 cases and none of them paired a negative y with an
+            // infinite x -- and the gate that should have noticed the four cases
+            // that DID ask could not fail (see test/math/ulp_check.y).
+            if (y > 0.0) { 0.0 } else { neg_zero }
+        } else {
+            // and the same for pi: the quadrant is the sign of y, not the sign of
+            // x alone. atan2(-4.0, -inf) is -pi.
+            if (y > 0.0) { pi } else { 0.0 - pi }
+        }
     } else if (is_inf(y)) {
         if (y > 0.0) { pi_over_2 } else { 0.0 - pi_over_2 }
     } else if (x > 0.0) {

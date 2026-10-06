@@ -66,11 +66,18 @@ MATH = os.environ.get("MATH_Y", "src/y/std/math.y")
 # Findings this file knows about and accepts. Each carries WHY it is acceptable,
 # because a bare list of suppressions is a list of things nobody will ever look
 # at again. A finding not here fails the run.
+# Keyed on (function, variable, value) and NOT on the line number. Keying on the
+# line was the first thing I did and it is wrong: the line moved the moment
+# hypot_scaled grew by twenty lines, and the ratchet then failed on an edit that
+# had nothing to do with either finding. A gate that fires on unrelated work is a
+# gate people learn to re-run until it is quiet, which is worse than no gate. The
+# variable's NAME is the stable identity here -- `neg` in atan is `neg` whatever
+# line it lands on -- and the line is reported rather than matched on.
 KNOWN = {
-    ("atan", 1911, "x<0.0"): (
+    ("atan", "neg", "x<0.0"): (
         "the matching test is in the is_inf arm and this binding in the else "
         "arm, so only one of the two ever runs"),
-    ("fvariance", 2933, "len(a)"): (
+    ("fvariance", "n", "len(a)"): (
         "real but tiny: len is a header load, and the guard is a length "
         "comparison. Hoisting it would save a few instructions a call on a "
         "kernel that spends its time on the elements, at the cost of binding a "
@@ -345,10 +352,11 @@ def divergent(path):
 
 
 def bound(path):
+    """(function, variable, line, value, other lines, set-aside lines)."""
     out = []
     for f in functions(path):
         for name, cval, n, hits, setaside in bound_elsewhere(f):
-            out.append((f["name"], n, re.sub(r"\s+", "", cval), hits, setaside))
+            out.append((f["name"], name, n, re.sub(r"\s+", "", cval), hits, setaside))
     return out
 
 
@@ -386,7 +394,7 @@ def selftest():
             path = fh.name
         try:
             rep = repeated(path)
-            bnd = [(f, n, c, h, s) for f, n, c, h, s in bound(path)]
+            bnd = [(f, v, n, c, h, sa) for f, v, n, c, h, sa in bound(path)]
             div = divergent(path)
             got = {"bound elsewhere": bnd, "repeated": list(rep.values()),
                    "commutative divergence": [p for v in div.values() for p in v]}
@@ -394,6 +402,20 @@ def selftest():
                 fails.append("%s: planted but NOT found -- the detector for it is broken" % what)
             else:
                 print("  ok      the '%s' detector finds its plant (%d)" % (what, len(got[what])))
+            # And the finding has to survive the step that decides whether it is
+            # NEW or accepted -- the step where a tuple of the wrong arity turned a
+            # finding into a traceback instead of a failure. A detector that
+            # crashes on a real defect is worse than one that misses it, because
+            # the crash looks like the tool's problem and gets worked around.
+            for entry in got[what]:
+                fname, vname = entry[0], (entry[1] if what == "bound elsewhere" else "")
+                cval = entry[3] if what == "bound elsewhere" else ""
+                why = KNOWN.get((fname, vname, cval)) if what == "bound elsewhere" else None
+                if why is not None:
+                    fails.append("%s: the plant was classified as a KNOWN finding, so "
+                                 "the ratchet would accept it" % what)
+                else:
+                    print("  ok      a '%s' plant classifies as NEW, not accepted" % what)
         finally:
             os.unlink(path)
     if fails:
@@ -408,20 +430,19 @@ def main():
         return selftest()
     path = sys.argv[1] if len(sys.argv) > 1 else MATH
     unknown = []
-    for fname, n, cval, hits, setaside in bound(path):
-        key = (fname, n, cval)
-        why = KNOWN.get(key)
+    for fname, vname, n, cval, hits, setaside in bound(path):
+        why = KNOWN.get((fname, vname, cval))
         if why is None:
-            unknown.append((fname, n, cval, hits, setaside))
+            unknown.append((fname, vname, n, cval, hits, setaside))
         else:
-            print("  known   %-12s line %-5d %-16s also on %s -- %s"
-                  % (fname, n, cval, ", ".join(str(h) for h in hits), why))
+            print("  known   %-12s line %-5d let %s = %-16s also on %s -- %s"
+                  % (fname, n, vname, cval, ", ".join(str(h) for h in hits), why))
         if setaside:
             print("  setaside %-11s line %-5d %-16s also on %s, but a name it reads is written in between"
                   % (fname, n, cval, ", ".join(str(h) for h in setaside)))
-    for fname, n, cval, hits, setaside in unknown:
-        print("  NEW     %-12s line %-5d %-16s spelled out again on %s"
-              % (fname, n, cval, ", ".join(str(h) for h in hits)))
+    for fname, vname, n, cval, hits, setaside in unknown:
+        print("  NEW     %-12s line %-5d let %s = %-16s spelled out again on %s"
+              % (fname, n, vname, cval, ", ".join(str(h) for h in hits)))
     print("  %d finding(s) new, %d accepted, over %s"
           % (len(unknown), len(KNOWN), path))
     if unknown:

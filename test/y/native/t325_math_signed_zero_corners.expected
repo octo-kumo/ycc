@@ -35,9 +35,13 @@ hypot(3, 4) == 5            true
 hypot(3e200, 4e200)  7609430662777223920
   which is one ulp under the 5e200 literal, and matches glibc: true
   while 5e200 itself is:  7609430662777223921
+hypot(3.284781714398278e282, 1.5206628784236626e287)  8903604381772537044
+  the ratio form answered:                               8903604381772537043
+  glibc answers:                                         8903604381772537045
+wide-ratio pairs outside their bound or asymmetric: 0
   and 3e200*3e200 overflows: true
 hypot(DBL_MAX, DBL_MAX) is inf true
-hypot(2, 3) bits  4615301398490339828
+hypot(2, 3) bits  4615301398490339827
   sqrt(13) bits   4615301398490339827   one ulp above
 hypot(1, 1) bits  4609047870845172685
   sqrt(2) bits    4609047870845172685   exact

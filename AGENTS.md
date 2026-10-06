@@ -206,8 +206,8 @@ very build was just compared (`make test`, `check`, `rebless` do);
   with each suite and an RSA and an ECDSA certificate (skipped without
   openssl).
 - `test_math.sh` [math] — the accuracy gate for `std/math.y`: reads
-  `test/math/ulp_table.txt` (**7565 cases**, 7025 of them taking one argument
-  and 540 taking two or three — the pinned edges, the overflow and flush
+  `test/math/ulp_table.txt` (**8340 cases**, 7285 of them taking one argument
+  and 1055 taking two or three — the pinned edges, the overflow and flush
   points, both sides of 1, the poles, the signed zeros, and then seeded spreads
   over each function's own domain: uniform in the DECADES for `log2`, `log10`
   and `exp2`, where the structure is in the exponent; over [-1, 1] for `asin`
@@ -222,6 +222,26 @@ very build was just compared (`make test`, `check`, `rebless` do);
   through the monotone key of a double's bits, so it is exact at zero, across a
   sign change, for a subnormal, and infinite for a NaN. The worst gap and the
   function it came from are printed, so a regression names itself.
+
+  Two things about that gate that are worth knowing before changing it. It ends
+  in `exit(main())`, and it used to end in a bare `main();` — a statement whose
+  value is discarded — so the 1 a failure produced went nowhere, the process
+  always exited 0, and the "0 over 1" this module is held to was a number the
+  harness counted correctly and then threw away. **The gate could not fail**,
+  while its own header said a kernel that drifted past it would. And the `OVER`
+  line printed only the *first* argument, so a two-argument failure could not be
+  located in the table at all. Both are fixed; both are the kind of thing that
+  reads as coverage right up until it is measured.
+
+  The three thinnest **rounding** functions were then grown, on the reasoning
+  that an exact function needs few cases (finitely many answers) and a rounding
+  function does not: `sqrt` had 23, `atan2` 35 and `hypot` **14**, and fourteen
+  cases cannot gate a function whose difficulty is the ratio between its two
+  arguments. Each pair's two exponents are drawn **independently**, which is
+  what makes the ratios wide. The 768 cases that added found `atan2` dropping the
+  sign of `y` at an infinite `x`, the same sign dropped twice in the *reference*
+  (so the table agreed with the module on a case where the module was right), and
+  `hypot` 2 ulps out on 0.75% of wide-ratio pairs.
   `test/math/ulp_check.y` says in its own header why the tolerance is 1 and what
   the four cases that used to sit over it were; `gen_ulp_table.py` wrote the
   table from this platform's libm (mpmath is not installed here, and a platform

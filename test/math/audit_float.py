@@ -3,7 +3,7 @@
 
 WHAT THIS IS FOR
 
-`ulp_table.txt` is the gate: 7572 cases, tolerance 1, every answer checked
+`ulp_table.txt` is the gate: 8340 cases, tolerance 1, every answer checked
 against a checked-in bit pattern. That is a gate against REGRESSION -- against a
 change moving an answer -- and it is exactly as good as the list.
 

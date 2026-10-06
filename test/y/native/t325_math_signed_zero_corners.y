@@ -48,6 +48,19 @@
 // The fix looks for an infinity rather than inferring one from a maximum, and
 // rules out the NaN before taking a maximum at all. hypot_scaled carries the
 // body so each of the two branches stays a single expression.
+//
+// AND THE SCALING INSIDE hypot_scaled IS NO LONGER THE LIMIT IT WAS. It used to
+// compute m * sqrt((s/m)^2 + 1), and that form was documented here as "a known
+// limit of the scaled form rather than a defect of it -- the table pins what
+// hypot does". It was neither pinned nor known: the table had FOURTEEN hypot
+// cases, none of them with a wide ratio, and 236 more found it 2 ulps out on
+// 0.75% of the wide-ratio pairs. So the sentence was wrong in the way this file
+// exists to catch -- it read as coverage.
+//
+// It is now a power-of-two scaling, which is within 1 ulp of glibc on 2044 pairs
+// spanning every decade from 1e-320 to 1.8e308 and every ratio from 1e-300 to
+// 1e300, and the two cases below are the ones that used to be the argument for
+// leaving it alone.
 
 import math;
 
@@ -104,6 +117,36 @@ print("hypot(3, 4) == 5            ", math.hypot(3.0, 4.0) == 5.0);
 print("hypot(3e200, 4e200)  ", bits(math.hypot(3e200, 4e200)));
 print("  which is one ulp under the 5e200 literal, and matches glibc: ", bits(math.hypot(3e200, 4e200)) == 7609430662777223920);
 print("  while 5e200 itself is:  ", bits(5e200));
+// The wide-ratio case the ratio form got wrong, pinned by value. The three
+// numbers are the point:
+//
+//   ...043   the ratio form, 2 ulps from glibc
+//   ...044   the power-of-two scaling, 1 ulp from glibc
+//   ...045   glibc
+//
+// So the fix moved the answer by one ulp and the tolerance is one ulp, which is
+// the whole promise. It is not exact, and the comment in hypot_scaled that used
+// to call the old form "a known limit" was wrong about that too.
+print("hypot(3.284781714398278e282, 1.5206628784236626e287)  ",
+    bits(math.hypot(3.284781714398278e282, 1.5206628784236626e287)));
+print("  the ratio form answered:                               8903604381772537043");
+print("  glibc answers:                                         8903604381772537045");
+// And twenty more, because one case is one argument and the failure was a BAND.
+// Two properties, both of which the ratio form kept too -- so these are here as
+// a floor, not as the check: the value above is the check.
+let wide_bad = 0;
+let w = 0;
+while (w < 20) {
+    let big = 1.5206628784236626e+287 * (1.0 + 0.031 * w);
+    let small = big * (1.0 - 0.087 * w) * 1e-5;
+    let h = math.hypot(small, big);
+    // hypot(small, big) is above big and below big*(1+1e-4): the correction is
+    // (small/big)^2/2, which for a ratio of 1e-5 is 5e-11.
+    if (h < big || h > big * 1.0001) { wide_bad = wide_bad + 1 };
+    if (h != math.hypot(big, small)) { wide_bad = wide_bad + 1 };
+    w = w + 1
+};
+print("wide-ratio pairs outside their bound or asymmetric: ", wide_bad);
 print("  and 3e200*3e200 overflows: ", 3e200 * 3e200 == math.inf);
 print("hypot(DBL_MAX, DBL_MAX) is inf ", math.hypot(1.7976931348623157e308, 1.7976931348623157e308) == math.inf);
 // hypot(2, 3) is ONE ULP ABOVE the correctly rounded sqrt(13), and it was

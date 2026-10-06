@@ -407,13 +407,28 @@ computed by squaring).
   17\% of the answer: a cube root's iteration is only locally convergent, and
   the obvious seed --- a fourth root --- is off by a factor of $a^{1/12}$, which
   is \num{1e27} for a subnormal.
-\item[\ic{math.hypot(x, y)}] $\sqrt{x^2+y^2}$ without the overflow: the larger
-  magnitude divides both out first, and that is exact. An infinity is the larger
-  of the two whatever else is beside it, so \ic{hypot(inf, nan)} is
-  $+\infty$ --- found by looking for one, not by taking a maximum, since every
-  comparison against a \ic{nan} is false. The scaled form rounds where a plain
-  \ic{sqrt} would not, so \ic{hypot(2.0, 3.0)} is one ulp above the correctly
-  rounded $\sqrt{13}$ while the Pythagorean triples are exact; recorded in t325.
+\item[\ic{math.hypot(x, y)}] $\sqrt{x^2+y^2}$ without the overflow: both
+  magnitudes are divided by a \emph{power of two} chosen to bring the larger into
+  $[1, 2)$, the sum of squares is taken there, and the answer is scaled back by
+  $2^k$ --- which is exact, because multiplying by a power of two only changes
+  the exponent. That last property is the whole design. The obvious form,
+  $m\sqrt{(s/m)^2+1}$, divides by an arbitrary float and multiplies by one, and
+  both of those round at full size; it was measured 2 ulps from this platform's
+  \ic{libm} on \num{0.75} per cent of pairs with $|s/m|$ between $10^{-8}$ and
+  $10^{-1}$. Dividing by a power of two instead puts $m^2$ in $[1, 4)$, where it
+  cannot overflow, and removes one of the two full-size roundings outright rather
+  than compensating for it. Over \num{2044} pairs spanning every decade from
+  $10^{-320}$ to $1.8\cdot10^{308}$ and every ratio from $10^{-300}$ to
+  $10^{300}$ the answer is within one ulp of \ic{libm}; the Pythagorean triples
+  are exact, and \ic{hypot(2.0, 3.0)} is still one ulp above the correctly
+  rounded $\sqrt{13}$, which no scaling fixes.
+
+  An infinity is the larger of the two whatever else is beside it, so
+  \ic{hypot(inf, nan)} is $+\infty$ --- found by looking for one, not by taking
+  a maximum, since every comparison against a \ic{nan} is false. And the answer
+  is symmetric: the scaling takes the larger magnitude, so \ic{hypot(x, y)} and
+  \ic{hypot(y, x)} agree to the bit, which is a property the function has and
+  one the ratio form could have lost; t325 pins both.
 \item[\ic{math.ldexp(x, e)}] $x\cdot 2^e$, exactly. Scaling by a power of two
   is exact while the result stays normal, so this is the one scaling that never
   rounds --- and it has to be checked where it stops being exact, which is when

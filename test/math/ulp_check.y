@@ -202,13 +202,23 @@ def main() -> long {
             let a = math.bitsf(f[1].tolong());
             let want: long = 0;
             let got: float = math.nan;
+            // Every argument, spelled, because a failure you cannot LOCATE is a
+            // failure you cannot act on. This line printed only f[1] -- the first
+            // argument -- so for a two-argument function the report named half
+            // the case and the other half had to be found by guessing which line
+            // of an 8340-line table it was. It cost an hour: three atan2 cases
+            // and a hypot one were reported with one argument each, and every
+            // reconstruction from that half turned out to be a case that passed.
+            let args = f[1];
             if (is_three_arg(name)) {
                 let b = math.bitsf(f[2].tolong());
                 let t = math.bitsf(f[3].tolong());
+                args = args + " " + f[2] + " " + f[3];
                 want = f[4].tolong();
                 got = apply3(name, a, b, t);
             } else if (is_two_arg(name)) {
                 let b = math.bitsf(f[2].tolong());
+                args = args + " " + f[2];
                 want = f[3].tolong();
                 got = apply2(name, a, b);
             } else {
@@ -221,7 +231,8 @@ def main() -> long {
             if (gap > 1) { over_one = over_one + 1; };
             if (gap > tolerance) {
                 bad = bad + 1;
-                print("OVER " + tostring(tolerance) + " ULP: " + name + " arg=" + f[1]
+                print("OVER " + tostring(tolerance) + " ULP: " + name
+                    + " args=" + args
                     + " gap=" + tostring(gap) + " got=" + tostring(math.fbits(got))
                     + " want=" + tostring(want));
             }
@@ -233,4 +244,18 @@ def main() -> long {
     if (bad > 0) { 1 } else { 0 }
 };
 
-main();
+// exit(main()), NOT main(). This file ended in a bare `main();` -- a statement
+// whose value is DISCARDED -- so the 1 that `bad > 0` produced went nowhere and
+// _start fell through to its hardcoded exit_group(0). The gate could not fail.
+//
+// That is worth being precise about, because everything upstream believed the
+// opposite: this file's own header says "a kernel that drifts past it fails
+// here", test_math.sh reads the exit code and decides PASS or FAIL from it, and
+// the number it printed -- "0 over 1", the promise this whole module is held to
+// -- was a number the harness counted correctly and then threw away. Adding 768
+// cases to the table is what exposed it: the summary line said 4 over 1 and the
+// suite still said PASS, and those two facts cannot both be true.
+//
+// main() -> long exists precisely so the answer can become the exit code. Calling
+// it and dropping the answer is the one spelling that cannot work.
+exit(main());
