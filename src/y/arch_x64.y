@@ -97,6 +97,12 @@ def w_sysno(name: str) -> long {
     else if (name == "perf_counter") { 49 } // NtQueryPerformanceCounter
     else if (name == "delay") { 52 }        // NtDelayExecution
     else if (name == "system_time") { 90 }  // NtQuerySystemTime
+    // 196 is NOT what the public Windows 10 table suggests (it lists 62, whose
+    // neighbour NtQueryAttributesFile really is 61); 62 answers
+    // STATUS_INVALID_HANDLE. Read out of the installed ntdll's own stub by
+    // test/sh/w_sysno.py, which is the only authority for what a probe under
+    // this wine will do.
+    else if (name == "attrs") { 196 }       // NtQueryFullAttributesFile
     else { -1 }
 };
 

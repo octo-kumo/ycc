@@ -233,8 +233,30 @@ branch-disjointness false positive.
   It immediately settled a guess: `NtQueryFullAttributesFile` is **196**, not
   the 62 the public Win10 table suggests (62 is `NtQueryAttributesFile`'s
   neighbour by coincidence, and calling it answers STATUS_INVALID_HANDLE).
-- **`y_os_stat` on NT: written, assembled, ran, and reverted -- with the exact
-  next step known.** The body widened the path to UTF-16 on the stack, built an
+- **`y_os_stat` on NT WORKS** (round 38), and it is the first of the eleven
+  missing bodies. `fs.exists`, `fs.is_file`, `fs.is_dir`, `path_mode` and
+  `file_size` now answer correctly on a PE over paths with separators in them --
+  measured against the Linux build of the same program, byte-identical output,
+  including `file_size("src/y/std/fs.y")` = 12546 on both. `test/y/native/t349_fs_stat.y`
+  is the dual-target fixture (it compares the size instead of printing it, so it
+  does not have to change when fs.y does).
+  What it took: an ABSOLUTE path built in the body -- `\??\` plus the CWD's own
+  DOS path from the PEB (ProcessParameters+56, a UNICODE_STRING whose Length in
+  BYTES is at +56 and whose Buffer is at +64), then the relative part widened
+  byte by byte with `/` translated to `\`, and an empty path refused rather than
+  resolving to the CWD. A relative name answered STATUS_OBJECT_PATH_SYNTAX_BAD
+  because the kernel does not do that resolution.
+  The number, 196, is in `w_sysno` in BOTH copies with the reason it is not the
+  public table's 62 -- and `wselftest.s` now calls it at startup like the other
+  ten, so a drift fails loudly in the first instruction of every PE rather than
+  in the first file it stats.
+- **The same helper is what the other ten need**: `y_os_openat`, `y_os_close`,
+  `y_os_lseek`, `y_os_mkdir`, `y_os_unlink`, `y_os_rename`, `y_os_getcwd`,
+  `y_os_chdir`, `y_os_list`, `y_os_set_mode`. The path-building half is now
+  written and proven (in `y_os_stat`); the directory half is
+  NtQueryDirectoryFile with a handle from NtCreateFile, and `getcwd`/`chdir` are
+  PEB reads (the DOS path is already being read for the prefix).
+- **The failed first attempt, kept for the record:** The body widened the path to UTF-16 on the stack, built an
   OBJECT_ATTRIBUTES (Length 48, RootDirectory NULL, OBJ_CASE_INSENSITIVE) and a
   UNICODE_STRING, and called `NtQueryFullAttributesFile`, filling the two fields
   `fs.y` reads (st_mode at byte 24, st_size at 48 from EndOfFile). With the

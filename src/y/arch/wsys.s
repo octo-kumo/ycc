@@ -513,3 +513,174 @@ y_os_fork:
 y_os_random:
     mov $-38, %rax
     ret
+# y_os_stat(dirfd, path, len, stbuf, flags) -> 0, or -1. The caller's buffer is
+# Linux-shaped and fs.y reads exactly two fields: st_mode at byte 24 and
+# st_size at byte 48. Both are written; the rest is left as the caller zeroed
+# it.
+#
+# FIVE ARGUMENTS, FRAMELESS in the ELF body, so arg5 (flags) is at 8(%rsp),
+# arg4 (stbuf) at 16, arg3 (len) at 24, arg2 (path) at 32 and arg1 (dirfd) at
+# 40 -- which after `push %rbp; mov %rsp, %rbp` become 16, 24, 32, 40 and 48.
+# dirfd and flags are ignored: NT resolves an absolute name without either.
+#
+# THE PATH MUST BE ABSOLUTE, AND THAT IS THE WHOLE POINT OF THIS BLOCK. A first
+# cut passed the relative name straight to NtQueryFullAttributesFile, which
+# answers STATUS_OBJECT_PATH_SYNTAX_BAD (0xC000003B): the KERNEL does not
+# resolve a relative name against the process's current directory -- that is
+# user-space work (RtlDosPathNameToNtPathName). So the path is assembled here:
+# the `\??\` prefix, then the current directory's own DOS path out of the PEB,
+# then the relative part widened byte by byte.
+#
+#   PEB                 %gs:96
+#   ProcessParameters   PEB+32
+#   CURDIR.DosPath      ProcessParameters+56, a UNICODE_STRING: Length (u16) at
+#                       +56, MaximumLength at +58, the Buffer pointer at +64.
+#                       Length is in BYTES and the path ends in a backslash, so
+#                       the units are Length/2 and the separator is added only
+#                       if that last unit is not already one.
+#
+# NtQueryFullAttributesFile, NOT NtQueryAttributesFile: only the "full" form
+# returns FILE_NETWORK_OPEN_INFORMATION, which carries EndOfFile -- the size.
+# The attributes-only form has no size in it, so file_size would have to lie.
+#
+# THE NUMBER IS 196, and that is measured rather than remembered: 62 is what the
+# public Win10 table suggests and it answers STATUS_INVALID_HANDLE. See
+# test/sh/w_sysno.py, which reads the number out of the stub in the installed
+# ntdll -- and which confirms all ten of w_sysno's pinned numbers while it is
+# there.
+#
+# Only ASCII is accepted, in the relative part: a byte >= 128 returns -1 rather
+# than being mangled, because a wrong path is worse than a refused one. A `/` is
+# translated to `\` -- NT does not take the Unix separator, and a path like
+# src/y/std/fs.y answered "no such file" while pe-fs.expected (no separator at
+# all) worked. An EMPTY path fails rather than resolving to the current
+# directory, which is what `\??\CWD\` alone means and is not what
+# fs.exists("") answers on Linux.
+#
+# Frame layout, all rbp-relative, inside `sub $2304`: the UTF-16 path at -2304
+# (capacity 1000 units), the UNICODE_STRING at -304, the OBJECT_ATTRIBUTES at
+# -288 (48 bytes, and Length must say 48), FILE_NETWORK_OPEN_INFORMATION at -240
+# (56 bytes: four times, then AllocationSize at +32, EndOfFile at +40,
+# FileAttributes at +48). 2304 is a multiple of 16, so rsp stays 0 mod 16.
+#=== replace: y_os_stat ===
+y_os_stat:
+    push %rbp
+    mov %rsp, %rbp
+    sub $2304, %rsp
+    lea -2304(%rbp), %rdi
+    mov $4, %r8
+    movb $92, (%rdi)
+    movb $0, 1(%rdi)
+    movb $63, 2(%rdi)
+    movb $0, 3(%rdi)
+    movb $63, 4(%rdi)
+    movb $0, 5(%rdi)
+    movb $92, 6(%rdi)
+    movb $0, 7(%rdi)
+    add $8, %rdi
+    mov %gs:96, %rax
+    mov 32(%rax), %rax
+    mov 64(%rax), %rsi
+    mov 56(%rax), %r11
+    and $65535, %r11
+    shr $1, %r11
+    cmp $0, %r11
+    je yostat_sep
+yostat_cwd:
+    movzbq (%rsi), %rax
+    movb %al, (%rdi)
+    movzbq 1(%rsi), %rax
+    movb %al, 1(%rdi)
+    add $2, %rsi
+    add $2, %rdi
+    add $1, %r8
+    sub $1, %r11
+    jne yostat_cwd
+yostat_sep:
+    movzbq -2(%rdi), %rax
+    cmp $92, %rax
+    je yostat_rel
+    movb $92, (%rdi)
+    movb $0, 1(%rdi)
+    add $2, %rdi
+    add $1, %r8
+yostat_rel:
+    mov 40(%rbp), %rsi
+    mov 32(%rbp), %rcx
+    cmp $0, %rcx
+    je yostat_fail
+    xor %r9d, %r9d
+yostat_widen:
+    cmp %rcx, %r9
+    jge yostat_widened
+    movzbq (%rsi,%r9,1), %rax
+    cmp $128, %rax
+    jge yostat_fail
+    cmp $47, %rax
+    jne yostat_keep
+    mov $92, %rax
+yostat_keep:
+    movb %al, (%rdi)
+    movb $0, 1(%rdi)
+    add $2, %rdi
+    add $1, %r8
+    add $1, %r9
+    cmp $1000, %r8
+    jg yostat_fail
+    jmp yostat_widen
+yostat_widened:
+    movb $0, (%rdi)
+    movb $0, 1(%rdi)
+    add %r8, %r8
+    movb %r8b, -304(%rbp)
+    mov %r8, %rax
+    shr $8, %rax
+    movb %al, -303(%rbp)
+    add $2, %r8
+    mov %r8, %rax
+    shr $8, %rax
+    movb %r8b, -302(%rbp)
+    movb %al, -301(%rbp)
+    lea -2304(%rbp), %rax
+    mov %rax, -296(%rbp)
+    mov $48, %rax
+    mov %rax, -288(%rbp)
+    mov $0, %rax
+    mov %rax, -280(%rbp)
+    lea -304(%rbp), %rax
+    mov %rax, -272(%rbp)
+    mov $64, %rax
+    mov %rax, -264(%rbp)
+    mov $0, %rax
+    mov %rax, -256(%rbp)
+    mov $0, %rax
+    mov %rax, -248(%rbp)
+    lea -288(%rbp), %r10
+    lea -240(%rbp), %rdx
+    mov $196, %eax
+    syscall
+    test %eax, %eax
+    jne yostat_fail
+    mov 24(%rbp), %r9
+    movzbq -192(%rbp), %rax
+    and $16, %rax
+    cmp $0, %rax
+    je yostat_reg
+    mov $16877, %rax
+    mov %rax, 24(%r9)
+    jmp yostat_size
+yostat_reg:
+    mov $33188, %rax
+    mov %rax, 24(%r9)
+yostat_size:
+    mov -200(%rbp), %rax
+    mov %rax, 48(%r9)
+    xor %eax, %eax
+    mov %rbp, %rsp
+    pop %rbp
+    ret
+yostat_fail:
+    mov $-1, %rax
+    mov %rbp, %rsp
+    pop %rbp
+    ret
