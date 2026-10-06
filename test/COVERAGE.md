@@ -184,6 +184,9 @@ reason.
 | 10-errors | Run time | Out-of-memory and unbounded non-tail recursion | none: exhausting memory or the stack guard is unsafe and nondeterministic |
 | 10-errors | Exit status | Falling off, explicit exit and trapped programs' statuses | `native/t09_divzero.y`, `native/t13_arroob.y`, `native/t38_exec.y`, `native/t80_slice_bounds.y` |
 | 10-errors | Reproducibility | Deterministic cross-compiler binaries and self-compiler fixpoint | `sh/test_port.sh`, `sh/test_fixpoint.sh` |
+| 10-errors | The toolchain | Toolchain chapter heading | none: a heading; the two subsections below carry the rows |
+| 10-errors | Language server | `yserve` is the LSP the VS Code extension drives: it imports the compiler's own modules by path, so it adds names to the compiler's vocabulary | `lsp/test/test-agree.sh`, `sh/test_lsp.sh` |
+| 10-errors | Building this document | `make docs` builds the manual and fails on any LaTeX error or over/underfull box | none: it documents the make target, and it is verified by running it, not by a test |
 | 10-errors | Language server | `std/json.y` parses and prints every JSON shape, and agrees with itself | `lsp/test/t001_json_shapes.y`, `lsp/test/t002_json_parse.y` |
 | 10-errors | Language server | A tolerant scanner that classifies every span in a `.y` file the way `lexer.tokenize` does, and repairs what will not lex | `lsp/test/t003_scan.y`, `lsp/test/test-agree.sh` |
 | 10-errors | Language server | **Errors and warnings together** for one buffer — what the command line cannot do, since `compile_unit` returns before `lint_unit` when the checker found anything — plus a warning attributed to an imported file, a missing import as a diagnostic rather than an `exit(1)`, and both warning levels | `lsp/test/t007_diag.y` |

@@ -267,6 +267,7 @@ cannot be bound, passed, printed or returned as one.
 an error wherever a value is needed:
 
 \begin{lstlisting}
+let ok = true;
 if (ok) { 1 } else { "one" };            // fine: a statement
 let v = if (ok) { 1 } else { 2 };        // long
 let w = if (ok) { 1 } else { "one" };    // error: cannot bind a void value to 'w'

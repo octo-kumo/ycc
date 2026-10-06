@@ -163,3 +163,43 @@ output on every run and in either implementation. This is checked
 continuously by comparing the two compilers' output binaries byte for
 byte, and by self-compilation (a compiler built by the compiler is
 identical to the one that built it).
+
+\section{The toolchain}
+\label{sec:toolchain}
+
+Everything above is the language. Two things ship beside it, and neither is part
+of what a program means, so neither has a section of its own earlier on.
+
+\subsection{Language server}
+
+\ic{make yserve} builds \ic{yserve}, the language server for
+\textsf{Y}. It is written in \textsf{Y} in the same tree (\ic{src/tools/lsp/}) It speaks the Language
+Server Protocol over its own standard streams, so an editor can ask it about a
+buffer it has not saved: the diagnostics the compiler itself would print for
+that text, semantic tokens, formatting, hover, go-to-definition and completion
+from the buffer's own declarations. It is driven by a VS Code extension in
+\ic{vscode-y-lang/}, and it runs in the checked suite, which compiles and runs
+its fixtures under both compilers and compares each against its
+\ic{.expected}.
+
+Two things follow from it being in the same tree and written in the language.
+It \emph{imports the compiler's own modules by path}, so every name it defines
+joins the compiler's vocabulary --- which is why a fixture in the language
+suites and a fixture in the server's cannot both be named the same thing. And
+it produces byte-identical output under either compiler, which \ic{make yserve}
+checks rather than assumes.
+
+\subsection{Building this document}
+
+\ic{make docs} builds this manual and nothing else needs to be run first. It
+needs \ic{t tectonic} on the path; without it the target says so and stops. The
+result is \ic{docs/build/manual.pdf}, with \ic{docs/build/manual.log} beside it.
+
+The target fails the build on any \LaTeX{} error \emph{or} on any over- or
+underfull box, so a clean run is the proof that the typesetting is sound rather
+than a claim about it. That is deliberate: a manual that merely compiles is a
+manual with lines running into the margin, and nothing in the build would say
+so. The three source files are concatenated in the order \ic{\_preamble.tex},
+\ic{index.tex}, \ic{\_postamble.tex} and piped to \ic{tectonic} on its standard
+input, because the installed version takes exactly one input file; the sources
+live in \ic{docs/src/}.
