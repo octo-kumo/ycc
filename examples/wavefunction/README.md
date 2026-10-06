@@ -443,7 +443,7 @@ is why a 24-cell row printed a character at a time comes out as 24 one-character
 | `EXPECTED` | the golden run's stdout, 2101 bytes |
 | `gate.conf` | `build=`, `run=`, `check=` (the battery **and** the two exit codes) |
 
-Vendored from `examples/_toolkit/`, byte-identical, never edited:
+Vendored from `test/std/`, byte-identical, never edited:
 
 | file | sha256 |
 |---|---|

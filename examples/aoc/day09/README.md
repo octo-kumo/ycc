@@ -494,7 +494,7 @@ each worked around visibly in `day09.y` rather than silently:
 **Nothing is vendored.** This example needs no `fx` (every quantity is an
 integer — there are no floats, no division except exact integer division of the
 shoelace sum), no `term`, no `fb`, no `args` (four flags are read from
-`argv()` directly) and no `time`. The frozen toolkit in `examples/_toolkit/`
+`argv()` directly) and no `time`. The frozen toolkit in `test/std/`
 is byte-identical and untouched; its shas, for the record, are
 `fx.y 4b47a9bfef0c1e30aa2397a24e21ab43753e6994c298f7ccd43c418b87b62058`,
 tui 07135b31109fcecdef5bddf7d0299c9194039d172396b49347630a93a286b6ee`,

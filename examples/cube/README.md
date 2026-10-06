@@ -345,15 +345,17 @@ The only allocation the program makes is the one `fb.Surface` (1.5 MiB) from
 
 ## Frozen toolkit
 
-Vendored copies, **byte-identical to `examples/_toolkit/`**, unedited:
+Vendored copies, **byte-identical to `test/std/`**, unedited:
 
 | file | sha256 (first 16) | lines | what |
 |---|---|---|---|
-| `fx.y` | `4b47a9bfef0c1e30` | 687 | integer Q30 `sin cos tan sqrt atan2 …` |
+| `fx.y` | `4b47a9bfef0c1e30` | 694 | integer Q30 `sin cos tan sqrt atan2 …` |
 
-The toolkit revision frozen here is **`examples/_toolkit/` as of
-2026-10-04**, those five files and nothing else. This folder's copies are
-unedited: `diff` against `_toolkit/` is empty for all five. The one place
+The module revision frozen here is **`test/std/fx.y` as of
+2026-10-04** --- one module, not five. It said five because the folder used
+to hold five; four of them (`term`, `fb`, `time`, `args`) moved into `std`
+and this example vendors only what is left. This folder's copy is unedited:
+`diff` against `test/std/fx.y` is empty. The one place
 this example needed something the toolkit does not offer — a window size
 without a per-call allocation — is a **separate def**, not an edit:
 `poll_size()` in `cube.y` does the same ioctl into its own buffer.

@@ -157,9 +157,20 @@ print("after p. on line 7: " + tostring(col_of(7, ".a", 0) + 2));
 print("split on line 11: " + tostring(col_of(11, "split", 0)));
 print("a needle the buffer does not have: " + tostring(col_of(12, "zzz", 0)));
 
+// READ and BOUND are the SAME name at two positions, and both answer. That is the
+// point of the pair: a `Decl` node sits at the KEYWORD, so the name's own position
+// (`Decl.nline`/`ncol`, §9.2 A5) is a second place the type has to be recorded, and
+// a server that records only the node's own line gives the same name two different
+// answers depending on where the cursor is -- `long` at the use and nothing at all
+// at the declaration, which is what this used to do.
 print("-- a hover shows the type the checker inferred");
 print("p, where it is READ: " + hover1(st, 1, 10, col_of(10, "p", 0)));
 print("p, where it is BOUND: " + hover1(st, 2, 6, col_of(6, "p", 0)));
+// `mk` is a FUNCTION, and its declaration already IS its signature, so the hover
+// shows the signature once and not the type above it. Recording the call's RETURN
+// type at the callee's position instead made this read
+// `{ a: long, b: str }`, which is the record `mk(1, "x")` produces -- an answer that
+// is not wrong about anything and wrong about what `mk` is.
 print("mk: " + hover1(st, 3, 6, col_of(6, "mk", 0)));
 
 print("-- an expression that is not a name still has a type");

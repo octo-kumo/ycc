@@ -417,7 +417,7 @@ the helper is now called by name; and the fixed-array unification above.
 
 ## The std units this uses
 
-`examples/_toolkit/` (`fx.y`, `tui`, `args`) is **not**
+`test/std/` (`fx.y`, `tui`, `args`) is **not**
 vendored here, and no sha is recorded, because this example uses none of it:
 there is no floating point (so no `fx`), no trigonometry, no terminal, no raw
 mode, no keyboard, no frame pacing and no argument parsing beyond `argv()`. The

@@ -401,13 +401,13 @@ renderer, and it is the one place the workaround lives.
 
 ## The std units this uses
 
-Vendored, byte-identical to `examples/_toolkit/`, **not edited**:
+Vendored, byte-identical to `test/std/`, **not edited**:
 
 | file | sha256 | lines | what this example uses it for |
 |---|---|---|---|
 | `fx.y` | `4b47a9bfef0c1e30aa2397a24e21ab43753e6994c298f7ccd43c418b87b62058` | 694 | `mul`, `fdiv`, `floor`, `from_int`, `abs`, `cos`, `ONE`, `TWO`, `PI`, `TWO_PI` |
 
-All five are byte-identical to `examples/_toolkit/` as of the last check, and
+All five are byte-identical to `test/std/` as of the last check, and
 none was edited here. **The revision moved once while this task ran**, and
 deliberately: `fx.y` is still vendored campaign-wide, while `tui` and `args`
 now come from std (every folder in

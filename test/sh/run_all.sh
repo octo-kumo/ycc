@@ -1,7 +1,7 @@
 #!/bin/bash
 # Run the full y test suite (or a subset).
 # Usage: ./test/sh/run_all.sh [-j N] [suite ...]
-# Suites: port native native-examples examples audit ycc-units ycc fixpoint loops comprehensive debug link pkg stdin-eof net lsp coverage
+# Suites: port native native-examples examples audit ycc-units ycc fixpoint loops comprehensive debug link pkg stdin-eof net lsp coverage std-suites
 # Default (no args): all suites. They compare the C copy ($CYCC, default
 # ./cycc) with the reference ($YREF, default refs/ycc.ref); the ycc,
 # fixpoint, native, native-examples, debug, link and pkg suites also drive a
@@ -31,7 +31,7 @@ if [ ! -x "${YREF:-$ROOT/refs/ycc.ref}" ]; then
 fi
 YSELF_BIN="${YSELF:-$ROOT/ycc}"
 
-ALL="port native native-examples examples audit ycc-units ycc fixpoint loops comprehensive debug link pkg stdin-eof net lsp math coverage"
+ALL="port native native-examples examples audit ycc-units ycc fixpoint loops comprehensive debug link pkg stdin-eof net lsp math coverage std-suites"
 SUITES="${*:-$ALL}"
 declare -A SCRIPT_FOR=(
     [port]="test_port.sh"
@@ -52,6 +52,7 @@ declare -A SCRIPT_FOR=(
     [lsp]="test_lsp.sh"
     [coverage]="test_coverage.sh"
     [math]="test_math.sh"
+    [std-suites]="test_std_suites.sh"
 )
 # Under -j these run as this many shards at once: alone they take ~80, ~40
 # and ~16 s, the others 13 s at most.

@@ -702,7 +702,7 @@ in the floor were **checked rather than asserted**. `golden/*.png` are its outpu
 
 ## The std units this uses
 
-Vendored byte-identical from `examples/_toolkit/` and **not edited** (the folder
+Vendored byte-identical from `test/std/` and **not edited** (the folder
 contract, `ORCHESTRATOR.md` §4):
 
 | file | sha256 |

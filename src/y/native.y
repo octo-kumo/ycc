@@ -2108,7 +2108,9 @@ def strip_ns(node: Node, imports: [str]) -> Node {
         strip_decl(decl, imports)
     } else if (k == K.func) {
         let func: Func = node;
-        normnode({ k: K.func, params: func.params, ptypes: strip_type_list(func.ptypes, imports), ret: strip_type(func.ret, imports), body: strip_ns(func.body, imports), line: func.line, col: func.col, defs: func.defs, label: func.label })
+        // `ppos` through: stripping a namespace rewrites names and types, never
+        // positions, and a parameter's position is where an editor points at it.
+        normnode({ k: K.func, params: func.params, ptypes: strip_type_list(func.ptypes, imports), ret: strip_type(func.ret, imports), body: strip_ns(func.body, imports), line: func.line, col: func.col, defs: func.defs, label: func.label, ppos: func.ppos })
     } else if (k == K.assign) {
         let assign: Assign = node;
         normnode({ k: K.assign, name: assign.name, v: strip_ns(assign.v, imports), line: assign.line, col: assign.col })

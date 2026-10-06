@@ -468,11 +468,11 @@ source edit. `day02.txt` is this account's puzzle input — personal data,
 kept inside this folder and nowhere else in the repository. No session
 cookie is stored in any file here.)
 
-**Toolkit: nothing vendored.** No `examples/_toolkit/` module is imported
+**Toolkit: nothing vendored.** No `test/std/` module is imported
 or copied, because nothing here needs one: there is no trigonometry, no
 terminal, no framebuffer and no argument table (`--input`, `--brute`,
 `--check`, `--time`, `--help` are parsed by hand, about 20 lines). For
-reference, the toolkit files that exist at `examples/_toolkit/` as of this
+reference, the toolkit files that exist at `test/std/` as of this
 writing were *not* consulted by this example and are **not** part of it:
 `fx.y`, `tui`, `args`. The only std unit used is
 `fs` (for `read_file`), which comes from the compiler's embedded std pack.

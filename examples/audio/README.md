@@ -52,7 +52,7 @@ been verified against each, and a reader who wants to know what changed should
 be able to see it rather than infer it.
 
 **Toolkit: `fx.y` and `args`** — `args` from std, `fx.y` still vendored
-byte-identical from `examples/_toolkit/`. The frozen shas:
+byte-identical from `test/std/`. The frozen shas:
 
 | file | sha256 |
 |---|---|

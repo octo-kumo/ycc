@@ -1492,6 +1492,9 @@ Yv *parse_func(Yv *toks, long p, int isnat) {
         ;
     }
     Yv *names = yav(0);
+    /* ppos: each parameter NAME's position, packed line * 65536 + col, parallel
+       to names. See the note on the record itself in parser.y. */
+    Yv *ppos = yav(0);
     Yv *ptypes = yav(0);
     // defs[i]: param i's default value (a literal), `void` when it has none,
     // `optarg` for an optional `name?: T` (none when left out, some(arg) when
@@ -1511,6 +1514,8 @@ Yv *parse_func(Yv *toks, long p, int isnat) {
             } else {
                 Yv *nm = tv(toks, pos);
                 names = ya_push(names, nm);
+                ppos = ya_push(
+                    ppos, yv_long(tline(toks, pos) * 65536 + tcol(toks, pos)));
                 pos = pos + 1;  // name
                 int isopt = 0;
                 if (is_op(toks, pos, ys("?"))) {
@@ -1677,7 +1682,7 @@ Yv *parse_func(Yv *toks, long p, int isnat) {
         // the body holds only the header's errors, if any: a native has none
         // of its own, and the checker reads them so they are reported once
         Yv *bnode = yr(4, "k", yv_long(K_block), "stmts", derrs, "line", yv_long(ln), "col", yv_long(cl));
-        Yv *func = yr(9, "k", yv_long(K_func), "params", names, "ptypes", ptypes, "ret", ret, "body", bnode, "line", yv_long(ln), "col", yv_long(cl), "defs", defs, "label", label);
+        Yv *func = yr(10, "k", yv_long(K_func), "params", names, "ptypes", ptypes, "ret", ret, "body", bnode, "line", yv_long(ln), "col", yv_long(cl), "defs", defs, "label", label, "ppos", ppos);
         return res(yr(9, "k", yv_long(K_decl), "kind", ys("native"), "name", fname, "typ", yr(1, "k", yv_long(K_tnone)), "v", func, "line", yv_long(ln), "col", yv_long(cl), "nline", yv_long(cl), "ncol", yv_long(cl)), pos);
     } else {
         Yv *body = parse_block(toks, pos);
@@ -1689,7 +1694,7 @@ Yv *parse_func(Yv *toks, long p, int isnat) {
             for (long bi = 0; bi < yv_len(bst); bi++) nst = ya_push(nst, ya_get(bst, bi));
             bnode = yr(4, "k", yv_long(K_block), "stmts", nst, "line", yr_get(bnode, "line"), "col", yr_get(bnode, "col"));
         }
-        Yv *func = yr(9, "k", yv_long(K_func), "params", names, "ptypes", ptypes, "ret", ret, "body", bnode, "line", yv_long(ln), "col", yv_long(cl), "defs", defs, "label", ys(""));
+        Yv *func = yr(10, "k", yv_long(K_func), "params", names, "ptypes", ptypes, "ret", ret, "body", bnode, "line", yv_long(ln), "col", yv_long(cl), "defs", defs, "label", ys(""), "ppos", ppos);
         if (ys_eq_lit(fname, "")) {
             return res(func, yv_l(yr_get(body, "pos")));
         } else {

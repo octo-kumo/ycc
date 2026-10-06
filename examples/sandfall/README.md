@@ -428,7 +428,7 @@ FAIL heap growth over 2000 step+tally pairs, in bytes (got 6656000, want 0)
 
 ## The std units this uses
 
-Vendored copies, byte-identical to `examples/_toolkit/`, **not edited** — the
+Vendored copies, byte-identical to `test/std/`, **not edited** — the
 (there is nothing left to diff -- the files are gone):
 
 `fx.y` is **not** vendored: there is no trigonometry, no square root and no
