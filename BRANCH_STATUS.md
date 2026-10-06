@@ -277,6 +277,37 @@ branch-disjointness false positive.
   2000, where stat's own layout has exactly 2000. `y_os_close` (NtClose, 15) was
   written the same round and reverted with it, untested, for the same reason:
   it is only reachable through a file handle that openat has to produce first.
+- **`y_os_list`: measured, written, reverted -- and the next attempt has a
+  precise starting point.** It is the LAST of the thirteen, and the only one
+  without a Windows body.
+  What is established:
+    * the call is `NtQueryDirectoryFile` (53), eleven arguments: four in
+      registers and SEVEN on the stack at 40(%rsp) and up, which is why the
+      frame has to be 128 bytes with the IO_STATUS_BLOCK at -32 -- the
+      round-44 rule again.
+    * THE NUMBER AND THE ARGUMENTS ARE RIGHT. With a 64-byte buffer the kernel
+      rejects the call (the body answers -1) and with the caller's 32760 it
+      returns records; a wrong syscall number or a misplaced argument does not
+      behave that way.
+    * FileNamesInformation (12) does NOT come back as
+      FILE_NAMES_INFORMATION on wine 11.17: the walk read
+      NextEntryOffset/FileIndex/FileNameLength at +0/+4/+8 and got garbage,
+      so it emitted the whole buffer as one name. Class 3
+      (FileBothDirectoryInformation, length at +60 and name at +94) was tried
+      next and the header words were garbage too.
+    * ...AND THAT SECOND MEASUREMENT IS WORTHLESS AS TAKEN, because the body
+      REWRITES THE BUFFER IN PLACE. Whatever the kernel wrote is destroyed by
+      the walk before any diagnostic can look at it, so every dump of that
+      buffer after a call shows the walk's own output, not the kernel's. **The
+      next attempt must look at the raw buffer FIRST**: a temporary
+      `y_os_list` that makes the call and returns immediately, dumping the
+      first few dozen bytes through a helper in std/fs.y (which is read from
+      source, so the experiment needs no rebless). That is the one experiment
+      this round should have run and did not.
+  Twelve of the thirteen entries have Windows bodies; the known-gap report in
+  pe-gate.sh names y_os_list as the one that does not. Nothing was committed
+  for it: the tree is the round-45 state, make ycc verifies byte-identical, and
+  no rebless was needed.
 - **`y_os_getcwd` and `y_os_chdir` work (round 45)**, so TWELVE of the thirteen
   entries have Windows bodies and ONE does not: **`y_os_list`** -- the last of
   the directory trio and the fiddliest, since fs.list_dir's contract is one
