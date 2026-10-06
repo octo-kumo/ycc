@@ -4637,4 +4637,14 @@ def def_sig(name: str, func: Func) -> Field {
     { name: name, opt: false, typ: type_node({ k: K.tfunc, args: args, ret: ret }) }
 };
 
-export { check_program, tstr, teq, leaf_of, field_pos, field_merge, narrow_type, union_member, unfold, members, union_parts, pat_members, lit_target, opt_wraps, t_mutex, t_sem, tcanon, tsig, inferred_ret, str_sorted, rec_names, type_names, str_method, fmt_spec, fmt_kind , expr_type, type_index_on, type_index_off};
+// `Sym` is here because a unit's `exports` is a `[Sym]` and a caller that wants to
+// offer a module's members needs each one's TYPE as well as its name -- the language
+// server's completion items carry it as `detail`. Without the export the shape is
+// invisible across a path import, and a caller has to either take the names and lose
+// the types or rebuild the record itself.
+//
+// The C twin needs nothing for this: a `Sym` is a Y record, so it is a `Yv *` there
+// and `Unit.exports` is already a `Yv *` in `native.h`. An export list is a
+// source-level concept; the port gate compares compiled bytes, which this does not
+// move.
+export { check_program, tstr, teq, leaf_of, field_pos, field_merge, narrow_type, union_member, unfold, members, union_parts, pat_members, lit_target, opt_wraps, t_mutex, t_sem, tcanon, tsig, inferred_ret, str_sorted, rec_names, type_names, str_method, fmt_spec, fmt_kind , expr_type, type_index_on, type_index_off, Sym };

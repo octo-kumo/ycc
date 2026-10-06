@@ -33,9 +33,32 @@ advertise them, so the extension does not ask for them — see `src/extension.ts
 Almost everything above needs **no code in this extension**: the client library
 registers each feature from the capability the server advertises.
 
+## Install
+
+```sh
+sh src/tools/lsp/install-vscode.sh
+```
+
+That builds the server (`make yserve`), builds and packages the extension
+(`make lsp-vsix`), installs the `.vsix` with the `code` CLI, and copies `yserve`
+next to the installed extension so nothing is left to configure. Add
+`--dry-run` to see the steps without doing any of them, or `--help` for the two.
+
+Then **Developer: Reload Window**, and open a `.y` file. The extension activates
+on a `.y` file, so an editor that is already open has not started the server yet.
+
+Two things to know, both printed again by the script:
+
+- An extension **update** replaces its directory and the `yserve` copy with it.
+  Re-run the script, or set `y.lsp.serverPath` (below), which survives one.
+- Do not run the script under `ulimit -v`. The `code` CLI is Electron, which
+  reserves far more *virtual* address space than it uses and dies under a cap
+  with a trap that reads like "the install failed". `make`'s own recipes set a
+  cap for every compile they start, so nothing needs one here.
+
 ## Requirements
 
-`yserve` must be built:
+If you are building by hand rather than with the script:
 
 ```sh
 make yserve          # at the repository root

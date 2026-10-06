@@ -1422,9 +1422,16 @@ def do_completion(st: State, id: json.Val, p: { str => json.Val }) -> str {
                 if (len(mods) > 0) {
                     let mi = 0;
                     while (mi < len(mods)) {
-                        let nm = module_label(mods[mi], obj_name);
+                        // NOT named `sym`: this module imports `./sym.y` AS `sym`,
+                        // and a field read on a name the checker resolves to the
+                        // module rather than to the local gives "undefined variable
+                        // 'name'" rather than anything mentioning the collision.
+                        let one: Sym = mods[mi];
+                        let nm = module_label(one.name, obj_name);
                         if (nm != "" && (prefix == "" || (len(nm) >= len(prefix) && nm[:len(prefix)] == prefix))) {
-                            items += module_item(nm);
+                            let det = "";
+                            if (one.typ.k != K.tunk) { det = tstr(one.typ); };
+                            items += module_item(nm, det);
                         };
                         mi = mi + 1;
                     };
@@ -1516,8 +1523,8 @@ def type_at_decl(st: State, d: Doc, off: long) -> Type {
 // module -- which is the answer that has to be right, because the alternative is
 // offering a `str`'s methods for something that is not a `str`.
 // `off` is the object's BYTE OFFSET, the same one `object_col` was handed.
-def module_members(st: State, d: Doc, off: long) -> [str] {
-    let out: [str] = [];
+def module_members(st: State, d: Doc, off: long) -> [Sym] {
+    let out: [Sym] = [];
     if (off > 0) {
         let idx = scope.index_src(d.text, d.path);
         let w = object_hit(d.text, scan.scan_full(d.text).spans, off);
@@ -1564,8 +1571,8 @@ def module_members(st: State, d: Doc, off: long) -> [str] {
 // It is a text match on a real path, and when two modules share a basename in one
 // buffer the first is taken -- which is stated rather than pretended away, and is
 // the only case here that is not exact.
-def module_exports(st: State, d: Doc, modname: str, dc: IdxDecl) -> [str] {
-    let out: [str] = [];
+def module_exports(st: State, d: Doc, modname: str, dc: IdxDecl) -> [Sym] {
+    let out: [Sym] = [];
     let x = xref_of(st, d);
     if is_some(x) {
         let pr: Prepared = x!;
@@ -1576,7 +1583,7 @@ def module_exports(st: State, d: Doc, modname: str, dc: IdxDecl) -> [str] {
             if (u.name == modname) {
                 let es = u.exports;
                 let ei = 0;
-                while (ei < len(es)) { out += es[ei].name; ei = ei + 1; };
+                while (ei < len(es)) { out += es[ei]; ei = ei + 1; };
             };
             ui = ui + 1;
         };
@@ -1585,23 +1592,65 @@ def module_exports(st: State, d: Doc, modname: str, dc: IdxDecl) -> [str] {
             // match and is used when there is one.
             let want = "";
             if (dc.detail != "") { want = resolve_import_path(d, dc.detail); };
-            let want_base = basename_of(want);
-            let i = 0;
-            // NOT `&& len(out) == 0` in the condition: that guard is on the block
-            // above, and inside the loop it stopped after the FIRST member -- so
-            // `helper.` offered `twice` and not `TOP`, which reads as "this module
+            // A PATH import's target identifies the file outright (`helper` ->
+            // `.../helper.y`), and a NAMED one identifies it by its basename
+            // (`math` -> `math.y`), so both are set and pass 2 can use the second.
+            let want_base = "";
+            if (want != "") { want_base = basename_of(want); }
+            else { want_base = modname + ".y"; };
+            // Every name is collected, not the first match: the loop condition used
+            // to test `len(out) == 0` as well, so it stopped after ONE member and
+            // `helper.` offered `twice` and not `TOP` -- which reads as "this module
             // has one member" rather than as the bug it is.
-            while (i < len(pr.names)) {
-                let nm = pr.names[i];
-                let f = pr.files[nm];
-                if (is_some(f)) {
-                    let fp = f!;
-                    let mine = pr.self_path;
-                    if (want != "" && fp == want) { out += nm; }
-                    else if (want_base != "" && basename_of(fp) == want_base) { out += nm; }
-                    else if (fp != mine) { out += nm; };
+            //
+            // Three passes, and WHICH ONE runs is the whole of it.
+            //
+            // Pass 1, when the import stated its own target: an exact file match and
+            // nothing else. A buffer with two imports used to mix them -- `helper.`
+            // offered `thing`, `CONST` AND `math.min`, `math.max`, ... -- because
+            // the old test was "any file that is not the buffer's own", which is
+            // true for every imported module at once. Offering another module's
+            // members is the specific thing this branch exists to prevent, and it
+            // was doing it.
+            //
+            // Pass 2, when it did not -- a std unit is NAMED, not pathed, so there is
+            // no target to match. Its file's BASENAME is then the identifier, because
+            // a module is named after its file: `math` -> `math.y`. That is exact
+            // too, and it is what keeps a buffer's two modules apart.
+            //
+            // Pass 3, the guess, only when the first two found nothing: every name
+            // from a file that is not the buffer's own. Reached only when nothing
+            // matched by name, and it can return another module's members -- so it is
+            // the last resort rather than the first, which is the whole difference
+            // between "usually right" and "right unless you have two imports".
+            let pass = 0;
+            let got = 0;
+            while (pass < 3 && got == 0) {
+                let i = 0;
+                while (i < len(pr.names)) {
+                    let nm = pr.names[i];
+                    let f = pr.files[nm];
+                    if (is_some(f)) {
+                        let fp = f!;
+                        let mine = pr.self_path;
+                        let take = false;
+                        if (pass == 0) { take = want != "" && fp == want; }
+                        else if (pass == 1) { take = want_base != "" && basename_of(fp) == want_base; }
+                        else { take = fp != mine; };
+                        if (take) {
+                            // A NAME with no TYPE, deliberately: this is the path
+                            // taken when the module was never linked as a unit, so
+                            // there is no `Sym` and no type to print. A `tunk`
+                            // rendered as "<missing annotation>" would be a type the
+                            // compiler never gave us, and the item simply has no
+                            // `detail` instead.
+                            out += { name: nm, label: "", typ: t_unk() };
+                            got = got + 1;
+                        };
+                    };
+                    i = i + 1;
                 };
-                i = i + 1;
+                pass = pass + 1;
             };
         };
     };
@@ -1660,10 +1709,15 @@ def member_object_name(text: str, sps: [Span], off: long) -> str {
 // A module member as a completion item: kind 3, Function, because every export of
 // a linked unit is callable or a constant and the protocol has no better single
 // answer. The label is the name, which is what the user types.
-def module_item(name: str) -> json.Val {
+def module_item(name: str, detail: str) -> json.Val {
     let o = json.obj();
     o["label"] = json.str(name);
+    o["sortText"] = json.str(sort_text(name));
     o["kind"] = json.num(3);
+    // An empty `detail` is OMITTED rather than sent blank, the same rule the
+    // builtins follow: a member whose type the compiler did not give us carries no
+    // type rather than an empty one.
+    if (detail != "") { o["detail"] = json.str(detail); };
     let te = json.obj();
     te["newText"] = json.str(name);
     o["textEdit"] = json.jobj(te);
@@ -1746,12 +1800,29 @@ def record_fields(trec: Type) -> [Field] {
 def field_name(f: Field) -> str { f.name }
 def field_type(f: Field) -> str { tstr(f.typ) }
 
+// `sortText` on every completion item, which R6.3 requires and which was set by
+// none of the five builders.
+//
+// It is the LABEL, and that is the whole of it rather than a stub. `sortText`
+// exists to override the editor's sort key, and the only override this language
+// would want is a rule that puts `_`-prefixed names first -- the convention in
+// every language that has them, and the reason people reach for the field at all.
+// No Y name can trigger it: no `src/y/std` unit declares a top-level name starting
+// with `_`, and `y_` is the reserved prefix for generated labels, emitted under
+// their bare name precisely so they never appear as declarations. So the rule would
+// be untestable and the field would be decoration.
+//
+// Every builder below calls this rather than setting the key itself, so an item
+// kind added later cannot forget. `t020_sorttext` asserts all five kinds carry it.
+def sort_text(label: str) -> str { label }
+
 // A record field as a completion item: kind 5, Field. `detail` is the field's type
 // from the checker, so the list is readable without taking an item, and it is the
 // same answer a hover on the field would give (see inferred_at).
 def field_item(name: str, detail: str) -> json.Val {
     let o = json.obj();
     o["label"] = json.str(name);
+    o["sortText"] = json.str(sort_text(name));
     o["kind"] = json.num(5);
     o["detail"] = json.str(detail);
     let te = json.obj();
@@ -1764,6 +1835,7 @@ def field_item(name: str, detail: str) -> json.Val {
 def completion_item(dcl: IdxDecl) -> json.Val {
     let o = json.obj();
     o["label"] = json.str(dcl.name);
+    o["sortText"] = json.str(sort_text(dcl.name));
     o["kind"] = json.num(completion_kind(dcl.kind));
     if (dcl.detail != "") { o["detail"] = json.str(dcl.detail); };
     if (dcl.doc != "") {
@@ -1792,6 +1864,7 @@ def completion_item(dcl: IdxDecl) -> json.Val {
 def str_method_item(name: str) -> json.Val {
     let o = json.obj();
     o["label"] = json.str(name);
+    o["sortText"] = json.str(sort_text(name));
     o["kind"] = json.num(2);
     o["detail"] = json.str(strm.sig(name));
     let te = json.obj();
@@ -1806,6 +1879,7 @@ def str_method_item(name: str) -> json.Val {
 def builtin_item(name: str) -> json.Val {
     let o = json.obj();
     o["label"] = json.str(name);
+    o["sortText"] = json.str(sort_text(name));
     o["kind"] = json.num(1);
     let te = json.obj();
     te["newText"] = json.str(name);
@@ -1970,6 +2044,7 @@ export {
   result_msg, error_msg, notify_msg,
   doc_get, doc_has, doc_put, doc_drop, uri_path, doc_dir,
   diag_json, publish_params, publish_for, path_uri, refresh,
+  sort_text,
   note_open, note_change, note_close,
   on_did_open, on_did_change, on_did_save, on_did_close, on_exit,
   do_initialize, read_check_on_change, do_shutdown, do_formatting,
