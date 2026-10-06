@@ -153,7 +153,7 @@ cannot do. What it IS good for is leaving no file behind and passing argv
 
 ## Test suites (`test/sh/`)
 
-Nineteen suites, run by `test/sh/run_all.sh` (named below in brackets).
+Twenty suites, run by `test/sh/run_all.sh` (named below in brackets).
 Most compile each program with **both** compilers — the reference side is
 `refs/ycc.ref` — and require the outputs to agree (byte-identical
 binaries, the same warnings, identical program behavior). `test_native.sh`,
@@ -378,6 +378,21 @@ coverage). Neither is in `make test`.
     one of each thing it claims to find, because a detector that silently stops
     detecting would leave the ratchet reading as coverage.
 
+- `test_treeshake.sh` [treeshake] — the measurement behind "unused code
+  costs nothing", as a ratchet. It compiles `test/treeshake/minimal.y` and
+  then the same program with one unused `import` and reports what each unit
+  adds; growth fails, shrinkage is reported so `test/treeshake/costs.txt`
+  can be lowered deliberately. The finding it records today is the tree
+  shake's blind spot: **functions are dropped, data is not**. A program
+  importing `math`, `regex` and `fs` and calling none of them keeps exactly
+  the minimal program's function labels — and pays 6705 bytes for
+  `std/math.y`'s top-level `const`s, which are emitted and initialized at
+  startup whether anything reads them or not (`fs`, `struct` and `net` are
+  within a few bytes of free). `test/treeshake/dead.y` is the program with a
+  dead table, dead helpers, a dead branch, an unused union and code after a
+  `return`: 544 bytes of it survive its own tree shake, and its import cost
+  is on top. `test/sh/test_treeshake.sh` is run by both compilers and their
+  results must agree.
 - `test_std_suites.sh` [std-suites] — the self-test suites for the std units
   that have one, in `test/std/`: `fx_test.y` (292 checks, the vendored `fx.y`),
   `args_test.y` (61, `std/args.y` and the pacer it paces with),

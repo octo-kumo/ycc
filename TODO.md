@@ -231,3 +231,44 @@ Checked and working, so these stay only in `TODO.y` as history:
 | `if cond { }` without brackets | implemented |
 | `0b10001` binary literal | implemented (`0x1F` and `_` grouping too) |
 | `0o755` octal literal | implemented (`0O17`, `_` grouping, and the one `radix_of` prefix test the other radixes now share) |
+
+## 9. The tree shake drops functions, not data
+
+Measured by `test/sh/test_treeshake.sh` (the numbers live in
+`test/treeshake/costs.txt` as a ratchet). An unused `import` keeps no
+FUNCTION -- a program importing `math`, `regex` and `fs` and calling none of
+them has exactly the minimal program's function labels -- but it keeps the
+unit's top-level GLOBALS and their initialization, which run at startup:
+
+| unused import | bytes added | what it is |
+| --- | --- | --- |
+| `math` | 6705 | `const pi`, `const e`, `const tau`, the rest of the constants |
+| `tls` | 651 | |
+| `x509` | 637 | |
+| `crypto` | 420 | |
+| `regex` | 182 | |
+| `json` | 53 | |
+| `net` | 14 | |
+| `fs`, `struct` | 0 | nothing at the top level to initialize |
+
+`import math;` therefore costs a program that never calls it ~1500
+instructions at startup and 6.7 KB of file. The program's OWN dead code is in
+the same shape: `test/treeshake/dead.y` (a dead table, helpers only a dead
+branch reaches, an unused union, code after a `return`) keeps 544 bytes of
+itself.
+
+**Wanted:** shake globals per GLOBAL, not per unit. A global whose cell no
+kept code references needs no cell and no initializer -- which is also how
+the constants get folded: `const pi = 3.14...` that only literals use is a
+literal, and the cell, the store and the rodata behind it all go away. The
+two rules to keep straight while doing it: a top-level statement with a side
+effect (`print`, a call, an assignment through a global) must still run --
+"unused import" is not "unreachable module" -- and a global initialized from
+a call cannot be folded, only dropped when unread.
+
+**Cost.** Medium. The link step already computes each unit's `globals` and
+each kept body's label references (`native.y`, `Unit`); this adds "and the
+global cell labels", then filters `global_decls`/the init text by it. The
+tempting wrong version is to shake the unit: a unit whose functions are all
+dropped may still have a top-level side effect, and dropping it would change
+what the program prints.

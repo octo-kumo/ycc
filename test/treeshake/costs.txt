@@ -1,0 +1,18 @@
+# The recorded size an unused `import <unit>;` adds to a program that only
+# prints a constant (test/treeshake/minimal.y), in bytes. Growth fails the
+# suite; shrinkage is reported so the file can be lowered deliberately.
+#
+# The numbers are what is left of the tree shake's blind spot: functions are
+# dropped, top-level globals are not. math's 6705 bytes are `const pi`,
+# `const e`, `const tau` and the rest of its constants, emitted and
+# initialized at startup whether anything reads them or not. A unit whose top
+# level has nothing to initialize (fs, struct) is free already.
+fs 0
+struct 0
+net 14
+json 53
+regex 182
+crypto 420
+x509 637
+tls 651
+math 6705
