@@ -46,11 +46,33 @@
 //     log10, is too small to explain it either -- and log2 uses the identical
 //     z-series.
 //
-// So the fix is to compensate the z-series: two_sum for the 2 + w*P(w) add and
-// prod_err for the z multiply, six instructions on a path already at 817 against
-// the assembly kernel's 149. NOT done here, and the reason is recorded rather
-// than implied: 379 in 20000 is a promise gap the table does not catch and this
-// file now states.
+// TWO FIXES TRIED, BOTH FALSIFIED BY MEASUREMENT -- so neither is the answer
+//
+// The suspect is ln(m) = z*(2 + w*P(w)), and three things in it round.
+// Compensating the two obvious ones changes nothing:
+//
+//   1. The `2 + w*P(w)` add -- two_sum for its residual, prod_err for the z
+//      multiply. log10 is 379 over 1 ulp BEFORE and AFTER, and log2 comes out one
+//      argument WORSE (0 -> 1). So the add's half-ulp is not the error.
+//   2. The division z = (m-1)/(m+1). The existing z_lo captures the rounding of
+//      den, not of the quotient, so the quotient's half-ulp is uncompensated;
+//      adding rem = num - z*den to z_lo also changes nothing -- log10 379 before
+//      and after, log2 unchanged.
+//
+// Both were reverted. What is left in ln(m) is `w * poly_log(w)` -- whose own
+// rounding two_sum does not recover, since two_sum's residual is taken about the
+// ALREADY-ROUNDED product -- and poly_log itself. Estimated at ~5e-4 ulp of
+// ln(m) for |w| <= 0.17, which is too small to be a 2-ulp answer, so neither of
+// those is written up as THE answer either.
+//
+// Closing this needs ln(m)'s error MEASURED rather than inferred, which means
+// putting ln(m) in the audit_float harness -- and that needs a reference for the
+// z-series which this session twice failed to write by hand. Saying so is more
+// useful than a third guess.
+//
+// NOT done here, and the reason is recorded rather than implied: 379 in 20000 is
+// a promise gap the table does not catch, and this file and the manual both say
+// so.
 //
 // It also cost 5.5x the instructions: log through assembly plus a multiply is
 // 149 a call, and this is 817. That is a deliberate trade and it is worth naming

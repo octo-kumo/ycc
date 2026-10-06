@@ -514,8 +514,11 @@ computed by squaring).
     comparable size --- $e\log_{10}2$ beside $\ln(m)\log_{10}e$ --- so
     \ic{ln(m)}'s own error is not diluted, where in \ic{log2} the integer part is
     a thousand times the small one and no error in the small one can move the
-    rounding. Recorded in t322, which also rules out the two explanations that
-    look right.
+    rounding. Recorded in t322, which also carries two fixes that were tried
+    and \emph{disproved} by measurement --- compensating the add inside
+    $\ln(m)$ leaves all 379 exactly where they were and makes \ic{log2} one
+    argument worse, and so does capturing the division's own rounding, which
+    is what made the hunt for the cause harder than the arithmetic.
 
     What replaced it keeps \ic{log}'s reduction and scales the \emph{exact}
     integer part:
