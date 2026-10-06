@@ -5995,21 +5995,21 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, ylong line, ylong col, Yv *nli
             if (yv_l(yr_get(ret, "k")) == K_tnone &&
                 yv_len(yr_get(yr_get(func, "body"), "stmts")) == 0) {
                 st = fail(st,
-                          ys_cat(ys_cat(ys("native def '"), disp(name)),
+                          ys_cat(ys_cat(ys("ndef '"), disp(name)),
                                  ys("' needs a return type (there is no body to infer it from)")),
                           line, col);
                 ret = t_unk();
             }
             if (!ys_starts_with(yr_get(func, "label"), ys("y_"))) {
                 st = fail(st,
-                          ys_cat(ys_cat(ys("native label '"),
+                          ys_cat(ys_cat(ys("ndef label '"),
                                         disp(yr_get(func, "label"))),
                                  ys("' must start with 'y_' (generated code calls it by that prefix)")),
                           line, col);
             }
             if (yv_l(yr_get(st, "fdepth")) > 0) {
                 st = fail(st,
-                          ys_cat(ys_cat(ys("native def '"), disp(name)),
+                          ys_cat(ys_cat(ys("ndef '"), disp(name)),
                                  ys("' must be at the top level (an assembly label has no place inside a function)")),
                           line, col);
             }

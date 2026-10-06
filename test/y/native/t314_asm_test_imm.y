@@ -7,9 +7,9 @@
 // src/y/arch/math.s uses $257 for that reason, an immediate the 8-bit encoding
 // cannot even hold.
 //
-// native def (P1) is what lets the fixture reach an assembly label at all, and
+// ndef (P1) is what lets the fixture reach an assembly label at all, and
 // the `y_` prefix keeps it out of the program's own namespace.
-native def test_imm(n: long) -> long = "y_test_imm";
+ndef test_imm(n: long) -> long = "y_test_imm";
 
 // The flags as the probe reports them: bit 0 ZF, bit 1 SF, bit 2 CF, bit 3 PF,
 // bits 4 and up the AND of n with 257. Printed beside the arithmetic the reader

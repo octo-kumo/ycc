@@ -1,8 +1,8 @@
-# std/math.y — a fast math module, and the `native def` it needs
+# std/math.y — a fast math module, and the `ndef` it needs
 
 A proposal, measured on this tree. Two pieces:
 
-1. **`native def`** — a declaration in Y with no body whose implementation is an
+1. **`ndef`** — a declaration in Y with no body whose implementation is an
    assembly label. This is the enabling feature; it is general (any std module can
    reach machine code) and it is small.
 2. **`std/math.y`** — the math library, built on it. One file. No compiler flag,
@@ -129,15 +129,15 @@ Also relevant, all verified:
 
 ---
 
-## 3. `native def`
+## 3. `ndef`
 
 ### Syntax
 
 ```y
 // src/y/std/math.y — the machine-dependent layer, at the top of the file
-native def sqrt(x: float) -> float;                             // label y_sqrt
-native def dot(a: [float], b: [float]) -> float;                // label y_dot
-native def dot_pairs(a: [float], b: [float]) -> float = "y_dot4";  // explicit label
+ndef sqrt(x: float) -> float;                             // label y_sqrt
+ndef dot(a: [float], b: [float]) -> float;                // label y_dot
+ndef dot_pairs(a: [float], b: [float]) -> float = "y_dot4";  // explicit label
 ```
 
 A **declaration**: no body, no parameters to check beyond the signature, nothing
@@ -175,7 +175,7 @@ text by hand, so the derivation must be the one both sides already agree on.
 ### Shaking: no new code
 
 `shake_prelude` keeps a prelude block when a kept body's emitted text references
-its label. A native def's call site emits `call y_exp`, which is exactly that
+its label. A ndef's call site emits `call y_exp`, which is exactly that
 reference. So an unused native costs nothing: no body is emitted, and the arch
 block is dropped. This is the same mechanism that keeps `y_float_tostr` out of
 programs that never print a float.
@@ -184,12 +184,12 @@ programs that never print a float.
 
 | File | Change |
 |---|---|
-| `parser.y` | `native def`, no body, optional `= "label"`. Today `def foo(x: long) -> long;` is `expected '{', got ';'` — one alternative in one production. |
-| `parser.y` (AST) | `Func` gains `label: str` (`""` = an ordinary def). Cheaper than a new node kind; `def_sig` and `rn_top` need no change, since a native def already has a signature. |
+| `parser.y` | `ndef`, no body, optional `= "label"`. Today `def foo(x: long) -> long;` is `expected '{', got ';'` — one alternative in one production. |
+| `parser.y` (AST) | `Func` gains `label: str` (`""` = an ordinary def). Cheaper than a new node kind; `def_sig` and `rn_top` need no change, since a ndef already has a signature. |
 | `lexer.y` | `native` into the keyword table. |
-| `types.y` | The pre-pass binds it as usual. `typeof_def` skips the body when `label != ""`. New diagnostics: a native def with no written return type; a label that does not start with `y_`; a native and a `def` of one name in a unit. |
+| `types.y` | The pre-pass binds it as usual. `typeof_def` skips the body when `label != ""`. New diagnostics: a ndef with no written return type; a label that does not start with `y_`; a native and a `def` of one name in a unit. |
 | `rename.y` | Set `label` from the declared name; no body to walk. Nothing else — a top-level def is already registered. |
-| `native.y` | A per-unit index of native decls (`name → label`), filled from the top-level defs before emission (~15 entries; it holds only natives). The call path consults it, so `f(x)` emits `call y_exp` instead of the derived `yfn_…` label. `emit_fns` emits no body for a native def. |
+| `native.y` | A per-unit index of native decls (`name → label`), filled from the top-level defs before emission (~15 entries; it holds only natives). The call path consults it, so `f(x)` emits `call y_exp` instead of the derived `yfn_…` label. `emit_fns` emits no body for a ndef. |
 | `lint.y` | Nothing. A top-level declaration is not an unused local. |
 | `dwarf.y` | The call site keeps its `.loc`; the callee has no line info. `test_debug.sh` must confirm `nm`/`addr2line` still name the label and gdb/callgrind do not choke on a bodyless function. |
 | `src/c/*` | The same changes, mechanically (R1). |
@@ -217,9 +217,9 @@ programs that never print a float.
 
 ### New diagnostics (each needs an `e*.y` marker and a `COVERAGE.md` row)
 
-1. a native def with no written return type;
+1. a ndef with no written return type;
 2. a native label that does not start with `y_`;
-3. a native def whose name a `def` in the same unit also defines (the silent
+3. a ndef whose name a `def` in the same unit also defines (the silent
    double-body trap of §2).
 
 ---
@@ -371,7 +371,7 @@ documented as unfused.
 |---|---|---|
 | P0 | the asm moves to `src/y/arch/*.s` | **done**, merged (`0f24376`) |
 | — | the portable tier: integers/bits, float comparisons and constants, RNGs, `[float]` array work (`src/y/std/math.y`) | **done** (`85403df`) — no compiler change needed; tests `t300`–`t304` |
-| P1 | `native def` | **done** — nine users' worth of tests, no std user yet |
+| P1 | `ndef` | **done** — nine users' worth of tests, no std user yet |
 | P2 | `enc64` mnemonics + `math.s` primitives (`y_sqrt`, `y_to_int`, `y_fbits`, `y_bitsf`) | **done** — `sqrtsd` was the only mnemonic missing; `movq`/`cvttsd2si`/`cvtsi2sd` were already there. `movsd` and SSE arithmetic with a memory source have since landed too (`f95398b`..this commit), and **P4 finished without needing `movapd`/`xorpd`/`andpd`/`unpcklpd`**, so those four are still absent from both encoders and that is the finished state rather than a remainder: they were to arrive only if a kernel wanted them, and what a kernel actually wants is SSE-register residency, which `movsd` plus `mulsd`/`addsd`/`subsd` with register sources already gives. The one thing none of them would have saved is a sign flip, and no kernel has one to do — `y_pow` takes its sign off in a GPR (`shl`, then the bits are a biased exponent), and `y_fmod` shows the GPR-only style needs zero new encodings at all |
 | P3 | the transcendentals in Y on the primitives | **done** — `exp exp2 expm1 log log2 log10 log1p sin cos tan asin acos atan atan2 sinh cosh tanh pow`, all in plain Y on top of `poly_split`, `prod_err` and `two_sum`. The ulp table is now **2695 cases** (the pinned edges, a seeded 1500-case spread, a seeded 240-case spread over [-1, 1] for the only two functions with a bounded domain, and the exact layer's own 619) and **every one of them is within 1 ulp**, worst gap 1 — the number the gate enforces and the number the manual quotes, including for all five assembly kernels. It was four cases over it, at up to three ulps; §8 has what closed them, and it is one lesson three times. The exact layer's own share of the table is still exact. The table is generated from this platform's libm rather than mpmath: mpmath is not installed here, and a platform libm is the *relevant* reference anyway -- the promise is to match what C gives. `gen_kernel.py` fits and prints the coefficients and reports the split evaluation's error before they are pasted in |
 | P4 | `exp`/`log`/`pow`/`sin`/`cos` moved into `math.s` | **the instruction work and `exp` are landed.** `y_exp` is **generated** by `test/math/gen_exp.py` from `math.y`'s own constants and walks the same operations in the same order, so it returns the same double: t311 checks **10,420 arguments bit for bit**, reaching every branch (the NaN test, both range edges, the reduction boundary at each end, the subnormal band, the top of the range). **1422 → 105.7 Ir/call** (ten Y functions collapse into one routine) and **69.6 → 31.9 ns/call** net of a 4.7 ns loop, on `bench/y/tmath.y --full` (run bare it is a fast smoke test — 20,000 calls a row and 15 exact assertions — because `make check` profiles every `bench/y` program under callgrind and the deep setting took 107 s of it against 5 s for the next-slowest). `y_log` has landed the same way (`test/math/gen_log.py`, t312: **10,317 arguments, 0 differing**, **1335 → 115.2 Ir/call**, 71.8 → 34.9 ns/call). `y_sin`/`y_cos` have landed the same way (`test/math/gen_sin.py`, one body for both: two two-instruction entries and the choice in a register, t313: **10,410 arguments each, 0 differing**, **1775 → 190 Ir/call**, 75.4 → 40.4 ns/call). `y_pow` has landed the same way (`test/math/gen_pow.py`, t315: **15,137 pairs, 0 differing**, **3004 → 472 Ir/call**, 159.3 → 69.2 ns/call) — the first routine in the file that calls, and therefore the first with a frame. **P4 is complete.** §8 has what each attempt found |
@@ -385,7 +385,7 @@ Each phase ends green: `make ycc` byte-identical after `make rebless`, then
 | phase | what | gate |
 |---|---|---|
 | **P0** | **the asm moves out of Y into `.s`** — `src/y/arch/prelude.s`, `threads.s`, embedded by both copies, split and `#`-stripped in `arch_prelude_lines()`; `make asm-check`; `ARCH_ASM` in the Makefile; PORTING.md rule 11 | `cmp ycc refs/ycc.ref` **byte-identical** — this phase changes no semantics at all, so every emitted byte must match — and `make test` green |
-| **P1** | `native def` end to end, **no asm yet** — parser, AST, types, rename, native, lint, `src/c/`, docs, one fixture | `make ycc` byte-identical; a `t*.y` calls a native whose label exists; fuzz clean (R12) |
+| **P1** | `ndef` end to end, **no asm yet** — parser, AST, types, rename, native, lint, `src/c/`, docs, one fixture | `make ycc` byte-identical; a `t*.y` calls a native whose label exists; fuzz clean (R12) |
 | **P2** | `enc64` mnemonics; `math.s` gains `y_sqrt y_to_int y_fbits y_bitsf`; math.y's portable half | every suite; `make asm-check`; size/time in `make check` |
 | **P3** | the transcendentals in Y on the primitives | the ulp harness: max ulp per function against a **checked-in** `(input bits → expected bits)` table generated once from the platform's libm (checked in, so the suite needs no python at run time), and a seeded random spread on top of the hand-picked edges -- which is what found `cbrt`'s seed bug, a case no hand-picked list had; plus property checks (exp∘log ≈ id, sin²+cos² ≈ 1, `sqrt(x*x) == \|x\|` for normal x, monotonicity, ±0/±inf/NaN/subnormal/2^53/INT64 edges) |
 | **P4** | `exp` (done), then `log`, `pow`, `sin`, `cos` moved into `math.s`, **one at a time** | **bit-identical to the Y version** over a 10k-case corpus (random + edge). The Y version stays in the tree as the oracle. **All five are done**: `t311` 10,420 arguments, `t312` 10,317, `t313` 10,410 each for sin and cos, `t315` 15,137 pow pairs — all 0 differing. Done for `exp`: `t311_math_exp_asm.y`, 10,420 arguments, 0 differing; `test/math/gen_exp.py` generates the routine from the Y so the table cannot drift; the three encoder bugs it needed are in `e123e2a` |
@@ -435,7 +435,7 @@ All closed.
 | D1 | `native` reserved or contextual keyword? | **reserved** | Uniform in the parser, `find_dup` and coverage.sh's keyword check. Nothing in the repo binds `native` — all 16 occurrences under `test/`, `bench/`, `examples/`, `src/y/std/` are comments about `native.y`. |
 | D2 | Explicit `= "label"` form? | **keep it** | ~3 lines of parser; covers one assembly body with several Y signatures, and makes D3 a policy rather than a structural consequence. |
 | D3 | Must a label start with `y_`? | **yes, always** | Keeps the reserved-prefix rule meaningful and confines a native to arch/runtime labels, so it cannot reach an internal helper or arbitrary program label. |
-| D4 | `native def` and `def` of one name in a unit? | **reject it** | Otherwise two bodies land under one bare label with no duplicate scan — a *silent* miscompile, not a diagnosable one. |
+| D4 | `ndef` and `def` of one name in a unit? | **reject it** | Otherwise two bodies land under one bare label with no duplicate scan — a *silent* miscompile, not a diagnosable one. |
 | D5 | A native with no assembly on the target backend? | **accept the asm error** | `undefined label 'y_exp'` from `asm_link` — an error on that backend only, naming the exact label, fixed by one entry in `arch_prelude_lines`. The alternative ("use the label if defined, else this body") pushes the decision into the emitter and makes the bytes backend-dependent by design. |
 | D6 | May a native be used as a value? | **yes** | No captures, so it is the ordinary code-pointer closure — free, and it keeps natives interchangeable with defs at call sites. |
 | D7 | How much asm moves to `.s`? | **the existing prelude too** | The asm is 1869 of arch_x64.y's 2181 lines and is hand-duplicated in arch_x64.c; moving it deletes ~1870 lines from each copy and makes R1 apply to the glue instead. Verified byte-identical by `make ycc`, so the phase carries no semantic risk. |
@@ -840,7 +840,7 @@ over 1 ulp**, then 15, then 0.
 
 **What it cost: nothing.** Both halves measured in one program, the same loop
 over the same arguments, the old implementation and the new one verbatim (two
-copies of `std/math.y` cannot both be imported — their `native def`s collide,
+copies of `std/math.y` cannot both be imported — their `ndef`s collide,
 which is that rule doing its job — so the arithmetic under test is a local copy
 fed by the module's own unchanged primitives):
 

@@ -3216,7 +3216,7 @@ def uses_threads(refs: [str]) -> bool {
 };
 
 // The float primitives (src/y/arch/math.s), by the same rule as the thread
-// runtime: a `native def` names one as its body, so the call is a reference
+// runtime: a `ndef` names one as its body, so the call is a reference
 // like any other and the block stays. Looking first is what makes this cheap
 // -- split()ing the lines for every compile measured +2.6% instructions on
 // hello.y, against a few dozen lines (bench/compile_ir.sh).
@@ -10956,7 +10956,7 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
                 hdefs += d;
                 let rl = next_uid(st);
                 st = rl.st;
-                // A native def's label is the one it named -- the assembly it
+                // A ndef's label is the one it named -- the assembly it
                 // calls into. Everything else gets a generated label.
                 let label = "";
                 if (len(d.func.label) > 0) { label = d.func.label; } else { label = fn_label_of(rl.uid, d.name); };
@@ -11017,7 +11017,7 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
           self_label: st.self_label, end_label: st.end_label,
           fns: fntab_of(fixedfns, idsA), bodies: st.bodies,
           btext: st.btext, blabels: st.blabels };
-        // emit each hoisted body. A native def has none: its label names
+        // emit each hoisted body. A ndef has none: its label names
         // assembly that is already in the output, so emitting anything under
         // that label would duplicate it.
         i = 0;

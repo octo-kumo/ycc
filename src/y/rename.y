@@ -1280,7 +1280,7 @@ def rn_decl(node: Decl, st: RnSt) -> RnRes {
     }
 };
 
-// A native def renames like a def, but there is no body to walk: it holds no
+// A ndef renames like a def, but there is no body to walk: it holds no
 // code, only the header's errors, and the label it names is what the call
 // sites resolve to -- so it rides through untouched.
 def rn_decl_native(node: Decl, st: RnSt) -> RnRes {

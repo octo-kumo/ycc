@@ -302,7 +302,7 @@ take \ty{long}s and their float counterparts carry an \ic{f}: \ic{fmin},
 \ic{math.is\_signed\_zero} and the bit casts \ic{math.fbits} /
 \ic{math.bitsf} need a machine primitive Y has no spelling for: a truncating
 \ty{float}-to-\ty{long} cast, or a look at a float's bits. The module declares
-those with \ic{native def} (Section~\ref{sec:declarations}). The
+those with \ic{ndef} (Section~\ref{sec:declarations}). The
 primitives behind them live in \ic{src/y/arch/math.s}, and so do the
 transcendentals further down --- \ic{exp}, \ic{log}, \ic{sin}, \ic{cos}, \ic{pow}
 and the five array kernels are machine code reached the same way, so the set
@@ -527,7 +527,7 @@ computed by squaring).
     $e^x-1$: it is \ic{0.0} for $x = \num{1e-300}$, and at $x = -9$ it is
     \num{1.23e-4} $- 1$ with the answer's last bits gone.
     \ic{exp} is machine code (\texttt{src/y/arch/math.s}), reached through
-    \ic{native def}: \num{106} instructions with no calls at
+    \ic{ndef}: \num{106} instructions with no calls at
     all, against the ten Y functions it replaced and \num{1422} instructions a
     call. It is \emph{bit-identical} to that loop --- same operations in the same
     order --- and \texttt{test/y/native/t311\_math\_exp\_asm.y} says so over
@@ -553,7 +553,7 @@ computed by squaring).
     answers \ic{x} outright now sits below $2^{-52}$, where the series' first
     correction $x^2/2$ is under half an ulp of \ic{x}.
     \ic{log} is machine code (\texttt{src/y/arch/math.s}), reached through
-    \ic{native def} and \emph{bit-identical} to the loop it replaced ---
+    \ic{ndef} and \emph{bit-identical} to the loop it replaced ---
     \texttt{test/y/native/t312\_math\_log\_asm.y} says so over
     \num{10317} arguments --- \num{1335} instructions a call against \num{115},
     as \num{115} in one routine with no calls at all against eight functions
@@ -660,7 +660,7 @@ computed by squaring).
     each that set a register and fall into the same body, and the quadrant picks
     between the two halves at the end with two tests of the index rather than
     eight cases. \ic{math.sin} and \ic{math.cos} are machine code
-    (\texttt{src/y/arch/math.s}), reached through \ic{native def} and
+    (\texttt{src/y/arch/math.s}), reached through \ic{ndef} and
     \emph{bit-identical} to the loops they replaced ---
     \texttt{test/y/native/t313\_math\_sin\_asm.y} says so over \num{10410}
     arguments each --- \num{190} instructions a call against \num{1775}, and one
@@ -712,7 +712,7 @@ computed by squaring).
     \num{5.7e-14} of the answer, which is 360 ulps of it. That is also why $1/\ln 2$
     is a pair of constants here and not one. \ic{math.pow} is machine code
     (\texttt{src/y/arch/math.s}) like \ic{exp}, \ic{log} and \ic{sin}, reached
-    through \ic{native def} and \emph{bit-identical} to the loop it replaced ---
+    through \ic{ndef} and \emph{bit-identical} to the loop it replaced ---
     \texttt{test/y/native/t315\_math\_pow\_asm.y} says so over \num{15137}
     pairs, every arm of the dispatch and then the general path from a subnormal
     base to an overflowing exponent --- \num{472} instructions a call against
@@ -798,7 +798,7 @@ computed by squaring).
   \ic{fsum\_kahan([1e308, 1e308])} used to answer \ic{nan} where the answer is
   \ic{+inf} --- the accurate sum unable to answer where the plain one could. \ic{fsum}, \ic{fdot}, \ic{fmin\_of},
   \ic{fmax\_of}, \ic{fscale} and \ic{faxpy} are machine code
-  (\texttt{src/y/arch/math.s}), reached through \ic{native def}; each returns
+  (\texttt{src/y/arch/math.s}), reached through \ic{ndef}; each returns
   exactly what the equivalent Y loop would, which is what makes it a
   drop-in rather than a second opinion, and \ic{bench/y/fmath.y} measures them
   at \num{0.44} ns an element against \num{1.26} for the loop.

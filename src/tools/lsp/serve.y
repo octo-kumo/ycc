@@ -693,7 +693,7 @@ def do_formatting(st: State, id: json.Val, p: { str => json.Val }) -> str {
 //                member name is: whether the member exists is the checker's
 //                business, and `p.nosuchfield` is still a property.
 //   parameter -- resolves to a declaration the index marks D_PARAM.
-//   function  -- resolves to a `def`/`native def`, or to a `let`/`const` whose
+//   function  -- resolves to a `def`/`ndef`, or to a `let`/`const` whose
 //                declared type is a function type, which is how a closure is
 //                written in Y.
 //   type      -- resolves to a `type` alias.

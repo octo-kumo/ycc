@@ -1,10 +1,10 @@
 // the four machine primitives in src/y/arch/math.s, reached through
-// `native def` -- the only machine code between Y and a numeric library, and
+// `ndef` -- the only machine code between Y and a numeric library, and
 // what std/math.y's transcendentals will be written on
-native def sqrt(x: float) -> float = "y_sqrt";
-native def to_int(x: float) -> long = "y_to_int";
-native def fbits(x: float) -> long = "y_fbits";
-native def bitsf(b: long) -> float = "y_bitsf";
+ndef sqrt(x: float) -> float = "y_sqrt";
+ndef to_int(x: float) -> long = "y_to_int";
+ndef fbits(x: float) -> long = "y_fbits";
+ndef bitsf(b: long) -> float = "y_bitsf";
 
 def is_nan(x: float) -> bool { x != x };
 

@@ -4348,7 +4348,7 @@ def typeof_decl(st: TcSt, node: Decl) -> TcRes {
         // named function: full check (signature + body)
         typeof_def(st, node.name, node.v, node.line, node.col, node.nline, node.ncol, false)
     } else if (node.kind == "native") {
-        // native def: the signature, and three rules of its own
+        // ndef: the signature, and three rules of its own
         typeof_def(st, node.name, node.v, node.line, node.col, node.nline, node.ncol, true)
     } else {
         // let/const. A literal def on the right names a function WITHOUT
@@ -4522,7 +4522,7 @@ def ret_inferred_hint(rt: Type) -> str {
 // the NAME's, and are what st_bind records. They differ by however much
 // whitespace `let`/`def` was followed by.
 def typeof_def(st: TcSt, name: str, func: Func, line: long, col: long, nline: long, ncol: long, isnat: bool) -> TcRes {
-    // `isnat` is a `native def`: the signature is checked exactly as a def's
+    // `isnat` is a `ndef`: the signature is checked exactly as a def's
     // is, but there is no body -- the return type must be written, the label
     // must be a `y_` one, and the declaration must be at the top level.
     if (len(func.params) != len(func.ptypes)) {
@@ -4563,14 +4563,14 @@ def typeof_def(st: TcSt, name: str, func: Func, line: long, col: long, nline: lo
             // would -- so wait for them rather than piling on.
             let nbody: Block = func.body;
             if (ret.k == K.tnone && len(nbody.stmts) == 0) {
-                st = fail(st, "native def '" + disp(name) + "' needs a return type (there is no body to infer it from)", line, col);
+                st = fail(st, "ndef '" + disp(name) + "' needs a return type (there is no body to infer it from)", line, col);
                 ret = t_unk();
             };
             if (!func.label.starts_with("y_")) {
-                st = fail(st, "native label '" + disp(func.label) + "' must start with 'y_' (generated code calls it by that prefix)", line, col);
+                st = fail(st, "ndef label '" + disp(func.label) + "' must start with 'y_' (generated code calls it by that prefix)", line, col);
             };
             if (st.fdepth > 0) {
-                st = fail(st, "native def '" + disp(name) + "' must be at the top level (an assembly label has no place inside a function)", line, col);
+                st = fail(st, "ndef '" + disp(name) + "' must be at the top level (an assembly label has no place inside a function)", line, col);
             };
         };
         let ret_inferred = false;

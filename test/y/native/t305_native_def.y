@@ -1,17 +1,17 @@
-// native def: a declaration whose body is an assembly label
+// ndef: a declaration whose body is an assembly label
 //
 // There is no way to put assembly in a program, so these reach the runtime's
 // own -- `y_str_cmp`, `y_str_eq` and `y_heap_used` take their arguments on the
-// stack like any other function, which is the convention a native def is
+// stack like any other function, which is the convention a ndef is
 // called with. The declaration is a promise about the label: nothing here can
 // check it, exactly as an `extern` declaration in C cannot.
-native def my_cmp(a: str, b: str) -> long = "y_str_cmp";
-native def my_eq(a: str, b: str) -> long = "y_str_eq";
-native def my_heap() -> long = "y_heap_used";
+ndef my_cmp(a: str, b: str) -> long = "y_str_cmp";
+ndef my_eq(a: str, b: str) -> long = "y_str_eq";
+ndef my_heap() -> long = "y_heap_used";
 
 // called above its own declaration: a forward call resolves like a def's
 print(early("a", "a"));
-native def early(a: str, b: str) -> long = "y_str_eq";
+ndef early(a: str, b: str) -> long = "y_str_eq";
 
 print(my_cmp("apple", "banana") < 0);
 print(my_cmp("banana", "apple") > 0);
@@ -25,7 +25,7 @@ let f = my_cmp;
 print(f("a", "b") < 0);
 
 // and with no `=`, the label is `y_<name>`
-native def str_eq(a: str, b: str) -> long;
+ndef str_eq(a: str, b: str) -> long;
 print(str_eq("x", "x"));
 
 // lint has nothing to say about any of them, and that is checked rather than
@@ -38,6 +38,6 @@ print(str_eq("x", "x"));
 //
 // The unused parameter is here for the same reason: it is the case a
 // body-walking rule would get wrong.
-native def spare(a: str, b: str, unused_param: str) -> long = "y_str_cmp";
-native def nobody_calls_this(a: str) -> long = "y_str_eq";
+ndef spare(a: str, b: str, unused_param: str) -> long = "y_str_cmp";
+ndef nobody_calls_this(a: str) -> long = "y_str_eq";
 print(spare("a", "b", "third") < 0);

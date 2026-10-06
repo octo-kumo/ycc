@@ -98,7 +98,7 @@ def tops_of(ast: Block) -> XRef {
         if (n.k == K.decl) {
             let d: Decl = n;
             // An `import` binds a module basename and has no body to jump into;
-            // `native def` is a declaration with no body at all, and both are
+            // `ndef` is a declaration with no body at all, and both are
             // still things a program can name, so neither is filtered here.
             let orig = strip_uniq(d.name);
             // A map's value type is pinned by its first entry and cannot hold a

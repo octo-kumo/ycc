@@ -207,11 +207,11 @@ def y_str_tofloat(s: str) -> float {
     }
 };
 
-// The bare truncating cast, and a `native def` is what makes it reachable from
+// The bare truncating cast, and a `ndef` is what makes it reachable from
 // here: naming the label puts it in this program's references, which is how
 // uses_math decides whether math.s is in the program at all. One instruction of
 // machine code, already written and already gated -- not a second copy of it.
-native def trunc_to_long(x: float) -> long = "y_to_int";
+ndef trunc_to_long(x: float) -> long = "y_to_int";
 
 // tolong(x) for a float: truncated toward zero, and CHECKED. A float with no
 // long answer -- a NaN, or |x| at or past 2^63 -- traps here rather than coming

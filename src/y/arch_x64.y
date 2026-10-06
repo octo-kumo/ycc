@@ -14,7 +14,7 @@ embed THREADS_ASM from "./arch/threads.s";
 // second arch_x64.y could not coexist (arch_frame would be defined twice and
 // the second would win).
 embed W_SYS_ASM from "./arch/wsys.s";
-// The float primitives std/math.y's kernels reach for (`native def`s with no
+// The float primitives std/math.y's kernels reach for (`ndef`s with no
 // body -- see NATIVE.md, "Backend"), one embedded copy like the rest.
 embed MATH_ASM from "./arch/math.s";
 // The Windows syscall self-test: the probe w_self_test_lines returns, run
@@ -407,7 +407,7 @@ def arch_prelude_threads_lines() -> [str] {
 };
 
 // The floating-point primitives (src/y/arch/math.s): the four a std module
-// reaches through `native def`, and the only machine code between Y and a
+// reaches through `ndef`, and the only machine code between Y and a
 // numeric library -- Y has no float-to-long conversion and no way to read a
 // float's bits. Always given to the shaking (they are a few lines, unlike the
 // thread runtime, so there is nothing to save by looking first).

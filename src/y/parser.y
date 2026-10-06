@@ -1311,25 +1311,21 @@ def num_lit_type(s: str) -> Type {
 def parse_func(toks: [Tok], p: long, isnat: bool) -> Parsed {
     // Named:    def name(params) -> ret { body }      (top-level declaration)
     // Anonymous: def(params) -> ret { body }           (function expression)
-    // Native:   native def name(params) -> ret [= "label"];
+    // Native:   ndef name(params) -> ret [= "label"];
     //           a declaration with no body -- the assembly label named after
     //           `=` (or `y_<name>`) IS the body
     let ln = tline(toks, p);
     let cl = tcol(toks, p);
     let nln = ln;   // the name's position; an anonymous def has none of its own
     let ncl = cl;
-    let pos = p + 1;  // skip 'def' (or 'native', handled just below)
+    let pos = p + 1;  // skip 'def' (or 'ndef', which is a keyword of its own)
     let fname = "";
     // A malformed header plants its errors here; they run first in the body.
     let derrs: [Node] = [];
-    if (isnat) {
-        // 'native' is a keyword, so `p` is on it and `def` must follow.
-        if (is_kw(toks, pos, "def")) {
-            pos = pos + 1;
-        } else {
-            derrs += expect_err(toks, pos, "'def' after 'native'");
-        };
-    };
+    // `ndef` used to be written `native def`, two words; it is one keyword
+    // now, so there is nothing to expect here. The rest of the header is
+    // identical, and `isnat` still says a name is required (no anonymous
+    // form: the assembly label has to come from somewhere).
     // optional function name (present unless next token is '(') -- a native
     // declaration has no anonymous form, so there it is required.
     // Only the optional-name branch changes `fname` and `pos`; both are
@@ -1341,12 +1337,12 @@ def parse_func(toks: [Tok], p: long, isnat: bool) -> Parsed {
             ncl = tcol(toks, pos);
             pos = pos + 1;
         } else if (isnat) {
-            derrs += expect_err(toks, pos, "a name after 'native def'");
+            derrs += expect_err(toks, pos, "a name after 'ndef'");
         } else {
             derrs += expect_err(toks, pos, "a function name or '('");
         };
     } else if (isnat) {
-        derrs += expect_err(toks, pos, "a name after 'native def'");
+        derrs += expect_err(toks, pos, "a name after 'ndef'");
     };
     let hbad = len(derrs) > 0;
     if (is_punct(toks, pos, "(")) {
@@ -1464,7 +1460,7 @@ def parse_func(toks: [Tok], p: long, isnat: bool) -> Parsed {
         // no body: the declaration ends at the ';', which the statement loop
         // consumes like any other statement's
         if (!is_punct(toks, pos, ";")) {
-            derrs += expect_err(toks, pos, "';' after a native declaration");
+            derrs += expect_err(toks, pos, "';' after a ndef declaration");
         };
         // the body holds only the header's errors, if any: a native has none
         // of its own, and the checker reads them so they are reported once
@@ -1593,8 +1589,16 @@ def parse_stmt(toks: [Tok], p: long) -> Parsed {
     else if (is_kw(toks, p, "let")) { parse_decl(toks, p) }
     else if (is_kw(toks, p, "const")) { parse_decl(toks, p) }
     else if (is_typedef_start(toks, p)) { parse_typedef(toks, p) }
-    else if (is_kw(toks, p, "native")) {
-        // `native def name(...) -> T [= "label"];` — a declaration with no
+    else if (tt(toks, p) == "id" && tv(toks, p) == "native" && is_kw(toks, p + 1, "def")) {
+        // `native def` was the spelling until it became one keyword. `native`
+        // is an ordinary identifier now, so without this the error is
+        // "undefined variable 'native'" followed by "expected ';', got 'def'"
+        // -- two errors that never mention the spelling that works.
+        let bad: Node = { k: K.err, msg: "'native def' is 'ndef' now: write 'ndef name(...) -> T;'", line: tline(toks, p), col: tcol(toks, p) };
+        res(bad, p + 2)
+    }
+    else if (is_kw(toks, p, "ndef")) {
+        // `ndef name(...) -> T [= "label"];` — a declaration with no
         // body. parse_stmt sees it wherever it appears; the checker is what
         // insists on the top level (a nested one has no assembly to land in).
         parse_func(toks, p, true)
@@ -2304,7 +2308,7 @@ def parse_program(toks: [Tok]) -> Block {
             pos = pos + 1;
         };
     };
-    // A native def owns an assembly label, so it cannot share its name with
+    // A ndef owns an assembly label, so it cannot share its name with
     // another top-level declaration of the same unit. This is the only place
     // that can see it: renaming makes every name unique, so by the time the
     // checker runs the two would look like different names.
@@ -2321,7 +2325,7 @@ def parse_program(toks: [Tok]) -> Block {
                     if (os.k == K.decl) {
                         let odec: Decl = os;
                         if (co != ci && odec.name == cdec.name) {
-                            clash += { k: K.err, msg: "'" + cdec.name + "' is a native def and is declared again at the top level (a native def cannot share a name)", line: cdec.line, col: cdec.col };
+                            clash += { k: K.err, msg: "'" + cdec.name + "' is a ndef and is declared again at the top level (a ndef cannot share a name)", line: cdec.line, col: cdec.col };
                         };
                     };
                     co = co + 1;

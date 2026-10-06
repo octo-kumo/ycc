@@ -1434,23 +1434,14 @@ Yv *parse_func(Yv *toks, ylong p, int isnat) {
     //           `=` (or `y_<name>`) IS the body
     ylong ln = tline(toks, p);
     ylong cl = tcol(toks, p);
-    ylong pos = p + 1;  // skip 'def' (or 'native', handled just below)
+    ylong pos = p + 1;  // skip 'def' (or 'ndef', which is a keyword of its own)
     Yv *fname = ys("");
     // A malformed header plants its errors here; they run first in the body.
     Yv *derrs = yav(0);
-    if (isnat) {
-        // 'native' is a keyword, so `p` is on it and `def` must follow.
-        if (is_kw(toks, pos, ys("def"))) {
-            pos = pos + 1;
-            ;
-        } else {
-            derrs = ya_push(derrs,
-                            expect_err(toks, pos,
-                                       ys("'def' after 'native'")));
-            ;
-        }
-        ;
-    }
+    /* `ndef` used to be written `native def`, two words; it is one keyword
+     * now, so there is nothing to expect here. The rest of the header is
+     * identical, and `isnat` still says a name is required (no anonymous
+     * form: the assembly label has to come from somewhere). */
     // optional function name (present unless next token is '(') -- a native
     // declaration has no anonymous form, so there it is required.
     // Only the optional-name branch changes `fname` and `pos`; both are
@@ -1463,7 +1454,7 @@ Yv *parse_func(Yv *toks, ylong p, int isnat) {
         } else if (isnat) {
             derrs = ya_push(derrs,
                             expect_err(toks, pos,
-                                       ys("a name after 'native def'")));
+                                       ys("a name after 'ndef'")));
             ;
         } else {
             derrs = ya_push(derrs,
@@ -1475,7 +1466,7 @@ Yv *parse_func(Yv *toks, ylong p, int isnat) {
     } else if (isnat) {
         derrs = ya_push(derrs,
                         expect_err(toks, pos,
-                                   ys("a name after 'native def'")));
+                                   ys("a name after 'ndef'")));
         ;
     }
     int hbad = yv_len(derrs) > 0;
@@ -1675,7 +1666,7 @@ Yv *parse_func(Yv *toks, ylong p, int isnat) {
         if (!is_punct(toks, pos, ys(";"))) {
             derrs = ya_push(derrs,
                             expect_err(toks, pos,
-                                       ys("';' after a native declaration")));
+                                       ys("';' after a ndef declaration")));
             ;
         }
         // the body holds only the header's errors, if any: a native has none
@@ -1827,7 +1818,19 @@ Yv *parse_stmt(Yv *toks, ylong p) {
         return parse_decl(toks, p);
     } else if (is_typedef_start(toks, p)) {
         return parse_typedef(toks, p);
-    } else if (is_kw(toks, p, ys("native"))) {
+    } else if (ys_eq(tt(toks, p), ys("id")) &&
+               ys_eq(tv(toks, p), ys("native")) &&
+               is_kw(toks, p + 1, ys("def"))) {
+        /* `native def` was the spelling until it became one keyword. `native`
+         * is an ordinary identifier now, so without this the error is
+         * "undefined variable 'native'" followed by "expected ';', got 'def'"
+         * -- two errors that never mention the spelling that works. */
+        Yv *bad = yr(4, "k", yv_long(K_err), "msg",
+                     ys("'native def' is 'ndef' now: write 'ndef name(...) -> T;'"),
+                     "line", yv_long(tline(toks, p)),
+                     "col", yv_long(tcol(toks, p)));
+        return res(bad, p + 2);
+    } else if (is_kw(toks, p, ys("ndef"))) {
         // `native def name(...) -> T [= "label"];` — a declaration with no
         // body. parse_stmt sees it wherever it appears; the checker is what
         // insists on the top level (a nested one has no assembly to land in).
@@ -2667,7 +2670,7 @@ Yv *parse_program(Yv *toks) {
                             yr(4, "k", yv_long(K_err),
                                "msg",
                                ys_cat(ys_cat(ys("'"), cname),
-                                      ys("' is a native def and is declared again at the top level (a native def cannot share a name)")),
+                                      ys("' is a ndef and is declared again at the top level (a ndef cannot share a name)")),
                                "line", yr_get(cs, "line"),
                                "col", yr_get(cs, "col")));
                         ;

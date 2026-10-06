@@ -1,4 +1,4 @@
-// expect-error: expected a name after 'native def', got '('
-// A native def is always named -- there is no anonymous form.
-native def (a: str, b: str) -> long = "y_str_cmp";
+// expect-error: expected a name after 'ndef', got '('
+// A ndef is always named -- there is no anonymous form.
+ndef (a: str, b: str) -> long = "y_str_cmp";
 print(1);

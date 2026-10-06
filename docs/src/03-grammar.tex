@@ -160,7 +160,7 @@ network. Git runs through \ic{/bin/sh} with the compiler's environment.
 \ty{declaration} ::={}& \ic{let}~\ty{name}~[\ic{:}~\ty{type}]~\ic{=}~\ty{expr}~\ic{;} \\
   |~& \ic{const}~\ty{name}~[\ic{:}~\ty{type}]~\ic{=}~\ty{expr}~\ic{;} \\
   |~& \ic{def}~\ty{name}~\ic{(}~\ty{params}~\ic{)}~[\ic{->}~\ty{type}]~\ty{block} \\
-  |~& \ic{native}~\ic{def}~\ty{name}~\ic{(}~\ty{params}~\ic{)}~\ic{->}~\ty{type}~[\ic{=}~\ic{label}]~\ic{;} \\
+  |~& \ic{ndef}~\ty{name}~\ic{(}~\ty{params}~\ic{)}~\ic{->}~\ty{type}~[\ic{=}~\ic{label}]~\ic{;} \\
   |~& \ic{type}~\ty{name}~\ic{=}~\ty{type}~\ic{;}                && \text{(alias)}
 \end{align*}
 
@@ -210,7 +210,7 @@ draw(cv, {r: 255});           // fg: some({r: 255}); bg: none
 Function literals may also appear bound or anonymous:
 \ic{let f = def (x: long) -> long \{ x \};}.
 
-\paragraph{\texorpdfstring{$\mathrm{native}\ \mathrm{def}$}{native def}.}
+\paragraph{\texorpdfstring{$\mathrm{ndef}$}{ndef}.}
 The last declaration form has no body: its implementation is an assembly
 label, and the declaration is the compiler's promise about what that label
 does. \ic{label} is a string naming the symbol; left out, it is
@@ -222,13 +222,13 @@ does. \ic{label} is a string naming the symbol; left out, it is
 mistake & message \\
 \midrule
 the label has no \ic{y\_} &
-  \ic{native label 'x' must start with 'y\_'} \\
+  \ic{ndef label 'x' must start with 'y\_'} \\
 no return type after \ic{->} &
-  \ic{native def 'f' needs a return type} \\
+  \ic{ndef 'f' needs a return type} \\
 inside a function &
-  \ic{native def 'f' must be at the top level} \\
+  \ic{ndef 'f' must be at the top level} \\
 another top-level name already taken &
-  \ic{'f' is a native def and is declared again at the top level} \\
+  \ic{'f' is a ndef and is declared again at the top level} \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -239,7 +239,7 @@ which is as late as it can be found: \ic{error: assemble: undefined label 'y\_f'
 There is no linker here --- the compiler has its own assembler and ELF writer
 --- so the prefix is \ic{assemble}, not \ic{link}.
 
-A \ic{native def} is called with the ordinary convention (arguments pushed
+A \ic{ndef} is called with the ordinary convention (arguments pushed
 on the stack, the result in \ic{\%rax}), so it reaches the runtime's
 string and array helpers, and any assembly a package contributes. It cannot
 reach a helper written for the binary-float convention, which takes its
@@ -249,8 +249,8 @@ is opaque, exactly as an \ic{extern} declaration in C is --- so the promise
 has to be kept by hand.
 
 \begin{lstlisting}
-native def hash2(a: str, b: str) -> long = "y_str_cmp";  // a promise
-native def heap_used() -> long;                          // means y_heap_used
+ndef hash2(a: str, b: str) -> long = "y_str_cmp";  // a promise
+ndef heap_used() -> long;                          // means y_heap_used
 
 print(hash2("abc", "abd") < 0);
 \end{lstlisting}

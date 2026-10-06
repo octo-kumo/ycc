@@ -530,11 +530,11 @@ replaces the std one at link time).
 - **`ycc run FILE`** compiles and runs in one step; **`ycc -E FILE`** dumps the
   source the pass actually saw (blocks expanded), which is the way to see what a
   block generated.
-- **`native def f(params) -> T [= "label"];`** is a declaration with no body
+- **`ndef f(params) -> T [= "label"];`** is a declaration with no body
   whose implementation is an assembly label (docs `03-grammar.tex`, NATIVE.md
   "Backend"). It is the way std modules reach raw machine primitives: the
   return type must be written, the label must start with `y_`, and the
-  declaration must be at the top level under its own name. `native` is a
+  declaration must be at the top level under its own name. `ndef` is a
   reserved keyword.
 - A nested `def` captures the enclosing bindings **that are already in
   scope where it is written** (a name declared later is an
@@ -622,7 +622,7 @@ replaces the std one at link time).
 - `src/y/arch/*.s` — the compiler's own assembly: the arch prelude
   (`prelude.s`: allocator, traps, string/array cores, `y_fmod`, float
   formatting), the float primitives `math.s` (`y_sqrt`, `y_to_int`, `y_fbits`,
-  `y_bitsf` — what a `native def` reaches for), the thread runtime
+  `y_bitsf` — what a `ndef` reaches for), the thread runtime
   (`threads.s`) and the Windows syscall self-test (`wselftest.s`) — embedded
   by both copies, see PORTING.md rule 12. Every kernel access goes through the
   named layer: std says `os_call("y_os_read", ...)` and the ELF body lives in

@@ -877,7 +877,7 @@ Yv *tokenize(Yv *src) {
             if (ys_eq_lit(word, "let")) { ty = ys("kw"); ; }
             else if (ys_eq_lit(word, "const")) { ty = ys("kw"); ; }
             else if (ys_eq_lit(word, "def")) { ty = ys("kw"); ; }
-            else if (ys_eq_lit(word, "native")) { ty = ys("kw"); ; }
+            else if (ys_eq_lit(word, "ndef")) { ty = ys("kw"); ; }
             else if (ys_eq_lit(word, "if")) { ty = ys("kw"); ; }
             else if (ys_eq_lit(word, "else")) { ty = ys("kw"); ; }
             else if (ys_eq_lit(word, "while")) { ty = ys("kw"); ; }

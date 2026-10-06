@@ -238,7 +238,7 @@ source → lexer → parser (+types) → splice imports → strip namespaces
   (except `str`→`*T` and `none` unification), exhaustiveness where cheap.
 - **The float primitives (`src/y/arch/math.s`)** are the other half of the same
   story: four functions (`y_sqrt`, `y_to_int`, `y_fbits`, `y_bitsf`), each a
-  leaf reached through a `native def`, each written by hand because only the
+  leaf reached through a `ndef`, each written by hand because only the
   machine can do it. `sqrtsd` is the hardware's own correctly-rounded root, so
   sqrt is four instructions with no table and no tolerance; `cvttsd2si` is the
   truncating conversion and returns the "integer indefinite" value for a NaN,
@@ -258,7 +258,7 @@ source → lexer → parser (+types) → splice imports → strip namespaces
   beside them, and are bit-identical to it — which is the whole promise, so each
   is gated by a fixture that compares thousands of arguments bit for bit
   (`t311`, `t312`, `t313`, `t315`). They are reached the same way, through a
-  `native def`, and each has its `*_y` oracle kept beside it in the module. The
+  `ndef`, and each has its `*_y` oracle kept beside it in the module. The
   generator exists because a retyped coefficient table would silently disagree
   with the function it is meant to reproduce, and nothing else would notice.
 
@@ -273,7 +273,7 @@ source → lexer → parser (+types) → splice imports → strip namespaces
   intermediate against the Y's own value at that point — which is what makes a
   472-instruction routine debuggable at all, and `ideas/math.md` §8 has the
   six bugs they found.
-- **`native def`: a declaration with no body.** `native def name(params) -> T
+- **`ndef`: a declaration with no body.** `ndef name(params) -> T
   [= "label"];` declares a function whose implementation is an assembly
   label. The parser makes a `Decl` with `kind: "native"` whose value is a
   `Func` carrying the label in a new `label: str` field and an *empty* body —

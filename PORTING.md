@@ -215,7 +215,7 @@ requires byte-identical binaries).
     so the in-tree assembler never sees one. `make asm-check` reads them with
     GNU `as`.
 
-13. **`native def` is a declaration, and it ports as one.** `native def
+13. **`ndef` is a declaration, and it ports as one.** `ndef
      name(params) -> ret [= "label"];` is a `Func` whose `label` field carries
      the assembly label and whose `body` holds only the header's own errors —
      there is no body to walk and none to emit. Six places know that, and each
@@ -235,9 +235,9 @@ requires byte-identical binaries).
      - **`types.y`/`types.c`** require the return type to be written (there is
        no body to infer it from), require the label to start with `y_`, and
        require the declaration to be at top level. The three messages are
-       `"native def '<name>' needs a return type (there is no body to infer it
+       `"ndef '<name>' needs a return type (there is no body to infer it
        from)"`, `"native label '<label>' must start with 'y_' (generated code
-       calls it by that prefix)"` and `"native def '<name>' must be at the top
+       calls it by that prefix)"` and `"ndef '<name>' must be at the top
        level (an assembly label has no place inside a function)"` — same text,
        same order, on both sides, because the diagnostics are compared verbatim
        by the port gate.
@@ -255,10 +255,10 @@ requires byte-identical binaries).
      - **`asm.y`/`asm.c`** treat a `y_` name as a call target in their operand
        classification (~line 1784).
      - **The clash check** is in `parse_decl`'s caller (`parser.y` ~2270,
-       `parser.c` ~2650), not in rename: a top-level `native def` may not share
+       `parser.c` ~2650), not in rename: a top-level `ndef` may not share
        its name with a `def` in the same unit, and the message is
-       `"'<name>' is a native def and is declared again at the top level (a
-       native def cannot share a name)"`. Both copies must reject the same
+       `"'<name>' is a ndef and is declared again at the top level (a
+       ndef cannot share a name)"`. Both copies must reject the same
        programs — the port gate compiles every fixture with both and compares
        the diagnostics a program both reject must get.
 

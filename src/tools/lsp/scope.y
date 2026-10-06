@@ -608,7 +608,7 @@ def def_params_at(sps: [Span], src: str, k: long) -> bool {
     while (j >= 0 && sps[j].kind == scan.K_comment) { j = j - 1; };
     // `def (`: an ANONYMOUS def -- a function literal, `let mul = def (a: long)
     // -> long { ... }`. `def` on its own cannot be anything else, because a
-    // `native def` must be named and a named def has a name here.
+    // `ndef` must be named and a named def has a name here.
     //
     // Without this the parameters of every closure in a file were unindexed, and
     // that is not a rare shape: it is how a lambda is written in Y, and the first

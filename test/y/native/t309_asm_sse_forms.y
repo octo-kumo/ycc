@@ -5,8 +5,8 @@
 // `make asm-check` cannot be the gate. src/y/arch/math.s's two probes exist only
 // for this fixture; the shaker drops them from any binary that does not call
 // them.
-native def sse_forms(a: float, b: float) -> float = "y_sse_forms";
-native def sse_flags(a: float, b: float) -> long = "y_sse_flags";
+ndef sse_forms(a: float, b: float) -> float = "y_sse_forms";
+ndef sse_flags(a: float, b: float) -> long = "y_sse_flags";
 
 // (a*b)*2.0 + 0.5 - 0.25, all over 4.0, with the last three steps applied to
 // what came back through a stack slot. Every step is exact in binary floating
