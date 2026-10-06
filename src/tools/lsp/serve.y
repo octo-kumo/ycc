@@ -959,7 +959,8 @@ def do_definition(st: State, id: json.Val, p: { str => json.Val }) -> str {
             // answer can name a file the client does not have open (LSP.md 11.4).
             let at = request_position(p);
             let member = after_dot(u.text, w.off);
-            let found = resolve_name(st, d, w.name, member, at.line, at.character);
+            let found = resolve_name(st, d, w.name, member, at.line, at.character,
+                                     member_object_name(d.text, scan.scan_full(d.text).spans, w.off));
             if (is_some(found)) {
                 let wh: Where = found!;
                 let r = json.obj();
@@ -1108,7 +1109,9 @@ def file_uri(path: str) -> str { "file://" + path }
 // telling "the answer is in this file" from "it is in another".
 type Where = { path: str, line: long, ch: long, dcl: IdxDecl, cross: bool };
 
-def resolve_name(st: State, d: Doc, name: str, member: bool, line: long, ch: long) -> Where? {
+// `mod_of` is the name of the object when the cursor is on a member -- `bn` in
+// `bn.NLIMB` -- and "" otherwise. It is what makes a MODULE member navigable.
+def resolve_name(st: State, d: Doc, name: str, member: bool, line: long, ch: long, mod_of: str) -> Where? {
     let out: Where? = none;
     // The buffer first: a local is a better answer than an import of the same
     // name, and the single-file index already knows the scope rules.
@@ -1129,9 +1132,31 @@ def resolve_name(st: State, d: Doc, name: str, member: bool, line: long, ch: lon
         let x = xref_of(st, d);
         if is_some(x) {
             let pr: Prepared = x!;
-            let ln = pr.lines[name];
+            // The spliced index spells a member EITHER WAY, and which one exists is
+            // what says which kind of import this was:
+            //
+            //   `bn.NLIMB`   a module imported BY NAME keeps its namespace, so the
+            //                spliced top level holds `bn.NLIMB`. This is the shape
+            //                `examples/bignum` uses -- `bn` is not a std unit, it is
+            //                the file next to it, so std_resolve finds it and
+            //                rename keeps the qualifier.
+            //   `NLIMB`      a module imported BY PATH is flattened by strip_ns, so
+            //                the spliced top level holds the bare name. That is the
+            //                shape t015_xref pins.
+            //
+            // Only the first spelling was looked up, so `bn.NLIMB` found nothing:
+            // no go-to-definition, and a hover with no declaration under the type.
+            // Both are tried, qualified first because a module member is the case
+            // that was broken.
+            let key = name;
+            if (member && mod_of != "" && key != mod_of + "." + name) { key = mod_of + "." + name; };
+            let ln = pr.lines[key];
+            if (!is_some(ln) && key != name) {
+                key = name;
+                ln = pr.lines[name];
+            };
             if is_some(ln) {
-                let tg = pr.files[name];
+                let tg = pr.files[key];
                 let target = tg!;
                 let got = fs.read_file(target);
                 if is_some(got) {
@@ -1265,7 +1290,9 @@ def do_hover(st: State, id: json.Val, p: { str => json.Val }) -> str {
         let found: Where? = none;
         if (is_some(gd)) {
             let at2 = request_position(p);
-            found = resolve_name(st, gd!, w.name, after_dot(u.text, w.off), at2.line, at2.character);
+            found = resolve_name(st, gd!, w.name, after_dot(u.text, w.off), at2.line,
+                                 at2.character,
+                                 member_object_name(u.text, scan.scan_full(u.text).spans, w.off));
         };
         // The TYPE first, because that is what R4.1 asks for and what a person
         // hovering an expression wants -- and because a type is an answer on its

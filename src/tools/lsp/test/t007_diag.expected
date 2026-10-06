@@ -14,7 +14,10 @@ unterminated string: 1
 still alive
 unterminated comment: 1
 with an import: 1
-  src/tools/lsp/test/mod.y:7 unused variable 'spare'
+the buffer's own finding: 2
+  src/tools/lsp/test/main.y:3 undefined function 'nosuchfn'
+  src/tools/lsp/test/mod.y:8 unused variable 'spare'
+  src/tools/lsp/test/mod.y:8 unused variable 'spare'
 missing import: 1
   1:18 cannot open import './no_such_file.y'
 and it does not take the server down

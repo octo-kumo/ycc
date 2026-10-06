@@ -48,6 +48,11 @@ function check(name, ok, detail) {
 const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'lsp-client-'));
 fs.writeFileSync(path.join(ws, 'mod.y'), '// café 😀\ndef f() -> long {\n    let spare = 1;\n    7\n}\n');
 
+// The extension's own manifest: the client checks the SERVER's legend against what
+// the extension declares, and the two live in different files.
+const pkgExt = JSON.parse(
+    fs.readFileSync(path.join(__dirname, '..', 'vscode-y-lang', 'package.json'), 'utf8'));
+
 const uri = (p) => 'file://' + p;
 const mainPath = path.join(ws, 'main.y');
 const mainUri = uri(mainPath);
@@ -224,6 +229,42 @@ function main() {
                 leg.tokenTypes[11] === 'property' && leg.tokenTypes[12] === 'type' &&
                 leg.tokenTypes[13] === 'builtin',
             JSON.stringify(leg && leg.tokenTypes),
+        );
+        // Every advertised token type must either be one VS Code already knows how
+        // to colour, or be DECLARED in package.json with a superType.
+        //
+        // This is not a style preference. VS Code's built-in fallback covers the
+        // LSP's standard type names; anything outside that list gets NO colour from
+        // any shipped theme unless the extension declares it. `builtin` was one of
+        // four such names here, so `print`, `len` and `clock_us` rendered as plain
+        // foreground -- the user reported it as "builtins are still white", which
+        // is exactly what it was. Declaring them is theme-independent: VS Code
+        // scores a theme rule against the type's superType chain, so an exact rule
+        // still wins and the superType is only the fallback.
+        const LSP_STANDARD = new Set([
+            'namespace', 'class', 'enum', 'interface', 'struct', 'typeParameter',
+            'type', 'parameter', 'variable', 'property', 'enumMember', 'decorator',
+            'event', 'function', 'method', 'macro', 'label', 'comment', 'string',
+            'keyword', 'number', 'regexp', 'operator',
+        ]);
+        const declaredTypes = new Map(
+            (((pkgExt.contributes || {}).semanticTokenTypes) || []).map((t) => [t.id, t.superType]));
+        const undeclared = (leg && leg.tokenTypes ? leg.tokenTypes : [])
+            .filter((t) => !LSP_STANDARD.has(t) && !declaredTypes.has(t));
+        check(
+            'initialize: every token type is either standard or declared with a superType',
+            undeclared.length === 0,
+            'no colour from any theme: ' + undeclared.join(','),
+        );
+        // And a declared superType must itself be a real type, or the chain dead-ends
+        // and the token is uncoloured again -- which is the same bug wearing a
+        // different hat.
+        const badParents = [...declaredTypes.entries()].filter(
+            ([, parent]) => !LSP_STANDARD.has(parent) && !declaredTypes.has(parent));
+        check(
+            'package.json: every declared superType resolves to a real token type',
+            badParents.length === 0,
+            'dangling: ' + badParents.map(([id, p2]) => id + '->' + p2).join(','),
         );
         send('initialized', {});
         await settle();

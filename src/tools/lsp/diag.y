@@ -51,8 +51,37 @@ def externs_for(su: [Unit], snames: [str]) -> [Sym] {
 // already known, so the path is everything up to the last colon.
 def file_of(o: Origin, ln: long) -> str {
     let at = origin_at(o, ln, false);
+    // ":" and LAST, not first: origin_at renders `path:line`, and a Windows path
+    // has a colon of its own (`C:\src\asm.y:12`), so the first one is the drive.
     let cut = last_index_of(at, ":");
     if (cut < 0) { at } else { at[0:cut] }
+}
+
+// The line a SPLICED line has IN THE FILE IT CAME FROM, which is not the spliced
+// line and never was.
+//
+// `origin_at` already computes exactly this -- it renders "path:line" and every
+// caller wanted only the path -- and `file_of` threw the line away. So a finding
+// carried a spliced line and published it against the buffer's URI, and every
+// diagnostic in a file with imports landed past the end of it: `src/y/asm.y` is
+// 1888 lines, its six imports splice to 6426, and every error the user saw was on
+// line 3356 and up. The editor cannot show a squiggle there, so the finding was
+// invisible AND the message looked wrong, which together read as "the errors are
+// nonsense".
+//
+// The arithmetic is origin_at's own, done directly rather than by rendering a
+// string and taking it apart again: `o.line[k-1]` is where this file's first
+// contribution sat in the splice, and `ln - k` is how far into the run we are.
+def line_in_file(o: Origin, ln: long) -> long {
+    let f = o.file;
+    let l = o.line;
+    let n = len(f);
+    if (ln < 1 || n == 0) {
+        return ln;
+    };
+    let k = ln;
+    if (k > n) { k = n; };
+    l[k - 1] + ln - k
 }
 
 // One `import` the buffer asks for, found without parsing: the tolerant
@@ -181,12 +210,14 @@ def diagnose(text: str, dir: str, path: str, pack: str, wlevel: long) -> [Findin
     let errors = types.check_program(ast3, ext);
     let warnings = lint.lint_unit(ast, ast3, nr.origin.file, nr.origin.mods, wlevel);
 
+    // The checker's and the linter's lines are SPLICED lines; a Finding's are the
+    // line in the file it names. See line_in_file.
     let o = nr.origin;
     foreach (e in errors) {
-        out += { msg: e.msg, line: e.line, col: e.col, kind: SEV_ERROR, file: file_of(o, e.line) };
+        out += { msg: e.msg, line: line_in_file(o, e.line), col: e.col, kind: SEV_ERROR, file: file_of(o, e.line) };
     }
     foreach (w in warnings) {
-        out += { msg: w.msg, line: w.line, col: w.col, kind: SEV_WARNING, file: file_of(o, w.line) };
+        out += { msg: w.msg, line: line_in_file(o, w.line), col: w.col, kind: SEV_WARNING, file: file_of(o, w.line) };
     }
     out
 }
@@ -319,5 +350,5 @@ def missing_import_here(text: str, dir: str) -> bool {
 
 export {
   Imp, Finding, SEV_ERROR, SEV_WARNING, check, imports_of,
-  missing_imports, externs_for, file_of, Prepared, xref_for
+  missing_imports, externs_for, file_of, line_in_file, Prepared, xref_for
 };
