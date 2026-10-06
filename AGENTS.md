@@ -18,9 +18,22 @@ same semantics.
   - `./ycc` self-compiles byte-identically (fixpoint).
   `refs/` holds the backed-up reference binaries (gitignored; see
   `refs/SHA256SUMS`).
-- Do not commit build artifacts: `*.o`, `cycc`, `cycc-asan`, `ycc`,
-  `_ycc`, `_ycc0`, `ynew`, `*.pack`, `a.out`, `_check/` (all gitignored;
-  `make clean` removes them).
+- `make cycc.exe` → the C copy cross-compiled for Windows with mingw-w64.
+  It is the SAME source as `cycc`: `src/c/ylong.h` is what makes Y's 64-bit
+  `long` hold on Windows' LLP64. The gate is `test/sh/cycc-win.sh`, which
+  needs wine: every fixture `cycc.exe` compiles must be byte-identical to
+  Linux `cycc`'s, diagnostics and `-S` listing included (`-g` is not compared
+  across hosts — DWARF records the host's own absolute path). Meta fixtures
+  are the known gap (the M1 runner forks and maps a memfd). Not in
+  `make test`.
+- `make ytest` → `./ytest`, the test/metrics runner written in Y
+  (`src/tools/ytest/README.md`): `./ytest suites` times each `test/sh` suite,
+  `./ytest coverage` reports gcov line coverage of the C copy over a corpus,
+  and `./ytest report` writes `ytest-report.md`. A measurement tool, not a
+  gate, and not in `make test`.
+- Do not commit build artifacts: `*.o`, `cycc`, `cycc.exe`, `cycc-asan`, `ycc`,
+  `_ycc`, `_ycc0`, `ynew`, `ytest`, `ytest-report.md`, `*.pack`, `a.out`,
+  `_check/` (all gitignored; `make clean` removes them).
   `refs/` is gitignored too but is **not** disposable — it is the port's
   ground truth.
 - The std units the compiler links into programs are plain Y in
@@ -138,6 +151,11 @@ stdin-eof).
 `YPORT_SELF=0` leaves `src/y/ycc.y` out of the port gate, for when that
 very build was just compared (`make test`, `check`, `rebless` do);
 `YQUIET=1` prints failures only.
+
+Beyond the suites, two harnesses are run by hand because they need more than
+the suite runner: `test/sh/cycc-win.sh` (W1: `cycc.exe` under wine must match
+Linux `cycc` byte for byte) and `./ytest` (times the suites; gcov line
+coverage). Neither is in `make test`.
 
 - `test_port.sh` [port] — the port gate: every `test/y/**.y` (plus
   `src/y/ycc.y` itself) compile to byte-identical binaries with
@@ -621,6 +639,11 @@ replaces the std one at link time).
   request costs per phase. Neither has an expectation — they print, so
   the number can be quoted rather than remembered; run them by hand, as
   the fixtures are for shapes and these are for sizes.
+- `src/tools/ytest/` — the test/metrics runner (`make ytest` → `./ytest`,
+  `README.md`): it times each `test/sh` suite, and `coverage` builds a
+  `gcc --coverage` C copy, runs a corpus through it and reports gcov line
+  coverage per source file. A Y program, and a customer of `std/exec.y`'s
+  `popen`/`pread`/`pclose`. Not a gate and not in `make test`.
 - `refs/` — backed-up reference binaries for the port gate (see
   `PORTING.md` for where the current `ycc.ref` came from).
 - `test/` — `test/sh/` (suite drivers + `lib.sh` + `ytool.sh` +

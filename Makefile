@@ -78,6 +78,14 @@ ycc: cycc $(YCC_SRCS) $(CYC_SRCS) $(CY_HDRS) $(STD_EMBEDS) $(ARCH_EMBEDS)
 	rm -f _ycc _ycc0
 	@echo "verified: cycc output == refs/ycc.ref == ycc self-compile (byte-identical)"
 
+# The test/metrics runner (src/tools/ytest/README.md). Like the language
+# server it is an ordinary Y program built by the compiler, and it is NOT in
+# `make test`: a coverage run rebuilds the compiler with --coverage and is a
+# measurement, not a gate.
+ytest: ycc
+	./ycc src/tools/ytest/ytest.y -o ytest
+	@echo "ytest built: ./ytest suites|coverage|report"
+
 # [W1] the Windows build of the C copy, cross-compiled with mingw-w64. It is
 # the SAME source as cycc -- src/c/ylong.h is what makes Y's 64-bit long hold
 # on LLP64 -- so this is a second host for one compiler, not a second compiler.
@@ -272,7 +280,7 @@ rebless: cycc
 
 clean:
 	rm -f $(CYC_SRCS:src/c/%.c=src/c/%.o) cycc cycc.exe cycc-asan ycc _ycc _ycc0 _ycc0.pack ycc.pack a.out
-	rm -f ynew _ynew1 _ynew2 _ynew3 _ynewp _ynewp.pack _rb1 _rb2 _rbp _rbp.pack
+	rm -f ynew _ynew1 _ynew2 _ynew3 _ynewp _ynewp.pack _rb1 _rb2 _rbp _rbp.pack ytest ytest-report.md
 	rm -rf _check docs/build
 
 # Memcheck the C copy on a real input. NOTE: no --leak-check=full: the Y

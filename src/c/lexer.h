@@ -16,6 +16,17 @@
  * each real ctype name and one of each lexer name. */
 #include <ctype.h>
 
+/* glibc's <ctype.h> defines all seven as macros too, so the renames below
+ * would be "redefined" warnings (they were). Undefine them first: after this
+ * the Y spellings win, which is the point. */
+#undef isdigit
+#undef isupper
+#undef islower
+#undef isalpha
+#undef isalnum
+#undef isspace
+#undef ispunct
+
 /* NOTE: isdigit/isupper/islower/isalpha/isalnum/isspace/ispunct are the
  * exact Y names of this module's defs (see lexer.y), but C's <ctype.h>
  * reserves all seven as builtin function names and gcc warns on ANY

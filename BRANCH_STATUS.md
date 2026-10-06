@@ -18,8 +18,11 @@ Last updated by the integration pass that merged them (see *The merge* below).
 - **Every suite passes** (run with a fresh `/tmp`; see *Environment* at the
   bottom for the one trap).
 - **Finished in this pass:** the math branch's pending IR reductions, the
-  encoder guard the Windows design claimed but never had, and the two stale
-  comments that promised things nobody had built.
+  encoder guard the Windows design claimed but never had, the two stale
+  comments that promised things nobody had built, W1's `cycc.exe` (mingw-w64,
+  all but the meta fixtures byte-identical), a child's stdio in `std/exec.y`,
+  `ycc run FILE -- ARG...`, and a Y test/metrics runner with gcov line
+  coverage (`./ytest`).
 - **Still open:** the Windows work that needs NT implementations — the rest of
   the named-syscall layer (`B2`), the PE syscall self-test, NT `fork`/threads,
   BCrypt crypto, console `readline`, and `W6`'s harness. `W1` is done as far as
@@ -242,6 +245,27 @@ callgrind profile is `+0.0%` on every function because both sides compiled the
 benchmarks against the same on-disk `std/math.y`.
 
 ---
+
+## 4b. Tooling added in the integration pass
+
+- **`test/sh/cycc-win.sh`** — W1's gate (see §3): `cycc.exe` under wine must
+  compile every fixture to the same bytes, with the same diagnostics and the
+  same `-S` listing, as Linux `cycc`. 532 of 535 corpus files agree; the 11
+  meta cases are the unported M1 runner.
+- **`src/tools/ytest/`** (`make ytest` → `./ytest`) — a test and metrics
+  runner written in Y. `./ytest suites` times each `test/sh` suite (all 19 in
+  98.8 s here, 0 failures); `./ytest coverage` builds a `gcc --coverage` C
+  copy, runs a corpus through it and reports **gcov line coverage** per source
+  file — **68.0%, 15,870/23,332 lines**, with `elf` 99.6%, `dwarf` 97.3%,
+  `pe` 94.9%, `labels` 100% at the top and `pkg` 26%, `ycc` 30% at the bottom
+  (the corpus has no full `ycc build` project and few driver errors);
+  `./ytest report` writes `ytest-report.md`. It uses the `popen`/`pread`/
+  `pclose` API this pass added — the tool is the feature's first customer.
+  Coverage is of `src/c`, the 1:1 twin of `src/y`, so the per-file numbers are
+  the compiler's with the documented caveat that `yv.c` and the CLI shims have
+  no Y twin.
+- **`ycc run FILE -- ARG...`** — the program's own argv, so a test can drive
+  arguments without the driver reading them as its own flags.
 
 ## 5. Environment notes (gotchas worth keeping)
 
