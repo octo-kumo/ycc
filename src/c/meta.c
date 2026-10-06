@@ -2636,6 +2636,26 @@ static Yv *mg_where(ylong s) {
 
 /* Split the pipe's bytes into pieces. A framing error means the generator did
  * not run our helpers, which cannot happen unless the pass is broken. */
+/* The leading digits of s as a long, 0 when there are none (whitespace is
+   skipped). The meta piece header's fields are written by the generator and
+   read here; this is the one place that wants a prefix rather than a whole
+   string, and it exists so that ys_tolong's callers can stay strict. Mirrors
+   leading_long in src/y/meta.y. */
+static ylong leading_long(Yv *s) {
+    ylong n = yv_len(s);
+    ylong i = 0;
+    ylong v = 0;
+    while (i < n) {
+        ylong c = ys_byte_at(s, i);
+        if (c == 32 || (c >= 9 && c <= 13)) { i = i + 1; } else { break; }
+    }
+    while (i < n) {
+        ylong c = ys_byte_at(s, i);
+        if (c >= 48 && c <= 57) { v = v * 10 + (c - 48); i = i + 1; } else { break; }
+    }
+    return v;
+}
+
 static ylong mg_unframe(Yv *data) {
     ylong n = yv_len(data);
     ylong i = 0;
@@ -2652,8 +2672,14 @@ static ylong mg_unframe(Yv *data) {
             if (sp < 0) {
                 bad = 1;
             } else {
-                ylong slot = ys_tolong(ys_slice(head, 0, sp));
-                ylong take = ys_tolong(ys_slice_from(head, sp + 1));
+                /* The header is "<slot> <take>", both decimal -- but this used
+                   to lean on ys_tolong stopping at the first non-digit, and the
+                   text handed to it is not always exactly two numbers. The Y
+                   twin takes the digit prefix itself now (leading_long in
+                   meta.y), because tolong requires a fully valid input there;
+                   this mirrors it rather than diverging. */
+                ylong slot = leading_long(ys_slice(head, 0, sp));
+                ylong take = leading_long(ys_slice_from(head, sp + 1));
                 Yv *body = ys_slice(data, j + 1, j + 1 + take);
                 if (take < 0 || yv_len(body) != take || slot < 0 || slot >= mg_next) {
                     bad = 1;
