@@ -372,6 +372,38 @@ for compiler in "$YCC_BIN" "$CYCC"; do
     [ -x "$compiler" ] && run_args "$compiler" "${compiler##*/}"
 done
 
+# heap_used() must not move with how the caller spelled the command: the
+# prologue's heap copy of argv is what it used to count, so an absolute figure
+# grew a byte per character of argv[0] (SUGGESTIONS.md 24) and an example's
+# golden failed only when the gate ran the binary by absolute path. One
+# binary, three spellings, one number.
+run_heap_paths() {
+    local compiler="$1" tag="$2" dir a b c long
+    dir=$(mktemp -d /tmp/ycc_heap.XXXXXX)
+    printf 'print(heap_used());\n' > "$dir/p.y"
+    (cd "$dir" && timeout $((60 * YTIMEOUT_SCALE)) "$compiler" p.y -o p </dev/null >/dev/null 2>&1)
+    if [ ! -x "$dir/p" ]; then
+        fail "heap_used -- does not move with argv[0] ($tag)" "no binary"
+        rm -rf "$dir"
+        return
+    fi
+    a=$(cd "$dir" && ./p </dev/null)
+    b=$(cd "$dir" && ./p </dev/null)
+    c=$("$dir/p" </dev/null)
+    long=$(printf 'x%.0s' $(seq 1 90))
+    cp "$dir/p" "$dir/$long"
+    d=$("$dir/$long" </dev/null)
+    if [ "$a" = "$b" ] && [ "$a" = "$c" ] && [ "$a" = "$d" ]; then
+        pass "heap_used -- same number as ./, by absolute path and a 90-char name ($tag): $a"
+    else
+        fail "heap_used -- does not move with argv[0] ($tag)" "./=$a abs=$c long=$d"
+    fi
+    rm -rf "$dir"
+}
+for compiler in "$YCC_BIN" "$CYCC"; do
+    [ -x "$compiler" ] && run_heap_paths "$compiler" "${compiler##*/}"
+done
+
 echo ""
 echo "═══════════════════════════════════════════"
 TOTAL=$((PASS + FAIL))

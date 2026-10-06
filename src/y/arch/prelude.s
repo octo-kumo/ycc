@@ -545,14 +545,22 @@ y_os_dup2:
     mov $33, %eax
     syscall
     ret
+# y_heap_used() -> the arena bytes handed out, NOT counting the heap copy of
+# argv the prologue makes (y_heap_base; SUGGESTIONS.md 24). A spawned thread
+# reads its own heap, which holds no argv copies, so the subtraction is on the
+# main-heap path only.
 y_heap_used:
     lea y_heap(%rip), %rcx
     mov 24(%rcx), %rdx
     test %rdx, %rdx
-    je y_heap_used_go
+    je y_heap_used_main
     mov %fs:24, %rcx
-y_heap_used_go:
     mov 16(%rcx), %rax
+    ret
+y_heap_used_main:
+    mov 16(%rcx), %rax
+    mov y_heap_base(%rip), %rdx
+    sub %rdx, %rax
     ret
 y_alloc_fail:
     mov $1, %rax
@@ -1715,6 +1723,21 @@ yai_done:
     ret
 y_argv:
     mov %r15, %rax
+    ret
+
+# y_heap_base_set() -> the pre-main baseline, in y_heap_base. The prologue
+# calls it AFTER y_argv_init, so the baseline the accessor subtracts is what
+# the runtime had already handed out -- the argument vector's heap copies
+# included -- and heap_used() stops moving with the command line.
+y_heap_base_set:
+    lea y_heap(%rip), %rcx
+    mov 24(%rcx), %rdx
+    test %rdx, %rdx
+    je y_hbs_main
+    mov %fs:24, %rcx
+y_hbs_main:
+    mov 16(%rcx), %rax
+    mov %rax, y_heap_base(%rip)
     ret
 y_cstr_to_str:
     push %rbp

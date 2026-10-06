@@ -288,7 +288,10 @@ def y_range(n: long) -> [long] {
 // tick into the same struct timespec, so the code above the arch module is the
 // same bytes on both targets. clock_us is CLOCK_MONOTONIC microseconds, time_us
 // CLOCK_REALTIME's: the wall clock, since the Unix epoch. (heap_used
-// reads the allocator's own counter: y_heap_used in arch_x64.y.)
+// reads the allocator's own counter -- y_heap_used in arch_x64.y -- minus
+// the pre-main baseline y_heap_base_set records after y_argv_init, so the
+// heap copy of argv is not in the figure and an absolute number does not
+// move with the length of the command line.)
 // ONE timespec for the whole runtime, not one per call.
 //
 // The obvious spelling -- `let ts: [long; 2] = [0; 2];` inside the function --

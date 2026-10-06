@@ -10257,6 +10257,11 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
             body = insn.ir_push(body, insn.F_PUSH_R, insn.R_R14, 64, 0, 0, 0, 0, 0);
             body = insn.ir_push(body, insn.F_PUSH_R, insn.R_R15, 64, 0, 0, 0, 0, 0);
             body = insn.ir_push(body, insn.F_CALL_L, lbl_new("y_argv_init"), 0, 0, 0, 0, 0, 0);
+            // The arena baseline is taken AFTER the argument vector is copied
+            // (and only when the vector was wanted at all): heap_used()
+            // subtracts it, so an absolute figure stops moving with the length
+            // of the command line (SUGGESTIONS.md 24).
+            body = insn.ir_push(body, insn.F_CALL_L, lbl_new("y_heap_base_set"), 0, 0, 0, 0, 0, 0);
             body = insn.ir_push(body, insn.F_ADD_I_R, 16, insn.R_RSP, 64, 0, 0, 0, 0);
         }
     }

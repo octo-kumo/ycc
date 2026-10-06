@@ -11830,7 +11830,16 @@ Yv *emit_one_fn(Yv *st, Yv *label, ylong fuid, Yv *func, int is_main,
             body = ir_push(body, F_ADD_I_R, 8, R_R14, 64, 0, 0, 0, 0);
             body = ir_push(body, F_PUSH_R, R_R14, 64, 0, 0, 0, 0, 0);
             body = ir_push(body, F_PUSH_R, R_R15, 64, 0, 0, 0, 0, 0);
+            /* The arena baseline is taken BEFORE the argument vector is
+               copied: heap_used() subtracts it, so an absolute figure stops
+               moving with the length of argv[0] (SUGGESTIONS.md 24). */
             body = ir_push(body, F_CALL_L, yv_l(lbl_new(ys("y_argv_init"))), 0,
+                           0, 0, 0, 0, 0);
+            /* The arena baseline is taken AFTER the argument vector is copied
+               (and only when the vector was wanted at all): heap_used()
+               subtracts it, so an absolute figure stops moving with the length
+               of the command line (SUGGESTIONS.md 24). */
+            body = ir_push(body, F_CALL_L, yv_l(lbl_new(ys("y_heap_base_set"))), 0,
                            0, 0, 0, 0, 0);
             body = ir_push(body, F_ADD_I_R, 16, R_RSP, 64, 0, 0, 0, 0);
             ;

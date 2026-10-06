@@ -920,7 +920,14 @@ print(add);      // <function (long, long) -> long>
   (UTC) as \ic{long}: the time of day, which jumps when the clock is
   set.
 \item[\ic{heap\_used()}] Bytes allocated so far (by the thread that
-  asks: each has a heap of its own).
+  asks: each has a heap of its own). The arena the process was handed
+  before the first line of \ic{main} is not counted --- in particular the
+  heap copy of the argument vector the prologue makes, which is why the
+  figure does not change with how the caller spelled the command line.
+  Report a \emph{difference} (measure, work, measure) rather than an
+  absolute number anyway: that is what stays meaningful as the runtime
+  changes, and a golden built on an absolute one is the trap this
+  exemption exists to remove.
 \item[\ic{sleep(ms)}] Suspend the calling \emph{thread} for \ty{ms}
   milliseconds, so every other thread keeps running
   (Section~\ref{sec:builtin-threads}); \ic{void}.

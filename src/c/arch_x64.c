@@ -190,7 +190,14 @@ Yv *arch_global_cell(Yv *label) {
 //   like the brk memory this replaced -- and unlike brk it has no 8 MB
 //   cap under valgrind.
 Yv *arch_heap_cells(void) {
-    return ys("y_heap:\n.zero 32\n");
+    /* y_heap_base holds the main heap's bytes handed out before the program's
+       own top-level code runs -- the argv copies y_argv_init makes, which are
+       the one part of that baseline that changes with how the caller spelled
+       the command (SUGGESTIONS.md 24: heap_used() moved one byte per
+       character of argv[0]). y_heap_used subtracts it, on the main heap only:
+       a spawned thread gets a heap of its own, and the argv copies are not in
+       it. */
+    return ys("y_heap:\n.zero 32\ny_heap_base:\n.zero 8\n");
 }
 
 ylong arch_frame(ylong slots) {
