@@ -129,6 +129,7 @@ def y_shift_neg() -> long {
 // tolong(s): optional '-', then digits; anything else stops the
 // scan and is ignored (exactly the old asm behaviour). This was `tolong` until
 // it grew a float arm, and a name that says "number" cannot say which.
+
 // Whitespace around a number is allowed; nothing else is. 32 space, 9 tab,
 // 10 newline, 11 vertical tab, 12 form feed, 13 return.
 def y_is_space(c: byte) -> bool {

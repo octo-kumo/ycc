@@ -1,0 +1,19 @@
+gcc -Wall -Wextra -std=gnu99 -O1 -g -o cycc src/c/arch_x64.c src/c/asm.c src/c/dwarf.c src/c/elf.c src/c/enc64.c src/c/host.c src/c/ir.c src/c/labels.c src/c/lexer.c src/c/lint.c src/c/meta.c src/c/native.c src/c/parser.c src/c/pe.c src/c/pkg.c src/c/rename.c src/c/tags.c src/c/target.c src/c/types.c src/c/ycc.c src/c/yv.c
+src/c/asm.c: In function ‘pe_prologue_push’:
+src/c/asm.c:2731:35: warning: unused parameter ‘alloc_off’ [-Wunused-parameter]
+ 2731 |                             ylong alloc_off, Yv *pushes, ylong prolog) {
+      |                             ~~~~~~^~~~~~~~~
+src/c/asm.c:2731:64: warning: unused parameter ‘prolog’ [-Wunused-parameter]
+ 2731 |                             ylong alloc_off, Yv *pushes, ylong prolog) {
+      |                                                          ~~~~~~^~~~~~
+src/c/pe.c: In function ‘pe_bss_from_ro’:
+src/c/pe.c:75:58: warning: unused parameter ‘bss_len’ [-Wunused-parameter]
+   75 | ylong pe_bss_from_ro(ylong code_len, ylong ro_len, ylong bss_len) {
+      |                                                    ~~~~~~^~~~~~~
+cycc built: the C copy of the compiler (3823632 bytes)
+ulimit -v 3670016; ./cycc -o _rb1 src/y/ycc.y
+ulimit -v 2097152; ./_rb1 -o _rb2 src/y/ycc.y
+cmp _rb1 _rb2
+_rb1 _rb2 differ: byte 106214, line 39
+make: *** [Makefile:316: rebless] Error 1
+rebless=2

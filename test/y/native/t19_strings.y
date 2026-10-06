@@ -8,7 +8,7 @@ print(ord(""));
 print(chr(66));
 print(tolong("123")!);
 print(tolong("-45")!);
-print(tolong("12x")!);
+print(tolong("12x") == none);
 print(tostring(456));
 print(tostring(-7));
 print(tostring(true));

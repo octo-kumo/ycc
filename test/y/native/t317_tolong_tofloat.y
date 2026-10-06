@@ -8,8 +8,9 @@
 // exact on both sides (-2^63 is a long and must come back, +2^63 is not and
 // must not).
 
-print("-- tolong on a str: parse, stopping at the first non-digit");
-print(tolong("42")!, " ", tolong("-42")!, " ", tolong("+7x")!, " ", tolong("abc")!, " ", tolong("")!);
+print("-- tolong on a str: a whole number and NOTHING else, so junk is none");
+print(tolong("42")!, " ", tolong("-42")!, " ", tolong("+42")!, " ", tolong(" 42 ")!, "  <- whitespace is fine");
+print(tolong("+7x") == none, " ", tolong("abc") == none, " ", tolong("") == none, " ", tolong("0x10") == none, " ", tolong("4 2") == none);
 print("42".tolong()!, " ", "-42".tolong()!, "  (the string method is the same function)");
 
 print("-- tolong on a float: TOWARD ZERO, not floor");
@@ -20,14 +21,14 @@ if (tolong(-3.99)! == -4) { print("FAIL: tolong floored instead of truncating");
 print("-- tofloat on a str: the same scan, with a fraction");
 print(tofloat("3.14")!, " ", tofloat("-0.5")!, " ", tofloat("2.5")!, " ");
 print("3.14".tofloat()!, "  (the string method again)");
-print(tofloat("1e9")!, "  <- an exponent is not read: stops at the 'e'");
-print(tofloat("abc")!, " ", tofloat("")!, "  <- no digits at all reads as 0.0");
+print(tofloat("1e9") == none, "  <- an exponent is not read, and is none rather than truncated");
+print(tofloat("abc") == none, " ", tofloat("") == none, "  <- no digits at all is none");
 
 print("-- tofloat on a long: the widening, made explicit");
 print(tofloat(7)!, " ", tofloat(-7)!, " ", tofloat(0)!, " ");
 // long -> float is already implicit, so this must not contradict it.
 let widened: float = 7;
-if (tofloat(7) != widened) { print("FAIL: tofloat(long)! disagrees with the implicit widening"); };
+if (tofloat(7)! != widened) { print("FAIL: tofloat(long)! disagrees with the implicit widening"); };
 print("  and it agrees with the implicit widening");
 
 print("-- the round trip, which is what the pair is for");

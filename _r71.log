@@ -1,0 +1,111 @@
+ulimit -v 3670016; ./cycc -o _rb1 src/y/ycc.y
+ulimit -v 2097152; ./_rb1 -o _rb2 src/y/ycc.y
+cmp _rb1 _rb2
+./_rb1 --std-pack _rbp.pack && cat _rb1 _rbp.pack > _rbp && chmod 755 _rbp && rm -f _rbp.pack
+YREF=/home/aiagent/Projects/compiler/_rbp YQUIET=1 YPORT_SELF=0 ./test/sh/run_all.sh -j 8 port pe-port
+  ok     port 4/8               6.4s
+  ok     port 2/8               6.6s
+  ok     port 8/8               7.5s
+  ok     port 6/8               7.7s
+  ok     port 5/8               8.5s
+  ok     port 3/8               8.7s
+  ok     port 1/8               9.2s
+  ok     port 7/8               9.2s
+  ok     pe-port 2/8            6.4s
+  ok     pe-port 4/8            6.3s
+  ok     pe-port 1/8            8.8s
+  ok     pe-port 6/8            6.7s
+  ok     pe-port 3/8            8.0s
+  ok     pe-port 8/8            6.5s
+  ok     pe-port 5/8            7.3s
+  ok     pe-port 7/8            7.5s
+
+################################################################
+# suite: port
+################################################################
+
+═══════════════════════════════════════════
+  [port] [0;32m143 passed[0m, [0;31m0 failed[0m / 143 total (plus 0 skipped)
+═══════════════════════════════════════════
+
+═══════════════════════════════════════════
+  [port] [0;32m143 passed[0m, [0;31m0 failed[0m / 143 total (plus 0 skipped)
+═══════════════════════════════════════════
+
+═══════════════════════════════════════════
+  [port] [0;32m143 passed[0m, [0;31m0 failed[0m / 143 total (plus 0 skipped)
+═══════════════════════════════════════════
+
+═══════════════════════════════════════════
+  [port] [0;32m143 passed[0m, [0;31m0 failed[0m / 143 total (plus 0 skipped)
+═══════════════════════════════════════════
+/home/aiagent/Projects/compiler/test/sh/lib.sh: line 105: warning: command substitution: ignored null byte in input
+/home/aiagent/Projects/compiler/test/sh/lib.sh: line 109: warning: command substitution: ignored null byte in input
+
+═══════════════════════════════════════════
+  [port] [0;32m142 passed[0m, [0;31m0 failed[0m / 142 total (plus 0 skipped)
+═══════════════════════════════════════════
+
+═══════════════════════════════════════════
+  [port] [0;32m142 passed[0m, [0;31m0 failed[0m / 142 total (plus 0 skipped)
+═══════════════════════════════════════════
+/home/aiagent/Projects/compiler/test/sh/lib.sh: line 105: warning: command substitution: ignored null byte in input
+/home/aiagent/Projects/compiler/test/sh/lib.sh: line 109: warning: command substitution: ignored null byte in input
+
+═══════════════════════════════════════════
+  [port] [0;32m142 passed[0m, [0;31m0 failed[0m / 142 total (plus 0 skipped)
+═══════════════════════════════════════════
+
+═══════════════════════════════════════════
+  [port] [0;32m142 passed[0m, [0;31m0 failed[0m / 142 total (plus 0 skipped)
+═══════════════════════════════════════════
+
+################################################################
+# suite: pe-port
+################################################################
+
+═══════════════════════════════════════════
+  [pe-port] [0;32m143 passed[0m, [0;31m0 failed[0m / 143 total (plus 0 skipped)
+═══════════════════════════════════════════
+
+═══════════════════════════════════════════
+  [pe-port] [0;32m143 passed[0m, [0;31m0 failed[0m / 143 total (plus 0 skipped)
+═══════════════════════════════════════════
+
+═══════════════════════════════════════════
+  [pe-port] [0;32m143 passed[0m, [0;31m0 failed[0m / 143 total (plus 0 skipped)
+═══════════════════════════════════════════
+
+═══════════════════════════════════════════
+  [pe-port] [0;32m143 passed[0m, [0;31m0 failed[0m / 143 total (plus 0 skipped)
+═══════════════════════════════════════════
+/home/aiagent/Projects/compiler/test/sh/pe-port.sh: line 29: warning: command substitution: ignored null byte in input
+/home/aiagent/Projects/compiler/test/sh/pe-port.sh: line 30: warning: command substitution: ignored null byte in input
+
+═══════════════════════════════════════════
+  [pe-port] [0;32m142 passed[0m, [0;31m0 failed[0m / 142 total (plus 0 skipped)
+═══════════════════════════════════════════
+
+═══════════════════════════════════════════
+  [pe-port] [0;32m142 passed[0m, [0;31m0 failed[0m / 142 total (plus 0 skipped)
+═══════════════════════════════════════════
+/home/aiagent/Projects/compiler/test/sh/pe-port.sh: line 29: warning: command substitution: ignored null byte in input
+/home/aiagent/Projects/compiler/test/sh/pe-port.sh: line 30: warning: command substitution: ignored null byte in input
+
+═══════════════════════════════════════════
+  [pe-port] [0;32m142 passed[0m, [0;31m0 failed[0m / 142 total (plus 0 skipped)
+═══════════════════════════════════════════
+
+═══════════════════════════════════════════
+  [pe-port] [0;32m142 passed[0m, [0;31m0 failed[0m / 142 total (plus 0 skipped)
+═══════════════════════════════════════════
+
+################################################################
+# ALL SUITES PASSED (port pe-port)
+################################################################
+cp _rbp refs/ycc.ref
+cd refs && sha256sum *.ref > SHA256SUMS
+mv _rbp ycc
+rm -f _rb1 _rb2
+blessed refs/ycc.ref 29b2d3354beb40bc
+rebless=0

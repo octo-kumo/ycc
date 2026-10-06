@@ -1,4 +1,8 @@
-// tolong's one runtime error: a float with no long answer.
+// tolong's bound, from both sides: a float with no long answer is NONE.
+//
+// This used to be a trap, and the fixture is renamed for it. The binary is what
+// changed: tolong returns long?, so "there is no long answer" is a value the
+// caller can check rather than a process that ends.
 //
 // The bound is exact in both directions and both ends are pinned here, because
 // a half-checked bound is the worst of the three: it either rejects values
@@ -15,8 +19,9 @@
 //     a NaN is out of range too, and no comparison catches it, so the
 //           self-inequality test has to.
 //
-// Here: the bound from below, which must NOT trap, and the float above the
-// bound, which must. Two directions, one process, exit 1.
+// Here: the bound from below, which is a long and comes back, and the float
+// above the bound, which is none.
 
 print(tolong(-9223372036854775808.0)!);
-print(tolong(9.3e18)!);
+print(tolong(9.3e18) == none);
+print(tolong(0.0 / 0.0) == none, " ", tolong(1.0 / 0.0) == none);

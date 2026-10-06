@@ -68,6 +68,57 @@
 // import native.y (native.y imports this file -- see the driver note).
 import lexer from "./lexer.y";
 
+// The runtime's strtoll-shaped read, whose body rt.y owns: leading whitespace
+// skipped, a sign allowed, digits to the first non-digit, 0 when there are none.
+// The C copy reaches the same read through ys_tolong (strtoll), and the two
+// compilers must agree byte for byte, so this must NOT be the checked tolong.
+// The leading number in s, 0 when there is none: leading whitespace skipped, a
+// sign allowed, digits run to the first byte that is not one, and a string with
+// no digits at all is 0. THIS IS NOT tolong. The C copy reaches the same read
+// through ys_tolong, which is strtoll, and the two compilers have to agree byte
+// for byte: the emitter's own reads -- a slot mark, a .loc field, a pack size --
+// were written against THAT, and using the checked tolong there traps on inputs
+// the C side has always accepted (measured: the -g meta fixtures, where the two
+// compilers produced different diagnostics). strtoll clamps rather than wraps.
+def leading_long(s: str) -> long {
+    let n = len(s);
+    let i = 0;
+    let go = true;
+    while (i < n && go) {
+        let c = byte_at(s, i);
+        if (c == 32 || (c >= 9 && c <= 13)) { i = i + 1; } else { go = false; };
+    };
+    let neg = false;
+    if (i < n) {
+        let sg = byte_at(s, i);
+        if (sg == 45 || sg == 43) { neg = sg == 45; i = i + 1; };
+    };
+    let v = 0;
+    let any = false;
+    let clamp = false;
+    while (i < n) {
+        let c = byte_at(s, i);
+        if (c >= 48 && c <= 57) {
+            let d = c - 48;
+            if (!clamp) {
+                if (v > 922337203685477580) { clamp = true; }
+                else if (v == 922337203685477580 && d > (if (neg) { 8 } else { 7 })) { clamp = true; }
+                else { v = v * 10 + d; };
+            };
+            any = true;
+            i = i + 1;
+        } else { i = n; };
+    };
+    if (!any) {
+        0
+    } else if (clamp) {
+        if (neg) { -9223372036854775807 - 1 } else { 9223372036854775807 }
+    } else if (neg) {
+        0 - v
+    } else { v }
+};
+
+
 // ── little-endian reads and writes ──────────────────────────────────────
 
 // ── M2: the pass ────────────────────────────────────────────────────────
@@ -2347,27 +2398,6 @@ def mg_where(s: long) -> str {
 
 // Split the pipe's bytes into pieces. A framing error means the generator did
 // not run our helpers, which cannot happen unless the pass is broken.
-// The leading digits of s as a long, 0 when there are none (whitespace is
-// skipped). The meta piece header's fields are written by the generator and
-// read here; this is the one place that wants a prefix rather than a whole
-// string, and it exists so that tolong can be strict everywhere else.
-def leading_long(s: str) -> long {
-    let i = 0;
-    let n = len(s);
-    while (i < n) {
-        let c = byte_at(s, i);
-        if (c == 32 || (c >= 9 && c <= 13)) { i = i + 1; } else { i = n; };
-    };
-    let v = 0;
-    while (i < n) {
-        let c = byte_at(s, i);
-        if (c >= 48 && c <= 57) {
-            v = v * 10 + (c - 48);
-            i = i + 1;
-        } else { i = n; };
-    };
-    v
-};
 
 def mg_unframe(data: str) -> long {
     let n = len(data);
