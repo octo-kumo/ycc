@@ -513,6 +513,117 @@ y_os_fork:
 y_os_random:
     mov $-38, %rax
     ret
+#=== add: y_w_path ===
+# y_w_path(dst, rel, len) -> the number of UTF-16 units written, or -1, with
+# the three arguments in %rdi, %rsi and %rcx -- %rcx and not %rdx, because every
+# caller is a `replace:` block that has just loaded the layer's own argument
+# slots and already holds the length there. Getting that wrong assembles, runs
+# and fails as an unwrap of none, which is a whole debugging session for one
+# register. Builds
+# an ABSOLUTE NT path at dst: the `\??\` prefix, then the current directory's
+# own DOS path out of the PEB, then `rel` widened byte by byte.
+#
+# It exists as one helper because every path-taking call needs exactly this, and
+# WINDOWS DOES NOT DO IT FOR US. A relative name handed to the kernel answers
+# STATUS_OBJECT_PATH_SYNTAX_BAD: resolving one against the process's current
+# directory is user-space work (RtlDosPathNameToNtPathName) and there is no
+# user space here, just syscalls. Two further details, both learned by watching
+# a real call fail:
+#
+#   * the PEB's CURDIR.DosPath is a UNICODE_STRING at ProcessParameters+56 whose
+#     Length (BYTES) is at +56 and whose Buffer is at +64. It usually ends in a
+#     backslash already, and a doubled one is not harmless, so the separator is
+#     added only if the last unit copied is not one.
+#   * `/` must become `\`. `pe-fs.expected` (no separator) worked while
+#     `src/y/std/fs.y` answered "no such file", which is a confusing way to
+#     learn that NT does not take the Unix separator.
+#
+# Only ASCII is accepted: a byte >= 128 returns -1 rather than being mangled,
+# because a wrong path is worse than a refused one. An empty relative path is
+# also -1: `\??\CWD\` alone is the current directory, and that is not what
+# fs.exists("") answers on Linux.
+#
+# Callers get the unit count so they can fill UNICODE_STRING.Length (in BYTES,
+# without the terminator, which MaximumLength leaves room for).
+#=== add: y_w_path ===
+y_w_path:
+    push %rbp
+    mov %rsp, %rbp
+    sub $64, %rsp
+    mov %rsi, -16(%rbp)
+    mov %rcx, -24(%rbp)
+    movb $92, (%rdi)
+    movb $0, 1(%rdi)
+    movb $63, 2(%rdi)
+    movb $0, 3(%rdi)
+    movb $63, 4(%rdi)
+    movb $0, 5(%rdi)
+    movb $92, 6(%rdi)
+    movb $0, 7(%rdi)
+    add $8, %rdi
+    mov $4, %r8
+    mov %gs:96, %rax
+    mov 32(%rax), %rax
+    mov 64(%rax), %rsi
+    mov 56(%rax), %r11
+    and $65535, %r11
+    shr $1, %r11
+ywp_cwd:
+    cmp $0, %r11
+    je ywp_sep
+    movzbq (%rsi), %rax
+    movb %al, (%rdi)
+    movzbq 1(%rsi), %rax
+    movb %al, 1(%rdi)
+    add $2, %rsi
+    add $2, %rdi
+    add $1, %r8
+    sub $1, %r11
+    jmp ywp_cwd
+ywp_sep:
+    movzbq -2(%rdi), %rax
+    cmp $92, %rax
+    je ywp_rel
+    movb $92, (%rdi)
+    movb $0, 1(%rdi)
+    add $2, %rdi
+    add $1, %r8
+ywp_rel:
+    mov -16(%rbp), %rsi
+    mov -24(%rbp), %rcx
+    cmp $0, %rcx
+    je ywp_fail
+    xor %r9d, %r9d
+ywp_loop:
+    cmp %rcx, %r9
+    jge ywp_done
+    movzbq (%rsi,%r9,1), %rax
+    cmp $128, %rax
+    jge ywp_fail
+    cmp $47, %rax
+    jne ywp_keep
+    mov $92, %rax
+ywp_keep:
+    movb %al, (%rdi)
+    movb $0, 1(%rdi)
+    add $2, %rdi
+    add $1, %r8
+    add $1, %r9
+    cmp $1000, %r8
+    jg ywp_fail
+    jmp ywp_loop
+ywp_done:
+    movb $0, (%rdi)
+    movb $0, 1(%rdi)
+    mov %r8, %rax
+    mov %rbp, %rsp
+    pop %rbp
+    ret
+ywp_fail:
+    mov $-1, %rax
+    mov %rbp, %rsp
+    pop %rbp
+    ret
 # y_os_stat(dirfd, path, len, stbuf, flags) -> 0, or -1. The caller's buffer is
 # Linux-shaped and fs.y reads exactly two fields: st_mode at byte 24 and
 # st_size at byte 48. Both are written; the rest is left as the caller zeroed
@@ -523,123 +634,42 @@ y_os_random:
 # 40 -- which after `push %rbp; mov %rsp, %rbp` become 16, 24, 32, 40 and 48.
 # dirfd and flags are ignored: NT resolves an absolute name without either.
 #
-# THE PATH MUST BE ABSOLUTE, AND THAT IS THE WHOLE POINT OF THIS BLOCK. A first
-# cut passed the relative name straight to NtQueryFullAttributesFile, which
-# answers STATUS_OBJECT_PATH_SYNTAX_BAD (0xC000003B): the KERNEL does not
-# resolve a relative name against the process's current directory -- that is
-# user-space work (RtlDosPathNameToNtPathName). So the path is assembled here:
-# the `\??\` prefix, then the current directory's own DOS path out of the PEB,
-# then the relative part widened byte by byte.
+# The path itself comes from y_w_path, which is where the `\??\` prefix, the
+# PEB's current directory and the separator translation live.
 #
-#   PEB                 %gs:96
-#   ProcessParameters   PEB+32
-#   CURDIR.DosPath      ProcessParameters+56, a UNICODE_STRING: Length (u16) at
-#                       +56, MaximumLength at +58, the Buffer pointer at +64.
-#                       Length is in BYTES and the path ends in a backslash, so
-#                       the units are Length/2 and the separator is added only
-#                       if that last unit is not already one.
+# NtQueryFullAttributesFile (196), NOT NtQueryAttributesFile: only the "full"
+# form returns FILE_NETWORK_OPEN_INFORMATION, which carries EndOfFile -- the
+# size. The attributes-only form has no size in it, so file_size would have to
+# lie. The number is in w_sysno in both copies, and wselftest.s calls it at
+# startup, because 62 is what the public Windows 10 table suggests and 62
+# answers STATUS_INVALID_HANDLE.
 #
-# NtQueryFullAttributesFile, NOT NtQueryAttributesFile: only the "full" form
-# returns FILE_NETWORK_OPEN_INFORMATION, which carries EndOfFile -- the size.
-# The attributes-only form has no size in it, so file_size would have to lie.
-#
-# THE NUMBER IS 196, and that is measured rather than remembered: 62 is what the
-# public Win10 table suggests and it answers STATUS_INVALID_HANDLE. See
-# test/sh/w_sysno.py, which reads the number out of the stub in the installed
-# ntdll -- and which confirms all ten of w_sysno's pinned numbers while it is
-# there.
-#
-# Only ASCII is accepted, in the relative part: a byte >= 128 returns -1 rather
-# than being mangled, because a wrong path is worse than a refused one. A `/` is
-# translated to `\` -- NT does not take the Unix separator, and a path like
-# src/y/std/fs.y answered "no such file" while pe-fs.expected (no separator at
-# all) worked. An EMPTY path fails rather than resolving to the current
-# directory, which is what `\??\CWD\` alone means and is not what
-# fs.exists("") answers on Linux.
-#
-# Frame layout, all rbp-relative, inside `sub $2304`: the UTF-16 path at -2304
-# (capacity 1000 units), the UNICODE_STRING at -304, the OBJECT_ATTRIBUTES at
-# -288 (48 bytes, and Length must say 48), FILE_NETWORK_OPEN_INFORMATION at -240
-# (56 bytes: four times, then AllocationSize at +32, EndOfFile at +40,
-# FileAttributes at +48). 2304 is a multiple of 16, so rsp stays 0 mod 16.
+# Frame layout, rbp-relative, inside `sub $2304`: the UTF-16 path at -2304
+# (y_w_path writes upward from there and refuses past 1000 units), the
+# UNICODE_STRING at -304, the OBJECT_ATTRIBUTES at -288 (48 bytes, Length must
+# say 48), FILE_NETWORK_OPEN_INFORMATION at -240 (56 bytes: four times, then
+# AllocationSize at +32, EndOfFile at +40, FileAttributes at +48).
 #=== replace: y_os_stat ===
 y_os_stat:
     push %rbp
     mov %rsp, %rbp
     sub $2304, %rsp
     lea -2304(%rbp), %rdi
-    mov $4, %r8
-    movb $92, (%rdi)
-    movb $0, 1(%rdi)
-    movb $63, 2(%rdi)
-    movb $0, 3(%rdi)
-    movb $63, 4(%rdi)
-    movb $0, 5(%rdi)
-    movb $92, 6(%rdi)
-    movb $0, 7(%rdi)
-    add $8, %rdi
-    mov %gs:96, %rax
-    mov 32(%rax), %rax
-    mov 64(%rax), %rsi
-    mov 56(%rax), %r11
-    and $65535, %r11
-    shr $1, %r11
-    cmp $0, %r11
-    je yostat_sep
-yostat_cwd:
-    movzbq (%rsi), %rax
-    movb %al, (%rdi)
-    movzbq 1(%rsi), %rax
-    movb %al, 1(%rdi)
-    add $2, %rsi
-    add $2, %rdi
-    add $1, %r8
-    sub $1, %r11
-    jne yostat_cwd
-yostat_sep:
-    movzbq -2(%rdi), %rax
-    cmp $92, %rax
-    je yostat_rel
-    movb $92, (%rdi)
-    movb $0, 1(%rdi)
-    add $2, %rdi
-    add $1, %r8
-yostat_rel:
     mov 40(%rbp), %rsi
     mov 32(%rbp), %rcx
-    cmp $0, %rcx
-    je yostat_fail
-    xor %r9d, %r9d
-yostat_widen:
-    cmp %rcx, %r9
-    jge yostat_widened
-    movzbq (%rsi,%r9,1), %rax
-    cmp $128, %rax
-    jge yostat_fail
-    cmp $47, %rax
-    jne yostat_keep
-    mov $92, %rax
-yostat_keep:
-    movb %al, (%rdi)
-    movb $0, 1(%rdi)
-    add $2, %rdi
-    add $1, %r8
-    add $1, %r9
-    cmp $1000, %r8
-    jg yostat_fail
-    jmp yostat_widen
-yostat_widened:
-    movb $0, (%rdi)
-    movb $0, 1(%rdi)
+    call y_w_path
+    cmp $0, %rax
+    jl yostat_fail
+    mov %rax, %r8
     add %r8, %r8
-    movb %r8b, -304(%rbp)
     mov %r8, %rax
+    movb %al, -304(%rbp)
     shr $8, %rax
     movb %al, -303(%rbp)
     add $2, %r8
     mov %r8, %rax
+    movb %al, -302(%rbp)
     shr $8, %rax
-    movb %r8b, -302(%rbp)
     movb %al, -301(%rbp)
     lea -2304(%rbp), %rax
     mov %rax, -296(%rbp)
@@ -683,4 +713,175 @@ yostat_fail:
     mov $-1, %rax
     mov %rbp, %rsp
     pop %rbp
+    ret
+# y_os_openat(dirfd, path, len, flags, mode) -> a handle, or a negative errno.
+# The handle is what the rest of fs.y passes back as an "fd", and y_os_handle
+# hands anything >= 3 straight through -- which is why that comment in its block
+# says "fs.y's y_os_openat returns an NtCreateFile handle" and why this body is
+# the thing that makes it true.
+#
+# FIVE ARGUMENTS, FRAMELESS in the ELF body: flags at 8(%rsp) -> 16(%rbp), mode
+# at 16 -> 24, len at 24 -> 32, path at 32 -> 40, dirfd at 40 -> 48. dirfd is
+# ignored (y_w_path builds an absolute name) and so is mode: NT has no mode
+# bits, an ACL is a different mechanism entirely, and fs.y's default 0o644 is
+# not expressible here.
+#
+# THE FLAG MAPPING is the interesting part, because Linux's open flags and NT's
+# three separate parameters do not line up:
+#   access       SYNCHRONIZE | FILE_READ_ATTRIBUTES always, plus FILE_READ_DATA
+#                unless O_WRONLY, plus FILE_WRITE_DATA -- or FILE_APPEND_DATA
+#                when O_APPEND, which is what makes writes go to the end
+#                without an explicit seek
+#   share        FILE_SHARE_READ|WRITE|DELETE (7): permissive, and the closest
+#                thing to Linux's "no sharing restrictions"
+#   disposition  FILE_OPEN (1), FILE_OVERWRITE (4) for O_TRUNC alone,
+#                FILE_OPEN_IF (3) for O_CREAT, FILE_OVERWRITE_IF (5) for
+#                O_CREAT|O_TRUNC, FILE_CREATE (2) for O_CREAT|O_EXCL
+#   options      FILE_DIRECTORY_FILE (1) when O_DIRECTORY, else 0
+#   attributes   FILE_ATTRIBUTE_NORMAL (128)
+#
+# NtCreateFile (85) takes five arguments in registers and SIX on the stack. The
+# stack copy is written at 40(%rsp) and up, which with this frame is
+# rbp-2360; the path buffer, the UNICODE_STRING, the handle, the
+# OBJECT_ATTRIBUTES and the IO_STATUS_BLOCK all live above it and do not
+# overlap: path at -2200 (y_w_path writes upward), UNICODE_STRING at -300,
+# handle at -280, OBJECT_ATTRIBUTES at -272 (48 bytes) and IO_STATUS_BLOCK at
+# -224 (16). 2400 is a multiple of 16.
+#
+# The access mask is copied OUT of %r9 into %rdx before %r9 is reloaded with
+# &iosb: they are arg2 and arg4, and doing it in the other order passes the
+# IO_STATUS_BLOCK's address as the access mask, which fails with
+# STATUS_INVALID_PARAMETER and looks like a path problem.
+#=== replace: y_os_openat ===
+y_os_openat:
+    push %rbp
+    mov %rsp, %rbp
+    sub $2400, %rsp
+    lea -2200(%rbp), %rdi
+    mov 40(%rbp), %rsi
+    mov 32(%rbp), %rcx
+    call y_w_path
+    cmp $0, %rax
+    jl yoap_fail
+    mov %rax, %r8
+    add %r8, %r8
+    mov %r8, %rax
+    movb %al, -300(%rbp)
+    shr $8, %rax
+    movb %al, -299(%rbp)
+    add $2, %r8
+    mov %r8, %rax
+    movb %al, -298(%rbp)
+    shr $8, %rax
+    movb %al, -297(%rbp)
+    lea -2200(%rbp), %rax
+    mov %rax, -292(%rbp)
+    mov $48, %rax
+    mov %rax, -272(%rbp)
+    mov $0, %rax
+    mov %rax, -264(%rbp)
+    lea -300(%rbp), %rax
+    mov %rax, -256(%rbp)
+    mov $64, %rax
+    mov %rax, -248(%rbp)
+    mov $0, %rax
+    mov %rax, -240(%rbp)
+    mov $0, %rax
+    mov %rax, -232(%rbp)
+    mov 16(%rbp), %r11
+    mov $1048704, %r9
+    mov %r11, %rax
+    and $3, %rax
+    cmp $1, %rax
+    je yoap_wonly
+    cmp $2, %rax
+    je yoap_rdwr
+    or $1, %r9
+    jmp yoap_acc_done
+yoap_rdwr:
+    or $1, %r9
+yoap_wonly:
+    mov %r11, %rax
+    and $1024, %rax
+    cmp $0, %rax
+    je yoap_wwrite
+    or $4, %r9
+    jmp yoap_acc_done
+yoap_wwrite:
+    or $2, %r9
+yoap_acc_done:
+    mov %r9, %rdx
+    mov $1, %r11
+    mov 16(%rbp), %rax
+    and $512, %rax
+    cmp $0, %rax
+    je yoap_disp_creat
+    mov $4, %r11
+yoap_disp_creat:
+    mov 16(%rbp), %rax
+    and $64, %rax
+    cmp $0, %rax
+    je yoap_disp_done
+    mov $3, %r11
+    mov 16(%rbp), %rax
+    and $512, %rax
+    cmp $0, %rax
+    je yoap_disp_excl
+    mov $5, %r11
+yoap_disp_excl:
+    mov 16(%rbp), %rax
+    and $128, %rax
+    cmp $0, %rax
+    je yoap_disp_done
+    mov $2, %r11
+yoap_disp_done:
+    mov $0, 40(%rsp)
+    mov $128, 48(%rsp)
+    mov $7, 56(%rsp)
+    mov %r11, 64(%rsp)
+    mov $0, %rax
+    mov 16(%rbp), %r11
+    and $65536, %r11
+    cmp $0, %r11
+    je yoap_opt_done
+    mov $1, %rax
+yoap_opt_done:
+    mov %rax, 72(%rsp)
+    mov $0, 80(%rsp)
+    mov $0, 88(%rsp)
+    lea -280(%rbp), %r10
+    lea -272(%rbp), %r8
+    lea -224(%rbp), %r9
+    mov $85, %eax
+    syscall
+    test %eax, %eax
+    jne yoap_fail
+    mov -280(%rbp), %rax
+    test %rax, %rax
+    je yoap_fail
+    mov %rbp, %rsp
+    pop %rbp
+    ret
+yoap_fail:
+    mov $-1, %rax
+    mov %rbp, %rsp
+    pop %rbp
+    ret
+# y_os_close(fd) -> 0, or -1. One argument and frameless, so the fd is at
+# 8(%rsp). NtClose (15) takes the handle in %r10, like every other Nt call here.
+# The fd is NOT passed through y_os_handle: fs.y only ever closes what
+# y_os_openat returned, and a file handle is already a handle (y_os_handle
+# passes >= 3 through, so the two agree anyway -- but this is not the place to
+# depend on that).
+#=== replace: y_os_close ===
+y_os_close:
+    mov 8(%rsp), %r10
+    mov $15, %eax
+    syscall
+    test %eax, %eax
+    jne yocl_fail
+    xor %eax, %eax
+    ret
+yocl_fail:
+    mov $-1, %rax
     ret

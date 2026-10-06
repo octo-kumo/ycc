@@ -250,6 +250,33 @@ branch-disjointness false positive.
   public table's 62 -- and `wselftest.s` now calls it at startup like the other
   ten, so a drift fails loudly in the first instruction of every PE rather than
   in the first file it stats.
+- **The path helper is now ONE function, `y_w_path`** (round 39), called by
+  `y_os_stat`: `\??\` + the PEB's current directory + the relative part, with
+  `/` translated and an empty path refused. Its three arguments are `%rdi`,
+  `%rsi` and **`%rcx`** -- not `%rdx`, because every caller is a `replace:`
+  block that has just loaded the layer's own argument slots and already holds
+  the length there. Passing it in the wrong register assembles, runs, and fails
+  as an unwrap of none; that cost a debugging session and is written down in the
+  block.
+- **`y_os_openat` was written, ran, and did NOT work -- reverted, with the
+  exact symptom measured.** `NtCreateFile` (85, confirmed by
+  test/sh/w_sysno.py) with the same helper, the same object layout that works
+  for `y_os_stat`, access `SYNCHRONIZE|FILE_READ_ATTRIBUTES|FILE_WRITE_DATA`,
+  share 7, disposition FILE_OVERWRITE_IF (5) and `FILE_ATTRIBUTE_NORMAL`,
+  answers:
+    STATUS_OBJECT_NAME_INVALID (0xC0000033) opening an EXISTING file
+    STATUS_OBJECT_NAME_NOT_FOUND  (0xC0000034) for a file to be created
+    STATUS_OBJECT_PATH_NOT_FOUND  (0xC000003A) for a missing directory
+  -- so the path resolution is right (a missing directory is reported as such)
+  and something about the call's own parameters is not. `y_os_stat`, called on
+  the SAME path, succeeds. Two candidate causes, both cheap to test next, and
+  neither yet excluded: the access mask copied into `%rdx` before `%r9` is
+  reloaded with `&iosb` (they are arg2 and arg4 and the order matters), and the
+  openat frame's object regions sitting ABOVE the path buffer's start, inside
+  the range it grows into -- 1900 bytes of headroom for a buffer that can write
+  2000, where stat's own layout has exactly 2000. `y_os_close` (NtClose, 15) was
+  written the same round and reverted with it, untested, for the same reason:
+  it is only reachable through a file handle that openat has to produce first.
 - **The same helper is what the other ten need**: `y_os_openat`, `y_os_close`,
   `y_os_lseek`, `y_os_mkdir`, `y_os_unlink`, `y_os_rename`, `y_os_getcwd`,
   `y_os_chdir`, `y_os_list`, `y_os_set_mode`. The path-building half is now
