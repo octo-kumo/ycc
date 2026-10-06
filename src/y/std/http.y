@@ -152,7 +152,7 @@ def link_send(l: Link, data: [byte]) -> bool {
     };
     let off = 0;
     while (off < len(data)) {
-        let k = syscall(1, l.fd, &data[off], len(data) - off);
+        let k = os_call("y_os_write", l.fd, &data[off], len(data) - off);
         if (k <= 0) {
             l.err = "the connection broke while sending";
             return false;
@@ -176,7 +176,7 @@ def link_fill(l: Link) -> bool {
         return true;
     };
     let chunk: [byte; 16384] = [0; 16384];
-    let k = syscall(0, l.fd, &chunk[0], 16384);
+    let k = os_call("y_os_read", l.fd, &chunk[0], 16384);
     if (k == 0) {
         l.eof = true;
         return false;

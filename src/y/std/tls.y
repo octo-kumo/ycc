@@ -129,7 +129,9 @@ def fail(c: Conn, why: str) -> bool {
 def write_all(c: Conn, data: [byte]) -> bool {
     let off = 0;
     while (off < len(data)) {
-        let k = syscall(1, c.fd, &data[off], len(data) - off);
+        // Through the named layer: fd 1 is write(2) on Linux and an unrelated
+        // Nt function on Windows, so a raw number here is a target bug (B2).
+        let k = os_call("y_os_write", c.fd, &data[off], len(data) - off);
         if (k <= 0) { return fail(c, "the connection broke while sending"); };
         off = off + k;
     };
@@ -182,7 +184,7 @@ def read_record(c: Conn) -> Rec {
         if (len(c.inbuf) >= need) {
             have = true;
         } else {
-            let k = syscall(0, c.fd, &buf[0], 16384);
+            let k = os_call("y_os_read", c.fd, &buf[0], 16384);
             if (k <= 0) {
                 if (len(c.inbuf) == 0 && k == 0) { c.eof = true; } else { fail(c, "the connection broke"); };
                 return none_r;

@@ -164,9 +164,13 @@ generation (`meta`), and Windows support (`win`), plus LSP and docs work.
 ### In progress at the tip
 
 - **`B2` — the remaining std units onto the named layer.** Raw `syscall(`
-  sites still in `std`: `tui.y` 29, `net.y` 21, `http.y` 2, `tls.y` 2. Each
-  needs a Linux half in `arch/prelude.s` and a Windows half in `wsys.s`; the
-  NT halves for console I/O and `std/net` are the large ones.
+  sites still in `std`: `tui.y` 29 and `net.y` 21, and those are the two that
+  genuinely need a new NT design (console API calls and Winsock, neither of
+  which is a syscall). **`http.y` and `tls.y` are off the list**: their four
+  raw sites were `syscall(1, ...)` and `syscall(0, ...)` -- write and read --
+  which the layer already had as `y_os_write`/`y_os_read`, so routing them
+  needed no new bodies at all. Every file-descriptor I/O site in `std` is now
+  on the layer; only the console and the sockets remain.
   **`crypto.y` is off the list**: its one raw site was `getrandom`, now
   `os_call("y_os_random", buf, len)` with the Linux body in `prelude.s` and a
   Windows body in `wsys.s` that answers ENOSYS (-38, the file's established
@@ -204,7 +208,7 @@ generation (`meta`), and Windows support (`win`), plus LSP and docs work.
 | **`B2`** the rest of the named-syscall layer | the work above; needs NT bodies for `newfstatat`, `getdents64`, `mkdirat`, `renameat`, `unlinkat`, `fchmodat`, `getcwd`/`chdir`, console `readline`, `exec`, threads/`fork`, net, crypto |
 | **`W1`** `cycc.exe` under mingw-w64 | **DONE for non-meta programs.** `x86_64-w64-mingw32-gcc` is installed, `make cycc.exe` builds from the same `src/c`, and `test/sh/cycc-win.sh` reports 557 same / 6 different over the corpus. All 11 are the meta fixtures: their M1 runner forks and maps a memfd, which is the NT `fork`/`mmap` work below. |
 | **`W5`** the std split | largely superseded by `B1`'s named layer for the packed units; the rest is `B2` |
-| **`W6`** the Windows harness | job-object memory cap (`ulimit -v` has no Windows equivalent), a PE `test_debug.sh` branch, `llvm-*` tool swap |
+| **`W6`** the Windows harness | job-object memory cap (`ulimit -v` has no Windows equivalent), a PE `test_debug.sh` branch, `llvm-*` tool swap. **A version-pinned prefix is done**: `winetricks` is installed here, and `WINEPREFIX=~/.wine-win10 winetricks -q win10` gives a Windows-10 profile to run the PE gates against. Measured: a ycc-built PE prints `pe ok` / `true` and exits 0 under both the default prefix and the win10 one, and the W3 self-test stays silent in both -- so the `w_sysno` numbers pinned to one ntdll sample hold under a version-pinned prefix too. No script change is needed: `wine` reads `WINEPREFIX` from the environment, so `WINEPREFIX=~/.wine-win10 ./test/sh/pe-gate.sh ./ycc` is the whole recipe. (The prefix is 1.7 GB, so it is created when wanted rather than kept; the default `~/.wine` is what the committed gates use.) |
 | **`w_self_test_lines()`** | **DONE.** `src/y/arch/wselftest.s` (5.2 KB) is the probe: one `Nt*` call per class, once at program start, each NTSTATUS checked, so a stale `w_sysno` number that now names a different real Nt function fails by name in the first instruction instead of surfacing later as wrong memory. `arch_x64.y`'s `w_self_test_lines` returns the lines (and `arch_x64.c` its twin), `native.y` feeds them to the prelude so the tree shaker keeps `y_os_write`/`y_os_exit`, and the `_start` prologue calls `y_w_self_test` on the Windows target only -- no lines and no call are emitted for an ELF. `pe-gate.sh` is the gate: a PE must load, run, and NOT print the self-test's message. |
 | **`fork`/`spawn`/threads on NT**, `std/crypto` on BCrypt, console `readline` | per-call redesigns, listed in `ideas/WINDOWS.md` |
 | **PDB**, `--target=macos`, PE-side program profiling | explicitly deferred by the design |
