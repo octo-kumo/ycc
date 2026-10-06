@@ -104,14 +104,26 @@ an overfull or underfull line is counted out of the log. The manual last
 typeset with none, and a target that only printed warnings is how one sat
 unnoticed. `docs/build/` is gitignored.
 
-Two things to know before you rely on it:
+Three things to know before you rely on it:
 
-- **`make docs` skips when `tectonic` is absent** — it prints `no tectonic,
-  skipped` and exits **0**, so `make` calls it a success. On a machine without
-  it, nothing checks your LaTeX at all, which is exactly how a stale manual
-  survives.
-- Without tectonic you can still check your own edits with XeTeX, which is what
-  tectonic runs underneath:
+- **`make docs` skips when `tectonic` is not on the PATH** --- it prints `no
+  tectonic, skipped` and exits **0**, so `make` calls it a success and nothing
+  checks your LaTeX. On this machine the binary is at
+  `~/.local/bin/tectonic` (0.17.0) and that directory is not on the recipes'
+  PATH, so the form that actually builds is:
+
+  ```
+  PATH="$HOME/.local/bin:$PATH" make docs
+  ```
+
+  It writes `docs/build/manual.pdf` and `manual.log` (both gitignored) and
+  typesets the manual in three XeTeX passes. The verdict it prints is the one
+  to quote: size, page count, and whether there were errors or warnings.
+- XeTeX is what tectonic runs underneath, and it is a usable fallback when the
+  binary cannot be reached --- but **its warning set is not tectonic's**. This
+  tree had one overfull line under `xelatex` that `tectonic` does not report at
+  all, so use xelatex to find ERRORS in the file you touched, and `make docs`
+  for the verdict that counts.
 
   ```
   cd docs/src
@@ -121,11 +133,22 @@ Two things to know before you rely on it:
   ```
 
   Run it from `docs/src` or the `\input`s are not found, and **delete the
-  artifacts**: a `_tmpcheck.*` left behind is an untracked file in the tree.
-  XeTeX stops at errors that `make docs` would also fail on, so treat any of
-  them as yours to check: a raw `_` inside `\ic{}` is an error (write `\_`) and
-  two of them sat in `02-lexical.tex` --- where the manual could not have
-  typeset --- until they were fixed.
+  artifacts**: a `_tmpcheck.*` left behind is an untracked file in the tree. A
+  raw `_` inside `\ic{}` is an error --- write `\_` --- and two of them sat in
+  `02-lexical.tex` until 2026-10-06, where `make docs` failed outright with
+  `! Missing $ inserted.`
+- **To tell whether an error is yours, build the baseline in a throwaway
+  worktree**:
+
+  ```
+  git worktree add /tmp/base <rev> && (cd /tmp/base && PATH="$HOME/.local/bin:$PATH" make docs)
+  git worktree remove /tmp/base
+  ```
+
+  That is how the two errors above were shown to predate the change that fixed
+  them, and it is the only way to distinguish "my edit broke the manual" from
+  "the manual was already broken" --- which matters, because the second is the
+  normal reason `make docs` was never run.
 
 ### Voice
 

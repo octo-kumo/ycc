@@ -99,6 +99,44 @@ int is_op(Yv *toks, ylong p, Yv *w) {
     }
 }
 
+/* ── loop labels (TODO.md item 5) ─────────────────────────────────────────
+ * The parser tracks enclosing loop names while parsing a body, resolving
+ * `break name` / `continue name` to a loop depth before rename changes the
+ * variable names. An unknown name means the outermost loop (`break outer`). */
+static Yv *ploop_names = NULL;
+
+static void ploop_ensure(void) {
+    if (ploop_names == NULL) { ploop_names = yav(0); };
+}
+
+Yv *loop_push(Yv *nm) {
+    ploop_ensure();
+    ploop_names = ya_push(ploop_names, nm);
+    return yv_long(0);
+}
+
+Yv *loop_pop(void) {
+    ploop_ensure();
+    ylong n = yv_len(ploop_names);
+    if (n > 0) { ploop_names = ya_slice(ploop_names, 0, n - 1); };
+    return yv_long(0);
+}
+
+Yv *loop_resolve(Yv *label) {
+    ploop_ensure();
+    if (ys_eq_lit(label, "")) { return ys(""); };
+    ylong found = -1;
+    ylong i = yv_len(ploop_names) - 1;
+    while (found < 0 && i >= 0) {
+        if (ys_eq(ya_get(ploop_names, i), label)) { found = i; };
+        i = i - 1;
+    };
+    if (found < 0) {
+        if (yv_len(ploop_names) > 0) { found = 0; } else { return label; };
+    };
+    return ys_long(found);
+}
+
 Yv *res(Yv *node, ylong p) {
     return yr(2, "node", node, "pos", yv_long(p));
 }
@@ -1684,7 +1722,10 @@ Yv *parse_func(Yv *toks, ylong p, int isnat) {
         Yv *func = yr(10, "k", yv_long(K_func), "params", names, "ptypes", ptypes, "ret", ret, "body", bnode, "line", yv_long(ln), "col", yv_long(cl), "defs", defs, "label", label, "ppos", ppos);
         return res(yr(9, "k", yv_long(K_decl), "kind", ys("native"), "name", fname, "typ", yr(1, "k", yv_long(K_tnone)), "v", func, "line", yv_long(ln), "col", yv_long(cl), "nline", yv_long(cl), "ncol", yv_long(cl)), pos);
     } else {
+        Yv *saved_loops = ploop_names;
+        ploop_names = yav(0);
         Yv *body = parse_block(toks, pos);
+        ploop_names = saved_loops;
         Yv *bnode = yr_get(body, "node");
         if (yv_len(derrs) > 0) {
             Yv *bst = yr_get(bnode, "stmts");
@@ -1845,12 +1886,20 @@ Yv *parse_stmt(Yv *toks, ylong p) {
         // insists on the top level (a nested one has no assembly to land in).
         return parse_func(toks, p, 1);
     } else if (is_kw(toks, p, ys("break")) || is_kw(toks, p, ys("continue"))) {
-        /* `break;` and `continue;` -- see the same arm in src/y/parser.y,
-           including why only the keyword is consumed and the `;` is left to
-           the caller. */
+        /* `break;` / `continue;` and `break name;` / `continue name;`.
+         * An enclosing loop variable selects that loop; any other name is
+         * resolved to the outermost loop, so `break outer;` is the
+         * multi-level exit it is meant to be. */
         ylong kind = is_kw(toks, p, ys("break")) ? K_kw_break : K_kw_continue;
-        return res(yr(3, "k", yv_long(kind), "line", yv_long(tline(toks, p)),
-                              "col", yv_long(tcol(toks, p))), p + 1);
+        Yv *label = ys("");
+        ylong pos = p + 1;
+        if (ys_eq_lit(tt(toks, pos), "id")) {
+            label = tv(toks, pos);
+            pos = pos + 1;
+        };
+        label = loop_resolve(label);
+        return res(yr(4, "k", yv_long(kind), "v", label, "line", yv_long(tline(toks, p)),
+                              "col", yv_long(tcol(toks, p))), pos);
     } else if (is_kw(toks, p, ys("return"))) {
         if (is_punct(toks, p + 1, ys(";")) ||
             is_punct(toks, p + 1, ys("}")) ||
@@ -2212,7 +2261,9 @@ Yv *parse_if_let(Yv *toks, ylong p) {
 
 Yv *parse_while(Yv *toks, ylong p) {
     Yv *cond = parse_expr(toks, p + 1);
+    loop_push(ys(""));
     Yv *body = parse_block(toks, yv_l(yr_get(cond, "pos")));
+    loop_pop();
     return res(yr(5, "k", yv_long(K_kw_while), "cond", yr_get(cond, "node"), "body", yr_get(body, "node"), "line", yv_long(tline(toks, p)), "col", yv_long(tcol(toks, p))), yv_l(yr_get(body, "pos")));
 }
 
@@ -2238,7 +2289,9 @@ Yv *parse_foreach(Yv *toks, ylong p) {
         return res(expect_err(toks, yv_l(yr_get(it, "pos")), ys("')'")),
                    sync_stmt(toks, p + 1));
     }
+    loop_push(name);
     Yv *body = parse_block(toks, yv_l(yr_get(it, "pos")) + 1);  // skip ')'
+    loop_pop();
     return res(yr(6, "k", yv_long(K_kw_foreach), "name", name, "iter", yr_get(it, "node"), "body", yr_get(body, "node"), "line", yv_long(tline(toks, p)), "col", yv_long(tcol(toks, p))), yv_l(yr_get(body, "pos")));
 }
 
@@ -2268,7 +2321,9 @@ Yv *parse_for_or_range(Yv *toks, ylong p) {
                        sync_stmt(toks, p + 1));
         }
         Yv *hi = parse_expr(toks, yv_l(yr_get(lo, "pos")) + 1);
+        loop_push(name);
         Yv *body = parse_block(toks, yv_l(yr_get(hi, "pos")));
+        loop_pop();
         return res(yr(7, "k", yv_long(K_forrange), "name", name, "lo", yr_get(lo, "node"), "hi", yr_get(hi, "node"), "body", yr_get(body, "node"), "line", yv_long(ln), "col", yv_long(cl)), yv_l(yr_get(body, "pos")));
     } else {
         // C-style for
@@ -2321,8 +2376,10 @@ Yv *parse_for_or_range(Yv *toks, ylong p) {
             Yv *err = clause_err(toks, pos, step, ys("')'"));
             return res(err, sync_stmt(toks, p + 1));
         }
-        pos = pos + 1;  // ')'
+        pos = pos + 1;  /* ')' */
+        loop_push(ys(""));
         Yv *body = parse_block(toks, pos);
+        loop_pop();
         return res(yr(7, "k", yv_long(K_kw_for), "init", init, "cond", cond,
                       "step", step, "body", yr_get(body, "node"), "line",
                       yv_long(ln), "col", yv_long(cl)),

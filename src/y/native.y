@@ -122,6 +122,13 @@ let ush_vals: [[str]] = [];
 // consistent is how a jump ends up in an unrelated body.
 let brk_label: long = 0 - 1;
 let cont_label: long = 0 - 1;
+// One entry per enclosing loop while a body is emitted: the loop variable's
+// name ("" for `while`/C-style `for`), and the jump targets `break` and
+// `continue` name. A labelled break searches this from the innermost outward;
+// an unknown label falls back to the outermost loop (TODO.md item 5).
+let loop_names: [str] = [];
+let loop_brks: [long] = [];
+let loop_conts: [long] = [];
 
 // ── native import resolution ───────────────────────────────────────────
 // An import is a COMPILE-TIME text splice, and the C copy splices the same
@@ -3940,14 +3947,27 @@ def gen_go(st: EmitSt, node: Node) -> EmitSt {
     } else if (k == K.store) {
         let store: Store = node;
         gen_store(st, store)
-    } else if (k == K.kw_break) {
-        // types.y has already refused a `break` with no loop to leave and one
-        // that would cross a function boundary, so `brk_label` is a live label
-        // here. Nothing is left in %rax: the merge label that follows needs no
-        // value (the same reason a loop's own does not -- see gen_while).
-        emit_insn(st, insn.F_JMP_L, brk_label, 0, 0, 0, 0, 0, 0)
-    } else if (k == K.kw_continue) {
-        emit_insn(st, insn.F_JMP_L, cont_label, 0, 0, 0, 0, 0, 0)
+    } else if (k == K.kw_break || k == K.kw_continue) {
+        // types.y has already refused a bare `break`/`continue` with no loop
+        // to leave and one that would cross a function boundary, so the
+        // innermost target is live here. Nothing is left in %rax: the merge
+        // label that follows needs no value (the same reason a loop's own
+        // does not -- see gen_while).
+        let leaf: Leaf = node;
+        let label: str = leaf.v;
+        let target = cont_label;
+        if (k == K.kw_break) { target = brk_label; };
+        if (label != "") {
+            // The parser resolved the label to a loop depth (outermost is 0)
+            // before rename.y could change the variable's name. A malformed
+            // label only reaches here in a program the checker rejects.
+            let depth = tolong(label)!;
+            if (depth >= 0 && depth < len(loop_brks)) {
+                if (k == K.kw_break) { target = loop_brks[depth]; }
+                else { target = loop_conts[depth]; };
+            };
+        };
+        emit_insn(st, insn.F_JMP_L, target, 0, 0, 0, 0, 0, 0)
     } else if (k == K.ret) {
         let ret: Wrap = node;
         st = gen_as(st, ret.e, cur_fn_ret(st));
@@ -4654,7 +4674,14 @@ def gen_union_str_rax(st: EmitSt, t: Type, path: [Type]) -> EmitSt {
         st = emit_insn(st, insn.F_JZ_L, rnext.label, 0, 0, 0, 0, 0, 0);
         st = emit_insn(st, insn.F_POP_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
         let mu = types.unfold(mt);
-        st = gen_rec_str_rax(st, mu, union_lay(mu, t), path + t);
+        if (types.is_boxable_type(mu)) {
+            let lay = union_lay(mu, t);
+            let slot = mfield_idx(lay, types.box_field_name(mu));
+            st = gen_slot_move(st, slot, false);
+            st = gen_val_tostr_rax(st, mu, path + t);
+        } else {
+            st = gen_rec_str_rax(st, mu, union_lay(mu, t), path + t);
+        };
         st = emit_insn(st, insn.F_JMP_L, rdone.label, 0, 0, 0, 0, 0, 0);
         st = emit_label(st, rnext.label);
         m = m + 1;
@@ -6619,7 +6646,13 @@ def gen_while(st: EmitSt, node: While) -> EmitSt {
     let saved_cont = cont_label;
     brk_label = r2.label;
     cont_label = r1.label;
+    loop_names += "";
+    loop_brks += brk_label;
+    loop_conts += cont_label;
     st = gen_discard(st, node.body);
+    loop_names = loop_names[0:len(loop_names) - 1];
+    loop_brks = loop_brks[0:len(loop_brks) - 1];
+    loop_conts = loop_conts[0:len(loop_conts) - 1];
     brk_label = saved_brk;
     cont_label = saved_cont;
     st = gen_loc_loop(st, node);
@@ -6668,7 +6701,13 @@ def gen_for(st: EmitSt, node: For) -> EmitSt {
     let saved_cont = cont_label;
     brk_label = r2.label;
     cont_label = r3.label;
+    loop_names += "";
+    loop_brks += brk_label;
+    loop_conts += cont_label;
     st = gen_discard(st, node.body);
+    loop_names = loop_names[0:len(loop_names) - 1];
+    loop_brks = loop_brks[0:len(loop_brks) - 1];
+    loop_conts = loop_conts[0:len(loop_conts) - 1];
     brk_label = saved_brk;
     cont_label = saved_cont;
     st = emit_label(st, r3.label);
@@ -6726,8 +6765,14 @@ def gen_forrange(st: EmitSt, node: ForRange) -> EmitSt {
     let saved_cont = cont_label;
     brk_label = r2.label;
     cont_label = r3.label;
+    loop_names += node.name;
+    loop_brks += brk_label;
+    loop_conts += cont_label;
     st = box_bound(st, node.name);
     st = gen_discard(st, node.body);
+    loop_names = loop_names[0:len(loop_names) - 1];
+    loop_brks = loop_brks[0:len(loop_brks) - 1];
+    loop_conts = loop_conts[0:len(loop_conts) - 1];
     brk_label = saved_brk;
     cont_label = saved_cont;
     st = emit_label(st, r3.label);
@@ -6795,8 +6840,14 @@ def gen_foreach(st: EmitSt, node: Foreach) -> EmitSt {
     let saved_cont = cont_label;
     brk_label = r2.label;
     cont_label = r3.label;
+    loop_names += node.name;
+    loop_brks += brk_label;
+    loop_conts += cont_label;
     st = box_bound(st, node.name);
     st = gen_discard(st, node.body);
+    loop_names = loop_names[0:len(loop_names) - 1];
+    loop_brks = loop_brks[0:len(loop_brks) - 1];
+    loop_conts = loop_conts[0:len(loop_conts) - 1];
     brk_label = saved_brk;
     cont_label = saved_cont;
     st = emit_label(st, r3.label);
@@ -7364,12 +7415,11 @@ def union_shared(u: Type) -> [str] {
     let ms = types.members(u);
     let out: [str] = [];
     if (len(ms) > 0) {
-        let m0: TRec = ms[0];
-        let fs: [Field] = m0.fields;
+        let fs: [Field] = types.member_fields(ms[0]);
         foreach (f in fs) {
             let ok = true;
             foreach (m in ms) {
-                let ft = rec_field_type(m, f.name);
+                let ft = types.member_field_type(m, f.name);
                 if (ok && (ft.k == K.tnone || !types.teq(ft, f.typ))) { ok = false; };
             };
             if (ok) { out += f.name; };
@@ -7385,8 +7435,7 @@ def union_shared(u: Type) -> [str] {
 // field names in slot order.
 def union_lay(m: Type, u: Type) -> [str] {
     let sh = union_shared(u);
-    let rec: TRec = m;
-    let fs: [Field] = rec.fields;
+    let fs: [Field] = types.member_fields(m);
     let rest: [str] = [];
     foreach (f in fs) {
         if (mfield_idx(sh, f.name) < 0) { rest += f.name; };
@@ -7401,8 +7450,7 @@ def union_lay(m: Type, u: Type) -> [str] {
 // declared: in a union, union_lay; else its own sorted fields.
 def lay_of(t: Type, inu: Type) -> [str] {
     if (inu.k == K.tunion) { union_lay(t, inu) } else {
-        let rec: TRec = t;
-        types.rec_names(rec.fields)
+        types.rec_names(types.member_fields(t))
     }
 };
 
@@ -7422,8 +7470,7 @@ def same_lay(a: [str], b: [str]) -> bool {
 def ty_desc_in(st: EmitSt, m: Type, inu: Type) -> StLbl {
     let mu = types.unfold(m);
     let lay = lay_of(mu, inu);
-    let rec: TRec = mu;
-    if (same_lay(lay, types.rec_names(rec.fields))) { ty_desc(st, m) }
+    if (same_lay(lay, types.rec_names(types.member_fields(mu)))) { ty_desc(st, m) }
     else { ty_desc_as(st, m, "@" + join(lay, ",")) }
 };
 
@@ -7446,6 +7493,30 @@ def gen_copy_rec(st: EmitSt, from: [str], to: [str], tag: long) -> EmitSt {
     emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RAX, 64, 0, 0, 0, 0)
 };
 
+// A primitive value in %rax being boxed as a union member: create the
+// hidden one-field record (`{ $long: value }`) in the union's layout and
+// tag it with the member's descriptor.
+def gen_box_prim(st: EmitSt, p: Type, u: Type) -> EmitSt {
+    // Tag with the member as the UNION writes it: a structurally equal
+    // inferred type can have a different recursive-alias spelling, and the
+    // descriptor's signature includes that spelling (tsig).
+    let m = types.union_member(u, p);
+    if (m.k == K.tnone) { m = p; };
+    let mu = types.unfold(m);
+    let dr = ty_desc_in(st, m, u);
+    st = dr.st;
+    let lay = union_lay(mu, u);
+    let slot = mfield_idx(lay, types.box_field_name(mu));
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_I_R, 8 * len(lay) + 16, insn.R_RDI, 64, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_CALL_L, lbl_new("y_alloc"), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_POP_R, insn.R_RCX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_LEA_P_R, -1, -1, 1, 0, dr.label, insn.R_RDX, 64);
+    st = emit_insn(st, insn.F_MOV_R_D, insn.R_RDX, 64, insn.R_RAX, -1, 1, 0, -1);
+    st = emit_insn(st, insn.F_MOV_R_D, insn.R_RCX, 64, insn.R_RAX, -1, 1, 8 + 8 * slot, -1);
+    emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RAX, 64, 0, 0, 0, 0)
+};
+
 // The value in %rax, of static type src0, going where want0 is declared:
 // a member into a union, a union into one of its members (`check`: its
 // tag is checked first), or a union into another. Each member whose
@@ -7456,7 +7527,17 @@ def gen_convert(st: EmitSt, src0: Type, want0: Type, check: bool) -> EmitSt {
     let w = types.unfold(want0);
     let sk: long = s.k;
     let wk: long = w.k;
-    if (sk == K.trec && wk == K.tunion) {
+    if (types.is_boxable_type(s) && wk == K.tunion) {
+        gen_box_prim(st, s, w)
+    } else if (sk == K.tunion && types.is_boxable_type(w)) {
+        let m = types.union_member(s, w);
+        if (m.k == K.tnone) { m = w; };
+        if (check) { st = gen_cast_check(st, [m], s); };
+        let mu = types.unfold(m);
+        let lay = union_lay(mu, s);
+        let slot = mfield_idx(lay, types.box_field_name(mu));
+        gen_slot_move(st, slot, false)
+    } else if (sk == K.trec && wk == K.tunion) {
         let m = types.union_member(w, s);
         if (m.k == K.tnone) { st } else {
             let from = lay_of(s, src0);
@@ -7832,6 +7913,9 @@ def gen_decl(st: EmitSt, node: Decl) -> EmitSt {
             };
             let rsz = arr_elem_bytes(t);
             st = gen_arrrep_esz(st, rep, rsz, store_elem_type(t, rsz));
+            if (types.unfold(t).k == K.tunion) {
+                st = gen_convert(st, infer(st, rep), t, true);
+            };
             bind_decl(st, node.name, t)
         } else if (node.v.k == K.array) {
             let array: ArrLit = node.v;
@@ -7844,6 +7928,9 @@ def gen_decl(st: EmitSt, node: Decl) -> EmitSt {
             };
             let asz = arr_elem_bytes(t);
             st = gen_array_esz(st, array, asz, store_elem_type(t, asz));
+            if (types.unfold(t).k == K.tunion) {
+                st = gen_convert(st, infer(st, array), t, true);
+            };
             bind_decl(st, node.name, t)
         } else if (node.v.k == K.rec) {
             let rec: RecLit = node.v;
@@ -10468,8 +10555,17 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
     // right on its own terms rather than relying on that check in another file.
     let prev_brk = brk_label;
     let prev_cont = cont_label;
+    let prev_loop_names = loop_names;
+    let prev_loop_brks = loop_brks;
+    let prev_loop_conts = loop_conts;
     brk_label = 0 - 1;
     cont_label = 0 - 1;
+    let no_names: [str] = [];
+    let no_brks: [long] = [];
+    let no_conts: [long] = [];
+    loop_names = no_names;
+    loop_brks = no_brks;
+    loop_conts = no_conts;
     let f: EmitSt = { ir: [], txt: [], rodata: st.rodata, uid: st.uid,
       fuid: fuid, loc: 1, env: [], slots: 0, temp: 0,
       self_label: label, end_label: lbl_new(arch.arch_loc_label(fuid, 0)),
@@ -10565,6 +10661,9 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
     frame_max = prev_max;
     brk_label = prev_brk;
     cont_label = prev_cont;
+    loop_names = prev_loop_names;
+    loop_brks = prev_loop_brks;
+    loop_conts = prev_loop_conts;
     // The body is one IR stream: the prologue, what the body emitted, the
     // epilogue (see ir.y). The text the linker and -S read is rendered from
     // it, so nothing here is spelled twice.

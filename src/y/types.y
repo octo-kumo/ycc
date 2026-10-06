@@ -651,6 +651,60 @@ def trec_field_type(rec: Type, key: str) -> Type {
 // with tighter spacing (`(long)->long`, `{a: long}`), used only by those four
 // emitter sites; one type had two spellings and only one of them was in the
 // diagnostics.
+// A tuple is represented as a record with positional field names $0..$n-1.
+// These helpers recognise that shape for display and for the checker's own
+// diagnostics; the storage/emitter never need a separate case.
+def tuple_field_no(name: str) -> long {
+    if (len(name) < 2) { -1 }
+    else if (name[0:1] != "$") { -1 }
+    else {
+        let v = 0;
+        let i = 1;
+        let ok = true;
+        while (i < len(name) && ok) {
+            let c = name[i:i + 1];
+            if (c >= "0" && c <= "9") {
+                v = v * 10 + (ord(c) - ord("0"));
+                i = i + 1;
+            } else {
+                ok = false;
+            };
+        };
+        if (ok) { v } else { -1 }
+    }
+};
+
+// The tuple arity of a field list: n for a complete $0..$n-1 set, -1 for
+// any ordinary record (including the empty record, which is not a tuple).
+def tuple_n(fs: [Field]) -> long {
+    let n = 0;
+    let ok = len(fs) > 0;
+    foreach (f in fs) {
+        let ix = tuple_field_no(f.name);
+        if (ix < 0 || f.opt) { ok = false; }
+        else if (ix + 1 > n) { n = ix + 1; };
+    };
+    if (ok && n == len(fs)) { n } else { -1 }
+};
+
+def tuple_typs(fs: [Field]) -> [Type] {
+    let n = tuple_n(fs);
+    let out: [Type] = [];
+    if (n < 0) {
+    } else {
+        let i = 0;
+        while (i < n) {
+            out += { k: K.tunk };
+            i = i + 1;
+        };
+        foreach (f in fs) {
+            let ix = tuple_field_no(f.name);
+            out[ix] = f.typ;
+        };
+    };
+    out
+};
+
 def tstr_go(t: Type) -> str {
     if (t.k == K.tlong) { "long" }
     else if (t.k == K.tbyte) { "byte" }
@@ -678,9 +732,20 @@ def tstr_go(t: Type) -> str {
     else if (t.k == K.trec && teq(t, t_mutex())) { "mutex" }
     else if (t.k == K.trec && teq(t, t_sem())) { "sem" }
     else if (t.k == K.trec) {
-        let parts: [str] = [];
         let rec: TRec = t;
         let fs: [Field] = rec.fields;
+        let tn = tuple_n(fs);
+        if (tn >= 0) {
+            let tys = tuple_typs(fs);
+            let tparts: [str] = [];
+            let ti = 0;
+            while (ti < len(tys)) {
+                tparts += tstr_go(tys[ti]);
+                ti = ti + 1;
+            };
+            "(" + join(tparts, ", ") + ")"
+        } else {
+        let parts: [str] = [];
         let i = 0;
         while (i < len(fs)) {
             // NOTE: bound once — `fields` is a bare param here, so an inline
@@ -695,6 +760,7 @@ def tstr_go(t: Type) -> str {
             i = i + 1;
         };
         "{ " + join(parts, ", ") + " }"
+        }
     }
     else if (t.k == K.tfunc) {
         let parts: [str] = [];
@@ -727,14 +793,77 @@ def tstr_union(ts: [Type], sep: str) -> str {
 // time"), so a match tells the member a value holds by comparing that, a
 // compare per member (the first matching arm wins).
 
+// ── primitive union members ─────────────────────────────────────────────
+// A union may hold a primitive as one of its members. The runtime value is
+// still a record pointer: each primitive kind has one hidden box record
+// (`{ $long: long }`, `{ $str: str }`, ...) whose single field carries the
+// value. The hidden field name cannot be written by a program, so the boxes
+// cannot collide with records a person writes.
+def is_prim_type(t: Type) -> bool {
+    t.k == K.tlong || t.k == K.tbyte || t.k == K.tstr || t.k == K.tbool || t.k == K.tfloat || t.k == K.tbigint
+};
+
+def prim_field_name(t: Type) -> str {
+    if (t.k == K.tlong) { "$long" }
+    else if (t.k == K.tbyte) { "$byte" }
+    else if (t.k == K.tstr) { "$str" }
+    else if (t.k == K.tbool) { "$bool" }
+    else if (t.k == K.tfloat) { "$float" }
+    else if (t.k == K.tbigint) { "$bigint" }
+    else { "$?" }
+};
+
+// A primitive, array or map can be a union member. The value is boxed in a
+// hidden one-field record; arrays and maps are already pointers, and the box
+// gives them the descriptor tag union matching and printing need.
+def is_boxable_type(t: Type) -> bool {
+    is_prim_type(t) || t.k == K.tarr || t.k == K.tarrfix || t.k == K.tmap
+};
+
+def box_field_name(t: Type) -> str {
+    if (t.k == K.tarr || t.k == K.tarrfix) { "$arr" }
+    else if (t.k == K.tmap) { "$map" }
+    else { prim_field_name(t) }
+};
+
+def prim_field(t: Type) -> Field {
+    { name: box_field_name(t), opt: false, typ: t }
+};
+
+// The fields a member contributes to a union's layout: a record's own fields,
+// or the one hidden field of a primitive's box. Any other type contributes
+// nothing (the checker has already rejected it as a union member).
+def member_fields(m: Type) -> [Field] {
+    let u = unfold(m);
+    let out: [Field] = [];
+    if (u.k == K.trec) {
+        let rec: TRec = u;
+        out += rec.fields;
+    } else if (is_boxable_type(u)) {
+        out += prim_field(u);
+    };
+    out
+};
+
+def member_field_type(m: Type, key: str) -> Type {
+    let fs = member_fields(m);
+    let found: Type = { k: K.tnone };
+    let i = 0;
+    while (i < len(fs)) {
+        let f = fs[i];
+        if (f.name == key) { found = f.typ; };
+        i = i + 1;
+    };
+    found
+};
+
 // The field names a match pattern tests: a record type's, or a record
 // pattern's (tpat).
 def type_names(t: Type) -> [str] {
     let out: [str] = [];
     let tk: long = t.k;
-    if (tk == K.trec) {
-        let rec: TRec = t;
-        let fs: [Field] = rec.fields;
+    if (tk == K.trec || is_boxable_type(unfold(t))) {
+        let fs: [Field] = member_fields(t);
         let i = 0;
         while (i < len(fs)) {
             let f = fs[i];
@@ -778,7 +907,8 @@ def rec_has_names(r: Type, names: [str]) -> bool {
 def narrow_type(s: Type, t: Type) -> Type {
     let tk: long = t.k;
     let sk: long = s.k;
-    if (tk != K.tpat) { t }
+    if (is_prim_type(unfold(t))) { unfold(t) }
+    else if (tk != K.tpat) { t }
     else if (sk == K.trec) {
         let pat: TPat = t;
         if (rec_has_names(s, pat.names)) { s } else { t_unk() }
@@ -848,8 +978,9 @@ def dotassign_union(st: TcSt, t: Type, node: DotAssign) -> TcRes {
     { typ: fr.typ, st: st }
 };
 
-// Every member of a union must be a record type (they are told apart by
-// their field names).
+// Every member of a union must be a record or a primitive (primitive
+// members are boxed in hidden one-field records at run time; they are told
+// apart by their hidden field names).
 def union_ok(t: Type) -> bool {
     let ms = members(t);
     let ok = true;
@@ -857,7 +988,7 @@ def union_ok(t: Type) -> bool {
     while (i < len(ms)) {
         let m = ms[i];
         let mk: long = m.k;
-        if (mk != K.trec) { ok = false; }
+        if (mk != K.trec && !is_boxable_type(m)) { ok = false; }
         i = i + 1;
     };
     ok
@@ -2659,8 +2790,13 @@ def typeof_rectest(st: TcSt, node: Narrow) -> TcRes {
     let tk: long = tu.k;
     if (tk == K.tunk) {
         // an alias that stands for no type (rename.y reported it)
+    } else if (is_prim_type(tu)) {
+        if (sk == K.tunk) {
+        } else if (!pattern_fits(s, t)) {
+            st = fail(st, "pattern type " + tstr(t) + " can never match " + tstr(s), node.line, node.col);
+        };
     } else if (tk != K.trec && tk != K.tpat) {
-        st = fail(st, "match pattern type " + tstr(t) + " is not a record type", node.line, node.col);
+        st = fail(st, "match pattern type " + tstr(t) + " is not a record or primitive type", node.line, node.col);
     } else if (sk == K.tunk) {
     } else if (sk == K.trec || sk == K.tunion) {
         if (tk == K.tpat) {
@@ -2695,7 +2831,9 @@ def typeof_narrow(st: TcSt, node: Narrow) -> TcRes {
     let t = node.typ;
     let tu = unfold(t);
     let tk: long = tu.k;
-    if (tk == K.trec || tk == K.tpat) {
+    if (is_prim_type(tu)) {
+        tc_res(tu, r.st)
+    } else if (tk == K.trec || tk == K.tpat) {
         tc_res(narrow_type(r.typ, t), r.st)
     } else {
         tc_res(t_unk(), r.st)
@@ -4796,6 +4934,231 @@ def st_fdepth(st: TcSt, d: long) -> TcSt { { bindings: st.bindings, errors: st.e
 
 // `ext`: the externs -- top-level defs of the units this one links
 // against (native.y compile_unit), visible by name like the unit's own.
+// ── parameter type inference (TODO.md item 8) ─────────────────────────────
+// A parameter with no annotation and no literal default can still get its
+// type from a literal used at a call site (`f(1)`) or from a literal the body
+// combines it with (`i + 10`). This is deliberately local and conservative:
+// nothing is guessed, a clue must be a primitive literal or a known operator
+// on one, and an unresolved parameter keeps the old "annotate it" error.
+//
+// The probe is one global pair rather than a callback: the walker below
+// already visits every node, so when a parameter is being probed the same
+// pass looks for a direct clue involving its name.
+let pi_names: [str] = [];
+let pi_funcs: [Func] = [];
+let pi_probe = "";
+let pi_probe_type: Type = { k: K.tnone };
+
+def pi_reset() {
+    let no: [str] = [];
+    let nf: [Func] = [];
+    pi_names = no;
+    pi_funcs = nf;
+    pi_probe = "";
+    pi_probe_type = { k: K.tnone };
+    0
+};
+
+def pi_id_is(node: Node, name: str) -> bool {
+    if (node.k == K.id) {
+        let id: Leaf = node;
+        id.v == name
+    } else { false }
+};
+
+def pi_lit_hint(node: Node) -> Type {
+    let k: long = node.k;
+    if (k == K.num) {
+        let leaf: Leaf = node;
+        let v: str = leaf.v;
+        if (index_of(v, ".") >= 0 || index_of(v, "e") >= 0 || index_of(v, "E") >= 0) {
+            let t: Type = { k: K.tfloat }; t
+        } else {
+            let t: Type = { k: K.tlong }; t
+        }
+    }
+    else if (k == K.bignum) { let t: Type = { k: K.tbigint }; t }
+    else if (k == K.str) { let t: Type = { k: K.tstr }; t }
+    else if (k == K.bool) { let t: Type = { k: K.tbool }; t }
+    else if (k == K.char) { let t: Type = { k: K.tbyte }; t }
+    else if (k == K.un) {
+        let un: Un = node;
+        if (un.op == "-" && un.e.k == K.num) {
+            let leaf: Leaf = un.e;
+            let v: str = leaf.v;
+            if (index_of(v, ".") >= 0 || index_of(v, "e") >= 0 || index_of(v, "E") >= 0) {
+                let t: Type = { k: K.tfloat }; t
+            } else {
+                let t: Type = { k: K.tlong }; t
+            }
+        } else { let t: Type = { k: K.tnone }; t }
+    }
+    else { let t: Type = { k: K.tnone }; t }
+};
+
+def pi_note(t: Type) -> long {
+    if (pi_probe != "" && pi_probe_type.k == K.tnone && t.k != K.tnone) {
+        pi_probe_type = t;
+    };
+    0
+};
+
+// The type a binary operator gives the probed parameter when the other side
+// is a primitive literal. Nothing is inferred for `::` (the element type is
+// the missing half) or for a non-literal other side.
+def pi_bin_hint(op: str, other: Node) -> Type {
+    let ht = pi_lit_hint(other);
+    if (ht.k == K.tnone) { let t: Type = { k: K.tnone }; t }
+    else if (op == "+" && ht.k == K.tstr) { let t: Type = { k: K.tstr }; t }
+    else if ((op == "+" || op == "-" || op == "*" || op == "/" || op == "%") && is_num_kind(ht)) {
+        if (ht.k == K.tfloat) { let t: Type = { k: K.tfloat }; t }
+        else { let t: Type = { k: K.tlong }; t }
+    }
+    else if (op == "<" || op == ">" || op == "<=" || op == ">=") { ht }
+    else if (op == "==" || op == "!=") { ht }
+    else if (is_bits_op(op) && is_num_kind(ht)) { let t: Type = { k: K.tlong }; t }
+    else if ((op == "&&" || op == "||") && ht.k == K.tbool) { let t: Type = { k: K.tbool }; t }
+    else { let t: Type = { k: K.tnone }; t }
+};
+
+def pi_callee_name(callee: Node) -> str {
+    if (callee.k == K.id) {
+        let id: Leaf = callee;
+        id.v
+    } else { "" }
+};
+
+// Look for a literal actual for an unannotated parameter of a top-level def.
+// This is the "single-candidate literal call site" half of the feature.
+def pi_call_args(call: Call) -> long {
+    let nm = pi_callee_name(call.callee);
+    if (nm == "") { return 0; };
+    let fi = 0;
+    while (fi < len(pi_names)) {
+        if (pi_names[fi] == nm) {
+            let f = pi_funcs[fi];
+            let args = call.args;
+            let ai = 0;
+            while (ai < len(args) && ai < len(f.ptypes)) {
+                if (f.ptypes[ai].k == K.tnone) {
+                    let ht = pi_lit_hint(args[ai]);
+                    if (ht.k != K.tnone) { f.ptypes[ai] = ht; };
+                };
+                ai = ai + 1;
+            };
+        };
+        fi = fi + 1;
+    };
+    0
+};
+
+def pi_direct(node: Node) -> long {
+    let k: long = node.k;
+    if (pi_probe != "") {
+        if (k == K.bin) {
+            let b: Bin = node;
+            let op = b.op;
+            if (pi_id_is(b.l, pi_probe)) { pi_note(pi_bin_hint(op, b.r)); }
+            else if (pi_id_is(b.r, pi_probe)) { pi_note(pi_bin_hint(op, b.l)); };
+        } else if (k == K.un) {
+            let u: Un = node;
+            if (pi_id_is(u.e, pi_probe)) {
+                if (u.op == "!") { pi_note({ k: K.tbool }); }
+                else if (u.op == "-" || u.op == "~") { pi_note({ k: K.tlong }); };
+            };
+        } else if (k == K.kw_if || k == K.kw_while) {
+            let c: Node = if (k == K.kw_if) { let i: If = node; i.cond } else { let w: While = node; w.cond };
+            if (pi_id_is(c, pi_probe)) { pi_note({ k: K.tbool }); };
+        } else if (k == K.forrange) {
+            let r: ForRange = node;
+            if (pi_id_is(r.lo, pi_probe) || pi_id_is(r.hi, pi_probe)) { pi_note({ k: K.tlong }); };
+        } else if (k == K.index) {
+            let ix: Index = node;
+            if (pi_id_is(ix.idx, pi_probe)) { pi_note({ k: K.tlong }); };
+        } else if (k == K.idxassign) {
+            let ix: IdxAssign = node;
+            if (pi_id_is(ix.idx, pi_probe)) { pi_note({ k: K.tlong }); };
+        } else if (k == K.slice) {
+            let sl: Slice = node;
+            if (pi_id_is(sl.lo, pi_probe) || pi_id_is(sl.hi, pi_probe)) { pi_note({ k: K.tlong }); };
+        } else if (k == K.sliceassign) {
+            let sl: SliceAssign = node;
+            if (pi_id_is(sl.lo, pi_probe) || pi_id_is(sl.hi, pi_probe)) { pi_note({ k: K.tlong }); };
+        } else if (k == K.incdec) {
+            let inc: IncDec = node;
+            if (pi_id_is(inc.tgt, pi_probe)) { pi_note({ k: K.tlong }); };
+        } else if (k == K.opassign) {
+            let opa: OpAssign = node;
+            if (pi_id_is(opa.tgt, pi_probe)) { pi_note({ k: K.tlong }); };
+        };
+    };
+    if (k == K.call) {
+        let call: Call = node;
+        pi_call_args(call);
+    };
+    0
+};
+
+def pi_walk_list(nodes: [Node]) -> long {
+    let i = 0;
+    while (i < len(nodes)) {
+        pi_walk(nodes[i]);
+        i = i + 1;
+    };
+    0
+};
+
+def pi_infer_body(func: Func) -> long {
+    let saved = pi_probe;
+    let savedt = pi_probe_type;
+    let i = 0;
+    while (i < len(func.params) && i < len(func.ptypes)) {
+        if (func.ptypes[i].k == K.tnone) {
+            pi_probe = func.params[i];
+            pi_probe_type = { k: K.tnone };
+            pi_walk(func.body);
+            if (pi_probe_type.k != K.tnone) { func.ptypes[i] = pi_probe_type; };
+        };
+        i = i + 1;
+    };
+    pi_probe = saved;
+    pi_probe_type = savedt;
+    0
+};
+
+def pi_walk(node: Node) -> long {
+    pi_direct(node);
+    let k: long = node.k;
+    if (k == K.bin) { let n: Bin = node; pi_walk(n.l); pi_walk(n.r); }
+    else if (k == K.un) { let n: Un = node; pi_walk(n.e); }
+    else if (k == K.addr || k == K.deref || k == K.ret) { let n: Wrap = node; pi_walk(n.e); }
+    else if (k == K.narrow || k == K.rectest || k == K.matchend) { let n: Narrow = node; pi_walk(n.e); }
+    else if (k == K.array) { let n: ArrLit = node; pi_walk_list(n.elems); }
+    else if (k == K.arrrep) { let n: ArrRep = node; pi_walk(n.v); }
+    else if (k == K.assign) { let n: Assign = node; pi_walk(n.v); }
+    else if (k == K.block) { let n: Block = node; pi_walk_list(n.stmts); }
+    else if (k == K.call) { let n: Call = node; pi_walk(n.callee); pi_walk_list(n.args); }
+    else if (k == K.decl) { let n: Decl = node; pi_walk(n.v); }
+    else if (k == K.dot) { let n: Dot = node; pi_walk(n.obj); }
+    else if (k == K.dotassign) { let n: DotAssign = node; pi_walk(n.obj); pi_walk(n.v); }
+    else if (k == K.kw_for) { let n: For = node; pi_walk(n.init); pi_walk(n.cond); pi_walk(n.step); pi_walk(n.body); }
+    else if (k == K.kw_foreach) { let n: Foreach = node; pi_walk(n.iter); pi_walk(n.body); }
+    else if (k == K.forrange) { let n: ForRange = node; pi_walk(n.lo); pi_walk(n.hi); pi_walk(n.body); }
+    else if (k == K.func) { let n: Func = node; pi_infer_body(n); pi_walk(n.body); pi_walk_list(n.defs); }
+    else if (k == K.idxassign) { let n: IdxAssign = node; pi_walk(n.arr); pi_walk(n.idx); pi_walk(n.v); }
+    else if (k == K.kw_if) { let n: If = node; pi_walk(n.cond); pi_walk(n.then); pi_walk(n.els); }
+    else if (k == K.incdec) { let n: IncDec = node; pi_walk(n.tgt); }
+    else if (k == K.index) { let n: Index = node; pi_walk(n.arr); pi_walk(n.idx); }
+    else if (k == K.rec) { let n: RecLit = node; pi_walk_list(n.vals); }
+    else if (k == K.map) { let n: RecLit = node; pi_walk_list(n.vals); }
+    else if (k == K.opassign) { let n: OpAssign = node; pi_walk(n.tgt); pi_walk(n.v); }
+    else if (k == K.slice) { let n: Slice = node; pi_walk(n.arr); pi_walk(n.lo); pi_walk(n.hi); }
+    else if (k == K.sliceassign) { let n: SliceAssign = node; pi_walk(n.arr); pi_walk(n.lo); pi_walk(n.hi); pi_walk(n.v); }
+    else if (k == K.store) { let n: Store = node; pi_walk(n.p); pi_walk(n.v); }
+    else if (k == K.kw_while) { let n: While = node; pi_walk(n.cond); pi_walk(n.body); };
+    0
+};
+
 def check_program(ast: Block, ext: [Sym]) -> [Diag] {
     // the inferred-return table is made when first written (inf_reset)
     let nobkts: [[long]] = [];
@@ -4804,6 +5167,29 @@ def check_program(ast: Block, ext: [Sym]) -> [Diag] {
     // program would be a cost paid for a feature no compiler run uses.
     if (tc_index) { tci_reset(); };
     tc_ixn = 0;
+    // Parameter inference runs before signatures: a call-site literal or a
+    // body literal use fills an unannotated parameter's ptypes entry, so
+    // def_sig and typeof_def see the type the rest of the compiler uses.
+    pi_reset();
+    let pi_i = 0;
+    let pi_stmts: [Node] = ast.stmts;
+    while (pi_i < len(pi_stmts)) {
+        let ps: Node = pi_stmts[pi_i];
+        if (ps.k == K.decl) {
+            let pd: Decl = ps;
+            if (pd.kind == "def") {
+                let pf: Func = pd.v;
+                pi_names += pd.name;
+                pi_funcs += pf;
+            } else if (pd.v.k == K.func) {
+                let pf2: Func = pd.v;
+                pi_names += pd.name;
+                pi_funcs += pf2;
+            };
+        };
+        pi_i = pi_i + 1;
+    };
+    pi_walk(ast);
     // pass 1: collect top-level def signatures (allows mutual recursion).
     let defs: [Field] = [];
     let pstmts: [Node] = ast.stmts;
@@ -4880,4 +5266,4 @@ def def_sig(name: str, func: Func) -> Field {
     { name: name, opt: false, typ: type_node({ k: K.tfunc, args: args, ret: ret }) }
 };
 
-export { check_program, os_call_names, tstr, teq, leaf_of, field_pos, field_merge, narrow_type, union_member, unfold, members, union_parts, pat_members, lit_target, opt_wraps, t_mutex, t_sem, tcanon, tsig, inferred_ret, str_sorted, rec_names, type_names, str_method, fmt_spec, fmt_kind, expr_type, type_index_on, type_index_off, Sym };
+export { check_program, os_call_names, tstr, teq, leaf_of, field_pos, field_merge, narrow_type, union_member, unfold, members, union_parts, pat_members, lit_target, opt_wraps, t_mutex, t_sem, tcanon, tsig, inferred_ret, str_sorted, rec_names, type_names, member_fields, member_field_type, is_prim_type, is_boxable_type, box_field_name, str_method, fmt_spec, fmt_kind, expr_type, type_index_on, type_index_off, Sym };

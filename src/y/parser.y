@@ -17,6 +17,39 @@
 import tags from "./tags.y";
 import lexer from "./lexer.y";
 
+// ── loop labels (TODO.md item 5) ─────────────────────────────────────────
+// The parser tracks the names of enclosing loops while it parses a body, so
+// `break name` / `continue name` can be resolved to a loop DEPTH before
+// rename.y changes the variable names. An unknown name is read as the
+// outermost enclosing loop (`break outer`), which is the multi-level exit the
+// feature exists for; a name matching an enclosing `for`/`foreach` variable
+// selects that loop.
+let ploop_names: [str] = [];
+
+def loop_push(nm: str) -> long {
+    ploop_names += nm;
+    0
+};
+
+def loop_pop() -> long {
+    ploop_names = ploop_names[0:len(ploop_names) - 1];
+    0
+};
+
+def loop_resolve(label: str) -> str {
+    if (label == "") { return ""; };
+    let found = 0 - 1;
+    let i = len(ploop_names) - 1;
+    while (found < 0 && i >= 0) {
+        if (ploop_names[i] == label) { found = i; };
+        i = i - 1;
+    };
+    if (found < 0) {
+        if (len(ploop_names) > 0) { found = 0; } else { return label; };
+    };
+    tostring(found)
+};
+
 // AST nodes have one type per shape; kinds with a shared shape use one
 // member and are distinguished by `k`.
 type Leaf = { k: long, v: str, line: long, col: long };
@@ -282,7 +315,205 @@ def op_prec(op: str) -> long {
     else { 0 }
 };
 
+// ── JSON literals ────────────────────────────────────────────────────────
+// `json{...}` and `json[...]` are one sigil each, not a type-directed
+// feature: the parser desugars them to ordinary calls into std/json.y, so the
+// checker, renamer and emitter need no new cases. Inside a JSON literal a
+// bare `{...}` is always an object, `[...]` always an array, and the five
+// scalar forms are str, num, bool, null and another json literal.
+
+// The token after `json` is the sigil opener (`{` or `[`), with no space:
+// `json{` / `json[`. The lexer keeps `json` an identifier, so this test is
+// the whole disambiguation and existing programs cannot change meaning.
+def json_sigil_at(toks: [Tok], p: long, opener: str) -> bool {
+    if (tt(toks, p) != "id" || tv(toks, p) != "json") { false }
+    else if (!is_punct(toks, p + 1, opener)) { false }
+    else if (tline(toks, p + 1) != tline(toks, p)) { false }
+    else { tcol(toks, p + 1) == tcol(toks, p) + 4 }
+};
+
+def json_callee(name: str, ln: long, cl: long) -> Node {
+    let obj: Node = { k: K.id, v: "json", line: ln, col: cl };
+    let dot: Dot = { k: K.dot, obj: obj, key: name, line: ln, col: cl, nline: ln, ncol: cl };
+    let node: Node = dot;
+    node
+};
+
+def json_call_name(name: str, args: [Node], ln: long, cl: long) -> Node {
+    mk_call(json_callee(name, ln, cl), args, ln, cl)
+};
+
+def json_call0(name: str, ln: long, cl: long) -> Node {
+    let args: [Node] = [];
+    json_call_name(name, args, ln, cl)
+};
+
+def json_call1(name: str, arg: Node, ln: long, cl: long) -> Node {
+    let args: [Node] = [];
+    args += arg;
+    json_call_name(name, args, ln, cl)
+};
+
+def json_err(msg: str, ln: long, cl: long) -> Node {
+    let e: Node = { k: K.err, msg: msg, line: ln, col: cl };
+    e
+};
+
+// One JSON value. `top` is true only for the outermost `json{...}` /
+// `json[...]`: a top-level object stays a bare map (what `json.stringify`
+// takes), while an object nested in another value is wrapped with
+// `json.jobj`. Arrays are always wrapped with `json.jarr`, matching
+// `json.parse_val` (which returns Val for a top-level array).
+def parse_json_value(toks: [Tok], p: long, top: bool) -> Parsed {
+    let t = tt(toks, p);
+    let v = tv(toks, p);
+    let ln = tline(toks, p);
+    let cl = tcol(toks, p);
+    if (t == "str") {
+        res(json_call1("str", { k: K.str, v: v, line: ln, col: cl }, ln, cl), p + 1)
+    } else if (t == "num") {
+        res(json_call1("numtext", { k: K.str, v: v, line: ln, col: cl }, ln, cl), p + 1)
+    } else if (is_op(toks, p, "-") && tt(toks, p + 1) == "num") {
+        res(json_call1("numtext", { k: K.str, v: "-" + tv(toks, p + 1), line: ln, col: cl }, ln, cl), p + 2)
+    } else if (is_kw(toks, p, "true")) {
+        res(json_call1("boolean", { k: K.bool, v: "true", line: ln, col: cl }, ln, cl), p + 1)
+    } else if (is_kw(toks, p, "false")) {
+        res(json_call1("boolean", { k: K.bool, v: "false", line: ln, col: cl }, ln, cl), p + 1)
+    } else if (t == "id" && v == "null") {
+        res(json_call0("nul", ln, cl), p + 1)
+    } else if (is_punct(toks, p, "{")) {
+        let o = parse_json_object(toks, p);
+        if (top) { o } else { res(json_call1("jobj", o.node, ln, cl), o.pos) }
+    } else if (is_punct(toks, p, "[")) {
+        let a = parse_json_array(toks, p);
+        res(json_call1("jarr", a.node, ln, cl), a.pos)
+    } else if (json_sigil_at(toks, p, "{") || json_sigil_at(toks, p, "[")) {
+        parse_json_primary(toks, p, top)
+    } else {
+        let ce = json_err("expected a JSON value, got " + tok_desc(toks, p), ln, cl);
+        if (t == "eof" || is_punct(toks, p, ")") || is_punct(toks, p, "]") || is_punct(toks, p, "}") || is_punct(toks, p, ",") || is_punct(toks, p, ";")) {
+            res(ce, p)
+        } else {
+            res(ce, p + 1)
+        }
+    }
+};
+
+// `{ ... }` inside a JSON literal: a bare object node (a map, or
+// `json.obj()` when empty); the caller wraps it for a nested position.
+def parse_json_object(toks: [Tok], p: long) -> Parsed {
+    let ln = tline(toks, p);
+    let cl = tcol(toks, p);
+    let keys: [str] = [];
+    let vals: [Node] = [];
+    let pos = p + 1;  // skip '{'
+    let bad: Node = { k: K.void, line: ln, col: cl };
+    let go = true;
+    while (go) {
+        if (is_punct(toks, pos, "}")) {
+            pos = pos + 1;
+            go = false;
+        } else if (tt(toks, pos) == "str") {
+            let key = tv(toks, pos);
+            pos = pos + 1;
+            if (!is_punct(toks, pos, ":")) {
+                bad = json_err("expected ':' after JSON object key", tline(toks, pos), tcol(toks, pos));
+                go = false;
+            } else {
+                pos = pos + 1;
+                let v = parse_json_value(toks, pos, false);
+                keys += key;
+                vals += v.node;
+                pos = v.pos;
+                if (is_punct(toks, pos, ",")) {
+                    pos = pos + 1;
+                } else if (is_punct(toks, pos, "}")) {
+                    pos = pos + 1;
+                    go = false;
+                } else {
+                    bad = json_err("expected ',' or '}' in JSON object", tline(toks, pos), tcol(toks, pos));
+                    go = false;
+                };
+            };
+        } else {
+            // A key must be a string literal. Consume the offending token
+            // (unless it is a closer) so the caller can make progress.
+            bad = json_err("expected a string key in JSON object, got " + tok_desc(toks, pos), tline(toks, pos), tcol(toks, pos));
+            if (!is_punct(toks, pos, "}") && tt(toks, pos) != "eof") { pos = pos + 1; };
+            go = false;
+        };
+    };
+    if (bad.k == K.err) {
+        res(bad, pos)
+    } else if (len(keys) == 0) {
+        res(json_call0("obj", ln, cl), pos)
+    } else {
+        res({ k: K.map, keys: keys, vals: vals, line: ln, col: cl }, pos)
+    }
+};
+
+// `[ ... ]` inside a JSON literal: a bare `[Val]` array (or `json.arr()`
+// when empty); the caller wraps it with `json.jarr`.
+def parse_json_array(toks: [Tok], p: long) -> Parsed {
+    let ln = tline(toks, p);
+    let cl = tcol(toks, p);
+    let elems: [Node] = [];
+    let pos = p + 1;  // skip '['
+    let bad: Node = { k: K.void, line: ln, col: cl };
+    let go = true;
+    while (go) {
+        if (is_punct(toks, pos, "]")) {
+            pos = pos + 1;
+            go = false;
+        } else {
+            let v = parse_json_value(toks, pos, false);
+            elems += v.node;
+            pos = v.pos;
+            if (is_punct(toks, pos, ",")) {
+                pos = pos + 1;
+            } else if (is_punct(toks, pos, "]")) {
+                pos = pos + 1;
+                go = false;
+            } else {
+                bad = json_err("expected ',' or ']' in JSON array", tline(toks, pos), tcol(toks, pos));
+                go = false;
+            };
+        };
+    };
+    if (bad.k == K.err) {
+        res(bad, pos)
+    } else if (len(elems) == 0) {
+        res(json_call0("arr", ln, cl), pos)
+    } else {
+        res({ k: K.array, elems: elems, line: ln, col: cl }, pos)
+    }
+};
+
+// The entire sigil form. `top` distinguishes the outermost literal (top
+// object is a bare map) from one nested in another JSON value (wrapped).
+def parse_json_primary(toks: [Tok], p: long, top: bool) -> Parsed {
+    let ln = tline(toks, p);
+    let cl = tcol(toks, p);
+    if (json_sigil_at(toks, p, "{")) {
+        let o = parse_json_object(toks, p + 1);
+        if (top) { o } else { res(json_call1("jobj", o.node, ln, cl), o.pos) }
+    } else if (json_sigil_at(toks, p, "[")) {
+        let a = parse_json_array(toks, p + 1);
+        res(json_call1("jarr", a.node, ln, cl), a.pos)
+    } else {
+        let ce = json_err("expected '{' or '[' after 'json'", ln, cl);
+        res(ce, p)
+    }
+};
+
 // ── primary expressions ──────────────────────────────────────────────────
+
+// The hidden name of a tuple element: position i is field "$i". A record
+// field name cannot be spelled by a user program ($ is not a word char),
+// so a tuple can never collide with a spelled record.
+def tuple_key(i: long) -> str {
+    "$" + tostring(i)
+};
 
 def parse_primary(toks: [Tok], p: long) -> Parsed {
     let t = tt(toks, p);
@@ -311,7 +542,9 @@ def parse_primary(toks: [Tok], p: long) -> Parsed {
         // the lexer's message, where it found the fault
         res({ k: K.err, msg: v, line: ln, col: cl }, p + 1)
     } else if (t == "id") {
-        if (v == "match") {
+        if (json_sigil_at(toks, p, "{") || json_sigil_at(toks, p, "[")) {
+            parse_json_primary(toks, p, true)
+        } else if (v == "match") {
             parse_match_try(toks, p)
         } else if ((v == "spawn" || v == "fork") && is_punct(toks, p + 1, "{")) {
             // `spawn { ... }`, `fork { ... }`: the builtin on a function of
@@ -352,7 +585,40 @@ def parse_primary(toks: [Tok], p: long) -> Parsed {
             res({ k: K.void, line: ln, col: cl }, p + 2)
         } else {
             let inner = parse_expr(toks, p + 1);
-            close_res(toks, inner.pos, ")", inner.node)
+            if (is_punct(toks, inner.pos, ",")) {
+                // `(a, b, ...)` is a tuple: a record whose fields are named
+                // by position (`$0`, `$1`, ...). The record backend already
+                // has the fixed-layout, first-class value this needs; the
+                // hidden field names make the type anonymous and structural.
+                let keys: [str] = [];
+                let vals: [Node] = [];
+                keys += tuple_key(0);
+                vals += inner.node;
+                let pos = inner.pos;
+                let go = true;
+                while (go) {
+                    pos = pos + 1;  // skip ','
+                    if (is_punct(toks, pos, ")")) {
+                        go = false;
+                    } else {
+                        let e = parse_expr(toks, pos);
+                        keys += tuple_key(len(vals));
+                        vals += e.node;
+                        pos = e.pos;
+                        if (is_punct(toks, pos, ",")) {
+                        } else {
+                            go = false;
+                        };
+                    };
+                };
+                if (is_punct(toks, pos, ")")) {
+                    res({ k: K.rec, keys: keys, vals: vals, line: ln, col: cl }, pos + 1)
+                } else {
+                    res(expect_err(toks, pos, "',' or ')'"), pos)
+                }
+            } else {
+                close_res(toks, inner.pos, ")", inner.node)
+            }
         }
     } else if (is_punct(toks, p, "[")) {
         parse_array(toks, p)
@@ -465,6 +731,13 @@ def parse_postfix(toks: [Tok], p: long) -> Parsed {
         } else if (is_op(toks, pos, ".")) {
             if (is_name_tok(toks, pos + 1)) {
                 let name = tv(toks, pos + 1);
+                node = { k: K.dot, obj: node, key: name, line: tline(toks, pos), col: tcol(toks, pos), nline: tline(toks, pos + 1), ncol: tcol(toks, pos + 1) };
+                pos = pos + 2;
+            } else if (tt(toks, pos + 1) == "num") {
+                // `t.0` / `t.1`: tuple element access. The key is the tuple's
+                // hidden positional field name; a non-tuple record simply has
+                // no such field and the checker reports it.
+                let name = tuple_key(size_lit(tv(toks, pos + 1)));
                 node = { k: K.dot, obj: node, key: name, line: tline(toks, pos), col: tcol(toks, pos), nline: tline(toks, pos + 1), ncol: tcol(toks, pos + 1) };
                 pos = pos + 2;
             } else {
@@ -1226,7 +1499,16 @@ def parse_type_tparams(toks: [Tok], apos: long, tlist: [Type]) -> PType {
     } else if (len(ts0) == 1) {
         tres(ts0[0], apos)
     } else {
-        tres({ k: K.tparams, ts: ts0 }, apos)
+        // A bare parenthesized type list is a tuple type: a record type
+        // with positional field names. The old tparams result was rejected
+        // by the checker everywhere; tuples give it a meaning.
+        let fields: [Field] = [];
+        let ti = 0;
+        while (ti < len(ts0)) {
+            fields += { name: tuple_key(ti), opt: false, typ: ts0[ti] };
+            ti = ti + 1;
+        };
+        tres({ k: K.trec, fields: fields }, apos)
     }
 };
 
@@ -1474,7 +1756,11 @@ def parse_func(toks: [Tok], p: long, isnat: bool) -> Parsed {
         let func: Func = { k: K.func, params: names, ptypes: ptypes, ret: ret, body: bnode, line: ln, col: cl, defs: defs, label: label, ppos: ppos };
         res({ k: K.decl, kind: "native", name: fname, typ: { k: K.tnone }, v: func, line: ln, col: cl, nline: nln, ncol: ncl }, pos)
     } else {
+        let saved_loops = ploop_names;
+        let no_loops: [str] = [];
+        ploop_names = no_loops;
         let body = parse_block(toks, pos);
+        ploop_names = saved_loops;
         let bnode: Block = body.node;
         if (len(derrs) > 0) {
             let bst: [Node] = bnode.stmts;
@@ -1610,18 +1896,28 @@ def parse_stmt(toks: [Tok], p: long) -> Parsed {
         parse_func(toks, p, true)
     }
     else if (is_kw(toks, p, "break") || is_kw(toks, p, "continue")) {
-        // `break;` and `continue;` -- a jump out of, or to the next turn of,
-        // the innermost enclosing loop. Bare nodes: there is nothing to carry,
-        // so they are a `Bare` and the shape needs no union member.
+        // `break;` / `continue;` (innermost loop) and `break name;` /
+        // `continue name;` (the named enclosing loop). A label naming an
+        // enclosing loop's variable selects that loop; any other name is
+        // taken as the outermost enclosing loop, so `break outer;` reads as
+        // the multi-level exit it is meant to be.
         //
-        // Only the keyword is consumed, and the `;` is left to the caller --
-        // exactly what `return` does below, and the reason it must: the caller
-        // is the one that eats the `;` and tolerates its absence before a `}`.
-        // Consuming it here as well makes the caller report "expected ';', got
-        // <the next statement>", which is what a first attempt did.
+        // Only the keyword and an optional name are consumed, and the `;` is
+        // left to the caller -- exactly what `return` does below, and the
+        // reason it must: the caller is the one that eats the `;` and
+        // tolerates its absence before a `}`. Consuming it here as well makes
+        // the caller report "expected ';', got <the next statement>", which is
+        // what a first attempt did.
         let kind = 0;
         if (is_kw(toks, p, "break")) { kind = K.kw_break; } else { kind = K.kw_continue; };
-        res({ k: kind, line: tline(toks, p), col: tcol(toks, p) }, p + 1)
+        let label = "";
+        let pos = p + 1;
+        if (tt(toks, pos) == "id") {
+            label = tv(toks, pos);
+            pos = pos + 1;
+        };
+        label = loop_resolve(label);
+        res({ k: kind, v: label, line: tline(toks, p), col: tcol(toks, p) }, pos)
     }
     else if (is_kw(toks, p, "return")) {
         if (is_punct(toks, p + 1, ";") || is_punct(toks, p + 1, "}") || tt(toks, p + 1) == "eof") {
@@ -1926,7 +2222,9 @@ def parse_if_let(toks: [Tok], p: long) -> Parsed {
 
 def parse_while(toks: [Tok], p: long) -> Parsed {
     let cond = parse_expr(toks, p + 1);
+    loop_push("");
     let body = parse_block(toks, cond.pos);
+    loop_pop();
     res({ k: K.kw_while, cond: cond.node, body: body.node, line: tline(toks, p), col: tcol(toks, p) }, body.pos)
 };
 
@@ -1946,7 +2244,9 @@ def parse_foreach(toks: [Tok], p: long) -> Parsed {
     if (!is_punct(toks, it.pos, ")")) {
         return res(expect_err(toks, it.pos, "')'"), sync_stmt(toks, p + 1));
     };
+    loop_push(name);
     let body = parse_block(toks, it.pos + 1);  // skip ')'
+    loop_pop();
     res({ k: K.kw_foreach, name: name, iter: it.node, body: body.node, line: tline(toks, p), col: tcol(toks, p) }, body.pos)
 };
 
@@ -1972,7 +2272,9 @@ def parse_for_or_range(toks: [Tok], p: long) -> Parsed {
                          line: tline(toks, lo.pos), col: tcol(toks, lo.pos) }, sync_stmt(toks, p + 1));
         };
         let hi = parse_expr(toks, lo.pos + 1);
+        loop_push(name);
         let body = parse_block(toks, hi.pos);
+        loop_pop();
         res({ k: K.forrange, name: name, lo: lo.node, hi: hi.node, body: body.node, line: ln, col: cl }, body.pos)
     } else {
         // C-style for
@@ -2013,7 +2315,9 @@ def parse_for_or_range(toks: [Tok], p: long) -> Parsed {
             return res(clause_err(toks, pos, step, "')'"), sync_stmt(toks, p + 1));
         };
         pos = pos + 1;  // ')'
+        loop_push("");
         let body = parse_block(toks, pos);
+        loop_pop();
         res({ k: K.kw_for, init: init, cond: cond, step: step, body: body.node, line: ln, col: cl }, body.pos)
     }
 };
@@ -2219,8 +2523,21 @@ def parse_some_pattern(toks: [Tok], p: long, tmp: str) -> PatRes {
     pat_res(test, binds, { k: K.tnone }, false, pos)
 };
 
-// T / T x / T {f, g: y}: T names a record type (an alias; `m.T` one of
-// module m's).
+// A type name in a pattern: the builtin primitive names map to their type
+// kinds (as in an annotation), anything else is an alias tname resolved by
+// rename.y.
+def pattern_type(nm: str) -> Type {
+    if (nm == "long" || nm == "int") { let t: Type = { k: K.tlong }; t }
+    else if (nm == "byte") { let t: Type = { k: K.tbyte }; t }
+    else if (nm == "bool") { let t: Type = { k: K.tbool }; t }
+    else if (nm == "str") { let t: Type = { k: K.tstr }; t }
+    else if (nm == "float") { let t: Type = { k: K.tfloat }; t }
+    else if (nm == "bigint") { let t: Type = { k: K.tbigint }; t }
+    else { let t: Type = { k: K.tname, name: nm }; t }
+};
+
+// T / T x / T {f, g: y}: T names a record/primitive type (an alias; `m.T`
+// one of module m's).
 def parse_type_pattern(toks: [Tok], p: long, tmp: str) -> PatRes {
     let ln = tline(toks, p);
     let cl = tcol(toks, p);
@@ -2230,7 +2547,7 @@ def parse_type_pattern(toks: [Tok], p: long, tmp: str) -> PatRes {
         tname = tname + "." + tv(toks, pos + 1);
         pos = pos + 2;
     };
-    let ty = { k: K.tname, name: tname };
+    let ty = pattern_type(tname);
     let subj = { k: K.id, v: tmp, line: ln, col: cl };
     let binds: [Node] = [];
     if (is_punct(toks, pos, "{")) {
