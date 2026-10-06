@@ -2647,13 +2647,15 @@ Yv *strip_ns(Yv *node, Yv *imports) {
     } else if (yv_l(k) == K_decl) {
         return strip_decl(node, imports);
     } else if (yv_l(k) == K_func) {
-        return normnode(yr(9, "k", yv_long(K_func), "params", yr_get(node, "params"),
+        /* `ppos` through: stripping a namespace rewrites names and types, never
+         * positions, and a parameter's position is where an editor points at it. */
+        return normnode(yr(10, "k", yv_long(K_func), "params", yr_get(node, "params"),
                            "ptypes", strip_type_list(yr_get(node, "ptypes"), imports),
                            "ret", strip_type(yr_get(node, "ret"), imports), "body",
                            strip_ns(yr_get(node, "body"), imports), "line",
                            yr_get(node, "line"), "col", yr_get(node, "col"),
                            "defs", yr_get(node, "defs"), "label",
-                           yr_get(node, "label")));
+                           yr_get(node, "label"), "ppos", yr_get(node, "ppos")));
     } else if (yv_l(k) == K_assign) {
         return normnode(yr(5, "k", yv_long(K_assign), "name", yr_get(node, "name"),
                            "v", strip_ns(yr_get(node, "v"), imports), "line",

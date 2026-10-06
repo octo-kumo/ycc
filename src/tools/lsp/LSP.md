@@ -446,8 +446,17 @@ Every class is resolved, none is inferred:
 | class | decided by |
 |---|---|
 | `builtin` | `native.intrinsic_names()` — the compiler's own list |
+| `type` on a **language type name** — `long`, `str`, `float`, `void`, `mutex`, `sem`, `int` | `parser.type_word_names()` — **the list the parser parses with**, exported for this (§9.2 A8). A mirrored copy here would drift the first time a primitive is added, which is the same argument as the builtins above and the same hazard |
 | `parameter` / `function` / `type` | `scope`'s declaration kinds (`D_PARAM`, `D_DEF`, `D_TYPE`) |
 | `function` on a `let` | the text after the name: `: (long) -> long` is a function type, `= def (` is a function literal |
+
+The type-name row has a second half, and only one is obvious: a user name that
+**happens** to be a type name stays `variable`, so a `let long = 1` is a variable
+called `long`. Both halves are pinned, because the other direction is wrong too.
+
+A type name used to be painted as an ordinary variable, which is the plainest way
+for a highlighter to say nothing: every type in the language looked like a name
+(§11.6).
 | `property` | the name is after a `.` — a fact about the text |
 | `variable` | everything else, **including every name that resolves to nothing** |
 
@@ -562,6 +571,17 @@ are part of the requirement rather than extras to it:
 - where the checker indexed nothing the answer is `null`, and `t016_types` pins
   three such positions.
 
+Three positions that a user reported as answering nothing are now answered, and
+they are the same requirement: a name's own declaration, a parameter's own name,
+and a call's callee (§11.6). A **parameter** needed a compiler change to be
+answerable at all — `Func.params` is a list of bare strings, so a parameter had no
+position to record — and a **builtin** needed one too, because an intrinsic is
+matched by name and its callee identifier is never visited. Where a declaration's
+text already IS the type (a `def`, a parameter), the hover prints it once rather
+than twice; where the checker holds no signature at all (a builtin), it prints the
+return type rather than inventing one. `t018_reported` pins all of these beside
+the positions that must still answer nothing.
+
 **R4.2** Function hover shows the full signature: parameter names, parameter
 types, return type. The return type comes from `types.inferred_ret(line, col)`
 (`types.inferred_ret`), which is **already exported** and needs no compiler change.
@@ -658,6 +678,7 @@ decided by **the checker's type of the object**, never by guessing:
 | receiver | the list |
 |---|---|
 | a record | its own fields, filtered by the prefix |
+| a **module** (an `import` binding) | **its own members** — the linked unit's `exports`, else the spliced names filtered by origin file |
 | a `str` | the string methods (`strm.y`) |
 | anything else | **nothing** |
 | *no type at all* | the string methods — the Stage A answer, honest because the server does not know the receiver |
@@ -669,6 +690,23 @@ both non-answers are pinned: `t016_types` for the array that must **not** get th
 because nothing is known. A receiver that is not a single identifier (`a.b.c`) is
 refused rather than approximated — `serve.object_col` returns −1, because no
 position in the type table means "the object of *this* dot".
+
+The module row and the record row were both reported wrong, in one sitting, and
+both for the same reason: the string-method fallback fired whenever the record
+branch produced nothing, so `math.` offered `byte_at, bytes, center` and so did a
+record literal (§11.6). A module is not a record and needs its own source, which
+is the linked unit's `exports` when there is a linked unit — a std unit resolved
+from a buffer outside the compiler tree often is not, so the fallback is the
+spliced top level filtered by **origin file**, which is exact rather than a guess.
+
+One case needs saying out loud because it is the whole reason the row works at
+all: **a half-typed line does not typecheck.** `z.` has no name after the dot, so
+there is no `Dot` node, no type at that position, and the string-method fallback.
+But the *declaration* is not mid-edit — `let z = { z: 1 };` typechecks — so when
+the checker has nothing at the use, the object is resolved through the scope index
+and asked about at its declaration. Both answers are the checker's; the second is
+a **position**, not a re-derivation. That is why `t018_reported` ends its buffer
+with a bare `math.` and a bare `z.`, which do not parse.
 
 **R6.2** Global items need no compiler change and come from the compiler's own
 tables: `native.is_intrinsic_name` (`native.is_intrinsic_name`) for builtins —
@@ -889,6 +927,10 @@ rename.rn_bind    (st, orig) -> { st, uniq }                 ← the def site dr
 | **A1** `Binding` gains `line`/`col`; `st_bind` two arguments | where each binding was defined | a caller's binding index |
 | **A3** `rename_program_x2(ast, …) -> { ast, defs }` | `defs`: a `NameIx` of `uniq -> line * 65536 + col` | **nobody yet — see below** |
 | **A2** `type_index_on()` / `expr_type(line, col)` | the type inferred for **every expression**, by position | `serve.inferred_at` → hover, and `serve.type_at` → members |
+| **A6** `Func.ppos` | each parameter NAME's position, parallel to `params` | the type table, `rename` |
+| **A4** a `Decl`'s type at its NAME's column | where a reader puts the cursor | hover |
+| **A7** a call's type at its CALLEE's column | a builtin and an imported function | hover |
+| **A8** `parser.type_word_names()` | the language's own type names, as the parser decides them | semantic tokens — so `long` is not a variable |
 
 **A5 — the name's position, which `line`/`col` cannot be.** `Decl.line/col` is the
 KEYWORD's, because that is where a diagnostic points and where the reader looks. A
@@ -901,9 +943,37 @@ what lets a member's own name carry its own type below.
 
 **A1 — `Binding` positions.** `Binding` is *constructed* in one place (`st_bind`),
 so the 15 call sites are the whole of it. A `Decl` passes `node.nline/ncol`; a
-parameter passes the `Func`'s own, documented as the imprecision it is (the parser
-keeps no position per parameter); an intrinsic or an extern passes −1, which no
-consumer may read as line 1.
+parameter passes its own, out of **`Func.ppos`** (below); an intrinsic or an extern
+passes −1, which no consumer may read as line 1.
+
+**A6 — `Func.ppos`, added when A1's imprecision turned out to be the bug.** A
+parameter was, and still is in this record, a bare string in `Func.params`: no node,
+no line, no column. Binding it at the `Func`'s own position was documented above as
+"the imprecision it is", and it was not — it was the reason hovering the `p` in
+`def g(p: P)` showed **nothing at all** while hovering a *use* of `p` showed `P`,
+which is the same name giving two answers. `ppos` is a `[long]` parallel to
+`params`, one packed `line * 65536 + col` per name, filled by the parser at the
+token it just consumed; an EMPTY list means "not recorded" and every consumer must
+read it as no position. It is one more word per parameter and nothing else, and it
+is why a go-to-definition on a parameter now lands on the parameter instead of on
+the function (`rename.y`'s `rn_func_go` reads it too, for the same reason).
+
+**A4 — a `Decl`'s own name carries its type.** A `let` records its type at the
+KEYWORD's column and nowhere else, because that is where the node sits. A reader
+puts the cursor on the *name*, so hovering `b` in `let b = 1` showed `b` and
+nothing else. Same shape as the member-key note below, same fix, same flag.
+
+**A7 — a call's CALLEE is indexed.** An intrinsic is matched *by name* inside
+`typeof_call`, so its callee identifier is never an expression and `typeof_expr`
+never visits it: `clock_us` had no entry anywhere. `typeof_call` is now a wrapper
+that records the call's own type at an `Id` callee's position. The `!id` arm
+records a `Dot` callee's **signature** at the key's position, beside the call —
+`math.exp(0.0)` answers `float` and a user's `mk(1, "x")` answers
+`mk(a: long) -> P`, which is the asymmetry between an intrinsic (the checker holds
+no signature object for it, only its result) and a function (it holds one). The
+alternative — recording the call's return type in both places — was tried and
+rejected: it made `mk` hover as `{ a: long, b: str }`, the record its *call*
+produces, which reads as though `mk` were that record.
 
 **A3 — the def sites.** A SECOND `parser.NameIx` beside the `types.tc_ix` that
 already indexes bindings, not a new container, and the packing is the one
@@ -929,7 +999,8 @@ a type a program can write, and a consumer must be able to tell "the checker say
 none" from "there is nothing here", or it prints a type the checker never gave it.
 `check_program` resets the table, and only when the flag is on.
 
-Two things the implementation had to add that the plan above did not name:
+Three things the implementation had to add that the plan above did not name. The
+first was found before the first release; the other two by a user, in §11.6.
 
 - **A member access records its type at the key's position as well as the dot's.**
   `a.b` parses with the `Dot` at the `.`, so the field's type lands under the dot
@@ -967,13 +1038,28 @@ the shape which scales, and the comment in `types.y` says so.
 | capability | answer |
 |---|---|
 | hover on a name read | the checker's type, then the declaration |
-| hover on a name bound | the declaration (a `Decl` is not a reference, so nothing is indexed there) |
+| hover on a name **bound** — a `let`'s or `def`'s own name | the type, then the declaration: §9.2 A4 records it at `Decl.nline/ncol` |
+| hover on a **parameter's own name** | its declared type (§9.2 A6; before that, nothing — a parameter had no position to record) |
+| hover on a **builtin** | the call's return type, which is the whole of what the checker holds for an intrinsic (§9.2 A7). Not a signature: inventing one would be a second copy of the manual |
+| hover on an **imported member** | the checker's own answer at that position, which for a function is its signature |
+| hover on a **def** or a **parameter** | the declaration alone — its text IS the signature, and a hover prints a type only when the declaration does not already say it |
 | hover on an expression that is not a name — a literal, an operator | the type, with **no `range`**, which the protocol allows |
 | hover on a record's **field** | the field's type — and **no declaration**, because a field is not a binding and there is nothing to find |
 | completion after `.` on a record | the record's own fields, filtered by the prefix |
+| completion after `.` on a **module** | the unit's own members, in the receiver's own spelling — an import is not a record (§11.6) |
 | completion after `.` on a `str` | the string methods |
 | completion after `.` on anything else | **nothing** |
+| an f-string | **not one token**: the literal runs are `string`, and each `{...}` is scanned as code by the same scanner, so `name` is a name and `:<14` is punctuation, operator and number (§11.6) |
+| a type name — `long`, `str`, a user's own alias | painted as a `type`, from `parser.type_word_names()`; and a user name that *happens* to be one stays a `variable` (§9.2 A8) |
 | hover / completion where the checker has no answer | `null` / omitted |
+
+The last row is the one that matters most and the hardest to hold. A wrong type is
+worse than none, because the user cannot tell it from a real one. `t018_reported.y`
+pins the non-answers beside the answers for exactly that reason: a string literal,
+a line past the end of the buffer, and a name the checker indexed nothing at must
+all come back empty, and `serve.type_at` answers `tunk()` — never `tnone`, which
+is a type a program can write and would make "no answer" indistinguishable from
+"the checker says none".
 
 The last two rows are the honesty rules, and `t016_types` pins each one:
 
@@ -1213,13 +1299,13 @@ Each ends green on `make test`.
 | **M-json** | `src/y/std/json.y` (§15) | Parses and emits every case in `test/y/native/tNNN_json.y`; round-trips losslessly; compiles warning-free; a manual section, a `COVERAGE.md` row and a checked fixture all exist. **Blocks M1.** |
 | ~~**M0**~~ | ~~C1: the two exports~~ | **Dropped** — M1 does not need them (§9.1). Nothing was blocked on this, so no reblessing was needed. |
 | **M1** | R1 — errors and warnings | **Done, end to end.** `yserve` answers errors *and* warnings together, live, on an unsaved buffer, for the file **and each import** (one `publishDiagnostics` per file); survives an unterminated literal, a missing import and a 4000-line file; the VS Code extension activates, spawns it and reaches `Running` (`activation-check.js` 21/21), and the same server is driven by the JSON-RPC library VS Code uses (`client-check.js` 20/20). 39 process-level checks, 12 fixture runs under both compilers, registered in `make test`. |
-| **M2** | R2 — semantic tokens | **Done.** `sem.y` turns `scan.y`'s spans into the protocol's delta encoding; `textDocument/semanticTokens/full` is advertised and answered. The grammar is unregistered from `package.json`, so this IS the only highlighter. `t010_sem` pins the round trip (R2.4) over the whole corpus; `client-check.js` decodes the delta the way an editor does. **Not yet:** the semantic half of the legend (parameter / function / type / builtin need M4's symbol knowledge), and a user setting to turn the layer off. |
+| **M2** | R2 — semantic tokens | **Done.** `sem.y` turns `scan.y`'s spans into the protocol's delta encoding; `textDocument/semanticTokens/full` is advertised and answered. The grammar is unregistered from `package.json`, so this IS the only highlighter. `t010_sem` pins the round trip (R2.4) over the whole corpus; `client-check.js` decodes the delta the way an editor does. The **semantic half of the legend is now delivered** (R2.3, M4): parameter / function / type / property / builtin are all resolved, and the language's own type names come from `parser.type_word_names()` so the list cannot drift (§11.6). An **f-string is no longer one token** — each `{...}` is scanned as code, which is what a reader is actually looking at (§11.6). **Not yet:** a user setting to turn the layer off. |
 | **M3** | R3 — formatting | **Formatter and the protocol handler done** (idempotent over every `.y` file in
 the tree — `test-fmt.sh` compares the number of files that are NOT idempotent,
 which must be zero, and only *prints* the total, so the total moves as `src/y`
 moves without anything failing; this row used to quote 487, a number nothing
 checks; no edits on an unlexable buffer; no edits when already formatted). **Not yet:** wiring the VS Code command. |
-| **M4** | R4–R6 + C2 — hover, go-to-def, completion | **Stage A done and measured; Stage B decided and not started** (§11.3). `scope.y` + `nav.y` answer all three from the declarations of the open buffer: definition points at the name (not the keyword), hover shows the signature as written plus the comment above it, completion offers the visible names and the builtins with `isIncomplete: true`. The builtins come from `native.intrinsic_names()`, which this work added to the compiler so the list cannot drift. `strm.y` answers the member position from the compiler's own `types.str_method`, so a hover on `"a,b".split` shows the signature the checker would use and completion after a `.` offers the methods and only the methods. `t012_scope` pins the visibility rules, `t013_m4` the wire shapes, `t014_strm` the string methods and the mirror's ratchet, and `client-check.js` drives all of it through the JSON-RPC library VS Code uses (**73/73**). `scope-coverage.y` measures what the index resolves over `src/y`: **61%** of identifier tokens, after two bugs that had it at 46% (§11.3), and `request-cost.y` what a request costs on the largest file in the tree — 20 ms, after a bug that had it at 5,499 ms. `xref.y` + `nav.find_decl_named` close the cross-file half: `helper.helper` jumps to `mod.y` at the name, with its signature and doc comment, and `helper.TOP` to the `let` that declares it. `t015_xref` pins the three compiler facts it rests on. §9.2 is **delivered**: the checker keeps its inferred types in a position-keyed table behind a flag (§9.2 A2, +0.09% instructions on `ycc.y`, +0.00% for the member-key addition), so a hover shows the type the checker computed — including on an expression that is not a name, and including a record's field, which has a type and no binding — and completion after a `.` offers a record's own fields. §9.2.2 lists what it refuses. The semantic classes are **delivered** too (R2.3): `sem`'s legend has five more entries and `serve.classify` resolves each identifier to one, from `scope`'s declaration kinds and `native.intrinsic_names()`. It needed **no** compiler change — this row's earlier note said it did, on the grounds that what a name denotes is the checker's answer; it is `scope`'s answer about DECLARATIONS, plus a dot's own text, and §9.2's type table is not involved. Three costs were found by measuring rather than by reading, and all three are now in `request-cost.y`: `classify` was **34.5 s** on `src/y/native.y` and is **115 ms**, and the two causes were a per-identifier position lookup that counted newlines from byte 0 (quadratic), and `scope_end` walking all ~7,000 scope pairs per candidate (linear in the file, per identifier). The second also made completion `visible()` **22x** faster, 7,576 us to 347 us on the same file, which nothing had asked about because a completion asks once. `t017_sem` pins the five classes and the four names that must stay `variable`, and `t010_sem` pins the one that was a whole line of tokens missing (§11.5). **Nothing is left undone in this row.** Cross-file navigation is **not** behind §9.2 as this row previously said — §11.4 measured that the renamer the server already runs produces the pairing it needs. Cross-file navigation is **not** behind §9.2 as this row previously said — §11.4 measured that the renamer the server already runs produces the pairing it needs. |
+| **M4** | R4–R6 + C2 — hover, go-to-def, completion | **Stage A done and measured; Stage B decided and not started** (§11.3). `scope.y` + `nav.y` answer all three from the declarations of the open buffer: definition points at the name (not the keyword), hover shows the signature as written plus the comment above it, completion offers the visible names and the builtins with `isIncomplete: true`. The builtins come from `native.intrinsic_names()`, which this work added to the compiler so the list cannot drift. `strm.y` answers the member position from the compiler's own `types.str_method`, so a hover on `"a,b".split` shows the signature the checker would use and completion after a `.` offers the methods and only the methods. `t012_scope` pins the visibility rules, `t013_m4` the wire shapes, `t014_strm` the string methods and the mirror's ratchet, and `client-check.js` drives all of it through the JSON-RPC library VS Code uses (**73/73**). `scope-coverage.y` measures what the index resolves over `src/y`: **61%** of identifier tokens, after two bugs that had it at 46% (§11.3), and `request-cost.y` what a request costs on the largest file in the tree — 20 ms, after a bug that had it at 5,499 ms. `xref.y` + `nav.find_decl_named` close the cross-file half: `helper.helper` jumps to `mod.y` at the name, with its signature and doc comment, and `helper.TOP` to the `let` that declares it. `t015_xref` pins the three compiler facts it rests on. §9.2 is **delivered**: the checker keeps its inferred types in a position-keyed table behind a flag (§9.2 A2, +0.09% instructions on `ycc.y`, +0.00% for the member-key addition), so a hover shows the type the checker computed — including on an expression that is not a name, and including a record's field, which has a type and no binding — and completion after a `.` offers a record's own fields. §9.2.2 lists what it refuses. The semantic classes are **delivered** too (R2.3): `sem`'s legend has five more entries and `serve.semantic_overrides` resolves each identifier to one, from `scope`'s declaration kinds and `native.intrinsic_names()`. (It was `serve.classify` until the `bugs-ledger` merge, which put a `classify` into `std/tui.y` — a path import flattens, so the two were one name in one namespace; §5's collision check is what found it.) It needed **no** compiler change — this row's earlier note said it did, on the grounds that what a name denotes is the checker's answer; it is `scope`'s answer about DECLARATIONS, plus a dot's own text, and §9.2's type table is not involved. Three costs were found by measuring rather than by reading, and all three are now in `request-cost.y`: `classify` was **34.5 s** on `src/y/native.y` and is **115 ms**, and the two causes were a per-identifier position lookup that counted newlines from byte 0 (quadratic), and `scope_end` walking all ~7,000 scope pairs per candidate (linear in the file, per identifier). The second also made completion `visible()` **22x** faster, 7,576 us to 347 us on the same file, which nothing had asked about because a completion asks once. `t017_sem` pins the five classes and the four names that must stay `variable`, and `t010_sem` pins the one that was a whole line of tokens missing (§11.5). Cross-file navigation is **not** behind §9.2 as this row previously said — §11.4 measured that the renamer the server already runs produces the pairing it needs. **Six defects a user reported are fixed and pinned** (`t018_reported`, §11.6): a declaration's own name and a parameter's own name now answer, a builtin answers, an imported name answers, an f-string is sub-tokenized, type names are painted as types, and a module or a record literal offers its own members after a `.`. Five of the six were **one bug** — something recorded at one column and asked about at another — and one was *not* a server bug at all and is reported as such rather than as a fix. **Nothing is left undone in this row.** |
 | **M5** | packaging and docs | `PORTING.md` and `AGENTS.md` updated (§4, §10); `AGENTS.md`'s suite list gains `lsp`; the extension README documents `yserve` placement and every setting. |
 
 ### 11.1 Two bugs the work found in the compiler
@@ -1480,6 +1566,8 @@ Reusable as-is, no compiler change:
 | `native.strip_ns` (`native.strip_ns`), `rename.rename_program_x` (`rename.rename_program_x`) | the pipeline, in order. |
 | `native.std_units` (`:9489`), `unit_iface` (`:10805`), `unit_externs` (`:10817`) | std units and the checker's externs. |
 | `native.is_intrinsic_name` (`:2553`), `types.str_method` (`types.str_method`) | the completion item sources. |
+| `parser.type_word_names()` (`parser.type_word_names`) | the language's own type names, as the parser decides them. **Added** by §9.2 A8, for R2.3 — a mirrored list in the server would drift the first time a primitive is added |
+| `Unit.exports` (a `[Sym]` of name / label / type) | a linked unit's member names, which is what a module offers after a `.` (§11.6). Reached through `Prepared.units`, which is the same `std_units(nr.std, pack)` call the checker needs — the list that was loaded anyway |
 | `fork {}`, `wait_pid`, `mutex`, `sem`, raw `syscall` | the isolation and framing primitives. |
 | 289 diagnostic fixtures in `test/y/native/` | a ready-made regression corpus. |
 
@@ -1930,7 +2018,7 @@ found by running something rather than by reading it.
    a name the program does not bind, so the index has nothing to find. So hovering
    `p.a` showed nothing at all even though the checker had the answer. The type
    answers on its own and the declaration, when there is one, goes underneath.
-5. **`classify` cost 34.5 seconds on the largest file in the tree.** Two causes,
+5. **`classify` — later `semantic_overrides` — cost 34.5 seconds on the largest file in the tree.** Two causes,
    both invisible until something asked about *every* identifier rather than one
    position: the per-identifier position lookup counted newlines from byte 0, which
    is quadratic in the file, and `scope_end` walked all ~7,000 scope pairs for
@@ -1946,3 +2034,120 @@ indexed, so the type silently never appeared.
 
 C4 is a different project. It changes what a union *is* at runtime, and it
 should be argued for on its own merits rather than as LSP support.
+
+### 11.6 Six reported bugs, and the one that was not a server bug
+
+Six defects a user hit in one sitting. Five were the server's; one was not
+reproducible in the server at all and is reported here as what it is rather than
+as a fix. All five share one root cause, which is why they looked like six:
+
+> **A position is not a type.** In every case something was recorded at one column
+> of a line and asked about at another.
+
+`t018_reported.y` is the fixture, and it drives the same `dispatch.doc_request`
+path an editor does — not the internals — so each line below is what a user gets.
+
+1. **A declaration's own name showed no type.** `let b = 1000000000;` — the `Decl`
+   sits at the KEYWORD, so the table held `long` at column 1 and nothing at column
+   5, which is where the cursor is. A *use* of `b` two lines away answered `long`,
+   so the same name gave two answers depending on where you pointed. Fixed by
+   §9.2 A4.
+2. **A parameter's own name showed no type**, and this one had nothing behind it:
+   `Func.params` is a list of bare strings, so a parameter has no node, no line
+   and no column, and no consumer *could* have answered. This was documented in
+   §9.2 as "the imprecision it is" and was not one. Fixed by §9.2 A6, which also
+   fixed go-to-definition on a parameter, which had been landing on the `def`.
+3. **No hover for a builtin.** An intrinsic is matched *by name* inside
+   `typeof_call`, so its callee identifier is never an expression and nothing was
+   ever recorded at it. `clock_us` had no entry anywhere in the file. Fixed by
+   §9.2 A7, recording the call's own type at the callee — which is what the
+   checker knows, and no signature string was invented for it.
+4. **Imported names had no type.** Root cause one level down, in the compiler:
+   `diag.xref_for` — the path that *builds* the type index — linked **no std
+   units**, passing `externs_none()`, while `diag.diagnose` had always passed the
+   real `externs_for(std_units(nr.std, pack))`. So every std name was undefined,
+   every expression using one came back `tunk`, and the editor had nothing to
+   show. The tell was that `math.pi` *did* answer `float`: a constant needs no
+   extern, and a call member did — so the bug read as "imports are not typed"
+   rather than as a checker that was never asked. `xref_for` takes the pack now.
+5. **An f-string was one colour.** `scan` emits an f-string as one span, so
+   `f"{name:<14}: {us * 2.0:7.2f} ns"` was a single `string` token and `name` was
+   part of one blob — worse than not highlighting it at all, because the
+   interpolation is the part a reader is looking at. `sem.fstring_parts` now
+   re-scans each `{...}` with **the same `scan` over the same text** and offsets
+   the spans into place, so the inside of an interpolation is classified the way
+   the same code is outside a string. A hand-rolled split would have re-implemented
+   the scanner and been wrong the first time a construct appeared that it had not
+   heard of. Line 15 of the fixture: **5 spans, 26 tokens**.
+6. **Completion after a `.` was wrong in two ways.** `math.` offered
+   `byte_at, bytes, center` — the string methods — because the string-method
+   fallback fired whenever the record branch produced nothing, and a module is not
+   a record; `a.` where `let a = { a: 2 }` did the same. Two distinct fixes: a
+   module offers its own members (the linked unit's `exports`, else the spliced
+   names filtered by origin file), and a record literal offers its fields. The
+   second needed one more thing, and it is the useful part:
+
+   > **A half-typed line does not typecheck, so nothing is indexed on it.** `z.`
+   > has no name after the dot, so there is no `Dot` node and no type at that
+   > position — which is the whole reason the fallback existed. But the
+   > DECLARATION is not mid-edit: `let z = { z: 1 };` typechecks and its type is
+   > recorded at the name's own column. `serve.type_of_object` therefore asks at
+   > the use, and if the checker has nothing, resolves the name through the scope
+   > index and asks at the declaration. Both answers are the checker's; the second
+   > is a *position*, not a re-derivation.
+
+Three bugs in that last paragraph are worth naming separately, because they were
+each invisible until something asked for *every* member position rather than the
+one a fixture happened to use, and every fixture sat near the top of a short file:
+
+- **`object_col` passed a column to `nav.ident_at`, which wants a byte offset.**
+  The two coincide on line 1 of a buffer, which is why every member case in the
+  fixtures passed. On line 26 of a real one it looked up a column as an offset,
+  found whatever identifier happened to live there, and returned its column.
+- **`object_col` and the two other lookups each re-derived "the identifier before
+  the dot"**, and one of them did it without stepping back over the dot. With
+  nothing typed after `z.`, `word_start` *is* the dot, and a dot is not an
+  identifier — so both silently found nothing. They now all go through one
+  `object_hit`.
+- **`serve.type_at` answered `tnone` for "no answer"**, and `tnone` is a type a
+  program can write, so the caller's "did the checker say anything?" test never
+  fired. It answers `tunk()`, for the same reason `types.expr_type` does.
+
+And one the report turned up that is worth more than its size: **the hover printed
+a function's return type as though it were the function.** Recording the call's
+result at the callee made `mk` hover as `{ a: long, b: str }` — the record that
+`mk(1, "x")` produces. The answer was not wrong about anything; it was wrong about
+what `mk` *is*. A hover now shows the type only when the declaration does not
+already say it, so a def or a parameter's signature is printed once instead of
+twice, and a call's callee carries its **signature** (`mk(a: long, b: str) -> P`).
+An intrinsic keeps its return type, because the checker holds no signature object
+for one — the asymmetry is real and is the honest answer rather than a uniform one
+that is half invented.
+
+#### The one that is not a server bug
+
+**Brackets inside a comment were highlighted.** This could not be reproduced in
+the server, and the two layers that could have done it both were checked and are
+correct:
+
+- `scan.scan_full` returns a `//` comment as **one** `K_comment` span — verified by
+  reading the spans, not by looking at the output — and `sem.split_lines` gives it
+  one token, so the semantic-token layer cannot be the cause.
+- `vscode-y-lang/syntaxes/y.tmLanguage.json` lists `#comments` **first**, which is
+  right: TextMate takes the match that starts *earliest*, so for a comment that is
+  the only way it wins.
+
+The likeliest cause is **VS Code's own bracket-pair colourisation**
+(`editor.bracketPairColorization.enabled`, on by default), which colours matching
+brackets anywhere in the line, strings and comments included. That is an editor
+feature the server does not participate in, so it is not something a fixture here
+can pin. The exact text is worth having if it turns out not to be.
+
+What *did* come out of chasing it is a real grammar bug, and the reason it was
+worth chasing: `#comments` before `#strings` is right for a comment and **wrong for
+a string containing `//`**, because the comment match starts earlier than the
+string's own quote. `let s = "// not a comment";` painted half a string as a
+comment. `#strings` now comes first — a comment outside any string still matches,
+because nothing starts before it. `t018_reported.y` asserts the ORDER, on the file's
+text, because the order is the semantics and reparsing the JSON would only make
+the same comparison harder to read.

@@ -1527,12 +1527,14 @@ Yv *rn_decl_native_lookup(Yv *node, Yv *u, Yv *st) {
 
 Yv *rn_decl_native_go(Yv *node, Yv *u, Yv *st) {
     Yv *f = yr_get(node, "v");
-    Yv *nf = yr(9, "k", yr_get(f, "k"), "params", yr_get(f, "params"),
+    /* `ppos` carried through unchanged: the renamer renames names, not positions,
+     * and a native declaration's parameters are exactly where they were written. */
+    Yv *nf = yr(10, "k", yr_get(f, "k"), "params", yr_get(f, "params"),
                 "ptypes", rn_types(st, yr_get(f, "ptypes")),
                 "ret", rn_type(st, yr_get(f, "ret")),
                 "body", yr_get(f, "body"), "defs", yr_get(f, "defs"),
                 "label", yr_get(f, "label"), "line", yr_get(f, "line"),
-                "col", yr_get(f, "col"));
+                "col", yr_get(f, "col"), "ppos", yr_get(f, "ppos"));
     return yr(2, "st", st, "node",
               yr(9, "k", yv_long(K_decl), "kind", ys("native"), "name", u,
                  "typ", rn_type(st, yr_get(node, "typ")), "v", nf, "line",
@@ -1648,47 +1650,61 @@ Yv *rn_func_p4(Yv *func, Yv *fparams, Yv *fptypes, Yv *fret, Yv *fbody,
                Yv *st) {
     return rn_func_p5(fparams, fptypes, fret, fbody,
                       yv_l(yr_get(func, "line")), yv_l(yr_get(func, "col")),
-                      st);
+                      yr_get(func, "ppos"), st);
 }
 
 Yv *rn_func_p5(Yv *fparams, Yv *fptypes, Yv *fret, Yv *fbody, long fline,
-               long fcol, Yv *st) {
-    return rn_func_params(fparams, fptypes, fret, fbody, fline, fcol, st);
+               long fcol, Yv *fppos, Yv *st) {
+    return rn_func_params(fparams, fptypes, fret, fbody, fline, fcol, fppos,
+                          st);
 }
 
 Yv *rn_func_params(Yv *fparams, Yv *fptypes, Yv *fret, Yv *fbody, long fline,
-                   long fcol, Yv *st) {
-    return rn_func_go(fparams, fptypes, fret, fbody, fline, fcol, yav(0), 0,
-                      st);
+                   long fcol, Yv *fppos, Yv *st) {
+    return rn_func_go(fparams, fptypes, fret, fbody, fline, fcol, fppos,
+                      yav(0), 0, st);
 }
 
 Yv *rn_func_go(Yv *fparams, Yv *fptypes, Yv *fret, Yv *fbody, long fline,
-               long fcol, Yv *params, long i, Yv *st) {
+               long fcol, Yv *fppos, Yv *params, long i, Yv *st) {
     /* NOTE: recursion over the param list (replaces the while loop): the
      * loop's `st = b.st` rebind poisoned the merged-shape read of st.
      * fparams stays BARE (like res(node)): the single `fparams[i]` read
      * unifies via the tcompat law (tnone). */
     if (i >= yv_len(fparams)) {
-        return rn_func_body(fptypes, fret, fbody, fline, fcol, params, st);
+        return rn_func_body(fptypes, fret, fbody, fline, fcol, fppos, params,
+                            st);
     } else {
-        /* A parameter has no node: the Func's own line is the nearest site. */
-        Yv *b = rn_bind(st, ya_get(fparams, i), yv_long(fline), yv_long(fcol));
-        return rn_func_go(fparams, fptypes, fret, fbody, fline, fcol,
+        /* The parameter's OWN position, from the parser, when it has one. It used
+         * to be the Func's line for every parameter, which put every parameter's
+         * def site on the `def` keyword -- so a go-to-definition on a parameter
+         * landed on the function, not on the parameter. An empty `fppos` (a
+         * hand-built Func) falls back to the Func's own position, which is the
+         * imprecision rather than a wrong answer. */
+        long pl = fline;
+        long pc = fcol;
+        if (i < yv_len(fppos) && yv_l(ya_get(fppos, i)) > 0) {
+            pl = yv_l(ya_get(fppos, i)) / 65536;
+            pc = yv_l(ya_get(fppos, i)) % 65536;
+            ;
+        }
+        Yv *b = rn_bind(st, ya_get(fparams, i), yv_long(pl), yv_long(pc));
+        return rn_func_go(fparams, fptypes, fret, fbody, fline, fcol, fppos,
                           ya_push(params, yr_get(b, "uniq")), i + 1,
                           yr_get(b, "st"));
     }
 }
 
 Yv *rn_func_body(Yv *fptypes, Yv *fret, Yv *fbody, long fline, long fcol,
-                 Yv *params, Yv *st) {
+                 Yv *fppos, Yv *params, Yv *st) {
     /* NOTE: fbody read ONCE here (one read site — no merge). */
     Yv *b = rn_block(yr_get(fbody, "stmts"), st);
-    return rn_func_finish(fptypes, fret, fbody, fline, fcol, params,
+    return rn_func_finish(fptypes, fret, fbody, fline, fcol, fppos, params,
                           yr_get(b, "stmts"), rn_pop(yr_get(b, "st")));
 }
 
 Yv *rn_func_finish(Yv *fptypes, Yv *fret, Yv *fbody, long fline, long fcol,
-                   Yv *params, Yv *stmts, Yv *st) {
+                   Yv *fppos, Yv *params, Yv *stmts, Yv *st) {
     /* NOTE: NO record reads here — all values are params already.
      * (fbody is kept for 1:1 signature parity but never read, as in Y.) */
     (void)fbody;
@@ -1708,12 +1724,15 @@ Yv *rn_func_finish(Yv *fptypes, Yv *fret, Yv *fbody, long fline, long fcol,
         i = i + 1;
     }
     return yr(2, "st", st, "node",
-              yr(9, "k", yv_long(K_func), "params", params, "ptypes", rn_types(st, fptypes),
+              /* `ppos` again: the parameter list is renamed in place, so each
+               * name keeps the position it was written at. */
+              yr(10, "k", yv_long(K_func), "params", params, "ptypes", rn_types(st, fptypes),
                  "ret", rn_type(st, fret), "body",
                  yr(4, "k", yv_long(K_block), "stmts", body, "line",
                     yv_long(fline), "col", yv_long(fcol)),
                  "defs", yav(0), "label", ys(""),
-                 "line", yv_long(fline), "col", yv_long(fcol)));
+                 "line", yv_long(fline), "col", yv_long(fcol), "ppos",
+                 fppos));
 }
 
 Yv *rename_program(Yv *ast) {

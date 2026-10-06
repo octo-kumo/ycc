@@ -39,7 +39,18 @@ type Err = { k: long, msg: str, line: long, col: long };
 type For = { k: long, init: Node, cond: Node, step: Node, body: Node, line: long, col: long };
 type Foreach = { k: long, name: str, iter: Node, body: Node, line: long, col: long };
 type ForRange = { k: long, name: str, lo: Node, hi: Node, body: Node, line: long, col: long };
-type Func = { k: long, params: [str], ptypes: [Type], ret: Type, body: Node, defs: [Node], label: str, line: long, col: long };
+// `ppos` is each parameter NAME's position, packed `line * 65536 + col`, parallel
+// to `params`. It exists because nothing else in the tree knows where a
+// parameter is written: `params` is a bare list of strings, so a hover, a
+// semantic token or a go-to-definition on one has nothing to point at. A
+// one-element-per-parameter list is the smallest thing that carries it -- a
+// parallel array rather than a new record, because `Func` is read in a hot
+// loop and this is one more word per parameter and nothing else.
+//
+// An EMPTY list means "the parser did not record them", which is what the
+// three hand-built Funcs below carry; a consumer must treat that as no
+// position rather than as position 0.
+type Func = { k: long, params: [str], ptypes: [Type], ret: Type, body: Node, defs: [Node], label: str, line: long, col: long, ppos: [long] };
 type IdxAssign = { k: long, arr: Node, idx: Node, v: Node, line: long, col: long };
 type If = { k: long, cond: Node, then: Node, els: Node, has_else: bool, line: long, col: long };
 type IncDec = { k: long, op: str, pre: bool, tgt: Node, line: long, col: long };
@@ -388,7 +399,7 @@ def sync_type(nm: str) -> Type {
 
 // A block as a function of no parameters, its return type inferred.
 def block_func(body: Node, ln: long, cl: long) -> Node {
-    let f: Func = { k: K.func, params: [], ptypes: [], ret: { k: K.tnone }, body: body, defs: [], label: "", line: ln, col: cl };
+    let f: Func = { k: K.func, params: [], ptypes: [], ret: { k: K.tnone }, body: body, defs: [], label: "", line: ln, col: cl, ppos: [] };
     let node: Node = f;
     node
 };
@@ -1113,7 +1124,28 @@ def parse_type_record(toks: [Tok], p: long) -> PType {
     parse_type_tail(toks, rc.pos, rc.node)
 };
 
-// Simple type-name atom tail of parse_type_node (fresh names — see note).
+// The language's own TYPE NAMES, as `parse_type_atom2` below decides them.
+//
+// Exported so a tool that has to recognise one -- the language server's semantic
+// tokens, which paint a type name differently from a variable -- reads the same
+// list the parser parses with instead of keeping a second copy that drifts. It is
+// the same argument as `native.intrinsic_names()`, and the same hazard: add a
+// primitive here and a mirrored list somewhere else stops knowing about it.
+def type_word_names() -> [str] {
+    let out: [str] = [];
+    out += "long";
+    out += "int";
+    out += "byte";
+    out += "bool";
+    out += "str";
+    out += "float";
+    out += "void";
+    out += "mutex";
+    out += "sem";
+    out
+}
+
+// Simple type-name atom tail of parse_type_node (fresh names -- see note).
 def parse_type_atom2(toks: [Tok], p: long) -> PType {
     // simple type name (`int` is `long`) + shared postfix tail.
     let nm = tv(toks, p);
@@ -1327,6 +1359,7 @@ def parse_func(toks: [Tok], p: long, isnat: bool) -> Parsed {
         hbad = true;
     };
     let names: [str] = [];
+    let ppos: [long] = [];
     let ptypes: [Type] = [];
     // defs[i]: param i's default value (a literal), `void` when it has none,
     // `optarg` for an optional `name?: T` (none when left out, some(arg) when
@@ -1343,6 +1376,7 @@ def parse_func(toks: [Tok], p: long, isnat: bool) -> Parsed {
             } else {
                 let nm = tv(toks, pos);
                 names += nm;
+                ppos += tline(toks, pos) * 65536 + tcol(toks, pos);
                 pos = pos + 1;  // name
                 let isopt = false;
                 if (is_op(toks, pos, "?")) {
@@ -1438,7 +1472,7 @@ def parse_func(toks: [Tok], p: long, isnat: bool) -> Parsed {
         // the body holds only the header's errors, if any: a native has none
         // of its own, and the checker reads them so they are reported once
         let bnode: Block = { k: K.block, stmts: derrs, line: ln, col: cl };
-        let func: Func = { k: K.func, params: names, ptypes: ptypes, ret: ret, body: bnode, line: ln, col: cl, defs: defs, label: label };
+        let func: Func = { k: K.func, params: names, ptypes: ptypes, ret: ret, body: bnode, line: ln, col: cl, defs: defs, label: label, ppos: ppos };
         res({ k: K.decl, kind: "native", name: fname, typ: { k: K.tnone }, v: func, line: ln, col: cl, nline: nln, ncol: ncl }, pos)
     } else {
         let body = parse_block(toks, pos);
@@ -1450,7 +1484,7 @@ def parse_func(toks: [Tok], p: long, isnat: bool) -> Parsed {
             nst += bst;
             bnode = { k: K.block, stmts: nst, line: bnode.line, col: bnode.col };
         };
-        let func: Func = { k: K.func, params: names, ptypes: ptypes, ret: ret, body: bnode, line: ln, col: cl, defs: defs, label: "" };
+        let func: Func = { k: K.func, params: names, ptypes: ptypes, ret: ret, body: bnode, line: ln, col: cl, defs: defs, label: "", ppos: ppos };
         if (fname == "") {
             res(func, body.pos)
         } else {
@@ -2297,7 +2331,7 @@ def parse_program(toks: [Tok]) -> Block {
     { k: K.block, stmts: all, line: 1, col: 1 }
 };
 
-export { parse_program, parse_type_full, nameix_new, nameix_put, nameix_get };
+export { parse_program, parse_type_full, type_word_names, nameix_new, nameix_put, nameix_get };
 
 // ── a name index (types.y lookup, lint.y) ─────────────────────────────────
 // str -> long, the last put of a name wins: open addressing over a power

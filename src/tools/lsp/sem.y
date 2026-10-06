@@ -156,12 +156,167 @@ def tokens_in(d: SrcDoc, over: [long]) -> [SemTok] {
             // opinion about anything else, and the guard makes that structural
             // rather than a promise.
             if (i < len(over) && over[i] != 0) { t = over[i]; };
-            out += split_lines(d, s, t);
+            if (s.kind == scan.K_fstring) {
+                // An f-string is not one token. `f"{name:<14}: {us * 2.0:7.2f}"`
+                // is code with string literals around it, and painting the whole
+                // span as `string` made every name inside it part of one green
+                // blob -- worse than not highlighting the interpolation at all,
+                // because the interpolation is the part a reader is looking at.
+                let parts = fstring_parts(src, s, d, over, i);
+                if (len(parts) > 0) { out += parts; }
+                else { out += split_lines(d, s, t); };
+            } else {
+                out += split_lines(d, s, t);
+            };
         }
         i = i + 1;
     }
     out
 }
+
+// An f-string's tokens: the literal runs as `string`, and each `{...}` is scanned
+// as CODE by the same scanner over the same text, so a name inside it comes out as
+// a name and a format spec as its punctuation and number.
+//
+// The scan of the interior is a whole `scan.scan_full` over a substring, which is
+// the point: reusing the real scanner is why the inside of an interpolation is
+// classified the same way as the same code written outside a string. A hand-rolled
+// split would have to re-implement it and would be wrong the first time a construct
+// appeared that it had not heard of.
+//
+// `over`/`idx` are the caller's classification table, offset by the span's own
+// index, so a name in an interpolation is classified as that name is everywhere
+// else. An offset table entry that does not exist simply reads as "no opinion".
+def fstring_parts(src: str, s: Span, d: SrcDoc, over: [long], idx: long) -> [SemTok] {
+    let out: [SemTok] = [];
+    let text = src[s.off:s.end];
+    // The `f"` and the closing quote are string; the span starts at the `f`.
+    let q = index_of(text, "\"");
+    if (q < 0) { return out; };
+    let lit_start = s.off;
+    let lit_end = s.off + q + 1;
+    let i = lit_end;
+    while (i < s.end) {
+        let c = byte_at(src, i);
+        if (c == 92) {
+            // A backslash escapes the next byte, so `\{` is not an interpolation.
+            i = i + 2;
+        } else if (c == 123) {
+            // `{{` is a literal brace, not the start of one.
+            if (i + 1 < s.end && byte_at(src, i + 1) == 123) {
+                i = i + 2;
+            } else {
+                let depth = brace_depth(src, i, s.end);
+                if (lit_end > lit_start) { out += run_lines(d, lit_start, lit_end, T_string); };
+                if (depth > i) {
+                    out += code_tokens(src, i, depth + 1, d, over, idx);
+                };
+                i = depth + 1;
+                lit_start = i;
+                lit_end = i;
+            };
+        } else if (c == 125) {
+            // A `}` with no `{` before it: the literal continues.
+            i = i + 1;
+        } else {
+            i = i + 1;
+        };
+    };
+    if (s.end > lit_start) { out += run_lines(d, lit_start, s.end, T_string); };
+    out
+}
+
+// The offset of the `}` closing the `{` at `from`, or `from` when the brace is
+// never closed -- which is what a half-typed interpolation looks like, and the
+// answer is "no tokens for it" rather than a span running off the end.
+def brace_depth(src: str, from: long, limit: long) -> long {
+    let depth = 0;
+    let i = from;
+    while (i < limit) {
+        let c = byte_at(src, i);
+        if (c == 92) { i = i + 2; }
+        else {
+            if (c == 123) { depth = depth + 1; }
+            else if (c == 125) {
+                depth = depth - 1;
+                if (depth == 0) { return i; };
+            };
+            i = i + 1;
+        };
+    };
+    from
+}
+
+// [from, to) scanned as code, its spans classified as they would be outside a
+// string.
+def code_tokens(src: str, from: long, to: long, d: SrcDoc, over: [long], idx: long) -> [SemTok] {
+    let out: [SemTok] = [];
+    let inner = src[from:to];
+    let r = scan.scan_full(inner);
+    let isps = r.spans;
+    let i = 0;
+    while (i < len(isps)) {
+        let sp = isps[i];
+        if (sp.end > sp.off && sp.end <= len(inner)) {
+            let t = type_of(inner, sp);
+            // The classification table is indexed by the OUTER span index, and an
+            // interpolation's identifiers are not in it -- they were never spans of
+            // the outer scan. So the inner scan classifies them lexically, which is
+            // `variable` for a name; the caller cannot do better without a second
+            // pass, and `variable` is the honest answer rather than a wrong class.
+            out += run_lines(d, from + sp.off, from + sp.end, t);
+        };
+        i = i + 1;
+    };
+    out
+}
+
+// One token per line for [from, to), which is `split_lines` without a Span.
+def run_lines(d: SrcDoc, from: long, to: long, t: long) -> [SemTok] {
+    let out: [SemTok] = [];
+    if (to <= from) { return out; };
+    let starts = d.starts;
+    let last_line = 0;
+    if (len(starts) > 0) { last_line = len(starts) - 1; };
+    let k = 1;
+    while (k < len(starts)) {
+        if (starts[k] > to - 1) { last_line = k; k = len(starts); } else { k = k + 1; };
+    };
+    let ln = line_of_byte(d, from);
+    let go = true;
+    while (go && ln <= last_line) {
+        let lo = starts[ln - 1];
+        let hi = doc_end(d, ln);
+        let a = from;
+        if (lo > a) { a = lo; };
+        let b = to;
+        if (hi < b) { b = hi; };
+        if (b > a) {
+            let ch = doc_u16_at(d, ln, a - lo);
+            let end = doc_u16_at(d, ln, b - lo);
+            if (end > ch) { out += { line: ln - 1, ch: ch, len: end - ch, typ: t }; };
+        };
+        ln = ln + 1;
+        if (ln > last_line) { go = false; };
+    };
+    out
+}
+
+// The 0-based line a byte offset is on, by counting the line starts -- which is
+// one linear walk per call and therefore only for the f-string path, where the
+// number of calls is the number of interpolations.
+def line_of_byte(d: SrcDoc, off: long) -> long {
+    let starts = d.starts;
+    let ln = 1;
+    let i = 0;
+    while (i < len(starts)) {
+        if (starts[i] <= off) { ln = i + 1; i = i + 1; } else { i = len(starts); };
+    };
+    ln
+}
+
+def doc_end(d: SrcDoc, ln: long) -> long { pos.doc_line_end(d, ln) }
+def doc_u16_at(d: SrcDoc, ln: long, off: long) -> long { pos.doc_u16(d, ln, off) }
 
 // One span, as one token per line it covers.
 //
