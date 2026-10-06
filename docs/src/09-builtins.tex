@@ -523,7 +523,9 @@ computed by squaring).
     residual is the rounding of the final sum, which no compensation of a term
     reaches. Reordering the sum does not fix it either, and the reason is worth
     the space: sorting the four corrections smallest-first takes the sweep from
-    \num{288} to \num{467} (and a partial sort, to \num{619}), because for
+    \num{288} to \num{467} (a partial sort, \num{619}), and choosing the order by
+    the argument --- sort only where \ic{e} is zero --- gives \num{290} with the
+    worst gap rising to 3, because for
     every argument with a non-zero exponent the term that needs to go first is
     \emph{already} first --- it is the residual of the \ic{two\_sum}, and
     \ic{two\_sum} puts it last in the expression and first in the sum. The two

@@ -159,8 +159,22 @@
 // help" -- it is that the one choice which would help helps only where the sum is
 // degenerate, and costs everywhere else. A single expression cannot have both.
 //
-// Six measured attempts, and a measurement that says a seventh would not either,
-// are worth more in this file than a seventh.
+// AND A SEVENTH, which is the one that ought to work and does not. Since the two
+// orders want opposite things and the argument says which, the order was CHOSEN
+// by it: sort the four corrections only when e == 0, leave the general path
+// exactly as it was. That is the textbook answer to "the two orders cannot both
+// be had" -- and it gives 290 against 288, with the worst gap rising from 2 to 3.
+//
+// So the localised improvement at e == 0 does not survive being applied to every
+// argument that wants it. Combined with the two unconditional sorts (467, 619)
+// that is three measurements all saying the same thing: the e == 0 case and the
+// general case are not two instances of one sum, and no expression serves both.
+//
+// Seven measured attempts. What would serve both is not a better order and not a
+// better compensation -- it is holding the pieces apart across the sum, which is
+// an extra-precision accumulator rather than an expression tree. That is a
+// rewrite of this function, it is not attempted here, and seven measurements are
+// the argument for why an eighth would not either.
 //
 // It also cost 5.5x the instructions: log through assembly plus a multiply is
 // 149 a call, and this is 817. That is a deliberate trade and it is worth naming
