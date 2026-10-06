@@ -938,3 +938,220 @@ y_os_close:
 yocl_fail:
     mov $-1, %rax
     ret
+# y_os_mkdir(path, len, mode) -> 0, or -1.
+#
+# THREE ARGUMENTS, FRAMELESS in the ELF body: mode (arg3) at 8(%rsp) -> 16(%rbp),
+# len (arg2) at 16 -> 24, path (arg1) at 24 -> 32. The ELF body ignores len (the
+# path is NUL-terminated there) and this one ignores mode, which NT cannot
+# express.
+#
+# NtCreateFile with FILE_CREATE (2) and FILE_DIRECTORY_FILE (1): an existing
+# directory must FAIL, because that is what mkdir(2) does and what fs.make_dir
+# reports, and FILE_CREATE is the one disposition wine honours as a create (see
+# y_os_openat for the measurement). The handle it returns is closed at once --
+# the directory exists as soon as the call returns.
+#
+# FILE_SYNCHRONOUS_IO_NONALERT (32) is here for the same reason as in openat:
+# an asynchronous handle is not what the rest of the layer expects.
+#
+# Layout as in y_os_openat: the path at -2200 (y_w_path writes upward from
+# there), the UNICODE_STRING at -2320, the handle at -2300, the
+# OBJECT_ATTRIBUTES at -2380 and the IO_STATUS_BLOCK at -2400 -- all below the
+# buffer's start, where its growth cannot reach.
+#=== replace: y_os_mkdir ===
+y_os_mkdir:
+    push %rbp
+    mov %rsp, %rbp
+    sub $3000, %rsp
+    lea -2200(%rbp), %rdi
+    mov 32(%rbp), %rsi
+    mov 24(%rbp), %rcx
+    call y_w_path
+    cmp $0, %rax
+    jl yomk_fail
+    mov %rax, %r8
+    add %r8, %r8
+    mov %r8, %rax
+    movb %al, -2320(%rbp)
+    shr $8, %rax
+    movb %al, -2319(%rbp)
+    add $2, %r8
+    mov %r8, %rax
+    movb %al, -2318(%rbp)
+    shr $8, %rax
+    movb %al, -2317(%rbp)
+    lea -2200(%rbp), %rax
+    mov %rax, -2312(%rbp)
+    mov $48, %rax
+    mov %rax, -2380(%rbp)
+    mov $0, %rax
+    mov %rax, -2372(%rbp)
+    lea -2320(%rbp), %rax
+    mov %rax, -2364(%rbp)
+    mov $64, %rax
+    mov %rax, -2356(%rbp)
+    mov $0, %rax
+    mov %rax, -2348(%rbp)
+    mov $0, %rax
+    mov %rax, -2340(%rbp)
+    mov $1048705, %rdx
+    mov $0, 40(%rsp)
+    mov $128, 48(%rsp)
+    mov $7, 56(%rsp)
+    mov $2, 64(%rsp)
+    mov $33, 72(%rsp)
+    mov $0, 80(%rsp)
+    mov $0, 88(%rsp)
+    lea -2300(%rbp), %r10
+    lea -2380(%rbp), %r8
+    lea -2400(%rbp), %r9
+    mov $85, %eax
+    syscall
+    test %eax, %eax
+    jne yomk_fail
+    mov -2300(%rbp), %r10
+    mov $15, %eax
+    syscall
+    xor %eax, %eax
+    mov %rbp, %rsp
+    pop %rbp
+    ret
+yomk_fail:
+    mov $-1, %rax
+    mov %rbp, %rsp
+    pop %rbp
+    ret
+# y_os_unlink(path, len, isdir) -> 0, or -1.
+#
+# Arg3 is a BOOLEAN here (fs.remove_dir passes 1), and it decides the open's
+# CreateOptions: FILE_DIRECTORY_FILE (1) or FILE_NON_DIRECTORY_FILE (64). Same
+# frameless offsets as y_os_mkdir: isdir at 16(%rbp), len at 24, path at 32.
+#
+# Deleting is two calls, not one: NtSetInformationFile (39) with
+# FileDispositionInformation (13), whose information is a SINGLE BYTE -- BOOLEAN
+# DeleteFile -- after opening the file with DELETE access (65536). Opening with
+# FILE_OPEN (1) and no create disposition is deliberate: unlinking something
+# that is not there must fail.
+#
+# FILE_SYNCHRONOUS_IO_NONALERT (32) is set for FILES here (96 = 32|64) as well as
+# directories (33 = 32|1): with an asynchronous handle NtSetInformationFile
+# answers STATUS_PENDING, the delete happens anyway, and a status check that
+# treats non-zero as failure reports "could not delete" for a file that is gone.
+# That is the second bug this block had, and the same fixture caught it.
+#
+# THE STATUS GOES IN A FRAME SLOT, NOT A REGISTER: `syscall` clobbers %rcx AND
+# %r11 architecturally, so saving the status in %r11 and restoring it after the
+# close hands the caller whatever the close left there -- which read as "-1, but
+# the file is gone". -2216 is below the path buffer's start, out of its way.
+#
+# STATUS_PENDING (259, 0x103) IS SUCCESS for this one call, and it is the only
+# place in this file that is true: FileDispositionInformation is documented to
+# answer it, the delete does happen, and a status check that reads "non-zero
+# means failure" reports "could not delete" for a file that is gone. That was
+# the third bug this block had, and the same fixture caught it -- only line 19,
+# remove_file, differing while line 20, exists, said false.
+#
+# A directory has to be empty, which is also what rmdir(2) requires -- and the
+# set-information STATUS IS THE RESULT. The first version of this block threw it
+# away and returned success unconditionally, which deleted a NON-EMPTY directory
+# and reported true where rmdir(2) fails; pe-gate.sh's round-trip fixture caught
+# it, because its expected output is the Linux one and `false` came back as
+# `true`. The status is saved, the handle is closed, and the status is what the
+# caller sees.
+#
+# The open reuses openat's frame shape; the disposition byte is at -2208, which
+# is below the path buffer's start.
+#=== replace: y_os_unlink ===
+y_os_unlink:
+    push %rbp
+    mov %rsp, %rbp
+    sub $3000, %rsp
+    lea -2200(%rbp), %rdi
+    mov 32(%rbp), %rsi
+    mov 24(%rbp), %rcx
+    call y_w_path
+    cmp $0, %rax
+    jl youn_fail
+    mov %rax, %r8
+    add %r8, %r8
+    mov %r8, %rax
+    movb %al, -2320(%rbp)
+    shr $8, %rax
+    movb %al, -2319(%rbp)
+    add $2, %r8
+    mov %r8, %rax
+    movb %al, -2318(%rbp)
+    shr $8, %rax
+    movb %al, -2317(%rbp)
+    lea -2200(%rbp), %rax
+    mov %rax, -2312(%rbp)
+    mov $48, %rax
+    mov %rax, -2380(%rbp)
+    mov $0, %rax
+    mov %rax, -2372(%rbp)
+    lea -2320(%rbp), %rax
+    mov %rax, -2364(%rbp)
+    mov $64, %rax
+    mov %rax, -2356(%rbp)
+    mov $0, %rax
+    mov %rax, -2348(%rbp)
+    mov $0, %rax
+    mov %rax, -2340(%rbp)
+    mov $1114112, %rdx
+    mov $0, 40(%rsp)
+    mov $128, 48(%rsp)
+    mov $7, 56(%rsp)
+    mov $1, 64(%rsp)
+    mov $96, 72(%rsp)
+    mov 16(%rbp), %rax
+    cmp $0, %rax
+    je youn_opts
+    mov $33, 72(%rsp)
+youn_opts:
+    mov $0, 80(%rsp)
+    mov $0, 88(%rsp)
+    lea -2300(%rbp), %r10
+    lea -2380(%rbp), %r8
+    lea -2400(%rbp), %r9
+    mov $85, %eax
+    syscall
+    test %eax, %eax
+    jne youn_fail
+    movb $1, -2208(%rbp)
+    mov -2300(%rbp), %r10
+    lea -2400(%rbp), %rdx
+    lea -2208(%rbp), %r8
+    mov $1, %r9
+    mov $13, 40(%rsp)
+    mov $39, %eax
+    syscall
+    mov %rax, -2216(%rbp)
+    mov -2300(%rbp), %r10
+    mov $15, %eax
+    syscall
+    mov -2216(%rbp), %rax
+    test %eax, %eax
+    je youn_ok
+    cmp $259, %eax
+    jne youn_fail
+youn_ok:
+    xor %eax, %eax
+    mov %rbp, %rsp
+    pop %rbp
+    ret
+youn_fail:
+    mov $-1, %rax
+    mov %rbp, %rsp
+    pop %rbp
+    ret
+# y_os_set_mode(path, len, mode) -> 0. NT has no mode bits: permissions are an
+# ACL, a completely different mechanism from the POSIX mode word, so there is
+# nothing here to set and the honest answer is success. It is written down
+# rather than left to the ELF body -- which is fchmodat with a Linux syscall
+# number -- because a caller that gets 0 back is being told "done", and a caller
+# that gets a Linux errno out of a Windows syscall is not being told anything.
+# chmod on NT is unimplemented, not failing.
+#=== replace: y_os_set_mode ===
+y_os_set_mode:
+    xor %eax, %eax
+    ret

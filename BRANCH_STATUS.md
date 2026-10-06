@@ -277,6 +277,27 @@ branch-disjointness false positive.
   2000, where stat's own layout has exactly 2000. `y_os_close` (NtClose, 15) was
   written the same round and reverted with it, untested, for the same reason:
   it is only reachable through a file handle that openat has to produce first.
+- **`y_os_mkdir`, `y_os_unlink` and `y_os_set_mode` work (round 42)**, so EIGHT
+  of fs.y's thirteen layer entries now have Windows bodies and FIVE do not:
+  `y_os_lseek`, `y_os_rename`, `y_os_getcwd`, `y_os_chdir`, `y_os_list`.
+  Verified byte-identical on ELF and PE: make_dir (and make_dir again FAILING,
+  because that is what mkdir(2) does), is_dir, write a file inside the new
+  directory, read it back, remove_file, remove_dir, and exists false afterwards.
+  `pe-gate.sh`'s round-trip fixture covers all of it.
+  How they are built, both reusing the openat frame and its measured rules:
+    * mkdir is NtCreateFile (85) with FILE_CREATE (2) and FILE_DIRECTORY_FILE
+      (1) -- FILE_CREATE deliberately, so an existing directory fails -- then
+      NtClose (15) on the handle it returns.
+    * unlink is TWO calls: open with DELETE access (65536) and FILE_OPEN, then
+      NtSetInformationFile (39) with FileDispositionInformation (13), whose
+      information is a SINGLE BYTE (BOOLEAN DeleteFile). FILE_DIRECTORY_FILE
+      (1) or FILE_NON_DIRECTORY_FILE (64) comes from arg3, which is a boolean
+      rather than the flag the ELF body translates. A directory still has to be
+      empty, as rmdir(2) requires.
+    * set_mode returns 0 and does nothing, in writing rather than by falling
+      through to the ELF body: NT permissions are an ACL, chmod is
+      unimplemented rather than failing, and a caller handed a Linux errno out
+      of a Windows syscall is being told nothing.
 - **`y_os_openat` WORKS (round 41), and two rounds of the record were wrong.**
   Round 39's commit message says the body was "written and REVERTED". It was
   not: the revert restored a backup that had been taken AFTER the body was

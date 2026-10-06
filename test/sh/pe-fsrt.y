@@ -15,3 +15,15 @@ print(fs.read_file("pefsrt.txt")!);
 print(fs.file_size("pefsrt.txt"));
 print(fs.read_file("pefsrt.txt")!.length);
 print(fs.exists("pefsrt.txt"));
+// The directory half: mkdir must fail on an existing directory (that is what
+// mkdir(2) does), unlink has to work for a file and for a directory, and
+// set_mode answers success because NT has no mode bits to set.
+print(fs.make_dir("pefsrt_dir"));
+print(fs.is_dir("pefsrt_dir"));
+print(fs.make_dir("pefsrt_dir"));
+print(fs.write_file("pefsrt_dir/inner.txt", "inner\n"));
+print(fs.read_file("pefsrt_dir/inner.txt")!);
+print(fs.remove_dir("pefsrt_dir"));
+print(fs.exists("pefsrt_dir"));
+print(fs.remove_file("pefsrt.txt"));
+print(fs.exists("pefsrt.txt"));
