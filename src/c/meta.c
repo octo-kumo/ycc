@@ -544,13 +544,24 @@ static Yv *run_image_read(Yv *m, ylong pid) {
     if (rfd >= 0) {
         unsigned char buf[65536];
         int more = 1;
+        /* Once the text has passed MG_MAX, STOP KEEPING IT and keep draining:
+         * a generator that emits without bound must not take the compiler's
+         * memory with it, and the failure is already decided -- mg_take_pieces
+         * reports "emitted more than MG_MAX" for exactly this. The drain is
+         * not optional: the child is still writing, and a writer that fills
+         * the pipe blocks forever with nobody reading it. (Found by the
+         * fuzzer: this copy boxes every byte, so collecting all of a 92 MiB
+         * hostile emission first cost it GBs and it died with "out of memory"
+         * where the Y copy reported the cap.) */
+        int capped = 0;
         while (more) {
             ylong k = (ylong)syscall(MG_SYS_READ, rfd, buf, 65536L);
             if (k <= 0) {
                 more = 0;
-            } else {
+            } else if (!capped) {
                 ylong i = 0;
                 while (i < k) { out = ya_push(out, yv_long(buf[i])); i = i + 1; };
+                if (yv_len(out) > MG_MAX) capped = 1;
             };
         };
     };

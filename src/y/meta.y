@@ -640,13 +640,24 @@ def run_image_read(stk: [byte], m: Mapd, pid: long) -> RunRes {
         let buf: [byte; 65536] = [0; 65536];
         let at = ptr_addr(&buf[0]);
         let more = true;
+        // Once the text has passed MG_MAX, STOP KEEPING IT and keep draining:
+        // a generator that emits without bound must not take the compiler's
+        // memory with it, and the failure is already decided -- mg_take_pieces
+        // reports "emitted more than MG_MAX" for exactly this. The drain is
+        // not optional: the child is still writing, and a writer that fills
+        // the pipe blocks forever with nobody reading it. (Found by the
+        // fuzzer: the C copy boxes every byte, so collecting all of a 92 MiB
+        // hostile emission first cost it GBs and it died with "out of memory"
+        // where the Y copy reported the cap.)
+        let capped = false;
         while (more) {
             let k = syscall(SYS_READ, m.rfd, at, 65536);
             if (k <= 0) {
                 more = false;
-            } else {
+            } else if (!capped) {
                 let i = 0;
                 while (i < k) { out += buf[i]; i = i + 1; };
+                if (len(out) > MG_MAX) { capped = true; };
             };
         };
     };

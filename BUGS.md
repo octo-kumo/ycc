@@ -3,33 +3,6 @@ Only include bugs of the compiler, make sure to include minimal reproduction.
 
 ***INSTRUCTIONS WHEN FINISH*** remove the BUG item from this file when it has been completed
 
-## The C copy OOMs where the Y copy hits the meta generator's 32 MiB cap
-
-A `#{ ... }#` block whose text grows past `MG_MAX` (33554432, `src/y/meta.y`
-and `src/c/meta.c`) must stop with `error: the meta generator emitted more
-than 33554432 bytes`. The Y compiler does, and in well under a second; the C
-copy instead keeps going (quadratic-looking) and dies with `runtime error: out
-of memory`, so the two copies disagree on a hostile input. Found by the fuzzer
-(seed 9432, iteration 264: a mutation of `test/y/native/e184_meta_emits_too_much.y`).
-
-### Minimal reproduction
-
-```y
-def huge() -> str {
-    let line = "0123456789012345678901234567890123456789";
-    let out = "";
-    for i in 0..600000 { out += line; };
-    out
-};
-let x = #{ huge() }#;
-print(1);
-```
-
-`./ycc f.y -o /tmp/x` prints `1` and then `error: the meta generator emitted
-more than 33554432 bytes`; `./cycc f.y -o /tmp/x` runs for minutes and OOMs
-under `ulimit -v 2000000`. Both exit 1, so only the message differs -- but the
-C copy never reaches the cap, which is the bug.
-
 ## A field of an `if let`-narrowed binding loses its map/array type
 
 When the value of an `if let` arm is produced *from* the narrowed binding's map-
