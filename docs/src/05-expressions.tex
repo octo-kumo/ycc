@@ -40,6 +40,14 @@ therefore the NaN test (and the one the linter leaves alone,
 Section~\ref{sec:errors}), \ic{[nan] == [1.0]} is \ic{false}, and an
 \ic{inf} compares exactly as an infinity should.
 
+\ic{bigint} arithmetic is exact and unbounded. \ic{/} truncates toward zero
+and \ic{\%} takes the sign of the dividend, like the \ic{long} forms above,
+and division by zero is the same runtime error; the difference is that nothing
+wraps and nothing overflows, so the \ic{LONG\_MIN} special cases have no
+counterpart. A \ic{float} on either side of a bigint operation converts by
+truncating toward zero before the operation, so the fraction is gone rather
+than carried (Section~\ref{sec:type-bigint}).
+
 \subsection{Bitwise operators}
 \label{sec:bitwise}
 

@@ -21,6 +21,9 @@ that a feature works.
 
 ## Features
 
+The writing convention for this file and for the manual is
+`docs/HOWTOWRITE.md`.
+
 One row per feature of each section of the manual: the manual file, the
 section title (exactly as in the `.tex`), the feature, and the tests that
 exercise it. Tests are `native/NAME.y`, `sh/test_NAME.sh`, or an inline
@@ -63,6 +66,7 @@ reason.
 | 02-lexical | Identifiers and keywords | `break` and `continue` are keywords, so neither may be a name | `native/t198_break_continue.y` |
 | 02-lexical | Identifiers and keywords | Reserved y_ generated-code prefix | none: y_ is reserved for compiler-generated labels, not user-program behavior |
 | 02-lexical | Literals | Decimal, binary, octal and hexadecimal integer spellings, `0o` included | `native/t25_radix.y`, `native/t334_octal.y` |
+| 02-lexical | Literals | The `n` suffix makes an integer literal an arbitrary-precision `bigint` in every radix, separators included; a fraction or an exponent under `n` is an error | `native/t353_bigint_ops.y`, `native/e194_bigint_errors.y` |
 | 02-lexical | Literals | A radix literal is its 64 bits: top-bit masks such as `0xFFFF_FFFF_FFFF_FFFF` | `native/t140_bitwise.y` |
 | 02-lexical | Literals | `_` digit separators in decimal integers and floats, wherever a literal is read (array lengths, shift counts, defaults, f-string fields); not right after the dot or the `e` | `native/t142_digit_separators.y`, `native/e135_digit_separators.y` |
 | 02-lexical | Literals | A radix prefix needs a digit of its radix: `0x`, `0X_`, `0b2`, `0o8`, `0o_` are errors, one for the whole word | `native/e139_radix_no_digits.y` |
@@ -101,6 +105,10 @@ reason.
 | 03-grammar | Assignment forms | The bitwise compound forms on name, index, `[byte]` element and field places | `native/t140_bitwise.y` |
 | 03-grammar | Assignment forms | `++`, `--` and the compound forms take a name, an element or a field: a slice, `*p`, `o!`, a str's bytes and an array's or str's `.length` and `.ptr` are rejected | `native/e136_place_targets.y` |
 | 04-types | Types and static semantics | Fatal static checking and structural type errors | `native/e11_recfield.y`, `native/e21_hetero_append.y`, `native/e25_map_value_type.y` |
+| 04-types | Big integers | `n`-suffixed literals of unlimited size in the decimal and radix forms, `bigint` arithmetic (`+ - * / %`, unary `-`) truncating toward zero with `%` following the dividend, comparisons and equality by VALUE (unlike a record), `+= -= *= /= %=` and `++`/`--` on a bigint target | `native/t353_bigint_ops.y` |
+| 04-types | Big integers | long/byte/float convert to bigint implicitly — exact for the integers, truncating toward zero for a float, so `2n + 0.9` is `2n` and `5n > 4.5` is `5n > 4n`; a float with no integral value traps | `native/t353_bigint_ops.y`, `native/t354_bigint_float_trap.y` |
+| 04-types | Big integers | Narrowing back is an option: `tolong(b)` is none outside the long range (`-2^63` included as fitting), `tofloat(b)` reads the decimal text and answers inf past a double | `native/t353_bigint_ops.y` |
+| 04-types | Big integers | The operators a bigint refuses name what they wanted: bitwise and shift operands, bitwise compound assignment (`bigints support only …` with `=`), a float literal under `n`, and a bigint where an index or a bitwise operand is wanted | `native/e194_bigint_errors.y`, `native/e96_builtin_types_core.y` |
 | 04-types | Scalar types | long, byte, bool, float and str values | `native/t01_arith.y`, `native/t05_cmp_bool.y`, `native/t07_str.y`, `native/t28_floats.y`, `native/t37_bytes.y` |
 | 04-types | Arrays | Homogeneous heap/fixed arrays and element-type enforcement | `native/t37_bytes.y`, `native/t40_array_ops.y`, `native/t57_from_bytes_fixed.y`, `native/e21_hetero_append.y` |
 | 04-types | Records | Record types are field sets (any order); field access (a field the type lacks is a compile error); `{ k: str }` is the record of one field | `native/t21_records.y`, `native/t50_unions_match.y`, `native/t81_record_k.y`, `native/t145_record_layout.y`, `native/e11_recfield.y`, `native/e145_record_missing_field.y`, `native/e147_k_record_exact.y` |
@@ -124,12 +132,14 @@ reason.
 | 04-types | Annotations and inference | No unknown type: a parameter without a type, a binding or result with a part nothing states (`[]`, `none`), and a call before the callee's return type is known are errors | `native/e149_unknown_types.y` |
 | 04-types | Conversions | byte-to-long and long-to-float widening; str accepted at a pointer position | `native/t28_floats.y`, `native/t37_bytes.y`, `native/t82_str_pointer_conversion.y` |
 | 04-types | Conversions | Annotated long-to-byte masking and long/byte-to-float conversion at every store under a known type, including a `return` under an inferred result; an existing record's fields never convert, a record literal's do | `native/t132_implicit_conversions.y`, `native/t133_inferred_returns.y`, `native/t145_record_layout.y`, `native/e130_record_field_conversion.y` |
+| 04-types | Operator typing | A bigint operand makes the result bigint and converts the other side to it; | `native/t353_bigint_ops.y`, `native/t355_bigint_crypto.y` |
 | 04-types | Operator typing | Numeric, string and array operators; comparisons, equality and truthy logic; every float comparison is IEEE-ordered, so a NaN compares false to everything (both operand orders, `x != x`, and through `[float]` elements, an option payload, records and maps) | `native/t28_floats.y`, `native/t33_str_compare.y`, `native/t40_array_ops.y`, `native/t75_eval_order.y`, `native/t77_reference_identity.y`, `native/t172_float_nan_order.y` |
 | 04-types | Operator typing | Bitwise operators take integers (a byte widens) and yield long; other operands rejected | `native/t140_bitwise.y`, `native/e134_bitwise_types.y` |
 | 04-types | Compound assignment typing | Valid numeric/string/array forms and rejected array operators | `native/t39_incdec_opassign.y`, `native/t40_array_ops.y`, `native/e21_hetero_append.y`, `native/e22_array_opassign_ops.y`, `native/e74_array_operators.y` |
 | 04-types | Compound assignment typing | Bitwise compound forms need an integer target and value; a byte target keeps the low 8 bits | `native/t140_bitwise.y`, `native/e134_bitwise_types.y` |
 | 04-types | The poison law | An error is reported once; the error type causes no follow-on errors | `native/e149_unknown_types.y`, `native/e140_record_exact.y` |
 | 05-expressions | Expressions and evaluation | Strict left-to-right operand evaluation and exactly-once place evaluation | `native/t39_incdec_opassign.y`, `native/t75_eval_order.y` |
+| 05-expressions | Numeric semantics | Bigint arithmetic is exact and unbounded — nothing wraps, so the LONG_MIN special cases have no counterpart — with truncating division, remainder following the dividend, and a float operand truncated before the operation | `native/t353_bigint_ops.y`, `native/t355_bigint_crypto.y` |
 | 05-expressions | Numeric semantics | Signed division/remainder edges, modulo-2^64 wraparound, float arithmetic and exact float negation; `float % float` as the IEEE remainder truncated toward zero (C's `fmod`: the dividend's sign, under the divisor in magnitude, exact for quotients of any size, with the NaN and infinity cases) | `native/t28_floats.y`, `native/t32_signed_div.y`, `native/t83_integer_wrap.y`, `native/t137_float_negation.y`, `native/t173_float_fmod.y` |
 | 05-expressions | Bitwise operators | And, or, exclusive or and not on 64 bits; byte operands widen to a long result | `native/t140_bitwise.y` |
 | 05-expressions | Bitwise operators | Arithmetic `>>` and logical `>>>`; counts of 64 or more shift every bit out; a negative count traps | `native/t140_bitwise.y`, `native/t141_shift_negative.y` |

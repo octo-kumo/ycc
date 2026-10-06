@@ -196,7 +196,15 @@ word.
 A leading zero with no \ic{o} is decimal, so \ic{017} is seventeen;
 \ic{0o755} is four hundred and ninety-three, which is what a file mode is
 written as. All integer
-literals are \ty{long} (64-bit). A radix literal spells the 64 bits
+literals are \ty{long} (64-bit) unless they end in \ic{n}, which makes one
+an arbitrary-precision \ic{bigint} (Section~\ref{sec:type-bigint}): \ic{255n}
+is a bigint holding 255, and \ic{9223372036854775808n} is $2^{63}$ rather
+than the \ic{-9223372036854775808} the 64 bits would spell. \ic{n} attaches
+to the decimal and the radix forms alike (\ic{0xFFn}, \ic{0b1010n},
+\ic{0o17n}), \ic{\_} groups digits there too, and a literal with a fraction
+or an exponent cannot be a bigint --- \ic{1.5n} and \ic{1e3n} are
+\ic{error: bigint literal '1.5n' is a float; a bigint is a whole number}. A
+radix literal spells the 64 bits
 themselves, so a mask may set the top bit:
 \ic{0xFFFF\_FFFF\_FFFF\_FFFF} is \ic{-1} and
 \ic{0x8000\_0000\_0000\_0000} the smallest \ty{long}; digits past 64
@@ -291,8 +299,8 @@ does not fit in a byte}, and a float is refused (\ic{3.14b}, \ic{1e3b}).
 A \emph{hex} literal cannot take the suffix, because \ic{b} is a hex
 digit: \ic{0x1Fb} is the hex number 507, not a byte. A byte from hex is
 written where its type is known, which narrows it: \ic{let c: byte =
-0x1F;}. Grouping with \ic{_} works as it does everywhere else
-(\ic{1_0b}).
+0x1F;}. Grouping with \ic{\_} works as it does everywhere else
+(\ic{1\_0b}).
 
 \paragraph{Multiline strings.} A string delimited by three quotes,
 \ic{"""}~\ldots~\ic{"""}, spans lines and may hold a \ic{"}:

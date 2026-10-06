@@ -21,6 +21,51 @@ type & domain & notes \\
 \end{tabular}
 \end{center}
 
+\subsection{Big integers}
+\label{sec:type-bigint}
+
+\ic{bigint} is the arbitrary-precision integer type, written with an \ic{n}
+suffix on the literal (Section~\ref{sec:literals}) and bounded by nothing:
+\ic{9223372036854775808n} is that number. A value is a heap record --- sign,
+limb count, limbs in base $2^{28}$ --- so a bigint is a reference like an
+array or a record, and the checker keeps the representation opaque. For
+\ic{==} it is nevertheless compared \emph{by value}, which is the one place
+a heap value of a record layout is: \ic{2n == 2n} is true for two separately
+allocated values, and \ic{[1n] == [1n]} is true (Section~\ref{sec:equality}).
+
+\paragraph{Operators.} If either operand of \ic{+ - * / \%} or of a
+comparison is a bigint, the other side converts to a bigint (next paragraph)
+and the result is a bigint (\ic{bool} for a comparison). The arithmetic is
+integers of unlimited size and follows C's rules for the two that have a
+sign choice: \ic{/} truncates toward zero (\ic{(0n - 7n) / 2n} is
+\ic{-3n}) and \ic{\%} takes the sign of the dividend (\ic{7n \% (0n -
+2n)} is \ic{1n}). Unary \ic{-} is defined; the bitwise and shift operators
+are not, and are rejected as \ic{'\&' left operand: expected long, got
+bigint}. Division or remainder by zero traps
+(Section~\ref{sec:errors}), as it does for \ic{long}.
+\ic{+= -= *= /= \%=} and \ic{++}/\ic{--} work on a bigint target; the
+bitwise compound forms do not and say so, one message for the family:
+\ic{bigints support only '+', '-', '*', '/' and '\%' with '='}.
+
+\paragraph{Conversion.} \ic{long}, \ic{byte} and \ic{float} convert to
+\ic{bigint} implicitly: the two integers exactly, a \ic{float} by
+\emph{truncating toward zero}. That truncation is the same one
+\ic{tolong} does and it is not a rounding, so \ic{2n + 0.9} is \ic{2n} and
+\ic{2n * 2.9} is \ic{4n} --- a float used where a bigint is wanted loses its
+fraction, silently, which is worth writing down because \ic{5n > 4.5} is
+\ic{5n > 4n} and is \ic{true}. A float with no integral value at all --- an
+infinity or a NaN --- traps rather than answering:
+\ic{runtime error: float has no bigint value}.
+
+The reverse is not implicit. \ic{tolong(b)} is a \ic{long?} and is
+\ic{none} outside the range it accepts for a \ic{str} or a \ic{float}:
+$2^{63} - 1$ converts and $2^{63}$ does not, with $-2^{63}$ the other end and
+\ic{some}. \ic{tofloat(b)} is
+a \ic{float?} and goes through the decimal text, so a magnitude past a
+\ic{double} reads \ic{inf} --- the same answer \ic{tofloat} gives for a
+string of the same digits --- and not \ic{none}. Both are in
+Section~\ref{sec:builtin-tostring}.
+
 \subsection{Arrays}
 \label{sec:type-arrays}
 
@@ -346,10 +391,14 @@ def spin(n: long) { self(n) };
 \label{sec:conversions}
 
 The implicit conversions are:
-\ic{long $\bs to$ float} (the only numeric widening),
-\ic{byte $\bs to$ long}, \ic{byte $\bs to$ float}, and the narrowing
+\ic{long $\bs to$ float} (the numeric widening),
+\ic{byte $\bs to$ long}, \ic{byte $\bs to$ float}, the narrowing
 \ic{long $\bs to$ byte} at a \ic{byte} position (the value is masked to
-eight bits: \ic{let b: byte = 258;} stores 2). A \ic{str} also
+eight bits: \ic{let b: byte = 258;} stores 2), and
+\ic{long}/\ic{byte}/\ic{float} $\bs to$ \ic{bigint} --- exact for the two
+integers, truncating toward zero for the float (Section~\ref{sec:type-bigint}).
+There is no implicit conversion the other way: a bigint needs \ic{tolong} or
+\ic{tofloat}, which answer options. A \ic{str} also
 flows into a \ic{*T} position, since a string value is a byte address.
 A union value converts to one of its members (a cast checked when the
 program runs, Section~\ref{sec:type-unions}). Apart from these, nothing
@@ -378,8 +427,10 @@ stores \ic{some(1.0)} (Section~\ref{sec:type-records}).
 
 \subsection{Operator typing}
 
-Arithmetic requires numbers; if either side is \ic{float} the result is
-\ic{float} and the other side widens. \ic{+} additionally allows
+Arithmetic requires numbers; if either side is \ic{bigint} the result is
+\ic{bigint} and the other side converts to it (a \ic{float} by truncating
+toward zero, Section~\ref{sec:type-bigint}), and otherwise if either side is
+\ic{float} the result is \ic{float} and the other side widens. \ic{+} additionally allows
 strings (concatenation, with auto-stringification of the non-string
 side) and arrays (Section~\ref{sec:arrays}); arrays win over strings
 when both appear. The bitwise operators \ic{\&} \ic{|}

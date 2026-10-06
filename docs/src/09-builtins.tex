@@ -105,7 +105,8 @@ a record still calls the field. \ic{s.length} is a property, so
   \ic{"\{k: v, ...\}"}, maps as \ic{"\{"k": v, ...\}"} (string keys
   quoted). A function is \emph{not} accepted here (only \ic{print} takes
   one, Section~\ref{sec:builtin-io}).
-\item[\ic{tolong(x)}] A \ic{long?} from either a \ic{str} or a \ic{float}.
+\item[\ic{tolong(x)}] A \ic{long?} from a \ic{str}, a \ic{float} or a
+  \ic{bigint}.
   The \ic{str} arm is exact rather than a prefix scan: optional whitespace,
   an optional \ic{+} or \ic{-}, one or more digits, and then only
   whitespace. Anything else is \ic{none} --- \ic{tolong("12x")},
@@ -119,8 +120,13 @@ a record still calls the field. \ic{s.length} is a property, so
   \ic{some(-3)}, not \ic{-4}, which is \ic{floor} and not \ic{trunc} ---
   and a float with no long answer is \ic{none} rather than a trap: a NaN, or
   a magnitude at or past \ic{2\textasciicircum 63} (\ic{-2\textasciicircum 63}
-  \emph{is} a long, and comes back as \ic{some(\ldots)}).
-\item[\ic{tofloat(x)}] A \ic{float?} from either a \ic{str} or a \ic{long}.
+  \emph{is} a long, and comes back as \ic{some(\ldots)}). On a \ic{bigint}
+  it is the same answer for a value that never had 64 bits to begin with:
+  \ic{none} exactly when the value is outside the \ic{long} range, so
+  $2^{63} - 1$ converts and $2^{63}$ does not, and $-2^{63}$ is the one that
+  fits at the bottom (Section~\ref{sec:type-bigint}).
+\item[\ic{tofloat(x)}] A \ic{float?} from a \ic{str}, a \ic{long} or a
+  \ic{bigint}.
   A \ic{str} is read by \ic{tolong}'s rule with at most one point: at least
   one digit, so \ic{tofloat(".5")} and \ic{tofloat("1.")} are both
   \ic{some(\ldots)}, while \ic{tofloat("1e9")}, \ic{tofloat(".")} and
@@ -132,6 +138,9 @@ a record still calls the field. \ic{s.length} is a property, so
   does implicitly, made explicit so that \ic{tolong} and \ic{tofloat} are a
   pair; a long beyond \ic{2\textasciicircum 53} rounds to the nearest
   double, as widening always does, and that arm is always \ic{some(\ldots)}.
+  A \ic{bigint} is converted through the same decimal text the \ic{str} arm
+  reads, so a magnitude past a \ic{double} answers \ic{inf} (not \ic{none})
+  --- the same answer a string of its digits gives.
 \item[\ic{mod(a, b)}] The \emph{floored} remainder of two \ic{long}s: the
   result has the sign of \ic{b}, so \ic{mod(-949, 100)} is \ic{51} and
   \ic{mod(949, -100)} is \ic{-51}. The \ic{\%} operator is C's --- it
@@ -1268,6 +1277,24 @@ how one is read out of its DER.
 \ic{x509.days\_from\_civil(y, m, d)} is the date arithmetic
 \ic{x509.verify\_chain} uses. \ic{x509.b64\_decode} is the Base64 decoder it
 needs to read a PEM file.
+
+\paragraph{Big integers.} \ic{crypto} also carries the number theory a
+prime needs, over the \ic{bigint} of Section~\ref{sec:type-bigint} --- where
+\ic{math}'s integer helpers stop at 64 bits, these do not.
+\ic{crypto.is\_prime(n)} is a Miller-Rabin test with 16 random bases after
+the small primes are divided out, so it is deterministic for small \ic{n} and
+has a negligible error probability past them: it is not a proof.
+\ic{random\_prime\_bytes} answers \ic{k} random bytes as a \ic{[byte]}
+and \ic{random\_bigint} the same as a non-negative bigint;
+\ic{bigint\_from\_bytes\_be} and \ic{bigint\_to\_bytes\_be} convert
+between a big-endian byte string and a bigint, and \ic{bigint\_byte\_len}
+is the shortest byte length that holds one. \ic{crypto.bigint\_mod\_pow(b, e, m)} is
+$b^e \bmod m$ by square and multiply, \ic{crypto.bigint\_gcd(a, b)} the
+greatest common divisor, and \ic{crypto.bigint\_inv\_mod(a, m)} the inverse
+of \ic{a} modulo \ic{m} --- \ic{0n} when there is none, which is an answer
+rather than a trap, so a caller has to test it. The shorter names
+\ic{gcd}, \ic{inv\_mod}, \ic{pow\_mod} and \ic{mod\_pow} are the same
+functions, and \ic{math.isnan(x)} is the C spelling of \ic{math.is\_nan}.
 
 \subsection{The terminal (the tui module)}
 \label{sec:builtin-tui}
