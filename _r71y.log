@@ -1,8 +1,0 @@
-ulimit -v 3670016; ./cycc -o _ycc0 src/y/ycc.y
-./_ycc0 --std-pack ycc.pack && cat _ycc0 ycc.pack > ycc && chmod 755 ycc && rm -f ycc.pack
-cmp ycc refs/ycc.ref
-ulimit -v 2097152; ./ycc -o _ycc src/y/ycc.y
-cmp _ycc0 _ycc
-rm -f _ycc _ycc0
-verified: cycc output == refs/ycc.ref == ycc self-compile (byte-identical)
-ycc=0

@@ -127,8 +127,12 @@ def ys_self_pack() -> str {
         syscall(8, fd, size - 16, 0);
         if (syscall(0, fd, &buf[0], 16) == 16) {
             let tail = from_bytes(buf[0:16]);
-            let n = tolong(tail[:8])!;
-            if (tail[8:] == ys_pack_magic() && n > 0 && n <= size - 16) {
+            // A binary with no pack has whatever the linker left in its last
+            // 16 bytes, so the size field is not a number. The old tolong read
+            // that as 0 and the check below rejected it; with `!` it traps.
+            let nopt = tolong(tail[:8]);
+            if (nopt != none && tail[8:] == ys_pack_magic() && nopt! > 0 && nopt! <= size - 16) {
+                let n = nopt!;
                 syscall(8, fd, size - 16 - n, 0);
                 let pieces: [str] = [];
                 let left = n;
