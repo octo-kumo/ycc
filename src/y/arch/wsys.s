@@ -1232,6 +1232,135 @@ yai_emit3:
     inc %r12
     ret
 # y_os_openat(dirfd, path, plen, flags, mode) -> the handle, or -1.
+# y_w_path(src, len, buf) -> the BYTE length of the NT name written to buf, or
+# -1. THE name builder, one copy: y_os_openat, y_os_unlink and y_os_rename all
+# need the same "\??\" prefix + CurrentDirectory + widened-path text, and a
+# second copy is how the UTF-32 prefix and the eight-bytes-per-unit widening
+# survived as long as they did.
+#
+# A path is ABSOLUTE when it starts "X:" -- a letter and a colon. Anything
+# else is relative and gets the process's RTL_USER_PROCESS_PARAMETERS
+# .CurrentDirectory.DosPath (PEB+0x20 is ProcessParameters, +0x38 the CURDIR's
+# UNICODE_STRING: Length at +0x38, Buffer at +0x40 -- decimal 56 and 64
+# below). That string is already UTF-16 and already DOS ("Z:\tmp\wfs", no
+# trailing separator), so a relative path is a byte copy plus the widening.
+#
+# The caller's buffer must hold 2000 bytes. The caps -- a 1024-byte directory,
+# a 900-byte path and a per-unit check that the name has not passed 1990 --
+# keep the three parts inside it.
+y_w_path:
+    push %rbp
+    mov %rsp, %rbp
+    push %rbx
+    push %r12
+    push %r13
+    push %r14
+    push %r15
+    sub $80, %rsp
+    mov 32(%rbp), %r12
+    mov 24(%rbp), %r13
+    mov 16(%rbp), %rax
+    mov %rax, -48(%rbp)
+    mov %rax, %r14
+    cmp $900, %r13
+    jg ywp_bad
+# The Win32 namespace prefix, four UTF-16 units in one 8-byte store:
+# '\' '?' '?' '\' is 5C 00 3F 00 3F 00 5C 00 = 0x005C003F003F005C. (It was
+# 0x5C3F3F5C -- four BYTES -- which is four UTF-16 units only if the string is
+# UTF-32: NT read the first unit as 0x3F5C and the path came back
+# STATUS_OBJECT_PATH_SYNTAX_BAD.)
+    mov $25895968444448860, %rax
+    mov %rax, (%r14)
+    add $8, %r14
+    cmp $2, %r13
+    jl ywp_rel
+    movzbq (%r12), %rax
+    add $32, %rax
+    cmp $97, %rax
+    jl ywp_rel
+    cmp $123, %rax
+    jg ywp_rel
+    movzbq 1(%r12), %rax
+    cmp $58, %rax
+    jne ywp_rel
+    jmp ywp_abs
+ywp_rel:
+    mov %gs:96, %rax
+    mov 32(%rax), %rax
+    mov 56(%rax), %rcx
+    and $65535, %rcx
+    mov 64(%rax), %rdx
+    cmp $1024, %rcx
+    jg ywp_bad
+    cmp $0, %rcx
+    je ywp_bad
+    mov $0, %rax
+ywp_cploop:
+    cmp %rcx, %rax
+    jge ywp_cpdone
+    mov %rdx, %rbx
+    add %rax, %rbx
+    movzbq (%rbx), %rbx
+    mov %rbx, (%r14)
+    add $1, %r14
+    add $1, %rax
+    jmp ywp_cploop
+ywp_cpdone:
+# a separator, unless the directory already ends with one (the low byte of its
+# last unit: every character here is ASCII)
+    mov %rdx, %rax
+    add %rcx, %rax
+    movzbq -2(%rax), %rbx
+    cmp $92, %rbx
+    je ywp_abs
+    mov $92, %rax
+    mov %rax, (%r14)
+    add $2, %r14
+ywp_abs:
+# Widen the path: one byte in, one UTF-16 unit out, '/' folded to '\'. The
+# in-tree assembler has no 16-bit store form (enc_mov's memory arm is 64-bit
+# only), so each store is 8 bytes with the unit in its low two and the cursor
+# advances TWO; the next store overwrites the six zero bytes the previous one
+# left. (Advancing eight per unit was the second bug here: every character was
+# followed by NULs, which NT answers STATUS_OBJECT_NAME_INVALID, 0xC0000033.)
+    mov $0, %r15
+ywp_loop:
+    cmp %r13, %r15
+    jge ywp_done
+    mov -48(%rbp), %rbx
+    mov %r14, %rax
+    sub %rbx, %rax
+    cmp $1990, %rax
+    jg ywp_bad
+    mov %r12, %rax
+    add %r15, %rax
+    movzbq (%rax), %rax
+    cmp $47, %rax
+    jne ywp_sep
+    mov $92, %rax
+ywp_sep:
+    cmp $128, %rax
+    jge ywp_bad
+    mov %rax, (%r14)
+    add $2, %r14
+    inc %r15
+    jmp ywp_loop
+ywp_done:
+    mov -48(%rbp), %rbx
+    mov %r14, %rax
+    sub %rbx, %rax
+    jmp ywp_out
+ywp_bad:
+    mov $-1, %rax
+ywp_out:
+    mov -40(%rbp), %r15
+    mov -32(%rbp), %r14
+    mov -24(%rbp), %r13
+    mov -16(%rbp), %r12
+    mov -8(%rbp), %rbx
+    mov %rbp, %rsp
+    pop %rbp
+    ret
 #=== replace: y_os_openat ===
 #
 # The other half of the shared entry point (see ideas/WINDOWS.md). std is
@@ -1278,109 +1407,23 @@ y_os_openat:
     mov 40(%rbp), %r12
     mov 32(%rbp), %r13
     mov 24(%rbp), %rbx
-# A path is ABSOLUTE when it starts "X:" -- a letter and a colon. Anything
-# else is relative and gets the process's CurrentDirectory prepended: the
-# PEB's RTL_USER_PROCESS_PARAMETERS.CurrentDirectory.DosPath (PEB+0x20 is
-# ProcessParameters, +0x38 the CURDIR's UNICODE_STRING: Length at +0x38,
-# Buffer at +0x40 -- decimal 56 and 64 below). That string is already UTF-16
-# and already DOS ("Z:\tmp\wfs", no trailing separator), so a relative path
-# is a byte copy plus a widening, not a widening of both.
-    cmp $900, %r13
-    jg yoa_bad
-# The Win32 namespace prefix, as four UTF-16 code units in one 8-byte store:
-# '\' '?' '?' '\' is 5C 00 3F 00 3F 00 5C 00, i.e. 0x005C003F003F005C.
-# (It was 0x5C3F3F5C -- four BYTES -- before, which is four UTF-16 code units
-# only if the string is UTF-32: NT read the first unit as 0x3F5C and the path
-# came back STATUS_OBJECT_PATH_SYNTAX_BAD, which is what every generated PE's
-# first file open did.)
-    lea -2096(%rbp), %r14
-    mov $25895968444448860, %rax
-    mov %rax, (%r14)
-    add $8, %r14
-    cmp $2, %r13
-    jl yoa_rel
-    movzbq (%r12), %rax
-    add $32, %rax
-    cmp $97, %rax
-    jl yoa_rel
-    cmp $123, %rax
-    jg yoa_rel
-    movzbq 1(%r12), %rax
-    cmp $58, %rax
-    jne yoa_rel
-    jmp yoa_abs
-yoa_rel:
-    mov %gs:96, %rax
-    mov 32(%rax), %rax
-    mov 56(%rax), %rcx
-    and $65535, %rcx
-    mov 64(%rax), %rdx
-# 1024 bytes (512 units) of directory: the cap that keeps prefix + directory
-# + separator + path inside rbp-2096..rbp-208 (1880 bytes), since the relative
-# part is still capped at 900 characters.
-    cmp $1024, %rcx
-    jg yoa_bad
-    cmp $0, %rcx
-    je yoa_bad
-    mov $0, %rax
-yoa_cploop:
-    cmp %rcx, %rax
-    jge yoa_cpdone
-    mov %rdx, %r15
-    add %rax, %r15
-    movzbq (%r15), %r15
-    mov %r15, (%r14)
-    add $1, %r14
-    add $1, %rax
-    jmp yoa_cploop
-yoa_cpdone:
-# A separator, unless the directory already ends with one (read the low byte
-# of its last unit: every character here is ASCII, so that byte is it).
-    mov %rdx, %rax
-    add %rcx, %rax
-    movzbq -2(%rax), %r15
-    cmp $92, %r15
-    je yoa_abs
-    mov $92, %rax
-    mov %rax, (%r14)
-    add $2, %r14
-yoa_abs:
-# Widen the path: one byte in, one UTF-16 unit out, '/' folded to '\'. The
-# in-tree assembler has no 16-bit store form (enc_mov's memory arm is 64-bit
-# only), so each store is 8 bytes with the unit in its low two; the cursor
-# advances TWO, not eight, and the next store overwrites the six zero bytes
-# the previous one left. (Advancing 8 per unit was the first bug here: the
-# name came out with a NUL after every character, which NT answers
-# STATUS_OBJECT_NAME_INVALID, 0xC0000033.)
-    mov $0, %r15
-yoa_loop:
-    cmp %r13, %r15
-    jge yoa_path_done
+# The name is built by y_w_path into the 1880-byte buffer at rbp-2096 (the
+# frame is 2184 bytes so the NT argument slots at 40(%rsp) stay below it).
     mov %r12, %rax
-    add %r15, %rax
-    movzbq (%rax), %rax
-    cmp $47, %rax
-    jne yoa_sep0
-    mov $92, %rax
-yoa_sep0:
-    cmp $128, %rax
-    jge yoa_bad
-    mov %rax, (%r14)
-    add $2, %r14
-    inc %r15
-    jmp yoa_loop
-yoa_path_done:
-# UNICODE_STRING at rbp-32. Length is in BYTES, and the buffer holds ONE
-# contiguous UTF-16 name: the four-unit "\??\" prefix, the directory when the
-# path was relative, and the path. %r14 advanced exactly two per unit and one
-# per copied byte, so the bytes written are r14 - (rbp-2096); the 8-byte
-# stores that leave six zero bytes behind do not move it, so that count is
-# exact and the zeros sit past Length. (The old code computed 2*(n+4) from the
-# path length alone, which cannot see a prepended directory.) MaximumLength is
-# the same. One 64-bit store carries both, Length | (Length << 16).
-    mov %r14, %rax
-    sub %rbp, %rax
-    add $2096, %rax
+    push %rax
+    mov %r13, %rax
+    push %rax
+    lea -2096(%rbp), %rax
+    push %rax
+    call y_w_path
+    add $24, %rsp
+    cmp $0, %rax
+    jl yoa_bad
+# UNICODE_STRING at rbp-32. Length is in BYTES and y_w_path returns exactly how
+# many it wrote -- the "\??\" prefix, the directory when the path was
+# relative, and the path. MaximumLength is the same. One 64-bit store carries
+# both, Length | (Length << 16); the Buffer is the prefix's address, because
+# the prefix IS part of the name.
     mov %rax, %r15
     shl $16, %rax
     add %r15, %rax
@@ -1657,6 +1700,131 @@ yostat_qfail:
 yostat_fail:
     mov $-1, %rax
 yostat_out:
+    mov %rbp, %rsp
+    pop %rbp
+    ret
+# y_os_mkdir(path, len, mode) -> 0, or -1. There is no NtMkdir: the directory
+# is created by NtCreateFile with FILE_DIRECTORY_FILE, which y_os_openat
+# already does for O_CREAT|O_DIRECTORY -- so this opens with
+# O_CREAT|O_EXCL|O_DIRECTORY|O_CLOEXEC (192 + 65536 + 524288 = 590016) and
+# closes. O_EXCL is what keeps this a MKDIR: FILE_OPEN_IF would answer success
+# for a directory that already exists, where mkdirat(2) answers EEXIST (and
+# fs.make_dirs depends on the difference).
+#=== replace: y_os_mkdir ===
+y_os_mkdir:
+    push %rbp
+    mov %rsp, %rbp
+    sub $64, %rsp
+    mov $-100, %rax
+    push %rax
+    mov 32(%rbp), %rax
+    push %rax
+    mov 24(%rbp), %rax
+    push %rax
+    mov $590016, %rax
+    push %rax
+    mov 16(%rbp), %rax
+    push %rax
+    call y_os_openat
+    add $40, %rsp
+    cmp $0, %rax
+    jl yomkdir_fail
+    mov %rax, %r10
+    mov $15, %eax
+    syscall
+    mov $0, %rax
+    jmp yomkdir_out
+yomkdir_fail:
+    mov $-1, %rax
+yomkdir_out:
+    mov %rbp, %rsp
+    pop %rbp
+    ret
+# y_os_unlink(path, len, isdir) -> 0, or -1. Open the path with DELETE access
+# (0x10000) and SYNCHRONIZE (0x100000) -- NtSetInformationFile's
+# FileDispositionInformation needs DELETE on the handle -- mark it for
+# deletion, and close. The open options are FILE_NON_DIRECTORY_FILE (0x40) for
+# a file and FILE_DIRECTORY_FILE (0x1) for a directory, both with
+# FILE_SYNCHRONOUS_IO_NONALERT (0x20). The name comes from y_w_path into the
+# 2048-byte buffer at rbp-2176; the frame leaves the NT argument slots at
+# 40(%rsp) below it.
+#=== replace: y_os_unlink ===
+y_os_unlink:
+    push %rbp
+    mov %rsp, %rbp
+    sub $2264, %rsp
+    mov 32(%rbp), %rax
+    mov %rax, -8(%rbp)
+    mov 24(%rbp), %rax
+    mov %rax, -16(%rbp)
+    mov 16(%rbp), %rax
+    mov %rax, -24(%rbp)
+    mov -8(%rbp), %rax
+    push %rax
+    mov -16(%rbp), %rax
+    push %rax
+    lea -2176(%rbp), %rax
+    push %rax
+    call y_w_path
+    add $24, %rsp
+    cmp $0, %rax
+    jl you_fail
+    mov %rax, %rcx
+    shl $16, %rax
+    add %rcx, %rax
+    mov %rax, -48(%rbp)
+    lea -2176(%rbp), %rax
+    mov %rax, -40(%rbp)
+    mov $48, %rax
+    mov %rax, -112(%rbp)
+    mov $0, %rax
+    mov %rax, -104(%rbp)
+    lea -48(%rbp), %rax
+    mov %rax, -96(%rbp)
+    mov $0, %rax
+    mov %rax, -88(%rbp)
+    mov %rax, -80(%rbp)
+    mov %rax, -72(%rbp)
+    mov -24(%rbp), %rcx
+    mov $96, %rax
+    cmp $0, %rcx
+    je you_opt
+    mov $33, %rax
+you_opt:
+    mov %rax, 48(%rsp)
+    mov $7, %rax
+    mov %rax, 40(%rsp)
+    lea -152(%rbp), %r10
+    mov $1114112, %rdx
+    lea -112(%rbp), %r8
+    lea -144(%rbp), %r9
+    mov $51, %eax
+    syscall
+    test %eax, %eax
+    js you_fail
+    mov $1, %rax
+    mov %rax, -160(%rbp)
+    mov -152(%rbp), %r10
+    lea -144(%rbp), %rdx
+    lea -160(%rbp), %r8
+    mov $1, %r9d
+    mov $13, 40(%rsp)
+    mov $39, %eax
+    syscall
+    test %eax, %eax
+    js you_fail2
+    mov -152(%rbp), %r10
+    mov $15, %eax
+    syscall
+    mov $0, %rax
+    jmp you_out
+you_fail2:
+    mov -152(%rbp), %r10
+    mov $15, %eax
+    syscall
+you_fail:
+    mov $-1, %rax
+you_out:
     mov %rbp, %rsp
     pop %rbp
     ret

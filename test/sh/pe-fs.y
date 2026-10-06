@@ -27,3 +27,18 @@ if (fd >= 0) {
     print("close=" + tostring(fs.close_file(fd)));
 };
 print("missing=" + tostring(fs.exists("peg_nope.txt")));
+
+// directories: make_dir, make_dirs, remove_dir -- and the EEXIST answer
+// (mkdir twice is false the second time, which is what mkdirat(2) says and
+// what fs.make_dirs depends on)
+print("mkdir=" + tostring(fs.make_dir("peg_dir")));
+print("isdir=" + tostring(fs.is_dir("peg_dir")));
+print("mkdir2=" + tostring(fs.make_dir("peg_dir")));
+print("mkdeep=" + tostring(fs.make_dirs("peg_d/a/b")));
+print("deepdir=" + tostring(fs.is_dir("peg_d/a/b")));
+print("rmdir=" + tostring(fs.remove_dir("peg_dir")));
+print("dirgone=" + tostring(fs.exists("peg_dir")));
+
+// and the file goes away
+print("rmfile=" + tostring(fs.remove_file(p)));
+print("gone=" + tostring(fs.exists(p)));

@@ -66,15 +66,35 @@ for i in $(seq 1 "$ITER"); do
     for r in "$yrc" "$crc"; do
         [ "$r" -ge 124 ] && kind="crash"
     done
-    case "$ymsg$cmsg" in
-        *"runtime error:"*|*INTERNAL*) kind="crash" ;;
-    esac
+    # A difference between the two compilers is a DIVERGENCE whatever else is
+    # in the messages, and it is checked FIRST: a run where ycc reports the
+    # meta cap and cycc reports "runtime error: out of memory" is a port bug
+    # (see BUGS.md), not a crash of either compiler. (Reordered in round 9,
+    # when seed 9432 produced exactly that and the old order called it a
+    # crash.)
+    if [ -z "$kind" ] && { [ "$yrc" != "$crc" ] || [ "$ymsg" != "$cmsg" ]; }; then
+        kind="diverge"
+    fi
     if [ -z "$kind" ]; then
-        if [ "$yrc" != "$crc" ] || [ "$ymsg" != "$cmsg" ]; then
-            kind="diverge"
-        elif [ "$yrc" = 0 ] && ! cmp -s "$W/y.bin" "$W/c.bin"; then
-            kind="diverge"
-        fi
+        case "$ymsg$cmsg" in
+            *"runtime error:"*|*INTERNAL*) kind="crash" ;;
+        esac
+    fi
+    # A `#{ ... }#` meta block's generator runs in a FORKED CHILD, and a trap in
+    # that child is a DIAGNOSTIC, not a compiler crash: the child's
+    # "runtime error: ..." reaches the parent's stdout and ycc then prints its
+    # own "the meta generator exited N" naming the block.
+    # `test/y/native/e185_meta_gen_dies.y` exists to produce exactly that, so a
+    # mutation landing in its shape was reported as a crash (seed 15900, round
+    # 9). Suppress only when BOTH compilers printed the meta diagnostic and
+    # agree on the message and the exit status -- a compiler trap that happened
+    # to follow one would still differ in one of the three.
+    if [ "$kind" = "crash" ] && [ "$ymsg" = "$cmsg" ] && [ "$yrc" = "$crc" ] &&
+       printf '%s' "$ymsg" | grep -q 'the meta generator exited'; then
+        kind=""
+    fi
+    if [ -z "$kind" ] && [ "$yrc" = 0 ] && ! cmp -s "$W/y.bin" "$W/c.bin"; then
+        kind="diverge"
     fi
     rm -f "$W/y.bin" "$W/c.bin"
     [ -z "$kind" ] && continue

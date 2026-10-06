@@ -200,9 +200,9 @@ def file_size(path: str) -> long? {
 };
 
 def rename(from: str, to: str) -> bool { syscall(264, fs_at_cwd(), from, fs_at_cwd(), to) == 0 };
-def remove_file(path: str) -> bool { syscall(263, fs_at_cwd(), path, 0) == 0 };
+def remove_file(path: str) -> bool { os_call("y_os_unlink", path, len(path), 0) == 0 };
 // An empty directory.
-def remove_dir(path: str) -> bool { syscall(263, fs_at_cwd(), path, 512) == 0 };
+def remove_dir(path: str) -> bool { os_call("y_os_unlink", path, len(path), 1) == 0 };
 
 // path and everything in it. A symlink is unlinked, never followed: what
 // it names is not this path's to delete (and rm -rf, which decides
@@ -222,7 +222,7 @@ def remove_all(path: str) -> bool {
     } else { remove_file(path) }
 };
 
-def make_dir(path: str, mode: long = 0o755) -> bool { syscall(258, fs_at_cwd(), path, mode) == 0 };
+def make_dir(path: str, mode: long = 0o755) -> bool { os_call("y_os_mkdir", path, len(path), mode) == 0 };
 
 // path and every directory above it that is missing (true when path is a
 // directory already).

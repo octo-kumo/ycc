@@ -922,9 +922,17 @@ reason this section exists:
   file). `pe-gate.sh` now compiles and runs a second program
   (`test/sh/pe-fs.y`) under wine and diffs its output against the same
   program's Linux output, so the file path is a checked gate rather than a
-  manual test. **Still raw `syscall(` in `fs.y`**: `list_dir` (217/257),
-  `make_dir` (258), `remove_file`/`remove_dir` (263), `rename` (264),
-  `set_mode` (268), `cwd` (79), `chdir` (80) -- the rest of the B2 slice.
+  manual test. `make_dir`/`make_dirs` and `remove_file`/`remove_dir` are named
+  too (`y_os_mkdir` = `NtCreateFile` with FILE_DIRECTORY_FILE and O_EXCL, so a
+  second mkdir is EEXIST as `mkdirat(2)` says and `fs.make_dirs` needs;
+  `y_os_unlink` = open with DELETE|SYNCHRONIZE, `NtSetInformationFile`
+  FileDispositionInformation, close). Both, and the new stat/unlink/rename
+  work, build the name with ONE helper, `y_w_path` -- the `\??\` prefix,
+  the PEB CurrentDirectory for a relative path, and the widening -- because
+  the first three copies of that code are where the UTF-32 prefix and the
+  eight-bytes-per-unit widening hid. **Still raw `syscall(` in `fs.y`**:
+  `list_dir` (217/257), `rename` (264), `set_mode` (268), `cwd` (79),
+  `chdir` (80) -- the rest of the B2 slice.
 - **`std/math.y` is not embedded, and that is correct.** Only the four packed units
   (`rt`, `prelude`, `exec`, `str`) are in `STD_EMBEDS`; `std/math.y` is spliced
   from source per target like `fs.y`/`net.y`, so the pack never carries it and

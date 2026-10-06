@@ -1867,6 +1867,41 @@ y_os_stat:
     mov $-1, %rax
 yostat_ret:
     ret
+# y_os_mkdir(path, len, mode) -> 0, or -1, and y_os_unlink(path, len, isdir) ->
+# 0, or -1. THREE arguments each and these bodies are frameless, so the last
+# pushed (arg3) is at 8(%rsp), arg2 at 16 and arg1 (the path) at 24 --
+# mkdirat(2) and unlinkat(2) with AT_FDCWD, and unlinkat's flag is AT_REMOVEDIR
+# (512) for a directory. (The first cut used the framed offsets, 32/24/16, so
+# make_dir passed a length where mkdirat wanted the path.) The Windows halves
+# are in wsys.s.
+y_os_mkdir:
+    mov 8(%rsp), %rdx
+    mov 24(%rsp), %rsi
+    mov $-100, %rdi
+    mov $258, %eax
+    syscall
+    test %rax, %rax
+    jns yomkdir_ret
+    mov $-1, %rax
+yomkdir_ret:
+    ret
+y_os_unlink:
+# arg3 is a BOOLEAN (fs.remove_dir passes 1), while unlinkat(2) wants a flag:
+# AT_REMOVEDIR is 512.
+    mov 8(%rsp), %rdx
+    cmp $0, %rdx
+    je younlink_file
+    mov $512, %rdx
+younlink_file:
+    mov 24(%rsp), %rsi
+    mov $-100, %rdi
+    mov $263, %eax
+    syscall
+    test %rax, %rax
+    jns younlink_ret
+    mov $-1, %rax
+younlink_ret:
+    ret
 # y_os_close(fd) -> 0, or -1. One contract on both kernels: zero for success,
 # negative for failure, which is what fs.close_file's `== 0` asks for and what
 # close(2) already returns. NtClose answers an NTSTATUS instead, so the Windows
