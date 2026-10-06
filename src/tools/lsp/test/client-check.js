@@ -266,6 +266,26 @@ function main() {
             badParents.length === 0,
             'dangling: ' + badParents.map(([id, p2]) => id + '->' + p2).join(','),
         );
+        // AND a colour, so a type can never be shipped uncoloured again.
+        //
+        // superType alone was tried and did not put a colour on screen: `builtin`
+        // stayed plain foreground after the manifest shipped it, twice. The
+        // mechanism is right in the code -- VS Code scores both theme rules and its
+        // own default rules through `getTypeHierarchy(n).indexOf(o.type)`, so a
+        // superType does reach the parent -- but a manifest that can only be
+        // checked by reading is a manifest that cannot be trusted to have been
+        // applied. So the four also carry an explicit default colour, and this
+        // asserts it, which means the day one is dropped the suite says so.
+        const cfgDefaults = (pkgExt.contributes || {}).configurationDefaults || {};
+        const uncoloured = (leg && leg.tokenTypes ? leg.tokenTypes : [])
+            .filter((t) => !LSP_STANDARD.has(t)
+                && cfgDefaults['editor.semanticTokenTypes.' + t] === undefined
+                && !declaredTypes.has(t));
+        check(
+            'package.json: every token type has a colour -- a default or a superType',
+            uncoloured.length === 0,
+            'nothing paints these: ' + uncoloured.join(','),
+        );
         send('initialized', {});
         await settle();
 

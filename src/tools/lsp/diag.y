@@ -314,10 +314,10 @@ def xref_for(text: str, dir: str, path: str, pack: str) -> Prepared? {
             let ast3: Block = rename.rename_program_x2(ast2, [], nr.origin.file, nr.origin.mods).ast;
             let x = xref.tops_of(ast3);
             let units = std_units(nr.std, pack);
-            let mine = xref.own_lines(
-                xref.nlines(nr.src),
-                xref.nlines(rp.text),
-                xref.first_own_line(rp.text, xref.nlines(rp.text)));
+            // From the origin map, not from a line count: a header comment before
+            // the imports made the old shift wrong for every line after them.
+            // xref.own_lines says which and by how much.
+            let mine = xref.own_lines(nr.origin, xref.nlines(rp.text));
             let lines: { str => long } = {};
             let files: { str => str } = {};
             let names: [str] = [];

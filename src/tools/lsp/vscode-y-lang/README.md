@@ -86,21 +86,35 @@ shell and fails in VS Code, or picks up something unrelated. If it is on your
 
 ## Colours
 
-The legend has fourteen entries. VS Code's built-in fallback colours the LSP's
-*standard* token type names; four of ours are not standard — `selfNone`,
-`punctuation`, `error` and `builtin` — and nothing colours those unless the
-extension says so. It does, in `contributes.semanticTokenTypes`, each with a
-`superType`: `builtin` falls back to `function`, `punctuation` to `operator`,
-`selfNone` and `error` to `keyword`.
+The legend has fourteen entries. VS Code registers 27 token types itself
+(`comment`, `string`, `keyword`, `function`, …) and has a default colour for each;
+**four of ours are not among them** — `selfNone`, `punctuation`, `error` and
+`builtin` — and nothing paints those unless the extension says so. Without that,
+`print`, `tostring`, `len`, `clock_us` and `heap_used` render as plain foreground.
 
-A `superType` is the theme-independent way to do this. VS Code scores a theme rule
-against the token type's superType *chain*, so an exact rule in your theme still
-wins and the parent is only the fallback — which means these four follow whatever
-theme you use rather than arriving as one hard-coded hex. To change one:
+They are handled in two layers, and the second exists because the first was not
+enough on its own:
+
+1. **`contributes.semanticTokenTypes`, each with a `superType`** — `builtin` falls
+   back to `function`, `punctuation` to `operator`, `selfNone` and `error` to
+   `keyword`. This is the theme-following mechanism: VS Code scores a theme rule
+   against a token type's superType *chain* (`getTypeHierarchy(n).indexOf(o.type)`,
+   `l += 100 - u`), so an exact rule in your theme still wins and the parent is only
+   the fallback.
+2. **A `configurationDefaults` colour for each of the four.** Shipping only the
+   first layer left `builtin` still white, so each one also carries an explicit
+   default. They are the colours Dark+ itself uses for the class each stands in for,
+   so a file stays internally consistent on the most common theme. A theme rule
+   beats a default, and your own `editor.semanticTokenTypes.*` setting beats both.
+
+To change one:
 
 ```jsonc
 "editor.semanticTokenTypes.builtin": "#4EC9B0"
 ```
+
+`client-check.js` asserts both layers, and it fails if either is dropped — checked
+by deleting the `builtin` entry and its colour, which turns two checks red.
 
 ## Settings
 

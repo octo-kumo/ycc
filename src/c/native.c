@@ -183,14 +183,14 @@ int seen_has(Yv *seen, Yv *full);
 Yv *dir_of(Yv *p);
 Yv *std_resolve(Yv *name, Yv *base_dir);
 Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen,
-                        Yv *smods, long fid);
+                        Yv *smods, long fid, Yv *self_path);
 /* the meta pass (see "the meta pass" below): meta.y hoists these defs, so C
  * needs them said twice -- meta_prepare is called from resolve_unit, which is
  * above it, and meta_run_generator from meta_prepare, which is above that. */
 static Yv *meta_prepare(Yv *src, Yv *base_dir, long depth, int allow_exec,
-                        Yv *root);
+                        Yv *root, Yv *self_path);
 static Yv *meta_resolve(Yv *src, Yv *base_dir, long depth, int allow_exec,
-                        Yv *root, Yv *first);
+                        Yv *root, Yv *first, Yv *self_path);
 static long meta_run_generator(Yv *src, Yv *base_dir, int allow_exec,
                                Yv *root, Yv *first);
 static Yv *meta_compile_gen(void);
@@ -650,10 +650,27 @@ Yv *native_resolve_pk(Yv *src, Yv *base_dir, int allow_exec, Yv *root,
 Yv *resolve_unit(Yv *src, Yv *base_dir, long depth, int allow_exec,
                  Yv *root) {
     res_used = yav(0);
+    /* The program itself is de-duplicated by `self_path` and NOT by putting it in
+     * `seen`. `seen` is also the file-id counter -- a nested call is handed
+     * `len(seen)` -- so seeding it would shift every module's id in
+     * `origin.file` by one and mis-attribute whole files. It was done that way
+     * first and `origin.file` then gave `bn.y` zero lines at id 1 while its text
+     * landed past the end of `files`, which stopped ycc.y and bignum.y compiling.
+     * `self_path` costs one string comparison per import and shifts nothing.
+     *
+     * Normalised, because the comparison is against what `std_resolve` returns and
+     * that is `norm_path`ed: `ycc src/y/asm.y` passes `src/y/asm.y`, and
+     * `std_resolve("./asm.y", "src/y")` answers `src/y/asm.y` after dropping the
+     * `.`. Comparing the raw spelling would simply never match. */
+    Yv *self_path = ys("");
+    if (!ys_eq(root, ys(""))) {
+        self_path = norm_path(root);
+    }
     /* NOTE: seen-threading wrapper (see native_resolve_seen): asm.y imports
      * enc64 as `enc` AND elf.y imports enc64 as `elfenc`; without dedup the
      * encoder splices twice and every enc64 def collides (find_dup). */
-    Yv *r = meta_prepare(src, base_dir, depth, allow_exec, root);
+    Yv *r = meta_prepare(src, base_dir, depth, allow_exec, root,
+                            self_path);
     Yv *rsrc = ys_join(yr_get(r, "lines"), ys("\n"));
     Yv *rimports = yr_get(r, "imports");
     Yv *files = yav(1, root);
@@ -1134,19 +1151,22 @@ static Yv *meta_meta_scan(Yv *src, Yv *base_dir, long fid) {
 }
 
 static Yv *meta_prepare(Yv *src, Yv *base_dir, long depth, int allow_exec,
-                        Yv *root) {
+                        Yv *root, Yv *self_path) {
     if (!mg_on) {
-        return native_resolve_seen(src, base_dir, depth, yav(0), yav(0), 0);
+        return native_resolve_seen(src, base_dir, depth, yav(0), yav(0), 0,
+                                       self_path);
     };
     /* step 1: find the blocks. The result is thrown away; only the scanner's
      * accumulators survive. */
-    Yv *first = native_resolve_seen(src, base_dir, depth, yav(0), yav(0), 0);
+    Yv *first = native_resolve_seen(src, base_dir, depth, yav(0), yav(0), 0,
+                                       self_path);
     if (mg_n == 0) {
         /* no blocks: the collecting pass's own result is the real one, and it
          * is byte for byte what the pass-off path returns */
         return first;
     } else {
-        return meta_resolve(src, base_dir, depth, allow_exec, root, first);
+        return meta_resolve(src, base_dir, depth, allow_exec, root, first,
+                                      self_path);
     }
 }
 
@@ -1168,7 +1188,7 @@ static Yv *meta_prepare(Yv *src, Yv *base_dir, long depth, int allow_exec,
  * (meta.y keeps this inline in meta_prepare: the C twin's forward declarations
  * are a flat list, and this is the only thing that needs the second one.) */
 static Yv *meta_resolve(Yv *src, Yv *base_dir, long depth, int allow_exec,
-                        Yv *root, Yv *first) {
+                        Yv *root, Yv *first, Yv *self_path) {
     if (mg_nest > 0) {
         /* A round in which a block cannot produce its text leaves a stand-in
          * where its call goes, so a statement naming something that block was
@@ -1182,7 +1202,8 @@ static Yv *meta_resolve(Yv *src, Yv *base_dir, long depth, int allow_exec,
      * inner text is missing). Start the rounds from a fresh pass, which holds
      * what it may have to give up and reduces. */
     (void)mg_pass();
-    (void)native_resolve_seen(src, base_dir, depth, yav(0), yav(0), 0);
+    (void)native_resolve_seen(src, base_dir, depth, yav(0), yav(0), 0,
+                                       self_path);
     long rounds = 0;
     int done = 0;
     while (!done) {
@@ -1199,13 +1220,15 @@ static Yv *meta_resolve(Yv *src, Yv *base_dir, long depth, int allow_exec,
             /* another round: the block table starts over, so the next resolve
              * hands out the same slots (mg_pass) and finds the pieces */
             (void)mg_pass();
-            (void)native_resolve_seen(src, base_dir, depth, yav(0), yav(0), 0);
+            (void)native_resolve_seen(src, base_dir, depth, yav(0), yav(0), 0,
+                                       self_path);
         };
     };
     /* step 3: the ordinary resolve, with every piece known. Its G is built and
      * not run -- nothing is pending, so there is nothing left to compute. */
     (void)mg_pass();
-    return native_resolve_seen(src, base_dir, depth, yav(0), yav(0), 0);
+    return native_resolve_seen(src, base_dir, depth, yav(0), yav(0), 0,
+                                       self_path);
 }
 
 /* `dst += src` for a Y array (meta.y's `[root] + first.seen`): the elements of
@@ -1441,7 +1464,7 @@ Yv *std_resolve(Yv *name, Yv *base_dir) {
  * above native_resolve), and smods[k] is the module seen[k] was imported
  * as by name ("" by path). */
 Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen,
-                        Yv *smods, long fid) {
+                        Yv *smods, long fid, Yv *self_path) {
     if (depth > 32) {
         // Fatal, like a missing module: carrying on compiled the program
         // without the rest of the chain and exited 0.
@@ -1566,12 +1589,37 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen,
                             ys("')\n")));
                         exit_(1);
                         ;
-                    } else if (seen_has(seen, full)) {
+                    } else if (seen_has(seen, full)
+                               || (!ys_eq(self_path, ys(""))
+                                   && ys_eq(full, self_path))) {
                         /* NOTE: already spliced (see native_resolve note):
                          * record the namespace name (strip_ns needs it,
                          * unless the file is a module with its own scope)
-                         * but do NOT splice the text a second time. */
-                        if (ys_eq_lit(ya_get(smods, seen_index(seen, full)), "")) {
+                         * but do NOT splice the text a second time.
+                         *
+                         * The program itself counts as already spliced: it is, by
+                         * the line above this walk started. asm.y imports ir.y and
+                         * ir.y imports asm.y back, which is legal -- they are
+                         * separate units, and a unit may be imported by more than
+                         * one -- and before this test existed the program was
+                         * spliced a second time inside its own module. Every one
+                         * of its declarations then stood in the tree twice, so
+                         * `ycc src/y/asm.y` reported "duplicate definition
+                         * 'is_digit_ch' ... defines it too" for each, and the
+                         * checker reported `type 'AsmLabel' is declared more than
+                         * once` -- thirty-two errors that `ycc ycc.y` never
+                         * produced, because there the program is ycc.y and nothing
+                         * imports ycc.y back.
+                         *
+                         * `smods` has no entry for the program -- it is not a
+                         * spliced module -- so its smod is "", which is right: the
+                         * program's own copy IS the flattened one, so strip_ns
+                         * must strip whatever qualifier a module used. */
+                        Yv *smod = ys("");
+                        if (!ys_eq(full, self_path)) {
+                            smod = ya_get(smods, seen_index(seen, full));
+                        }
+                        if (ys_eq_lit(smod, "")) {
                             imports = ya_push(imports, name);
                         }
                         ;
@@ -1594,7 +1642,8 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, long depth, Yv *seen,
                         Yv *mod_src2 = yv_unwrap(mod_src);
                         Yv *sub =
                             native_resolve_seen(mod_src2, mod_dir, depth + 1,
-                                                seen, smods, yv_len(seen));
+                                                seen, smods, yv_len(seen),
+                                                self_path);
                         Yv *subns = yr_get(sub, "imports");
                         Yv *subseen = yr_get(sub, "seen");
                         seen = subseen;

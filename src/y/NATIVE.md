@@ -1038,6 +1038,35 @@ name `fs.x`; a local `fs` keeps its field. find_dup qualifies the same
 way, so only files imported by path, which share the program's
 namespace (strip_ns rewrites `util.f` to `f`), can collide.
 
+**A module may import the program back.** `native_resolve_seen`
+de-duplicates spliced modules through a `seen` list, and the program
+counts as already spliced: `resolve_unit` passes its own normalised path
+down as `self_path` and the already-spliced test consults it. It is passed
+*beside* `seen`, not inside it, because `seen` is also the file-id
+counter -- a nested call is handed `len(seen)` -- so seeding it would shift
+every module's id in `origin.file` by one and mis-attribute whole files.
+`src/y/asm.y` imports `src/y/ir.y` and `ir.y` imports asm.y back, which is
+legal (they are separate units, and a unit may be imported by more than
+one); the program was spliced twice, so every one of its declarations stood
+in the tree twice and `ycc src/y/asm.y` reported a duplicate definition
+for each. It is only ever compiled as a unit of `ycc.y`, so nothing caught
+it until the language server checked the file a person had open.
+`test/y/native/t316_circ_import.y`, and the module it imports back
+(`test/y/native/m316/circ.y`, a program in its own right), check the cycle
+from both ends.
+
+The qualifier is still recorded: a module reaching the program by name
+keeps its namespace, so the already-spliced branch pushes the name into
+`imports` and `strip_ns` flattens it, exactly as for any other
+already-spliced module.
+
+Where the program *declares* a name still decides whether a module can use
+it, because the splice is a flat text and a module's lines land where the
+import line was. A module can name a `def` of the program wherever that
+`def` sits; a top-level `let` only if it came earlier in the file. That is
+a property of the splice, not of the cycle -- `ir.y` references nothing
+across its own cycle for the same reason.
+
 **A path import flattens types as well as expressions.** `strip_ns` has two
 entry points and they used to disagree: `strip_ns` for nodes, and
 `strip_type` for the annotations on them (`Decl.typ`, `Func.ptypes`,

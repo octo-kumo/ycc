@@ -173,69 +173,45 @@ def tops_pairs(x: XRef) -> [str] {
 // The SPLICED line for each of the buffer's own lines, 1-based at both ends and
 // 0 where the buffer has no line there.
 //
-// The program's own lines are a verbatim SUFFIX of the spliced text: the resolver
-// inlines each imported module and the buffer's own lines follow, unchanged, in
-// order. So the whole map is arithmetic on two line counts --
+// Built by INVERTING the origin map, which is the only source that knows. It used
+// to be a constant shift -- `spliced_lines - buffer_lines` added to every line from
+// the first non-import line on -- on the reasoning that a file's own text is
+// spliced as one contiguous SUFFIX. That holds only when the imports are the very
+// FIRST lines. A header comment before them makes "first non-import line" line 1
+// (a comment is not an import), the shift is then applied from line 1, and every
+// line after the imports maps to the wrong spliced line. Measured on
+// src/y/asm.y, which opens with a 16-line header before its six imports:
 //
-//     mine[k] = spliced_lines - buffer_lines + k
+//   mine[1623]   4283      what the shift answered
+//   the truth    4365      the program's own text starts at spliced line 2743
 //
-// for every k at or after the buffer's first non-import line, and 0 before it.
+// so expr_type was asked about a line 82 above the right one and hover on `it.fix`
+// there answered from some other expression's type -- string methods, for a
+// record. Nothing else in the file looked wrong: a declaration site is answered
+// from the buffer's own single-file index, not from this map, which is why it
+// survived. The failure needs a file whose header precedes its imports -- the
+// normal way to write one -- and it shows in the TYPE, not the navigation.
 //
-// Three things this gets wrong if you do it the obvious way instead, all measured
-// on `client-check.js`'s buffer (which imports) and all of them invisible on a
-// buffer that does not (the first fixture had no imports, and passed):
-//
-// - The import STATEMENT's own line is REPLACED by the module's lines, so it has
-//   no spliced line of its own. `t015_xref` shows it: mod.y's 10 lines are spliced
-//   1..10 and main.y's four lines are 10..13, overlapping at 10 -- main line 1 (the
-//   import) is not there at all. It gets 0, and `mine[0]` is the array's own
-//   sentinel.
-// - Filtering `origin.file == 0` and counting is off by ONE, because the origin
-//   map still has an entry for the replaced line. The failure mode is the nasty
-//   one: a hover asked about the line ABOVE the one under the cursor and got that
-//   line's type, so hovering a blank line between an `import` and a `def` returned
-//   the function's own signature.
-// - Using `origin.line[i]` as the buffer line has the same off-by-one for the
-//   same reason, which is why it is not used here: the two counts are facts about
-//   two texts, and `diag.xref_for` holds both.
-//
-// 0 is the honest answer where there is no spliced line: no type is indexed at
-// line 0, so expr_type returns tunk and the server says nothing rather than
-// something wrong.
-// `out` is indexed by the BUFFER's own 1-based line, so every line before
-// `first_own` needs a slot of its own even though its value is 0. Appending only
-// from `first_own` on leaves `out[1]` holding line 2's answer, which is an
-// off-by-one that reads as "the map is one line late" and is invisible on a buffer
-// whose first line is already its own (no import, so first_own == 1).
-def own_lines(spliced_lines: long, buffer_lines: long, first_own: long) -> [long] {
+// The origin map has no such assumption: per spliced line it records the file the
+// line came from and the line it was in that file. File id 0 is the program by
+// construction (resolve_unit builds `files` with the program's path first and the
+// top-level walk is handed fid 0), so `origin.line[i]` IS the buffer line and the
+// whole map is one walk. It also gets the two off-by-ones the shift could not: the
+// origin map still has an entry for an import statement's own replaced line (whose
+// recorded buffer line is real), and a file whose last line has no trailing newline
+// is counted the same way on both sides because both sides index the same text.
+def own_lines(o: Origin, buffer_lines: long) -> [long] {
     let out: [long] = [0];
-    let shift = spliced_lines - buffer_lines;
-    let k = 1;
-    while (k < first_own) {
-        out += 0;
-        k = k + 1;
-    };
-    while (k <= buffer_lines) {
-        out += shift + k;
-        k = k + 1;
-    };
-    out
-}
-
-// The 1-based buffer line of the first line that is not an import statement, or
-// buffer_lines + 1 when every line is one.
-//
-// Y requires imports at the top of a file, so the first line that does not begin
-// with the keyword is where the program's own statements start -- and that is
-// exactly the first line the splice keeps under its own name.
-def first_own_line(text: str, buffer_lines: long) -> long {
-    let out = buffer_lines + 1;
-    let k = 1;
-    while (k <= buffer_lines) {
-        let lb = line_text(text, k);
-        let i = 0;
-        while (i < len(lb) && (lb[i] == 32 || lb[i] == 9)) { i = i + 1; };
-        if (i >= len(lb) || lb[i:i + 7] != "import ") { out = k; k = buffer_lines + 1; } else { k = k + 1; };
+    let k = 0;
+    while (k < buffer_lines) { out += 0; k = k + 1; };
+    let i = 1;
+    let n = len(o.file);
+    while (i <= n) {
+        if (o.file[i - 1] == 0) {
+            let ln = o.line[i - 1];
+            if (ln >= 1 && ln <= buffer_lines) { out[ln] = i; };
+        };
+        i = i + 1;
     };
     out
 }
@@ -269,4 +245,4 @@ def indexed_line(mine: [long], line: long) -> long {
     out
 }
 
-export { Top, XRef, strip_uniq, tops_of, top_decl, top_line, tops_names, tops_pairs, is_ambiguous, own_lines, indexed_line, nlines, first_own_line };
+export { Top, XRef, strip_uniq, tops_of, top_decl, top_line, tops_names, tops_pairs, is_ambiguous, own_lines, indexed_line, nlines };
