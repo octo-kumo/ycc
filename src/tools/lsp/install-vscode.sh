@@ -76,12 +76,15 @@ done
 [ -n "$ROOT" ] || { say "install-vscode: no Makefile and src/y/ycc.y above this script"; exit 1; }
 EXT="$ROOT/src/tools/lsp/vscode-y-lang"
 DRY=0
+FORCE=0
 
 usage() {
     cat <<'EOF'
-usage: sh src/tools/lsp/install-vscode.sh [--dry-run]
+usage: sh src/tools/lsp/install-vscode.sh [--dry-run] [--force]
 
   --dry-run   print the steps and the commands, build and install nothing.
+  --force     install even while VS Code is running. Not advised: it replaces
+             the live extension's files, which has frozen VS Code here.
 
 Builds yserve and the VS Code extension through the Makefile, installs the .vsix
 with the `code` CLI, and copies yserve next to the installed extension so the
@@ -92,6 +95,7 @@ EOF
 while [ $# -gt 0 ]; do
     case "$1" in
         --dry-run) DRY=1 ;;
+        --force) FORCE=1 ;;
         -h|--help) usage; exit 0 ;;
         *) say "install-vscode: unknown argument '$1'"; usage; exit 2 ;;
     esac
@@ -153,7 +157,26 @@ VSIX_PATH="$EXT/$VSIX"
 #
 # --force because an install of the same id and version is otherwise refused,
 # and re-running this after a rebuild is the normal case rather than the odd one.
+#
+# REFUSED WHILE VS CODE IS RUNNING, unless --force. Installing the same version
+# over a live extension REPLACES its directory underneath the running extension
+# host. The host does not always survive that: the reported symptom was VS Code
+# itself frozen for a minute, with no Y file open, and the server measured 35 ms
+# per request on the largest file in the repository -- so the extension host being
+# left pointing at files that were deleted and recreated is the only thing that
+# fits. Closing VS Code first costs nothing and removes the whole class.
 step "3/4  install the extension"
+if [ "$FORCE" -eq 0 ] && [ "$DRY" -eq 0 ] && [ -n "$CODE" ]; then
+    if pgrep -f "resources/app/out/vs/code" >/dev/null 2>&1 \
+       || pgrep -x code >/dev/null 2>&1 \
+       || pgrep -x code-insiders >/dev/null 2>&1; then
+        say "install-vscode: VS Code is running."
+        say "  Installing over a live extension replaces its files underneath the"
+        say "  extension host, and that has frozen VS Code here. Quit VS Code and"
+        say "  run this again, or pass --force if you know the reload will be clean."
+        exit 1
+    fi
+fi
 if [ -n "$CODE" ]; then
     run "$CODE" --install-extension "$VSIX_PATH" --force || {
         say "install-vscode: the install failed. Install it by hand:"
