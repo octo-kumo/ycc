@@ -582,6 +582,13 @@ def do_initialize(st: State, id: json.Val) -> str {
     let stp = json.obj();
     stp["legend"] = json.jobj(legend);
     stp["full"] = json.boolean(true);
+    // `range` is what keeps a big file from costing a megabyte of JSON per viewport
+    // change: with it, the client asks for the lines it is showing rather than the
+    // whole document. src/y/types.y is 40,410 tokens, so a whole-file reply is
+    // 202,050 integers, and the SERVER answers that in 3ms -- which is why the cost
+    // never appeared in the server's own timings and read as the server doing
+    // nothing at all. sem.sem_range_in computes the visible slice.
+    stp["range"] = json.boolean(true);
     caps["semanticTokensProvider"] = json.jobj(stp);
 
     // The outline. documentSymbolProvider with `true` means "hierarchical", which
@@ -864,7 +871,24 @@ def do_semantic_tokens(st: State, id: json.Val, p: { str => json.Val }) -> str {
         let d: Doc = got!;
         // `semantic_classes_of` first: it is the expensive half and a buffer with no
         // identifiers in it must not pay for the pass that would have found none.
-        data = sem.sem_full_in(pos.doc_of(d.text), semantic_classes_of(d)).data;
+        let doc = pos.doc_of(d.text);
+        let over = semantic_classes_of(d);
+        // The client's range, when it sends one. Absent means the whole document,
+        // which is what every client sent until `range` was advertised -- so both
+        // paths have to work and both are exercised: the fixtures ask without a
+        // range, the editor with one.
+        let rng = field_of(p, "range");
+        if (len(members_of(rng)) == 0) {
+            data = sem.sem_full_in(doc, over).data;
+        } else {
+            // 1-based here, 0-based on the wire.
+            // `field_of` wants a map and `range` is a json.Val, so members_of first --
+            // the same widening every params read in this file does.
+            let rm = members_of(rng);
+            let from_l = long_field(field_of(rm, "start"), "line") + 1;
+            let to_l = long_field(field_of(rm, "end"), "line") + 1;
+            data = sem.sem_range_in(doc, over, from_l, to_l).data;
+        };
     }
     let r = json.obj();
     r["data"] = json.jarr(numbers(data));

@@ -325,7 +325,28 @@ def method_of_raw(raw: str) -> str {
 // between reading a frame and forking, so the message had not been sitting
 // anywhere yet. The delay a client actually sees is spent AFTER that, in the
 // parent's wait_pid on the handlers ahead of it.
+// Only what is worth reading.
+//
+// Three cuts, all of them about volume, and volume is the cost: a line here is an
+// appendLine on the extension host, which is the thread a slow editor is made of.
+// A real trace had roughly HALF its lines be `$/setTrace` -- the client re-asserting
+// its trace setting, six times in one millisecond -- each one a fork and two lines
+// recording that nothing happened. So:
+//
+//   * `$/...` is never logged. That is protocol chatter between the client and its
+//     own library: no information, and the client sends it whether or not we care.
+//   * A request that cost less than the threshold is not logged individually. What a
+//     person reads this for is the slow one; a line per keystroke is a wall of text
+//     with the answer somewhere in it.
+//   * The parent's blocked time is cut the same way, and blocked is ~work plus a fork,
+//     so the two thresholds agree by construction.
+//
+// Every slow request still appears, and `idle` still reports the gaps, which is the
+// part that actually located the problem. Only the noise goes.
+const TIMING_MIN_US = 30000;
+
 def log_work(method: str, work_us: long) {
+    if (method[:2] == "$/" || work_us < TIMING_MIN_US) { return; };
     fs.write_text(FD_OUT, stamp() + "  yserve  " + method + "  work "
         + tostring(work_us / 1000) + "ms\n");
 }
@@ -340,6 +361,7 @@ def log_work(method: str, work_us: long) {
 // a log line into it would corrupt the stream. Only the child dup2s its stdout onto
 // the log, which is why log_work can use FD_OUT.
 def log_blocked(us: long) {
+    if (us < TIMING_MIN_US) { return; };
     fs.write_text(FD_LOG, stamp() + "  yserve  [parent] blocked " + tostring(us / 1000)
         + "ms waiting for a handler\n");
 }
