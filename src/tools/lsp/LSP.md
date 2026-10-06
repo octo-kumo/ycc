@@ -1709,21 +1709,13 @@ same thing, and there is none. So it is a std module, not LSP-private.
 
 ### 15.2 The value type, and why objects are bare maps
 
-The shape is dictated by one language rule. A union member may not be a bare
-map or array, because then the type refers to itself outside a record field:
-
-```y
-type Json = { str => Json } | JN;
-// error: type 'Json' refers to itself outside any record field or function type
-```
-
-Recursion **must** pass through a record field (`parser.y`'s `Node` union `type Node = …`
-and `parser.y`'s `Type` union `type Type = …` are both recursive unions over record
-members). So `Json` is a union of *records*, and an object needs a wrapper
-record inside it.
-
-But a wrapper record is not indexable, and **`o["thing"] = v` on a JSON object
-is the whole point**. So the object is kept *outside* the union, as a bare map:
+The shape is dictated by what a union member can *do*, not by whether it may
+recur. Recursion through a bare map is legal now — `type Json = { str => Json }
+| JN;` compiles (TODO.md item 1, landed) — but a union member is still not
+indexable: `o["thing"] = v` on a `Val` would need the object narrowed to its
+map member first, and a JSON object is addressed that way constantly. So
+`Json` is a union of *records*, and the object is kept *outside* the union, as
+a bare map:
 
 ```y
 type Num  = { num: str };              // the literal text -- see J6
@@ -1731,7 +1723,7 @@ type Str  = { s: str };
 type Bool = { b: bool };
 type Null = { nil: long };
 type Arr  = { items: [Val] };
-type JObj = { members: { str => Val } };  // wrapper: only for objects STORED in a tree
+type JObj = { members: { str => Val } };  // wrapper: for an object STORED in a tree
 type Val  = Num | Str | Bool | Null | Arr | JObj;
 
 // An object is { str => Val } -- a plain map. Index it directly.
@@ -1745,9 +1737,10 @@ type: `if let Str` matches a number, the arms overwrite each other, and
 union and no `typeof` that reveals one — distinct shapes are the only mechanism.
 Found by building it; see `src/y/std/json.y`.
 
-Recursion goes through `Arr`'s `[Val]` field and `JObj`'s `{str => Val}` field —
-both record fields, so the rule is satisfied. And the object you actually hold is
-a map, so this is the whole API:
+Recursion goes through `Arr`'s `[Val]` field and `JObj`'s `{str => Val}` field.
+Both are record fields, as in `parser.y`'s `Node` and `Type` unions; a bare
+`{str => Val}` union member would compile now but could not be indexed. And
+the object you actually hold is a map, so this is the whole API:
 
 ```y
 let o = json.obj();
@@ -1949,19 +1942,18 @@ written as literals.
 
 ### 16.1 Why the module has to compensate: two independent blocks
 
-**Block 1 — recursion may not pass through an array or map.**
+**Block 1 — recursion may not pass through an array or map. RESOLVED.**
 
 ```y
-type Json = { n: long } | { str => Json };
-// error: type 'Json' refers to itself outside any record field or function type
+type Json = { n: long } | { str => Json };   // compiles now
 ```
 
-`rename.rn_reaches_go` walks an alias looking for a
-self-reference, and in `bare` mode only a **record field** or a **function type**
-stops the walk — its record and function arms. Array, fixed-array, option,
-map and pointer members all continue it (the array/option/map arms of `rn_reaches_go`), so any of those
-makes the alias "recursive on the nose". the `Node` and `Type` unions in `parser.y` get away with it
-because their recursion is genuinely through a record field.
+`rename.rn_reaches_go` walked an alias looking for a self-reference, and in
+`bare` mode only a **record field** or a **function type** stopped the walk;
+array, fixed-array, option and map members all continued it, so any of those
+made the alias "recursive on the nose". Those four arms now stop the walk too
+— each is a heap object with a header, so the cycle is closed by a pointer —
+and this block is gone (TODO.md item 1, landed; `test/y/native/t335_recursive_alias.y`).
 
 **Block 2 — a union may not contain a primitive.**
 

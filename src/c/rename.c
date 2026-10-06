@@ -626,9 +626,18 @@ int rn_reaches_go(Yv *st, Yv *t, ylong id, Yv *seen, int bare) {
         return rn_reaches_go(st, yr_get(t, "to"), id, seen, bare);
     } else if (yv_l(k) == K_tarr || yv_l(k) == K_tarrfix ||
                yv_l(k) == K_topt) {
-        return rn_reaches_go(st, yr_get(t, "of"), id, seen, bare);
+        /* An array, a fixed array, an option and a map are heap objects with
+           a header, so recursing through one is as sound as through a record
+           field, and they stop the BARE search the way the record arm below
+           does. See rename.y for the full note. */
+        if (!bare) {
+            return rn_reaches_go(st, yr_get(t, "of"), id, seen, bare);
+        }
+        return 0;
     } else if (yv_l(k) == K_tmap) {
-        if (rn_reaches_go(st, yr_get(t, "key"), id, seen, bare)) {
+        if (bare) {
+            return 0;
+        } else if (rn_reaches_go(st, yr_get(t, "key"), id, seen, bare)) {
             return 1;
         } else {
             return rn_reaches_go(st, yr_get(t, "of"), id, seen, bare);
@@ -720,7 +729,7 @@ Yv *rn_typedef_err(Yv *s, Yv *st) {
                               yv_l(yr_get(s, "col")));
     } else if (id >= 0 && rn_reaches(st, id, 1)) {
         Yv *msg = ys_cat(ys_cat(ys("type '"), name),
-                         ys("' refers to itself outside any record field or function type"));
+                         ys("' refers to itself outside any record field, array, option, map or function type"));
         return yr(4, "k", yv_long(K_err), "msg", msg, "line", yr_get(s, "line"),
                   "col", yr_get(s, "col"));
     } else {

@@ -2323,8 +2323,8 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                               yv_l(yr_get(node, "line")),
                               yv_l(yr_get(node, "col")));
                     return yr(2, "typ", t_unk(), "st", st);
-                } else if (yv_l(yr_get(yr_get(got, "typ"), "k")) == K_tarr ||
-                           yv_l(yr_get(yr_get(got, "typ"), "k")) == K_tarrfix) {
+                } else if (yv_l(yr_get(unfold(yr_get(got, "typ")), "k")) == K_tarr ||
+                           yv_l(yr_get(unfold(yr_get(got, "typ")), "k")) == K_tarrfix) {
                     /* One rule for BOTH array kinds: &a is not a data address.
                        A slot holds the {len,cap,data} header (fixed arrays are
                        heap blocks too), so `io.read(fd, &buf, n)` let the
@@ -2367,8 +2367,8 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                               yv_l(yr_get(node, "line")),
                               yv_l(yr_get(node, "col")));
                     return yr(2, "typ", t_unk(), "st", st);
-                } else if (yv_l(yr_get(yr_get(got, "typ"), "k")) == K_tarrfix ||
-                           yv_l(yr_get(yr_get(got, "typ"), "k")) == K_tarr) {
+                } else if (yv_l(yr_get(unfold(yr_get(got, "typ")), "k")) == K_tarrfix ||
+                           yv_l(yr_get(unfold(yr_get(got, "typ")), "k")) == K_tarr) {
                     st = check_visible(st, got, yr_get(arr, "v"),
                                        yv_l(yr_get(node, "line")),
                                        yv_l(yr_get(node, "col")));
@@ -2379,7 +2379,7 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                                      yv_l(yr_get(node, "col")));
                     return yr(2, "typ",
                               yr(2, "k", yv_long(K_tptr), "to",
-                                 yr_get(yr_get(got, "typ"), "of")),
+                                 yr_get(unfold(yr_get(got, "typ")), "of")),
                               "st", st);
                 } else {
                     st = fail(st,
@@ -2396,8 +2396,8 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                 Yv *barr = arr;
                 Yv *br = typeof_expr(st, barr);
                 st = yr_get(br, "st");
-                if (yv_l(yr_get(yr_get(br, "typ"), "k")) == K_tarrfix ||
-                    yv_l(yr_get(yr_get(br, "typ"), "k")) == K_tarr) {
+                if (yv_l(yr_get(unfold(yr_get(br, "typ")), "k")) == K_tarrfix ||
+                    yv_l(yr_get(unfold(yr_get(br, "typ")), "k")) == K_tarr) {
                     Yv *r = typeof_expr(st, ix);
                     st = yr_get(r, "st");
                     st = expect_type(st, yr_get(r, "typ"), yr(1, "k", yv_long(K_tlong)),
@@ -2405,7 +2405,7 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                                      yv_l(yr_get(node, "col")));
                     return yr(2, "typ",
                               yr(2, "k", yv_long(K_tptr), "to",
-                                 yr_get(yr_get(br, "typ"), "of")),
+                                 yr_get(unfold(yr_get(br, "typ")), "of")),
                               "st", st);
                 } else {
                     st = fail(st,
@@ -2672,7 +2672,7 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                              ys("'")),
                       yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
             return yr(2, "typ", yr_get(got, "typ"), "st", st);
-        } else if (yv_l(yr_get(yr_get(got, "typ"), "k")) == K_tarrfix) {
+        } else if (yv_l(yr_get(unfold(yr_get(got, "typ")), "k")) == K_tarrfix) {
             st = check_visible(st, got, yr_get(node, "name"),
                                yv_l(yr_get(node, "line")),
                                yv_l(yr_get(node, "col")));
@@ -2973,8 +2973,8 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                           yv_l(yr_get(node, "line")),
                           yv_l(yr_get(node, "col")));
                 return yr(2, "typ", t_unk(), "st", st);
-            } else if (yv_l(yr_get(yr_get(got, "typ"), "k")) == K_tarrfix ||
-                       yv_l(yr_get(yr_get(got, "typ"), "k")) == K_tarr) {
+            } else if (yv_l(yr_get(unfold(yr_get(got, "typ")), "k")) == K_tarrfix ||
+                       yv_l(yr_get(unfold(yr_get(got, "typ")), "k")) == K_tarr) {
                 st = check_visible(st, got, yr_get(yr_get(node, "arr"), "v"),
                                    yv_l(yr_get(node, "line")),
                                    yv_l(yr_get(node, "col")));
@@ -2983,8 +2983,8 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                 st = expect_type(st, yr_get(r, "typ"), yr(1, "k", yv_long(K_tlong)),
                                  ys("array index"), yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
-                return yr(2, "typ", yr_get(yr_get(got, "typ"), "of"), "st", st);
-            } else if (yv_l(yr_get(yr_get(got, "typ"), "k")) == K_tmap) {
+                return yr(2, "typ", yr_get(unfold(yr_get(got, "typ")), "of"), "st", st);
+            } else if (yv_l(yr_get(unfold(yr_get(got, "typ")), "k")) == K_tmap) {
                 // m[k]: the key must match K; a read is ALWAYS optional --
                 // V? for any V (none when the key is missing).
                 st = check_visible(st, got, yr_get(yr_get(node, "arr"), "v"),
@@ -2992,11 +2992,11 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                                    yv_l(yr_get(node, "col")));
                 Yv *r = typeof_expr(st, yr_get(node, "idx"));
                 st = yr_get(r, "st");
-                st = expect_type(st, yr_get(r, "typ"), yr_get(yr_get(got, "typ"), "key"),
+                st = expect_type(st, yr_get(r, "typ"), yr_get(unfold(yr_get(got, "typ")), "key"),
                                  ys("map key"), yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
-                return yr(2, "typ", yr(2, "k", yv_long(K_topt), "of", yr_get(yr_get(got, "typ"), "of")), "st", st);
-            } else if (yv_l(yr_get(yr_get(got, "typ"), "k")) == K_tstr) {
+                return yr(2, "typ", yr(2, "k", yv_long(K_topt), "of", yr_get(unfold(yr_get(got, "typ")), "of")), "st", st);
+            } else if (yv_l(yr_get(unfold(yr_get(got, "typ")), "k")) == K_tstr) {
                 // s[i]: the byte at i (trapped when out of bounds)
                 st = check_visible(st, got, yr_get(yr_get(node, "arr"), "v"),
                                    yv_l(yr_get(node, "line")),
@@ -3007,9 +3007,9 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                                  ys("string index"), yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
                 return yr(2, "typ", yr(1, "k", yv_long(K_tbyte)), "st", st);
-            } else if (yv_l(yr_get(yr_get(got, "typ"), "k")) == K_tunk ||
-                       yv_l(yr_get(yr_get(got, "typ"), "k")) == K_tnone ||
-                       yv_l(yr_get(yr_get(got, "typ"), "k")) == K_tname) {
+            } else if (yv_l(yr_get(unfold(yr_get(got, "typ")), "k")) == K_tunk ||
+                       yv_l(yr_get(unfold(yr_get(got, "typ")), "k")) == K_tnone ||
+                       yv_l(yr_get(unfold(yr_get(got, "typ")), "k")) == K_tname) {
                 Yv *r = typeof_expr(st, yr_get(node, "idx"));
                 st = yr_get(r, "st");
                 return yr(2, "typ", t_unk(), "st", st);
@@ -3029,37 +3029,37 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
             Yv *barr = yr_get(node, "arr");
             Yv *br = typeof_expr(st, barr);
             st = yr_get(br, "st");
-            if (yv_l(yr_get(yr_get(br, "typ"), "k")) == K_tarrfix ||
-                yv_l(yr_get(yr_get(br, "typ"), "k")) == K_tarr) {
+            if (yv_l(yr_get(unfold(yr_get(br, "typ")), "k")) == K_tarrfix ||
+                yv_l(yr_get(unfold(yr_get(br, "typ")), "k")) == K_tarr) {
                 Yv *ri = typeof_expr(st, yr_get(node, "idx"));
                 st = yr_get(ri, "st");
                 st = expect_type(st, yr_get(ri, "typ"), yr(1, "k", yv_long(K_tlong)),
                                  ys("array index"), yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
-                return yr(2, "typ", yr_get(yr_get(br, "typ"), "of"), "st", st);
-            } else if (yv_l(yr_get(yr_get(br, "typ"), "k")) == K_tmap) {
+                return yr(2, "typ", yr_get(unfold(yr_get(br, "typ")), "of"), "st", st);
+            } else if (yv_l(yr_get(unfold(yr_get(br, "typ")), "k")) == K_tmap) {
                 Yv *ri = typeof_expr(st, yr_get(node, "idx"));
                 st = yr_get(ri, "st");
-                st = expect_type(st, yr_get(ri, "typ"), yr_get(yr_get(br, "typ"), "key"),
+                st = expect_type(st, yr_get(ri, "typ"), yr_get(unfold(yr_get(br, "typ")), "key"),
                                  ys("map key"), yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
-                return yr(2, "typ", yr(2, "k", yv_long(K_topt), "of", yr_get(yr_get(br, "typ"), "of")), "st", st);
-            } else if (yv_l(yr_get(yr_get(br, "typ"), "k")) == K_tstr) {
+                return yr(2, "typ", yr(2, "k", yv_long(K_topt), "of", yr_get(unfold(yr_get(br, "typ")), "of")), "st", st);
+            } else if (yv_l(yr_get(unfold(yr_get(br, "typ")), "k")) == K_tstr) {
                 Yv *ri = typeof_expr(st, yr_get(node, "idx"));
                 st = yr_get(ri, "st");
                 st = expect_type(st, yr_get(ri, "typ"), yr(1, "k", yv_long(K_tlong)),
                                  ys("string index"), yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
                 return yr(2, "typ", yr(1, "k", yv_long(K_tbyte)), "st", st);
-            } else if (yv_l(yr_get(yr_get(br, "typ"), "k")) == K_tunk ||
-                       yv_l(yr_get(yr_get(br, "typ"), "k")) == K_tnone ||
-                       yv_l(yr_get(yr_get(br, "typ"), "k")) == K_tname) {
+            } else if (yv_l(yr_get(unfold(yr_get(br, "typ")), "k")) == K_tunk ||
+                       yv_l(yr_get(unfold(yr_get(br, "typ")), "k")) == K_tnone ||
+                       yv_l(yr_get(unfold(yr_get(br, "typ")), "k")) == K_tname) {
                 // poison quietly (tcompat law) — the missing annotation
                 // reports at its own site.
                 Yv *ri = typeof_expr(st, yr_get(node, "idx"));
                 st = yr_get(ri, "st");
                 return yr(2, "typ", t_unk(), "st", st);
-            } else if (yv_l(yr_get(yr_get(br, "typ"), "k")) == K_tvoid &&
+            } else if (yv_l(yr_get(unfold(yr_get(br, "typ")), "k")) == K_tvoid &&
                        (yv_l(yr_get(barr, "k")) == K_kw_if ||
                         yv_l(yr_get(barr, "k")) == K_block)) {
                 /* An `if` or a block in expression position, with no value:
@@ -3233,8 +3233,8 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                           yv_l(yr_get(node, "line")),
                           yv_l(yr_get(node, "col")));
                 return yr(2, "typ", t_unk(), "st", st);
-            } else if (yv_l(yr_get(yr_get(got, "typ"), "k")) == K_tarrfix ||
-                       yv_l(yr_get(yr_get(got, "typ"), "k")) == K_tarr) {
+            } else if (yv_l(yr_get(unfold(yr_get(got, "typ")), "k")) == K_tarrfix ||
+                       yv_l(yr_get(unfold(yr_get(got, "typ")), "k")) == K_tarr) {
                 st = check_visible(st, got, yr_get(yr_get(node, "arr"), "v"),
                                    yv_l(yr_get(node, "line")),
                                    yv_l(yr_get(node, "col")));
@@ -3243,14 +3243,14 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                 st = expect_type(st, yr_get(ix, "typ"), yr(1, "k", yv_long(K_tlong)),
                                  ys("array index"), yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
-                Yv *v = typeof_want(st, yr_get(node, "v"), yr_get(yr_get(got, "typ"), "of"));
+                Yv *v = typeof_want(st, yr_get(node, "v"), yr_get(unfold(yr_get(got, "typ")), "of"));
                 st = yr_get(v, "st");
                 st = expect_type(st, yr_get(v, "typ"),
-                                 yr_get(yr_get(got, "typ"), "of"),
+                                 yr_get(unfold(yr_get(got, "typ")), "of"),
                                  ys("array element"), yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
-                return yr(2, "typ", yr_get(yr_get(got, "typ"), "of"), "st", st);
-            } else if (yv_l(yr_get(yr_get(got, "typ"), "k")) == K_tmap) {
+                return yr(2, "typ", yr_get(unfold(yr_get(got, "typ")), "of"), "st", st);
+            } else if (yv_l(yr_get(unfold(yr_get(got, "typ")), "k")) == K_tmap) {
                 // m[k] = v: the key matches K and the value V (the store is
                 // in place -- every alias of the map sees it).
                 st = check_visible(st, got, yr_get(yr_get(node, "arr"), "v"),
@@ -3258,16 +3258,16 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                                    yv_l(yr_get(node, "col")));
                 Yv *ix = typeof_expr(st, yr_get(node, "idx"));
                 st = yr_get(ix, "st");
-                st = expect_type(st, yr_get(ix, "typ"), yr_get(yr_get(got, "typ"), "key"),
+                st = expect_type(st, yr_get(ix, "typ"), yr_get(unfold(yr_get(got, "typ")), "key"),
                                  ys("map key"), yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
-                Yv *v = typeof_want(st, yr_get(node, "v"), yr_get(yr_get(got, "typ"), "of"));
+                Yv *v = typeof_want(st, yr_get(node, "v"), yr_get(unfold(yr_get(got, "typ")), "of"));
                 st = yr_get(v, "st");
                 st = expect_type(st, yr_get(v, "typ"),
-                                 yr_get(yr_get(got, "typ"), "of"),
+                                 yr_get(unfold(yr_get(got, "typ")), "of"),
                                  ys("map value"), yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
-                return yr(2, "typ", yr_get(yr_get(got, "typ"), "of"), "st", st);
+                return yr(2, "typ", yr_get(unfold(yr_get(got, "typ")), "of"), "st", st);
             } else {
                 st = fail(st,
                           ys_cat(ys_cat(ys("cannot index "),
@@ -3283,36 +3283,36 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
             Yv *barr = yr_get(node, "arr");
             Yv *br = typeof_expr(st, barr);
             st = yr_get(br, "st");
-            if (yv_l(yr_get(yr_get(br, "typ"), "k")) == K_tarrfix ||
-                yv_l(yr_get(yr_get(br, "typ"), "k")) == K_tarr) {
+            if (yv_l(yr_get(unfold(yr_get(br, "typ")), "k")) == K_tarrfix ||
+                yv_l(yr_get(unfold(yr_get(br, "typ")), "k")) == K_tarr) {
                 Yv *ix = typeof_expr(st, yr_get(node, "idx"));
                 st = yr_get(ix, "st");
                 st = expect_type(st, yr_get(ix, "typ"), yr(1, "k", yv_long(K_tlong)),
                                  ys("array index"), yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
-                Yv *v = typeof_want(st, yr_get(node, "v"), yr_get(yr_get(br, "typ"), "of"));
+                Yv *v = typeof_want(st, yr_get(node, "v"), yr_get(unfold(yr_get(br, "typ")), "of"));
                 st = yr_get(v, "st");
                 st = expect_type(st, yr_get(v, "typ"),
-                                 yr_get(yr_get(br, "typ"), "of"),
+                                 yr_get(unfold(yr_get(br, "typ")), "of"),
                                  ys("array element"), yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
-                return yr(2, "typ", yr_get(yr_get(br, "typ"), "of"), "st", st);
-            } else if (yv_l(yr_get(yr_get(br, "typ"), "k")) == K_tmap) {
+                return yr(2, "typ", yr_get(unfold(yr_get(br, "typ")), "of"), "st", st);
+            } else if (yv_l(yr_get(unfold(yr_get(br, "typ")), "k")) == K_tmap) {
                 Yv *ix = typeof_expr(st, yr_get(node, "idx"));
                 st = yr_get(ix, "st");
-                st = expect_type(st, yr_get(ix, "typ"), yr_get(yr_get(br, "typ"), "key"),
+                st = expect_type(st, yr_get(ix, "typ"), yr_get(unfold(yr_get(br, "typ")), "key"),
                                  ys("map key"), yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
-                Yv *v = typeof_want(st, yr_get(node, "v"), yr_get(yr_get(br, "typ"), "of"));
+                Yv *v = typeof_want(st, yr_get(node, "v"), yr_get(unfold(yr_get(br, "typ")), "of"));
                 st = yr_get(v, "st");
                 st = expect_type(st, yr_get(v, "typ"),
-                                 yr_get(yr_get(br, "typ"), "of"),
+                                 yr_get(unfold(yr_get(br, "typ")), "of"),
                                  ys("map value"), yv_l(yr_get(node, "line")),
                                  yv_l(yr_get(node, "col")));
-                return yr(2, "typ", yr_get(yr_get(br, "typ"), "of"), "st", st);
-            } else if (yv_l(yr_get(yr_get(br, "typ"), "k")) == K_tunk ||
-                       yv_l(yr_get(yr_get(br, "typ"), "k")) == K_tnone ||
-                       yv_l(yr_get(yr_get(br, "typ"), "k")) == K_tname) {
+                return yr(2, "typ", yr_get(unfold(yr_get(br, "typ")), "of"), "st", st);
+            } else if (yv_l(yr_get(unfold(yr_get(br, "typ")), "k")) == K_tunk ||
+                       yv_l(yr_get(unfold(yr_get(br, "typ")), "k")) == K_tnone ||
+                       yv_l(yr_get(unfold(yr_get(br, "typ")), "k")) == K_tname) {
                 // poison quietly (tcompat law) — the missing annotation
                 // reports at its own site.
                 Yv *ix = typeof_expr(st, yr_get(node, "idx"));
@@ -5335,7 +5335,7 @@ static Yv *typeof_call_go(Yv *st, Yv *node) {
                         ;
                     }
                     ;
-                } else if (yv_l(yr_get(yr_get(got, "typ"), "k")) == K_tfunc) {
+                } else if (yv_l(yr_get(unfold(yr_get(got, "typ")), "k")) == K_tfunc) {
                     // Either a hoisted `def` (kind "func") or a local/param
                     // holding a closure value — both are callable.
                     ft = yr_get(got, "typ");
@@ -5511,6 +5511,15 @@ Yv *lit_target(Yv *node, Yv *want) {
         ;
     } else if (yv_l(wk) == K_trec) {
         if (lit_fits(w, keys)) {
+            found = want;
+        }
+    } else if (yv_l(wk) == K_tmap) {
+        /* An EMPTY literal under a map type IS that map -- the same rule the
+           `let` path applies. `{}` is the only finite value of a recursive
+           map alias (`type Tree = { str => Tree }`), and its value type comes
+           from `want`; without this arm the literal was an empty record and
+           every store into such a map failed "expected Tree, got { }". */
+        if (yv_len(keys) == 0) {
             found = want;
         }
     } else if (yv_l(wk) == K_tunion) {
@@ -5743,10 +5752,13 @@ static Yv *typeof_decl(Yv *st, Yv *node) {
                     }
                     t = yr_get(node, "typ");
                     ;
-                } else if (yv_l(vk) == K_rec && yv_len(yr_get(yr_get(node, "v"), "keys")) == 0 && yv_l(yr_get(yr_get(node, "typ"), "k")) == K_tmap) {
+                } else if (yv_l(vk) == K_rec && yv_len(yr_get(yr_get(node, "v"), "keys")) == 0 && yv_l(yr_get(unfold(yr_get(node, "typ")), "k")) == K_tmap) {
                     // The empty literal `{}` under a map annotation IS the
                     // map (the emitter lowers it to the {keys, vals, boxes}
-                    // shape).
+                    // shape). `unfold`, because a RECURSIVE map alias
+                    // (`type Tree = { str => Tree }`) reaches here as its
+                    // tref, and before this only an inline alias was
+                    // recognized.
                     t = yr_get(node, "typ");
                     ;
                 } else {

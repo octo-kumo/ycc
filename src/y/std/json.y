@@ -18,12 +18,15 @@
 // `{"a": 1, "b": "x"}` does not infer. `obj()` returns an empty map whose value
 // type is already `Val`, so every assignment after it is checked against it.
 //
-// WHY THE WRAPPER EXISTS. Recursion in a type alias has to reach itself through
-// a record field -- `type Json = { str => Json }` is rejected, "refers to itself
-// outside any record field or function type". So `Val` needs a record member
-// holding a map, and that member is `JObj`. Holding an object *inside* another
-// value therefore costs one `jobj(map)`; a top-level object costs nothing, and
-// `stringify` takes the bare map.
+// WHY THE WRAPPER EXISTS. Not for recursion any more: a type alias may reach
+// itself through a map, an array or an option as well as through a record field
+// (TODO.md item 1, landed), so `type Json = { str => Json }` is legal on its
+// own. It is INDEXABILITY that keeps objects out of the union -- `o["thing"] = v`
+// on a `Val` would need the object narrowed to its map member first, and a JSON
+// object is addressed that way constantly. So `Val` keeps a record member
+// holding a map, `JObj`, for an object *stored inside* another value, which
+// costs one `jobj(map)`; a top-level object costs nothing, and `stringify` takes
+// the bare map.
 //
 // NUMBERS ARE TEXT. A number holds its literal text, not a number, because Y
 // has no string-to-float conversion at all: `tolong` returns a long and there is

@@ -540,12 +540,20 @@ def rn_reaches_go(st: RnSt, t: Type, id: long, seen: [long], bare: bool) -> bool
         }
     }
     else if (k == K.tptr) { let ptr: TPtr = t; rn_reaches_go(st, ptr.to, id, seen, bare) }
-    else if (k == K.tarr) { let arr: TOf = t; rn_reaches_go(st, arr.of, id, seen, bare) }
-    else if (k == K.tarrfix) { let arr: TFix = t; rn_reaches_go(st, arr.of, id, seen, bare) }
-    else if (k == K.topt) { let opt: TOf = t; rn_reaches_go(st, opt.of, id, seen, bare) }
+    // An array, a fixed array, an option and a map are heap objects with a
+    // header, so recursing through one is as sound as recursing through a
+    // record field -- at runtime both are a pointer -- and they stop the BARE
+    // search exactly the way the record and function arms below do. That is
+    // what lets `type Ids = [Ids]` and `type Tree = { str => Tree }` both be
+    // written without a one-field wrapper record. The check still rejects a
+    // cycle with no indirection at all: `type A = B; type B = A` (the tname
+    // arm ignores `bare`).
+    else if (k == K.tarr) { let arr: TOf = t; if (!bare) { rn_reaches_go(st, arr.of, id, seen, bare) } else { false } }
+    else if (k == K.tarrfix) { let arr: TFix = t; if (!bare) { rn_reaches_go(st, arr.of, id, seen, bare) } else { false } }
+    else if (k == K.topt) { let opt: TOf = t; if (!bare) { rn_reaches_go(st, opt.of, id, seen, bare) } else { false } }
     else if (k == K.tmap) {
         let map: TMap = t;
-        if (rn_reaches_go(st, map.key, id, seen, bare)) { true } else { rn_reaches_go(st, map.of, id, seen, bare) }
+        if (bare) { false } else if (rn_reaches_go(st, map.key, id, seen, bare)) { true } else { rn_reaches_go(st, map.of, id, seen, bare) }
     }
     else if (k == K.trec) {
         let rec: TRec = t;
@@ -647,7 +655,7 @@ def rn_typedef_err(s: TypeDef, st: RnSt) -> Node {
     let id = rn_alias_index(st, name);
     if (un != "") { rn_unknown_err(un, s.line, s.col) }
     else if (id >= 0 && rn_reaches(st, id, true)) {
-        let err: Err = { k: K.err, msg: "type '" + name + "' refers to itself outside any record field or function type", line: s.line, col: s.col };
+        let err: Err = { k: K.err, msg: "type '" + name + "' refers to itself outside any record field, array, option, map or function type", line: s.line, col: s.col };
         let node: Node = err;
         node
     } else {

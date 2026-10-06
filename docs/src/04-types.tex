@@ -164,7 +164,8 @@ s = r;
 \ic{type Name = T;} names a type: the alias stands for \ty{T} wherever
 it is written (two aliases of one structure are one type). An alias may
 refer to itself, or to aliases that refer back to it, when the reference
-sits inside a record's field or a function type:
+sits behind an indirection --- a record's field, an array, a fixed array,
+an option, a map's key or value, or a function type:
 
 \begin{lstlisting}
 type List = { head: long, tail: List? };
@@ -172,12 +173,18 @@ type Expr = Num | Add;
 type Num = { n: long };
 type Add = { l: Expr, r: Expr };
 let e: Expr = { l: { n: 1 }, r: { l: { n: 2 }, r: { n: 3 } } };
+type Tree = { str => Tree };     // map of itself
+type Ids = [Ids];                // array of itself
+type Maybe = Maybe?;             // option of itself
 \end{lstlisting}
 
-\noindent A cycle with no record field or function type in it, as in
-\ic{type T = [T];} or \ic{type U = U | \{ a: long \};}, names no type,
-and is an error at its declaration: \ic{type 'T' refers to itself}
-\ic{outside any record field or function type}.
+\noindent Each of those is a heap object with a header at run time, so the
+cycle is closed by a pointer; that is why a record field always worked, and
+why the others do too. What names no type is a cycle with \emph{no}
+indirection --- \ic{type T = T;}, \ic{type A = B; type B = A;} or
+\ic{type U = U | \{ a: long \};} --- and that is an error at its
+declaration: \ic{type 'T' refers to itself outside any record field,}
+\ic{array, option, map or function type}.
 
 \subsection{Maps}
 \label{sec:type-maps}

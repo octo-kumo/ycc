@@ -447,6 +447,7 @@ Yv *n_not(Yv *e, ylong line, ylong col);
 Yv *n_if(Yv *c, Yv *t, Yv *e, ylong ln, ylong cl);
 Yv *n_while(Yv *c, Yv *b, ylong ln, ylong cl);
 Yv *n_decl(Yv *name, Yv *v, ylong ln, ylong cl);
+Yv *n_decl_typ(Yv *name, Yv *v, Yv *typ, ylong ln, ylong cl);
 Yv *n_assign(Yv *name, Yv *v, ylong ln, ylong cl);
 Yv *block_of(Yv *sts, ylong ln, ylong cl);
 Yv *gen_maplit(Yv *st, Yv *node);
@@ -3643,7 +3644,7 @@ Yv *infer_go(Yv *st, Yv *node) {
         if (yv_l(yr_get(bt, "k")) == K_tarrfix ||
             yv_l(yr_get(bt, "k")) == K_tarr) {
             return yr_get(bt, "of");
-        } else if (yv_l(yr_get(bt, "k")) == K_tmap) {
+        } else if (yv_l(yr_get(unfold(bt), "k")) == K_tmap) {
             /* m[k] is always optional: V? for any V */
             return normnode(yr(2, "k", yv_long(K_topt), "of", yr_get(bt, "of")));
         } else if (yv_l(yr_get(bt, "k")) == K_tstr) {
@@ -3773,7 +3774,7 @@ Yv *infer_go(Yv *st, Yv *node) {
             } else {
                 return uft;
             }
-        } else if (yv_l(yr_get(dt, "k")) == K_tmap) {
+        } else if (yv_l(yr_get(unfold(dt), "k")) == K_tmap) {
             /* the map lowering reads its {keys, vals, boxes} shape directly */
             if (ys_eq_lit(yr_get(node, "key"), "keys")) { return normnode(yr(2, "k", yv_long(K_tarr), "of", yr_get(dt, "key"))); }
             else if (ys_eq_lit(yr_get(node, "key"), "vals")) { return normnode(yr(2, "k", yv_long(K_tarr), "of", yr_get(dt, "of"))); }
@@ -3919,7 +3920,7 @@ Yv *infer_call(Yv *st, Yv *node) {
             return yr(1, "k", yv_long(K_tlong));
         } else if (ys_eq_lit(name, "keys")) {
             Yv *kt = infer(st, ya_get(yr_get(node, "args"), 0));
-            if (yv_l(yr_get(kt, "k")) == K_tmap) {
+            if (yv_l(yr_get(unfold(kt), "k")) == K_tmap) {
                 return yr(2, "k", yv_long(K_tarr), "of", yr_get(kt, "key"));
             } else {
                 return yr(1, "k", yv_long(K_tunk));
@@ -4616,9 +4617,9 @@ Yv *gen_go(Yv *st, Yv *node) {
     } else if (yv_l(k) == K_index) {
         /* maps scan their keys; strings read a byte; arrays index directly */
         Yv *kbt = infer(st, yr_get(node, "arr"));
-        if (yv_l(yr_get(kbt, "k")) == K_tmap) {
+        if (yv_l(yr_get(unfold(kbt), "k")) == K_tmap) {
             return gen_map_get(st, node, ys("opt"));
-        } else if (yv_l(yr_get(kbt, "k")) == K_tstr) {
+        } else if (yv_l(yr_get(unfold(kbt), "k")) == K_tstr) {
             return gen_byte_at(st, n_call2(ys("byte_at"), yr_get(node, "arr"), yr_get(node, "idx"), yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col"))));
         } else {
             return gen_index(st, node);
@@ -4644,7 +4645,7 @@ Yv *gen_go(Yv *st, Yv *node) {
         return gen_sliceassign(st, node);
     } else if (yv_l(k) == K_idxassign) {
         Yv *kbt = infer(st, yr_get(node, "arr"));
-        if (yv_l(yr_get(kbt, "k")) == K_tmap) { return gen_map_set(st, node); } else { return gen_idxassign(st, node); }
+        if (yv_l(yr_get(unfold(kbt), "k")) == K_tmap) { return gen_map_set(st, node); } else { return gen_idxassign(st, node); }
     } else if (yv_l(k) == K_dotassign) {
         return gen_dotassign(st, node);
     } else if (yv_l(k) == K_dot) {
@@ -8829,7 +8830,7 @@ Yv *gen_decl(Yv *st, Yv *node) {
             /* record literal: heap address (first-class value, plain
              * slot). An empty literal under a map annotation is the map
              * itself (the {keys, vals, boxes} shape the map ops expect). */
-            if (yv_l(yr_get(yr_get(node, "typ"), "k")) == K_tmap && yv_len(yr_get(yr_get(node, "v"), "keys")) == 0) {
+            if (yv_l(yr_get(unfold(yr_get(node, "typ")), "k")) == K_tmap && yv_len(yr_get(yr_get(node, "v"), "keys")) == 0) {
                 st = gen_maplit(st, yr_get(node, "v"));
             } else {
                 /* created as the declared type (gen_as, gen_reclit) */
@@ -14453,6 +14454,13 @@ Yv *n_decl(Yv *name, Yv *v, ylong ln, ylong cl) {
     return yr(9, "k", yv_long(K_decl), "kind", ys("let"), "typ", yr(1, "k", yv_long(K_tnone)), "name", name, "v", v, "line", yv_long(ln), "col", yv_long(cl), "nline", yv_long(cl), "ncol", yv_long(cl));
 }
 
+/* n_decl with a declared type, for a synthetic binding whose value needs the
+   context to be created right (an EMPTY `{}` under a map type is the map, not
+   an empty record -- gen_decl's rule; see gen_map_set). */
+Yv *n_decl_typ(Yv *name, Yv *v, Yv *typ, ylong ln, ylong cl) {
+    return yr(9, "k", yv_long(K_decl), "kind", ys("let"), "typ", typ, "name", name, "v", v, "line", yv_long(ln), "col", yv_long(cl), "nline", yv_long(ln), "ncol", yv_long(cl));
+}
+
 Yv *n_assign(Yv *name, Yv *v, ylong ln, ylong cl) {
     return yr(5, "k", yv_long(K_assign), "name", name, "v", v, "line", yv_long(ln), "col", yv_long(cl));
 }
@@ -14526,7 +14534,7 @@ Yv *gen_maplit(Yv *st, Yv *node) {
 
 /* m[k] read or test (is_map_read): m[k] on a map value. */
 int is_map_read(Yv *st, Yv *e) {
-    if (yv_l(yr_get(e, "k")) == K_index) { return yv_l(yr_get(infer(st, yr_get(e, "arr")), "k")) == K_tmap; } else { return 0; }
+    if (yv_l(yr_get(e, "k")) == K_index) { return yv_l(yr_get(unfold(infer(st, yr_get(e, "arr"))), "k")) == K_tmap; } else { return 0; }
 }
 
 int is_none_id(Yv *e) {
@@ -14626,10 +14634,18 @@ Yv *gen_map_set(Yv *st, Yv *node) {
     Yv *i = n_id(ys_cat(t, ys("i")), ln, cl);
     Yv *n = n_id(ys_cat(t, ys("n")), ln, cl);
     Yv *v = n_id(ys_cat(t, ys("v")), ln, cl);
+    /* The value is declared WITH the map's value type, so an empty literal
+       `{}` is created as the map it is (gen_decl's empty-under-a-map rule).
+       With no type it was an empty RECORD, and storing that into a map of
+       maps left a value whose `!` dereferenced a record as a map -- measured
+       as a SIGSEGV in "map of map, empty store, read back". */
+    Yv *mt = unfold(infer(st, yr_get(node, "arr")));
+    Yv *vt = yr(1, "k", yv_long(K_tunk));
+    if (yv_l(yr_get(mt, "k")) == K_tmap) { vt = yr_get(mt, "of"); }
     Yv *sts = yav(0);
     sts = ya_push(sts, n_decl(ys_cat(t, ys("m")), yr_get(node, "arr"), ln, cl));
     sts = ya_push(sts, n_decl(ys_cat(t, ys("k")), yr_get(node, "idx"), ln, cl));
-    sts = ya_push(sts, n_decl(ys_cat(t, ys("v")), yr_get(node, "v"), ln, cl));
+    sts = ya_push(sts, n_decl_typ(ys_cat(t, ys("v")), yr_get(node, "v"), vt, ln, cl));
     sts = ya_push(sts, n_decl(ys_cat(t, ys("ks")), n_dot(m, ys("keys"), ln, cl), ln, cl));
     sts = ya_push(sts, n_decl(ys_cat(t, ys("i")), n_num(ys("0"), ln, cl), ln, cl));
     sts = ya_push(sts, n_decl(ys_cat(t, ys("n")), n_call1(ys("len"), n_id(ys_cat(t, ys("ks")), ln, cl), ln, cl), ln, cl));

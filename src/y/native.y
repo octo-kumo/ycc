@@ -2723,7 +2723,7 @@ def infer_go(st: EmitSt, node: Node) -> Type {
         if (bt.k == K.tarrfix || bt.k == K.tarr) {
             let arr: ArrTy = bt;
             arr.of
-        } else if (bt.k == K.tmap) {
+        } else if (unfold(bt).k == K.tmap) {
             // m[k] is always optional: V? for any V
             let map: TMap = bt;
             normtype({ k: K.topt, of: map.of })
@@ -2857,7 +2857,7 @@ def infer_go(st: EmitSt, node: Node) -> Type {
             // types.y union_field: the type the field has in every member
             let uft = rec_field_type(dt, dot.key);
             if (uft.k == K.tnone) { normtype({ k: K.tunk }) } else { uft }
-        } else if (dt.k == K.tmap) {
+        } else if (unfold(dt).k == K.tmap) {
             let map: TMap = dt;
             // the map lowering reads its {keys, vals, boxes} shape directly
             if (dot.key == "keys") { normtype({ k: K.tarr, of: map.key }) }
@@ -3000,7 +3000,7 @@ def infer_call(st: EmitSt, node: Call) -> Type {
             type_node({ k: K.tlong })
         } else if (name == "keys") {
             let kt = infer(st, node.args[0]);
-            if (kt.k == K.tmap) {
+            if (unfold(kt).k == K.tmap) {
                 let km: TMap = kt;
                 normtype({ k: K.tarr, of: km.key })
             } else { normtype({ k: K.tarr, of: normtype({ k: K.tunk }) }) }
@@ -3674,8 +3674,8 @@ def gen_go(st: EmitSt, node: Node) -> EmitSt {
         let index: Index = node;
         // maps scan their keys; strings read a byte; arrays index directly
         let kbt = infer(st, index.arr);
-        if (kbt.k == K.tmap) { gen_map_get(st, index, "opt") }
-        else if (kbt.k == K.tstr) { gen_byte_at(st, n_call2("byte_at", index.arr, index.idx, index.line, index.col)) }
+        if (unfold(kbt).k == K.tmap) { gen_map_get(st, index, "opt") }
+        else if (unfold(kbt).k == K.tstr) { gen_byte_at(st, n_call2("byte_at", index.arr, index.idx, index.line, index.col)) }
         else { gen_index(st, index) }
     } else if (k == K.slice) {
         let slice: Slice = node;
@@ -3704,7 +3704,7 @@ def gen_go(st: EmitSt, node: Node) -> EmitSt {
     } else if (k == K.idxassign) {
         let assign: IdxAssign = node;
         let kbt = infer(st, assign.arr);
-        if (kbt.k == K.tmap) { gen_map_set(st, assign) } else { gen_idxassign(st, assign) }
+        if (unfold(kbt).k == K.tmap) { gen_map_set(st, assign) } else { gen_idxassign(st, assign) }
     } else if (k == K.dotassign) {
         let assign: DotAssign = node;
         gen_dotassign(st, assign)
@@ -7562,7 +7562,7 @@ def gen_decl(st: EmitSt, node: Decl) -> EmitSt {
             // record literal: heap address (first-class value, plain slot).
             // An empty literal under a map annotation is the map itself
             // (the {keys, vals, boxes} shape the map ops expect).
-            if (node.typ.k == K.tmap && len(rec.keys) == 0) {
+            if (unfold(node.typ).k == K.tmap && len(rec.keys) == 0) {
                 st = gen_maplit(st, rec)
             } else {
                 // created as the declared type (gen_as, gen_reclit)
@@ -12433,6 +12433,13 @@ def n_decl(name: str, v: Node, ln: long, cl: long) -> Decl {
     { k: K.decl, kind: "let", typ: type_node({ k: K.tnone }), name: name, v: v, line: ln, col: cl, nline: ln, ncol: cl }
 };
 
+// n_decl with a declared type, for a synthetic binding whose value needs the
+// context to be created right (an EMPTY `{}` under a map type is the map, not
+// an empty record -- gen_decl's rule; see gen_map_set).
+def n_decl_typ(name: str, v: Node, typ: Type, ln: long, cl: long) -> Decl {
+    { k: K.decl, kind: "let", typ: typ, name: name, v: v, line: ln, col: cl, nline: ln, ncol: cl }
+};
+
 def n_assign(name: str, v: Node, ln: long, cl: long) -> Assign {
     { k: K.assign, name: name, v: v, line: ln, col: cl }
 };
@@ -12504,7 +12511,7 @@ def gen_maplit(st: EmitSt, node: RecLit) -> EmitSt {
 
 // m[k] read or test (is_map_read): m[k] on a map value.
 def is_map_read(st: EmitSt, e: Node) -> bool {
-    if (e.k == K.index) { let index: Index = e; infer(st, index.arr).k == K.tmap } else { false }
+    if (e.k == K.index) { let index: Index = e; unfold(infer(st, index.arr)).k == K.tmap } else { false }
 };
 
 def is_none_id(e: Node) -> bool {
@@ -12600,10 +12607,18 @@ def gen_map_set(st: EmitSt, node: IdxAssign) -> EmitSt {
     let i: Node = n_id(t + "i", ln, cl);
     let n: Node = n_id(t + "n", ln, cl);
     let v: Node = n_id(t + "v", ln, cl);
+    // The value is declared WITH the map's value type, so an empty literal
+    // `{}` is created as the map it is (gen_decl's empty-under-a-map rule).
+    // With no type it was an empty RECORD, and storing that into a map of
+    // maps left a value whose `!` dereferenced a record as a map -- measured
+    // as a SIGSEGV in "map of map, empty store, read back".
+    let mt = unfold(infer(st, node.arr));
+    let vt: Type = type_node({ k: K.tunk });
+    if (mt.k == K.tmap) { let mm: TMap = mt; vt = mm.of; };
     let sts: [Node] = [];
     sts += n_decl(t + "m", node.arr, ln, cl);
     sts += n_decl(t + "k", node.idx, ln, cl);
-    sts += n_decl(t + "v", node.v, ln, cl);
+    sts += n_decl_typ(t + "v", node.v, vt, ln, cl);
     sts += n_decl(t + "ks", n_dot(m, "keys", ln, cl), ln, cl);
     sts += n_decl(t + "i", n_num("0", ln, cl), ln, cl);
     sts += n_decl(t + "n", n_call1("len", n_id(t + "ks", ln, cl), ln, cl), ln, cl);

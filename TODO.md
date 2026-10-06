@@ -6,50 +6,6 @@ Each entry says what it buys and what it costs today.
 
 ***INSTRUCTIONS WHEN FINISH*** remove the TODO item from this file when it has been completed
 
-## 1. A recursive `type` alias through an array, option or map member
-
-**Useful because** recursion in an alias currently has to go through a record
-field, which is the only indirection the renamer recognises. That forces a
-one-field wrapper record around every nested list or dictionary — noise in every
-recursive type in the language, and the reason `std/json.y` needs a `jobj()`
-wrapper that exists only to satisfy the rule.
-
-It is also arbitrary: an array, an option and a map are heap objects with
-headers, structurally as sound a place to recurse through as a record.
-
-Today — all three rejected:
-
-```y
-type Ids = [Ids];
-type Tree = { str => Tree };
-type Maybe = Maybe?;
-```
-```
-1:1: error: type 'Ids' refers to itself outside any record field or function type
-```
-
-Wanted:
-
-```y
-type Ids = [Ids];
-type Tree = { str => Tree };
-
-type Json = Num | Str | Bool | Arr | JObj;
-type Arr  = { v: [Json] };              // still a record field -- already legal
-type JObj = { v: { str => Json } };
-// and, once C3 lands, without the JObj wrapper at all:
-type Tree2 = { str => Tree2 };           // the map itself, recursive
-```
-
-**Cost.** Small: in `rename.rn_reaches_go` (`rename.y:480`) make the array,
-fixed-array, option and map arms (`rename.y:496-499`) respect `bare` the way
-the record (`rename.y:507`) and function (`rename.y:517`) arms already do, plus
-the 1:1 `src/c/rename.c`. It does need validating against everything that
-consumes a recursive alias — `teq`'s 64-level unfold limit (`types.y:200`),
-`tcanon`, `unfold`, and the emitter's record-type hashing (`native.y:5755`) —
-and bench and fuzz numbers, because the emitter and the checker both recurse
-over these types.
-
 ## 2. A primitive as a union member
 
 **Useful because** it would let a union model "a value of one of several

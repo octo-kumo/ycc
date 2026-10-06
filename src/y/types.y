@@ -2297,32 +2297,32 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
             if (got.kind == "") {
                 st = fail(st, "undefined variable '" + id.v + "'", index.line, index.col);
                 tc_res(t_unk(), st)
-            } else if (got.typ.k == K.tarrfix || got.typ.k == K.tarr) {
+            } else if (unfold(got.typ).k == K.tarrfix || unfold(got.typ).k == K.tarr) {
                 st = check_visible(st, got, id.v, index.line, index.col);
                 let r = typeof_expr(st, index.idx);
                 st = r.st;
                 st = expect_type(st, r.typ, type_node({ k: K.tlong }), "array index", index.line, index.col);
                 let elem: Type = t_unk();
-                if (got.typ.k == K.tarr) { let arr: TOf = got.typ; elem = arr.of; }
-                else { let arr: TFix = got.typ; elem = arr.of; };
+                if (unfold(got.typ).k == K.tarr) { let arr: TOf = unfold(got.typ); elem = arr.of; }
+                else { let arr: TFix = unfold(got.typ); elem = arr.of; };
                 tc_res(elem, st)
-            } else if (got.typ.k == K.tmap) {
+            } else if (unfold(got.typ).k == K.tmap) {
                 // m[k]: the key must match K; a read is ALWAYS optional --
                 // V? for any V (none when the key is missing).
                 st = check_visible(st, got, id.v, index.line, index.col);
-                let map: TMap = got.typ;
+                let map: TMap = unfold(got.typ);
                 let r = typeof_expr(st, index.idx);
                 st = r.st;
                 st = expect_type(st, r.typ, map.key, "map key", index.line, index.col);
                 tc_res(type_node({ k: K.topt, of: map.of }), st)
-            } else if (got.typ.k == K.tstr) {
+            } else if (unfold(got.typ).k == K.tstr) {
                 // s[i]: the byte at i (trapped when out of bounds)
                 st = check_visible(st, got, id.v, index.line, index.col);
                 let r = typeof_expr(st, index.idx);
                 st = r.st;
                 st = expect_type(st, r.typ, type_node({ k: K.tlong }), "string index", index.line, index.col);
                 tc_res(type_node({ k: K.tbyte }), st)
-            } else if (got.typ.k == K.tunk || got.typ.k == K.tnone || got.typ.k == K.tname) {
+            } else if (unfold(got.typ).k == K.tunk || unfold(got.typ).k == K.tnone || unfold(got.typ).k == K.tname) {
                 let r = typeof_expr(st, index.idx);
                 st = r.st;
                 tc_res(t_unk(), st)
@@ -2337,32 +2337,32 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
             let barr = index.arr;
             let br = typeof_expr(st, barr);
             st = br.st;
-            if (br.typ.k == K.tarrfix || br.typ.k == K.tarr) {
+            if (unfold(br.typ).k == K.tarrfix || unfold(br.typ).k == K.tarr) {
                 let ri = typeof_expr(st, index.idx);
                 st = ri.st;
                 st = expect_type(st, ri.typ, type_node({ k: K.tlong }), "array index", index.line, index.col);
                 let elem: Type = t_unk();
-                if (br.typ.k == K.tarr) { let arr: TOf = br.typ; elem = arr.of; }
-                else { let arr: TFix = br.typ; elem = arr.of; };
+                if (unfold(br.typ).k == K.tarr) { let arr: TOf = unfold(br.typ); elem = arr.of; }
+                else { let arr: TFix = unfold(br.typ); elem = arr.of; };
                 tc_res(elem, st)
-            } else if (br.typ.k == K.tmap) {
-                let map: TMap = br.typ;
+            } else if (unfold(br.typ).k == K.tmap) {
+                let map: TMap = unfold(br.typ);
                 let ri = typeof_expr(st, index.idx);
                 st = ri.st;
                 st = expect_type(st, ri.typ, map.key, "map key", index.line, index.col);
                 tc_res(type_node({ k: K.topt, of: map.of }), st)
-            } else if (br.typ.k == K.tstr) {
+            } else if (unfold(br.typ).k == K.tstr) {
                 let ri = typeof_expr(st, index.idx);
                 st = ri.st;
                 st = expect_type(st, ri.typ, type_node({ k: K.tlong }), "string index", index.line, index.col);
                 tc_res(type_node({ k: K.tbyte }), st)
-            } else if (br.typ.k == K.tunk || br.typ.k == K.tnone || br.typ.k == K.tname) {
+            } else if (unfold(br.typ).k == K.tunk || unfold(br.typ).k == K.tnone || unfold(br.typ).k == K.tname) {
                 // poison quietly (tcompat law) — the missing annotation
                 // reports at its own site.
                 let ri = typeof_expr(st, index.idx);
                 st = ri.st;
                 tc_res(t_unk(), st)
-            } else if (br.typ.k == K.tvoid && (barr.k == K.kw_if || barr.k == K.block)) {
+            } else if (unfold(br.typ).k == K.tvoid && (barr.k == K.kw_if || barr.k == K.block)) {
                 // An `if` or a block in expression position, with no value:
                 // `if (c) { A }["k"]` indexes the `if`, and A's arms are
                 // statements (or disagree, so the `if` is void), so there is
@@ -2470,20 +2470,20 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
             if (got.kind == "") {
                 st = fail(st, "undefined variable '" + id.v + "'", assign.line, assign.col);
                 tc_res(t_unk(), st)
-            } else if (got.typ.k == K.tarrfix || got.typ.k == K.tarr) {
+            } else if (unfold(got.typ).k == K.tarrfix || unfold(got.typ).k == K.tarr) {
                 st = check_visible(st, got, id.v, assign.line, assign.col);
                 let ix = typeof_expr(st, assign.idx);
                 st = ix.st;
                 st = expect_type(st, ix.typ, type_node({ k: K.tlong }), "array index", assign.line, assign.col);
                 let elem: Type = t_unk();
-                if (got.typ.k == K.tarr) { let arr: TOf = got.typ; elem = arr.of; }
-                else { let arr: TFix = got.typ; elem = arr.of; };
+                if (unfold(got.typ).k == K.tarr) { let arr: TOf = unfold(got.typ); elem = arr.of; }
+                else { let arr: TFix = unfold(got.typ); elem = arr.of; };
                 let v = typeof_want(st, assign.v, elem);
                 st = v.st;
                 st = expect_type(st, v.typ, elem, "array element", assign.line, assign.col);
                 tc_res(elem, st)
-            } else if (got.typ.k == K.tmap) {
-                let map: TMap = got.typ;
+            } else if (unfold(got.typ).k == K.tmap) {
+                let map: TMap = unfold(got.typ);
                 // m[k] = v: the key matches K and the value V (the store is
                 // in place -- every alias of the map sees it).
                 st = check_visible(st, got, id.v, assign.line, assign.col);
@@ -2504,19 +2504,19 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
             let barr = assign.arr;
             let br = typeof_expr(st, barr);
             st = br.st;
-            if (br.typ.k == K.tarrfix || br.typ.k == K.tarr) {
+            if (unfold(br.typ).k == K.tarrfix || unfold(br.typ).k == K.tarr) {
                 let ix = typeof_expr(st, assign.idx);
                 st = ix.st;
                 st = expect_type(st, ix.typ, type_node({ k: K.tlong }), "array index", assign.line, assign.col);
                 let elem: Type = t_unk();
-                if (br.typ.k == K.tarr) { let arr: TOf = br.typ; elem = arr.of; }
-                else { let arr: TFix = br.typ; elem = arr.of; };
+                if (unfold(br.typ).k == K.tarr) { let arr: TOf = unfold(br.typ); elem = arr.of; }
+                else { let arr: TFix = unfold(br.typ); elem = arr.of; };
                 let v = typeof_want(st, assign.v, elem);
                 st = v.st;
                 st = expect_type(st, v.typ, elem, "array element", assign.line, assign.col);
                 tc_res(elem, st)
-            } else if (br.typ.k == K.tmap) {
-                let map: TMap = br.typ;
+            } else if (unfold(br.typ).k == K.tmap) {
+                let map: TMap = unfold(br.typ);
                 let ix = typeof_expr(st, assign.idx);
                 st = ix.st;
                 st = expect_type(st, ix.typ, map.key, "map key", assign.line, assign.col);
@@ -2524,7 +2524,7 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
                 st = v.st;
                 st = expect_type(st, v.typ, map.of, "map value", assign.line, assign.col);
                 tc_res(map.of, st)
-            } else if (br.typ.k == K.tunk || br.typ.k == K.tnone || br.typ.k == K.tname) {
+            } else if (unfold(br.typ).k == K.tunk || unfold(br.typ).k == K.tnone || unfold(br.typ).k == K.tname) {
                 // poison quietly (tcompat law) — the missing annotation
                 // reports at its own site.
                 let ix = typeof_expr(st, assign.idx);
@@ -4199,6 +4199,13 @@ def lit_target(node: RecLit, want: Type) -> Type {
     if (str_in(keys, "...")) {
     } else if (wk == K.trec) {
         if (lit_fits(w, keys)) { found = want; }
+    } else if (wk == K.tmap) {
+        // An EMPTY literal under a map type IS that map -- the same rule the
+        // `let` path applies. `{}` is the only finite value of a recursive
+        // map alias (`type Tree = { str => Tree }`), and its value type comes
+        // from `want`; without this arm the literal was an empty record and
+        // every store into such a map failed "expected Tree, got { }".
+        if (len(keys) == 0) { found = want; };
     } else if (wk == K.tunion) {
         let ps = union_parts(w);
         let exact: Type = type_node({ k: K.tnone });
@@ -4368,10 +4375,13 @@ def typeof_decl(st: TcSt, node: Decl) -> TcRes {
                     t = node.typ;
                 } else if (vk == K.rec) {
                     let rec: RecLit = node.v;
-                    if (len(rec.keys) == 0 && node.typ.k == K.tmap) {
+                    if (len(rec.keys) == 0 && unfold(node.typ).k == K.tmap) {
                         // The empty literal `{}` under a map annotation IS
                         // the map (the emitter lowers it to the {keys, vals,
-                        // boxes} shape).
+                        // boxes} shape). `unfold`, because a RECURSIVE map
+                        // alias (`type Tree = { str => Tree }`) reaches here
+                        // as its tref, and before this only an inline alias
+                        // (no tref) was recognized.
                         t = node.typ;
                     } else {
                         st = expect_cast(st, r.typ, node.typ, "let '" + disp(node.name) + "'", node.line, node.col);
