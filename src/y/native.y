@@ -1352,6 +1352,160 @@ def ir_refs_item(ir: [long], at: long, out: [str]) -> [str] {
     out
 };
 
+// ── dead global initializers ────────────────────────────────────────────
+// A global cell nothing READS does not need its initialization, and for a
+// table or a record constant that is a whole RANGE of instructions (built
+// element by element at startup). The emitter brackets each global's
+// initializer with `ygiS_<cell>` / `ygiE_<cell>` marks (gen_decl_marked), and
+// this deletes the range for a dead cell; the shake after it drops whatever
+// only that range called.
+//
+// Reads are what keeps a cell: a load from it, an in-place op on it
+// (`add %r, cell`) and a `lea cell` (someone may read it through the pointer)
+// all count, so only a plain `mov <src>, <cell>` is not a read. That is what
+// an unused `import math;` costs -- 6705 bytes of `const pi` and coefficient
+// tables, spliced into the program's own unit, built at startup and read by
+// nobody (test/sh/test_treeshake.sh is the gate, test/treeshake/costs.txt the
+// ratchet).
+def cell_reads(ir: [long], out: [str]) -> [str] {
+    let at = 0;
+    while (at < len(ir)) {
+        let f = ir[at];
+        if (f < insn.IR_LABEL) {
+            let form = insn.ir_form(f);
+            let kinds = form.kinds;
+            let wp = at + 1;
+            let i = 0;
+            while (i < len(kinds)) {
+                let k = kinds[i];
+                if (k == insn.O_MEM || k == insn.O_MEM0) {
+                    let last = i == len(kinds) - 1;
+                    if (!(last && form.mn == "mov")) {
+                        let nm = lname(ir[wp + 4]);
+                        if (len(nm) > 0) { out += nm; };
+                    };
+                } else if (k == insn.O_LBL) {
+                    // A global read is a LABEL operand, not a memory one
+                    // (gen_id: `mov <cell>(%rip), %rax` is F_MOV_P_R). Only
+                    // the store forms (`mov <src>, <cell>`) name a cell
+                    // without reading it, and they are all `mov` with the
+                    // label last.
+                    let last = i == len(kinds) - 1;
+                    if (!(last && form.mn == "mov")) {
+                        let nm = lname(ir[wp]);
+                        if (len(nm) > 0) { out += nm; };
+                    };
+                };
+                wp = wp + insn.ir_kind_words(k);
+                i = i + 1;
+            };
+        };
+        at = at + insn.IR_W;
+    };
+    out
+};
+
+// The cell an initializer mark names, or "" for a label that is not a mark.
+// `start` picks the opening one.
+def mark_cell(nm: str, start: bool) -> str {
+    let pre = "ygiE_";
+    if (start) { pre = "ygiS_"; };
+    if (len(nm) > len(pre) && nm[:len(pre)] == pre) { nm[len(pre):] } else { "" }
+};
+
+// The body's items without the initializers of `dead` cells: everything from
+// an opening mark through its closing one, marks included.
+// The offset of the closing mark for the range opened at `a`, or -1. Marks do
+// not nest (gen_decl_marked emits one pair around one declaration), so the
+// first closing mark with the same cell is the one.
+def mark_end(ir: [long], a: long, cell: str) -> long {
+    let at = a + insn.IR_W;
+    let out = -1;
+    while (at < len(ir) && out < 0) {
+        if (ir[at] == insn.IR_LABEL) {
+            if (mark_cell(lname(ir[at + 1]), false) == cell) { out = at; };
+        };
+        at = at + insn.IR_W;
+    };
+    out
+};
+
+// Does the range hold nothing but VALUE? `let result = main(...)` is the
+// counterexample that made this necessary: the cell `result` is read by
+// nobody, and the CALL inside its initializer is the entire program. So a
+// range is droppable only when it makes no call (except the allocator, whose
+// only effect is the memory an unread table would have held), writes no other
+// cell, and holds no raw text.
+def range_is_pure(ir: [long], a: long, b: long, cell: str) -> bool {
+    let ok = true;
+    let at = a;
+    while (at <= b && ok) {
+        let f = ir[at];
+        if (f == insn.IR_TEXT) { ok = false; }
+        else if (f < insn.IR_LABEL) {
+            let form = insn.ir_form(f);
+            let kinds = form.kinds;
+            if (form.mn == "call") {
+                if (lname(ir[at + 1]) != "y_alloc") { ok = false; };
+            } else if (len(kinds) > 0 && form.mn == "mov" && kinds[len(kinds) - 1] == insn.O_MEM) {
+                let wp = at + 1;
+                let i = 0;
+                while (i < len(kinds) - 1) { wp = wp + insn.ir_kind_words(kinds[i]); i = i + 1; };
+                let nm = lname(ir[wp + 4]);
+                if (len(nm) > 0 && nm != cell) { ok = false; };
+            } else if (len(kinds) > 0 && form.mn == "mov" && kinds[len(kinds) - 1] == insn.O_LBL) {
+                let wp = at + 1;
+                let i = 0;
+                while (i < len(kinds) - 1) { wp = wp + insn.ir_kind_words(kinds[i]); i = i + 1; };
+                let nm = lname(ir[wp]);
+                if (len(nm) > 0 && nm != cell) { ok = false; };
+            };
+        };
+        at = at + insn.IR_W;
+    };
+    ok
+};
+
+def ir_drop_inits(ir: [long], dead: [str]) -> [long] {
+    let out: [long] = [];
+    let at = 0;
+    let keep_from = 0;
+    let skipping = "";
+    // Whether anything was actually dropped. Most bodies have no dead cell in
+    // them at all, and the answer for those must be the SAME array: building
+    // `out` copies every item in the body, and the bench-ir run of the first
+    // version showed exactly that as +1-2% compile instructions (maps.y
+    // +2.28%) on programs with nothing to delete.
+    let dropped = false;
+    while (at < len(ir)) {
+        let f = ir[at];
+        if (f == insn.IR_LABEL) {
+            let nm = lname(ir[at + 1]);
+            let s0 = mark_cell(nm, true);
+            let e0 = mark_cell(nm, false);
+            if (len(s0) > 0 && len(skipping) == 0 && name_in(dead, s0)) {
+                let e_at = mark_end(ir, at, s0);
+                if (e_at >= 0 && range_is_pure(ir, at, e_at, s0)) {
+                    // keep the run before the mark, then skip to its pair
+                    out += ir[keep_from:at];
+                    skipping = s0;
+                    dropped = true;
+                };
+            } else if (len(e0) > 0 && e0 == skipping) {
+                skipping = "";
+                keep_from = at + insn.IR_W;
+            };
+        };
+        at = at + insn.IR_W;
+    };
+    // The runs are copied by SLICE and appended with `+=`: appending word by
+    // word is what the rodata comment above calls out -- each append copies
+    // the whole accumulator, and on a self-compilation that is 1.4MB of items
+    // copied 175,000 times, which runs the compiler out of memory.
+    if (len(skipping) == 0) { out += ir[keep_from:len(ir)]; };
+    if (dropped) { out } else { ir }
+};
+
 // tok_push's rule (an empty token is no name) -- which is how the text scans
 // dropped the pseudo-operands a non-label `lea` used to contribute.
 def ir_refs_push(out: [str], nm: str) -> [str] {
@@ -3687,7 +3841,7 @@ def gen_go(st: EmitSt, node: Node) -> EmitSt {
         gen_block(st, block)
     } else if (k == K.decl) {
         let decl: Decl = node;
-        gen_decl(st, decl)
+        gen_decl_marked(st, decl)
     } else if (k == K.assign) {
         let assign: Assign = node;
         gen_assign(st, assign)
@@ -7544,6 +7698,29 @@ def gen_closure_binding(st: EmitSt, name: str, func: Func, caps: [str]) -> EmitS
       fns: st.fns, bodies: st.bodies, btext: st.btext, blabels: st.blabels };
     st3 = env_define(st3, name, "closure", coff, -1, "", func_type_in(st3, func));
     box_bound(st3, name)
+};
+
+// ── a global's initializer, delimited ───────────────────────────────────
+// A top-level declaration's initialization is a RANGE of instructions -- an
+// array or record constant is built element by element -- and a global that
+// nothing reads does not need any of it. The link step cannot find that range
+// on its own, so the emitter brackets it with two labels named for the cell
+// (`ygiS_<cell>` / `ygiE_<cell>`): the linker deletes the range for a dead
+// cell and the shake after it drops whatever only that range called.
+//
+// Only declarations whose target is a GLOBAL get marks: a local `let` inside
+// a function is not a global cell and nothing shakes it. The marks' labels are
+// minted like any other; an unreferenced label emits nothing.
+def gen_decl_marked(st: EmitSt, node: Decl) -> EmitSt {
+    let ge = env_find(st, node.name);
+    if (ge.kind != "global") {
+        gen_decl(st, node)
+    } else {
+        let cell = lname(ge.label);
+        st = emit_label(st, lbl_new("ygiS_" + cell));
+        st = gen_decl(st, node);
+        emit_label(st, lbl_new("ygiE_" + cell))
+    }
 };
 
 def gen_decl(st: EmitSt, node: Decl) -> EmitSt {
@@ -11592,6 +11769,61 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
         allrod += u.rodata;
         gls += u.globals;
         ju = ju + 1;
+    };
+    // Which of the PROGRAM's globals the kept code reads. Only these: a unit
+    // from the std pack carries packed bodies, whose references are not IR
+    // that can be walked, so a cell whose only reader lives in one would look
+    // dead (it did, and the failure is an undefined label at assembly). A
+    // packed unit cannot read a program global anyway -- it was compiled
+    // before the program existed -- and the spliced units this is for
+    // (std/math.y and friends) are the program's own.
+    let reads: [str] = [];
+    let ri = 0;
+    while (ri < len(all)) {
+        if (keep[ri]) {
+            if (len(all[ri]) > 0) {
+                reads = cell_reads(all[ri], reads)
+            } else {
+                // A body from the std pack carries no items: its REFS are all
+                // that can be seen, and they include the stores, so a packed
+                // unit's cells look read and are never dropped. Conservative
+                // on purpose -- the alternative is a cell dropped while a
+                // packed body reads it.
+                reads += refs[ri]
+            };
+        };
+        ri = ri + 1;
+    };
+    let dead_cells: [str] = [];
+    let di = 0;
+    while (di < len(prog.globals)) {
+        if (!name_in(reads, prog.globals[di])) { dead_cells += prog.globals[di]; };
+        di = di + 1;
+    };
+    if (len(dead_cells) > 0) {
+        let dj = 0;
+        while (dj < len(all)) {
+            if (keep[dj] && len(all[dj]) > 0) {
+                let ni = ir_drop_inits(all[dj], dead_cells);
+                if (len(ni) != len(all[dj])) {
+                    all[dj] = ni;
+                    refs[dj] = ir_refs(ni);
+                };
+            };
+            dj = dj + 1;
+        };
+        // The CELLS stay: a dead cell's storage is .bss, which costs no file
+        // bytes, and the read scan above is the one thing here that has to be
+        // exactly right (a cell dropped while something reads it is an
+        // undefined label at assembly, or worse). What this pass is for is the
+        // INSTRUCTIONS, and those are gone.
+        let live: [str] = [];
+        let lv = 0;
+        while (lv < len(gls)) {
+            live += gls[lv];
+            lv = lv + 1;
+        };
+        gls = live;
     };
     allrod += prog.rodata;
     gls += prog.globals;

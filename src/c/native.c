@@ -403,6 +403,7 @@ Yv *infer_go(Yv *st, Yv *node);
 Yv *gen_slot_load(Yv *st, ylong idx);
 Yv *gen_func_literal(Yv *st, Yv *node);
 Yv *gen_closure_binding(Yv *st, Yv *name, Yv *func, Yv *caps);
+static Yv *gen_decl_marked(Yv *st, Yv *node);
 Yv *gen_decl(Yv *st, Yv *node);
 Yv *bind_decl(Yv *st, Yv *name, Yv *t);
 Yv *gen_assign(Yv *st, Yv *node);
@@ -2209,6 +2210,171 @@ static Yv *ir_refs_item(Yv *ir, ylong at, Yv *out) {
         i = i + 1;
         ;
     };
+    return out;
+}
+
+
+/* ── dead global initializers ──────────────────────────────────────────
+ * A global cell nothing READS does not need its initialization, and for a
+ * table or a record constant that is a whole RANGE of instructions (built
+ * element by element at startup). The emitter brackets each global's
+ * initializer with `ygiS_<cell>` / `ygiE_<cell>` marks (gen_decl_marked), and
+ * this deletes the range for a dead cell; the shake after it drops whatever
+ * only that range called.
+ *
+ * Reads are what keeps a cell: a load from it, an in-place op on it
+ * (`add %r, cell`) and a `lea cell` (someone may read it through the pointer)
+ * all count, so only a plain `mov <src>, <cell>` is not a read. That is what
+ * an unused `import math;` costs -- 6705 bytes of `const pi` and coefficient
+ * tables, spliced into the program's own unit, built at startup and read by
+ * nobody (test/sh/test_treeshake.sh is the gate, test/treeshake/costs.txt the
+ * ratchet). */
+static Yv *cell_reads(Yv *ir, Yv *out) {
+    ylong at = 0;
+    while (at < yv_len(ir)) {
+        ylong f = yv_l(ya_get(ir, at));
+        if (f < IR_LABEL) {
+            Yv *fo = ir_form(f);
+            Yv *kinds = yr_get(fo, "kinds");
+            ylong wp = at + 1;
+            ylong i = 0;
+            while (i < yv_len(kinds)) {
+                ylong k = yv_l(ya_get(kinds, i));
+                if (k == O_MEM || k == O_MEM0) {
+                    int last = i == yv_len(kinds) - 1;
+                    if (!(last && ys_eq_lit(yr_get(fo, "mn"), "mov"))) {
+                        Yv *nm = lname(ya_get(ir, wp + 4));
+                        if (yv_len(nm) > 0) { out = ya_push(out, nm); }
+                    }
+                } else if (k == O_LBL) {
+                    /* A global read is a LABEL operand, not a memory one
+                     * (gen_id: `mov <cell>(%rip), %rax` is F_MOV_P_R). Only
+                     * the store forms (`mov <src>, <cell>`) name a cell
+                     * without reading it, and they are all `mov` with the
+                     * label last. */
+                    int last = i == yv_len(kinds) - 1;
+                    if (!(last && ys_eq_lit(yr_get(fo, "mn"), "mov"))) {
+                        Yv *nm = lname(ya_get(ir, wp));
+                        if (yv_len(nm) > 0) { out = ya_push(out, nm); }
+                    }
+                }
+                wp = wp + ir_kind_words(k);
+                i = i + 1;
+            }
+        }
+        at = at + IR_W;
+    }
+    return out;
+}
+
+/* The cell an initializer mark names, or "" for a label that is not a mark.
+ * `start` picks the opening one. IS_SLICE below is the trap this function sat
+ * on for three rounds: a str in the C copy is not an array, `ya_slice` on one
+ * answers empty, and the whole pass then silently did nothing (every mark
+ * looked like a non-mark). PORTING.md's rule about ys_/ya_ applies to every
+ * string operation, not just the obvious ones. */
+static Yv *mark_cell(Yv *nm, int start) {
+    Yv *pre = ys("ygiE_");
+    if (start) { pre = ys("ygiS_"); }
+    if (yv_len(nm) > yv_len(pre) && ys_eq(ys_slice(nm, 0, yv_len(pre)), pre)) {
+        return ys_slice(nm, yv_len(pre), yv_len(nm));
+    }
+    return ys("");
+}
+
+/* The offset of the closing mark for the range opened at `a`, or -1. Marks do
+ * not nest (gen_decl_marked emits one pair around one declaration), so the
+ * first closing mark with the same cell is the one. */
+static ylong mark_end(Yv *ir, ylong a, Yv *cell) {
+    ylong at = a + IR_W;
+    ylong out = -1;
+    while (at < yv_len(ir) && out < 0) {
+        if (yv_l(ya_get(ir, at)) == IR_LABEL) {
+            if (ys_eq(mark_cell(lname(ya_get(ir, at + 1)), 0), cell)) { out = at; }
+        }
+        at = at + IR_W;
+    }
+    return out;
+}
+
+static int range_side_store(Yv *ir, ylong at, Yv *kinds, Yv *cell, int lbl) {
+    ylong wp = at + 1;
+    ylong i = 0;
+    while (i < yv_len(kinds) - 1) {
+        wp = wp + ir_kind_words(yv_l(ya_get(kinds, i)));
+        i = i + 1;
+    }
+    Yv *nm = lname(ya_get(ir, lbl ? wp : wp + 4));
+    return yv_len(nm) > 0 && !ys_eq(nm, cell);
+}
+
+/* Does the range hold nothing but VALUE? `let result = main(...)` is the
+ * counterexample that made this necessary: the cell `result` is read by
+ * nobody, and the CALL inside its initializer is the entire program -- the
+ * first version of this pass deleted it and produced a compiler that exits 0
+ * and does nothing. So a range is droppable only when it makes no call
+ * (except the allocator, whose only effect is the memory an unread table
+ * would have held), writes no other cell, and holds no raw text. */
+static int range_is_pure(Yv *ir, ylong a, ylong b, Yv *cell) {
+    int ok = 1;
+    ylong at = a;
+    while (at <= b && ok) {
+        ylong f = yv_l(ya_get(ir, at));
+        if (f == IR_TEXT) {
+            ok = 0;
+        } else if (f < IR_LABEL) {
+            Yv *fo = ir_form(f);
+            Yv *kinds = yr_get(fo, "kinds");
+            Yv *mn = yr_get(fo, "mn");
+            ylong nk = yv_len(kinds);
+            if (ys_eq_lit(mn, "call")) {
+                if (!ys_eq_lit(lname(ya_get(ir, at + 1)), "y_alloc")) { ok = 0; }
+            } else if (nk > 0 && ys_eq_lit(mn, "mov") && yv_l(ya_get(kinds, nk - 1)) == O_MEM) {
+                if (range_side_store(ir, at, kinds, cell, 0)) { ok = 0; }
+            } else if (nk > 0 && ys_eq_lit(mn, "mov") && yv_l(ya_get(kinds, nk - 1)) == O_LBL) {
+                if (range_side_store(ir, at, kinds, cell, 1)) { ok = 0; }
+            }
+        }
+        at = at + IR_W;
+    }
+    return ok;
+}
+
+/* The body's items without the initializers of `dead` cells: from an opening
+ * mark through its closing one, marks included, and only when the range is
+ * pure (range_is_pure). */
+static Yv *ir_drop_inits(Yv *ir, Yv *dead) {
+    Yv *out = yav(0);
+    ylong at = 0;
+    ylong keep_from = 0;
+    Yv *skipping = ys("");
+    while (at < yv_len(ir)) {
+        ylong f = yv_l(ya_get(ir, at));
+        if (f == IR_LABEL) {
+            Yv *nm = lname(ya_get(ir, at + 1));
+            Yv *s0 = mark_cell(nm, 1);
+            Yv *e0 = mark_cell(nm, 0);
+            if (yv_len(s0) > 0 && yv_len(skipping) == 0 && name_in(dead, s0)) {
+                ylong e_at = mark_end(ir, at, s0);
+                if (e_at >= 0 && range_is_pure(ir, at, e_at, s0)) {
+                    /* keep the run before the mark, then skip to its pair */
+                    ylong k = keep_from;
+                    while (k < at) { out = ya_push(out, ya_get(ir, k)); k = k + 1; }
+                    skipping = s0;
+                }
+            } else if (yv_len(e0) > 0 && ys_eq(e0, skipping)) {
+                skipping = ys("");
+                keep_from = at + IR_W;
+            }
+        }
+        at = at + IR_W;
+    }
+    /* Pushed one at a time: in the C value model that is amortized O(1) (the
+     * arrays grow), so the Y rule's quadratic warning does not apply. */
+    if (yv_len(skipping) == 0) {
+        ylong k = keep_from;
+        while (k < yv_len(ir)) { out = ya_push(out, ya_get(ir, k)); k = k + 1; }
+    }
     return out;
 }
 
@@ -4613,7 +4779,7 @@ Yv *gen_go(Yv *st, Yv *node) {
     } else if (yv_l(k) == K_block) {
         return gen_block(st, node);
     } else if (yv_l(k) == K_decl) {
-        return gen_decl(st, node);
+        return gen_decl_marked(st, node);
     } else if (yv_l(k) == K_assign) {
         return gen_assign(st, node);
     } else if (yv_l(k) == K_incdec) {
@@ -8790,6 +8956,28 @@ Yv *gen_closure_binding(Yv *st, Yv *name, Yv *func, Yv *caps) {
     st3 = env_define(st3, name, ys("closure"), coff, yv_long(-1), ys(""),
                      func_type_in(st3, func));
     return box_bound(st3, name);
+}
+
+/* ── a global's initializer, delimited ───────────────────────────────────
+ * A top-level declaration's initialization is a RANGE of instructions -- an
+ * array or record constant is built element by element -- and a global that
+ * nothing reads does not need any of it. The link step cannot find that range
+ * on its own, so the emitter brackets it with two labels named for the cell
+ * (`ygiS_<cell>` / `ygiE_<cell>`): the linker deletes the range for a dead
+ * cell and the shake after it drops whatever only that range called.
+ *
+ * Only declarations whose target is a GLOBAL get marks: a local `let` inside a
+ * function is not a global cell and nothing shakes it. */
+static Yv *gen_decl_marked(Yv *st, Yv *node) {
+    Yv *ge = env_find(st, yr_get(node, "name"));
+    if (!ys_eq_lit(yr_get(ge, "kind"), "global")) {
+        return gen_decl(st, node);
+    } else {
+        Yv *cell = lname(yr_get(ge, "label"));
+        st = emit_label(st, yv_l(lbl_new(ys_cat(ys("ygiS_"), cell))));
+        st = gen_decl(st, node);
+        return emit_label(st, yv_l(lbl_new(ys_cat(ys("ygiE_"), cell))));
+    }
 }
 
 Yv *gen_decl(Yv *st, Yv *node) {
@@ -13562,6 +13750,59 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
     while (pgi < yv_len(pg)) {
         gls = ya_push(gls, ya_get(pg, pgi));
         pgi = pgi + 1;
+    }
+    /* Which of the PROGRAM's globals the kept code reads. Only these: a unit
+       from the std pack carries packed bodies, whose references are not IR
+       that can be walked, so a cell whose only reader lives in one would look
+       dead. A packed unit cannot read a program global anyway -- it was
+       compiled before the program existed -- and the spliced units this is
+       for (std/math.y and friends) are the program's own. */
+    Yv *reads = yav(0);
+    ylong ri = 0;
+    while (ri < yv_len(all)) {
+        if (yv_b(ya_get(keep, ri))) {
+            Yv *bodyitems = ya_get(all, ri);
+            if (yv_len(bodyitems) > 0) {
+                reads = cell_reads(bodyitems, reads);
+            } else {
+                /* A body from the std pack carries no items: its REFS are all
+                   that can be seen, and they include the stores, so a packed
+                   unit's cells look read and are never dropped. Conservative
+                   on purpose. */
+                Yv *rrefs = ya_get(refs, ri);
+                ylong rj = 0;
+                while (rj < yv_len(rrefs)) {
+                    reads = ya_push(reads, ya_get(rrefs, rj));
+                    rj = rj + 1;
+                }
+            }
+        }
+        ri = ri + 1;
+    }
+    Yv *dead_cells = yav(0);
+    ylong di2 = 0;
+    while (di2 < yv_len(pg)) {
+        Yv *cell = ya_get(pg, di2);
+        if (!name_in(reads, cell)) { dead_cells = ya_push(dead_cells, cell); }
+        di2 = di2 + 1;
+    }
+    if (yv_len(dead_cells) > 0) {
+        ylong dj = 0;
+        while (dj < yv_len(all)) {
+            if (yv_b(ya_get(keep, dj)) && yv_len(ya_get(all, dj)) > 0) {
+                Yv *ni = ir_drop_inits(ya_get(all, dj), dead_cells);
+                if (yv_len(ni) != yv_len(ya_get(all, dj))) {
+                    ya_set(all, dj, ni);
+                    ya_set(refs, dj, ir_refs(ni));
+                }
+            }
+            dj = dj + 1;
+        }
+        /* Their CELLS stay: a dropped cell is only a `.bss` slot, which costs
+           no file bytes, and keeping it is the conservative half of this pass
+           -- if the read analysis ever misses a reader, a zero cell is a wrong
+           value rather than an undefined label at assembly. The Y twin keeps
+           them too, which is what makes the two outputs byte-identical. */
     }
     Yv *interned = rodata_intern(yav(0), allrod, const_refs);
     Yv *rodpieces = yr_get(interned, "pieces");

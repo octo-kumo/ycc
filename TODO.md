@@ -232,193 +232,45 @@ Checked and working, so these stay only in `TODO.y` as history:
 | `0b10001` binary literal | implemented (`0x1F` and `_` grouping too) |
 | `0o755` octal literal | implemented (`0O17`, `_` grouping, and the one `radix_of` prefix test the other radixes now share) |
 
-## 9. The tree shake drops functions, not data
+# DONE: the tree shake drops functions, not data (was item 9)
 
-Measured by `test/sh/test_treeshake.sh` (the numbers live in
-`test/treeshake/costs.txt` as a ratchet). An unused `import` keeps no
-FUNCTION -- a program importing `math`, `regex` and `fs` and calling none of
-them has exactly the minimal program's function labels -- but it keeps the
-unit's top-level GLOBALS and their initialization, which run at startup:
+Done in round 28. The emitter brackets every top-level global's initializer
+with two labels named for the cell (`ygiS_<cell>` / `ygiE_<cell>`), and the
+link step deletes that range when nothing reads the cell -- and refuses to
+unless the range is pure: no call except `y_alloc`, no store to another cell,
+no raw text. The shake that follows drops whatever only that range called.
+Both copies carry it, byte-identical.
 
-| unused import | bytes added | what it is |
-| --- | --- | --- |
-| `math` | 6705 | `const pi`, `const e`, `const tau`, the rest of the constants |
-| `tls` | 651 | |
-| `x509` | 637 | |
-| `crypto` | 420 | |
-| `regex` | 182 | |
-| `json` | 53 | |
-| `net` | 14 | |
-| `fs`, `struct` | 0 | nothing at the top level to initialize |
-
-`import math;` therefore costs a program that never calls it ~1500
-instructions at startup and 6.7 KB of file. The program's OWN dead code is in
-the same shape: `test/treeshake/dead.y` (a dead table, helpers only a dead
-branch reaches, an unused union, code after a `return`) keeps 544 bytes of
-itself.
-
-**Wanted:** shake globals per GLOBAL, not per unit. A global whose cell no
-kept code references needs no cell and no initializer -- which is also how
-the constants get folded: `const pi = 3.14...` that only literals use is a
-literal, and the cell, the store and the rodata behind it all go away. The
-two rules to keep straight while doing it: a top-level statement with a side
-effect (`print`, a call, an assignment through a global) must still run --
-"unused import" is not "unreachable module" -- and a global initialized from
-a call cannot be folded, only dropped when unread.
-
-**Map for the attempt** (a first try landed and was reverted; these are the
-things it cost an hour to learn, so they are written down here):
-
-  * **Where the cost is.** Only the four embedded units (`rt`, `str`,
-    `exec`, `prelude`) are linked as Units. Every other std unit -- `math`
-    included -- is SPLICED into the program's unit, so its globals are
-    `prog.globals` (`yg_0_math.pi$206`) and its initializations are in the
-    program's `_start` body, not in a separate unit `init`. A per-UNIT drop
-    looks at `units` and sees `[str, rt]` and nothing else; that is the wrong
-    boundary.
-  * **A packed body cannot be walked.** A Unit from the std pack carries
-    packed bodies, not items, so its references are invisible to an IR scan.
-    Dropping a packed unit's cell as "unread" fails at assembly
-    (`undefined label 'yg_1000000002_y_rl_end$6'`). Any cell-level pass has
-    to stay inside `prog.globals` (a packed unit cannot read a program global
-    anyway -- it was compiled before the program existed).
-  * **Dropping the STORE is not enough.** For the literal constants the
-    pattern is two items (`mov $imm, %rax`; `mov %rax, cell`) and dropping
-    both took 803 of the 6705 bytes, with every answer still right -- but the
-    other ~1600 instructions stayed, orphaned: a non-literal initializer is a
-    whole computation (`mov $bits,%rax`; `movq %rax,%xmm0`; ...; `divsd`)
-    whose only consumer was the store. Dead code that is *unreferenced* still
-    costs, so the pass has to delete the initializer's whole RANGE.
-  * So the two designs that work: **emission-time markers** (in `gen_decl`,
-    for a top-level global, emit a start/end label pair named for the cell,
-    and let the link step delete the range for a dead cell -- two label mints
-    per global, and `-S` noise unless they are stripped), or **const-value
-    substitution** (a `const` global with a literal initializer never gets a
-    cell at all: uses emit the literal, which is the "substitute const values
-    known at compile time" half of the request as well). The second needs an
-    address-taken guard -- `&x` must keep the cell -- which is unit-local for
-    the spliced case and has to be conservative (or a loud assembly failure)
-    for a packed one.
-  * The gate is already in place: `test/sh/test_treeshake.sh` and the ratchet
-    in `test/treeshake/costs.txt`. `math` must come down from 6705 to ~0 and
-    the zeros for `fs` and `struct` must stay zero.
-
-**Second attempt (the marker design), and where it stopped.** The pass was
-written and it WORKS on the thing it is for: `gen_decl_marked` brackets each
-top-level global's initializer with `ygiS_<cell>` / `ygiE_<cell>` labels, the
-link step reads the kept bodies' cells (`cell_reads`: a load is an `O_LBL`
-operand -- `F_MOV_P_R`, not a memory one -- and only `mov <src>, <cell>` is a
-store) and deletes the range of every cell nobody reads. On a program with
-400 unused `[long; 8]` tables it takes **78173 bytes to 973**, byte for byte
-what the tables were. It was reverted anyway, because on its own self-build it
-silently broke the compiler and the cause was not found:
-
-  * the ranges are provably safe -- `ygiS_yg_133_R_RBX$3227` wraps exactly
-    `mov $3, %rax` / `mov %rax, cell`, and that cell has **no load anywhere**
-    in the compiler's output (checked by NAME: the uid in a label is
-    per-compile, so comparing full labels across two compiles is meaningless
-    and a grep that does it will "verify" anything);
-  * deleting any ONE of the six dead cells is fine; deleting all six produces
-    a `ycc` that exits 0 and writes nothing (no usage line, no `-S`, no
-    binary, no pack). Marks with the deletion disabled are fine, so it is the
-    item removal, not the labels;
-  * two traps found on the way, both now avoided in the design above: the
-    first cut appended the kept items WORD BY WORD, which is the quadratic
-    append the rodata comment in native.y warns about (1.4 MB copied 175,000
-    times -- the compiler ran out of memory); and a body that came from the
-    std pack carries no items, so its REFERENCES have to be counted as reads
-    (`refs[i]`) or a packed unit's cell looks dead;
-  * where to look next: the multi-deletion case only. Compare the two
-    generations' assembly of `src/y/ycc.y`, and check `at_item`/the assembler's
-    label map against an item list that is 27 items shorter -- single
-    deletions and a 400-table program both assemble correctly, so it is
-    something about the *combination*.
-
-**Third look, and what it narrows to.** The listings were compared properly
-this time (both normalized by replacing every digit run with `N`, which is
-what makes a diff of two compiles of one source meaningful): generation 1's
-output for `src/y/ycc.y` differs from the reference's in **exactly** the 660
-`ygiS_`/`ygiE_` mark lines and the 12 deleted instructions -- nothing else,
-not one instruction. So the emitter is right; the *assembler* is what cannot
-take the combination. Marks with no deletion at all (660 labels, full item
-list) assemble fine, and 27 fewer items with no marks assemble fine; both
-together produce a 1.3 MB compiler that exits 0 and writes nothing. That
-points at the relaxation pass in `asm.y` -- the label-position loops keyed on
-`at_item` -- and the instrument that catches it in seconds is `make ynew`'s
-own generation comparison (`cmp _ynew2 _ynew3`), which I should have run
-before any hand-rolled test.
-
-**A design that needs none of this.** Instead of deleting instructions,
-never emit the construction: a top-level `const` aggregate whose elements are
-all literals is laid out as static **writable** data (`.data`, not `.rodata`
--- a `const` array can still be handed to a function that mutates it, so it
-must stay writable) and its initialization becomes the two instructions
-`mov $<label>, %rax` / `mov %rax, <cell>`. The elements' bytes stay in the
-file but the hundreds of pushes and stores per table go away, for *used*
-tables as well as unused ones, and startup gets faster. That is a pure
-emitter change: no marks, no link-time item surgery, nothing for the
-assembler to trip over.
-
-**Cost.** Medium. The link step already computes each unit's `globals` and
-each kept body's label references (`native.y`, `Unit`); this adds "and the
-global cell labels", then filters `global_decls`/the init text by it. The
-tempting wrong version is to shake the unit: a unit whose functions are all
-dropped may still have a top-level side effect, and dropping it would change
-what the program prints.
-
-**Fourth look: implemented, working in Y, blocked on the C twin.** The marker
-design was written for real (`gen_decl_marked`, `cell_reads`, `mark_cell`,
-`mark_end`, `range_is_pure`, `ir_drop_inits` and the link-time wiring) and it
-works in `src/y`:
+Measured:
 
 | program | before | after |
 | --- | --- | --- |
 | `import math; print(7);` | 7678 | **973** |
+| `import regex;` / `import crypto;` / `import fs;` unused | 1155 / 1393 / 1045 | 973 |
 | 400 unused `[long; 8]` tables | 78173 | **973** |
-| unused `import regex;` / `import crypto;` | 1155 / 1393 | 973 |
+| three dead tables beside one live one | 1491 | 1491 (they cost nothing) |
 | `print(math.sqrt(9.0))` (math used) | 17132 | 10427 |
 
-and the real fixpoint holds (generation 2 vs 3 byte-identical) -- that is the
-check to run (`make ynew` makes it); a hand-rolled "generation 1 vs 2"
-comparison is not a fixpoint, because generation 1 was built by a compiler
-without the pass.
+`test/treeshake/costs.txt`: math 6705 -> 0, regex 182 -> 0, crypto 420 -> 0,
+fs 72 -> 0. What is left is the rule doing its job, not a gap: x509 and tls 94,
+json 25 -- top-level statements with an effect, which must run whether or not
+anything reads their value.
 
-**The bug the first cut had, and it is the important one.** The pass asked
-only "is the cell read", so it deleted `let result = main(...)` -- the CALL to
-`main` -- from the compiler's own `_start`; the result was a compiler that
-exits 0 and writes nothing. Every range is now checked by `range_is_pure`: no
-call except `y_alloc` (whose only effect is the memory an unread table would
-have held), no store to another cell, no raw text. The earlier bisect that
-"proved" each single deletion safe was run against a stale binary and proved
-nothing.
+Two lessons worth keeping, both learned the hard way across six rounds:
 
-**Where it stopped.** The C twin does not delete: its program `_start` body
-carries 126 labels and **no `ygi` marks at all**, while the Y's `_start`
-carries the marked ranges (the Y reports `_start -1614 items`). So in the C
-build the marks land in a different body -- or as raw text -- and
-`ir_drop_inits` never sees one. The C's own port bugs found on the way are
-fixed (its `keep` array holds bools: `yv_b`, not `yv_l`; its packed-body
-fallback is in place). The port gate will not let one copy ship alone, so the
-whole thing is reverted; the next step is a print of which body the C's marks
-land in.
+  * **`ys_slice`, not `ya_slice`.** A `str` in the C copy is not an array, and
+    `ya_slice` on one answers EMPTY. `mark_cell` used it, so every mark looked
+    like a non-mark, nothing was deleted, and the pass was silently a no-op in
+    the C copy -- with the Y copy working perfectly, which is why the port gate
+    is not optional. PORTING.md's ys_/ya_ rule applies to every string
+    operation, not just the obvious ones.
+  * **An unread cell's initializer is not dead.** The first version asked only
+    "is the cell read", deleted `let result = main(...)` -- the call to `main`
+    -- and produced a compiler that exited 0 and did nothing.
+    `test/y/native/t348_unread_init_side_effect.y` is that regression, and
+    `range_is_pure` is why it cannot come back.
 
-**Fifth look, and the question is now exact.** Both copies were re-applied
-(the Y from its saved form plus the purity gate, the C ported again with
-`yv_b` in both loops) and the Y side is correct as before (math 7678 -> 973,
-400 tables 78173 -> 973, `g` 987, fixpoint holds). The C still fails, and the
-instrumented answer is:
-
-  * `_start` IS reached (`DBGENTRY items=13016`) and `keep`/`reads`/`all` are
-    right (`DBGKEPT 5 reads 45 all 188`, with `_start items=13016 blob=0`
-    among the kept);
-  * and that body's items hold **126 `IR_LABEL`s and zero `ygi` names** --
-    while `-S` prints 62 `ygiS_` lines *inside* `_start`.
-
-Both cannot be true of the same `[long]` item array, and the renderer walks
-the same items (`ir_render_all(kb, txt, ...)`), so the difference has to be
-the *text*: the C is emitting those marks as `IR_TEXT` items (raw lines the
-renderer prints verbatim) rather than as `IR_LABEL` items. The next step is
-therefore one print with the body's `txt` array in hand (`alltxt` is in scope
-in `link_units`): for an `IR_TEXT` item whose line starts with `ygi`, print
-it. If that fires, the fix is to make the C's mark emission produce the item
-the Y's does.
+Also: probes that "proved" the marks were missing were themselves wrong (a
+buggy guard in the probe), so the three rounds spent chasing "the marks are
+not in the items" were chasing nothing. Dump the first few items and read
+them; do not trust a counter you have not validated.

@@ -2,23 +2,24 @@
 # prints a constant (test/treeshake/minimal.y), in bytes. Growth fails the
 # suite; shrinkage is reported so the file can be lowered deliberately.
 #
-# The numbers are what is left of the tree shake's blind spot: functions are
-# dropped, top-level globals are not. math's 6705 bytes are `const pi`,
-# `const e`, `const tau` and the rest of its constants, emitted and
-# initialized at startup whether anything reads them or not. A unit whose top
-# level has nothing to initialize (struct) is free already.
+# These were the tree shake's blind spot until TODO.md 9: functions were
+# dropped, top-level globals were not, so `import math;` paid 6705 bytes for
+# `const pi` and coefficient tables built at startup and read by nobody. The
+# emitter now brackets each global's initializer with `ygiS_<cell>` /
+# `ygiE_<cell>` marks and the link step deletes the range for a cell nothing
+# reads -- and refuses to, unless the range is pure (no call but the
+# allocator, no store to another cell, no raw text).
 #
-# fs is 72 and net 86 rather than 0 and 14 since list_dir's 32 KiB getdents
-# buffer became lazy module state (SUGGESTIONS.md 22): the first-use check and
-# the growth loop are code, and code is what this measures. net pays fs's 72
-# because it imports fs. That is the whole price of not spending 32 864 bytes
-# of arena on every program that imports fs to read one file.
-fs 72
+# So math, regex, crypto, fs and struct are FREE, and what is left is the
+# purity rule keeping what has an effect: x509 and tls each have a top-level
+# statement that runs (94 bytes), json too (25). A unit with nothing to
+# initialize is free already.
+fs 0
 struct 0
-net 86
-json 53
-regex 182
-crypto 420
-x509 709
-tls 723
-math 6705
+net 0
+json 25
+regex 0
+crypto 0
+x509 94
+tls 94
+math 0

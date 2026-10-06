@@ -2,15 +2,24 @@
 # The tree shake: what a program does not use must not be in its binary.
 #
 # This is the measurement behind "unused code costs nothing", and it is a
-# RATCHET because the answer today is "functions yes, data no": every unused
-# std unit's FUNCTIONS are dropped (the kept labels of a program importing
-# math, regex and fs are the labels of one importing nothing), but a unit's
-# top-level GLOBALS and their initialization are emitted anyway. `import math;`
-# costs a program that never calls it 6705 bytes and ~1500 startup
-# instructions, all of it `const pi = 3.14159...` and friends. The costs below
-# are the recorded sizes; they may SHRINK freely (that is the work: shaking
-# globals, and folding the constants they hold into their uses), and a GROWTH
-# is a regression this suite exists to catch.
+# RATCHET. It used to answer "functions yes, data no": an unused unit's
+# FUNCTIONS were dropped, but its top-level globals and their initialization
+# were emitted anyway, so a bare `import math;` cost 6705 bytes and ~1500
+# startup instructions of `const pi = 3.14159...` and friends.
+#
+# That is fixed (TODO.md 9): the emitter brackets each global's initializer
+# with `ygiS_<cell>` / `ygiE_<cell>` marks, the link step deletes the range of
+# a cell nothing reads, and the shake after it drops what only that range
+# called. math is 0 now, and so are regex, crypto, fs and struct.
+#
+# What is LEFT is not a blind spot, it is the purity rule doing its job: 94
+# bytes for x509 and tls and 25 for json are top-level statements with an
+# effect (a call, a store to another cell), which must run whether or not
+# anything reads the value they produce. A range is droppable only when it
+# makes no call except the allocator, writes no other cell and holds no raw
+# text -- test/y/native/t348_unread_init_side_effect.y is the regression that
+# rule exists for. The costs below are the recorded sizes; they may SHRINK
+# freely, and a GROWTH is a regression this suite exists to catch.
 set -u
 
 source "$(dirname "$0")/lib.sh"

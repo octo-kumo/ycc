@@ -385,17 +385,23 @@ coverage). Neither is in `make test`.
   costs nothing", as a ratchet. It compiles `test/treeshake/minimal.y` and
   then the same program with one unused `import` and reports what each unit
   adds; growth fails, shrinkage is reported so `test/treeshake/costs.txt`
-  can be lowered deliberately. The finding it records today is the tree
-  shake's blind spot: **functions are dropped, data is not**. A program
-  importing `math`, `regex` and `fs` and calling none of them keeps exactly
-  the minimal program's function labels — and pays 6705 bytes for
-  `std/math.y`'s top-level `const`s, which are emitted and initialized at
-  startup whether anything reads them or not (`fs`, `struct` and `net` are
-  within a few bytes of free). `test/treeshake/dead.y` is the program with a
-  dead table, dead helpers, a dead branch, an unused union and code after a
-  `return`: 544 bytes of it survive its own tree shake, and its import cost
-  is on top. `test/sh/test_treeshake.sh` is run by both compilers and their
-  results must agree.
+  can be lowered deliberately. It used to record the tree shake's blind
+  spot — **functions are dropped, data is not**, 6705 bytes for
+  `std/math.y`'s top-level `const`s built at startup and read by nobody —
+  and that is fixed: the emitter brackets each global's initializer with
+  `ygiS_<cell>` / `ygiE_<cell>` labels and the link step deletes the range
+  of a cell nothing reads, so `math`, `regex`, `crypto`, `fs` and `struct`
+  are free. What is left is the *rule*, not a gap: 94 bytes for `x509` and
+  `tls`, 25 for `json`, are top-level statements with an effect, and a range
+  is droppable only when it makes no call but the allocator, writes no other
+  cell and holds no raw text (`test/y/native/t348_unread_init_side_effect.y`
+  is the regression that rule exists for — the first version of the pass
+  deleted a call to `main` and produced a compiler that exited 0 and did
+  nothing). `test/treeshake/dead.y` is the program with a dead table, dead
+  helpers, a dead branch, an unused union and code after a `return`: 544
+  bytes of it survive its own tree shake, and its import cost is on top.
+  `test/sh/test_treeshake.sh` is run by both compilers and their results
+  must agree.
 - `test_std_suites.sh` [std-suites] — the self-test suites for the std units
   that have one, in `test/std/`: `fx_test.y` (292 checks, the vendored `fx.y`),
   `args_test.y` (61, `std/args.y` and the pacer it paces with),
