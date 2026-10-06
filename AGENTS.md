@@ -206,11 +206,16 @@ very build was just compared (`make test`, `check`, `rebless` do);
   with each suite and an RSA and an ECDSA certificate (skipped without
   openssl).
 - `test_math.sh` [math] — the accuracy gate for `std/math.y`: reads
-  `test/math/ulp_table.txt` (4995 cases — the pinned edges, the overflow and
-  flush points, both sides of 1, the poles, the signed zeros, a seeded
-  1884-case spread (1540 of one argument, 344 of two or three), and a seeded
-  240-case spread over [-1, 1] for `asin` and `acos`, the only two with a
-  bounded domain — each line the function, its
+  `test/math/ulp_table.txt` (**7565 cases**, 7025 of them taking one argument
+  and 540 taking two or three — the pinned edges, the overflow and flush
+  points, both sides of 1, the poles, the signed zeros, and then seeded spreads
+  over each function's own domain: uniform in the DECADES for `log2`, `log10`
+  and `exp2`, where the structure is in the exponent; over [-1, 1] for `asin`
+  and `acos`, the only two with a bounded domain; over |x| ≤ 1/2 for `tanh`'s
+  polynomial branch; and a general [-8, 8] for the rest. A pinned list is not a
+  spread, and the arguments BETWEEN the pins are where the defects live — four
+  of the five found here sat between two values somebody had already written
+  down — each line the function, its
   argument(s) and the reference answer as IEEE-754 bit patterns), evaluates
   every case with both compilers and
   **fails on anything more than 1 ulp from the reference**. The gap is counted

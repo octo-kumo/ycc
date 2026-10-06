@@ -48,12 +48,12 @@ e, bound from an import: ```y|float|```||```y|e|```
 math itself: ```y|math|```
 the import statement's own name: ```y|math|```
 -- 7. completion after a `.` is the object's OWN members
-math. offers 170 items: min,max,abs,clamp,sign,gcd
+math. offers 188 items: min,max,abs,clamp,sign,gcd
   string methods wrongly among them: none
 z. (a record literal) offers: z
 a. (a record variable) offers: a
 p. (a parameter) offers: a,b
-and a str offers 26 items: split,join,trim,strip,trim_start,lstrip, all of them its own
+and a str offers 27 items: split,join,trim,strip,trim_start,lstrip, all of them its own
 -- and the NON-answers, which are the other half of the rule
 hovering inside a string literal: ""
 hovering a line that is not there: true
