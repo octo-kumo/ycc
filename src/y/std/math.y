@@ -666,14 +666,32 @@ def cbrt(x: float) -> float {
             y = (2.0 * y + s / (y * y)) / 3.0;
             i = i + 1;
         };
-        // The last step in its residual form. A Newton step rebuilds the whole
-        // iterate -- three roundings, which do not cancel -- and after four of
-        // them the answer sits a few ulps out and stays there. This one
-        // corrects the value already in hand by the error the residual
-        // measures, and the correction is ~1 ulp, so its own rounding is
-        // negligible: the answer lands within an ulp of the true root.
+        // The last step, and the only one that has to be RIGHT rather than close.
+        // Four plain Newton steps converge to about 4e-19 of relative error --
+        // far below an ulp -- but each of them is three roundings that do not
+        // cancel, so what they converge TO is a value a couple of ulps out, and
+        // they stay there: measured over 2000 arguments, cbrt was exact on half,
+        // one ulp out on 46% and TWO on 3.5%.
+        //
+        // The correction step fixes that, and it has to be done in
+        // double-double. y^3 - s cancels completely -- y^3 is within an ulp of s
+        // by the time we get here -- so the subtraction returns a residual with
+        // an ulp of ABSOLUTE error in it, and dividing that by 3y^2 turns the
+        // absolute error into 0.7 ulp of y. The correction is therefore wrong
+        // by about an ulp of its own, which is the 2.
+        //
+        // So the residual is assembled from the parts: prod_err gives back what
+        // each product lost, and two_sum subtracts without losing anything.
+        // What is left of the residual is then good to about 2^-104 of it, the
+        // correction to well under an ulp, and the final subtraction rounds
+        // once -- which is as close to correctly rounded as a double can be
+        // stated to be.
         let y2 = y * y;
-        y = y - ((y2 * y - s) / (3.0 * y2));
+        let y3 = y2 * y;
+        let y3_err = (prod_err(y, y, y2) * y) + prod_err(y2, y, y3);
+        let r_hi = two_sum(y3, 0.0 - s);
+        let r_lo = (y3 - r_hi) - s;
+        y = y - ((r_hi + (r_lo + y3_err)) / (3.0 * y2));
         let out = ldexp(y, q);
         if (neg) { 0.0 - out } else { out }
     }
@@ -1043,6 +1061,43 @@ let inv_sqrt2: float = 0.70710678118654752440;
 // it, where the two-part split is for the *whole* multiples of it
 let ln2: float = 0.6931471805599453094172321214581765680755001343602553;
 
+// Where sin, cos and tan stop having an answer at all: the quadrant must fit a
+// long, and past 9.9999999999995904e18 it does not, so the reduction cannot be
+// performed. That number is not 2^63*(pi/2) = 1.4488038916154245e19 as one would
+// guess, because the reduction computes floor(x*2/pi + 0.5) and the +0.5
+// carries the quotient over the edge a third of the way sooner. Hence a
+// function rather than a constant, below: it asks on the expression itself, so
+// it cannot be off by however much the arithmetic turns out to be.
+//
+// It is NOT the boundary of accuracy, and the difference is worth being exact
+// about, because an earlier version of this note claimed 2^53*(pi/2) = 1.41e16
+// and that was wrong by a factor of a thousand. Measured over 3000 arguments
+// per decade, the gap to libm grows with the argument and there is no sharp
+// edge: at |x| <= 1e8 sin and cos are within 1 ulp of every one of 3000, at
+// 1e10 three are not, at 1e12 four are, at 1e14 eleven are, at 1e13 a cos is 11
+// ulps out. The reason there is no edge is that the quotient round(x*2/pi) is
+// one rounded product, and whether that rounding carries it across the
+// half-integer boundary depends on where x*2/pi happens to fall for that
+// particular x -- a property of the argument, not a bound on it. sin(1e15) is
+// exact; sin(1e18) is -3.7e18 where the truth is -0.993.
+//
+// So the honest description is: within 1 ulp for the arguments small enough
+// that the quotient is exact, degrading gradually above that, and NaN past this
+// constant. Closing the gap needs libm's multi-precision reduction (a
+// three-word quotient), which is a piece of work in its own right and not a
+// patch. t320 measures the degradation and pins the NaN region.
+// And the test itself, on the very expression to_int will be handed, so the two
+// cannot be off by one double relative to each other. A constant boundary was
+// tried first and was wrong: at 1.4488038916154243e19 -- one ulp BELOW the
+// constant, and the largest argument whose quadrant does fit -- the product
+// x*two_over_pi rounds UP to exactly 2^63, the +0.5 carries it past, and to_int
+// traps. Asking the question the same way to_int asks it is the only version
+// that cannot drift.
+def pio2_fits(x: float) -> bool {
+    let q = x * two_over_pi + 0.5;
+    q < 9223372036854775807.0 && q > 0.0 - 9223372036854775807.0
+};
+
 // pi/4 and pi/2: below pi/4 an argument needs no reduction at all, and atan
 // of an infinity is pi/2.
 let pi_over_4: float = 0.78539816339744830961;
@@ -1272,7 +1327,10 @@ def sin_cos_k(x: float) -> [float] {
 // t320_sin_reduction_limit.y pins the present behaviour so that raising the
 // limit is a visible diff.
 def sin(x: float) -> float {
-    sin_asm(x)
+    // Past pio2_max there is no reduction left to do; see the note on the
+    // constant. sin and cos go through the assembly kernels, so without this
+    // they answered inf out there -- a number that reads as an answer.
+    if (!pio2_fits(x)) { nan } else { sin_asm(x) }
 };
 
 // The Y sin, as `sin_asm` computes it: the oracle for the kernel. Not exported.
@@ -1292,7 +1350,7 @@ def sin_y(x: float) -> float {
 
 // cos(x), same reduction and same limit as sin.
 def cos(x: float) -> float {
-    cos_asm(x)
+    if (!pio2_fits(x)) { nan } else { cos_asm(x) }
 };
 
 // The Y cos, as `cos_asm` computes it. Not exported.
@@ -1314,6 +1372,12 @@ def cos_y(x: float) -> float {
 // pole, and cos(x) == 0 is a pole).
 def tan(x: float) -> float {
     if (x != x || is_inf(x)) {
+        nan
+    } else if (!pio2_fits(x)) {
+        // NaN, for the reason on pio2_max. It is worth saying what this cost
+        // before it was here: to_int does not return a wrong quadrant past its
+        // own limit, it TRAPS, and a trap ends the program -- so tan(1e30) used
+        // to kill whatever asked.
         nan
     } else if (x >= -pi_over_4 && x <= pi_over_4) {
         let sc = sin_cos_k(x);
@@ -1505,19 +1569,53 @@ def expm1(x: float) -> float {
         let n: long = to_int(floor(x * log2e + 0.5));
         let nf: float = n;
         let r = (x - nf * ln2_hi) - nf * ln2_lo;
-        let k: long = n;
-        let f2 = 1.0;
-        if (n > 1023) { k = n - 1; f2 = 2.0; };
-        // 2^k*e^r - 1, which is not the subtraction it looks like: the -1 is
-        // split into 2^k*(e^r - 1) and (2^k - 1), and the second of those is
-        // EXACT (2^k - 1 needs at most 53 bits). So nothing is ever subtracted
+        // The kernel's own shape: r*(1 + r*P(r)) is e^r - 1, NOT e^r. That is
+        // deliberate and it is why exp's form is 1 + r*(1 + r*P(r)): this value
+        // is the whole point of expm1, the part that is small when r is, and
+        // hoisting it here makes the three branches below three ways of
+        // assembling the same answer rather than three separate expressions
+        // that can each be wrong in their own way. (The first version of the
+        // n > 1023 branch read 1 + r*P(r) as e^r and was out by a factor of
+        // 1/r.)
+        let kern = r * (1.0 + r * poly_exp(r));
+        // 2^n*e^r - 1, which is not the subtraction it looks like: the -1 is
+        // split into 2^n*(e^r - 1) and (2^n - 1), and the second of those is
+        // EXACT (2^n - 1 needs at most 53 bits). So nothing is ever subtracted
         // from something nearly equal to it -- which is the whole difficulty
         // with e^x - 1: it is 0.0 for x = 1e-300, and at x = -9 it is
         // 1.23e-4 - 1 with the answer's last bits gone (18 ulps).
-        let small = f2 * (r * (1.0 + r * poly_exp(r)));
-        // for k = 0 the second term is +0.0, and -0.0 + 0.0 is +0.0 -- so the
-        // signed zero of expm1(-0.0) has to be the first term alone
-        if (k == 0) { small } else { ldexp(small, k) + (ldexp(f2, k) - 1.0) }
+        if (n > 1023) {
+            // The one branch where 2^n DOES NOT EXIST. n = 1024 over
+            // x in [709.436, 709.783] (the only such x under exp_hi), and
+            // 2^1024 is one ulp past DBL_MAX, so it cannot be formed -- and
+            // with it goes the whole 2^n - 1 term, which would be inf and take
+            // the answer with it. That is not a rounding question: it is where
+            // expm1(709.5) came back as inf instead of 1.3549863193146328e+308.
+            //
+            // The -1 does not need carrying here, and that is why the branch is
+            // not merely a workaround. x >= 709.436 here, so e^x >= 1.06e308,
+            // and an ulp of THAT is 2e292: the 1 is far below the answer's last
+            // bit and e^x - 1 IS e^x as a double. So the answer is one scaled
+            // kernel with the factor of two inside the scale (k = n-1, where
+            // 2^k is representable) -- the move exp_half makes, for the same
+            // reason.
+            ldexp(2.0 * (1.0 + kern), n - 1)
+        } else if (n == 0) {
+            // The second term is +0.0, and -0.0 + 0.0 is +0.0, so the signed
+            // zero of expm1(-0.0) has to be the first term alone.
+            kern
+        } else {
+            // ONE ldexp, not two: p is 2^n, and the small term is p times a
+            // kernel value under 0.72, so the product is exact whenever it is
+            // normal. It lands in the subnormals only where the term is already
+            // a correction far under the answer's last bit (at n = -1075, p
+            // itself is subnormal and the product rounds -- to an absolute error
+            // of 2^-1075, against an answer of order 1). So the rounding ldexp
+            // exists to avoid is bounded there by the smallest number there is,
+            // and the second ldexp was 200 instructions of nothing.
+            let p = ldexp(1.0, n);
+            (kern * p) + (p - 1.0)
+        }
     }
 };
 

@@ -304,20 +304,37 @@ eight interior arguments --- which is not a gate on a 24-term polynomial, and
 which was how \ic{acos} went on cancelling eight digits near \ic{x = 1} for a
 forty-ulp answer that nothing in the suite could see.
 
-\emph{One limit, stated rather than discovered.} \ic{sin}, \ic{cos} and \ic{tan}
+\emph{One limit, and it is not a number.} \ic{sin}, \ic{cos} and \ic{tan}
 reduce their argument in one step: the quadrant is \ic{round(x*2/$\pi$)} as a
 single \ic{double}, and the subtraction of \ic{n*($\pi$/2)} that follows is
 compensated in double-double and is exact. The quotient is not. That product
-wants about \num{106} bits and rounds, which is harmless while the rounding
-cannot carry it across the half-integer boundary and is not harmless at all
-afterwards: at \ic{x = 1e15} the answer is exact, at \ic{1e16} it is
-\num{33} ulps out, at \ic{1e18} the quadrant itself is wrong, and from
-\ic{1e100} the quotient has left the range of a \ic{long} and the answer is
-\ic{inf}. The promise is therefore \ic{$|x| \le 2^{53}\cdot(\pi/2)$}, about
-\num{1.41e16}, and past it the answers are not to be relied on ---
-\ic{test/y/native/t320\_sin\_reduction\_limit.y} pins what they are, so that
-raising the limit is a visible diff. Closing it needs the multi-precision
-reduction \ic{libm} uses, a three-word quotient.
+wants about \num{106} bits and rounds, and whether the rounding carries it
+across the half-integer boundary is a property of the particular \ic{x} and not
+a bound on it --- \ic{sin(1e15)} is exact and \ic{sin(1e16)} is \num{33} ulps out.
+
+So there is no sharp edge, and saying otherwise would be worse than admitting
+it. Measured against this platform's libm over \num{3000} arguments per decade:
+\ic{sin} and \ic{cos} are within one ulp of every one of \num{3000} arguments up
+to \ic{1e8}; at \ic{1e10} three are not, at \ic{1e12} four are, at \ic{1e14}
+eleven are and the worst is eight ulps, and at \ic{1e18} the quadrant is wrong
+by one and the answer is unrelated (\ic{-3.7e18}, where the truth is
+\num{-0.993}). One earlier draft of this section claimed the limit was
+\ic{$2^{53}\cdot(\pi/2)$}, about \num{1.41e16}; it was wrong by a factor of a
+thousand, and a limit asserted without a measurement behind it is the thing this
+section exists to avoid.
+
+What \emph{is} a boundary is where the reduction cannot be performed at all: the
+quadrant stops fitting a \ic{long} at \num{9.9999999999995904e18}, and all three
+answer \ic{nan} from there --- \ic{tan} used to \emph{kill the program} instead,
+because the cast it uses traps rather than returning a wrong number, and a trap
+ends the program. The guard asks on the expression itself rather than against a
+constant, so it cannot be out by a double: the constant one would guess is
+\ic{$2^{63}\cdot(\pi/2)$ = \num{1.4488038916154245e19}}, but the reduction
+computes \ic{floor(x*2/$\pi$ + 0.5)} and the \ic{+0.5} moves the edge a third of
+the way sooner. Closing the accuracy gap needs the multi-precision reduction
+\ic{libm} uses, a three-word quotient;
+\ic{test/y/native/t320\_sin\_reduction\_limit.y} records all of it, so that
+changing any of this is a diff rather than a silence.
 
 A third gap of the same shape was still open after that: nine functions this
 module exports had \emph{no cases at all} --- \ic{ldexp}, \ic{fmin}, \ic{fmax},

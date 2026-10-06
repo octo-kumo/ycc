@@ -39,6 +39,22 @@ def cbrt_ref(x):
     return -v if neg else v
 
 
+# The reduction's limit, in one place, for the three references that share it.
+# 2^53 * (pi/2) -- the argument past which a quadrant stops being computable in a
+# double. std/math.y's own pio2_max is the same number, and t320 pins both
+# sides of it.
+# The reduction's reach, tested the way the module tests it: on the expression
+# to_int is handed, because a constant boundary is off by one double (at the
+# largest argument whose quadrant fits, the product rounds UP to 2^63).
+PIO2_TWO_OVER_PI = 6.36619772367581382433e-01
+PIO2_LONGS_MAX = 9223372036854775807.0
+
+
+def pio2_limit(x):
+    q = x * PIO2_TWO_OVER_PI + 0.5
+    return q < PIO2_LONGS_MAX and q > 0.0 - PIO2_LONGS_MAX
+
+
 def zeros(fn):
     """C's floor/ceil/trunc/round/fract keep the sign of a zero; Python's return
     an int, which loses it. Same answer, one bit less information."""
@@ -120,10 +136,17 @@ ONE = {
             6.283185307179586, -6.283185307179586, 10.0, -10.0, 100.0, -100.0,
             1000.0, 1e6, -1e6, 1e12, 1e15, 0.001, 12345.6789,
             float("inf"), float("nan")],
+    # The last six are the region where the quadrant no longer fits a long, and
+    # they are here because tan(1e30) used to KILL THE PROGRAM: to_int traps
+    # rather than returning a wrong number, and a trap ends the program, which is
+    # a worse answer than any number could be. The module answers NaN there and
+    # the reference below says so -- libm would answer -0.009331875232662407 and
+    # be two thousand times further from the truth.
     "tan": [0.0, -0.0, 0.5, -0.5, 1.0, -1.0, 0.7853981633974483,
             1.5707963267948966, -1.5707963267948966, 3.141592653589793,
             6.283185307179586, 10.0, -10.0, 100.0, -100.0, 0.001,
             12345.6789, 0.5 * 3.141592653589793,
+            1e20, -1e20, 1e30, -1e30, 1e300, -1e300,
             float("inf"), float("nan")],
     "atan": [0.0, -0.0, 0.1, -0.1, 0.19891236737965801,
              -0.19891236737965801, 0.5, -0.5, 1.0, -1.0, 2.0, -2.0, 2.5, -2.5,
@@ -131,9 +154,15 @@ ONE = {
              1.5, -1.5, float("inf"), float("-inf"), float("nan")],
     # expm1 and log1p: the ones a plain e^x - 1 or log(1+x) gets wrong at the
     # bottom of their range
+    # The strip where the reduction's n becomes 1024, which is where 2^n stops
+    # existing (2^1024 is one ulp past DBL_MAX) and where expm1 answered inf for
+    # arguments whose answer is 1.35e308. The table carried 709.0 and 709.78
+    # and nothing between, and the gap between two pinned points is not a
+    # region: 709.4 is correct and 709.5 is not.
     "expm1": [0.0, -0.0, 1.0, -1.0, 0.5, -0.5, 1e-17, -1e-17, 1e-10, -1e-10,
               1e-8, 1e-5, 0.1, -0.1, 1.0e-300, -1.0e-300, 10.0, -10.0, 700.0,
               -700.0, 709.0, -745.0, -750.0, 0.6931471805599453, 36.0, -36.0,
+              709.4, 709.44, 709.5, 709.6, 709.7, 709.75, 709.78,
               float("inf"), float("-inf"), float("nan")],
     "log1p": [0.0, -0.0, 1.0, -1.0, 0.5, -0.5, 1e-17, -1e-17, 1e-10, -1e-10,
               1e-8, 0.1, -0.1, 0.9, -0.9, 1e300, -1e-9, 1e-300, 1234.5678,
@@ -207,9 +236,19 @@ ONE = {
                -1e18, 9223372036854774784.0, -9223372036854775808.0,
                4294967296.0, -4294967296.0],
     # cbrt: Newton on cubes, and the subnormal corner
+    # A SEEDED SPREAD, not just the pinned points. The twenty-odd values above
+    # are the ones somebody thought of, and cbrt was 2 ulps out on 3.5% of
+    # ordinary arguments -- none of which any of them happened to be. The spread
+    # is what found that, and it is also what holds the fix: with the residual
+    # carried in double-double, cbrt is now the correctly rounded answer on every
+    # argument tried, where libm is 3 ulps out on 1385 of 3030. (libm is NOT this
+    # table's reference for cbrt -- cbrt_ref computes it in 60 digits and rounds
+    # once -- and that is why the improvement could be gated at all: a libm
+    # reference would have failed the correctly rounded answers.)
     "cbrt": [0.0, -0.0, 1.0, -1.0, 8.0, -8.0, 27.0, 2.0, 3.0, 10.0, 0.001,
              -0.001, 1e300, -1e300, 1e-300, -1e-300, 5e-324, -5e-324,
-             float("inf"), float("-inf"), float("nan"), 1e100, 2.0 ** 60],
+             float("inf"), float("-inf"), float("nan"), 1e100, 2.0 ** 60,
+             1e-320, 2.2250738585072014e-308, -1.7976931348623157e308],
 }
 
 TWO = {
@@ -328,9 +367,18 @@ REF1 = {
                       (float("-inf") if x == 0 else float("nan"))),
     "log2": lambda x: math.log2(x) if x > 0 else (float("-inf") if x == 0 else float("nan")),
     "log10": lambda x: math.log10(x) if x > 0 else (float("-inf") if x == 0 else float("nan")),
-    "sin": lambda x: (float("nan") if math.isinf(x) else math.sin(x)),
-    "cos": lambda x: (float("nan") if math.isinf(x) else math.cos(x)),
-    "tan": lambda x: (float("nan") if math.isinf(x) else math.tan(x)),
+    # sin, cos and tan share one reference for the reduction's limit, so the
+    # three cannot drift apart in what they claim. Past 2^53*(pi/2) the quadrant
+    # wants more bits than a double can carry and the answers are not close --
+    # sin(1e18) is -3.7e18 where the truth is -0.993 -- so the module answers NaN
+    # and so does the reference. libm keeps going with a multi-precision
+    # quotient, which is the honest answer and a different piece of work.
+    "sin": lambda x: (float("nan") if math.isinf(x) else
+                      (float("nan") if not pio2_limit(x) else math.sin(x))),
+    "cos": lambda x: (float("nan") if math.isinf(x) else
+                      (float("nan") if not pio2_limit(x) else math.cos(x))),
+    "tan": lambda x: (float("nan") if math.isinf(x) else
+                      (float("nan") if not pio2_limit(x) else math.tan(x))),
     "atan": lambda x: (math.atan(x) if not math.isnan(x) else float("nan")),
     "expm1": lambda x: (float("nan") if math.isnan(x) else
                         (math.expm1(x) if -745.2 < x < 709.79 else
@@ -506,9 +554,29 @@ def pair_spread(seed, n=80):
 EXTRA = {name: spread(1000 + i, 60) for i, name in enumerate(
     ["exp", "expm1", "log", "log1p", "sinh", "cosh", "tanh", "asin", "acos",
      "atan", "sin", "cos", "tan"])}
-# cbrt gets its own spread in [1, 8] and near the subnormals: the case the
-# native fixture found (7.5) was 1e-12 out and the pinned list missed it
-EXTRA["cbrt"] = spread(4242, 80, 1.0, 8.0)
+# cbrt gets its own spread, and it needs far more than the 80 it had. Those 80
+# were added because the native fixture found 7.5 a trillion times out and the
+# pinned list had missed it -- and 80 was still not enough, because cbrt was 2
+# ulps out on 3.5% of ORDINARY arguments and neither the 80 nor the twenty-odd
+# pinned values was one of them.
+#
+# That is this table's lesson stated a third time: a pinned list is not a spread,
+# and the arguments BETWEEN the pins are where the defects live. expm1 answered
+# inf across the strip between 709.4 and 709.78; sinh answered inf from 709.78 to
+# 710.47; cbrt was 2 ulps out at 96.2371129. All three were found by SWEEPING,
+# and all three sat between values somebody had already thought to write down.
+#
+# So cbrt gets 1600: [1, 8] where its kernel runs, the whole negative half, and
+# [0.001, 1) where the seed and the exponent split differ.
+#
+# libm is NOT this table's reference for cbrt. cbrt_ref computes the cube root in
+# 60 digits and rounds once (see above), because this platform's libm cbrt is not
+# correctly rounded -- up to 3 ulps out on 1385 of 3030 arguments, where this
+# module's is correctly rounded on all of them. A libm reference would have
+# failed the better answers, which is the second time in this file that the
+# reference line rather than the code has been the thing to fix.
+EXTRA["cbrt"] = (spread(4242, 80, 1.0, 8.0) + spread(4243, 720, 1.0, 8.0)
+                 + spread(4244, 800, -100.0, -0.001))
 
 # asin and acos get a spread over the domain they HAVE, on top of the general
 # one (which is what supplies their out-of-domain NaN cases and must stay). A

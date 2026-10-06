@@ -206,7 +206,7 @@ very build was just compared (`make test`, `check`, `rebless` do);
   with each suite and an RSA and an ECDSA certificate (skipped without
   openssl).
 - `test_math.sh` [math] — the accuracy gate for `std/math.y`: reads
-  `test/math/ulp_table.txt` (2713 cases — the pinned edges, the overflow and
+  `test/math/ulp_table.txt` (4249 cases — the pinned edges, the overflow and
   flush points, both sides of 1, the poles, the signed zeros, a seeded
   1500-case spread, and a seeded 240-case spread over [-1, 1] for `asin` and
   `acos`, the only two with a bounded domain — each line the function, its
