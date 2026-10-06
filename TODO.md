@@ -334,6 +334,31 @@ silently broke the compiler and the cause was not found:
     deletions and a 400-table program both assemble correctly, so it is
     something about the *combination*.
 
+**Third look, and what it narrows to.** The listings were compared properly
+this time (both normalized by replacing every digit run with `N`, which is
+what makes a diff of two compiles of one source meaningful): generation 1's
+output for `src/y/ycc.y` differs from the reference's in **exactly** the 660
+`ygiS_`/`ygiE_` mark lines and the 12 deleted instructions -- nothing else,
+not one instruction. So the emitter is right; the *assembler* is what cannot
+take the combination. Marks with no deletion at all (660 labels, full item
+list) assemble fine, and 27 fewer items with no marks assemble fine; both
+together produce a 1.3 MB compiler that exits 0 and writes nothing. That
+points at the relaxation pass in `asm.y` -- the label-position loops keyed on
+`at_item` -- and the instrument that catches it in seconds is `make ynew`'s
+own generation comparison (`cmp _ynew2 _ynew3`), which I should have run
+before any hand-rolled test.
+
+**A design that needs none of this.** Instead of deleting instructions,
+never emit the construction: a top-level `const` aggregate whose elements are
+all literals is laid out as static **writable** data (`.data`, not `.rodata`
+-- a `const` array can still be handed to a function that mutates it, so it
+must stay writable) and its initialization becomes the two instructions
+`mov $<label>, %rax` / `mov %rax, <cell>`. The elements' bytes stay in the
+file but the hundreds of pushes and stores per table go away, for *used*
+tables as well as unused ones, and startup gets faster. That is a pure
+emitter change: no marks, no link-time item surgery, nothing for the
+assembler to trip over.
+
 **Cost.** Medium. The link step already computes each unit's `globals` and
 each kept body's label references (`native.y`, `Unit`); this adds "and the
 global cell labels", then filters `global_decls`/the init text by it. The
