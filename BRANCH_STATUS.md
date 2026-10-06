@@ -285,6 +285,24 @@ branch-disjointness false positive.
   harness has no tty for wine, so a console handle (as opposed to a pipe) is
   unverified, and `test_std_suites.sh`'s `term_test` needs a pty and only runs
   against ELF.
+- **`argv()` ON PE IS A NULL FAULT, and the map for fixing it (round 56,
+  measured).** `t198_argv_only_length` page-faults on a read of address 0 at
+  0x140001328, and `t20_files_argv` fails the same way. `argv()` is
+  materialized by the `_start` prologue's `y_argv_init(argc, argv)`, which on
+  Linux reads the two values the kernel left on the stack -- and a PE gets no
+  such stack. The fixture's own header documents the Linux half of this exact
+  bug class ("`y_argv_init` is emitted only when a scan of the AST sees
+  `argv()`, and that scan had no arm for a field read, so `argv().length` left
+  %r15 untouched and the program died on SIGSEGV"): on PE the register is
+  untouched for a different reason and the symptom is identical.
+  What a PE prologue has to do instead, so the next round does not re-derive
+  it: read the PEB (%gs:0x60), ProcessParameters at +0x20, and the CommandLine
+  UNICODE_STRING at +0x70 (Length at +0x70, Buffer at +0x78); split the
+  command line into `argc` words and widen/narrow them to the UTF-8 bytes
+  `y_argv_init` already expects (ASCII, as everywhere in this layer); build the
+  pointer array the same way the Linux path does, set %r15, and then call
+  `y_argv_init` unchanged. `t20_files_argv` and `t198_argv_only_length` are the
+  two fixtures that check it.
 - **THE META FIXTURES WORK ON PE NOW (round 56) -- 7 of the 41 PE-only
   failures were one structural mistake.** A meta block's generator is
   EXECUTED: `meta.y` forks it and runs it in the compiler's own process, and
