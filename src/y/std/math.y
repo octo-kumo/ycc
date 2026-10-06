@@ -1609,7 +1609,21 @@ def log10(x: float) -> float {
         let l = z * (2.0 + w * poly_log(w));
         let ef: float = e;
         let a = ef * log10_2_hi;
-        let ae = prod_err(ef, log10_2_hi, a);
+        // log10_2_lo was DECLARED AND NEVER ADDED. It carries the constant's own
+        // residual -- log10(2) - log10_2_hi -- and prod_err recovers the error of
+        // the PRODUCT ef*log10_2_hi, which is a different thing: the product's
+        // error is not the constant's. The missing term is worth a constant
+        // -0.042 ulp of the answer for every ef, and a perturbation that small
+        // still flips the rounding whenever the exact value lies that close to a
+        // tie -- which is a couple of percent of arguments.
+        //
+        // I had ruled this out, and the ruling was wrong for the wrong reason: I
+        // wrote that 0.042 ulp "cannot produce a 2-ulp answer", reasoning from the
+        // SIZE of the error rather than from what an error does -- an error of any
+        // size produces a whole-ulp answer if it lands on the wrong side of a tie.
+        // Measured: log10 2 ulps on 379 of 20000 decade-uniform arguments becomes
+        // 288 of 20000, and log2 is unchanged.
+        let ae = prod_err(ef, log10_2_hi, a) + ef * log10_2_lo;
         // ln(m) scaled by log10(e), NOT by log10(2) -- see the two constants
         let bq = l * log10e_hi;
         let be = prod_err(l, log10e_hi, bq);
