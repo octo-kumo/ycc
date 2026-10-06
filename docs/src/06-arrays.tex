@@ -235,12 +235,77 @@ print(hdr[0:2]);         // b'AB'
 helpers for file headers and binary layouts (\ic{u32be}, \ic{get\_i16le},
 \ic{pack}, \ic{unpack}, \ldots).
 
-\subsection{Operators are the interface}
+\subsection{Methods}
+\label{sec:array-methods}
 
-There are no array mutator functions: \ic{+=} and \ic{*=} \emph{are} push
-and prepend, and there is no \ic{push}, \ic{prepend}, \ic{map\_get} or
-\ic{map\_set} to call instead (Section~\ref{sec:builtins}).
-\ic{len(a)} is the only builtin whose argument is an
-array \emph{as such}; \ic{join(xs, sep)} also takes an array but of any
-element type (each element is stringified), and \ic{bytes}/\ic{from\_bytes}
-and \ic{fs.write\_bytes} take a \ic{[byte]}.
+Besides the operators, an array carries methods, called \ic{a.m(args)}.
+The read-only methods take a closure and leave the receiver alone:
+
+\begin{center}
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lll}
+\toprule
+call & returns & meaning \\
+\midrule
+\ic{a.foreach(f)} & \ic{void} & call \ic{f(elem[, idx])} for each element \\
+\ic{a.map(f)}     & \ic{[R]} & a new array of \ic{f(elem[, idx])} \\
+\ic{a.filter(f)}  & \ic{[T]} & a new array of the elements \ic{f} accepts \\
+\ic{a.all(f)}     & \ic{bool} & every element accepted (true for an empty array) \\
+\ic{a.some(f)}    & \ic{bool} & some element accepted (false for an empty array) \\
+\ic{a.find(f)}    & \ic{T?} & the first element \ic{f} accepts, or \ic{none} \\
+\ic{a.index(x)}   & \ic{long} & the first index whose element equals \ic{x}, else $-1$ \\
+\ic{a.reduce(f, init)} & \ic{R} & fold \ic{f(acc, v)} over the array from \ic{init} \\
+\ic{a.flat()}     & \ic{[T]} & one level: the elements of each inner array \\
+\ic{a.sorted(f)}  & \ic{[T]} & a new array sorted by \ic{f} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent and the mutating ones change the receiver in place, which every
+alias sees:
+
+\begin{center}
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lll}
+\toprule
+call & returns & meaning \\
+\midrule
+\ic{a.pop()}          & \ic{T} & remove and return the last element \\
+\ic{a.shift()}        & \ic{T} & remove and return the first element \\
+\ic{a.remove(i)}      & \ic{T} & remove and return element \ic{i} \\
+\ic{a.remove(i, n)}   & \ic{[T]} & remove \ic{n} elements at \ic{i} and return them \\
+\ic{a.push(x)}        & \ic{long} & append \ic{x}; the new length \\
+\ic{a.unshift(x)}     & \ic{long} & prepend \ic{x}; the new length \\
+\ic{a.insert(i, x)}   & \ic{void} & insert \ic{x} at index \ic{i} \\
+\ic{a.sort(f)}        & \ic{[T]} & sort in place by \ic{f} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent A sort comparator or a predicate is an ordinary closure with the
+element (and, where it wants it, the index) as its parameters:
+\ic{f(a, b) < 0} puts \ic{a} first. The index is optional, so \ic{a.map(e
+=> e + 1)} and \ic{a.map((e, i) => e + i)} are both the same kind of
+literal, and a missing parameter type is filled from the receiver --- the
+element for the first parameter, \ic{long} for the second
+(Section~\ref{sec:closures}). An empty array answers each method's
+identity: \ic{all} is true, \ic{some} is false, \ic{find} is \ic{none},
+\ic{index} is $-1$, and \ic{map}/\ic{filter}/\ic{flat} are empty.
+\ic{pop} and \ic{shift} on an empty array are a runtime error
+(``index out of bounds''); \ic{remove} and \ic{insert} clamp an
+out-of-range index into \ic{[0, len]}.
+
+\paragraph{Constants and fixed arrays.} Calling a method that mutates a
+\ic{const} array is the usual \ic{cannot modify 'a': it is a constant}.
+A length-changing method (\ic{pop}, \ic{shift}, \ic{remove}, \ic{push},
+\ic{unshift}, \ic{insert}) on a fixed \ic{[T; N]} is rejected like
+\ic{+=} is, because the length is part of its type
+(``cannot resize fixed array \ic{[long; 3]} with \ic{'.pop'}''); the
+read-only methods and \ic{sort}, which keeps the length, are fine.
+
+\noindent \ic{len(a)} is still the builtin whose argument is an array
+\emph{as such}; \ic{join(xs, sep)} also takes an array but of any element
+type (each element is stringified), and \ic{bytes}/\ic{from\_bytes} and
+\ic{fs.write\_bytes} take a \ic{[byte]}. There is no free \ic{push} or
+\ic{prepend} function: \ic{+=} and \ic{*=} remain the operator spelling
+of the two ends (Section~\ref{sec:builtins}).

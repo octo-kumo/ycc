@@ -50,6 +50,142 @@ def loop_resolve(label: str) -> str {
     tostring(found)
 };
 
+// ── parameter type inference (from the parser) ────────────────────────────
+// A parameter with no annotation and no literal default can be given a type
+// by a literal it is combined with in the body (`i + 10`) or by a literal
+// actual at a call site (`f(1)`). This is parser-local: no AST walk can see a
+// value in a layout the emitter did not choose for it, and the type tables
+// are resolved before rename.y reads the function.
+let pbody_names: [str] = [];
+let pbody_typs: [Type] = [];
+let pcall_names: [str] = [];
+let pcall_idxs: [long] = [];
+let pcall_typs: [Type] = [];
+let pfunc_names: [str] = [];
+let pfunc_nodes: [Func] = [];
+
+def p_infer_reset() -> long {
+    pbody_names = [];
+    pbody_typs = [];
+    pcall_names = [];
+    pcall_idxs = [];
+    pcall_typs = [];
+    pfunc_names = [];
+    pfunc_nodes = [];
+    0
+};
+
+def p_body_note(name: str, t: Type) -> long {
+    if (t.k == K.tnone) { return 0; };
+    let i = 0;
+    while (i < len(pbody_names)) {
+        if (pbody_names[i] == name) { pbody_typs[i] = t; return 0; };
+        i = i + 1;
+    };
+    pbody_names += name;
+    pbody_typs += t;
+    0
+};
+
+def p_body_get(name: str) -> Type {
+    let i = 0;
+    while (i < len(pbody_names)) {
+        if (pbody_names[i] == name) { return pbody_typs[i]; };
+        i = i + 1;
+    };
+    { k: K.tnone }
+};
+
+def p_body_apply(names: [str], ptypes: [Type]) -> long {
+    let i = 0;
+    while (i < len(names) && i < len(ptypes)) {
+        if (ptypes[i].k == K.tnone) {
+            let cl = p_body_get(names[i]);
+            if (cl.k != K.tnone) { ptypes[i] = cl; };
+        };
+        i = i + 1;
+    };
+    0
+};
+
+// The type a binary operator implies for a missing parameter on one side
+// when the other side is a primitive literal.
+def p_bin_hint(op: str, other: Node) -> Type {
+    let out: Type = { k: K.tnone };
+    let ht = lit_type(other);
+    if (ht.k != K.tnone) {
+        if (op == "+" && ht.k == K.tstr) { out = { k: K.tstr }; }
+        else if (op == "+" || op == "-" || op == "*" || op == "/" || op == "%") {
+            if (ht.k == K.tlong || ht.k == K.tbyte || ht.k == K.tfloat || ht.k == K.tbigint) {
+                if (ht.k == K.tfloat) { out = { k: K.tfloat }; }
+                else { out = { k: K.tlong }; };
+            };
+        }
+        else if (op == "<" || op == ">" || op == "<=" || op == ">=") { out = ht; }
+        else if (op == "==" || op == "!=") { out = ht; }
+        else if (op == "&" || op == "|" || op == "^" || op == "<<" || op == ">>" || op == ">>>") { out = { k: K.tlong }; }
+        else if ((op == "&&" || op == "||") && ht.k == K.tbool) { out = { k: K.tbool }; };
+    };
+    out
+};
+def p_str_in(xs: [str], s: str) -> bool {
+    let found = false;
+    let i = 0;
+    while (i < len(xs)) {
+        if (xs[i] == s) { found = true; };
+        i = i + 1;
+    };
+    found
+};
+
+def p_body_bin_clue(left: Node, op: str, right: Node) -> long {
+    if (len(pbody_names) == 0) { return 0; };
+    if (left.k == K.id) {
+        let id: Leaf = left;
+        if (p_str_in(pbody_names, id.v)) { p_body_note(id.v, p_bin_hint(op, right)); };
+    };
+    if (right.k == K.id) {
+        let id2: Leaf = right;
+        if (p_str_in(pbody_names, id2.v)) { p_body_note(id2.v, p_bin_hint(op, left)); };
+    };
+    0
+};
+
+def p_call_note(callee: Node, args: [Node]) -> long {
+    if (callee.k != K.id) { return 0; };
+    let id: Leaf = callee;
+    let i = 0;
+    while (i < len(args)) {
+        let lt = lit_type(args[i]);
+        if (lt.k != K.tnone) {
+            pcall_names += id.v;
+            pcall_idxs += i;
+            pcall_typs += lt;
+        };
+        i = i + 1;
+    };
+    0
+};
+
+def p_infer_finish() -> long {
+    let c = 0;
+    while (c < len(pcall_names)) {
+        let fi = 0;
+        while (fi < len(pfunc_names)) {
+            if (pfunc_names[fi] == pcall_names[c]) {
+                let f = pfunc_nodes[fi];
+                let ix = pcall_idxs[c];
+                if (ix < len(f.ptypes) && f.ptypes[ix].k == K.tnone) {
+                    f.ptypes[ix] = pcall_typs[c];
+                };
+            };
+            fi = fi + 1;
+        };
+        c = c + 1;
+    };
+    0
+};
+
 // AST nodes have one type per shape; kinds with a shared shape use one
 // member and are distinguished by `k`.
 type Leaf = { k: long, v: str, line: long, col: long };
@@ -506,6 +642,100 @@ def parse_json_primary(toks: [Tok], p: long, top: bool) -> Parsed {
     }
 };
 
+// ── arrow closures ───────────────────────────────────────────────────────
+// `v => expr`, `(v) => expr`, `(v1, v2: T) => expr`, `() => expr`. All
+// desugar to the same Func node a `def` literal builds, so the checker and
+// emitter need no new closure representation. A parameter with no written
+// type stays tnone; an array method fills it from the receiver element type
+// before checking the body.
+
+// Is the parenthesized group at p a parameter list followed by `=>`? The
+// scan accepts names, optional `: T` (balanced brackets/parens, no commas
+// at the top level), commas and the final `)`. It is deliberately
+// conservative: anything else is an ordinary parenthesized expression.
+def arrow_params_at(toks: [Tok], p: long) -> bool {
+    if (!is_punct(toks, p, "(")) { false }
+    else {
+        let pos = p + 1;
+        let ok = true;
+        if (is_punct(toks, pos, ")")) {
+            pos = pos + 1;
+        } else {
+            let go = true;
+            while (go) {
+                if (tt(toks, pos) != "id") { ok = false; go = false; }
+                else {
+                    pos = pos + 1;
+                    if (is_punct(toks, pos, ":")) {
+                        pos = pos + 1;
+                        let depth = 0;
+                        let tdone = false;
+                        while (!tdone) {
+                            let tk = tt(toks, pos);
+                            if (tk == "eof") { ok = false; tdone = true; }
+                            else if (tk == "punct" && (tv(toks, pos) == "(" || tv(toks, pos) == "[" || tv(toks, pos) == "{")) { depth = depth + 1; pos = pos + 1; }
+                            else if (tk == "punct" && (tv(toks, pos) == ")" || tv(toks, pos) == "]" || tv(toks, pos) == "}")) {
+                                if (depth == 0) { tdone = true; } else { depth = depth - 1; pos = pos + 1; };
+                            }
+                            else if (tk == "punct" && tv(toks, pos) == "," && depth == 0) { tdone = true; }
+                            else { pos = pos + 1; };
+                        };
+                    };
+                };
+                if (ok) {
+                    if (is_punct(toks, pos, ",")) { pos = pos + 1; }
+                    else if (is_punct(toks, pos, ")")) { pos = pos + 1; go = false; }
+                    else { ok = false; go = false; };
+                };
+            };
+        };
+        if (ok) { is_op(toks, pos, "=>") } else { false }
+    }
+};
+
+// Parse `(params) => body` or `v => body`; p is at `(` or the lone name.
+def parse_arrow_func(toks: [Tok], p: long) -> Parsed {
+    let ln = tline(toks, p);
+    let cl = tcol(toks, p);
+    let names: [str] = [];
+    let ptypes: [Type] = [];
+    let ppos: [long] = [];
+    let pos = p;
+    if (is_punct(toks, p, "(")) {
+        pos = p + 1;
+        if (!is_punct(toks, pos, ")")) {
+            let go = true;
+            while (go) {
+                if (tt(toks, pos) != "id") { go = false; }
+                else {
+                    names += tv(toks, pos);
+                    ppos += tline(toks, pos) * 65536 + tcol(toks, pos);
+                    pos = pos + 1;
+                    let ty: Type = { k: K.tnone };
+                    if (is_punct(toks, pos, ":")) {
+                        let tr = parse_type_full(toks, pos + 1);
+                        ty = tr.node;
+                        pos = tr.pos;
+                    };
+                    ptypes += ty;
+                    if (is_punct(toks, pos, ",")) { pos = pos + 1; }
+                    else { go = false; };
+                };
+            };
+        };
+        if (is_punct(toks, pos, ")")) { pos = pos + 1; };
+    } else {
+        names += tv(toks, p);
+        ptypes += { k: K.tnone };
+        ppos += tline(toks, p) * 65536 + tcol(toks, p);
+        pos = p + 1;
+    };
+    let body = parse_expr(toks, pos + 1);
+    let f: Func = { k: K.func, params: names, ptypes: ptypes, ret: { k: K.tnone }, body: block1(body.node, ln, cl), defs: [], label: "", line: ln, col: cl, ppos: ppos };
+    let node: Node = f;
+    res(node, body.pos)
+};
+
 // ── primary expressions ──────────────────────────────────────────────────
 
 // The hidden name of a tuple element: position i is field "$i". A record
@@ -572,6 +802,8 @@ def parse_primary(toks: [Tok], p: long) -> Parsed {
             let args: [Node] = [];
             args += e.node;
             res({ k: K.call, callee: { k: K.id, v: v, line: ln, col: cl }, args: args, line: ln, col: cl }, e.pos)
+        } else if (is_op(toks, p + 1, "=>")) {
+            parse_arrow_func(toks, p)
         } else {
             res({ k: K.id, v: v, line: ln, col: cl }, p + 1)
         }
@@ -580,7 +812,9 @@ def parse_primary(toks: [Tok], p: long) -> Parsed {
     } else if (is_kw(toks, p, "false")) {
         res({ k: K.bool, v: "false", line: ln, col: cl }, p + 1)
     } else if (is_punct(toks, p, "(")) {
-        if (is_punct(toks, p + 1, ")")) {
+        if (arrow_params_at(toks, p)) {
+            parse_arrow_func(toks, p)
+        } else if (is_punct(toks, p + 1, ")")) {
             // `()` is the void value (nothing computed)
             res({ k: K.void, line: ln, col: cl }, p + 2)
         } else {
@@ -687,6 +921,7 @@ def parse_postfix(toks: [Tok], p: long) -> Parsed {
     while (go) {
         if (is_punct(toks, pos, "(")) {
             let a = parse_args(toks, pos + 1);
+            p_call_note(node, a.node);
             node = mk_call(node, a.node, tline(toks, pos), tcol(toks, pos));
             pos = skip_close(toks, a.pos, ")");
         } else if (is_punct(toks, pos, "[")) {
@@ -894,6 +1129,7 @@ def parse_binary(toks: [Tok], p: long, min_prec: long) -> Parsed {
                 next_min = prec;
             }
             let right_r = parse_binary(toks, pos + 1, next_min);
+            p_body_bin_clue(left, op, right_r.node);
             left = { k: K.bin, op: op, l: left, r: right_r.node, line: tline(toks, pos), col: tcol(toks, pos) };
             pos = right_r.pos;
         };
@@ -1759,7 +1995,22 @@ def parse_func(toks: [Tok], p: long, isnat: bool) -> Parsed {
         let saved_loops = ploop_names;
         let no_loops: [str] = [];
         ploop_names = no_loops;
+        let saved_pbody_names = pbody_names;
+        let saved_pbody_typs = pbody_typs;
+        pbody_names = [];
+        pbody_typs = [];
+        let pi = 0;
+        while (pi < len(names) && pi < len(ptypes)) {
+            if (ptypes[pi].k == K.tnone) {
+                pbody_names += names[pi];
+                pbody_typs += { k: K.tnone };
+            };
+            pi = pi + 1;
+        };
         let body = parse_block(toks, pos);
+        p_body_apply(names, ptypes);
+        pbody_names = saved_pbody_names;
+        pbody_typs = saved_pbody_typs;
         ploop_names = saved_loops;
         let bnode: Block = body.node;
         if (len(derrs) > 0) {
@@ -1770,6 +2021,10 @@ def parse_func(toks: [Tok], p: long, isnat: bool) -> Parsed {
             bnode = { k: K.block, stmts: nst, line: bnode.line, col: bnode.col };
         };
         let func: Func = { k: K.func, params: names, ptypes: ptypes, ret: ret, body: bnode, line: ln, col: cl, defs: defs, label: "", ppos: ppos };
+        if (fname != "") {
+            pfunc_names += fname;
+            pfunc_nodes += func;
+        };
         if (fname == "") {
             res(func, body.pos)
         } else {
@@ -2617,6 +2872,7 @@ def parse_value_pattern(toks: [Tok], node: Node, pos: long, tmp: str, ln: long, 
 // ── top level: a program is a block of statements (no surrounding braces) ─
 
 def parse_program(toks: [Tok]) -> Block {
+    p_infer_reset();
     let stmts: [Node] = [];
     let pos = 0;
     while (tt(toks, pos) != "eof") {
@@ -2631,6 +2887,7 @@ def parse_program(toks: [Tok]) -> Block {
             pos = pos + 1;
         };
     };
+    p_infer_finish();
     // A ndef owns an assembly label, so it cannot share its name with
     // another top-level declaration of the same unit. This is the only place
     // that can see it: renaming makes every name unique, so by the time the

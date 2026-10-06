@@ -1585,6 +1585,69 @@ yap_done:
     pop %rbx
     pop %rbp
     ret
+y_arr_insert:
+    push %rbp
+    mov %rsp, %rbp
+    push %rbx
+    push %r12
+    push %r13
+    push %r14
+    push %r15
+    mov 40(%rbp), %rbx
+    mov 32(%rbp), %r12
+    mov 24(%rbp), %r13
+    mov 16(%rbp), %r9
+    push %rbx
+    push %r13
+    push %r9
+    call y_arr_push
+    add $24, %rsp
+    mov %rax, %rbx
+    mov 16(%rbx), %r14
+    mov (%rbx), %r15
+    mov %r15, %rax
+    sub $2, %rax
+ins_loop:
+    cmp %r12, %rax
+    jl ins_put
+    mov %rax, %rcx
+    imul %r9, %rcx
+    add %r14, %rcx
+    lea 1(%rax), %rdx
+    imul %r9, %rdx
+    add %r14, %rdx
+    cmp $1, %r9
+    je ins_byte
+    mov (%rcx), %r8
+    mov %r8, (%rdx)
+    jmp ins_next
+ins_byte:
+    mov %rdx, %r10
+    movzbq (%rcx), %rdx
+    movb %dl, (%r10)
+ins_next:
+    dec %rax
+    jmp ins_loop
+ins_put:
+    mov %r12, %rax
+    imul %r9, %rax
+    add %r14, %rax
+    cmp $1, %r9
+    je ins_put1
+    mov %r13, (%rax)
+    jmp ins_done
+ins_put1:
+    mov %r13, %rdx
+    movb %dl, (%rax)
+ins_done:
+    mov %rbx, %rax
+    pop %r15
+    pop %r14
+    pop %r13
+    pop %r12
+    pop %rbx
+    pop %rbp
+    ret
 # y_arr_extend(arr, other, esz) -> arr: other's elements appended
 # (`arr += other` when the element types are one: native.y
 # gen_opassign_arr). The block grows once, to the capacity pushing them

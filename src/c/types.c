@@ -864,6 +864,109 @@ static Yv *trec_field_type(Yv *rec, Yv *key) {
     return found;
 }
 
+/* ── tuple display and primitive union boxes ───────────────────────────── */
+static ylong tuple_field_no(Yv *name) {
+    if (yv_len(name) < 2) { return -1; }
+    else if (!ys_eq_lit(ys_slice(name, 0, 1), "$")) { return -1; }
+    else {
+        ylong v = 0;
+        ylong i = 1;
+        int ok = 1;
+        while (i < yv_len(name) && ok) {
+            Yv *c = ys_slice(name, i, i + 1);
+            if (ys_ord(c) >= '0' && ys_ord(c) <= '9') {
+                v = v * 10 + (ys_ord(c) - '0');
+                i = i + 1;
+            } else {
+                ok = 0;
+            };
+        };
+        if (ok) { return v; } else { return -1; };
+    }
+}
+
+static ylong tuple_n(Yv *fs) {
+    ylong n = 0;
+    int ok = yv_len(fs) > 0;
+    for (ylong i = 0; i < yv_len(fs); i++) {
+        Yv *f = ya_get(fs, i);
+        ylong ix = tuple_field_no(yr_get(f, "name"));
+        if (ix < 0 || yv_b(yr_get(f, "opt"))) { ok = 0; }
+        else if (ix + 1 > n) { n = ix + 1; };
+    };
+    if (ok && n == yv_len(fs)) { return n; } else { return -1; };
+}
+
+static Yv *tuple_typs(Yv *fs) {
+    ylong n = tuple_n(fs);
+    Yv *out = yav(0);
+    if (n < 0) {
+        ;
+    } else {
+        for (ylong i = 0; i < n; i++) { out = ya_push(out, yr(1, "k", yv_long(K_tunk))); };
+        for (ylong j = 0; j < yv_len(fs); j++) {
+            Yv *f = ya_get(fs, j);
+            ylong ix = tuple_field_no(yr_get(f, "name"));
+            ya_set(out, ix, yr_get(f, "typ"));
+        };
+    };
+    return out;
+}
+
+int is_prim_type(Yv *t) {
+    ylong k = yv_l(yr_get(t, "k"));
+    return k == K_tlong || k == K_tbyte || k == K_tstr || k == K_tbool || k == K_tfloat || k == K_tbigint;
+}
+
+Yv *prim_field_name(Yv *t) {
+    ylong k = yv_l(yr_get(t, "k"));
+    if (k == K_tlong) { return ys("$long"); }
+    else if (k == K_tbyte) { return ys("$byte"); }
+    else if (k == K_tstr) { return ys("$str"); }
+    else if (k == K_tbool) { return ys("$bool"); }
+    else if (k == K_tfloat) { return ys("$float"); }
+    else if (k == K_tbigint) { return ys("$bigint"); }
+    else { return ys("$?"); }
+}
+
+int is_boxable_type(Yv *t) {
+    ylong k = yv_l(yr_get(t, "k"));
+    return is_prim_type(t) || k == K_tarr || k == K_tarrfix || k == K_tmap;
+}
+
+Yv *box_field_name(Yv *t) {
+    ylong k = yv_l(yr_get(t, "k"));
+    if (k == K_tarr || k == K_tarrfix) { return ys("$arr"); }
+    else if (k == K_tmap) { return ys("$map"); }
+    else { return prim_field_name(t); }
+}
+
+Yv *prim_field(Yv *t) {
+    return yr(3, "name", box_field_name(t), "opt", yv_bool(0), "typ", t);
+}
+
+Yv *member_fields(Yv *m) {
+    Yv *u = unfold(m);
+    Yv *out = yav(0);
+    if (yv_l(yr_get(u, "k")) == K_trec) {
+        Yv *fs = yr_get(u, "fields");
+        for (ylong i = 0; i < yv_len(fs); i++) { out = ya_push(out, ya_get(fs, i)); };
+    } else if (is_boxable_type(u)) {
+        out = ya_push(out, prim_field(u));
+    };
+    return out;
+}
+
+Yv *member_field_type(Yv *m, Yv *key) {
+    Yv *fs = member_fields(m);
+    Yv *found = yr(1, "k", yv_long(K_tnone));
+    for (ylong i = 0; i < yv_len(fs); i++) {
+        Yv *f = ya_get(fs, i);
+        if (ys_eq(yr_get(f, "name"), key)) { found = yr_get(f, "typ"); };
+    };
+    return found;
+}
+
 static Yv *tstr_go(Yv *t) {
     if (yv_l(yr_get(t, "k")) == K_tlong) {
         return ys("long");
@@ -911,8 +1014,15 @@ static Yv *tstr_go(Yv *t) {
     } else if (yv_l(yr_get(t, "k")) == K_trec && teq(t, t_sem())) {
         return ys("sem");
     } else if (yv_l(yr_get(t, "k")) == K_trec) {
-        Yv *parts = yav(0);
         Yv *fs = yr_get(t, "fields");
+        ylong tn = tuple_n(fs);
+        if (tn >= 0) {
+            Yv *tys = tuple_typs(fs);
+            Yv *tparts = yav(0);
+            for (ylong ti = 0; ti < yv_len(tys); ti++) { tparts = ya_push(tparts, tstr_go(ya_get(tys, ti))); };
+            return ys_cat(ys_cat(ys("("), ys_join(tparts, ys(", "))), ys(")"));
+        };
+        Yv *parts = yav(0);
         ylong i = 0;
         while (i < yv_len(fs)) {
             // NOTE: bound once — `fields` is a bare param here, so an inline
@@ -971,8 +1081,8 @@ static Yv *tstr_union(Yv *ts, Yv *sep) {
 Yv *type_names(Yv *t) {
     Yv *out = yav(0);
     Yv *tk = yr_get(t, "k");
-    if (yv_l(tk) == K_trec) {
-        Yv *fs = yr_get(t, "fields");
+    if (yv_l(tk) == K_trec || is_boxable_type(unfold(t))) {
+        Yv *fs = member_fields(t);
         ylong i = 0;
         while (i < yv_len(fs)) {
             out = ya_push(out, yr_get(ya_get(fs, i), "name"));
@@ -1018,7 +1128,9 @@ static int rec_has_names(Yv *r, Yv *names) {
 Yv *narrow_type(Yv *s, Yv *t) {
     Yv *tk = yr_get(t, "k");
     Yv *sk = yr_get(s, "k");
-    if (yv_l(tk) != K_tpat) {
+    if (is_prim_type(unfold(t))) {
+        return unfold(t);
+    } else if (yv_l(tk) != K_tpat) {
         return t;
     } else if (yv_l(sk) == K_trec) {
         if (rec_has_names(s, yr_get(t, "names"))) {
@@ -1115,14 +1227,14 @@ static Yv *dotassign_union(Yv *st, Yv *t, Yv *node) {
     return yr(2, "typ", yr_get(fr, "typ"), "st", st);
 }
 
-// Every member of a union must be a record type (they are told apart by
-// their field names).
+// Every member of a union must be a record or a primitive/array/map box.
 static int union_ok(Yv *t) {
     Yv *ms = members(t);
     int ok = 1;
     ylong i = 0;
     while (i < yv_len(ms)) {
-        if (yv_l(yr_get(ya_get(ms, i), "k")) != K_trec) {
+        Yv *m = ya_get(ms, i);
+        if (yv_l(yr_get(m, "k")) != K_trec && !is_boxable_type(m)) {
             ok = 0;
         }
         i = i + 1;
@@ -3514,8 +3626,22 @@ static Yv *typeof_rectest(Yv *st, Yv *node) {
     if (yv_l(tk) == K_tunk) {
         // an alias that stands for no type (rename.y reported it)
         ;
+    } else if (is_prim_type(tu)) {
+        if (yv_l(sk) == K_tunk) {
+            ;
+        } else if (yv_l(sk) == K_tunion) {
+            if (!pattern_fits(s, t)) {
+                st = fail(st, ys_cat(ys_cat(ys_cat(ys("pattern type "), tstr(t)), ys(" can never match ")), tstr(s)), NLINE, NCOL);
+            };
+        } else if (yv_l(sk) == K_trec) {
+            st = fail(st, ys_cat(ys_cat(ys("match pattern type "), tstr(t)), ys(" is not a record type")), NLINE, NCOL);
+        } else {
+            if (!pattern_fits(s, t)) {
+                st = fail(st, ys_cat(ys_cat(ys("match pattern type "), tstr(t)), ys(" is not a record type")), NLINE, NCOL);
+            };
+        };
     } else if (yv_l(tk) != K_trec && yv_l(tk) != K_tpat) {
-        st = fail(st, ys_cat(ys_cat(ys("match pattern type "), tstr(t)), ys(" is not a record type")), NLINE, NCOL);
+        st = fail(st, ys_cat(ys_cat(ys("match pattern type "), tstr(t)), ys(" is not a record or primitive type")), NLINE, NCOL);
     } else if (yv_l(sk) == K_tunk) {
         ;
     } else if (yv_l(sk) == K_trec || yv_l(sk) == K_tunion) {
@@ -3550,7 +3676,9 @@ static Yv *typeof_narrow(Yv *st, Yv *node) {
     Yv *t = yr_get(node, "typ");
     Yv *tu = unfold(t);
     Yv *tk = yr_get(tu, "k");
-    if (yv_l(tk) == K_trec || yv_l(tk) == K_tpat) {
+    if (is_prim_type(tu)) {
+        return yr(2, "typ", tu, "st", yr_get(r, "st"));
+    } else if (yv_l(tk) == K_trec || yv_l(tk) == K_tpat) {
         return yr(2, "typ", narrow_type(yr_get(r, "typ"), t), "st", yr_get(r, "st"));
     } else {
         return yr(2, "typ", t_unk(), "st", yr_get(r, "st"));
@@ -4479,6 +4607,219 @@ static Yv *typeof_call(Yv *st, Yv *node) {
     return r;
 }
 
+static Yv *arr_elem_of(Yv *t) {
+    ylong k = yv_l(yr_get(t, "k"));
+    if (k == K_tarr) { return yr_get(t, "of"); }
+    else if (k == K_tarrfix) { return yr_get(t, "of"); }
+    else { return t_unk(); }
+}
+
+static int arr_is_heap(Yv *t) {
+    return yv_l(yr_get(t, "k")) == K_tarr;
+}
+
+/* A method that changes the length of its receiver needs a heap [T].
+ * A fixed [T; N] has its length in its type, which the same rule that
+ * rejects += and *= on one (opassign_check) rejects here. */
+static Yv *arr_fixed_guard(Yv *st, Yv *at, Yv *key, ylong line, ylong col) {
+    if (arr_is_heap(at)) { return st; }
+    Yv *msg = ys_cat(ys("cannot resize fixed array "), tstr(at));
+    msg = ys_cat(msg, ys(" with '."));
+    msg = ys_cat(msg, key);
+    msg = ys_cat(msg, ys("' (its length is part of its type; use [T] instead)"));
+    return fail(st, msg, line, col);
+}
+
+static Yv *typeof_closure_want(Yv *st, Yv *node, Yv *ptypes) {
+    if (yv_l(yr_get(node, "k")) == K_func) {
+        Yv *params = yr_get(node, "params");
+        Yv *pts = yr_get(node, "ptypes");
+        for (ylong i = 0; i < yv_len(params) && i < yv_len(ptypes); i++) {
+            if (yv_l(yr_get(ya_get(pts, i), "k")) == K_tnone) {
+                ya_set(pts, i, ya_get(ptypes, i));
+            } else if (!tcompat(ya_get(ptypes, i), ya_get(pts, i))) {
+                st = fail(st, ys_cat(ys_cat(ys_cat(ys("closure parameter "),
+                                                   ys_long(i + 1)),
+                                             ys(": expected ")),
+                                     ys_cat(tstr(ya_get(ptypes, i)),
+                                            ys_cat(ys(", got "),
+                                                   tstr(ya_get(pts, i))))),
+                          yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
+            }
+        }
+        return typeof_expr(st, node);
+    } else {
+        Yv *r = typeof_expr(st, node);
+        Yv *ft = unfold(yr_get(r, "typ"));
+        if (yv_l(yr_get(ft, "k")) == K_tfunc) {
+            Yv *targs = yr_get(ft, "args");
+            for (ylong i = 0; i < yv_len(targs) && i < yv_len(ptypes); i++) {
+                if (!tcompat(ya_get(ptypes, i), ya_get(targs, i))) {
+                    st = fail(st, ys_cat(ys_cat(ys_cat(ys("closure argument "),
+                                                       ys_long(i + 1)),
+                                                 ys(": expected ")),
+                                         ys_cat(tstr(ya_get(ptypes, i)),
+                                                ys_cat(ys(", got "),
+                                                       tstr(ya_get(targs, i))))),
+                              yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
+                }
+            }
+        } else if (yv_l(yr_get(ft, "k")) != K_tunk) {
+            st = fail(st, ys_cat(ys("expected a closure, got "), tstr(yr_get(r, "typ"))),
+                      yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
+        }
+        return yr(2, "typ", yr_get(r, "typ"), "st", st);
+    }
+}
+
+static Yv *closure_ret(Yv *t) {
+    if (yv_l(yr_get(t, "k")) == K_tfunc) { return yr_get(t, "ret"); }
+    else { return t_unk(); }
+}
+
+static Yv *typeof_arr_method(Yv *st, Yv *node, Yv *key, Yv *at) {
+    Yv *dot = yr_get(node, "callee");
+    Yv *elem = arr_elem_of(at);
+    Yv *args = yr_get(node, "args");
+    ylong na = yv_len(args);
+    Yv *what = ys_cat(ys("'array."), ys_cat(key, ys("'")));
+    ylong line = yv_l(yr_get(node, "line"));
+    ylong col = yv_l(yr_get(node, "col"));
+    if (ys_eq_lit(key, "pop") || ys_eq_lit(key, "shift")) {
+        st = const_store(st, yr_get(dot, "obj"), line, col);
+        st = arr_fixed_guard(st, at, key, line, col);
+        if (na != 0) {
+            st = fail(st, ys_cat(ys_cat(what, ys(" takes no args, got ")), ys_long(na)), line, col);
+        }
+        return yr(2, "typ", elem, "st", st);
+    } else if (ys_eq_lit(key, "push") || ys_eq_lit(key, "unshift")) {
+        st = const_store(st, yr_get(dot, "obj"), line, col);
+        st = arr_fixed_guard(st, at, key, line, col);
+        if (na != 1) {
+            st = fail(st, ys_cat(ys_cat(what, ys(" takes 1 arg, got ")), ys_long(na)), line, col);
+        } else {
+            Yv *r = typeof_expr(st, ya_get(args, 0));
+            st = yr_get(r, "st");
+            st = expect_type(st, yr_get(r, "typ"), elem, ys_cat(what, ys(" arg")), line, col);
+        }
+        return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
+    } else if (ys_eq_lit(key, "insert")) {
+        st = const_store(st, yr_get(dot, "obj"), line, col);
+        st = arr_fixed_guard(st, at, key, line, col);
+        if (na != 2) {
+            st = fail(st, ys_cat(ys_cat(what, ys(" takes 2 args, got ")), ys_long(na)), line, col);
+        } else {
+            Yv *ri = typeof_expr(st, ya_get(args, 0));
+            st = yr_get(ri, "st");
+            st = expect_type(st, yr_get(ri, "typ"), yr(1, "k", yv_long(K_tlong)), ys_cat(what, ys(" index")), line, col);
+            Yv *rv = typeof_expr(st, ya_get(args, 1));
+            st = yr_get(rv, "st");
+            st = expect_type(st, yr_get(rv, "typ"), elem, ys_cat(what, ys(" value")), line, col);
+        }
+        return yr(2, "typ", yr(1, "k", yv_long(K_tvoid)), "st", st);
+    } else if (ys_eq_lit(key, "remove")) {
+        st = const_store(st, yr_get(dot, "obj"), line, col);
+        st = arr_fixed_guard(st, at, key, line, col);
+        if (na < 1 || na > 2) {
+            st = fail(st, ys_cat(ys_cat(what, ys(" takes 1 or 2 args, got ")), ys_long(na)), line, col);
+        } else {
+            Yv *ri = typeof_expr(st, ya_get(args, 0));
+            st = yr_get(ri, "st");
+            st = expect_type(st, yr_get(ri, "typ"), yr(1, "k", yv_long(K_tlong)), ys_cat(what, ys(" index")), line, col);
+            if (na == 2) {
+                Yv *rl = typeof_expr(st, ya_get(args, 1));
+                st = yr_get(rl, "st");
+                st = expect_type(st, yr_get(rl, "typ"), yr(1, "k", yv_long(K_tlong)), ys_cat(what, ys(" count")), line, col);
+            }
+        }
+        if (na == 2) { return yr(2, "typ", yr(2, "k", yv_long(K_tarr), "of", elem), "st", st); }
+        return yr(2, "typ", elem, "st", st);
+    } else if (ys_eq_lit(key, "flat")) {
+        if (na != 0) {
+            st = fail(st, ys_cat(ys_cat(what, ys(" takes no args, got ")), ys_long(na)), line, col);
+        }
+        Yv *inner = arr_elem_of(elem);
+        if (yv_l(yr_get(elem, "k")) != K_tarr && yv_l(yr_get(elem, "k")) != K_tarrfix) {
+            st = fail(st, ys_cat(ys_cat(what, ys(" needs an array of arrays, got ")), tstr(at)), line, col);
+        }
+        return yr(2, "typ", yr(2, "k", yv_long(K_tarr), "of", inner), "st", st);
+    } else if (ys_eq_lit(key, "index")) {
+        if (na != 1) {
+            st = fail(st, ys_cat(ys_cat(what, ys(" takes 1 arg, got ")), ys_long(na)), line, col);
+        } else {
+            Yv *r = typeof_expr(st, ya_get(args, 0));
+            st = yr_get(r, "st");
+            st = expect_type(st, yr_get(r, "typ"), elem, ys_cat(what, ys(" value")), line, col);
+        }
+        return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
+    } else if (ys_eq_lit(key, "foreach") || ys_eq_lit(key, "map") ||
+               ys_eq_lit(key, "filter") || ys_eq_lit(key, "all") ||
+               ys_eq_lit(key, "some") || ys_eq_lit(key, "find")) {
+        if (na != 1) {
+            st = fail(st, ys_cat(ys_cat(what, ys(" takes 1 arg, got ")), ys_long(na)), line, col);
+            return yr(2, "typ", t_unk(), "st", st);
+        } else {
+            Yv *ptypes = yav(0);
+            ptypes = ya_push(ptypes, elem);
+            ptypes = ya_push(ptypes, yr(1, "k", yv_long(K_tlong)));
+            Yv *rf = typeof_closure_want(st, ya_get(args, 0), ptypes);
+            st = yr_get(rf, "st");
+            Yv *rt = closure_ret(yr_get(rf, "typ"));
+            if (ys_eq_lit(key, "map")) {
+                return yr(2, "typ", yr(2, "k", yv_long(K_tarr), "of", rt), "st", st);
+            } else if (ys_eq_lit(key, "filter")) {
+                st = expect_type(st, rt, yr(1, "k", yv_long(K_tbool)), ys_cat(what, ys(" predicate")), line, col);
+                return yr(2, "typ", at, "st", st);
+            } else if (ys_eq_lit(key, "all") || ys_eq_lit(key, "some")) {
+                st = expect_type(st, rt, yr(1, "k", yv_long(K_tbool)), ys_cat(what, ys(" predicate")), line, col);
+                return yr(2, "typ", yr(1, "k", yv_long(K_tbool)), "st", st);
+            } else if (ys_eq_lit(key, "find")) {
+                st = expect_type(st, rt, yr(1, "k", yv_long(K_tbool)), ys_cat(what, ys(" predicate")), line, col);
+                return yr(2, "typ", yr(2, "k", yv_long(K_topt), "of", elem), "st", st);
+            } else {
+                return yr(2, "typ", yr(1, "k", yv_long(K_tvoid)), "st", st);
+            }
+        }
+    } else if (ys_eq_lit(key, "reduce")) {
+        if (na != 2) {
+            st = fail(st, ys_cat(ys_cat(what, ys(" takes 2 args, got ")), ys_long(na)), line, col);
+            return yr(2, "typ", t_unk(), "st", st);
+        } else {
+            Yv *ri = typeof_expr(st, ya_get(args, 1));
+            st = yr_get(ri, "st");
+            Yv *acc = yr_get(ri, "typ");
+            Yv *ptypes = yav(0);
+            ptypes = ya_push(ptypes, acc);
+            ptypes = ya_push(ptypes, elem);
+            Yv *rf = typeof_closure_want(st, ya_get(args, 0), ptypes);
+            st = yr_get(rf, "st");
+            st = expect_type(st, closure_ret(yr_get(rf, "typ")), acc, ys_cat(what, ys(" reducer")), line, col);
+            return yr(2, "typ", acc, "st", st);
+        }
+    } else if (ys_eq_lit(key, "sort") || ys_eq_lit(key, "sorted")) {
+        if (ys_eq_lit(key, "sort")) { st = const_store(st, yr_get(dot, "obj"), line, col); }
+        if (na != 1) {
+            st = fail(st, ys_cat(ys_cat(what, ys(" takes 1 arg, got ")), ys_long(na)), line, col);
+            return yr(2, "typ", t_unk(), "st", st);
+        } else {
+            Yv *ptypes = yav(0);
+            ptypes = ya_push(ptypes, elem);
+            ptypes = ya_push(ptypes, elem);
+            Yv *rf = typeof_closure_want(st, ya_get(args, 0), ptypes);
+            st = yr_get(rf, "st");
+            st = expect_type(st, closure_ret(yr_get(rf, "typ")), yr(1, "k", yv_long(K_tlong)), ys_cat(what, ys(" comparator")), line, col);
+            return yr(2, "typ", at, "st", st);
+        }
+    } else {
+        st = fail(st, ys_cat(ys("array has no method '"), ys_cat(key, ys("'"))), line, col);
+        for (ylong i = 0; i < na; i++) {
+            Yv *r = typeof_expr(st, ya_get(args, i));
+            st = yr_get(r, "st");
+        }
+        return yr(2, "typ", t_unk(), "st", st);
+    }
+}
+
 static Yv *typeof_call_go(Yv *st, Yv *node) {
     // Two callee shapes: a plain id (the `else` arm below — a hoisted def,
     // an intrinsic, `self`, or a local holding a closure) and an arbitrary
@@ -4492,10 +4833,18 @@ static Yv *typeof_call_go(Yv *st, Yv *node) {
         Yv *ccal = yr_get(node, "callee");
         Yv *cf = yr(2, "typ", t_unk(), "st", st);
         int smeth = 0;
+        int ameth = 0;
+        Yv *arecv = t_unk();
         if (yv_l(yr_get(ccal, "k")) == K_dot) {
             Yv *crt = typeof_expr(st, yr_get(ccal, "obj"));
-            if (yv_l(yr_get(yr_get(crt, "typ"), "k")) == K_tstr) {
+            ylong rtk = yv_l(yr_get(yr_get(crt, "typ"), "k"));
+            if (rtk == K_tstr) {
                 smeth = 1;
+                cf = yr(2, "typ", t_unk(), "st", yr_get(crt, "st"));
+                ;
+            } else if (rtk == K_tarr || rtk == K_tarrfix) {
+                ameth = 1;
+                arecv = yr_get(crt, "typ");
                 cf = yr(2, "typ", t_unk(), "st", yr_get(crt, "st"));
                 ;
             } else {
@@ -4524,7 +4873,7 @@ static Yv *typeof_call_go(Yv *st, Yv *node) {
          * object (it is matched by name), so the id arm in typeof_call records its
          * return type, which is the whole of what the checker knows about it; the
          * asymmetry is the honest one and both are the checker's own answer. */
-        if (tc_index && yv_l(yr_get(ccal, "k")) == K_dot && !smeth &&
+        if (tc_index && yv_l(yr_get(ccal, "k")) == K_dot && !smeth && !ameth &&
             yv_l(yr_get(ccal, "nline")) > 0 && yv_l(yr_get(ccal, "ncol")) > 0) {
             tci_note_key(yv_l(yr_get(ccal, "nline")) * 65536 +
                              yv_l(yr_get(ccal, "ncol")),
@@ -4532,6 +4881,8 @@ static Yv *typeof_call_go(Yv *st, Yv *node) {
         }
         if (smeth) {
             return typeof_method(st, node, yr_get(ccal, "key"));
+        } else if (ameth) {
+            return typeof_arr_method(st, node, yr_get(ccal, "key"), arecv);
         } else if (yv_l(yr_get(yr_get(cf, "typ"), "k")) == K_tfunc) {
             Yv *cft = yr_get(cf, "typ");
             Yv *cfargs = yr_get(cft, "args");

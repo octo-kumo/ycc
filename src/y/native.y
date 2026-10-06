@@ -3100,6 +3100,30 @@ def infer_go(st: EmitSt, node: Node) -> Type {
     }
 };
 
+def infer_arr_method(st: EmitSt, node: Call, key: str, at: Type) -> Type {
+    let elem = arr_elem_type(at);
+    let args: [Node] = node.args;
+    if (key == "pop" || key == "shift") { elem }
+    else if (key == "remove") {
+        if (len(args) == 2) { normtype({ k: K.tarr, of: elem }) } else { elem }
+    }
+    else if (key == "push" || key == "unshift") { normtype({ k: K.tlong }) }
+    else if (key == "insert") { normtype({ k: K.tvoid }) }
+    else if (key == "flat") { normtype({ k: K.tarr, of: arr_elem_type(elem) }) }
+    else if (key == "index") { normtype({ k: K.tlong }) }
+    else if (key == "map") {
+        let ft = infer(st, args[0]);
+        if (ft.k == K.tfunc) { let f: TFunc = ft; normtype({ k: K.tarr, of: f.ret }) }
+        else { normtype({ k: K.tunk }) }
+    }
+    else if (key == "filter") { at }
+    else if (key == "all" || key == "some") { normtype({ k: K.tbool }) }
+    else if (key == "find") { normtype({ k: K.topt, of: elem }) }
+    else if (key == "reduce") { infer(st, args[1]) }
+    else if (key == "sort" || key == "sorted") { at }
+    else { normtype({ k: K.tunk }) }
+};
+
 def infer_call(st: EmitSt, node: Call) -> Type {
     let callee: Node = node.callee;
     if (callee.k != K.id) {
@@ -3107,9 +3131,12 @@ def infer_call(st: EmitSt, node: Call) -> Type {
         // or `s.m(...)` with s a str: a string method (types.str_method).
         if (callee.k == K.dot) {
             let dot: Dot = callee;
-            if (infer(st, dot.obj).k == K.tstr) {
+            let rt = infer(st, dot.obj);
+            if (rt.k == K.tstr) {
                 let method = types.str_method(dot.key);
                 method.ret
+            } else if (rt.k == K.tarr || rt.k == K.tarrfix) {
+                infer_arr_method(st, node, dot.key, rt)
             } else {
                 let cft = infer(st, callee);
                 if (cft.k == K.tfunc) {
@@ -5860,8 +5887,11 @@ def gen_call(st: EmitSt, node: Call) -> EmitSt {
     if (callee.k != K.id) {
         if (callee.k == K.dot) {
             let dot: Dot = callee;
-            if (infer(st, dot.obj).k == K.tstr) {
+            let rt = infer(st, dot.obj);
+            if (rt.k == K.tstr) {
                 gen_method(st, node)
+            } else if (rt.k == K.tarr || rt.k == K.tarrfix) {
+                gen_arr_method(st, node)
             } else {
                 // Calling the result of an expression (e.g. `fs[0](x)`): it is a
                 // closure value, so go through its code pointer.
@@ -6042,6 +6072,587 @@ def gen_call(st: EmitSt, node: Call) -> EmitSt {
 // the call goes to the builtin's own lowering, or straight to the
 // std/str.y helper by label -- a Y function like any other, so the
 // arguments are pushed and the caller pops them.
+// ── array methods ────────────────────────────────────────────────────────
+// The checker types `arr.m(...)` in types.y; here each method is emitted
+// inline. Element width comes from the receiver's static type, so packed
+// [byte] and word-per-element arrays share one body per method.
+def gen_closure_call(st: EmitSt, foff: long, arg_regs: [long]) -> EmitSt {
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, foff, -1, insn.R_R10, 64);
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_R10, 64, 0, 0, 0, 0, 0);
+    let i = 0;
+    while (i < len(arg_regs)) {
+        st = emit_insn(st, insn.F_PUSH_R, arg_regs[i], 64, 0, 0, 0, 0, 0);
+        i = i + 1;
+    };
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, foff, -1, insn.R_R10, 64);
+    st = emit_insn(st, insn.F_MOV_0_R, insn.R_R10, -1, 1, -1, -1, insn.R_R10, 64);
+    st = emit_insn(st, insn.F_CALL_IND, insn.R_R10, 64, 0, 0, 0, 0, 0);
+    emit_insn(st, insn.F_ADD_I_R, 8 * (len(arg_regs) + 1), insn.R_RSP, 64, 0, 0, 0, 0)
+};
+
+def gen_arr_new_empty(st: EmitSt) -> EmitSt {
+    st = emit_insn(st, insn.F_MOV_I_R, 32, insn.R_RDI, 64, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_CALL_L, lbl_new("y_alloc"), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_XOR_R_R, insn.R_RCX, 32, insn.R_RCX, 32, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_R_D, insn.R_RCX, 64, insn.R_RAX, -1, 1, 0, -1);
+    st = emit_insn(st, insn.F_MOV_R_D, insn.R_RCX, 64, insn.R_RAX, -1, 1, 8, -1);
+    st = emit_insn(st, insn.F_MOV_R_D, insn.R_RCX, 64, insn.R_RAX, -1, 1, 16, -1);
+    emit_insn(st, insn.F_MOV_R_D, insn.R_RCX, 64, insn.R_RAX, -1, 1, 24, -1)
+};
+
+// Append the value in %rax to the array whose header is in slot `roff`.
+def gen_arr_push_slot(st: EmitSt, roff: long, esz: long) -> EmitSt {
+    st = emit_insn(st, insn.F_MOV_R_R, insn.R_RAX, 64, insn.R_RDX, 64, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, roff, -1, insn.R_RAX, 64);
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RDX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_I_R, esz, insn.R_RAX, 64, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_CALL_L, lbl_new("y_arr_push"), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_ADD_I_R, 24, insn.R_RSP, 64, 0, 0, 0, 0);
+    emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, roff, -1)
+};
+
+def gen_mul_esz(st: EmitSt, reg: long, esz: long) -> EmitSt {
+    if (esz == 8) {
+        emit_insn(st, insn.F_SHL_I_R, 3, reg, 64, 0, 0, 0, 0)
+    } else {
+        st
+    }
+};
+
+def gen_arr_pop_shift(st: EmitSt, node: Call, shift: bool) -> EmitSt {
+    let dot: Dot = node.callee;
+    let at = infer(st, dot.obj);
+    let esz = arr_elem_bytes(at);
+    let save = st.temp;
+    let aoff = (st.slots + st.temp + 1) * -8;
+    let voff = (st.slots + st.temp + 2) * -8;
+    st = st_temp(st, st.temp + 2);
+    st = gen(st, dot.obj);
+    st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, aoff, -1);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, aoff, -1, insn.R_RDX, 64);
+    st = emit_insn(st, insn.F_MOV_0_R, insn.R_RDX, -1, 1, 0, -1, insn.R_RCX, 64);
+    st = emit_insn(st, insn.F_TEST_R_R, insn.R_RCX, 64, insn.R_RCX, 64, 0, 0, 0);
+    st = emit_insn(st, insn.F_JZ_L, lbl_new("y_oob"), 0, 0, 0, 0, 0, 0);
+    if (shift) {
+        st = emit_insn(st, insn.F_XOR_R_R, insn.R_R8, 32, insn.R_R8, 32, 0, 0, 0);
+        st = elem_load(st, esz, insn.R_RDX, insn.R_R8, insn.R_RAX);
+        st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, voff, -1);
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, aoff, -1, insn.R_RDX, 64);
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RDX, -1, 1, 16, -1, insn.R_RDI, 64);
+        st = emit_insn(st, insn.F_MOV_R_R, insn.R_RDI, 64, insn.R_RSI, 64, 0, 0, 0);
+        if (esz == 1) {
+            st = emit_insn(st, insn.F_ADD_I_R, 1, insn.R_RSI, 64, 0, 0, 0, 0);
+        } else {
+            st = emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSI, 64, 0, 0, 0, 0);
+        };
+        st = emit_insn(st, insn.F_MOV_0_R, insn.R_RDX, -1, 1, 0, -1, insn.R_RCX, 64);
+        st = emit_insn(st, insn.F_DEC_R, insn.R_RCX, 64, 0, 0, 0, 0, 0);
+        st = gen_mul_esz(st, insn.R_RCX, esz);
+        st = emit_insn(st, insn.F_CALL_L, lbl_new("y_mem_copy"), 0, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, aoff, -1, insn.R_RDX, 64);
+        st = emit_insn(st, insn.F_MOV_0_R, insn.R_RDX, -1, 1, 0, -1, insn.R_RCX, 64);
+        st = emit_insn(st, insn.F_DEC_R, insn.R_RCX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOV_R_D, insn.R_RCX, 64, insn.R_RDX, -1, 1, 0, -1);
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, voff, -1, insn.R_RAX, 64);
+    } else {
+        st = emit_insn(st, insn.F_DEC_R, insn.R_RCX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOV_R_D, insn.R_RCX, 64, insn.R_RDX, -1, 1, 0, -1);
+        st = elem_load(st, esz, insn.R_RDX, insn.R_RCX, insn.R_RAX);
+    };
+    st_temp(st, save)
+};
+
+def gen_arr_remove(st: EmitSt, node: Call) -> EmitSt {
+    let dot: Dot = node.callee;
+    let at = infer(st, dot.obj);
+    let esz = arr_elem_bytes(at);
+    let args: [Node] = node.args;
+    let save = st.temp;
+    let aoff = (st.slots + st.temp + 1) * -8;
+    let ioff = (st.slots + st.temp + 2) * -8;
+    let coff = (st.slots + st.temp + 3) * -8;
+    let voff = (st.slots + st.temp + 4) * -8;
+    let roff = (st.slots + st.temp + 5) * -8;
+    st = st_temp(st, st.temp + 5);
+    st = gen(st, dot.obj);
+    st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, aoff, -1);
+    st = gen(st, args[0]);
+    st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, ioff, -1);
+    if (len(args) == 2) {
+        st = gen(st, args[1]);
+        st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, coff, -1);
+        // roff = y_arr_slice(arr, idx, idx + count, esz)
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, aoff, -1, insn.R_RAX, 64);
+        st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, ioff, -1, insn.R_RAX, 64);
+        st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, ioff, -1, insn.R_RAX, 64);
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, coff, -1, insn.R_RCX, 64);
+        st = emit_insn(st, insn.F_ADD_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0);
+        st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOV_I_R, esz, insn.R_RAX, 64, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_CALL_L, lbl_new("y_arr_slice"), 0, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_ADD_I_R, 32, insn.R_RSP, 64, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, roff, -1);
+    } else {
+        // single: value first
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, aoff, -1, insn.R_RDX, 64);
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, ioff, -1, insn.R_RCX, 64);
+        st = elem_load(st, esz, insn.R_RDX, insn.R_RCX, insn.R_RAX);
+        st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, voff, -1);
+        st = emit_insn(st, insn.F_MOV_I_R, 1, insn.R_RAX, 64, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, coff, -1);
+    };
+    // Move the tail left by count elements.
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, aoff, -1, insn.R_RDX, 64);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RDX, -1, 1, 16, -1, insn.R_RDI, 64);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, ioff, -1, insn.R_RAX, 64);
+    st = gen_mul_esz(st, insn.R_RAX, esz);
+    st = emit_insn(st, insn.F_ADD_R_R, insn.R_RAX, 64, insn.R_RDI, 64, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, aoff, -1, insn.R_RDX, 64);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RDX, -1, 1, 16, -1, insn.R_RSI, 64);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, ioff, -1, insn.R_RAX, 64);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, coff, -1, insn.R_RCX, 64);
+    st = emit_insn(st, insn.F_ADD_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0);
+    st = gen_mul_esz(st, insn.R_RAX, esz);
+    st = emit_insn(st, insn.F_ADD_R_R, insn.R_RAX, 64, insn.R_RSI, 64, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, aoff, -1, insn.R_RDX, 64);
+    st = emit_insn(st, insn.F_MOV_0_R, insn.R_RDX, -1, 1, 0, -1, insn.R_RCX, 64);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, ioff, -1, insn.R_RAX, 64);
+    st = emit_insn(st, insn.F_SUB_R_R, insn.R_RAX, 64, insn.R_RCX, 64, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, coff, -1, insn.R_RAX, 64);
+    st = emit_insn(st, insn.F_SUB_R_R, insn.R_RAX, 64, insn.R_RCX, 64, 0, 0, 0);
+    st = gen_mul_esz(st, insn.R_RCX, esz);
+    st = emit_insn(st, insn.F_CALL_L, lbl_new("y_mem_copy"), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, aoff, -1, insn.R_RDX, 64);
+    st = emit_insn(st, insn.F_MOV_0_R, insn.R_RDX, -1, 1, 0, -1, insn.R_RCX, 64);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, coff, -1, insn.R_RAX, 64);
+    st = emit_insn(st, insn.F_SUB_R_R, insn.R_RAX, 64, insn.R_RCX, 64, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_R_D, insn.R_RCX, 64, insn.R_RDX, -1, 1, 0, -1);
+    if (len(args) == 2) {
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, roff, -1, insn.R_RAX, 64);
+    } else {
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, voff, -1, insn.R_RAX, 64);
+    };
+    st_temp(st, save)
+};
+
+def gen_arr_push_method(st: EmitSt, node: Call, prepend: bool) -> EmitSt {
+    let dot: Dot = node.callee;
+    let at = infer(st, dot.obj);
+    let esz = arr_elem_bytes(at);
+    let args: [Node] = node.args;
+    st = gen(st, dot.obj);
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    st = gen(st, args[0]);
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_I_R, esz, insn.R_RAX, 64, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    if (prepend) {
+        st = emit_insn(st, insn.F_CALL_L, lbl_new("y_arr_prepend"), 0, 0, 0, 0, 0, 0);
+    } else {
+        st = emit_insn(st, insn.F_CALL_L, lbl_new("y_arr_push"), 0, 0, 0, 0, 0, 0);
+    };
+    st = emit_insn(st, insn.F_ADD_I_R, 24, insn.R_RSP, 64, 0, 0, 0, 0);
+    emit_insn(st, insn.F_MOV_0_R, insn.R_RAX, -1, 1, 0, -1, insn.R_RAX, 64)
+};
+
+def arr_closure_nargs(st: EmitSt, fnode: Node) -> long {
+    let ft = infer(st, fnode);
+    if (ft.k == K.tfunc) { let f: TFunc = ft; len(f.args) } else { 0 }
+};
+
+def arr_closure_ret(st: EmitSt, fnode: Node) -> Type {
+    let ft = infer(st, fnode);
+    if (ft.k == K.tfunc) { let f: TFunc = ft; f.ret } else { t_unk() }
+};
+
+def gen_arr_loop_head(st: EmitSt, at: Type, aoff: long, ioff: long, done: long) -> EmitSt {
+    let esz = arr_elem_bytes(at);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, aoff, -1, insn.R_RDX, 64);
+    st = emit_insn(st, insn.F_MOV_0_R, insn.R_RDX, -1, 1, 0, -1, insn.R_RCX, 64);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, ioff, -1, insn.R_RAX, 64);
+    st = emit_insn(st, insn.F_CMP_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0);
+    st = emit_insn(st, insn.F_JGE_L, done, 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, aoff, -1, insn.R_RDX, 64);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, ioff, -1, insn.R_RCX, 64);
+    elem_load(st, esz, insn.R_RDX, insn.R_RCX, insn.R_RAX)
+};
+
+def gen_arr_sort(st: EmitSt, node: Call, sorted: bool) -> EmitSt {
+    let dot: Dot = node.callee;
+    let at = infer(st, dot.obj);
+    let esz = arr_elem_bytes(at);
+    let args: [Node] = node.args;
+    let save = st.temp;
+    let aoff = (st.slots + st.temp + 1) * -8;
+    let foff = (st.slots + st.temp + 2) * -8;
+    let ioff = (st.slots + st.temp + 3) * -8;
+    let joff = (st.slots + st.temp + 4) * -8;
+    let koff = (st.slots + st.temp + 5) * -8;
+    let ajoff = (st.slots + st.temp + 6) * -8;
+    st = st_temp(st, st.temp + 6);
+    st = gen(st, dot.obj);
+    st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, aoff, -1);
+    if (sorted) {
+        // New array = y_arr_slice(old, 0, len(old), esz)
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, aoff, -1, insn.R_RAX, 64);
+        st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
+        st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, aoff, -1, insn.R_RDX, 64);
+        st = emit_insn(st, insn.F_MOV_0_R, insn.R_RDX, -1, 1, 0, -1, insn.R_RAX, 64);
+        st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOV_I_R, esz, insn.R_RAX, 64, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_CALL_L, lbl_new("y_arr_slice"), 0, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_ADD_I_R, 32, insn.R_RSP, 64, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, aoff, -1);
+    };
+    st = gen(st, args[0]);
+    st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, foff, -1);
+    st = emit_insn(st, insn.F_MOV_I_R, 1, insn.R_RAX, 64, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, ioff, -1);
+    let loop_i = next_loc(st);
+    st = loop_i.st;
+    let done = next_loc(st);
+    st = done.st;
+    let loop_j = next_loc(st);
+    st = loop_j.st;
+    let shift_done = next_loc(st);
+    st = shift_done.st;
+    st = emit_label(st, loop_i.label);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, aoff, -1, insn.R_RDX, 64);
+    st = emit_insn(st, insn.F_MOV_0_R, insn.R_RDX, -1, 1, 0, -1, insn.R_RCX, 64);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, ioff, -1, insn.R_RAX, 64);
+    st = emit_insn(st, insn.F_CMP_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0);
+    st = emit_insn(st, insn.F_JGE_L, done.label, 0, 0, 0, 0, 0, 0);
+    // key = a[i]
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, aoff, -1, insn.R_RAX, 64);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, ioff, -1, insn.R_RCX, 64);
+    st = elem_load(st, esz, insn.R_RAX, insn.R_RCX, insn.R_RDX);
+    st = emit_insn(st, insn.F_MOV_R_D, insn.R_RDX, 64, insn.R_RBP, -1, 1, koff, -1);
+    // j = i - 1
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, ioff, -1, insn.R_RAX, 64);
+    st = emit_insn(st, insn.F_SUB_I_R, 1, insn.R_RAX, 64, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, joff, -1);
+    st = emit_label(st, loop_j.label);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, joff, -1, insn.R_RAX, 64);
+    st = emit_insn(st, insn.F_TEST_R_R, insn.R_RAX, 64, insn.R_RAX, 64, 0, 0, 0);
+    st = emit_insn(st, insn.F_JS_L, shift_done.label, 0, 0, 0, 0, 0, 0);
+    // a_j = a[j]
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, aoff, -1, insn.R_RAX, 64);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, joff, -1, insn.R_RCX, 64);
+    st = elem_load(st, esz, insn.R_RAX, insn.R_RCX, insn.R_RDX);
+    st = emit_insn(st, insn.F_MOV_R_D, insn.R_RDX, 64, insn.R_RBP, -1, 1, ajoff, -1);
+    // cmp(a_j, key)
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, ajoff, -1, insn.R_RAX, 64);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, koff, -1, insn.R_RCX, 64);
+    let regs: [long] = [];
+    regs += insn.R_RAX;
+    regs += insn.R_RCX;
+    st = gen_closure_call(st, foff, regs);
+    st = emit_insn(st, insn.F_CMP_I_R, 0, insn.R_RAX, 64, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_JLE_L, shift_done.label, 0, 0, 0, 0, 0, 0);
+    // a[j+1] = a_j
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, aoff, -1, insn.R_RAX, 64);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, joff, -1, insn.R_RCX, 64);
+    st = emit_insn(st, insn.F_ADD_I_R, 1, insn.R_RCX, 64, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, ajoff, -1, insn.R_RDX, 64);
+    st = elem_store_rdx(st, esz, insn.R_RAX, insn.R_RCX);
+    st = emit_insn(st, insn.F_DEC_D, insn.R_RBP, -1, 1, joff, -1, 0, 0);
+    st = emit_insn(st, insn.F_JMP_L, loop_j.label, 0, 0, 0, 0, 0, 0);
+    st = emit_label(st, shift_done.label);
+    // a[j+1] = key
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, aoff, -1, insn.R_RAX, 64);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, joff, -1, insn.R_RCX, 64);
+    st = emit_insn(st, insn.F_ADD_I_R, 1, insn.R_RCX, 64, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, koff, -1, insn.R_RDX, 64);
+    st = elem_store_rdx(st, esz, insn.R_RAX, insn.R_RCX);
+    st = emit_insn(st, insn.F_INC_D, insn.R_RBP, -1, 1, ioff, -1, 0, 0);
+    st = emit_insn(st, insn.F_JMP_L, loop_i.label, 0, 0, 0, 0, 0, 0);
+    st = emit_label(st, done.label);
+    st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, aoff, -1, insn.R_RAX, 64);
+    st_temp(st, save)
+};
+
+def gen_arr_iter_method(st: EmitSt, node: Call, key: str, at: Type) -> EmitSt {
+    let dot: Dot = node.callee;
+    let esz = arr_elem_bytes(at);
+    let args: [Node] = node.args;
+    if (key == "sort" || key == "sorted") {
+        gen_arr_sort(st, node, key == "sorted")
+    } else if (key == "flat") {
+        let inner = arr_elem_of(at);
+        let inneresz = elem_bytes(inner);
+        let save = st.temp;
+        let aoff = (st.slots + st.temp + 1) * -8;
+        let ioff = (st.slots + st.temp + 2) * -8;
+        let roff = (st.slots + st.temp + 3) * -8;
+        let nioff = (st.slots + st.temp + 4) * -8;
+        st = st_temp(st, st.temp + 4);
+        st = gen(st, dot.obj);
+        st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, aoff, -1);
+        st = gen_arr_new_empty(st);
+        st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, roff, -1);
+        st = emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, ioff, -1);
+        let loop = next_loc(st);
+        st = loop.st;
+        let done = next_loc(st);
+        st = done.st;
+        st = emit_label(st, loop.label);
+        st = gen_arr_loop_head(st, at, aoff, ioff, done.label);
+        st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, nioff, -1);
+        // y_arr_extend(res, inner, inneresz)
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, roff, -1, insn.R_RAX, 64);
+        st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, nioff, -1, insn.R_RAX, 64);
+        st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOV_I_R, inneresz, insn.R_RAX, 64, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_CALL_L, lbl_new("y_arr_extend"), 0, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_ADD_I_R, 24, insn.R_RSP, 64, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, roff, -1);
+        st = emit_insn(st, insn.F_INC_D, insn.R_RBP, -1, 1, ioff, -1, 0, 0);
+        st = emit_insn(st, insn.F_JMP_L, loop.label, 0, 0, 0, 0, 0, 0);
+        st = emit_label(st, done.label);
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, roff, -1, insn.R_RAX, 64);
+        st_temp(st, save)
+    } else if (key == "map" || key == "filter") {
+        let fnode = args[0];
+        let nargs = arr_closure_nargs(st, fnode);
+        let ret = arr_closure_ret(st, fnode);
+        let resesz = elem_bytes(ret);
+        let save = st.temp;
+        let aoff = (st.slots + st.temp + 1) * -8;
+        let foff = (st.slots + st.temp + 2) * -8;
+        let ioff = (st.slots + st.temp + 3) * -8;
+        let roff = (st.slots + st.temp + 4) * -8;
+        let eoff = (st.slots + st.temp + 5) * -8;
+        st = st_temp(st, st.temp + 5);
+        st = gen(st, dot.obj);
+        st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, aoff, -1);
+        st = gen(st, fnode);
+        st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, foff, -1);
+        st = gen_arr_new_empty(st);
+        st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, roff, -1);
+        st = emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, ioff, -1);
+        let loop = next_loc(st);
+        st = loop.st;
+        let done = next_loc(st);
+        st = done.st;
+        let skip = next_loc(st);
+        st = skip.st;
+        st = emit_label(st, loop.label);
+        st = gen_arr_loop_head(st, at, aoff, ioff, done.label);
+        st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, eoff, -1);
+        let regs: [long] = [];
+        if (nargs >= 1) { regs += insn.R_RAX; };
+        if (nargs >= 2) { regs += insn.R_RCX; };
+        st = gen_closure_call(st, foff, regs);
+        if (key == "map") {
+            st = gen_arr_push_slot(st, roff, resesz);
+        } else {
+            st = emit_insn(st, insn.F_TEST_R_R, insn.R_RAX, 64, insn.R_RAX, 64, 0, 0, 0);
+            st = emit_insn(st, insn.F_JZ_L, skip.label, 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, eoff, -1, insn.R_RAX, 64);
+            st = gen_arr_push_slot(st, roff, esz);
+            st = emit_label(st, skip.label);
+        };
+        st = emit_insn(st, insn.F_INC_D, insn.R_RBP, -1, 1, ioff, -1, 0, 0);
+        st = emit_insn(st, insn.F_JMP_L, loop.label, 0, 0, 0, 0, 0, 0);
+        st = emit_label(st, done.label);
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, roff, -1, insn.R_RAX, 64);
+        st_temp(st, save)
+    } else if (key == "foreach" || key == "all" || key == "some" || key == "find") {
+        let fnode = args[0];
+        let nargs = arr_closure_nargs(st, fnode);
+        let save = st.temp;
+        let aoff = (st.slots + st.temp + 1) * -8;
+        let foff = (st.slots + st.temp + 2) * -8;
+        let ioff = (st.slots + st.temp + 3) * -8;
+        let eoff = (st.slots + st.temp + 4) * -8;
+        st = st_temp(st, st.temp + 4);
+        st = gen(st, dot.obj);
+        st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, aoff, -1);
+        st = gen(st, fnode);
+        st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, foff, -1);
+        st = emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, ioff, -1);
+        let loop = next_loc(st);
+        st = loop.st;
+        let done = next_loc(st);
+        st = done.st;
+        let ret = next_loc(st);
+        st = ret.st;
+        let end = next_loc(st);
+        st = end.st;
+        st = emit_label(st, loop.label);
+        st = gen_arr_loop_head(st, at, aoff, ioff, done.label);
+        st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, eoff, -1);
+        let regs: [long] = [];
+        if (nargs >= 1) { regs += insn.R_RAX; };
+        if (nargs >= 2) { regs += insn.R_RCX; };
+        st = gen_closure_call(st, foff, regs);
+        if (key == "foreach") {
+            st = emit_insn(st, insn.F_INC_D, insn.R_RBP, -1, 1, ioff, -1, 0, 0);
+            st = emit_insn(st, insn.F_JMP_L, loop.label, 0, 0, 0, 0, 0, 0);
+            st = emit_label(st, done.label);
+            st = emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
+        } else if (key == "all") {
+            st = emit_insn(st, insn.F_TEST_R_R, insn.R_RAX, 64, insn.R_RAX, 64, 0, 0, 0);
+            st = emit_insn(st, insn.F_JZ_L, ret.label, 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_INC_D, insn.R_RBP, -1, 1, ioff, -1, 0, 0);
+            st = emit_insn(st, insn.F_JMP_L, loop.label, 0, 0, 0, 0, 0, 0);
+            st = emit_label(st, done.label);
+            st = emit_insn(st, insn.F_MOV_I_R, 1, insn.R_RAX, 64, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_JMP_L, end.label, 0, 0, 0, 0, 0, 0);
+            st = emit_label(st, ret.label);
+            st = emit_insn(st, insn.F_MOV_I_R, 0, insn.R_RAX, 64, 0, 0, 0, 0);
+            st = emit_label(st, end.label);
+        } else if (key == "some") {
+            st = emit_insn(st, insn.F_TEST_R_R, insn.R_RAX, 64, insn.R_RAX, 64, 0, 0, 0);
+            st = emit_insn(st, insn.F_JNZ_L, ret.label, 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_INC_D, insn.R_RBP, -1, 1, ioff, -1, 0, 0);
+            st = emit_insn(st, insn.F_JMP_L, loop.label, 0, 0, 0, 0, 0, 0);
+            st = emit_label(st, done.label);
+            st = emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
+            st = emit_insn(st, insn.F_JMP_L, end.label, 0, 0, 0, 0, 0, 0);
+            st = emit_label(st, ret.label);
+            st = emit_insn(st, insn.F_MOV_I_R, 1, insn.R_RAX, 64, 0, 0, 0, 0);
+            st = emit_label(st, end.label);
+        } else {
+            st = emit_insn(st, insn.F_TEST_R_R, insn.R_RAX, 64, insn.R_RAX, 64, 0, 0, 0);
+            st = emit_insn(st, insn.F_JNZ_L, ret.label, 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_INC_D, insn.R_RBP, -1, 1, ioff, -1, 0, 0);
+            st = emit_insn(st, insn.F_JMP_L, loop.label, 0, 0, 0, 0, 0, 0);
+            st = emit_label(st, done.label);
+            st = emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
+            st = emit_insn(st, insn.F_JMP_L, end.label, 0, 0, 0, 0, 0, 0);
+            st = emit_label(st, ret.label);
+            st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, eoff, -1, insn.R_RAX, 64);
+            st = gen_box_rax(st);
+            st = emit_label(st, end.label);
+        };
+        st_temp(st, save)
+    } else if (key == "reduce") {
+        let fnode = args[0];
+        let save = st.temp;
+        let aoff = (st.slots + st.temp + 1) * -8;
+        let foff = (st.slots + st.temp + 2) * -8;
+        let ioff = (st.slots + st.temp + 3) * -8;
+        let acoff = (st.slots + st.temp + 4) * -8;
+        st = st_temp(st, st.temp + 4);
+        st = gen(st, dot.obj);
+        st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, aoff, -1);
+        st = gen(st, fnode);
+        st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, foff, -1);
+        st = gen(st, args[1]);
+        st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, acoff, -1);
+        st = emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, ioff, -1);
+        let loop = next_loc(st);
+        st = loop.st;
+        let done = next_loc(st);
+        st = done.st;
+        st = emit_label(st, loop.label);
+        st = gen_arr_loop_head(st, at, aoff, ioff, done.label);
+        st = emit_insn(st, insn.F_MOV_R_R, insn.R_RAX, 64, insn.R_RCX, 64, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, acoff, -1, insn.R_RAX, 64);
+        let regs: [long] = [];
+        regs += insn.R_RAX;
+        regs += insn.R_RCX;
+        st = gen_closure_call(st, foff, regs);
+        st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, acoff, -1);
+        st = emit_insn(st, insn.F_INC_D, insn.R_RBP, -1, 1, ioff, -1, 0, 0);
+        st = emit_insn(st, insn.F_JMP_L, loop.label, 0, 0, 0, 0, 0, 0);
+        st = emit_label(st, done.label);
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, acoff, -1, insn.R_RAX, 64);
+        st_temp(st, save)
+    } else if (key == "index") {
+        let target = args[0];
+        let save = st.temp;
+        let aoff = (st.slots + st.temp + 1) * -8;
+        let voff = (st.slots + st.temp + 2) * -8;
+        let ioff = (st.slots + st.temp + 3) * -8;
+        let eoff = (st.slots + st.temp + 4) * -8;
+        st = st_temp(st, st.temp + 4);
+        st = gen(st, dot.obj);
+        st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, aoff, -1);
+        st = gen(st, target);
+        st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, voff, -1);
+        st = emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, ioff, -1);
+        let loop = next_loc(st);
+        st = loop.st;
+        let done = next_loc(st);
+        st = done.st;
+        let found = next_loc(st);
+        st = found.st;
+        let end = next_loc(st);
+        st = end.st;
+        st = emit_label(st, loop.label);
+        st = gen_arr_loop_head(st, at, aoff, ioff, done.label);
+        st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, eoff, -1);
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, voff, -1, insn.R_RAX, 64);
+        st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, eoff, -1, insn.R_RAX, 64);
+        st = gen_eq_vals(st, arr_elem_of(at));
+        st = emit_insn(st, insn.F_TEST_R_R, insn.R_RAX, 64, insn.R_RAX, 64, 0, 0, 0);
+        st = emit_insn(st, insn.F_JNZ_L, found.label, 0, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_INC_D, insn.R_RBP, -1, 1, ioff, -1, 0, 0);
+        st = emit_insn(st, insn.F_JMP_L, loop.label, 0, 0, 0, 0, 0, 0);
+        st = emit_label(st, done.label);
+        st = emit_insn(st, insn.F_MOV_I_R, -1, insn.R_RAX, 64, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_JMP_L, end.label, 0, 0, 0, 0, 0, 0);
+        st = emit_label(st, found.label);
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, ioff, -1, insn.R_RAX, 64);
+        st = emit_label(st, end.label);
+        st_temp(st, save)
+    } else {
+        // sort/sorted emitted below in a later arm; keep a loud internal
+        // marker rather than silently emitting nothing.
+        st = emit(st, "    # INTERNAL: array method '" + key + "' has no emitter")
+    }
+};
+
+def gen_arr_insert_method(st: EmitSt, node: Call) -> EmitSt {
+    let dot: Dot = node.callee;
+    let at = infer(st, dot.obj);
+    let esz = arr_elem_bytes(at);
+    let args: [Node] = node.args;
+    st = gen(st, dot.obj);
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    st = gen(st, args[0]);
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    st = gen(st, args[1]);
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_I_R, esz, insn.R_RAX, 64, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_CALL_L, lbl_new("y_arr_insert"), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_ADD_I_R, 32, insn.R_RSP, 64, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
+    st
+};
+
+def gen_arr_method(st: EmitSt, node: Call) -> EmitSt {
+    let dot: Dot = node.callee;
+    let key = dot.key;
+    let at = infer(st, dot.obj);
+    if (key == "pop") { gen_arr_pop_shift(st, node, false) }
+    else if (key == "shift") { gen_arr_pop_shift(st, node, true) }
+    else if (key == "remove") { gen_arr_remove(st, node) }
+    else if (key == "push") { gen_arr_push_method(st, node, false) }
+    else if (key == "unshift") { gen_arr_push_method(st, node, true) }
+    else if (key == "insert") { gen_arr_insert_method(st, node) }
+    else { gen_arr_iter_method(st, node, key, at) }
+};
+
 def gen_method(st: EmitSt, node: Call) -> EmitSt {
     let mcal: Dot = node.callee;
     let mobj = mcal.obj;

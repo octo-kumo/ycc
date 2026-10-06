@@ -27,6 +27,11 @@ Yv *str_method(Yv *m);        /* string-method lowering/type table */
 Yv *narrow_type(Yv *s, Yv *t); /* static type of a match `narrow` node */
 Yv *union_member(Yv *u, Yv *t); /* the member of union u that is t */
 Yv *unfold(Yv *t);            /* a tref's type, one level */
+Yv *member_fields(Yv *m);     /* fields a union member contributes */
+Yv *member_field_type(Yv *m, Yv *key);
+int is_prim_type(Yv *t);
+int is_boxable_type(Yv *t);
+Yv *box_field_name(Yv *t);
 Yv *members(Yv *t);           /* a union's members, unfolded */
 Yv *union_parts(Yv *t);       /* a union's members as written */
 Yv *pat_members(Yv *s, Yv *t); /* members with a record pattern's fields */

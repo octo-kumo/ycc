@@ -30,6 +30,7 @@ ylong skip_close(Yv *toks, ylong p, Yv *closer);
 int is_name_tok(Yv *toks, ylong p);
 
 Yv *res(Yv *node, ylong p);
+Yv *tuple_key(ylong i);
 Yv *sep_by(Yv *toks, ylong p, Yv *close, Yv *one);
 
 /* ── operator precedence ────────────────────────────────────────────────── */
@@ -37,6 +38,17 @@ ylong op_prec(Yv *op);
 
 /* ── primary expressions ────────────────────────────────────────────────── */
 Yv *parse_primary(Yv *toks, ylong p);
+Yv *parse_arrow_func(Yv *toks, ylong p);
+int json_sigil_at(Yv *toks, ylong p, Yv *opener);
+Yv *json_callee(Yv *name, ylong ln, ylong cl);
+Yv *json_call_name(Yv *name, Yv *args, ylong ln, ylong cl);
+Yv *json_call0(Yv *name, ylong ln, ylong cl);
+Yv *json_call1(Yv *name, Yv *arg, ylong ln, ylong cl);
+Yv *json_err(Yv *msg, ylong ln, ylong cl);
+Yv *parse_json_value(Yv *toks, ylong p, int top);
+Yv *parse_json_object(Yv *toks, ylong p);
+Yv *parse_json_array(Yv *toks, ylong p);
+Yv *parse_json_primary(Yv *toks, ylong p, int top);
 
 /* ── postfix: call, index, slice, dot ───────────────────────────────────── */
 Yv *parse_postfix(Yv *toks, ylong p);
@@ -138,6 +150,7 @@ Yv *pat_res(Yv *test, Yv *binds, Yv *cover, int wild, ylong pos);
 Yv *let_node(Yv *name, Yv *v, ylong ln, ylong cl);
 Yv *parse_pattern(Yv *toks, ylong p, Yv *tmp);
 Yv *parse_type_pattern(Yv *toks, ylong p, Yv *tmp);
+Yv *pattern_type(Yv *nm);
 Yv *parse_value_pattern(Yv *toks, Yv *node, ylong pos, Yv *tmp, ylong ln, ylong cl);
 
 /* a name index (types.c lookup): NameIx = { keys, vals, n } */

@@ -49,6 +49,15 @@ undefined-variable error, exactly like reading a local before its
 declaration). Captured bindings are \textbf{shared}: a write inside the
 closure is visible outside, and a write outside is visible inside.
 
+A literal written as an \emph{arrow} is the same closure with less
+punctuation: \ic{v => v + 1} is \ic{def(v) \{ v + 1 \}},
+\ic{(e, i) => e + i} takes two parameters, and \ic{() => 0} takes none.
+The body is one expression, or a block; a parameter may carry a type
+(\ic{(acc: long, v: long) => acc + v}), and the parentheses are optional
+for a lone parameter. Arrow literals appear anywhere a \ic{def} literal
+does, and they are what the array methods take
+(Section~\ref{sec:array-methods}).
+
 \begin{lstlisting}
 def counter() {
     let n = 0;
