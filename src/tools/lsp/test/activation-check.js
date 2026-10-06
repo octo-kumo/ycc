@@ -255,8 +255,23 @@ async function activateAt(dir) {
     check('activate: no error is shown on the way up',
         !stub.__status.some((t) => t.includes('$(error)')),
         JSON.stringify(stub.__status));
+    // The state changes are logged with their NAMES, not bare integers. A bare `3`
+    // is unreadable, which is how two wrong constants survived: a real log showed
+    // `client state: 3` followed by `client state: 2`, which reads as backwards.
+    check('activate: the state changes are logged by name',
+        stub.__lines.some((l) => l.includes('client state: Starting (2)'))
+            && stub.__lines.some((l) => l.includes('client state: Running (3)')),
+        stub.__lines.filter((l) => l.includes('client state')).join(' | '));
     await ext.deactivate();
     check('deactivate: stopped the server it started', spawned.length >= 1);
+    // And the status bar says the server is gone. This is the check that was
+    // missing while the state constants were wrong: the branch that reports a dead
+    // server was keyed on Running instead of Stopped, so it could never fire, and
+    // nothing asserted that it should. deactivate() takes the client through the
+    // real Stopped transition, so the assertion needs no new machinery.
+    check('deactivate: the status bar says the server stopped',
+        stub.__status.some((t) => t.includes('server stopped')),
+        JSON.stringify(stub.__status));
 
 // R1.6 and the root, with both settings ON. The positive half of the argv checks
 // above, and the only place `serverArgs(root, warnings)` is seen doing its job:
