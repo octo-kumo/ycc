@@ -1278,18 +1278,13 @@ y_os_openat:
     mov 40(%rbp), %r12
     mov 32(%rbp), %r13
     mov 24(%rbp), %rbx
-# an absolute DOS path is "X:" -- two bytes at least, a letter then a colon
-    cmp $2, %r13
-    jl yoa_bad
-    movzbq (%r12), %rax
-    add $32, %rax
-    cmp $97, %rax
-    jl yoa_bad
-    cmp $123, %rax
-    jg yoa_bad
-    movzbq 1(%r12), %rax
-    cmp $58, %rax
-    jne yoa_bad
+# A path is ABSOLUTE when it starts "X:" -- a letter and a colon. Anything
+# else is relative and gets the process's CurrentDirectory prepended: the
+# PEB's RTL_USER_PROCESS_PARAMETERS.CurrentDirectory.DosPath (PEB+0x20 is
+# ProcessParameters, +0x38 the CURDIR's UNICODE_STRING: Length at +0x38,
+# Buffer at +0x40 -- decimal 56 and 64 below). That string is already UTF-16
+# and already DOS ("Z:\tmp\wfs", no trailing separator), so a relative path
+# is a byte copy plus a widening, not a widening of both.
     cmp $900, %r13
     jg yoa_bad
 # The Win32 namespace prefix, as four UTF-16 code units in one 8-byte store:
@@ -1302,16 +1297,61 @@ y_os_openat:
     mov $25895968444448860, %rax
     mov %rax, (%r14)
     add $8, %r14
+    cmp $2, %r13
+    jl yoa_rel
+    movzbq (%r12), %rax
+    add $32, %rax
+    cmp $97, %rax
+    jl yoa_rel
+    cmp $123, %rax
+    jg yoa_rel
+    movzbq 1(%r12), %rax
+    cmp $58, %rax
+    jne yoa_rel
+    jmp yoa_abs
+yoa_rel:
+    mov %gs:96, %rax
+    mov 32(%rax), %rax
+    mov 56(%rax), %rcx
+    and $65535, %rcx
+    mov 64(%rax), %rdx
+# 1024 bytes (512 units) of directory: the cap that keeps prefix + directory
+# + separator + path inside rbp-2096..rbp-208 (1880 bytes), since the relative
+# part is still capped at 900 characters.
+    cmp $1024, %rcx
+    jg yoa_bad
+    cmp $0, %rcx
+    je yoa_bad
+    mov $0, %rax
+yoa_cploop:
+    cmp %rcx, %rax
+    jge yoa_cpdone
+    mov %rdx, %r15
+    add %rax, %r15
+    movzbq (%r15), %r15
+    mov %r15, (%r14)
+    add $1, %r14
+    add $1, %rax
+    jmp yoa_cploop
+yoa_cpdone:
+# A separator, unless the directory already ends with one (read the low byte
+# of its last unit: every character here is ASCII, so that byte is it).
+    mov %rdx, %rax
+    add %rcx, %rax
+    movzbq -2(%rax), %r15
+    cmp $92, %r15
+    je yoa_abs
+    mov $92, %rax
+    mov %rax, (%r14)
+    add $2, %r14
+yoa_abs:
 # Widen the path: one byte in, one UTF-16 unit out, '/' folded to '\'. The
 # in-tree assembler has no 16-bit store form (enc_mov's memory arm is 64-bit
 # only), so each store is 8 bytes with the unit in its low two; the cursor
 # advances TWO, not eight, and the next store overwrites the six zero bytes
 # the previous one left. (Advancing 8 per unit was the first bug here: the
 # name came out with a NUL after every character, which NT answers
-# STATUS_OBJECT_NAME_INVALID, 0xC0000033.) The last store's zeros sit past
-# Length and inside the buffer: rbp-2088 up to the OBJECT_ATTRIBUTES at
-# rbp-208 is 1880 bytes and the length cap above is 900 characters = 1800
-# bytes plus the 8-byte prefix and 6, so the two cannot meet.
+# STATUS_OBJECT_NAME_INVALID, 0xC0000033.)
     mov $0, %r15
 yoa_loop:
     cmp %r13, %r15
@@ -1330,17 +1370,17 @@ yoa_sep0:
     inc %r15
     jmp yoa_loop
 yoa_path_done:
-# UNICODE_STRING at rbp-32. Length is in BYTES and a UTF-16 unit is two: the
-# name is the four-unit "\??\" prefix PLUS the path, so Length = 2*(n+4).
-# (It used to start the Buffer past the prefix and leave it out of Length,
-# which hands NT a DRIVE-LETTER path with no object-namespace root -- exactly
-# STATUS_OBJECT_PATH_SYNTAX_BAD, 0xC000003B, which is what every generated
-# PE's first open answered.) MaximumLength is the same: the buffer holds the
-# name plus the possible odd-length NUL. One 64-bit store carries both,
-# Length | (Length << 16).
-    mov %r13, %rax
-    shl $1, %rax
-    add $8, %rax
+# UNICODE_STRING at rbp-32. Length is in BYTES, and the buffer holds ONE
+# contiguous UTF-16 name: the four-unit "\??\" prefix, the directory when the
+# path was relative, and the path. %r14 advanced exactly two per unit and one
+# per copied byte, so the bytes written are r14 - (rbp-2096); the 8-byte
+# stores that leave six zero bytes behind do not move it, so that count is
+# exact and the zeros sit past Length. (The old code computed 2*(n+4) from the
+# path length alone, which cannot see a prepended directory.) MaximumLength is
+# the same. One 64-bit store carries both, Length | (Length << 16).
+    mov %r14, %rax
+    sub %rbp, %rax
+    add $2096, %rax
     mov %rax, %r15
     shl $16, %rax
     add %r15, %rax

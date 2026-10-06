@@ -56,24 +56,37 @@ y_bitsf:
 # cannot report it (cvttsd2si answers with the "integer indefinite" value and
 # raises nothing), so the Y layer checks and comes here to stop with a message
 # that says what happened.
+# y_int_trap and y_len_stop go through the NAMED layer (y_os_write, y_os_exit)
+# rather than raw numbers, because this file is embedded in both targets and
+# `mov $1,%rax` is write(2) only on Linux: on a PE it is lseek, the trap fell
+# through, and `math.to_int(1.0/0.0)` returned a value instead of stopping the
+# program (ideas/WINDOWS.md, "math.s is target-blind"). The two labels exist in
+# prelude.s and in its Windows half (wsys.s), so calling them is what makes this
+# block correct on both -- and the shaker keeps them because this block
+# references them. Arguments go on the stack, count pushed last.
 y_int_trap:
     mov $1, %rax
-    mov $1, %rdi
-    lea ystr_int(%rip), %rsi
-    mov $ystr_int_end-ystr_int, %rdx
-    syscall
-    mov $231, %rax
-    mov $1, %rdi
-    syscall
+    push %rax
+    lea ystr_int(%rip), %rax
+    push %rax
+    mov $ystr_int_end-ystr_int, %rax
+    push %rax
+    call y_os_write
+    add $24, %rsp
+    mov $1, %rax
+    push %rax
+    call y_os_exit
+    add $8, %rsp
 
 # y_len_stop: the exit half of std/math.y's equal-length rule (its message goes
 # through eputs, which is ordinary Y; only the stop is machine code). Split the
 # same way as y_int_trap, for the same reason: a `void` native cannot fall off
 # its end into whatever follows.
 y_len_stop:
-    mov $231, %rax
-    mov $1, %rdi
-    syscall
+    mov $1, %rax
+    push %rax
+    call y_os_exit
+    add $8, %rsp
 
 # ── the two form probes ─────────────────────────────────
 #

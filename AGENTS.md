@@ -612,8 +612,14 @@ replaces the std one at link time).
 - `src/y/arch/*.s` — the compiler's own assembly: the arch prelude
   (`prelude.s`: allocator, traps, string/array cores, `y_fmod`, float
   formatting), the float primitives `math.s` (`y_sqrt`, `y_to_int`, `y_fbits`,
-  `y_bitsf` — what a `native def` reaches for), and the thread runtime
-  (`threads.s`) — embedded by both copies, see PORTING.md rule 12.
+  `y_bitsf` — what a `native def` reaches for), the thread runtime
+  (`threads.s`) and the Windows syscall self-test (`wselftest.s`) — embedded
+  by both copies, see PORTING.md rule 12. Every kernel access goes through the
+  named layer: std says `os_call("y_os_read", ...)` and the ELF body lives in
+  `prelude.s` while the Windows body is a `replace:` block in `wsys.s`, so a
+  raw `syscall` number in a file both targets use is a target bug — `math.s`'s
+  two traps had Linux numbers and `math.to_int(1.0/0.0)` returned instead of
+  trapping on a PE until they were routed through `y_os_write`/`y_os_exit`.
 - `src/y/` — the Y compiler: `ycc.y` (driver), `pkg.y` (`ycc build`:
   `y.toml`, the dependency graph, git, `y.lock`), `lexer.y`, `parser.y`,
   `rename.y`, `types.y` (checker), `lint.y` (warnings), `native.y`

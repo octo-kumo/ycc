@@ -864,18 +864,21 @@ reason this section exists:
   the list above (the `yav` count against its values, the two copies'
   `INTRINSICS` matching name-for-name and in order, every `os_call_names` entry
   being a label some `src/y/arch/*.s` defines) and they are all cheap.
-- **`src/y/arch/math.s` is a FOURTH arch file with no Windows half.** It is new
-  from master, it is embedded like the other three (so `ARCH_EMBEDS` — a wildcard
-  over `src/y/arch/*.s` — picked it up with no Makefile edit), and it is
-  **target-blind**: `y_int_trap` and `y_len_stop` write with Linux `syscall`
-  numbers (`mov $1, %rax` = `write(2)`, `mov $231, %rax` = `exit_group(2)`).
-  On a PE those numbers mean different `Nt*` calls, so `math.to_int(1.0/0.0)`
-  returns instead of trapping: `test/y/native/t307_math_trap` prints `0` and exits
-  0 where ELF prints `runtime error: a float with no integer part a long holds`
-  and exits 1. Verified in the `-S` output, where the block is byte-identical on
-  both targets. This is B2's `std/win/*` work, not a merge defect — but it is the
-  first thing that is *newly reachable* because of the merge, and it is the shape
-  every future `src/y/arch/*.s` must not have.
+- **`src/y/arch/math.s` was a FOURTH arch file with no Windows half — DONE.**
+  It is embedded like the other three (`ARCH_EMBEDS` — a wildcard over
+  `src/y/arch/*.s` — picks it up with no Makefile edit), and `y_int_trap` and
+  `y_len_stop` were **target-blind**: they wrote with Linux `syscall` numbers
+  (`mov $1, %rax` = `write(2)`, `mov $231, %rax` = `exit_group(2)`), which on a
+  PE are different Nt calls, so `math.to_int(1.0/0.0)` returned instead of
+  trapping (`test/y/native/t307_math_trap` printed `0` and exited 0 where ELF
+  prints `runtime error: a float with no integer part a long holds` and exits 1).
+  Both traps now go through the NAMED layer — `call y_os_write` / `call
+  y_os_exit`, which prelude.s and wsys.s each define — so the block is correct on
+  both targets and the shaker keeps those two labels because it references them.
+  Measured: `pe-fixtures.sh ./cycc t307_math_trap` went from `0 PASS, 1 PE-only
+  failure` to `1 PASS both targets, 0 PE-only`, and the ELF still prints the
+  message and exits 1. The rule for every future `src/y/arch/*.s`: name a label,
+  never a number.
 - **The NT file path works now (B2, in progress).** `fs.open_file` /
   `read_some` / `write_text` / `close_file` / `seek` are `os_call`s into
   `wsys.s` and they now do the right Nt calls. Getting there meant fixing
@@ -897,7 +900,12 @@ reason this section exists:
   deleted the file on close. The right numbers come from the `mov $N,%eax`
   of Wine's own `ntdll.dll` stubs, the same way `w_sysno` was read from a real
   one. Verified under wine: a PE writes, appends, reads back and seeks a
-  file with the same bytes as Linux. **Still raw `syscall(` in `fs.y`**:
+  file with the same bytes as Linux — ABSOLUTE ("Z:\\...") and, since this
+  round, RELATIVE paths too: the open path now prepends the PEB's
+  `RTL_USER_PROCESS_PARAMETERS.CurrentDirectory.DosPath` (a byte copy; it is
+  already UTF-16 and already DOS), which is what the block's own comment had
+  asked for and what kept every `fs` fixture PE-only.
+  **Still raw `syscall(` in `fs.y`**:
   `path_mode`/`exists`/`file_size` (262), `list_dir` (217/257), `make_dir`
   (258), `remove_file`/`remove_dir` (263), `rename` (264), `set_mode` (268),
   `cwd` (79), `chdir` (80) -- the rest of the B2 slice.
