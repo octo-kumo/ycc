@@ -43,10 +43,10 @@ wrong without them:
     for that reason rather than in a filter, because deciding the arms are
     mutually exclusive needs real control flow and a line-based scan cannot.
 
-SO: two reports, one real redundancy (fvariance computes len(a) twice) and one
-known false positive (atan). Both are in KNOWN, and anything new is a failure.
-That makes this a RATCHET: the list can shrink, and a new entry has to come with
-a reason.
+SO: the reports are one real redundancy that was fixed here (fvariance computed
+len(a) twice) and one known false positive (atan). Only the false positive is
+still in KNOWN, and anything new is a failure. That makes this a RATCHET: the
+list can shrink, and a new entry has to come with a reason.
 
 Line-based and bracket-aware: expressions are recovered by walking brackets and
 operators, which is enough for a module written the way math.y is. It would need
@@ -77,11 +77,6 @@ KNOWN = {
     ("atan", "neg", "x<0.0"): (
         "the matching test is in the is_inf arm and this binding in the else "
         "arm, so only one of the two ever runs"),
-    ("fvariance", "n", "len(a)"): (
-        "real but tiny: len is a header load, and the guard is a length "
-        "comparison. Hoisting it would save a few instructions a call on a "
-        "kernel that spends its time on the elements, at the cost of binding a "
-        "name before the guard that decides whether the rest runs"),
 }
 
 

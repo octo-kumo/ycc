@@ -719,7 +719,15 @@ def cbrt(x: float) -> float {
         // stated to be.
         let y2 = y * y;
         let y3 = y2 * y;
-        let y3_err = (prod_err(y, y, y2) * y) + prod_err(y2, y, y3);
+        // prod_err wants y and y2 split, and between the two products each is
+        // split more than once -- y three times, y2 twice. Split each once and
+        // hand the pieces to prod_err_s; the arithmetic is identical, so the
+        // residual is bit-for-bit what the two prod_err calls produced.
+        let yh = split_hi(y);
+        let yl = split_lo(y, yh);
+        let y2h = split_hi(y2);
+        let y2l = split_lo(y2, y2h);
+        let y3_err = (prod_err_s(yh, yl, yh, yl, y2) * y) + prod_err_s(y2h, y2l, yh, yl, y3);
         let r_hi = two_sum(y3, 0.0 - s);
         let r_lo = (y3 - r_hi) - s;
         y = y - ((r_hi + (r_lo + y3_err)) / (3.0 * y2));
@@ -1341,19 +1349,29 @@ let inv_ln2: float = 1.4426950408889634073599246810018921374266459541529859;
 // nothing more than rounding a constant.
 let inv_ln2_lo: float = 2.0355273740931033e-17;
 
+// The exact split of one double: hi holds the top 26 bits and lo the rest, and
+// hi + lo == a exactly. 134217729 is 2^27 + 1, Dekker's split constant.
+def split_hi(a: float) -> float {
+    let c = 134217729.0 * a;
+    c - (c - a)
+};
+def split_lo(a: float, hi: float) -> float { a - hi };
+
+// prod_err's sum, for a caller that has already split its operands: the same
+// arithmetic in the same order, so the result is bit-identical to prod_err.
+def prod_err_s(ah: float, al: float, bh: float, bl: float, p: float) -> float {
+    ((ah * bh - p) + ah * bl + al * bh) + al * bl
+};
+
 // The exact error of the product a*b, given p = a*b. Dekker's split: break
 // both factors at bit 26, recombine, and what is left is the rounding the
 // product lost. It needs no fused multiply-add, which this machine has no
 // instruction for, and it is exact for every magnitude here (all well below
 // 2^996, so no scaling).
 def prod_err(a: float, b: float, p: float) -> float {
-    let ca = 134217729.0 * a;
-    let ah = ca - (ca - a);
-    let al = a - ah;
-    let cb = 134217729.0 * b;
-    let bh = cb - (cb - b);
-    let bl = b - bh;
-    ((ah * bh - p) + ah * bl + al * bh) + al * bl
+    let ah = split_hi(a);
+    let bh = split_hi(b);
+    prod_err_s(ah, split_lo(a, ah), bh, split_lo(b, bh), p)
 };
 
 // n mod 4, as 0, 1, 2 or 3. C's % keeps the sign of the dividend, so a
@@ -1386,7 +1404,14 @@ def rem_pio2(x: float, n: long) -> float {
     // 2^10. The other two are 3.5e-27 and below, where the rounding is some
     // twenty orders of magnitude under the answer's last bit however large n
     // grows -- which is why there are two prod_err calls here and not four.
-    let err = prod_err(nf, pio2_1, p1) + prod_err(nf, pio2_1t, p1t);
+    // Both calls split the same nf, so it is split once and the pieces handed
+    // to prod_err_s; bit-identical, one split fewer on the hot reduction path.
+    let nh = split_hi(nf);
+    let nl = split_lo(nf, nh);
+    let p1h = split_hi(pio2_1);
+    let p1th = split_hi(pio2_1t);
+    let err = prod_err_s(nh, nl, p1h, split_lo(pio2_1, p1h), p1)
+            + prod_err_s(nh, nl, p1th, split_lo(pio2_1t, p1th), p1t);
     ((((x - p1) - p1t) - p2) - p2t) - err
 };
 
@@ -2282,13 +2307,15 @@ def asin_half(a: float) -> float {
         // more than the arithmetic they feed. Same operations, same order.
         let p = poly_asin(z);
         // two = 2*asin(s) = 2s + (2s)*z*P(z). The kernel is exact enough that
-        // the only rounding left in it is the one two_sum holds.
-        let hi = two_sum(2.0 * s, (2.0 * s) * z * p);
+        // the only rounding left in it is the one two_sum holds. 2s is bound
+        // once because both terms and the residual's denominator read it.
+        let t = 2.0 * s;
+        let hi = two_sum(t, t * z * p);
         // The square root's own half-ulp, which (z - s*s)/(2s) is exactly: z -
         // s*s is exact by Sterbenz again, and the first-order form is wrong by a
         // relative 5e-17 of a number that is itself a fraction of an ulp -- so
         // this is the sqrt put back, not an estimate of it.
-        asin_half_lo = ts_lo + 2.0 * ((z - s * s) / (2.0 * s)) * (1.0 + z * p);
+        asin_half_lo = ts_lo + 2.0 * ((z - s * s) / t) * (1.0 + z * p);
         asin_half_hi = hi;
         hi
     }
@@ -3007,10 +3034,13 @@ def fmean(a: [float]) -> float {
 // infinity sets e = 1024, the scaled elements stay infinite, and inf - inf is
 // the NaN it should be.
 def fvariance(a: [float]) -> float {
-    if (len(a) < 2) {
+    // len() once, through a name both the guard and the loops read: the guard
+    // is a length comparison and the body a header load, so the second call was
+    // pure repetition (find_repeats.py's own KNOWN named it before this).
+    let n = len(a);
+    if (n < 2) {
         nan
     } else {
-        let n = len(a);
         let big = 0.0;
         let i = 0;
         while (i < n) {

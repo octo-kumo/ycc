@@ -166,6 +166,14 @@ print("after `helper.` on line 7: " + tostring(past(7, "helper.")));
 print("after `math.` on line 8: " + tostring(past(8, "math.")));
 print("a name on line 9: " + tostring(past(9, "local +")));
 
+// The workspace is MADE here, not assumed. The buffer below imports
+// `./helper.y`, and completion on `helper.` makes the resolver look for that
+// file on disk; it used to exist in /tmp only because someone had created it by
+// hand, so the fixture passed on the machine where it already did and failed on
+// a fresh one. t021 makes its own for the same reason.
+fs.make_dirs(WS);
+fs.write_file(WS + "/helper.y", "def thing(n: long) -> long { n }\nlet CONST: long = 3;\n");
+
 let st = serve.server_state(WS, "", 0);
 let td = json.obj();
 td["uri"] = json.str(URI);
