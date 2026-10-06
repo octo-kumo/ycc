@@ -96,7 +96,7 @@ if (cd "$ROOT" && "$YCC" --target=windows "$RTSRC" -o "$OUT/fsrt.exe") >/dev/nul
     ( cd "$OUT" && rm -f pefsrt.txt; WINEARCH=win64 WINEDEBUG=-all \
         timeout 60 wine ./fsrt.exe >fsrt.out 2>fsrt.err )
     if diff -u "$RTEXP" "$OUT/fsrt.out" >"$OUT/fsrt.diff"; then
-        echo "pe-gate: file round trip ok (create/write/read/append/size/mkdir/unlink/seek/rename, PE == Linux)"
+        echo "pe-gate: file round trip ok (create/write/read/append/size/mkdir/unlink/seek/rename/cwd/chdir, PE == Linux)"
     else
         sed 's/^/    /' "$OUT/fsrt.diff" | head -10
         echo "pe-gate: FAIL (the PE's file round trip differs from the Linux output)"; exit 1
@@ -116,9 +116,9 @@ fi
 frc=$?
 # KNOWN GAP, loud on purpose: wsys.s has Windows bodies for only NINE of the
 # thirteen named-layer entries fs.y calls (read, write, stat, openat, close,
-# mkdir, unlink, set_mode, lseek and rename), so this program runs raw LINUX
-# syscall numbers on NT for the rest --
-#   y_os_getcwd y_os_chdir y_os_list
+# mkdir, unlink, set_mode, lseek, rename, getcwd and chdir), so this program
+# runs a raw LINUX syscall number on NT for the rest --
+#   y_os_list
 # -- and whatever those numbers mean to ntdll is what runs. Measured with a
 # pre-import-table compiler: fs.cwd() answers a non-empty string whose first
 # byte is 'Z' (90), not '/'. That is why this check passed in rounds 31-33 and
@@ -127,14 +127,14 @@ frc=$?
 # reports rather than fails, so the rest of this file stays a gate.
 if [ $frc -ne 0 ]; then
     grep -v '^$' "$OUT/fs.err" | head -3 | sed 's/^/    ! /'
-    echo "pe-gate: file path is a KNOWN GAP (exited $frc): 3 of fs.y's 13 layer entries have no Windows body yet"
+    echo "pe-gate: file path is a KNOWN GAP (exited $frc): 1 of fs.y's 13 layer entries has no Windows body yet (y_os_list)"
     exit 0
 fi
 if diff -u "$FSEXP" "$OUT/fs.out" >"$OUT/fs.diff"; then
     echo "pe-gate: file path ok ($(wc -l <"$FSEXP") lines, PE == the Linux output)"
 else
     sed 's/^/    /' "$OUT/fs.diff" | head -6
-    echo "pe-gate: file path is a KNOWN GAP (output differs): 3 of fs.y's 13 layer entries have no Windows body yet"
+    echo "pe-gate: file path is a KNOWN GAP (output differs): 1 of fs.y's 13 layer entries has no Windows body yet (y_os_list)"
     exit 0
 fi
 rm -f "$OUT/peg_fs.txt"

@@ -277,6 +277,38 @@ branch-disjointness false positive.
   2000, where stat's own layout has exactly 2000. `y_os_close` (NtClose, 15) was
   written the same round and reverted with it, untested, for the same reason:
   it is only reachable through a file handle that openat has to produce first.
+- **`y_os_getcwd` and `y_os_chdir` work (round 45)**, so TWELVE of the thirteen
+  entries have Windows bodies and ONE does not: **`y_os_list`** -- the last of
+  the directory trio and the fiddliest, since fs.list_dir's contract is one
+  format on both kernels (NUL-terminated names, "." and ".." left out) and NT
+  hands back FILE_BOTH_DIR_INFORMATION records that have to be rewritten into
+  it.
+  `fs.cwd()` answers `Z:/tmp/ts/w45` where Linux answers `/tmp/ts/e39` -- the
+  same shape, which is all a shared fixture can compare -- and `fs.chdir` moves
+  the process, fails for a path that is not a directory, and leaves the
+  directory alone when it fails. Both are in pe-gate.sh's round trip.
+    * getcwd is not a syscall at all: the current directory is a PEB field
+      (ProcessParameters+56, a UNICODE_STRING whose Length in BYTES is at +56 and
+      whose Buffer is at +64). The DOS path is narrowed to ASCII, its separator
+      turned around to `/` so the string fs.cwd returns is the shape the rest of
+      fs.y expects (y_w_path turns it back), and the TRAILING separator dropped,
+      which is what getcwd(2) returns.
+    * chdir is a PEB WRITE, so its buffer has to outlive the call: it is
+      allocated with NtAllocateVirtualMemory (24) and the PEB is pointed at it.
+      chdir therefore LEAKS the previous directory's buffer, bounded by the
+      number of chdirs a program makes -- the honest price of having no
+      allocator here. The `\??\` prefix y_w_path adds is skipped rather than
+      stripped (four units, eight bytes), because the PEB holds a DOS path.
+    * `..` IS NOT RESOLVED, and that is a real difference rather than a bug to
+      fix here: NT's native API does not do it -- that is user-space work
+      (RtlDosPathNameToNtPathName), and there is no user space in this layer. So
+      `chdir("..")` is true on Linux and false here, and the fixture deliberately
+      does not test it. Resolving it means normalising the path in the body.
+  Two bugs on the way, both the same shape as earlier ones: the copy wrote ONE
+  byte per unit where a PEB field needs UTF-16 (two bytes), and the length was
+  read out of %rdx after the PEB read had used it, so Length became a stray
+  character from the copy loop -- with chdir still reporting success while the
+  directory came out as the wrong path.
 - **`y_os_rename` WORKS (round 44)**, so TEN of the thirteen entries have
   Windows bodies and THREE do not: `y_os_getcwd`, `y_os_chdir`, `y_os_list` --
   the directory trio. Verified byte-identical on ELF and PE: write a file,

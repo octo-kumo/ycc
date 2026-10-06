@@ -1412,3 +1412,226 @@ yorn_fail:
     mov %rbp, %rsp
     pop %rbp
     ret
+# y_os_getcwd(buf, len) -> the number of bytes written INCLUDING the NUL, or -1.
+# fs.cwd does `from_bytes(buf[0:n-1])`, so the count has to include the
+# terminator.
+#
+# TWO ARGUMENTS, FRAMELESS in the ELF body: len (arg2) at 8(%rsp) -> 16(%rbp),
+# buf (arg1) at 16 -> 24.
+#
+# There is no getcwd(2) equivalent to call: the current directory is a field of
+# the PEB. ProcessParameters at PEB+32, CURDIR.DosPath at ProcessParameters+56,
+# a UNICODE_STRING whose Length is in BYTES at +56 and whose Buffer is at +64 --
+# the same read y_w_path does to build absolute paths. What comes back looks
+# like `Z:\tmp\ts\w42\`, so this narrows UTF-16 to bytes (ASCII only, as
+# everywhere in this file), turns the separator around to `/` so that the string
+# fs.cwd returns is the shape the rest of fs.y expects -- y_w_path turns it back
+# -- and drops the TRAILING separator, which is what getcwd(2) returns. A path
+# that is nothing but a root keeps it.
+#
+# The caller's buffer is not trusted to be big enough: a path that does not fit
+# is -1, not a truncation.
+#=== replace: y_os_getcwd ===
+y_os_getcwd:
+    push %rbp
+    mov %rsp, %rbp
+    sub $32, %rsp
+    mov 24(%rbp), %rdi
+    mov 16(%rbp), %rcx
+    cmp $0, %rcx
+    je yogc_fail
+    mov %gs:96, %rax
+    mov 32(%rax), %rax
+    mov 64(%rax), %rsi
+    mov 56(%rax), %r11
+    and $65535, %r11
+    shr $1, %r11
+    xor %r9d, %r9d
+yogc_loop:
+    cmp %r11, %r9
+    jge yogc_done
+    mov %r9, %rax
+    add %rax, %rax
+    movzbq (%rsi,%rax,1), %rdx
+    cmp $92, %rdx
+    jne yogc_keep
+    mov $47, %rdx
+yogc_keep:
+    cmp %rcx, %r9
+    jge yogc_fail
+    movb %dl, (%rdi,%r9,1)
+    add $1, %r9
+    jmp yogc_loop
+yogc_done:
+    cmp $1, %r9
+    jle yogc_term
+    mov %r9, %rax
+    sub $1, %rax
+    movzbq (%rdi,%rax,1), %rdx
+    cmp $47, %rdx
+    jne yogc_term
+    sub $1, %r9
+yogc_term:
+    cmp %rcx, %r9
+    jge yogc_fail
+    movb $0, (%rdi,%r9,1)
+    add $1, %r9
+    mov %r9, %rax
+    mov %rbp, %rsp
+    pop %rbp
+    ret
+yogc_fail:
+    mov $-1, %rax
+    mov %rbp, %rsp
+    pop %rbp
+    ret
+# y_os_chdir(path, len) -> 0, or -1.
+#
+# TWO ARGUMENTS, FRAMELESS: len (arg2) at 8(%rsp) -> 16(%rbp), path (arg1) at
+# 16 -> 24.
+#
+# The current directory is a PEB FIELD, so changing it is not a syscall but a
+# write: ProcessParameters at PEB+32, CURDIR.DosPath at +56, a UNICODE_STRING
+# whose Length is in BYTES at +56, MaximumLength at +58 and Buffer at +64. The
+# text it holds is a DOS path (`Z:\tmp\...`), NOT the `\??\` object-manager form
+# y_w_path produces, so the prefix is skipped rather than stripped by a second
+# builder -- its length is fixed at four units, the first eight bytes.
+#
+# THE BUFFER MUST OUTLIVE THE CALL, which rules out the frame: it is allocated
+# with NtAllocateVirtualMemory (24) at 2*units+4 bytes, and the DOS path written
+# into it as UTF-16 -- TWO bytes per unit, low byte then a zero high byte. The
+# first version wrote one byte per unit, which is the shape of every other
+# string in this file and the wrong shape for a PEB field: the result looked like
+# a path with NULs through it. and its address is what
+# the PEB ends up pointing at. chdir therefore LEAKS the previous directory's
+# buffer, because nothing else knows when the process is done with it. That is
+# the honest price of having no allocator here, and it is bounded by the number
+# of chdirs a program makes.
+#
+# The target is checked with NtQueryFullAttributesFile (196) and must have
+# FILE_ATTRIBUTE_DIRECTORY (16) set, because a chdir to something that is not
+# there has to FAIL -- chdir(2) says so, fs.chdir returns a bool, and a PEB
+# field will happily accept any string at all.
+#
+# The LENGTH is carried from the copy to the PEB write in %r11: the PEB read
+# uses %rax and %rdx, and the first version took the length out of %rdx after
+# that read, so Length became a stray character from the copy loop and the
+# directory came out as the wrong path -- with chdir still reporting success.
+#
+# Frame: the path at -2200 (y_w_path writes upward), the UNICODE_STRING at
+# -2320, the FILE_NETWORK_OPEN_INFORMATION at -2280 (its 56 bytes end at -2225,
+# below the buffer's start), the OBJECT_ATTRIBUTES at -2380, the allocated base
+# at -2300, the size at -2316 and two saved words at -2332 and -2340. 3000 puts
+# the stack-argument area at rbp-2960, clear of all of it.
+#=== replace: y_os_chdir ===
+y_os_chdir:
+    push %rbp
+    mov %rsp, %rbp
+    sub $3000, %rsp
+    lea -2200(%rbp), %rdi
+    mov 24(%rbp), %rsi
+    mov 16(%rbp), %rcx
+    call y_w_path
+    cmp $4, %rax
+    jle yocd_fail
+    mov %rax, -2400(%rbp)
+    sub $4, %rax
+    mov %rax, -2408(%rbp)
+    mov -2400(%rbp), %r8
+    add %r8, %r8
+    mov %r8, %rax
+    movb %al, -2320(%rbp)
+    shr $8, %rax
+    movb %al, -2319(%rbp)
+    add $2, %r8
+    mov %r8, %rax
+    movb %al, -2318(%rbp)
+    shr $8, %rax
+    movb %al, -2317(%rbp)
+    lea -2200(%rbp), %rax
+    mov %rax, -2312(%rbp)
+    mov $48, %rax
+    mov %rax, -2380(%rbp)
+    mov $0, %rax
+    mov %rax, -2372(%rbp)
+    lea -2320(%rbp), %rax
+    mov %rax, -2364(%rbp)
+    mov $64, %rax
+    mov %rax, -2356(%rbp)
+    mov $0, %rax
+    mov %rax, -2348(%rbp)
+    mov $0, %rax
+    mov %rax, -2340(%rbp)
+    lea -2380(%rbp), %r10
+    lea -2280(%rbp), %rdx
+    mov $196, %eax
+    syscall
+    test %eax, %eax
+    jne yocd_fail
+    movzbq -2232(%rbp), %rax
+    and $16, %rax
+    cmp $0, %rax
+    je yocd_fail
+    mov $0, %rax
+    mov %rax, -2300(%rbp)
+    mov -2408(%rbp), %rax
+    add %rax, %rax
+    add $4, %rax
+    mov %rax, -2316(%rbp)
+    mov $-1, %r10
+    lea -2300(%rbp), %rdx
+    xor %r8d, %r8d
+    lea -2316(%rbp), %r9
+    mov $12288, 40(%rsp)
+    mov $4, 48(%rsp)
+    mov $24, %eax
+    syscall
+    test %eax, %eax
+    jne yocd_fail
+    mov -2300(%rbp), %rdi
+    mov -2408(%rbp), %rcx
+    xor %r9d, %r9d
+yocd_copy:
+    cmp %rcx, %r9
+    jge yocd_tail
+    mov %r9, %rax
+    add $4, %rax
+    add %rax, %rax
+    movzbq -2200(%rbp,%rax,1), %rdx
+    mov %r9, %rax
+    add %rax, %rax
+    movb %dl, (%rdi,%rax,1)
+    movb $0, 1(%rdi,%rax,1)
+    add $1, %r9
+    jmp yocd_copy
+yocd_tail:
+    mov %r9, %rax
+    add %rax, %rax
+    movb $92, (%rdi,%rax,1)
+    movb $0, 1(%rdi,%rax,1)
+    add $2, %rax
+    movb $0, (%rdi,%rax,1)
+    movb $0, 1(%rdi,%rax,1)
+    mov %rax, %r11
+    mov %gs:96, %rax
+    mov 32(%rax), %rax
+    mov %r11, %rdx
+    movb %dl, 56(%rax)
+    shr $8, %rdx
+    movb %dl, 57(%rax)
+    add $2, %r11
+    mov %r11, %rdx
+    movb %dl, 58(%rax)
+    shr $8, %rdx
+    movb %dl, 59(%rax)
+    mov -2300(%rbp), %rdx
+    mov %rdx, 64(%rax)
+    xor %eax, %eax
+    mov %rbp, %rsp
+    pop %rbp
+    ret
+yocd_fail:
+    mov $-1, %rax
+    mov %rbp, %rsp
+    pop %rbp
+    ret

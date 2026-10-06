@@ -46,3 +46,17 @@ print(fs.rename("pefsrt_nope.txt", "pefsrt_x.txt"));
 print(fs.remove_file("pefsrt_ren2.txt"));
 print(fs.remove_file("pefsrt.txt"));
 print(fs.exists("pefsrt.txt"));
+// The current directory and chdir. Absolute paths differ between the targets by
+// construction (Z:/... against /...), so what is compared is the SHAPE: a
+// non-empty path that ends with the directory just entered, a chdir to
+// something that is not there failing, and the directory not having moved when
+// it did. `..` is deliberately NOT tested: NT's native API does not resolve it
+// (that is user-space work), so a chdir("..") that Linux accepts fails here, and
+// a fixture both targets must agree on is the wrong place to pin that down.
+print(fs.cwd().length > 0);
+print(fs.make_dir("pefsrt_cd"));
+print(fs.chdir("pefsrt_cd"));
+print(fs.cwd().ends_with("pefsrt_cd"));
+print(fs.chdir("pefsrt_missing"));
+print(fs.cwd().ends_with("pefsrt_cd"));
+print(fs.cwd().length > 0);
