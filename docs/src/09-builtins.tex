@@ -630,7 +630,11 @@ computed by squaring).
 \item[\ic{math.inv\_mod(a, m)}] The inverse of \ty{a} modulo \ic{m}, or \ic{0}
   when there is none.
 \item[\ic{math.fmin(a, b)}, \ic{math.fmax(a, b)}] The smaller or larger float,
-  with C's rule that a NaN loses to the other operand.
+  with C's rule that a NaN loses to the other operand. The tie between the two
+  signed zeros goes to \ic{-0.0} for \ic{fmin} and to \ic{+0.0} for \ic{fmax},
+  which is what \ic{minNum}/\ic{maxNum} say and what any caller dividing by the
+  answer needs --- C99 permits either sign, and \ic{1.0/fmax(0.0, -0.0)} is
+  \ic{+inf} rather than \ic{-inf}.
 \item[\ic{math.fabs(x)}, \ic{math.fsign(x)}] \ic{|x|}, with \ic{-0.0} coming
   back as \ic{+0.0}; and \ic{-1.0}, \ic{0.0} or \ic{1.0}.
 \item[\ic{math.lerp(a, b, t)}] \ic{a + (b - a) * t}.

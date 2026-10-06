@@ -77,4 +77,30 @@ a whole sequence is reproducible
   ok    a different seed gives a different sequence
           not one draw in fifty the same
 
-32 of 32 checks passed
+the VALUES, against splitmix64 in exact 64-bit arithmetic
+  ok    seed 1, first six draws
+          splitmix64 with the seed offset applied twice
+  ok    seed 2, first three
+          a second seed, a third stream
+  ok    seed 0, first three
+          seed 0 is not a fixed point and mixes like any other
+  ok    a negative seed
+          the shifts are >>> so the sign does not change the mixer
+  ok    seed 2^62
+          the sign bit set, which >>> must ignore
+  ok    seed LONG_MIN
+          every bit set: a >> would carry the sign down and fail this
+
+below(n), derived from the raw stream
+  ok    below(4) from seed 42
+          masked to 62 bits, then modulo, with rejection
+  ok    below(1000) from seed 42
+          a modulus that does not divide the span, so rejection runs
+  ok    below(2^61) from seed 42
+          the sign bit of the masked draw is where the difference is
+  ok    state after seed(1) is the offset seed
+          got -7046029254386353130, want -7046029254386353130
+  ok    and after one draw it has advanced by the golden ratio
+          got 4354685564936845355, want 4354685564936845355
+
+43 of 43 checks passed

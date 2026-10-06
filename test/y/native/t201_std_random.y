@@ -219,6 +219,92 @@ def main() -> long {
     test.ck("a different seed gives a different sequence", differs > 40,
         "not one draw in fifty the same");
 
+    // ─────────────────────────────────────────── against splitmix64 itself
+    //
+    // Every check above is a PROPERTY: two draws differ, a seed replays, the
+    // counts come out even. Each of those would also hold for a generator that is
+    // wrong in some way nobody thought to ask about, and a property cannot tell
+    // you which. So this block pins the VALUES -- and the reference is
+    // splitmix64 computed in exact 64-bit arithmetic, not a golden file written
+    // from this module's own output, which would only certify that it has not
+    // changed.
+    //
+    // The reference needs the module's convention spelled out. splitmix64 mixes
+    // the state it is handed, and this module both offsets the seed by the
+    // golden ratio (in seed) and advances before mixing (in next), so the draw
+    // for seed(v) is mix(v + 2*GOLDEN), the second mix(v + 3*GOLDEN), and so on.
+    // An earlier draft of this block seeded twice and compared against
+    // mix(v + GOLDEN), which is why the first line below is the FIRST draw and
+    // not a repeat of it -- the module advances st inside next(), so seeding once
+    // and drawing twice is one stream, and re-seeding is draw one again.
+    test.group("the VALUES, against splitmix64 in exact 64-bit arithmetic");
+    test.ck("seed 1, first six draws", stream_of(1, 6) == [
+        -4689498862643123097, -534904783426661026, 8196980753821780235,
+        8195237237126968761, -4373826470845021568, -2262517385565684571
+    ], "splitmix64 with the seed offset applied twice");
+    test.ck("seed 2, first three", stream_of(2, 3) == [
+        -4627371582388691390, -7459160825568275665, -4327252827158612380
+    ], "a second seed, a third stream");
+    test.ck("seed 0, first three", stream_of(0, 3) == [
+        7960286522194355700, 487617019471545679, -537132696929009172
+    ], "seed 0 is not a fixed point and mixes like any other");
+    test.ck("a negative seed", stream_of(0 - 5, 2) == [
+        -8161798454662654712, -2167467587980096447
+    ], "the shifts are >>> so the sign does not change the mixer");
+    test.ck("seed 2^62", stream_of(4611686018427387904, 2) == [
+        -4798756103566256131, -305740179795585657
+    ], "the sign bit set, which >>> must ignore");
+    test.ck("seed LONG_MIN", stream_of(0 - 9223372036854775807 - 1, 2) == [
+        -4292029157624213486, 7036458801432265024
+    ], "every bit set: a >> would carry the sign down and fail this");
+
+    // below(n) is the raw stream masked to 62 bits and rejected above the largest
+    // whole multiple of n -- so its values follow from the stream, and the
+    // expected ones are computed from it the same way.
+    test.group("below(n), derived from the raw stream");
+    test.ck("below(4) from seed 42", bounded_of(42, 4, 20) == [
+        3, 2, 0, 2, 2, 1, 0, 1, 2, 3, 2, 2, 3, 0, 2, 1, 1, 3, 0, 0
+    ], "masked to 62 bits, then modulo, with rejection");
+    test.ck("below(1000) from seed 42", bounded_of(42, 1000, 6) == [
+        291, 954, 860, 250, 350, 925
+    ], "a modulus that does not divide the span, so rejection runs");
+    test.ck("below(2^61) from seed 42", bounded_of(42, 2305843009213693952, 4) == [
+        643983082913198339, 527597730035375954, 1737512041830867860, 701532786141963250
+    ], "the sign bit of the masked draw is where the difference is");
+
+    // state() is st itself, so these two pin the offset arithmetic rather than
+    // the mixer.
+    random.seed(1);
+    test.ck_eq("state after seed(1) is the offset seed", random.state(),
+        -7046029254386353130);
+    random.next();
+    test.ck_eq("and after one draw it has advanced by the golden ratio",
+        random.state(), 4354685564936845355);
+
     return test.report();
+};
+
+// n draws from one seed, so a block can be compared as a list.
+def stream_of(v: long, n: long) -> [long] {
+    random.seed(v);
+    let out: [long] = [];
+    let i = 0;
+    while (i < n) {
+        out += random.next();
+        i = i + 1
+    };
+    out
+};
+
+// n draws of below(k) from one seed.
+def bounded_of(v: long, k: long, n: long) -> [long] {
+    random.seed(v);
+    let out: [long] = [];
+    let i = 0;
+    while (i < n) {
+        out += random.below(k);
+        i = i + 1
+    };
+    out
 };
 exit(main());
