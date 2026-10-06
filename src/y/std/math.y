@@ -1337,14 +1337,201 @@ def log_y(x: float) -> float {
     }
 };
 
-// log2(x) and log10(x): the same kernel with the constant changed, which is
-// what C's do too (they are log(x) times a reciprocal, not separate code).
-def log2(x: float) -> float {
-    log(x) * 1.4426950408889634073599246810018921374266459541529859
+// 1/ln2 and 1/ln10, each in two pieces. A single double for a reciprocal this
+// size is short by up to half an ulp, so log(x) * that constant rounds twice and
+// the answer can be 2 ulps out before log's own error is counted. The table found
+// it: log2(7.8166428423182364) came out 2 ulps from the true value where libm is
+// exact, on an ordinary argument, in a function the one-ulp promise names by
+// name. log2 had NINE pinned cases and log10 had NINE MORE -- the thinnest
+// coverage in the table -- and a spread uniform in the DECADES found it in a
+// minute, which is the argument for a spread stated four times now.
+//
+// The split carries about 150 bits, against the 106 a double-double holds.
+// GENERATED as hi/lo pairs from a 90-digit computation, because typing them is
+// how the first attempt got one of them wrong: a hand-written log10(2) tail
+// was off by a factor of EIGHT, and every test that followed it was an exact
+// power of ten, where the tail does not show at all. Same lesson as the
+// polynomial kernels' low halves, and the same reason gen_kernel.py exists.
+let log2e_hi: float = 1.4426950408889634;
+let log2e_lo: float = 2.0355273740931033e-17;
+// TWO constants, and confusing them is a bug that was made here: log10's answer
+// is built from two terms with two different scalings.
+//
+//     log10(x) = e * log10(2)  +  ln(m) * log10(e)
+//
+// The first term's e is the BASE 2 exponent (the reduction splits x = m*2^e), so
+// it is scaled by log10(2). The second term is a NATURAL logarithm -- the z
+// series gives ln(m) -- so it is scaled by log10(e) = 1/ln10. Scaling both by
+// log10(2) answers a different function: it gave log10(0.75) as 0.1307 instead
+// of -0.1249, which is 2.8e15 ulps out and would have been caught by any
+// ordinary case.
+let log10e_hi: float = 0.4342944819032518;
+let log10e_lo: float = 1.098319650216765e-17;
+let log10_2_hi: float = 0.3010299956639812;
+let log10_2_lo: float = -2.8037281277851704e-18;
+
+// log2(x) = e + log2(m), for x = m * 2^e with m in [1/sqrt2, sqrt2). The
+// integer e is EXACT and is not multiplied by anything, so the kernel's error
+// lands on the answer instead of being amplified by 1.4427.
+//
+// That is the whole fix, and getting to it took one wrong turn worth recording.
+// The functions used to be `log(x) * (1/ln2)`, which is what C's do, and the
+// table reported them 2 ulps out on ordinary arguments with libm exact on all
+// of them. The first thing blamed was the constant -- a single rounded double
+// for a reciprocal is short by half an ulp, so the product rounds twice -- and
+// splitting it into hi and lo with prod_err and two_sum recovering the error was
+// correct, necessary, and changed NOTHING. Because log itself is 1 ulp out on
+// 6 of 9 arguments tried (within its own promise, and 0 ulp for libm on all 9),
+// and multiplying a 1-ulp error by 1.4427 makes it up to 2. Compensating a
+// multiply cannot repair an operand that is already wrong; that is worth knowing
+// before reaching for it.
+//
+// What is left uncounted below is the rounding of L*clo alone, which is about
+// 2^-106 of L because clo is 2^-53 of chi. The final ef + small rounds once, at
+// the size of the ANSWER, so the whole thing is correctly rounded except in a
+// near-tie.
+// x = m * 2^e with m in [0.5, 1), for x > 0 finite: frexp without frexp.
+//
+// frexp returns a two-element ARRAY, and a call that allocates is 146
+// instructions where this is about forty -- a program calling log2 in a loop
+// pays that on every call, and the allocation is most of what costs, not the
+// arithmetic. A subnormal still normalises first, exactly as frexp does, because
+// it has no implicit leading bit to read an exponent from.
+//
+// x > 0 and finite is a precondition here, so the sign dance frexp needs does
+// not apply: both callers have already answered NaN below zero and for the
+// infinities. The exponent comes back in split_e because Y has no tuples --
+// which is why frexp returns an array in the first place.
+let split_e: long = 0;
+
+def split_mantissa(x: float) -> float {
+    let r = x;
+    let ef = exp_field(r);
+    // The doublings have to come OFF the exponent. A subnormal has no implicit
+    // leading bit, so normalising it doubles it until it has one -- and then
+    // r is 2^guard larger than x, so the exponent read off r is guard too
+    // large. frexp subtracts them (`e - 1022 - guard`) and this did not, which
+    // made log2(5e-324) answer -1022 where the answer is -1074: the argument
+    // 2^-1074 is the one argument in four hundred where this shows, and the
+    // table's log2 spread is log-uniform, so it found the amplified form of the
+    // same error immediately.
+    let guard = 0;
+    while (ef == 0) {
+        r = r * 2.0;
+        ef = exp_field(r);
+        guard = guard + 1;
+    };
+    split_e = ef - 1022 - guard;
+    bitsf((fbits(r) & 4503599627370495) | 4602678819172646912)
 };
 
+def log_base(x: float, chi: float, clo: float) -> float {
+    if (x != x || x < 0.0) {
+        nan
+    } else if (x == 0.0) {
+        0.0 - inf
+    } else if (x > 1.7976931348623157e308) {
+        // +inf, and only +inf: a negative argument has already been answered
+        // NaN above (which is what C's log(-inf) is), and the only double larger
+        // than DBL_MAX is +inf. is_inf() would say the same thing in 32
+        // instructions, all of them call overhead for a comparison.
+        inf
+    } else {
+        let m = split_mantissa(x);
+        let e: long = split_e;
+        if (m < inv_sqrt2) {
+            m = m * 2.0;
+            e = e - 1;
+        };
+        let z = log_z(m) + z_lo;
+        let w = z * z;
+        // log(m), the same shape log_y uses, at the size log_y uses it
+        // poly_log, not poly_split: these two are on a runtime path and the
+        // loop form is 890 instructions a call for what is twelve multiply-adds.
+        // gen_split_unroll.py checks the two agree bit for bit.
+        let l = z * (2.0 + w * poly_log(w));
+        let p = l * chi;
+        let pe = prod_err(l, chi, p);
+        let s = two_sum(p, l * clo);
+        let ef: float = e;
+        ef + (s + (ts_lo + pe))
+    }
+};
+
+def log2(x: float) -> float {
+    log_base(x, log2e_hi, log2e_lo)
+};
+
+// log10 goes THROUGH log2, not through its own reduction, and that is a
+// deliberate choice with a wrong turn behind it.
+//
+// The reduction above splits x = m*2^e, so the exact integer e is only the
+// integer part of a BASE 2 logarithm. Handing the same e to log10 gives
+// log10(100) = 6.8928, and that is not a rounding error -- it is a different
+// function. The decimal exponent has to come from a decimal split, and x/10^k
+// is not exact, so the compensated z series has nothing exact to work on.
+//
+// log2(x) * log10(2) has no such problem: log2(x) is now within half an ulp
+// RELATIVE of the truth, and multiplying by a constant keeps a relative error
+// relative -- it does not turn 0.5 ulp into 2. What the multiply does add is its
+// own rounding, and compensating it with the constant split leaves log10 within
+// the one-ulp promise. That the amplification used to be real is the finding:
+// log(x) * (1/ln10) put log's 1 ulp through a factor of 1.4427, or 3.32 for the
+// other base, and the table measured 2 ulps out on ordinary arguments.
+// Two wrong turns are recorded here because both were made, both compiled, and
+// both were caught only by the spread rather than by a test.
+//
+// The first was scaling the reciprocal: log10(x) as log(x)*(1/ln10), with the
+// constant split hi/lo and prod_err recovering the product's own rounding. That
+// is correct arithmetic and it changed NOTHING, because the error was in log's
+// answer, not in the multiply. Compensating a multiply cannot repair an operand
+// that is already wrong.
+//
+// The second was log10(x) = log2(x)*log10(2) with the same compensation, which
+// is the same mistake one level down: log2(x) has been ROUNDED, so the
+// computation was faithfully evaluating rounded-b times exact-c instead of
+// exact-log2 times exact-c. It measured 1 ulp on 787 of 12026 arguments where
+// the UNCOMPENSATED product was right on most of them -- making it worse, which
+// is what a compensation applied to the wrong target looks like.
+//
+// So the integer part is scaled, and it is scaled while it is still an exact
+// integer. log2's reduction splits x = m*2^e with m in [1/sqrt2, sqrt2), and e
+// is exact; log10(x) = e*log10(2) + log2(m)*log10(2), so both terms are products
+// of an EXACT quantity with a split constant, and the only rounding left is the
+// final addition -- 0.5 ulp, at the size of the answer.
 def log10(x: float) -> float {
-    log(x) * 0.43429448190325182765112891891660508229439700580366656
+    if (x != x || x < 0.0) {
+        nan
+    } else if (x == 0.0) {
+        0.0 - inf
+    } else if (x > 1.7976931348623157e308) {
+        // +inf, and only +inf: a negative argument has already been answered
+        // NaN above (which is what C's log(-inf) is), and the only double larger
+        // than DBL_MAX is +inf. is_inf() would say the same thing in 32
+        // instructions, all of them call overhead for a comparison.
+        inf
+    } else {
+        let m = split_mantissa(x);
+        let e: long = split_e;
+        if (m < inv_sqrt2) {
+            m = m * 2.0;
+            e = e - 1;
+        };
+        let z = log_z(m) + z_lo;
+        let w = z * z;
+        // poly_log, not poly_split: these two are on a runtime path and the
+        // loop form is 890 instructions a call for what is twelve multiply-adds.
+        // gen_split_unroll.py checks the two agree bit for bit.
+        let l = z * (2.0 + w * poly_log(w));
+        let ef: float = e;
+        let a = ef * log10_2_hi;
+        let ae = prod_err(ef, log10_2_hi, a);
+        // ln(m) scaled by log10(e), NOT by log10(2) -- see the two constants
+        let bq = l * log10e_hi;
+        let be = prod_err(l, log10e_hi, bq);
+        let s = two_sum(a, bq);
+        s + (ts_lo + (ae + be) + l * log10e_lo)
+    }
 };
 
 // ── sin and cos ────────────────────────────────────────────────────────────

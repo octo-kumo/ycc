@@ -24,6 +24,7 @@ import random
 import struct
 import sys
 from decimal import Decimal, getcontext, localcontext
+from fractions import Fraction
 
 # The cube root at 60 digits, rounded once at the end: x ** (1/3) is not it
 # (1/3 is not exact, and pow is a different function), and this platform's
@@ -484,9 +485,30 @@ REF1 = {
     "floor": lambda x: x if math.isinf(x) or math.isnan(x) else zeros(math.floor)(x),
     "ceil": lambda x: x if math.isinf(x) or math.isnan(x) else zeros(math.ceil)(x),
     "trunc": lambda x: x if math.isinf(x) or math.isnan(x) else zeros(math.trunc)(x),
+    # round: the nearest integer, halves AWAY FROM ZERO (C's round). Spelled out
+    # in exact rational arithmetic rather than as the usual floor(v + 0.5),
+    # which is wrong and was wrong here.
+    #
+    # floor(v + 0.5) fails whenever v + 0.5 is not representable and rounds the
+    # wrong way, and the case that matters is v just BELOW a half-integer. At
+    # v = 0.49999999999999994 the exact sum is 1 - 2^-54, which is halfway
+    # between 1 - 2^-53 and 1, so it rounds to 1.0 -- and the reference then
+    # answered 1 where C answers 0, for a double that is strictly less than one
+    # half. The module answered 0, correctly, and the table reported it as a
+    # 4.6e18-ulp failure. This is the FIFTH reference in this file to be the
+    # thing that is wrong.
+    #
+    # Fraction(v) is exact for a double, so the fractional part is exact and the
+    # comparison with 1/2 is exact. At |v| >= 2^52 the fraction is 0 and the
+    # answer is v, which is what every double that large wants to be.
     "round": lambda x: (x if math.isinf(x) or math.isnan(x)
-                        else zeros(lambda v: math.floor(v + 0.5) if v >= 0
-                                   else math.ceil(v - 0.5))(x)),
+                        else zeros(lambda v: (lambda n: float(n + 1)
+                                              if Fraction(v) - n >= Fraction(1, 2)
+                                              else float(n))(math.floor(Fraction(v)))
+                                    if v >= 0 else
+                                    (lambda n: float(n - 1)
+                                     if n - Fraction(v) >= Fraction(1, 2)
+                                     else float(n))(math.ceil(Fraction(v))))(x)),
     # C99: fract(+-inf) is a NaN (inf - trunc(inf)), and that is the answer
     # fract is x - trunc(x), and -0.0 - -0.0 is +0.0: the signed zero does NOT
     # survive this one (which is why zeros() does not wrap it)
@@ -600,6 +622,24 @@ def spread(seed, n, lo=-8.0, hi=8.0):
     return out
 
 
+def log_spread(seed, n, lo=-323.0, hi=308.0):
+    """n reproducible values uniform in the DECADES, so the argument is drawn
+    from the exponent rather than from the mantissa.
+
+    For log2, log10, exp2 and frexp the interesting structure is in the
+    exponent: a defect that hits one decade hits them all, and a spread uniform
+    in [lo, hi] would put 99.9% of its arguments in the last two decades and
+    none in the subnormals. Uniform in log10 puts equal weight on each of the
+    631 decades the range spans.
+    """
+    rng = random.Random(seed)
+    out = []
+    for _ in range(n):
+        e = rng.uniform(lo, hi)
+        out.append(math.copysign(10.0 ** e, 1.0 if rng.random() < 0.5 else -1.0))
+    return out
+
+
 def pair_spread(seed, n=80):
     """n reproducible (base, exponent) pairs, most of them with an exponent
     under 1 -- which is where pow's log is most sensitive, since the error it
@@ -647,6 +687,46 @@ EXTRA["cbrt"] = (spread(4242, 80, 1.0, 8.0) + spread(4243, 720, 1.0, 8.0)
 # its immediate neighbours, which are where a hand-off usually goes wrong.
 EXTRA["tanh"] = (spread(7001, 300, 0.0, 0.5) + spread(7002, 300, -0.5, 0.0)
                  + spread(7003, 200, -0.05, 0.05))
+
+# log2 and log10 were NOT in the list above, and that left them with 10 and 9
+# pinned cases -- the thinnest coverage in the whole table, for two functions
+# the one-ulp promise names by name. An omission, not a decision: everything
+# else in the tier got 60 and these two got nothing.
+#
+# They also need a spread uniform in the DECADES rather than in [-8, 8], because
+# that is where their structure is: log10(1e-300) and log10(1e300) exercise
+# different code from log10(7.3) does, and a uniform spread over [-8, 8] reaches
+# neither. So each gets the general spread AND 400 log-uniform arguments over the
+# 631 decades the positive range spans.
+EXTRA["log2"] = (spread(1013, 60) + log_spread(7101, 200, 0.0, 308.0)
+                 + log_spread(7102, 200, -323.0, 0.0))
+EXTRA["log10"] = (spread(1014, 60) + log_spread(7111, 200, 0.0, 308.0)
+                  + log_spread(7112, 200, -323.0, 0.0))
+
+# exp2's domain is [-1074, 1024] and its structure is the two ends of it, so a
+# general [-8, 8] spread is almost entirely wasted on it: 200 uniform arguments
+# across the range it covers, plus 100 drawn from the decades.
+EXTRA["exp2"] = (spread(1015, 60) + spread(7201, 120, -1074.0, -1.0)
+                 + spread(7202, 80, 1.0, 1024.0)
+                 + log_spread(7203, 100, -300.0, 300.0))
+
+# The exact-float tier -- floor, ceil, trunc, round, fract -- was gated on 24-29
+# arguments each, nearly all of them in [-8, 8]. What these do at the SIZE where
+# the answer stops being interesting is precisely what a spread over [-8, 8]
+# cannot see: at |x| >= 2^52 every double is already an integer, so floor, ceil,
+# trunc and round must be the identity there, and a kernel that rounded would be
+# caught by this and nowhere else. The subnormal band is where trunc and round
+# have almost no bits to work with, and 0.49999999999999994 is where a half-away-
+# from-zero rule and a ties-to-even one part company.
+EXACT_SIZE = (2.0 ** 52, 2.0 ** 53, 2.0 ** 62, 2.0 ** 63, 1e300, -1e300,
+              2.0 ** 52 + 2.0, 0.5 * 2.0 ** 53, 5e-324, -5e-324, 1e-320, -1e-320,
+              2.2250738585072014e-308, -2.2250738585072014e-308,
+              0.49999999999999994, -0.49999999999999994,
+              4503599627370495.5, 9007199254740991.5)
+for _i, _name in enumerate(["floor", "ceil", "trunc", "round", "fract"]):
+    EXTRA[_name] = (spread(7300 + _i, 120, -8.0, 8.0)
+                    + list(EXACT_SIZE)
+                    + log_spread(7400 + _i, 120, -320.0, 300.0))
 
 # asin and acos get a spread over the domain they HAVE, on top of the general
 # one (which is what supplies their out-of-domain NaN cases and must stay). A

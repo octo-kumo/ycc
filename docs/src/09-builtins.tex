@@ -472,6 +472,43 @@ computed by squaring).
     \ic{0.0}/\ic{0.0}, so the assembly's is a divide rather than a stored
     constant: the default NaN carries the sign bit, and the one you would write
     down is a different double from the one the Y returns.
+  \item[\ic{math.log2(x)}, \ic{math.log10(x)}] \emph{Not} \ic{math.log}'s answer
+    times a constant, which is what C does and what these used to do here. That
+    was \emph{wrong}: \ic{math.log} is inside its own one-ulp promise but is one
+    ulp out on six of every nine arguments tried, and multiplying that by
+    \num{1.4427} --- or by \num{3.32} for the other base --- makes it two. Over
+    \num{12026} arguments drawn log-uniformly from \num{5e-324} to
+    \ic{DBL\_MAX}, against a \num{60}-digit logarithm, the old code was two ulps
+    out on a fraction of a percent of them. Nine pinned cases each had let it
+    stand; the thinnest coverage in the table, for two functions the promise names.
+
+    What replaced it keeps \ic{log}'s reduction and scales the \emph{exact}
+    integer part:
+    \[
+      \log_2 x = e + \log_2 m, \qquad
+      \log_{10} x = e\log_{10} 2 + \ln m \cdot \log_{10} e,
+      \qquad x = m\,2^e.
+    \]
+    Each product's own rounding is taken back out with \ic{prod\_err} and
+    \ic{two\_sum}, and the two constants are carried as hi/lo pairs \emph{generated}
+    from a \num{90}-digit computation --- typing them is how the first attempt got
+    one of them wrong by a factor of eight, on a test that then turned out to be
+    an exact power of ten where the tail cannot show. Note the two different
+    scalings: $e$ is a \emph{base 2} exponent, so it takes $\log_{10} 2$, while
+    the other term is a \emph{natural} logarithm and takes $\log_{10} e$. Scaling
+    both by $\log_{10} 2$ answers a different function, and did --- it gave
+    $\log_{10} 0.75 = \num{0.1307}$ where the answer is $-\num{0.1249}$.
+
+    Measured on the same \num{12026} arguments: \ic{log2} within one ulp of
+    \emph{every one}, \ic{log10} within one ulp of all but one
+    (\num{0.76939152581348347}, where $\ln m$ is itself half an ulp out).
+    \ic{test/y/native/t322\_math\_log\_base.y} records it.
+
+    This cost \num{5.5}$\times$ the instructions: log through assembly and a
+    multiply is \num{149} a call, this is \num{817}. A deliberate trade, named as
+    one --- the promise is one ulp, and on a Y path that is what holding it
+    costs. Closing it means writing these two kernels in assembly, which is a
+    piece of work in its own right rather than a patch.
   \item[\ic{math.sin(x)}, \ic{math.cos(x)}, \ic{math.tan(x)}] The trigonometry,
     reduced modulo $\pi/2$ with \ic{two\_sum} taking out the two products that can
     round (the first piece's product needs more than 53 bits once $n$ passes
