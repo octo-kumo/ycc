@@ -137,9 +137,20 @@ const real = {
     },
 
     window: {
+        // `append` as well as `appendLine`: the language client writes the server's
+        // stderr through `outputChannel.append`, once per CHUNK it reads, so a stub
+        // with only appendLine throws "append is not a function" the moment the
+        // server says anything -- which is exactly when the activation check most
+        // wants to be watching. A chunk can carry several lines, so append splits on
+        // newlines and records each: the checks below count lines, not chunks.
         createOutputChannel: (name) => ({
             name,
             appendLine: (m) => lines.push(String(m)),
+            append: (m) => {
+                for (const one of String(m).split('\n')) {
+                    if (one.length > 0) { lines.push(one); }
+                }
+            },
             show: () => calls.push('output.show'),
             dispose: () => undefined,
         }),

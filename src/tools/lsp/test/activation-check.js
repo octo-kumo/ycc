@@ -109,14 +109,24 @@ check(
     readKeys.every((k) => settingKeys.includes(k)),
     'read but not declared: ' + readKeys.filter((k) => !settingKeys.includes(k)).join(','),
 );
-// The two booleans are pinned by name and by default, not only by type. Both
-// default to what the server already does (check on change, warn at level 0), so
-// adding a setting here cannot quietly change what every existing user sees.
+// The booleans are pinned by name and by default, not only by type, so adding a
+// setting here cannot quietly change what every existing user sees.
+//
+// checkOnChange and timing default TRUE -- check on change, and write the
+// per-request timing lines. warnings defaults false, which IS what the server
+// already does (yserve's own default, warn at level 0).
+//
+// timing's default was once false, on the reasoning that a line per request is
+// work on the extension host and this extension had been reported making a cold
+// open slow. That turned off the one instrument that had just located the
+// problem, on a guess. It is on by default and stays there.
 check(
-    'package.json: the five settings, and the two booleans default to what the server already does',
-    settingKeys.length === 5 &&
+    'package.json: the six settings, and every boolean defaults to what the server already does',
+    settingKeys.length === 6 &&
         settings['y.lsp.checkOnChange'].type === 'boolean' &&
         settings['y.lsp.checkOnChange'].default === true &&
+        settings['y.lsp.timing'].type === 'boolean' &&
+        settings['y.lsp.timing'].default === true &&
         settings['y.lsp.warnings'].type === 'boolean' &&
         settings['y.lsp.warnings'].default === false,
     'settings: ' + settingKeys.join(','),
