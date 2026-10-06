@@ -365,3 +365,39 @@ global cell labels", then filters `global_decls`/the init text by it. The
 tempting wrong version is to shake the unit: a unit whose functions are all
 dropped may still have a top-level side effect, and dropping it would change
 what the program prints.
+
+**Fourth look: implemented, working in Y, blocked on the C twin.** The marker
+design was written for real (`gen_decl_marked`, `cell_reads`, `mark_cell`,
+`mark_end`, `range_is_pure`, `ir_drop_inits` and the link-time wiring) and it
+works in `src/y`:
+
+| program | before | after |
+| --- | --- | --- |
+| `import math; print(7);` | 7678 | **973** |
+| 400 unused `[long; 8]` tables | 78173 | **973** |
+| unused `import regex;` / `import crypto;` | 1155 / 1393 | 973 |
+| `print(math.sqrt(9.0))` (math used) | 17132 | 10427 |
+
+and the real fixpoint holds (generation 2 vs 3 byte-identical) -- that is the
+check to run (`make ynew` makes it); a hand-rolled "generation 1 vs 2"
+comparison is not a fixpoint, because generation 1 was built by a compiler
+without the pass.
+
+**The bug the first cut had, and it is the important one.** The pass asked
+only "is the cell read", so it deleted `let result = main(...)` -- the CALL to
+`main` -- from the compiler's own `_start`; the result was a compiler that
+exits 0 and writes nothing. Every range is now checked by `range_is_pure`: no
+call except `y_alloc` (whose only effect is the memory an unread table would
+have held), no store to another cell, no raw text. The earlier bisect that
+"proved" each single deletion safe was run against a stale binary and proved
+nothing.
+
+**Where it stopped.** The C twin does not delete: its program `_start` body
+carries 126 labels and **no `ygi` marks at all**, while the Y's `_start`
+carries the marked ranges (the Y reports `_start -1614 items`). So in the C
+build the marks land in a different body -- or as raw text -- and
+`ir_drop_inits` never sees one. The C's own port bugs found on the way are
+fixed (its `keep` array holds bools: `yv_b`, not `yv_l`; its packed-body
+fallback is in place). The port gate will not let one copy ship alone, so the
+whole thing is reverted; the next step is a print of which body the C's marks
+land in.
