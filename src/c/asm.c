@@ -2172,10 +2172,27 @@ static Yv *patch_item_loop(Yv *code, Yv *it, Yv *lmap, long code_len, long pad, 
     return patch_item_finish(code, bytes, err);
 }
 
+/* A no-relocation image can hold a fixup only if it is a displacement or a
+   difference of two labels: there is no `.reloc` for an absolute address to be
+   rebased against, and enc64.c writes no relocated absolute address at all.
+   The kinds are enumerated here so that a future absolute one is refused by
+   NAME at assembly time rather than silently written as a difference of two
+   labels and truncated to 32 bits. pe.c's no-.reloc claim rests on this. */
+static int pe_no_abs(Yv *kind) {
+    return ys_eq_lit(kind, "rel32") || ys_eq_lit(kind, "rel8") ||
+           ys_eq_lit(kind, "rip32") || ys_eq_lit(kind, "imm32diff");
+}
+
 static Yv *patch_item_kind2(Yv *lmap, long code_len, long pad, Yv *fx, Yv *bytes, long base, Yv *it, long at) {
     /* (split: non-rel32 kinds; `{bytes,err}` built ONLY here + callees.) */
     if (ys_eq_lit(yr_get(fx, "kind"), "rip32")) {
         return patch_item_rel(lmap, code_len, pad, fx, bytes, base, it, at);
+    } else if (!pe_no_abs(yr_get(fx, "kind"))) {
+        /* rel32 and rel8 never reach here (patch_item_loop handles them); what
+           is left is the diff form, or a kind no no-relocation image can hold. */
+        return yr(2, "bytes", bytes,
+                  "err", ys_cat(ys_cat(ys("absolute fixup kind '"), yr_get(fx, "kind")),
+                                ys("' has no representation in a no-relocation image")));
     } else {
         return patch_item_diff(lmap, code_len, pad, fx, bytes, base, it);
     }

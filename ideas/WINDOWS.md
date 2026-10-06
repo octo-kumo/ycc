@@ -775,15 +775,20 @@ of which an earlier draft called unsolvable and is not:
   new pass — but two things are not bookkeeping: every emitted function needs a
   `RUNTIME_FUNCTION` entry and the table must cover `.text`, and `RELOCS_STRIPPED`
   does not exempt it.
-- **`w_self_test_lines()`'s doc comment describes a function that does not exist.** The
-  startup self-test was specified (W3) and the numbers are in `arch_x64.y`'s
-  `w_sysno`, but the body is empty. Either implement it or delete the claim — a comment
-  that promises a probe nobody runs is worse than no comment.
-- **An encoder guard against absolute addresses.** The "no `.reloc`" claim rests on
-  nothing ever emitting one, and `enc64.y` has **no `movabs`** — so a 64-bit absolute
-  address would be *silently truncated*, not diagnosed. A cheap assertion in `pe.y`
-  (or a `pe`-only check that no fixup kind is absolute) is worth adding before W3
-  starts needing real data.
+- **`w_self_test_lines()` is still unimplemented — the comment no longer pretends
+  otherwise.** The startup self-test was specified (W3) and the numbers are in
+  `arch_x64.y`'s `w_sysno`, but the body returns no lines. The false comment was
+  deleted (both twins now say the probe does not exist and why that is a gap); the
+  probe itself is still open, and until it exists nothing verifies the number table
+  at runtime.
+- **An encoder guard against absolute addresses — DONE.** The "no `.reloc`" claim
+  rests on nothing ever emitting one, and `enc64.y` has no `movabs` form for a
+  relocated address, so an absolute fixup kind would have been written as a
+  difference of two labels and truncated to 32 bits. `asm.y`/`asm.c`'s `pe_no_abs`
+  now enumerates the four kinds a no-relocation image may hold
+  (`rel32`, `rel8`, `rip32`, `imm32diff`) and `patch_item_kind2` refuses anything
+  else by name. Output-neutral: all four kinds are position-independent, so every
+  emitted binary is unchanged.
 - **Program profiling on PE.** `perf` and `callgrind` cannot read a PE at all, so
   R9's program-side half — "profile a compiled program and explain what moved" — has
   no equivalent for any `--target=windows` binary (see R9). What is left on Windows is
@@ -805,7 +810,7 @@ of which an earlier draft called unsolvable and is not:
 | **`argv()` on PE needs a command-line splitter, not a UTF-16 fixup**, and the W2 gate cannot see any of it (a hello-world that never calls `argv()` exercises none of it). | Build the parser in W4 — `RtlCommandLineToArgvW` or the MSVC rules, plus the UTF-16→UTF-8 policy for `y_cstr_to_str` — assert it in W5, and size W4 for it rather than leaving it as a footnote. |
 | **`ulimit -v` has no equivalent** (W6). | Decided, and cheaper than the exemption it replaces: `JOB_OBJECT_LIMIT_JOB_VM_SIZE` reproduces the fixture, because every mapping here is read-write committed. It costs a ~40-line job-object launcher, not a rule change. |
 | **Wine is not Windows.** Good enough to prove a PE loads and runs; not good enough to trust `CreateProcess`, console handles, or the TLS-free thread scheme. | W6 on a real runner; Wine only as a fast inner loop. |
-| **The no-`.reloc` claim is load-bearing and silent if violated.** | See the deferred encoder guard. |
+| **The no-`.reloc` claim is load-bearing and silent if violated.** | Guarded now: `asm.y`/`asm.c`'s `pe_no_abs` refuses any fixup kind that is not a displacement or a difference of two labels (`rel32`, `rel8`, `rip32`, `imm32diff`), by name, so a future absolute kind fails at assembly time rather than truncating. |
 | **SETTLED — the std pack bakes ONE target into every program built from it, and no flag on the consuming compiler can undo it.** `ycc --std-pack` never passes a target, so a target test compiled into `rt.y`/`fs.y`/`net.y`/… is baked into the pack and served to every program that links it. Measured both ways: with a conditional in `rt.y`, a PE built from the pack carried the ELF inline `write(2)` and printed nothing, while `--std-src` (which recompiles the units) worked. | **Hard rule, no exceptions: a std entry point names a label and none branches on the target.** `os_write` calls `y_os_write`, `exit` calls `y_os_exit`; the Windows bodies live in `src/y/arch/wsys.s` and the ELF bodies in `src/y/arch/prelude.s`, so the pack carries text correct for whichever compiler wrote it. The corollary for the port: `cycc` carries **no** pack at all, so it compiles the std units from source with its own `res_target` — which is why on the Windows path `cycc` and a pack-carrying `ynew` can differ byte-for-byte on fixtures whose std code still has raw `syscall(` sites, and `cycc` is the correct one of the two. Those raw sites are the W5 work; the divergence disappears when they are gone. **Done for the four packed units** (rt, prelude, exec, str): the named syscall layer B1 replaced every `syscall(` in them, and `test/sh/pe-packinv.sh` measures the invariant — a PE built from the pack and a PE built with `--std-src`, over every fixture, **210 identical and 0 different** (177 before the master merge; master added fixtures). The other std files (fs, net, tls, crypto, http, **math**, tui, test, args, json, random) are compiled per target from source, so they were never at risk from the pack; they are still raw-`syscall` sites, which is B2's `std/win/*` split. |
 
 ## What the Windows assembly halves cost, measured
@@ -941,12 +946,12 @@ allocator's growth policy is tuned against.
    implementation.** The numbers are no longer guesses: every one in `arch_x64.y`'s
    `w_sysno` was read out of a real `ntdll`'s stub rather than written from memory, so
    the pin is "whatever that `ntdll` was". What is still open — and it is the half that
-   matters — is the **guard**: `w_self_test_lines()` returns `[]` while its comment
-   claims it probes one call per class, so a `ycc` built against a Windows version whose
-   numbers have drifted would fail silently rather than at startup. Until the self-test
-   exists, "pinned" means "pinned to one unverified sample", and the number-drift risk
-   below is the only thing standing between a wrong number and silently wrong memory or
-   I/O.
+   matters — is the **guard**: `w_self_test_lines()` returns `[]` and its comment now
+   says so, but the probe it would emit does not exist, so a `ycc` built against a
+   Windows version whose numbers have drifted would fail silently rather than at
+   startup. Until the self-test exists, "pinned" means "pinned to one unverified
+   sample", and the number-drift risk below is the only thing standing between a wrong
+   number and silently wrong memory or I/O.
 
 ## Landing order
 

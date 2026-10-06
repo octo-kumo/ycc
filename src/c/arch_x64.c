@@ -79,7 +79,8 @@ long arch_word(void) {
 // range, which is dense and live, so a Linux number left behind does not
 // fail loudly — it calls a different, real Nt function. That is why they are
 // one table here, read off the stubs in a real ntdll rather than written from
-// memory, and why w_self_test probes one call per class at program start.
+// memory. w_self_test would probe one call per class at program start, and
+// does not yet -- see its own comment below.
 long arch_sysno(Yv *name) {
     if (target_is_windows()) { return w_sysno(name); }
     else { return l_sysno(name); }
@@ -113,20 +114,14 @@ static long w_sysno(Yv *name) {
     else { return -1; }
 }
 
-/* The Windows syscall self-test (ideas/WINDOWS.md, Risks): one Nt call per
-   class, its NTSTATUS checked, run once at program start when the target is
-   Windows. A number that drifted calls some other Nt function, and the honest
-   failure for that is a program that says so at startup rather than one that
-   misbehaves hours later. Memory (NtAllocateVirtualMemory), a file handle
-   (NtClose on the standard output), time (NtQueryPerformanceCounter) and a
-   thread (NtCreateThreadEx, whose failure path is "already probed": a real
-   thread is not started, the call is only made when a program uses threads).
-   Returns "" when every probe passed, else the name of the one that did not.
-
-   UNIMPLEMENTED, and the comment above is the specification it does not yet
-   meet: this returns nothing, so no program checks its syscall table at
-   startup. See the B9 item in the work report — do not read the paragraph
-   above as a claim about current behaviour.
+/* The Windows syscall self-test is NOT implemented. The design is in
+   ideas/WINDOWS.md (Risks): one Nt call per class -- memory, file, time,
+   thread -- with its NTSTATUS checked once at program start, so a number that
+   drifted on a different Windows build fails loudly instead of calling some
+   other real Nt function. It is a real gap rather than a postponed detail:
+   w_sysno's numbers are pinned to one ntdll sample and nothing verifies them
+   at runtime. This stub returns no lines, and says so, because a comment that
+   promises a probe nobody runs is worse than no comment.
 
    Not `static`, and not in arch_x64.h either: a Y `def` is callable from
    anywhere in its module and nothing warns when nothing calls it, whereas an
