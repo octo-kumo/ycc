@@ -47,6 +47,11 @@
           "default": true,
           "markdownDescription": "Run the checker and the linter on every keystroke. Off checks on `didOpen` and `didSave` only, which is much cheaper on a large file and costs you live errors. **The other features are unaffected**: hover, completion, semantic tokens and formatting still read your unsaved buffer, so they are never a keystroke behind."
         },
+        "y.lsp.warnings": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Pass `-W` to `yserve`, which adds the dropped-value and empty-`else` checks. Off is `yserve`'s own default and is **less** than `ycc`, which warns by default — turn this on if you want the editor to agree with the compiler."
+        },
         "y.lsp.trace.server": {
           "type": "string",
           "enum": [

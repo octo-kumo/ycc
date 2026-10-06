@@ -417,6 +417,23 @@ or operator position).
 Level 1 adds the two dropped-value checks and the empty-`else` check, all gated
 on `wlevel` in `lint.y`. Off means `wlevel` 0, never "no warnings".
 
+**Delivered, and it needed no server change at all** — which is why this one is
+here while R1.8 above was not. `yserve` has always taken `-W` / `--wlevel` on
+argv: the flag is parsed before any state exists and it changes what
+`check_program` is *asked for*, not how a message is answered, so it belongs on
+the command line rather than in `initializationOptions`. The client had simply
+never passed it. `client.ts`'s `serverArgs(root, warnings)` now does, and
+`activation-check.js` asserts the argv the client actually builds: `--stdio` alone
+at default settings, `--root <dir> -W` with both settings on.
+
+**Off by default, deliberately.** `yserve`'s own default is `wlevel` 0, so off is
+what every user sees today and what the client passed before this setting existed.
+It is worth saying that this is *less* than `ycc`, which warns by default: an
+editor that silently shows fewer warnings than the compiler is a small defect of
+its own, and this is the switch that fixes it. Changing the default would change
+what every existing user sees, which is a decision for the user rather than a bug
+fix, so it is documented instead of done.
+
 **R1.7** Diagnostics are published per document. A diagnostic whose origin is
 an imported file is published against that file's URI, so a typo in an
 imported module is visible without opening it. Publishing for the root

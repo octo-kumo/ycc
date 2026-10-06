@@ -113,13 +113,31 @@ export function notFoundMessage(spec: SearchSpec): string {
     );
 }
 
-/** The arguments yserve is started with. */
-export function serverArgs(root: string | undefined): string[] {
+/**
+ * The arguments yserve is started with.
+ *
+ * `warnings` is R1.6, and it is ARGV rather than an initializationOption because
+ * `yserve` has always read it that way (`-W` / `--wlevel`): the flag is part of how
+ * the compiler is invoked, it is parsed before any state exists, and it changes what
+ * `check_program` is asked for rather than how a message is answered. Putting it on
+ * argv means the setting needed no server change at all -- which is the whole of
+ * that requirement's cost.
+ *
+ * Off by default, which is `yserve`'s own default and therefore what every user
+ * sees today. Note that this is LESS than `ycc`, which warns by default: level 1
+ * adds the dropped-value and empty-`else` checks, and a user who wants the editor
+ * to agree with the compiler turns this on. Changing the default would change what
+ * every existing user sees, which is a decision and not a bug fix.
+ */
+export function serverArgs(root: string | undefined, warnings?: boolean): string[] {
     const args: string[] = [];
     // Only pass --root when we have one: yserve defaults to its own working
     // directory, and an empty --root would be a path that resolves to nothing.
     if (root && root.length > 0) {
         args.push('--root', root);
+    }
+    if (warnings === true) {
+        args.push('-W');
     }
     return args;
 }
@@ -128,12 +146,16 @@ export function config(): {
     serverPath: string | undefined;
     rootPath: string | undefined;
     checkOnChange: boolean;
+    warnings: boolean;
     trace: 'off' | 'messages' | 'verbose';
 } {
     const cfg = vscode.workspace.getConfiguration('y.lsp');
     return {
         serverPath: cfg.get<string>('serverPath') || undefined,
         rootPath: cfg.get<string>('rootPath') || undefined,
+        // R1.6. `false` is `yserve`'s own default, so this is today's behaviour
+        // spelled out rather than a new default -- see serverArgs for why.
+        warnings: cfg.get<boolean>('warnings', false),
         // Default ON, and the default is spelled out rather than left to
         // `get<boolean>`'s own: a client that sends nothing must get the
         // behaviour the server has always had. The server reads it as

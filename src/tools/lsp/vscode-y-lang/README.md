@@ -62,6 +62,7 @@ shell and fails in VS Code, or picks up something unrelated. If it is on your
 | `y.lsp.serverPath` | `""` | The `yserve` binary. Empty means search as above. |
 | `y.lsp.rootPath` | `""` | Passed as `--root`. Imports in an open file resolve against **that file's own directory** first, so this only matters for files outside the workspace. Empty uses the first workspace folder. |
 | `y.lsp.checkOnChange` | `true` | Run the checker and the linter on every keystroke. Off checks on open and on save only, which is much cheaper on a large file and costs you live errors. **The other features are unaffected** — hover, completion, highlighting and Format Document all read your unsaved buffer, so they are never a keystroke behind. |
+| `y.lsp.warnings` | `false` | Passes `-W` to `yserve`, adding the dropped-value and empty-`else` checks. Off is `yserve`'s own default and is **less** than `ycc`, which warns by default — turn this on if you want the editor to agree with the compiler. |
 | `y.lsp.trace.server` | `"off"` | `messages` or `verbose` logs the JSON-RPC traffic to the **Y** output channel. |
 
 Every setting in that table is read by the client and every setting the client

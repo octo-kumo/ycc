@@ -114,11 +114,11 @@ async function start(context: vscode.ExtensionContext, why: string): Promise<voi
         }
 
         const root = workspaceRoot();
-        log(`starting ${bin} ${serverArgs(root).join(' ')} (${why})`);
+        log(`starting ${bin} ${serverArgs(root, cfg.warnings).join(' ')} (${why})`);
 
         const server: ServerOptions = {
-            run: { command: bin, args: serverArgs(root), transport: TransportKind.stdio },
-            debug: { command: bin, args: serverArgs(root), transport: TransportKind.stdio },
+            run: { command: bin, args: serverArgs(root, cfg.warnings), transport: TransportKind.stdio },
+            debug: { command: bin, args: serverArgs(root, cfg.warnings), transport: TransportKind.stdio },
         };
 
         const clientOptions: LanguageClientOptions = {
