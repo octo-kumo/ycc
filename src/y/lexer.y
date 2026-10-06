@@ -1,6 +1,6 @@
 // lexer.y — tokenize a Y source string into a list of token maps.
 // Each token is { t: <type>, v: <lexeme/value>, line: <1-based>, col: <1-based> }.
-// Token types: id, num, str, bstr, char, op, punct, kw, eof, and ferr -- a
+// Token types: id, num, bigint, str, bstr, char, op, punct, kw, eof, and ferr -- a
 // malformed literal (a broken f-string, lex_fstring; a radix prefix without
 // digits), v its error message.
 
@@ -630,6 +630,8 @@ def tokenize(src: str) -> [Tok] {
             // two tokens in the stream for one literal: `expected ';', got
             // '0b10001b'`)
             let bval = -1;
+            // the decimal/radix literal ended in `n`: a bigint literal
+            let big = false;
             if (radix > 0) {
                 i = i + 2;
                 col = col + 2;
@@ -654,6 +656,13 @@ def tokenize(src: str) -> [Tok] {
                     if (radix == 16) { what = "hex"; }
                     else if (radix == 8) { what = "octal"; };
                     err = what + " literal '" + src[start:i] + "' has no digits";
+                } else if (src[i:i + 1] == "n" && !lex_word_slice(src[i + 1:i + 2])) {
+                    // `0b10001n` / `0o17n` / `0x1Fn`: a BIGINT literal.
+                    // `n` is not a digit of any radix, so the digits end
+                    // where it starts; the token tail emits it as a bignum.
+                    i = i + 1;
+                    col = col + 1;
+                    big = true;
                 } else if (src[i:i + 1] == "b" && !lex_word_slice(src[i + 1:i + 2])) {
                     // `0b10001b` / `0o17b`: a BYTE literal. `b` is not a
                     // digit of any radix that can take the suffix (which is
@@ -721,10 +730,23 @@ def tokenize(src: str) -> [Tok] {
                     };
                 };
             };
+            if (src[i:i + 1] == "n" && !lex_word_slice(src[i + 1:i + 2])) {
+                if (index_of(src[start:i], ".") >= 0 || index_of(src[start:i], "e") >= 0 || index_of(src[start:i], "E") >= 0) {
+                    err = "bigint literal '" + src[start:i + 1] + "' is a float; a bigint is a whole number";
+                    i = i + 1;
+                    col = col + 1;
+                } else {
+                    i = i + 1;
+                    col = col + 1;
+                    big = true;
+                };
+            };
             };
             let txt = src[start:i];
             if (err != "") {
                 toks += mktok("ferr", err, line, startcol);
+            } else if (big) {
+                toks += mktok("bigint", strip_seps(src[start:i - 1]), line, startcol);
             } else if (bval >= 0) {
                 toks += mktok("char", chr(bval), line, startcol);
             } else if (src[i:i + 1] == "b" && !lex_word_slice(src[i + 1:i + 2])) {

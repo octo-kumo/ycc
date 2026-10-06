@@ -420,6 +420,9 @@ ylong flit_bits(Yv *s);
 int flit_dmul_limb(Yv *a, ylong n);
 void flit_ddiv_limb(Yv *a, ylong n);
 Yv *gen_lit(Yv *st, Yv *node);
+Yv *gen_biglit(Yv *st, Yv *node);
+Yv *gen_bigint_to(Yv *st, Yv *node);
+Yv *gen_bigint_bin(Yv *st, Yv *node, Yv *lt, Yv *rt);
 Yv *gen_index(Yv *st, Yv *node);
 Yv *gen_dotassign(Yv *st, Yv *node);
 Yv *n_num(Yv *v, ylong line, ylong col);
@@ -3715,7 +3718,9 @@ Yv *infer(Yv *st, Yv *node) {
 
 Yv *infer_go(Yv *st, Yv *node) {
     Yv *k = yr_get(node, "k");
-    if (yv_l(k) == K_num) {
+    if (yv_l(k) == K_bignum) {
+        return yr(1, "k", yv_long(K_tbigint));
+    } else if (yv_l(k) == K_num) {
         if (lit_is_float(yr_get(node, "v"))) {
             return yr(1, "k", yv_long(K_tfloat));
         } else {
@@ -3789,6 +3794,9 @@ Yv *infer_go(Yv *st, Yv *node) {
                 (yv_l(yr_get(bl, "k")) == K_tstr ||
                  yv_l(yr_get(br, "k")) == K_tstr)) {
                 return yr(1, "k", yv_long(K_tstr));
+            } else if (yv_l(yr_get(bl, "k")) == K_tbigint ||
+                       yv_l(yr_get(br, "k")) == K_tbigint) {
+                return yr(1, "k", yv_long(K_tbigint));
             } else if (yv_l(yr_get(bl, "k")) == K_tfloat) {
                 return yr(1, "k", yv_long(K_tfloat));
             } else if (yv_l(yr_get(br, "k")) == K_tfloat) {
@@ -4752,6 +4760,8 @@ Yv *gen_go(Yv *st, Yv *node) {
     Yv *k = yr_get(node, "k");
     if (yv_l(k) == K_num) {
         return gen_lit(st, node);
+    } else if (yv_l(k) == K_bignum) {
+        return gen_biglit(st, node);
     } else if (yv_l(k) == K_bool) {
         if (ys_eq_lit(yr_get(node, "v"), "true")) {
             return emit_insn(st, F_MOV_I_R, 1, R_RAX, 64, 0, 0, 0, 0);
@@ -5678,7 +5688,9 @@ Yv *gen_un(Yv *st, Yv *node) {
     Yv *ut = infer(st, yr_get(node, "e"));
     st = gen(st, yr_get(node, "e"));
     if (ys_eq_lit(yr_get(node, "op"), "-")) {
-        if (yv_l(yr_get(ut, "k")) == K_tfloat) {
+        if (yv_l(yr_get(ut, "k")) == K_tbigint) {
+            return gen_helper1(st, ys("y_bigint_neg"));
+        } else if (yv_l(yr_get(ut, "k")) == K_tfloat) {
             /* flip the sign bit: -0.0 is a negative zero, -nan a nan */
             st = emit_insn(st, F_MOV_I_R, 1, R_RCX, 64, 0, 0, 0, 0);
             st = emit_insn(st, F_SHL_I_R, 63, R_RCX, 64, 0, 0, 0, 0);
@@ -5894,6 +5906,16 @@ Yv *gen_cat(Yv *st, Yv *node, Yv *lt, Yv *rt) {
             st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
             st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_str_cat"))), 0, 0, 0, 0, 0, 0);
             st = emit_insn(st, F_ADD_I_R, 16, R_RSP, 64, 0, 0, 0, 0);
+        } else if (yv_l(yr_get(rt, "k")) == K_tbigint) {
+            st = gen(st, yr_get(node, "l"));
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+            st = gen(st, yr_get(node, "r"));
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_bigint_tostr"))), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_ADD_I_R, 8, R_RSP, 64, 0, 0, 0, 0);
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_str_cat"))), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_ADD_I_R, 16, R_RSP, 64, 0, 0, 0, 0);
         } else {
             /* Unknown right operand: treat it as a string. Most unknowns
              * here ARE strings (a field read through an untyped hole infers
@@ -5943,6 +5965,16 @@ Yv *gen_cat(Yv *st, Yv *node, Yv *lt, Yv *rt) {
             st = gen(st, yr_get(node, "l"));
             st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
             st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_float_tostr"))), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_ADD_I_R, 8, R_RSP, 64, 0, 0, 0, 0);
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+            st = gen(st, yr_get(node, "r"));
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_str_cat"))), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_ADD_I_R, 16, R_RSP, 64, 0, 0, 0, 0);
+        } else if (yv_l(yr_get(lt, "k")) == K_tbigint) {
+            st = gen(st, yr_get(node, "l"));
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_bigint_tostr"))), 0, 0, 0, 0, 0, 0);
             st = emit_insn(st, F_ADD_I_R, 8, R_RSP, 64, 0, 0, 0, 0);
             st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
             st = gen(st, yr_get(node, "r"));
@@ -6143,7 +6175,8 @@ Yv *gen_str_cmp(Yv *st, Yv *node, Yv *op) {
 int eq_elem_loop(Yv *t) {
     return yv_l(yr_get(t, "k")) == K_topt ||
            yv_l(yr_get(t, "k")) == K_tarr ||
-           yv_l(yr_get(t, "k")) == K_tfloat;
+           yv_l(yr_get(t, "k")) == K_tfloat ||
+           yv_l(yr_get(t, "k")) == K_tbigint;
 }
 
 /* The left operand pushed, the right one in %rax: pops the left and leaves
@@ -6165,6 +6198,13 @@ Yv *gen_eq_vals(Yv *st, Yv *t) {
             st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_arr_eq"))), 0, 0, 0, 0, 0, 0);
             return emit_insn(st, F_ADD_I_R, 24, R_RSP, 64, 0, 0, 0, 0);
         }
+    } else if (yv_l(yr_get(t, "k")) == K_tbigint) {
+        st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_bigint_cmp"))), 0, 0, 0, 0, 0, 0);
+        st = emit_insn(st, F_ADD_I_R, 16, R_RSP, 64, 0, 0, 0, 0);
+        st = emit_insn(st, F_CMP_I_R, 0, R_RAX, 64, 0, 0, 0, 0);
+        st = emit_insn(st, F_SETE_R, R_RAX, 8, 0, 0, 0, 0, 0);
+        return emit_insn(st, F_MOVZBQ_R_R, R_RAX, 8, R_RAX, 64, 0, 0, 0);
     } else if (yv_l(yr_get(t, "k")) == K_tstr) {
         st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
         st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_str_eq"))), 0, 0, 0, 0, 0, 0);
@@ -6295,6 +6335,11 @@ Yv *gen_bin_rest(Yv *st, Yv *node) {
     } else if (ys_eq_lit(op, "<<") || ys_eq_lit(op, ">>") ||
                ys_eq_lit(op, ">>>")) {
         return gen_shift(st, node, op);
+    } else if (yv_l(yr_get(lt, "k")) == K_tbigint ||
+               yv_l(yr_get(rt, "k")) == K_tbigint) {
+        /* + - * / % and every comparison go through the runtime bigint
+         * helpers. Mixed long/byte/float operands convert silently. */
+        return gen_bigint_bin(st, node, lt, rt);
     } else if (yv_l(yr_get(lt, "k")) == K_tfloat ||
                yv_l(yr_get(rt, "k")) == K_tfloat) {
         return gen_float_bin(st, node, lt, rt);
@@ -6680,12 +6725,18 @@ Yv *gen_push_args_as(Yv *st, Yv *args, Yv *ptypes) {
 Yv *gen_conv(Yv *st, Yv *got, Yv *want) {
     Yv *gk = yr_get(got, "k");
     Yv *wk = yr_get(want, "k");
-    if (yv_l(wk) == K_tfloat &&
+    if (yv_l(gk) == yv_l(wk)) {
+        return st;
+    } else if (yv_l(wk) == K_tfloat &&
         (yv_l(gk) == K_tlong || yv_l(gk) == K_tbyte)) {
         st = emit_insn(st, F_CVTSI2SD_R_R, R_RAX, 64, R_XMM0, 128, 0, 0, 0);
         return emit_insn(st, F_MOVQ_R_R, R_XMM0, 128, R_RAX, 64, 0, 0, 0);
     } else if (yv_l(wk) == K_tbyte && yv_l(gk) == K_tlong) {
         return emit_insn(st, F_MOVZBQ_R_R, R_RAX, 8, R_RAX, 64, 0, 0, 0);
+    } else if (yv_l(wk) == K_tbigint && yv_l(gk) == K_tfloat) {
+        return gen_helper1(st, ys("y_bigint_from_float"));
+    } else if (yv_l(wk) == K_tbigint) {
+        return gen_helper1(st, ys("y_bigint_from_long"));
     } else {
         return st;
     }
@@ -6713,7 +6764,8 @@ Yv *gen_as(Yv *st, Yv *node, Yv *want0) {
     } else {
         st = gen(st, node);
     }
-    if (yv_l(wk) == K_tfloat || yv_l(wk) == K_tbyte) {
+    if (yv_l(wk) == K_tfloat || yv_l(wk) == K_tbyte ||
+        yv_l(wk) == K_tbigint) {
         return gen_conv(st, infer(st, node), want);
     } else if ((yv_l(wk) == K_trec || yv_l(wk) == K_tunion) &&
                yv_l(nk) != K_rec) {
@@ -7167,6 +7219,9 @@ Yv *gen_print_scalar(Yv *st, Yv *arg, Yv *t) {
     st = gen(st, arg);
     if (yv_l(yr_get(t, "k")) == K_tbool) {
         st = gen_helper1(st, ys("y_print_bool"));
+        return emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
+    } else if (yv_l(yr_get(t, "k")) == K_tbigint) {
+        st = gen_helper1(st, ys("y_bigint_print"));
         return emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
     } else if (yv_l(yr_get(t, "k")) == K_tstr) {
         st = gen_helper1(st, ys("y_print_hstr"));
@@ -9851,6 +9906,74 @@ Yv *gen_lit(Yv *st, Yv *node) {
                                           yr_get(node, "v"))), R_RAX, 64, 0, 0, 0, 0);
     }
 }
+Yv *gen_biglit(Yv *st, Yv *node) {
+    /* 1000n -- parse the literal text at run time into a bigint. The parser
+     * accepts decimal and 0x/0o/0b forms, so one helper covers every radix. */
+    st = gen_str_const(st, yr_get(node, "v"));
+    return gen_helper1(st, ys("y_bigint_parse"));
+}
+
+/* Leave `node` in %rax as a bigint: a bigint is already one, a long/byte
+ * converts exactly, a float truncates toward zero. */
+Yv *gen_bigint_to(Yv *st, Yv *node) {
+    Yv *t = infer(st, node);
+    st = gen(st, node);
+    if (yv_l(yr_get(t, "k")) == K_tbigint) {
+        return st;
+    } else if (yv_l(yr_get(t, "k")) == K_tfloat) {
+        return gen_helper1(st, ys("y_bigint_from_float"));
+    } else {
+        return gen_helper1(st, ys("y_bigint_from_long"));
+    }
+}
+
+/* Bigint binary operations. The runtime helpers take two stack arguments in
+ * the ordinary Y order (left, then right) and return a bigint or, for cmp, a
+ * signed -1/0/1. */
+Yv *gen_bigint_bin(Yv *st, Yv *node, Yv *lt, Yv *rt) {
+    Yv *op = yr_get(node, "op");
+    st = gen_bigint_to(st, yr_get(node, "l"));
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+    st = gen_bigint_to(st, yr_get(node, "r"));
+    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+    Yv *helper = ys("");
+    if (ys_eq_lit(op, "+")) { helper = ys("y_bigint_add"); }
+    else if (ys_eq_lit(op, "-")) { helper = ys("y_bigint_sub"); }
+    else if (ys_eq_lit(op, "*")) { helper = ys("y_bigint_mul"); }
+    else if (ys_eq_lit(op, "/")) { helper = ys("y_bigint_div"); }
+    else if (ys_eq_lit(op, "%")) { helper = ys("y_bigint_mod"); }
+    else { helper = ys("y_bigint_cmp"); }
+    st = emit_insn(st, F_CALL_L, yv_l(lbl_new(helper)), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_ADD_I_R, 16, R_RSP, 64, 0, 0, 0, 0);
+    if (ys_eq_lit(op, "<")) {
+        st = emit_insn(st, F_CMP_I_R, 0, R_RAX, 64, 0, 0, 0, 0);
+        st = emit_insn(st, F_SETL_R, R_RAX, 8, 0, 0, 0, 0, 0);
+        return emit_insn(st, F_MOVZBQ_R_R, R_RAX, 8, R_RAX, 64, 0, 0, 0);
+    } else if (ys_eq_lit(op, ">")) {
+        st = emit_insn(st, F_CMP_I_R, 0, R_RAX, 64, 0, 0, 0, 0);
+        st = emit_insn(st, F_SETG_R, R_RAX, 8, 0, 0, 0, 0, 0);
+        return emit_insn(st, F_MOVZBQ_R_R, R_RAX, 8, R_RAX, 64, 0, 0, 0);
+    } else if (ys_eq_lit(op, "<=")) {
+        st = emit_insn(st, F_CMP_I_R, 0, R_RAX, 64, 0, 0, 0, 0);
+        st = emit_insn(st, F_SETLE_R, R_RAX, 8, 0, 0, 0, 0, 0);
+        return emit_insn(st, F_MOVZBQ_R_R, R_RAX, 8, R_RAX, 64, 0, 0, 0);
+    } else if (ys_eq_lit(op, ">=")) {
+        st = emit_insn(st, F_CMP_I_R, 0, R_RAX, 64, 0, 0, 0, 0);
+        st = emit_insn(st, F_SETGE_R, R_RAX, 8, 0, 0, 0, 0, 0);
+        return emit_insn(st, F_MOVZBQ_R_R, R_RAX, 8, R_RAX, 64, 0, 0, 0);
+    } else if (ys_eq_lit(op, "==")) {
+        st = emit_insn(st, F_CMP_I_R, 0, R_RAX, 64, 0, 0, 0, 0);
+        st = emit_insn(st, F_SETE_R, R_RAX, 8, 0, 0, 0, 0, 0);
+        return emit_insn(st, F_MOVZBQ_R_R, R_RAX, 8, R_RAX, 64, 0, 0, 0);
+    } else if (ys_eq_lit(op, "!=")) {
+        st = emit_insn(st, F_CMP_I_R, 0, R_RAX, 64, 0, 0, 0, 0);
+        st = emit_insn(st, F_SETNE_R, R_RAX, 8, 0, 0, 0, 0, 0);
+        return emit_insn(st, F_MOVZBQ_R_R, R_RAX, 8, R_RAX, 64, 0, 0, 0);
+    } else {
+        return st;
+    }
+}
+
 Yv *gen_index(Yv *st, Yv *node) {
     /* Checker: an array expression — a plain variable or a nested place
      * (`grid[0][1]`, `rec.v[i]`); the base is evaluated once, here.
@@ -10643,6 +10766,8 @@ Yv *gen_val_tostr_rax(Yv *st, Yv *t, Yv *path) {
         return gen_str_const(st, ys_cat(ys_cat(ys("<"), tstr(named)), ys(">")));
     } else if (yv_l(tk) == K_tstr) {
         return st;
+    } else if (yv_l(tk) == K_tbigint) {
+        return gen_helper1(st, ys("y_bigint_tostr"));
     } else if (yv_l(tk) == K_tbool) {
         st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
         st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_bool_tostr"))), 0, 0, 0, 0, 0, 0);
@@ -11337,8 +11462,10 @@ Yv *gen_tolong(Yv *st, Yv *node) {
      * at run time. */
     Yv *targs = yr_get(node, "args");
     Yv *a0 = ya_get(targs, 0);
-    Yv *lbl = yv_l(yr_get(infer(st, a0), "k")) == K_tfloat ? ys("y_f2l")
-                                                              : ys("y_str_tolong");
+    Yv *tk = yr_get(infer(st, a0), "k");
+    Yv *lbl = yv_l(tk) == K_tfloat ? ys("y_f2l")
+             : yv_l(tk) == K_tbigint ? ys("y_bigint_to_long")
+             : ys("y_str_tolong");
     st = gen_push_args(st, targs);
     st = emit_insn(st, F_CALL_L, yv_l(lbl_new(lbl)), 0, 0, 0, 0, 0, 0);
     return emit_insn(st, F_ADD_I_R, 8, R_RSP, 64, 0, 0, 0, 0);
@@ -11356,8 +11483,13 @@ Yv *gen_tofloat(Yv *st, Yv *node) {
         st = emit_insn(st, F_CVTSI2SD_R_R, R_RAX, 64, R_XMM0, 128, 0, 0, 0);
         st = emit_insn(st, F_MOVQ_R_R, R_XMM0, 128, R_RAX, 64, 0, 0, 0);
         /* tofloat answers an OPTION now, so the widened value is boxed the same
-           way some(v) is: a pointer with the value at offset 0. */
+           way some(v) is: a pointer with the value at offset 0. A bigint
+           conversion is already boxed by its runtime helper. */
         return gen_box_rax(st);
+    } else if (yv_l(yr_get(infer(st, a0), "k")) == K_tbigint) {
+        st = gen_push_args(st, targs);
+        st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_bigint_to_float"))), 0, 0, 0, 0, 0, 0);
+        return emit_insn(st, F_ADD_I_R, 8, R_RSP, 64, 0, 0, 0, 0);
     } else {
         st = gen_push_args(st, targs);
         st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_str_tofloat"))), 0, 0, 0, 0, 0, 0);
@@ -11406,6 +11538,10 @@ Yv *gen_tostring(Yv *st, Yv *node) {
         return gen_union_str_rax(st, t, yav(0));
     } else if (yv_l(yr_get(t, "k")) == K_tmap) {
         return gen_map_repr(st, a0, t);
+    } else if (yv_l(yr_get(t, "k")) == K_tbigint) {
+        st = gen_push_args(st, yr_get(node, "args"));
+        st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_bigint_tostr"))), 0, 0, 0, 0, 0, 0);
+        return emit_insn(st, F_ADD_I_R, 8, R_RSP, 64, 0, 0, 0, 0);
     } else {
         st = gen_push_args(st, yr_get(node, "args"));
         st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_long_tostr"))), 0, 0, 0, 0, 0, 0);
@@ -14248,6 +14384,8 @@ Yv *tcode_go(Yv *out, Yv *t) {
         return ya_push(out, ys("b"));
     } else if (yv_l(k) == K_tfloat) {
         return ya_push(out, ys("f"));
+    } else if (yv_l(k) == K_tbigint) {
+        return ya_push(out, ys("g"));
     } else if (yv_l(k) == K_tbool) {
         return ya_push(out, ys("o"));
     } else if (yv_l(k) == K_tstr) {
@@ -14362,6 +14500,8 @@ Yv *tdecode_go(Yv *cur) {
         return normnode(yr(1, "k", yv_long(K_tbyte)));
     } else if (ys_eq_lit(c, "f")) {
         return normnode(yr(1, "k", yv_long(K_tfloat)));
+    } else if (ys_eq_lit(c, "g")) {
+        return normnode(yr(1, "k", yv_long(K_tbigint)));
     } else if (ys_eq_lit(c, "o")) {
         return normnode(yr(1, "k", yv_long(K_tbool)));
     } else if (ys_eq_lit(c, "s")) {

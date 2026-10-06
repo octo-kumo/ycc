@@ -1624,4 +1624,230 @@ def ecdsa_verify(c: Curve, qx: [byte], qy: [byte], digest: [byte], rb: [byte], s
     bn_cmp(xn, r) == 0
 };
 
-export { hex, unhex, random_bytes, bytes_eq, be_bytes, le_bytes, sha256, sha384, sha512, hash_sha256, hash_sha384, hmac, hkdf_extract, hkdf_expand, chacha20, poly1305, chacha_seal, chacha_open, aes_key, aes_encrypt, gcm_seal, gcm_open, x25519, x25519_base, rsa_verify_pkcs1, rsa_verify_pss, p256, p384, ecdsa_verify };
+
+// ── big integers and primality ─────────────────────────────────────────
+// The language's bigint type is the arithmetic core (native helpers under
+// std/rt.y); this section exposes the byte bridges and the prime utilities a
+// caller actually reaches for. A bigint has no fixed width, so N is a byte
+// count and the top byte is kept non-zero for random primes.
+
+// Big-endian bytes -> non-negative bigint.
+def bigint_from_bytes_be(b: [byte]) -> bigint {
+    let x: bigint = 0n;
+    let i = 0;
+    while (i < len(b)) {
+        x = x * 256n + b[i];
+        i = i + 1;
+    };
+    x
+};
+
+// The low n big-endian bytes of x (zero-padded on the left).
+def bigint_to_bytes_be(x: bigint, n: long) -> [byte] {
+    let out: [byte] = [];
+    let i = 0;
+    while (i < n) {
+        out += 0;
+        i = i + 1;
+    };
+    let y = x;
+    if (y < 0n) { y = 0n - y; };
+    i = n - 1;
+    while (i >= 0) {
+        let rem: bigint = y % 256n;
+        out[i] = tolong(rem)!;
+        y = y / 256n;
+        i = i - 1;
+    };
+    if (x < 0n) { return out; };
+    out
+};
+
+def bigint_byte_len(x: bigint) -> long {
+    let y = x;
+    if (y < 0n) { y = 0n - y; };
+    let n = 0;
+    while (y > 0n) {
+        y = y / 256n;
+        n = n + 1;
+    };
+    n
+};
+
+// n random bytes as a non-negative bigint.
+def random_bigint(n: long) -> bigint {
+    bigint_from_bytes_be(random_bytes(n))
+};
+
+// a*b mod m with a non-negative exponent; m must be positive.
+def bigint_mod_pow(b: bigint, e: bigint, m: bigint) -> bigint {
+    if (m == 1n) { return 0n; };
+    let result: bigint = 1n;
+    let base = b % m;
+    if (base < 0n) { base = base + m; };
+    let exp = e;
+    while (exp > 0n) {
+        if (exp % 2n == 1n) { result = (result * base) % m; };
+        base = (base * base) % m;
+        exp = exp / 2n;
+    };
+    result
+};
+
+// The names callers coming from the long helpers in std/math.y expect.
+def pow_mod(b: bigint, e: bigint, m: bigint) -> bigint {
+    bigint_mod_pow(b, e, m)
+};
+
+def mod_pow(b: bigint, e: bigint, m: bigint) -> bigint {
+    bigint_mod_pow(b, e, m)
+};
+
+def gcd(a: bigint, b: bigint) -> bigint {
+    bigint_gcd(a, b)
+};
+
+def bigint_gcd(a: bigint, b: bigint) -> bigint {
+    let x = a;
+    if (x < 0n) { x = 0n - x; };
+    let y = b;
+    if (y < 0n) { y = 0n - y; };
+    while (y > 0n) {
+        let r = x % y;
+        x = y;
+        y = r;
+    };
+    x
+};
+
+// Modular inverse of a modulo m, or 0 when it does not exist.
+def bigint_inv_mod(a: bigint, m: bigint) -> bigint {
+    if (m == 1n) { return 0n; };
+    let aa = a % m;
+    if (aa < 0n) { aa = aa + m; };
+    let old_r = aa;
+    let r = m;
+    let old_s: bigint = 1n;
+    let s: bigint = 0n;
+    while (r != 0n) {
+        let q = old_r / r;
+        let tr = old_r - q * r;
+        old_r = r;
+        r = tr;
+        let ts = old_s - q * s;
+        old_s = s;
+        s = ts;
+    };
+    if (old_r != 1n) { return 0n; };
+    let inv = old_s % m;
+    if (inv < 0n) { inv = inv + m; };
+    inv
+};
+
+def inv_mod(a: bigint, m: bigint) -> bigint {
+    bigint_inv_mod(a, m)
+};
+
+// Miller-Rabin, with 16 random bases. Small prime divisors are taken out
+// first; the result is deterministic for the small cases and has a
+// negligible error probability past them.
+def is_prime(n: bigint) -> bool {
+    if (n < 2n) { return false; };
+    if (n == 2n) { return true; };
+    if (n == 3n) { return true; };
+    if (n % 2n == 0n) { return false; };
+    let small: [long] = [3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43];
+    let si = 0;
+    while (si < len(small)) {
+        let p = small[si];
+        if (n == p) { return true; };
+        if (n % p == 0n) { return false; };
+        si = si + 1;
+    };
+    let d = n - 1n;
+    let s = 0;
+    while (d % 2n == 0n) {
+        d = d / 2n;
+        s = s + 1;
+    };
+    let nbytes = bigint_byte_len(n);
+    if (nbytes < 1) { nbytes = 1; };
+    let rounds = 16;
+    let i = 0;
+    while (i < rounds) {
+        let a = random_bigint(nbytes) % (n - 3n) + 2n;
+        let x = bigint_mod_pow(a, d, n);
+        if (x != 1n && x != n - 1n) {
+            let j = 1;
+            let ok = false;
+            while (j < s) {
+                x = (x * x) % n;
+                if (x == n - 1n) {
+                    ok = true;
+                    j = s;
+                } else {
+                    j = j + 1;
+                };
+            };
+            if (!ok) { return false; };
+        };
+        i = i + 1;
+    };
+    true
+};
+
+def prime_test(n: bigint) -> bool {
+    is_prime(n)
+};
+
+def next_prime(n: bigint) -> bigint {
+    if (n < 2n) { return 2n; };
+    let p = n + 1n;
+    if (p % 2n == 0n) { p = p + 1n; };
+    while (!is_prime(p)) {
+        p = p + 2n;
+    };
+    p
+};
+
+// A prime with exactly n random bytes (top and bottom bits set).
+def random_prime(nbytes: long) -> bigint {
+    if (nbytes < 1) {
+        arg_error("a random prime needs at least one byte");
+    };
+    while (true) {
+        let b = random_bytes(nbytes);
+        b[0] = b[0] | 128;
+        b[nbytes - 1] = b[nbytes - 1] | 1;
+        let p = bigint_from_bytes_be(b);
+        if (is_prime(p)) { return p; };
+    };
+    0n
+};
+
+// The prime's big-endian bytes, for protocols that want the raw value.
+def random_prime_bytes(nbytes: long) -> [byte] {
+    bigint_to_bytes_be(random_prime(nbytes), nbytes)
+};
+
+// A spelling for callers that want to be explicit about the result type.
+def random_prime_bigint(nbytes: long) -> bigint {
+    random_prime(nbytes)
+};
+
+def rand_prime(nbytes: long) -> bigint {
+    random_prime(nbytes)
+};
+
+def random_prime_bits(bits: long) -> bigint {
+    if (bits < 2) {
+        arg_error("a random prime needs at least two bits");
+    };
+    random_prime((bits + 7) / 8)
+};
+
+def prime_bytes(nbytes: long) -> [byte] {
+    bigint_to_bytes_be(random_prime(nbytes), nbytes)
+};
+
+export { hex, unhex, random_bytes, bytes_eq, be_bytes, le_bytes, sha256, sha384, sha512, hash_sha256, hash_sha384, hmac, hkdf_extract, hkdf_expand, chacha20, poly1305, chacha_seal, chacha_open, aes_key, aes_encrypt, gcm_seal, gcm_open, x25519, x25519_base, rsa_verify_pkcs1, rsa_verify_pss, p256, p384, ecdsa_verify, bigint_from_bytes_be, bigint_to_bytes_be, bigint_byte_len, random_bigint, bigint_mod_pow, pow_mod, bigint_gcd, bigint_inv_mod, inv_mod, is_prime, prime_test, next_prime, random_prime, random_prime_bytes, random_prime_bigint, rand_prime, random_prime_bits, prime_bytes, mod_pow, gcd };
