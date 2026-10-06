@@ -27,52 +27,62 @@
 // 20000 arguments (test/math/audit_float.py) finds log10 2 ulps out on 379 of
 // them -- 1.9%, spread across EVERY decade, not concentrated near zero.
 //
-// The cause is worth stating because it is not where I first looked. log10's
-// decomposition has two terms of COMPARABLE size:
-//
-//     log10(x) = e*log10(2) + ln(m)*log10(e)      e*0.301 and ln(m)*0.434
-//
-// so ln(m)'s own error is not diluted by the way it is in log2, where the answer
-// is |e| and the small part is ~0.4 -- there the small part's error is a
-// thousandth of an ulp of the answer and cannot move the rounding. That is why
-// log2 is within an ulp on all 20000 and log10 is not, on the SAME reduction and
-// the SAME z-series.
+// An earlier version of this comment blamed the two terms being of COMPARABLE
+// size -- e*log10(2) beside ln(m)*log10(e) -- so that ln(m)'s error was not
+// diluted the way log2's is. That is right for SMALL |e| and WRONG for large
+// |e|, and it was written from one sampled failure. Measured over the failures:
+// at e = 831 the ratio of the small term to the large one is 4e-4, and at e = 5
+// it is 0.24. So the claim does not hold for most of them, and it is replaced by
+// the measurement below rather than patched.
 //
 // Ruled out by measurement, so nobody repeats it:
 //   - log10_2_lo is declared and never added, and the term it carries is
-//     ef*(log10(2) - log10_2_hi) = -0.042 ulp of the answer for EVERY ef -- a
-//     constant fraction of an ulp, which cannot produce a 2-ulp answer.
-//   - the residual of the z-series' own `2 + w*P(w)`, bounded at ~0.1 ulp of
-//     log10, is too small to explain it either -- and log2 uses the identical
-//     z-series.
+//     ef*(log10(2) - log10_2_hi) = -0.042 ulp of the answer for EVERY ef. I first
+//     wrote that this "cannot produce a 2-ulp answer" and that was a mistake of
+//     the same kind: a term worth 0.042 ulp DOES flip the rounding whenever the
+//     exact value is within 0.042 ulp of a tie, which is a couple of percent of
+//     arguments. It is not ruled out. What IS ruled out is that it explains 2
+//     ulps rather than 1.
+//   - the residual of the z-series' own `2 + w*P(w)`, and of the division inside
+//     it, and of the inner product: all three measured, all three no-ops. See
+//     below.
 //
-// TWO FIXES TRIED, BOTH FALSIFIED BY MEASUREMENT -- so neither is the answer
+// THE ERROR IS MEASURED NOW, AND THREE FIXES FOR IT ARE FALSIFIED
 //
-// The suspect is ln(m) = z*(2 + w*P(w)), and three things in it round.
-// Compensating the two obvious ones changes nothing:
+// ln(m) = z*(2 + w*P(w)) can be reconstructed from the module's own pieces --
+// split_mantissa sets split_e, log_z sets z_lo, poly_log is the same polynomial
+// the runtime path calls -- and compared with a 60-digit logarithm. Over eight
+// arguments that log10 gets wrong, ln(m) comes out EXACTLY ROUNDED on six and
+// ONE ULP out on two. So the error is in ln(m), and three compensations for it
+// were tried:
 //
-//   1. The `2 + w*P(w)` add -- two_sum for its residual, prod_err for the z
-//      multiply. log10 is 379 over 1 ulp BEFORE and AFTER, and log2 comes out one
-//      argument WORSE (0 -> 1). So the add's half-ulp is not the error.
-//   2. The division z = (m-1)/(m+1). The existing z_lo captures the rounding of
-//      den, not of the quotient, so the quotient's half-ulp is uncompensated;
-//      adding rem = num - z*den to z_lo also changes nothing -- log10 379 before
-//      and after, log2 unchanged.
+//   1. two_sum for the `2 + w*P(w)` add, prod_err for the outer z multiply.
+//      log10 379 over 1 ulp before AND after; log2 one argument WORSE (0 -> 1).
+//   2. The division z = (m-1)/(m+1). The existing z_lo captures den's rounding,
+//      not the quotient's, so rem = num - z*den added to z_lo. log10 379 before
+//      and after; log2 unchanged.
+//   3. prod_err for the INNER w*poly_log(w), which nothing was recovering: two_sum
+//      takes its residual about the already-ROUNDED product. log10 379 before and
+//      after; log2 one argument worse again.
 //
-// Both were reverted. What is left in ln(m) is `w * poly_log(w)` -- whose own
-// rounding two_sum does not recover, since two_sum's residual is taken about the
-// ALREADY-ROUNDED product -- and poly_log itself. Estimated at ~5e-4 ulp of
-// ln(m) for |w| <= 0.17, which is too small to be a 2-ulp answer, so neither of
-// those is written up as THE answer either.
+// All three reverted, and (3) is the interesting one: it changed the ANSWER BIT
+// FOR BIT on every argument tried. Its error term is about 0.05 ulp of a total
+// of magnitude 1.5, which ought to flip the rounding on a few percent of
+// arguments -- and flipped none. So ln(m)'s own error is not reaching the sum at
+// all, whatever its size, and the 2 ulps are produced by the summation.
 //
-// Closing this needs ln(m)'s error MEASURED rather than inferred, which means
-// putting ln(m) in the audit_float harness -- and that needs a reference for the
-// z-series which this session twice failed to write by hand. Saying so is more
-// useful than a third guess.
+// Which points at the two_sum(p, l*clo) and the final add, and NOT at ln(m):
+// e*log10(2) is |e|*0.301 and l*log10(e) is ~0.15, so for large |e| the two are
+// wildly unequal and each correction is ~2^-106 of its own term -- neither can
+// move the total's rounding. They can only matter where the two terms are
+// COMPARABLE, which is small |e| ... and 31.403229, one of the failures, has
+// e = 5. So the failing arguments are not the large-|e| ones the first
+// measurement happened to pick, and that is the next thing to sweep.
 //
-// NOT done here, and the reason is recorded rather than implied: 379 in 20000 is
-// a promise gap the table does not catch, and this file and the manual both say
-// so.
+// Not resolved. What would settle it is ln(m) and the SUM in one extra-precision
+// accumulator, which is a different algorithm from a compensated expression tree
+// and is not attempted here. Three measured attempts that did not work are worth
+// more in this file than a fourth that might.
 //
 // It also cost 5.5x the instructions: log through assembly plus a multiply is
 // 149 a call, and this is 817. That is a deliberate trade and it is worth naming
