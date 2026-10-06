@@ -3187,10 +3187,15 @@ def infer_call(st: EmitSt, node: Call) -> Type {
             // the checker; native.y check_os_call_names makes sure each name is
             // a label the arch lines really define).
             type_node({ k: K.tlong })
-        } else if (name == "tolong" || name == "ord" || name == "byte_at" || name == "mod" || name == "index_of" || name == "last_index_of") {
-            normtype({ k: K.tlong })
+        } else if (name == "tolong") {
+            // tolong returns an OPTION: a fully valid input is required, and a
+            // value outside the long range or a float with no long answer is
+            // none rather than a wrap or a trap.
+            normtype({ k: K.topt, of: normtype({ k: K.tlong }) })
         } else if (name == "tofloat") {
-            normtype({ k: K.tfloat })
+            normtype({ k: K.topt, of: normtype({ k: K.tfloat }) })
+        } else if (name == "ord" || name == "byte_at" || name == "mod" || name == "index_of" || name == "last_index_of") {
+            normtype({ k: K.tlong })
         } else if (name == "clock_us" || name == "time_us" || name == "heap_used") {
             type_node({ k: K.tlong })
         } else if (name == "keys") {

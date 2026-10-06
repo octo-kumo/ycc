@@ -129,81 +129,108 @@ def y_shift_neg() -> long {
 // tolong(s): optional '-', then digits; anything else stops the
 // scan and is ignored (exactly the old asm behaviour). This was `tolong` until
 // it grew a float arm, and a name that says "number" cannot say which.
-def y_str_tolong(s: str) -> long {
-    let n = len(s);
-    let neg = false;
-    let i = 0;
-    if (n > 0) {
-        if (byte_at(s, 0) == 45) {
-            neg = true;
-            i = 1;
-        }
-    }
-    let acc = 0;
-    let go = true;
-    while (go) {
-        if (i < n) {
-            let c = byte_at(s, i);
-            if (c >= 48) {
-                if (c <= 57) {
-                    acc = acc * 10 + (c - 48);
-                    i = i + 1;
-                } else { go = false; };
-            } else { go = false; };
-        } else { go = false; };
-    };
-    if (neg) { 0 - acc } else { acc }
+// Whitespace around a number is allowed; nothing else is. 32 space, 9 tab,
+// 10 newline, 11 vertical tab, 12 form feed, 13 return.
+def y_is_space(c: byte) -> bool {
+    c == 32 || (c >= 9 && c <= 13)
 };
 
-// tofloat(s): the same scan, with a fraction. Deliberately NOT strtod and
-// deliberately not exact: it accumulates in double as it goes, so "3.14" comes
-// back as the double nearest 3.14 and "0.1" as the double nearest 0.1, which
-// is what every other language's parser returns and what this module's own
-// literals are. It reads what it can and stops at the first byte that is not
-// part of a number -- the same tolerance as tolong, because a value that has
-// been through one should behave the same way through the other. Exponents
-// ("1e9") are not read; a program that wants them wants math.log10 and
-// pow_mod, not a parser with a different answer per platform.
-def y_str_tofloat(s: str) -> float {
+// tolong(s): some(n) when s is a whole number and NOTHING else, none otherwise.
+// The version before this one read what it could and stopped at the first byte
+// that was not part of a number: "12abc" answered 12, "" answered 0, " 12 "
+// answered 0, "0x10" answered 0, and a 21-digit number wrapped silently. Five
+// wrong answers a caller could not tell from the right ones.
+//
+// The magnitude is carried as a NEGATIVE long when the sign is negative,
+// because the most negative long has no positive counterpart: -(acc*10) - d
+// reaches -9223372036854775808 without ever forming 9223372036854775808.
+def y_str_tolong(s: str) -> long? {
     let n = len(s);
-    let neg = false;
     let i = 0;
-    if (n > 0) {
-        if (byte_at(s, 0) == 45) {
-            neg = true;
-            i = 1;
-        }
+    while (i < n && y_is_space(byte_at(s, i))) { i = i + 1; };
+    let neg = false;
+    if (i < n) {
+        let sg = byte_at(s, i);
+        if (sg == 45 || sg == 43) {
+            neg = sg == 45;
+            i = i + 1;
+        };
+    };
+    let start = i;
+    let mag = 0;
+    let ovf = false;
+    let go = true;
+    while (i < n && go) {
+        let c = byte_at(s, i);
+        if (c < 48 || c > 57) { go = false; } else {
+            let d = c - 48;
+            if (neg) {
+                if (mag < -922337203685477580) { ovf = true; }
+                else if (mag == -922337203685477580 && d > 8) { ovf = true; }
+                else { mag = mag * 10 - d; };
+            } else {
+                if (mag > 922337203685477580) { ovf = true; }
+                else if (mag == 922337203685477580 && d > 7) { ovf = true; }
+                else { mag = mag * 10 + d; };
+            };
+            if (ovf) { go = false; } else { i = i + 1; };
+        };
+    };
+    if (ovf || i == start) {
+        none
+    } else {
+        while (i < n && y_is_space(byte_at(s, i))) { i = i + 1; };
+        if (i < n) { none } else { some(mag) }
+    }
+};
+
+// tofloat(s): the same rule -- a whole number, or one with a fraction, and
+// nothing else; whitespace around it is fine; none otherwise. The accumulation
+// is unchanged and deliberately not strtod: it adds in double as it goes, so
+// "3.14" comes back as the double nearest 3.14 and "0.1" as the double nearest
+// 0.1, which is what every other language's parser returns and what this
+// module's own literals are. Exponents ("1e9") are still not read -- a program
+// that wants them wants math.log10 and pow_mod, not a parser with a different
+// answer per platform -- and now they are REJECTED rather than silently
+// truncated to the digits before the "e".
+def y_str_tofloat(s: str) -> float? {
+    let n = len(s);
+    let i = 0;
+    while (i < n && y_is_space(byte_at(s, i))) { i = i + 1; };
+    let neg = false;
+    if (i < n) {
+        let sg = byte_at(s, i);
+        if (sg == 45 || sg == 43) {
+            neg = sg == 45;
+            i = i + 1;
+        };
     };
     let acc = 0.0;
     let scale = 0.1;
     let dot = false;
-    let any = false;
-    while (i < n) {
+    let digits = 0;
+    let go = true;
+    while (i < n && go) {
         let c = byte_at(s, i);
-        if (c >= 48) {
-            if (c <= 57) {
-                if (dot) {
-                    acc = acc + (c - 48) * scale;
-                    scale = scale * 0.1;
-                } else {
-                    acc = acc * 10.0 + (c - 48);
-                };
-                any = true;
-                i = i + 1;
-            } else { i = n; };
-        } else {
-            if (c == 46 && !dot) {
-                dot = true;
-                i = i + 1;
-            } else { i = n; };
-        };
+        if (c >= 48 && c <= 57) {
+            if (dot) {
+                acc = acc + (c - 48) * scale;
+                scale = scale * 0.1;
+            } else {
+                acc = acc * 10.0 + (c - 48);
+            };
+            digits = digits + 1;
+            i = i + 1;
+        } else if (c == 46 && !dot) {
+            dot = true;
+            i = i + 1;
+        } else { go = false; };
     };
-    if (!any) {
-        0.0
-    } else if (neg) {
-        0.0 - acc
+    if (digits == 0) {
+        none
     } else {
-        acc
+        while (i < n && y_is_space(byte_at(s, i))) { i = i + 1; };
+        if (i < n) { none } else if (neg) { some(0.0 - acc) } else { some(acc) }
     }
 };
 
@@ -219,21 +246,25 @@ ndef trunc_to_long(x: float) -> long = "y_to_int";
 // index and an utterly misleading one. math.to_int makes the same promise for
 // the same reason, and one rule in a language is worth more than four
 // instructions.
-def y_f2l(x: float) -> long {
+def y_f2l(x: float) -> long? {
     // 2^63 as a double: the first float with no long answer. It is exact, which
     // matters -- an inexact bound would reject x = 2^63 - 1024 for no reason.
     // A LOCAL, deliberately: a module-level `let` here becomes a .bss cell and
     // an _init thunk in every binary, because rt.y is linked by every program
     // and so its globals are the one thing the shaker cannot drop. Inside the
     // function the bound is materialised only by a program that calls it.
+    //
+    // This used to TRAP on a NaN or an out-of-range float. tolong now answers
+    // T?, so "there is no long answer" is `none` -- which is the same
+    // distinction the string form makes, and a caller can check it.
     let two63: float = 9223372036854775808.0;
     if (x != x || x >= two63 || x < 0.0 - two63) {
-        y_put_hstr("runtime error: tolong: this float has no long value\n");
-        exit(1);
-    };
+        none
+    } else {
     // The cast is where the truncation happens: cvttsd2si rounds toward zero,
     // which is what "truncate" means and what floor does not.
-    trunc_to_long(x)
+        some(trunc_to_long(x))
+    }
 };
 
 // last_index_of: the last match of needle in hay, -1 when absent; an

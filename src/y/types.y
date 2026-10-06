@@ -2881,8 +2881,8 @@ def str_method(m: str) -> StrMethod {
     else if (m == "repeat") { sm_mk("y_str_repeat", [l], 1, s, "", false) }
     else if (m == "lines") { sm_mk("y_str_lines", no, 0, sm_arr(s), "", false) }
     else if (m == "bytes") { sm_mk("bytes", no, 0, sm_arr(sm_t(K.tbyte)), "", false) }
-    else if (m == "tolong") { sm_mk("tolong", no, 0, l, "", false) }
-    else if (m == "tofloat") { sm_mk("tofloat", no, 0, f, "", false) }
+    else if (m == "tolong") { sm_mk("tolong", no, 0, normtype({ k: K.topt, of: l }), "", false) }
+    else if (m == "tofloat") { sm_mk("tofloat", no, 0, normtype({ k: K.topt, of: f }), "", false) }
     else if (m == "ord") { sm_mk("ord", no, 0, l, "", false) }
     else if (m == "byte_at") { sm_mk("byte_at", [l], 1, l, "", false) }
     else { sm_mk("", no, 0, t_unk(), "", false) }
@@ -3682,7 +3682,7 @@ def typeof_call_go(st: TcSt, node: Call) -> TcRes {
                            + tstr(r.typ), node.line, node.col);
                     tc_res(t_unk(), st)
                 } else {
-                    tc_res(type_node({ k: K.tlong }), st)
+                    tc_res(type_node({ k: K.topt, of: type_node({ k: K.tlong }) }), st)
                 }
             }
         } else if (name == "tofloat") {
@@ -3700,7 +3700,7 @@ def typeof_call_go(st: TcSt, node: Call) -> TcRes {
                            + tstr(r.typ), node.line, node.col);
                     tc_res(t_unk(), st)
                 } else {
-                    tc_res(type_node({ k: K.tfloat }), st)
+                    tc_res(type_node({ k: K.topt, of: type_node({ k: K.tfloat }) }), st)
                 }
             }
         } else if (name == "tostring") {

@@ -4093,13 +4093,19 @@ Yv *infer_call(Yv *st, Yv *node) {
                the checker; native.c check_os_call_names makes sure each name is
                a label the arch lines really define). */
             return yr(1, "k", yv_long(K_tlong));
-        } else if (ys_eq_lit(name, "tolong") || ys_eq_lit(name, "ord") ||
-                   ys_eq_lit(name, "byte_at") || ys_eq_lit(name, "mod") ||
-                   ys_eq_lit(name, "index_of") ||
+        } else if (ys_eq_lit(name, "tolong")) {
+            /* tolong returns an OPTION: a fully valid input is required, and a
+               value outside the long range or a float with no long answer is
+               none rather than a wrap or a trap. */
+            return yr(2, "k", yv_long(K_topt), "of",
+                      yr(1, "k", yv_long(K_tlong)));
+        } else if (ys_eq_lit(name, "tofloat")) {
+            return yr(2, "k", yv_long(K_topt), "of",
+                      yr(1, "k", yv_long(K_tfloat)));
+        } else if (ys_eq_lit(name, "ord") || ys_eq_lit(name, "byte_at") ||
+                   ys_eq_lit(name, "mod") || ys_eq_lit(name, "index_of") ||
                    ys_eq_lit(name, "last_index_of")) {
             return yr(1, "k", yv_long(K_tlong));
-        } else if (ys_eq_lit(name, "tofloat")) {
-            return yr(1, "k", yv_long(K_tfloat));
         } else if (ys_eq_lit(name, "clock_us") || ys_eq_lit(name, "time_us") || ys_eq_lit(name, "heap_used")) {
             return yr(1, "k", yv_long(K_tlong));
         } else if (ys_eq_lit(name, "keys")) {
