@@ -4,7 +4,7 @@
 
 #include <fcntl.h>
 #include <stdarg.h>
-#include <sys/syscall.h>
+#include "host.h"
 #include <unistd.h>
 
 typedef Yv *PkEnt;

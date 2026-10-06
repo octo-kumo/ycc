@@ -16,6 +16,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
+#include "host.h"
 #include <unistd.h>
 
 static long g_heap_used = 0;

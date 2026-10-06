@@ -31,6 +31,7 @@
 #include "yv.h"
 
 #include <fcntl.h>
+#include "host.h"
 #include <stdio.h>
 #include <sys/types.h>
 #include <unistd.h>

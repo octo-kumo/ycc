@@ -88,7 +88,7 @@
  * spells `jmp *%reg` — the same instruction the Y twin emits.
  */
 #include <string.h>
-#include <sys/syscall.h>
+#include "host.h"
 #include <unistd.h>
 #include "lexer.h"
 #include "meta.h"

@@ -66,7 +66,24 @@ Yv *ys_fmt(const char *fmt, ...);     /* formatted string (printf-style) */
  * std sources it splices into programs): the file's bytes are linked in
  * when cycc is BUILT, by the assembler's .incbin. The path is relative to
  * the directory gcc runs in, the repo root (where the Makefile runs it).
- * NAME() returns the bytes as a str; the Y twin's NAME is a str const. */
+ * NAME() returns the bytes as a str; the Y twin's NAME is a str const.
+ *
+ * `.pushsection`/`.popsection` are ELF directives; a COFF assembler (mingw's)
+ * wants an explicit `.section`, and the section's name is `.rdata` there where
+ * ELF says `.rodata`. The switch keeps one macro and one instruction. */
+#ifdef _WIN32
+#define Y_EMBED(name, path)                                             \
+    __asm__(".section .rdata,\"dr\"\n"                                  \
+            "y_embed_" #name ":\n"                                      \
+            ".incbin \"" path "\"\n"                                    \
+            "y_embed_" #name "_end:\n"                                  \
+            ".text\n");                                                 \
+    extern const char y_embed_##name[], y_embed_##name##_end[];         \
+    static Yv *name(void) {                                             \
+        return ys_n(y_embed_##name,                                     \
+                    (size_t)(y_embed_##name##_end - y_embed_##name));   \
+    }
+#else
 #define Y_EMBED(name, path)                                             \
     __asm__(".pushsection .rodata\n"                                    \
             "y_embed_" #name ":\n"                                      \
@@ -78,6 +95,7 @@ Yv *ys_fmt(const char *fmt, ...);     /* formatted string (printf-style) */
         return ys_n(y_embed_##name,                                     \
                     (size_t)(y_embed_##name##_end - y_embed_##name));   \
     }
+#endif
 
 /* boxed scalar accessors (unchecked; used at typed boundaries) */
 long yv_l(const Yv *v);

@@ -22,7 +22,7 @@
 #include "labels.h"
 #include "enc64.h"
 
-#include <sys/syscall.h>
+#include "host.h"
 #include <unistd.h>
 
 /* imported (module calls from asm.y, names flattened) */

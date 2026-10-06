@@ -7,6 +7,14 @@
 
 #include "yv.h"
 
+/* <ctype.h> FIRST, before the renames below. On Windows a later <windows.h>
+ * (host.h) pulls <ctype.h> in again, and if it arrives after these `#define`s
+ * its `int isalpha(int)` declaration is macro-expanded into a second
+ * `y_lex_isalpha` with the wrong signature. The header's include guard then
+ * makes the later inclusion a no-op, so there is exactly one declaration of
+ * each real ctype name and one of each lexer name. */
+#include <ctype.h>
+
 /* NOTE: isdigit/isupper/islower/isalpha/isalnum/isspace/ispunct are the
  * exact Y names of this module's defs (see lexer.y), but C's <ctype.h>
  * reserves all seven as builtin function names and gcc warns on ANY

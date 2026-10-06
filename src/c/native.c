@@ -17,7 +17,7 @@
  * Every value is 8 bytes (long/bool/ptr/str-address); expression values in
  * %rax; locals at negative rbp offsets; Y-function args pushed on the stack.
  */
-#include <sys/syscall.h>
+#include "host.h"
 #include <unistd.h>
 #include "ir.h"
 #include "native.h"
