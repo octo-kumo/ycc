@@ -118,18 +118,22 @@ behavior or diagnostics), `make bench`, `make bench-ir` (see
 "Performance" below).
 
 **What the loop costs, measured** (8 cores here), because "rebless is slow"
-is a belief worth replacing with numbers: `make rebless` is **9.5 s** — 0.98 s
+is a belief worth replacing with numbers: `make rebless` is **18.5 s** — 0.98 s
 for `cycc` to compile the compiler, 0.44 s for the Y self-compile, hundredths
-for the `cmp` and the pack, and **8.4 s (87%) for the port suite** over 142
-fixtures, each compiled by both compilers, which is the gate. `make cycc` from
+for the `cmp` and the pack, and then **both halves of the port gate**: 8.4 s for
+the Linux suite over 142 fixtures (each compiled by both compilers) and 8.1 s
+for `pe-port`, the Windows half, both sharded 8 ways under `-j`. The Windows
+half is there because `rebless` is the step that ACCEPTS a compiler and the PE
+walkers are invisible to the Linux suite — round 52's bug (`cycc
+--target=windows -g` trapped on every program, for ten rounds, with every suite
+green) lived in one and this line would have blessed it. `make cycc` from
 a clean tree is 5.5 s and `make -j8 cycc` is the same 5.5 s —
 `src/c/native.c` is one 12,000-line translation unit and it *is* the build, so
 there is nothing to overlap. The full 21-suite run is **46.8 s** (20 suites were
 37 s; `pe-port` is 37 s alone but sharded 8 ways under `-j`, so what it adds is
 one more shard, not one more suite), and `make
 check` adds the compare and bench phases on top of that; *those* are the slow
-steps, not the bless. `make rebless` runs the port suite only, so the Windows
-half does not slow the bless down. Numbers above the `rebless` target in the Makefile.
+steps, not the bless. Numbers above the `rebless` target in the Makefile.
 
 ## Run / verify (use these exact forms)
 

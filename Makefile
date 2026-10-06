@@ -16,7 +16,9 @@ GCC=gcc
 #     inlined in yv.c now.
 # Together: 206.7M -> 126.3M instructions compiling that fixture (-39%), 100
 # compiles 2.05 s -> 1.33 s, the port suite 16 s (-j 4) -> 7.7 s (-j 8), and
-# rebless 13.0 s -> 9.4 s. At -O0 the inline compare alone buys NOTHING
+# rebless 13.0 s -> 9.4 s, and 18.5 s MEASURED now that it runs the WINDOWS half
+# of the port gate too (pe-port is 8.1 s of that, sharded). At -O0 the inline
+# compare alone buys NOTHING
 # (2.07 s): the loop needs the optimizer, so the flag and the inline are one
 # change. -O2 measured no better on the suite (7.9 s) for a 9.4 s build
 # instead of 5.7 s, so -O1. What says none of this changed what cycc EMITS is
@@ -313,7 +315,13 @@ rebless: cycc
 	ulimit -v $(YCC_MEM_KB); ./_rb1 -o _rb2 src/y/ycc.y
 	cmp _rb1 _rb2
 	$(call PACK,_rb1,_rbp)
-	YREF=$(CURDIR)/_rbp YQUIET=1 YPORT_SELF=0 ./test/sh/run_all.sh -j $(JOBS) port
+# BOTH HALVES OF THE PORT GATE, not just the Linux one. rebless is the step
+# that ACCEPTS a compiler, and the PE walkers are invisible to the Linux port
+# suite: round 52's bug (cycc --target=windows -g trapped on EVERY program, for
+# ten rounds, with every suite green) lived in a PE walker and would have been
+# blessed by this very line. pe-port is sharded 8 ways under -j like port is, so
+# it adds a shard rather than a suite.
+	YREF=$(CURDIR)/_rbp YQUIET=1 YPORT_SELF=0 ./test/sh/run_all.sh -j $(JOBS) port pe-port
 	cp _rbp refs/ycc.ref
 	cd refs && sha256sum *.ref > SHA256SUMS
 	mv _rbp ycc
