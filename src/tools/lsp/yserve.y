@@ -246,6 +246,52 @@ def stamp() -> str {
     hh + ":" + mm + ":" + ss + "." + m3
 }
 
+// A line in the client's output channel, timestamped and prefixed `yserve:`, so a
+// reader can tell a server line from a client one at a glance. FD_LOG is stderr,
+// which is where the extension's outputChannel collects everything.
+//
+// Lifecycle only -- start, ready, stop -- plus the totals. These three moments are
+// what a person needs and nothing else gives them: whether the server is up at all,
+// how long it took to be usable, and where the time went. The per-request lines are
+// separate and behind y.lsp.timing.
+def log_line(msg: str) {
+    fs.write_text(FD_LOG, stamp() + "  yserve: " + msg + "\n");
+}
+
+// Elapsed since this process started reading its clock, in ms. Used for uptime and
+// for the startup breakdown, so "ready after 12ms" is a measurement and not a claim.
+let born_ms = -1;
+
+def since_born_ms() -> long {
+    if (born_ms < 0) { -1 } else { (clock_us() - born_ms) / 1000 }
+}
+
+def log_start(argv: [str], pack_bytes: long) {
+    born_ms = clock_us();
+    // getpid is syscall 39 on x86-64 Linux. Nothing in std exposes it and a
+    // lifecycle line is not worth adding a std builtin for.
+    log_line("start  pid " + tostring(syscall(39, 0)) + "  argv [" + join(argv, " ") + "]");
+    if (pack_bytes > 0) {
+        log_line("std pack attached: " + tostring(pack_bytes) + " bytes");
+    } else {
+        // Worth saying out loud, because it is the difference between a fast server
+        // and one that recompiles every std unit on every request.
+        log_line("no std pack: every std unit is compiled from SOURCE on every request");
+    };
+}
+
+def log_ready(docs_open: long) {
+    log_line("ready  " + tostring(since_born_ms()) + "ms after start  "
+        + tostring(docs_open) + " documents open  "
+        + tostring(heap_used() / 1024) + "KB heap");
+}
+
+def log_stop(reason: str, handled: long, forked: long, errors: long) {
+    log_line("stop   " + reason + "  after " + tostring(since_born_ms()) + "ms  "
+        + tostring(handled) + " messages handled  " + tostring(forked)
+        + " handlers forked  " + tostring(errors) + " errors");
+}
+
 // The method name out of the raw frame, for the timing line. A substring search
 // rather than a second json.parse: the message has already been parsed twice (once
 // in the parent by apply_state, once in the child by handle_one), and a log line is
@@ -338,6 +384,10 @@ def serve_loop(st: State, fd_in: long) -> long {
     let go = true;
     let code = 0;
     let idle_since = clock_us();
+    let handled = 0;
+    let forked = 0;
+    let errors = 0;
+    log_ready(len(st.open));
     while (go) {
         let got = rpc.read_frame(r, fd_in);
         let idle_us = clock_us() - idle_since;
@@ -349,8 +399,10 @@ def serve_loop(st: State, fd_in: long) -> long {
             // Clean end of input: the client closed the connection. Exiting 0
             // here is right -- this is how a client says "I am done", and the
             // LSP spec says the server should not treat it as an error.
+            log_stop("input closed by the client", handled, forked, errors);
             go = false;
         } else {
+            handled = handled + 1;
             let raw = got!;
 
             // The parent's own work: record what this message changed. Done
@@ -360,6 +412,7 @@ def serve_loop(st: State, fd_in: long) -> long {
             let leaving = dispatch.apply_state(st, raw);
             if (leaving) {
                 // `exit` is a notification: no reply, and the client is done.
+                log_stop("the client sent exit", handled, forked, errors);
                 go = false;
             } else {
             let child = fork {
@@ -382,6 +435,7 @@ def serve_loop(st: State, fd_in: long) -> long {
                 syscall(60, 0);
                 0
             };
+            forked = forked + 1;
             if (child > 0) {
                 // The pid, or -errno. A negative result is a fork failure, not a
                 // child: there is nothing to wait for, and the loop must not
@@ -402,6 +456,8 @@ def serve_loop(st: State, fd_in: long) -> long {
             } else {
                 // fork(2) failed outright: out of processes or memory. Retrying
                 // would spin; reporting and stopping is the honest answer.
+                errors = errors + 1;
+                log_stop("fork failed", handled, forked, errors);
                 rpc.write_frame(reply, serve.error_msg(json.nul(), serve.E_INTERNAL, "cannot fork a request handler"));
                 go = false;
                 code = 1;
@@ -422,6 +478,7 @@ def serve_main() -> long {
     }
     let pack = "";
     if (o.use_pack) { pack = ys_self_pack(); }
+    log_start(argv(), len(pack));
     let st = serve.server_state(o.root, pack, o.wlevel);
     serve_loop(st, FD_IN)
 }

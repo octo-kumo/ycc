@@ -74,7 +74,27 @@ for src in "$HERE"/t[0-9][0-9][0-9]_*.y; do
             failed="$failed $base"
             continue
         fi
-        if diff -u "$exp" "$OUT/$base.out" > "$OUT/$base.diff" 2>&1; then
+        # The lifecycle lines yserve writes to stderr are removed before the
+        # comparison, and the reason is a wart rather than a policy.
+        #
+        # t009_proto IMPORTS yserve.y -- for handle_one, so it can assert the wire
+        # format without a process or a pipe. Importing a Y module RUNS it, and
+        # yserve.y ends with `let code = serve_main();`, so the fixture's own
+        # process starts a server, finds no framed input on stdin and stops. That
+        # has always happened; it was silent until the server learned to log that
+        # it had started, and then the fixture's transcript grew a timestamp and a
+        # pid, which cannot go in an expectation.
+        #
+        # So the lines are filtered, and ONLY those lines: the discriminator is the
+        # server's own prefix, not the words on the line. Everything lifecycle goes
+        # through log_line and reads `yserve: `; the per-request timing lines go
+        # through log_work/log_blocked/log_idle and read `yserve ` with no colon.
+        # So matching the timestamp and `yserve: ` removes start, ready, the std-pack
+        # line and stop, and leaves every timing line and everything the fixture
+        # prints to be compared as before.
+        sed -e '/^[0-9][0-9]:[0-9][0-9]:[0-9][0-9]\.[0-9][0-9][0-9]  yserve: /d' \
+            "$OUT/$base.out" > "$OUT/$base.cmp"
+        if diff -u "$exp" "$OUT/$base.cmp" > "$OUT/$base.diff" 2>&1; then
             echo "ok       $base [$cc]"
             pass=$((pass + 1))
         else

@@ -192,6 +192,12 @@ const real = {
         visibleTextEditors: [],
     },
 
+    // `extensions.getExtension`, because activate() asks whether this extension is
+    // already active in order to say WHY it is activating, and a stub without it
+    // throws on the very first line of activate() -- before anything under test.
+    extensions: {
+        getExtension: (id) => (id === 'yun.y-lang' ? { id, isActive: false } : undefined),
+    },
     workspace: {
         getConfiguration: (section) => config.get(section),
         workspaceFolders: undefined,
