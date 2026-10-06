@@ -317,6 +317,7 @@ Yv *gen_elem_addr(Yv *st, Yv *node);
 Yv *gen_bin(Yv *st, Yv *node);
 Yv *gen_logic(Yv *st, Yv *node, int is_or);
 Yv *gen_cat(Yv *st, Yv *node, Yv *lt, Yv *rt);
+int xmm_free(Yv *n);
 Yv *gen_float_bin(Yv *st, Yv *node, Yv *lt, Yv *rt);
 Yv *gen_str_cmp(Yv *st, Yv *node, Yv *op);
 int eq_elem_loop(Yv *t);
@@ -5387,10 +5388,53 @@ Yv *gen_cat(Yv *st, Yv *node, Yv *lt, Yv *rt) {
     return st;
 }
 
+/* Whether generating `n` can leave an SSE register untouched.
+ *
+ * This exists for one narrow question: a float binary operator has to hold its
+ * LEFT operand somewhere while the RIGHT one is generated, and every GPR is
+ * caller-saved, so the general answer is the stack -- a push and a pop per
+ * operator. If the right operand writes no SSE register at all, the left can sit
+ * in %xmm0 across it instead and the pair is two instructions of pure waste.
+ *
+ * A numeric literal generates one `mov $bits, %rax`. An identifier generates one
+ * load -- from the frame, from a global, or through a closure's cell, and all
+ * three are GPR-only. A unary operator generates its operand and then flips the
+ * sign bit or negates in a GPR: gen_un's float arm is `mov $1, %rcx; shl $63,
+ * %rcx; xor %rcx, %rax`, with no xmm in it at all. Everything else may write
+ * one: a call clobbers all of them, a nested float operator uses %xmm0 and
+ * %xmm1 itself, a comparison uses them too, and an index expression can call
+ * y_oob on its bounds check. Guessing wrong here would not make a slow program,
+ * it would make a wrong one, so the predicate stays short of anything it cannot
+ * prove.
+ *
+ * The unary arm is not a small extension: it is the difference between a fitted
+ * polynomial losing half its saving and not, because every second coefficient in
+ * a Horner chain is negative and `-1.2` is a unary minus over a literal rather
+ * than a literal. Twelve of a chain's twenty-four operators were going the slow
+ * way on that alone. */
+int xmm_free(Yv *n) {
+    long k = yv_l(yr_get(n, "k"));
+    if (k == K_num || k == K_id) {
+        return 1;
+    } else if (k == K_un) {
+        return xmm_free(yr_get(n, "e"));
+    } else {
+        return 0;
+    }
+}
+
 /* Float arithmetic and comparison. Operands arrive in %rax as raw bits;
- * a long operand is widened with cvtsi2sd first (the only coercion). */
+ * a long operand is widened with cvtsi2sd first (the only coercion).
+ *
+ * The two operand loads end in the same place (%xmm0 left, %xmm1 right) whichever
+ * way round they are done, and the operator dispatch below does not know or care
+ * which. The saving is not in the arithmetic: it is that a twelve-step Horner
+ * chain -- what every fitted polynomial kernel in std/math.y is -- went through
+ * 48 push/pop instructions out of 192, one pair per multiply-add, and now goes
+ * through none. */
 Yv *gen_float_bin(Yv *st, Yv *node, Yv *lt, Yv *rt) {
     Yv *op = yr_get(node, "op");
+    Yv *r = yr_get(node, "r");
     st = gen(st, yr_get(node, "l"));
     if (yv_l(yr_get(lt, "k")) == K_tfloat) {
         ;
@@ -5399,18 +5443,28 @@ Yv *gen_float_bin(Yv *st, Yv *node, Yv *lt, Yv *rt) {
         st = emit_insn(st, F_MOVQ_R_R, R_XMM0, 128, R_RAX, 64, 0, 0, 0);
         ;
     }
-    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
-    st = gen(st, yr_get(node, "r"));
-    if (yv_l(yr_get(rt, "k")) == K_tfloat) {
-        ;
+    /* A long on the right needs the widening cvtsi2sd, and that writes %xmm0 --
+     * which is where the left would be living. So this arm requires the right to
+     * be a float already; the slow arm below handles the rest. */
+    if (xmm_free(r) && yv_l(yr_get(rt, "k")) == K_tfloat) {
+        st = emit_insn(st, F_MOVQ_R_R, R_RAX, 64, R_XMM0, 128, 0, 0, 0);
+        st = gen(st, r);
+        st = emit_insn(st, F_MOVQ_R_R, R_RAX, 64, R_XMM1, 128, 0, 0, 0);
     } else {
-        st = emit_insn(st, F_CVTSI2SD_R_R, R_RAX, 64, R_XMM0, 128, 0, 0, 0);
-        st = emit_insn(st, F_MOVQ_R_R, R_XMM0, 128, R_RAX, 64, 0, 0, 0);
+        st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+        st = gen(st, r);
+        if (yv_l(yr_get(rt, "k")) == K_tfloat) {
+            ;
+        } else {
+            st = emit_insn(st, F_CVTSI2SD_R_R, R_RAX, 64, R_XMM0, 128, 0, 0, 0);
+            st = emit_insn(st, F_MOVQ_R_R, R_XMM0, 128, R_RAX, 64, 0, 0, 0);
+            ;
+        }
+        st = emit_insn(st, F_MOVQ_R_R, R_RAX, 64, R_XMM1, 128, 0, 0, 0);
+        st = emit_insn(st, F_POP_R, R_RAX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, F_MOVQ_R_R, R_RAX, 64, R_XMM0, 128, 0, 0, 0);
         ;
     }
-    st = emit_insn(st, F_MOVQ_R_R, R_RAX, 64, R_XMM1, 128, 0, 0, 0);
-    st = emit_insn(st, F_POP_R, R_RAX, 64, 0, 0, 0, 0, 0);
-    st = emit_insn(st, F_MOVQ_R_R, R_RAX, 64, R_XMM0, 128, 0, 0, 0);
     if (ys_eq_lit(op, "+")) {
         st = emit_insn(st, F_ADDSD_R_R, R_XMM1, 128, R_XMM0, 128, 0, 0, 0);
         return emit_insn(st, F_MOVQ_R_R, R_XMM0, 128, R_RAX, 64, 0, 0, 0);

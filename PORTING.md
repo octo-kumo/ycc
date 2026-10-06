@@ -46,7 +46,7 @@ requires byte-identical binaries).
 | `src/y/ycc.y`           | `src/c/ycc.c`         | driver + `main`                   |
 | `src/y/pkg.y`           | `src/c/pkg.c`         | `ycc build`/`vendor`: y.toml, graph, git, y.lock, hashing; `exec` is fork + execve(`/bin/sh`, envp NULL) like std/exec.y, `syscall` openat/mkdir the libc calls |
 | —                       | `src/c/yv.c`/`yv.h`   | the value model (no Y twin; the runtime of *compiled* programs is `src/y/std/rt.y`) |
-| `src/y/std/rt.y`, `prelude.y`, `exec.y`, `str.y` | (stay Y)  | the std units, compiled separately and linked into programs (std_units; precompiled in ycc's std pack): their sources are native.y's `embed`, the C copy's `Y_EMBED` (rule 10) |
+| `src/y/std/rt.y`, `prelude.y`, `exec.y`, `str.y` | (stay Y)  | the std units, compiled separately and linked into programs (std_units; precompiled in ycc's std pack): their sources are native.y's `embed`, the C copy's `Y_EMBED` (rule 11) |
 | `src/y/std/fs.y`, `net.y`, `struct.y`   | (stay Y)  | optional modules resolved **from disk** by `std_resolve` when a program imports them; not embedded |
 | `src/tools/lsp/*.y`    | (none — stays Y)  | the language server (`yserve`), the VS Code extension and `LSP.md`. **Not ported, and not to be**: it is a tool, not the compiler, and it is the only program that imports the compiler's own modules **by path** — `types.y`, `native.y`, `parser.y`, `rename.y`, `lint.y`. A path import *flattens* (no namespace), so every name `src/tools/lsp/` defines lands in the compiler's vocabulary and two of them colliding is a duplicate-definition error reported against the wrong file. `src/tools/lsp/check-names.py` is what keeps that from happening, and it runs in `test/sh/test_lsp.sh`; it also checks each module's **basename**, because `strip_ns` rewrites any `name.field` in the whole program as a module reference — a module called `index.y` turned the compiler's own 42 `index.idx` reads into names that do not exist. Add a module there and the checker has to pass before the port gate means anything |
 
@@ -132,7 +132,20 @@ requires byte-identical binaries).
    an `else` arm written `{ 0 }` or `{ 0; }` ports as the bare `;`/`0`
    form it has — do not refactor while porting.
 
-8. **Smaller mappings**: `next_uid(st)` hands out a unique id for emitter
+8. **Emitter peepholes port as themselves.** `gen_float_bin`'s `xmm_free` guard
+   is not a convenience: it is the only thing standing between a wrong answer
+   and a fast one, because holding the left operand in `%xmm0` across the right
+   operand's evaluation is unsound the moment the right one calls. In the C copy
+   it is `int xmm_free(Yv *n)` — a `bool` return becomes `int` — reading
+   `yr_get(n, "k")` against `K_num`, `K_id` and `K_un`, and recursing on
+   `yr_get(n, "e")` for the unary arm. The forward declaration sits with the
+   other `gen_*` ones near the top of `native.c`; a C99 implicit declaration
+   would compile here and mistype the return on any later change. The port gate
+   is what notices, since the two copies then emit different assembly for every
+   float operator and every corpus program that does float arithmetic changes
+   its bytes.
+
+9. **Smaller mappings**: `next_uid(st)` hands out a unique id for emitter
    labels and table names by bumping the emit state's counter; it ports
    like any other function (`next_uid` in `native.c`), so the produced
    names stay identical. The compiler's file calls go through std/fs.y
@@ -144,17 +157,17 @@ requires byte-identical binaries).
    with the body unchanged: `long i = 0; while (i < yv_len(xs)) { Yv *x
    = ya_get(xs, i); ...; i = i + 1; }` (as in `asm.c` and `elf.c`).
 
-9. **Errors and exits** behave like the Y code: `exit(n)` terminates;
+10. **Errors and exits** behave like the Y code: `exit(n)` terminates;
    diagnostics go through `puts`/`eputs` unchanged.
 
-10. **Embedded files**: a top-level `embed NAME from "./std/rt.y";` (a str
+11. **Embedded files**: a top-level `embed NAME from "./std/rt.y";` (a str
     const holding the file, read when the compiler is built) →
     `Y_EMBED(NAME, "src/y/std/rt.y")` (yv.h: the assembler's `.incbin`,
     path relative to the repo root, where the Makefile runs gcc), read as
     `NAME()`. The Makefile lists the files in `STD_EMBEDS` so cycc rebuilds
     when one changes.
 
-11. **Assembly files**, the same mechanism and the same reason: `src/y/arch/
+12. **Assembly files**, the same mechanism and the same reason: `src/y/arch/
     *.s` holds the machine code (arch_x64.y `embed PRELUDE_ASM from
     "./arch/prelude.s";` → `Y_EMBED(PRELUDE_ASM, "src/y/arch/prelude.s")`).
     Unlike the std units this is not text either compiler reads — it is text
@@ -168,7 +181,7 @@ requires byte-identical binaries).
     so the in-tree assembler never sees one. `make asm-check` reads them with
     GNU `as`.
 
-12. **`native def` is a declaration, and it ports as one.** `native def
+13. **`native def` is a declaration, and it ports as one.** `native def
      name(params) -> ret [= "label"];` is a `Func` whose `label` field carries
      the assembly label and whose `body` holds only the header's own errors —
      there is no body to walk and none to emit. Six places know that, and each

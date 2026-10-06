@@ -26,12 +26,12 @@ same semantics.
 - The std units the compiler links into programs are plain Y in
   `src/y/std/rt.y`, `prelude.y`, `exec.y`, `str.y`, embedded into both
   compilers when they are built (`embed` in native.y, `Y_EMBED` in
-  native.c — PORTING.md rule 10). Edit those files directly; there is no
+  native.c — PORTING.md rule 11). Edit those files directly; there is no
   generator (`make ycc`/`ynew` rebuild the pack). `str.y` must not
   contain string literals (see NATIVE.md, "Runtime library").
 - The compiler's own **assembly** is in `src/y/arch/*.s`, embedded the
   same way (`embed PRELUDE_ASM from "./arch/prelude.s";` in arch_x64.y,
-  `Y_EMBED` in arch_x64.c — PORTING.md rule 11), so there is one copy of
+  `Y_EMBED` in arch_x64.c — PORTING.md rule 12), so there is one copy of
   it rather than one per compiler. Whole-line `#` comments are allowed
   there and dropped before the in-tree assembler sees the text;
   `make asm-check` reads the files with GNU `as`. Edit the `.s` files
@@ -417,7 +417,7 @@ replaces the std one at link time).
   (`prelude.s`: allocator, traps, string/array cores, `y_fmod`, float
   formatting), the float primitives `math.s` (`y_sqrt`, `y_to_int`, `y_fbits`,
   `y_bitsf` — what a `native def` reaches for), and the thread runtime
-  (`threads.s`) — embedded by both copies, see PORTING.md rule 11.
+  (`threads.s`) — embedded by both copies, see PORTING.md rule 12.
 - `src/y/` — the Y compiler: `ycc.y` (driver), `pkg.y` (`ycc build`:
   `y.toml`, the dependency graph, git, `y.lock`), `lexer.y`, `parser.y`,
   `rename.y`, `types.y` (checker), `lint.y` (warnings), `native.y`

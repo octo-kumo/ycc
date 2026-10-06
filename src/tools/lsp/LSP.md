@@ -243,7 +243,7 @@ It does not run the emitter, the assembler or the ELF writer. `yserve` never
 imports `asm.y`, `elf.y`, `arch_x64.y`, `enc64.y` or `dwarf.y` — and it could not
 pull in the prelude by accident either, since the compiler's own assembly now
 lives in `src/y/arch/*.s` (`prelude.s`, `threads.s`) embedded by both copies
-(`PORTING.md` rule 11), rather than being written inline in `arch_x64.y`.
+(`PORTING.md` rule 12), rather than being written inline in `arch_x64.y`.
 Diagnostics stop at `lint_unit`, which is the last thing `compile_unit` does
 before codegen (`compile_unit`'s error short-circuit). A smaller binary, and no way to
 accidentally write a file.
