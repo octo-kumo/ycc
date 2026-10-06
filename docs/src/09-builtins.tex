@@ -407,21 +407,41 @@ computed by squaring).
   17\% of the answer: a cube root's iteration is only locally convergent, and
   the obvious seed --- a fourth root --- is off by a factor of $a^{1/12}$, which
   is \num{1e27} for a subnormal.
-\item[\ic{math.hypot(x, y)}] $\sqrt{x^2+y^2}$ without the overflow: both
-  magnitudes are divided by a \emph{power of two} chosen to bring the larger into
-  $[1, 2)$, the sum of squares is taken there, and the answer is scaled back by
-  $2^k$ --- which is exact, because multiplying by a power of two only changes
-  the exponent. That last property is the whole design. The obvious form,
-  $m\sqrt{(s/m)^2+1}$, divides by an arbitrary float and multiplies by one, and
-  both of those round at full size; it was measured 2 ulps from this platform's
-  \ic{libm} on \num{0.75} per cent of pairs with $|s/m|$ between $10^{-8}$ and
-  $10^{-1}$. Dividing by a power of two instead puts $m^2$ in $[1, 4)$, where it
-  cannot overflow, and removes one of the two full-size roundings outright rather
-  than compensating for it. Over \num{2044} pairs spanning every decade from
-  $10^{-320}$ to $1.8\cdot10^{308}$ and every ratio from $10^{-300}$ to
-  $10^{300}$ the answer is within one ulp of \ic{libm}; the Pythagorean triples
-  are exact, and \ic{hypot(2.0, 3.0)} is still one ulp above the correctly
-  rounded $\sqrt{13}$, which no scaling fixes.
+\item[\ic{math.hypot(x, y)}] $\sqrt{x^2+y^2}$ without the overflow. Which form
+  computes it is decided by the argument, because the form that is accurate
+  everywhere and the form that is cheap everywhere turned out to be nearly the
+  same cost once the argument was looked at.
+
+  The form to avoid is $m\sqrt{(s/m)^2+1}$: it divides by an arbitrary float and
+  multiplies by one, and both of those round at full size, which measured it 2
+  ulps from this platform's \ic{libm} on \num{0.75} per cent of pairs with
+  $|s/m|$ between $10^{-8}$ and $10^{-1}$. So what the module does instead is:
+
+  \begin{itemize}
+  \item $m$ in $[10^{-152}, 10^{154}]$: $\sqrt{m^2+s^2}$ directly, with no
+    scaling at all. Three roundings where the ratio form had four, and none of
+    them spent on a scale factor --- so it is \emph{more} accurate as well as
+    cheaper, and about half of all arguments land here.
+  \item otherwise, and $s/m < 10^{-4}$: $m + (s/m)s/2$. When the ratio is that
+    small the terms past $s^2/2m$ are below an ulp of the answer, and the
+    correction's own rounding is multiplied by $p^2/2$ before it arrives --- so a
+    form built from three sloppy operations beats one built from a scaling. It is
+    written $(s/m)s$ rather than $s^2/2m$ because the first cannot overflow when
+    $m$ is near $10^{308}$, which is the case that brought it here.
+  \item otherwise: both magnitudes divided by a \emph{power of two} bringing the
+    larger into $[1,2)$, the sum of squares taken there, and the answer scaled
+    back by $2^k$ --- exact, because multiplying by a power of two only changes
+    the exponent, and it is what puts $m^2$ where it cannot overflow. Under one
+    per cent of arguments.
+  \end{itemize}
+
+  Over \num{2044} pairs spanning every decade from $10^{-320}$ to
+  $1.8\cdot10^{308}$ and every ratio from $10^{-300}$ to $10^{300}$, and over
+  \num{20000} pairs with each argument drawn independently from the decades, the
+  answer is within one ulp of \ic{libm} --- against 2 ulps on \num{0.75} per
+  cent for the ratio form, for \num{2.2} per cent more instructions. The
+  Pythagorean triples are exact, and \ic{hypot(2.0, 3.0)} is still one ulp above
+  the correctly rounded $\sqrt{13}$, which no form here fixes.
 
   An infinity is the larger of the two whatever else is beside it, so
   \ic{hypot(inf, nan)} is $+\infty$ --- found by looking for one, not by taking

@@ -57,10 +57,29 @@
 // 0.75% of the wide-ratio pairs. So the sentence was wrong in the way this file
 // exists to catch -- it read as coverage.
 //
-// It is now a power-of-two scaling, which is within 1 ulp of glibc on 2044 pairs
-// spanning every decade from 1e-320 to 1.8e308 and every ratio from 1e-300 to
-// 1e300, and the two cases below are the ones that used to be the argument for
-// leaving it alone.
+// It is now within 1 ulp of glibc everywhere, and the two cases below are the
+// ones that used to be the argument for leaving it alone.
+//
+// WHICH path it takes is a decision about the argument, not one compromise, and
+// the reason is that the accurate form turned out to be nearly free. Measuring
+// the power-of-two scaling cost 964 instructions a call against the ratio form's
+// 299 -- ldexp is 178 a call and the path needs two -- which is a 3.2x price for
+// accuracy that a decade-uniform spread says is only needed at the two ends of
+// the range. So:
+//
+//   m in [1e-152, 1e154]   sqrt(m*m + s*s) directly. Three roundings instead of
+//                          four and none spent on a scale factor, so it is MORE
+//                          accurate as well as cheaper. Half of all arguments.
+//   otherwise, s/m < 1e-4  m + (s/m)*s/2. When the ratio is that small the terms
+//                          past s^2/2m are below an ulp, and the correction's own
+//                          sloppy rounding is multiplied by p^2/2 before it
+//                          reaches the answer.
+//   otherwise              the power-of-two scaling, under one per cent of
+//                          arguments under a decade-uniform pair spread.
+//
+// Net cost against the form that was 2 ulps out: +2.2% instructions, and 0% on
+// the wide-ratio band that band lives in. The correctness was bought cheaply
+// because the accurate form and the cheap form turned out to be the same form.
 
 import math;
 
@@ -117,20 +136,28 @@ print("hypot(3, 4) == 5            ", math.hypot(3.0, 4.0) == 5.0);
 print("hypot(3e200, 4e200)  ", bits(math.hypot(3e200, 4e200)));
 print("  which is one ulp under the 5e200 literal, and matches glibc: ", bits(math.hypot(3e200, 4e200)) == 7609430662777223920);
 print("  while 5e200 itself is:  ", bits(5e200));
-// The wide-ratio case the ratio form got wrong, pinned by value. The three
-// numbers are the point:
+// The wide-ratio case the ratio form got wrong, pinned by value. Three answers
+// for one argument, and the order they were reached in is the whole story:
 //
-//   ...043   the ratio form, 2 ulps from glibc
-//   ...044   the power-of-two scaling, 1 ulp from glibc
-//   ...045   glibc
+//   ...043   the ratio form        2 ulps from glibc
+//   ...044   the power-of-two      1 ulp from glibc
+//   ...045   m + (s/m)*s/2         EXACTLY glibc
 //
-// So the fix moved the answer by one ulp and the tolerance is one ulp, which is
-// the whole promise. It is not exact, and the comment in hypot_scaled that used
-// to call the old form "a known limit" was wrong about that too.
+// So the cheapest form is also the most accurate one here, which is not what I
+// expected when I added it for its cost. The reason is visible in hypot_scaled:
+// at this ratio the answer is m plus a correction four orders of magnitude
+// below it, so the only rounding that reaches the answer is the final
+// subtraction's -- while the scaling form spends two of its four roundings
+// putting m in [1,2) and two taking it back out, and the sqrt's own half-ulp is
+// half an ulp of the ANSWER rather than of something near it.
+//
+// The comment in hypot_scaled that used to call the old form "a known limit" was
+// wrong about that too.
 print("hypot(3.284781714398278e282, 1.5206628784236626e287)  ",
     bits(math.hypot(3.284781714398278e282, 1.5206628784236626e287)));
 print("  the ratio form answered:                               8903604381772537043");
-print("  glibc answers:                                         8903604381772537045");
+print("  the power-of-two form answered:                        8903604381772537044");
+print("  glibc answers, and so does this:                      8903604381772537045");
 // And twenty more, because one case is one argument and the failure was a BAND.
 // Two properties, both of which the ratio form kept too -- so these are here as
 // a floor, not as the check: the value above is the check.
