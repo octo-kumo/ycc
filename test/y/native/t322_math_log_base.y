@@ -82,10 +82,33 @@
 // e = 5. So the failing arguments are not the large-|e| ones the first
 // measurement happened to pick, and that is the next thing to sweep.
 //
-// Not resolved. What would settle it is ln(m) and the SUM in one extra-precision
-// accumulator, which is a different algorithm from a compensated expression tree
-// and is not attempted here. Three measured attempts that did not work are worth
-// more in this file than a fourth that might.
+// WHERE THE FAILURES ACTUALLY ARE -- MEASURED, AND IT IS NOT WHERE I LOOKED
+//
+// Swept by binary exponent with 64 arguments, two mantissas at each of 32
+// exponents from -698 to +503. Every argument with a NON-ZERO binary exponent is
+// EXACT -- 62 of 62, gap 0 -- and the failures are concentrated at e == 0:
+//
+//     14 arguments in [1, 2), binary exponent exactly 0:  5 of 14 one ulp out
+//     62 arguments, exponents -698..+503, mantissa 3.3 and 9.02:  all exact
+//
+// At e == 0 the first term VANISHES -- a = ef*log10_2_hi with ef = 0 is exactly
+// +0.0 -- so the answer is ln(m)*log10(e) alone: ONE product of two rounded
+// doubles, with nothing to cancel against. two_sum(a, bq) contributes nothing
+// there (its residual is 0) and the else branch's `be + l*log10e_lo` is already
+// a compensated product, so those 5 are not a missing term: they are a
+// two-double product that lands on the wrong side of a tie, and closing them
+// needs the constant in three pieces or the product in more.
+//
+// So the earlier claim here -- that the two terms being of comparable size is what
+// lets ln(m)'s error through -- is wrong twice over. It is wrong for large |e|
+// (ratio 4e-4 at e = 831) and it is wrong about the mechanism: the failures are
+// not where the terms are comparable but where ONE of them is absent.
+//
+// Not resolved. What would settle the rest is ln(m) and the SUM in one
+// extra-precision accumulator, which is a different algorithm from a compensated
+// expression tree and is not attempted here. Three measured attempts that did
+// not work, and one measurement that says where to look, are worth more in this
+// file than a fourth guess.
 //
 // It also cost 5.5x the instructions: log through assembly plus a multiply is
 // 149 a call, and this is 817. That is a deliberate trade and it is worth naming
