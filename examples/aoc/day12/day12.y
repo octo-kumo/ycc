@@ -202,7 +202,7 @@ def is_picture(s: str) -> bool {
 // "7:" -- a shape's own index, which the input gives for convenience only.
 def is_label(s: str) -> bool {
     let n = len(s);
-    n > 1 && s[n - 1] == c':' && is_digits(s, 0, n - 1)
+    n > 1 && s[n - 1] == ':' && is_digits(s, 0, n - 1)
 }
 
 // "39x44: 51 35 ..." -- a region line.

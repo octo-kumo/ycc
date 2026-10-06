@@ -509,8 +509,8 @@ def wlevel_arg(argv: [str], i: long, n: long) -> long {
         let d = 0;
         while (ok && d < len(a)) {
             let c = byte_at(a, d);
-            ok = c >= c'0' && c <= c'9';
-            if (ok && v <= 1) { v = v * 10 + (c - c'0'); 0; };
+            ok = c >= '0' && c <= '9';
+            if (ok && v <= 1) { v = v * 10 + (c - '0'); 0; };
             d = d + 1;
         };
         if (!ok || v > 1) {

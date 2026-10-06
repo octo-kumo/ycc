@@ -28,7 +28,7 @@
 const K_comment = 1;      // // and /* */ both
 const K_string = 2;       // "..."
 const K_bstring = 3;      // b"..." b'...'
-const K_char = 4;         // c'x'
+const K_char = 4;         // 'x'
 const K_fstring = 5;      // f"...{expr}..."
 const K_number = 6;       // 12, 1.5, 1e10, 0x1f, 0b1010, with _ grouping
 const K_ident = 7;        // anything not in the keyword list
@@ -48,27 +48,27 @@ def sp(off: long, end: long, kind: long, line: long, col: long) -> Span {
 
 // ── byte classes ────────────────────────────────────────────────────────
 
-def is_dig(c: byte) -> bool { c >= c'0' && c <= c'9' }
+def is_dig(c: byte) -> bool { c >= '0' && c <= '9' }
 def is_hexd(c: byte) -> bool {
-    is_dig(c) || (c >= c'a' && c <= c'f') || (c >= c'A' && c <= c'F')
+    is_dig(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
 }
 def is_alpha(c: byte) -> bool {
-    (c >= c'a' && c <= c'z') || (c >= c'A' && c <= c'Z') || c == c'_'
+    (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'
 }
 def is_alphanum(c: byte) -> bool { is_alpha(c) || is_dig(c) }
-def is_space(c: byte) -> bool { c == c' ' || c == c'\t' || c == c'\n' || c == c'\r' }
+def is_space(c: byte) -> bool { c == ' ' || c == '\t' || c == '\n' || c == '\r' }
 
 // The nine punctuation characters, per the lexer's ispunct.
 def is_punct_byte(c: byte) -> bool {
-    c == c'(' || c == c')' || c == c'{' || c == c'}' || c == c'[' ||
-    c == c']' || c == c',' || c == c';' || c == c':'
+    c == '(' || c == ')' || c == '{' || c == '}' || c == '[' ||
+    c == ']' || c == ',' || c == ';' || c == ':'
 }
 
 // The lexer's issingleop.
 def is_single_op(c: byte) -> bool {
-    c == c'+' || c == c'-' || c == c'*' || c == c'/' || c == c'%' ||
-    c == c'<' || c == c'>' || c == c'=' || c == c'.' || c == c'!' ||
-    c == c'&' || c == c'?' || c == c'|' || c == c'^' || c == c'~'
+    c == '+' || c == '-' || c == '*' || c == '/' || c == '%' ||
+    c == '<' || c == '>' || c == '=' || c == '.' || c == '!' ||
+    c == '&' || c == '?' || c == '|' || c == '^' || c == '~'
 }
 
 // ── the twelve reserved words (lexer.y's chain) ──────────────────────────
@@ -106,7 +106,7 @@ def op2(src: str, i: long) -> bool {
 def op_long(src: str, i: long) -> long {
     let c = byte_at(src, i);
     let n = 0;
-    if (c == c'<' || c == c'>') {
+    if (c == '<' || c == '>') {
         if (src[i:i + 4] == ">>>=") { n = 4; }
         else if (src[i:i + 3] == ">>>" || src[i:i + 3] == ">>=" || src[i:i + 3] == "<<=") { n = 3; }
     };
@@ -135,7 +135,7 @@ def bump(c: Cur, n: long) -> long {
     let k = 0;
     while (k < n) {
         if (c.i < len(c.s)) {
-            if (byte_at(c.s, c.i) == c'\n') {
+            if (byte_at(c.s, c.i) == '\n') {
                 c.line = c.line + 1;
                 c.col = 1;
             } else { c.col = c.col + 1; }
@@ -180,19 +180,52 @@ def take_quoted(c: Cur, quote: long) -> Span {
 // hold a nested string with braces in it, as in f"{d["k"]}" and
 // f"{n == 1 ? "" : "s"}", so braces are counted and quoted runs inside a field
 // are skipped whole.
+// """...""" -- the same scan as take_quoted, but the terminator is three
+// quotes long, so a single `"` inside does not end it.
+def take_triple(c: Cur) -> Span {
+    let start = c.i;
+    let sline = c.line;
+    let scol = c.col;
+    let out = false;
+    let hit = false;
+    bump(c, 3);
+    while (!out) {
+        if (c.i + 3 > len(c.s)) {
+            out = true;
+        } else if (byte_at(c.s, c.i) == 92) {
+            if (c.i + 2 >= len(c.s)) { bump(c, 1); } else { bump(c, 2); }
+        } else if (byte_at(c.s, c.i) == '"' && byte_at(c.s, c.i + 1) == '"' && byte_at(c.s, c.i + 2) == '"') {
+            bump(c, 3);
+            out = true;
+            hit = true;
+        } else {
+            bump(c, 1);
+        }
+    };
+    let kind = K_string;
+    if (!hit) { kind = K_error; }
+    sp(start, c.i, kind, sline, scol)
+}
+
 def take_fstring(c: Cur) -> Span {
     let start = c.i;
     let sline = c.line;
     let scol = c.col;
     let closed = false;
-    bump(c, 2);                      // f"
+    // f""" opens with four bytes and closes with three: a single `"` inside is
+    // text, exactly as in the compiler's lexer
+    let qlen = 2;
+    if (byte_at(c.s, c.i + 1) == 34 && byte_at(c.s, c.i + 2) == 34) { qlen = 4; };
+    bump(c, qlen);                   // f" or f"""
     while (!closed) {
         if (c.i >= len(c.s)) {
             closed = true;
         } else {
             let ch = byte_at(c.s, c.i);
-            if (ch == 34) {
-                bump(c, 1);
+            if (ch == 34 && qlen == 4 && !(byte_at(c.s, c.i + 1) == 34 && byte_at(c.s, c.i + 2) == 34)) {
+                bump(c, 1);          // a lone " inside f""": text, not the end
+            } else if (ch == 34) {
+                bump(c, qlen - 1);   // the closing " (or """)
                 closed = true;
             } else if (ch == 92) {
                 if (c.i + 1 >= len(c.s)) { bump(c, 1); } else { bump(c, 2); }
@@ -245,7 +278,7 @@ def take_digits(c: Cur) -> long {
             if (is_dig(d)) {
                 bump(c, 1);
                 n = n + 1;
-            } else if (d == c'_' && n > 0 && c.i + 1 < len(c.s) && is_dig(byte_at(c.s, c.i + 1))) {
+            } else if (d == '_' && n > 0 && c.i + 1 < len(c.s) && is_dig(byte_at(c.s, c.i + 1))) {
                 bump(c, 1);
             } else {
                 more = false;
@@ -266,10 +299,10 @@ def take_number(c: Cur) -> Span {
     let sline = c.line;
     let scol = c.col;
     let radix = 0;
-    if (byte_at(c.s, c.i) == c'0' && c.i + 1 < len(c.s)) {
+    if (byte_at(c.s, c.i) == '0' && c.i + 1 < len(c.s)) {
         let n = byte_at(c.s, c.i + 1);
-        if (n == c'x' || n == c'X') { radix = 16; }
-        if (n == c'b' || n == c'B') { radix = 2; }
+        if (n == 'x' || n == 'X') { radix = 16; }
+        if (n == 'b' || n == 'B') { radix = 2; }
     }
     let bad = false;
     if (radix > 0) {
@@ -282,11 +315,11 @@ def take_number(c: Cur) -> Span {
             } else {
                 let d = byte_at(c.s, c.i);
                 let ok = is_hexd(d);
-                if (radix == 2) { ok = d == c'0' || d == c'1'; }
+                if (radix == 2) { ok = d == '0' || d == '1'; }
                 // `_` groups digits without being one: `0b1010_1010` is a
                 // single literal, while `0b_` has no digit and is an error.
                 if (ok) { bump(c, 1); got = got + 1; }
-                else if (d == c'_') { bump(c, 1); }
+                else if (d == '_') { bump(c, 1); }
                 else { more = false; }
             }
         }
@@ -300,7 +333,7 @@ def take_number(c: Cur) -> Span {
         }
     } else {
         take_digits(c);
-        if (c.i + 1 < len(c.s) && byte_at(c.s, c.i) == c'.') {
+        if (c.i + 1 < len(c.s) && byte_at(c.s, c.i) == '.') {
             if (is_dig(byte_at(c.s, c.i + 1))) {
                 bump(c, 1);
                 take_digits(c);
@@ -308,12 +341,12 @@ def take_number(c: Cur) -> Span {
         }
         if (c.i < len(c.s)) {
             let e = byte_at(c.s, c.i);
-            if (e == c'e' || e == c'E') {
+            if (e == 'e' || e == 'E') {
                 let save = c.i;
                 bump(c, 1);
                 if (c.i < len(c.s)) {
                     let sg = byte_at(c.s, c.i);
-                    if (sg == c'+' || sg == c'-') { bump(c, 1); }
+                    if (sg == '+' || sg == '-') { bump(c, 1); }
                 }
                 if (c.i < len(c.s) && is_dig(byte_at(c.s, c.i))) {
                     take_digits(c);
@@ -321,6 +354,12 @@ def take_number(c: Cur) -> Span {
             }
         }
     }
+    // a `b` byte-literal suffix (129b, 0b10001b) belongs to the number: the
+    // formatter must not split it into a number and an identifier
+    if (c.i < len(c.s) && byte_at(c.s, c.i) == 'b' &&
+        !(c.i + 1 < len(c.s) && is_alphanum(byte_at(c.s, c.i + 1)))) {
+        bump(c, 1);
+    };
     let kind = K_number;
     if (bad) { kind = K_error; }
     sp(start, c.i, kind, sline, scol)
@@ -344,7 +383,7 @@ def take_line_comment(c: Cur) -> Span {
     let sline = c.line;
     let scol = c.col;
     bump(c, 2);
-    while (c.i < len(c.s) && byte_at(c.s, c.i) != c'\n') { bump(c, 1); }
+    while (c.i < len(c.s) && byte_at(c.s, c.i) != '\n') { bump(c, 1); }
     sp(start, c.i, K_comment, sline, scol)
 }
 
@@ -402,28 +441,39 @@ def scan_full(src: str) -> { spans: [Span], bad: [Span] } {
                 one.kind = K_none;
                 done = true;
             }
-            if (!done && ch == c'/' && nx == c'/') {
+            if (!done && ch == '/' && nx == '/') {
                 one = take_line_comment(c);
                 done = true;
             }
-            if (!done && ch == c'/' && nx == c'*') {
+            if (!done && ch == '/' && nx == '*') {
                 one = take_block_comment(c);
                 done = true;
             }
-            if (!done && (ch == c'"' || ch == c'\'')) {
-                one = take_quoted(c, ch);
+            if (!done && ch == '"') {
+                // """...""" is one token; a one-line string ends at the next "
+                if (nx == '"' && c.i + 2 < len(c.s) && byte_at(c.s, c.i + 2) == '"') {
+                    one = take_triple(c);
+                } else {
+                    one = take_quoted(c, ch);
+                }
                 done = true;
             }
-            // b"..." / b'...' and c'a' and f"...": a letter followed by a quote
+            if (!done && ch == '\'') {
+                // 'a' -- a character literal: one byte, typed byte
+                one = take_quoted(c, ch);
+                if (one.kind == K_string) { one.kind = K_char; }
+                done = true;
+            }
+            // b"..." / b'...' and 'a' and f"...": a letter followed by a quote
             if (!done && is_alpha(ch)) {
-                if ((ch == c'b' || ch == c'f') && (nx == c'"' || nx == c'\'')) {
+                if ((ch == 'b' || ch == 'f') && (nx == '"' || nx == '\'')) {
                     let st = c.i;
                     let sl = c.line;
                     let sc = c.col;
                     bump(c, 1);
                     let q = take_quoted(c, nx);
                     let kind = K_bstring;
-                    if (ch == c'f') {
+                    if (ch == 'f') {
                         // an f-string's fields make take_quoted the wrong scan
                         c.i = st; c.line = sl; c.col = sc;
                         one = take_fstring(c);
@@ -433,15 +483,17 @@ def scan_full(src: str) -> { spans: [Span], bad: [Span] } {
                     }
                     done = true;
                 }
-                if (!done && ch == c'c' && nx == c'\'') {
+                if (!done && ch == 'c' && nx == '\'') {
+                    // c'a' is no longer a spelling: `c` is an identifier and
+                    // `'a'` the character literal that follows it. Taken as
+                    // one error span so the editor does not colour half of it.
                     let st = c.i;
                     let sl = c.line;
                     let sc = c.col;
                     bump(c, 1);
                     let q = take_quoted(c, 39);
-                    let kind = K_char;
-                    if (q.kind == K_error) { kind = K_error; }
-                    one = sp(st, c.i, kind, sl, sc);
+                    one = sp(st, c.i, K_error, sl, sc);
+                    if (q.kind == K_error) { one.kind = K_error; }
                     done = true;
                 }
             }
@@ -527,7 +579,7 @@ def line_starts(src: str) -> [long] {
     let i = 0;
     let n = len(src);
     while (i < n) {
-        if (byte_at(src, i) == c'\n') { out += i + 1; }
+        if (byte_at(src, i) == '\n') { out += i + 1; }
         i = i + 1;
     }
     out

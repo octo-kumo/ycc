@@ -68,9 +68,9 @@ def unhex(s: str) -> [byte] {
 };
 
 def hexdigit(c: byte) -> long {
-    if (c >= c'0' && c <= c'9') { c - c'0' }
-    else if (c >= c'a' && c <= c'f') { c - c'a' + 10 }
-    else if (c >= c'A' && c <= c'F') { c - c'A' + 10 }
+    if (c >= '0' && c <= '9') { c - '0' }
+    else if (c >= 'a' && c <= 'f') { c - 'a' + 10 }
+    else if (c >= 'A' && c <= 'F') { c - 'A' + 10 }
     else { -1 }
 };
 

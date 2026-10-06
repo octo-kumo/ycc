@@ -284,7 +284,7 @@ growing the window mid-session and checking that the next frame paints into row
 
 ### 3. `ord("x")` everywhere, never `'x'`
 
-`'a'` is a **lexer error**; the character literal is `c'a'`
+`'a'` is a **lexer error**; the character literal is `'a'`
 (`examples/BUGS.md`, "`'a'` is not a character literal"). Every key test here is
 `ord("h")`, which needs no annotation and reads the same. There is no `s[i]`
 byte in any of it either: indexing a `str` yields a `byte` and `str + byte`

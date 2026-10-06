@@ -43,7 +43,7 @@ are inferred), `if`/`else`, `while`, `for`, `for x in lo..hi`, `foreach`,
 `T?`, `&x`, `*p`, `*p = v`, `a[i]`, `&a[i]`, `len(a)`, fixed arrays
 `[v; n]`, heap arrays `[v, ...]` grown in place with `+=`/`*=`, options
 `some(v)`/`none`/`is_some`/`unwrap`/`x!`, `void`, `print`, `syscall`,
-`b"..."`/`c'a'` byte-string and byte literals, `a[lo:hi]` slices and
+`b"..."`/`'a'` byte-string and byte literals, `a[lo:hi]` slices and
 `a[lo:hi] = b` slice assignment. Top-level `def`s are hoisted; a nested
 `def` that captures is closure-converted. Imports are spliced
 inline (no runtime maps). `&a` on a whole array (either kind) is

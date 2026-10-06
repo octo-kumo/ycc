@@ -276,7 +276,7 @@ def words(s: str) -> [str] {
     let start = -1;
     let i = 0;
     while (i <= len(s)) {
-        let blank = i == len(s) || s[i] == c' ' || s[i] == c'\t' || s[i] == c'\r';
+        let blank = i == len(s) || s[i] == ' ' || s[i] == '\t' || s[i] == '\r';
         if (blank && start >= 0) {
             out += s[start:i];
             start = -1;
@@ -296,7 +296,7 @@ def is_quad(s: str) -> bool {
         if (len(p) == 0 || len(p) > 3) { ok = false; };
         let i = 0;
         while (ok && i < len(p)) {
-            if (p[i] < c'0' || p[i] > c'9') { ok = false; };
+            if (p[i] < '0' || p[i] > '9') { ok = false; };
             i = i + 1;
         };
         if (ok && tolong(p) > 255) { ok = false; };

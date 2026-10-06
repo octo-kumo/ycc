@@ -297,7 +297,7 @@ def parse_primary(toks: [Tok], p: long) -> Parsed {
         // b"..." / b'...' -- a [byte] literal
         res({ k: K.bstr, v: v, line: ln, col: cl }, p + 1)
     } else if (t == "char") {
-        // c'a' -- one byte, typed `byte`; v holds its code in decimal
+        // 'a' -- one byte, typed `byte`; v holds its code in decimal
         if (len(v) == 1) {
             res({ k: K.char, v: tostring(ord(v)), line: ln, col: cl }, p + 1)
         } else {
@@ -718,10 +718,10 @@ def size_lit(s: str) -> long {
         // the digit's value: `.`, `e` (and a hex digit in a decimal) are
         // past the radix
         let d = 99;
-        if (o >= c'0' && o <= c'9') { d = o - c'0'; }
-        else if (o >= c'a' && o <= c'f') { d = o - c'a' + 10; }
-        else if (o >= c'A' && o <= c'F') { d = o - c'A' + 10; };
-        if (o == c'_') {
+        if (o >= '0' && o <= '9') { d = o - '0'; }
+        else if (o >= 'a' && o <= 'f') { d = o - 'a' + 10; }
+        else if (o >= 'A' && o <= 'F') { d = o - 'A' + 10; };
+        if (o == '_') {
             // a radix literal keeps its `_` separators
         } else if (d >= radix || v > (2147483647 - d) / radix) {
             v = -1;
@@ -2028,7 +2028,7 @@ def clause_err(toks: [Tok], pos: long, clause: Node, sep: str) -> Node {
 //                           union: bind it / some of its fields / nothing
 //     {f: v, ...} x         a record whose fields f equal v (also written
 //                           ({f: v, ...}) x); the binding is optional
-//     1, "s", c'a', true, none, -2, (expr)   equal to that value
+//     1, "s", 'a', true, none, -2, (expr)   equal to that value
 // Three node kinds carry what only the checker can decide: rectest (does
 // the value have T's fields?), narrow (the value, typed as T), and
 // matchend (the fall-through: unreachable when the arms cover every case,

@@ -482,7 +482,7 @@ status line writes digits into the surface instead of concatenating strings.
   rather than one `struct.unpack`. That is what lets a truncated file be
   diagnosed by name ("the DIB header declares 40 bytes but only 26 are
   present") instead of being a single "bad header".
-* **`'q'` is not a character literal** — `c'a'` is, and a bare apostrophe in a
+* **`'q'` is not a character literal** — `'a'` is, and a bare apostrophe in a
   file can turn a diagnostic into a different one (filed in `../BUGS.md`). The
   key codes are written down once as `K_Q`, `K_PLUS`, … with their meanings.
 * **`fb.set_fd`** redirects the framebuffer to `/dev/null` in `--no-tty`, and

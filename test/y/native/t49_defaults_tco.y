@@ -27,5 +27,5 @@ print(scale(2.0));
 def neg(x: long, d = -3) -> long { x + d }
 print(neg(10));
 
-def flag(b = false, c = c'z') { print(b, " ", c) }
+def flag(b = false, c = 'z') { print(b, " ", c) }
 flag();

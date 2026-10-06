@@ -110,7 +110,7 @@ def line_bytes_from(text: str, starts: [long], ln: long) -> str {
     let i = from;
     let stop = len(text);
     while (i < stop) {
-        if (byte_at(text, i) == c'\n') { to = i; i = stop; } else { i = i + 1; to = i; }
+        if (byte_at(text, i) == '\n') { to = i; i = stop; } else { i = i + 1; to = i; }
     }
     if (to < from) { to = from; }
     text[from:to]

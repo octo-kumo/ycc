@@ -1197,7 +1197,7 @@ print(f"tab\there\{not a field\} {{x}} \x41 {"q\"q"}");
 print(f"{
     n * 100
     :>8}|");
-let b: byte = c'z';
+let b: byte = 'z';
 print(f"{b} {b:x} {b:c} {b:.1f}");
 def money(v: float) -> str { f"${v:,.2f}" };
 print(money(1234567.891), " ", money(0.005), " ", money(0.015));

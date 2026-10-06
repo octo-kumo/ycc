@@ -832,7 +832,7 @@ while (quit == false) {
     if (checked >= 4 || FRAMES == 0) {
         checked = 0;
         // keys come back as bytes, so they are compared as bytes: Y has no char
-        // literal (c'a' is the character form), and ord() is how a name becomes
+        // literal ('a' is the character form), and ord() is how a name becomes
         // the byte it means
         let k = tui.read_key_timeout(0);
         let moved = 0;

@@ -4,19 +4,19 @@ print(text[2:5]);
 print(text[1]);
 print(text[:5], "|", text[6:], "|", text[:]);
 print(text[8:100], "|", text[5:2], "|");
-print(text[0] == c'h');
+print(text[0] == 'h');
 
-let c = c'a';
+let c = 'a';
 print(c);
 print(c + 1);
-let nl = c'\n';
+let nl = '\n';
 print(nl);
 
 // count vowels byte by byte
 let vowels = 0;
 for (let i = 0; i < len(text); i++) {
     let ch = text[i];
-    if (ch == c'e' || ch == c'o') { vowels++; };
+    if (ch == 'e' || ch == 'o') { vowels++; };
 }
 print(vowels);
 

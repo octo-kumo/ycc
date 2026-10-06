@@ -542,7 +542,7 @@ All of these are lowered early, so the checker and emitter see little new:
   place, `gen_narrow_field`) and
   `matchend` (the fall-through). Patterns: `_`, `T x`, `T {f, g: y}`, `T`,
   record patterns `{f: v} x` / `({f: v}) x` (fields equal to values) and
-  literals (`1`, `"s"`, `c'a'`, `true`, `none`, `-2`, `(expr)`). Arms follow
+  literals (`1`, `"s"`, `'a'`, `true`, `none`, `-2`, `(expr)`). Arms follow
   the `if` law. Without `_`, every union member must be covered by a type
   arm or the match is rejected as non-exhaustive. A value pattern (a
   literal, or a record pattern like `({f: 10}) x`) matches only the values
@@ -551,7 +551,7 @@ All of these are lowered early, so the checker and emitter see little new:
   the substring — half-open and clamped like an array slice (`lo < 0`
   counts from 0, `hi > len` stops at len, `hi <= lo` is `""`), with
   `s[:hi]` and `s[lo:]` for the omitted bounds. There is no `substr`:
-  `substr(s, a, n)` is `s[a:a + n]`. **`c'a'`** is a `byte` literal.
+  `substr(s, a, n)` is `s[a:a + n]`. **`'a'`** is a `byte` literal.
 - **String methods** `s.m(args)`, as in `"str 1 2 3".split(" ")`, work on
   any `str`-typed receiver. One table, `str_method` in types.y, drives
   both the checker (`typeof_method`: arity, argument types, result) and

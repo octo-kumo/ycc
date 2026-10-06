@@ -233,12 +233,12 @@ def scan_none(src: str, fid: long) -> Scan {
 // not exported, and they must agree with lexer.y's wordbyte/isspace) ──────
 
 def m_word(c: long) -> bool {
-    c == c'_' || (c >= c'a' && c <= c'z') || (c >= c'A' && c <= c'Z') ||
-    (c >= c'0' && c <= c'9')
+    c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+    (c >= '0' && c <= '9')
 };
 
 def m_blank(c: long) -> bool {
-    c == c' ' || c == c'\t' || c == c'\n' || c == c'\r'
+    c == ' ' || c == '\t' || c == '\n' || c == '\r'
 };
 
 // The word at src[i], i known to be a word byte.
@@ -274,7 +274,7 @@ def m_prev(src: str, i: long) -> long {
 // bytes are dropped from G and its call hoisted (see sg_open and sg_mids_move).
 def m_token_end(c: long) -> bool {
     if (c == 0) { false }
-    else if (c == c')' || c == c']' || c == c'}' || c == c'.' || c == c'\'' || c == c'\"') { true }
+    else if (c == ')' || c == ']' || c == '}' || c == '.' || c == '\'' || c == '\"') { true }
     else { m_word(c) }
 };
 

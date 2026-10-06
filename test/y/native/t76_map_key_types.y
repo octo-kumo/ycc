@@ -1,6 +1,6 @@
 let bytes: {byte => str} = {};
-bytes[c'a'] = "letter";
-print(bytes[c'a']!);
+bytes['a'] = "letter";
+print(bytes['a']!);
 
 let flags: {bool => long} = {};
 flags[true] = 1;

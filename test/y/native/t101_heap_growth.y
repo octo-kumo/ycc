@@ -52,7 +52,7 @@ for k in 0..10000 { ys *= k; };
 print(heap_used() - h <= 4 * 8 * 10000);
 h = heap_used();
 let packed: [byte] = [];
-for k in 0..n { packed += c'x'; };
+for k in 0..n { packed += 'x'; };
 print(heap_used() - h <= 4 * n);
 
 // join sizes the result first and allocates it once

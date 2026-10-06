@@ -103,7 +103,7 @@ let HUD_DIM: long = 0x006464;          // and its labels
 let FRAME_FG: long = 0x002020;         // the rule above the status line
 
 // Key bytes.  Y has no `'q'` character literal -- the single-quote form is
-// `c'a'`, and a bare apostrophe in a file can turn a diagnostic into a
+// `'a'`, and a bare apostrophe in a file can turn a diagnostic into a
 // different one (examples/BUGS.md) -- so the codes are written down here
 // once, with their meanings, and used by number.
 const K_TAB = 9;

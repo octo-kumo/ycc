@@ -1443,7 +1443,7 @@ def typeof_eq(st: TcSt, op: str, lt: Type, rt: Type, line: long, col: long) -> T
     if (teq(lt, rt)) { tc_res({ k: K.tbool }, st) }
     else if (num_eq_ok(lt, rt)) {
         // Numeric kinds compare across widths: a byte IS a small long, so
-        // `c'\n'` needs no cast (and long/float already coerce in `<`).
+        // `'\n'` needs no cast (and long/float already coerce in `<`).
         tc_res({ k: K.tbool }, st)
     }
     else if (lt.k == K.tstr) {
@@ -3170,17 +3170,17 @@ def fmt_spec(spec: str) -> FmtSpec {
 };
 
 def fmt_align(c: long) -> bool {
-    c == c'<' || c == c'>' || c == c'^' || c == c'='
+    c == '<' || c == '>' || c == '^' || c == '='
 };
 
 def fmt_digit(c: long) -> bool {
-    c >= c'0' && c <= c'9'
+    c >= '0' && c <= '9'
 };
 
 // s d x X o b c f F e E %
 def fmt_type(c: long) -> bool {
-    c == c's' || c == c'd' || c == c'x' || c == c'X' || c == c'o' || c == c'b'
-    || c == c'c' || c == c'f' || c == c'F' || c == c'e' || c == c'E' || c == c'%'
+    c == 's' || c == 'd' || c == 'x' || c == 'X' || c == 'o' || c == 'b'
+    || c == 'c' || c == 'f' || c == 'F' || c == 'e' || c == 'E' || c == '%'
 };
 
 // The digits spec[a:b] as a number, stopping short of overflow (a value
@@ -3189,7 +3189,7 @@ def fmt_number(spec: str, a: long, b: long) -> long {
     let v = 0;
     let i = a;
     while (i < b) {
-        if (v < 1000000) { v = v * 10 + byte_at(spec, i) - c'0'; }
+        if (v < 1000000) { v = v * 10 + byte_at(spec, i) - '0'; }
         i = i + 1;
     };
     v
@@ -3212,25 +3212,25 @@ def fmt_kind(t: Type) -> long {
 // sign, `#` or grouping, and `,` groups decimals only.
 def fmt_check(f: FmtSpec, kind: long, tname: str) -> str {
     let ty = f.ty;
-    let ints = ty == c'd' || ty == c'x' || ty == c'X' || ty == c'o' || ty == c'b' || ty == c'c';
+    let ints = ty == 'd' || ty == 'x' || ty == 'X' || ty == 'o' || ty == 'b' || ty == 'c';
     if (f.err != "") {
         f.err
     } else if (kind == 0) {
-        if (ty != 0 && ty != c's') { "type '" + chr(ty) + "' needs a number, not " + tname }
+        if (ty != 0 && ty != 's') { "type '" + chr(ty) + "' needs a number, not " + tname }
         else if (f.sign != 0) { "a sign needs a number, not " + tname }
         else if (f.alt) { "'#' needs a number, not " + tname }
         else if (f.grp != 0) { "'" + chr(f.grp) + "' needs a number, not " + tname }
-        else if (f.align == c'=') { "'=' alignment needs a number, not " + tname }
+        else if (f.align == '=') { "'=' alignment needs a number, not " + tname }
         else { "" }
-    } else if (ty == c's') {
+    } else if (ty == 's') {
         "type 's' needs a string, not " + tname
     } else if (kind == 2 && ints) {
         "type '" + chr(ty) + "' needs an integer, not " + tname
     } else if (kind == 1 && f.prec >= 0 && (ty == 0 || ints)) {
         "a precision needs a float type (f, e or %), not an integer one"
-    } else if (ty == c'c' && (f.sign != 0 || f.alt || f.grp != 0)) {
+    } else if (ty == 'c' && (f.sign != 0 || f.alt || f.grp != 0)) {
         "type 'c' takes no sign, '#' or grouping"
-    } else if (f.grp == c',' && (ty == c'x' || ty == c'X' || ty == c'o' || ty == c'b')) {
+    } else if (f.grp == ',' && (ty == 'x' || ty == 'X' || ty == 'o' || ty == 'b')) {
         "',' does not group type '" + chr(ty) + "' (use '_')"
     } else {
         ""

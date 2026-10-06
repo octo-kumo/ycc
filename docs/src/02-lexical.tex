@@ -263,18 +263,54 @@ data).
 string literals}: a \ic{[byte]} value spelled like a Python \ic{bytes}
 literal. The escapes are the string escapes above, so binary data writes
 naturally: \ic{b"\bs x7fELF"} is the four-byte ELF magic. Either quote
-spells the same type; single quotes exist only for byte strings and
-character literals.
+spells the same type.
 
-\paragraph{Character literals.} \ic{c'a'} is a \emph{character
-literal}: exactly one byte, of type \ty{byte}, read with the string
-escapes above (\ic{c'\bs n'} is 10, \ic{c'\\'} is 92). It compares
-against a \ty{long} directly --- a \ty{byte} widens --- so a keypress
-test is \ic{k == c'q'}, and it needs an annotation to become a number:
-\ic{let q: long = c'q';}. Single quotes exist only for byte strings and
-character literals, and a \emph{bare} \ic{'a'} is neither: it is
-reported where it is written, naming the spelling
-(\ic{a character literal is spelled c'a' ...}).
+\paragraph{Character literals.} \ic{'a'} is a \emph{character literal}:
+exactly one byte, of type \ty{byte}, read with the string escapes above
+(\ic{'\bs n'} is 10, \ic{'\\'} is 92). It compares against a \ty{long}
+directly --- a \ty{byte} widens --- so a keypress test is \ic{k == 'q'},
+and it needs an annotation to become a number: \ic{let q: long = 'q';}.
+A run that is not exactly one byte is an error there and then
+(\ic{character literal must be exactly one byte}). This used to be spelled
+\ic{c'a'}; that prefix is gone, and writing it still says so rather than
+failing as a stray identifier.
+
+\paragraph{Byte literals.} A \ic{b} suffix on a decimal, binary or octal
+integer literal makes it a \ty{byte} instead of a \ty{long}:
+
+\begin{center}
+\begin{tabular}{ll}
+\ic{129b} & decimal \\
+\ic{0b10001b} & binary (17) \\
+\ic{0o17b} & octal (15) \\
+\end{tabular}
+\end{center}
+
+\noindent The value must be 0--255: \ic{256b} is \ic{byte literal '256b'
+does not fit in a byte}, and a float is refused (\ic{3.14b}, \ic{1e3b}).
+A \emph{hex} literal cannot take the suffix, because \ic{b} is a hex
+digit: \ic{0x1Fb} is the hex number 507, not a byte. A byte from hex is
+written where its type is known, which narrows it: \ic{let c: byte =
+0x1F;}. Grouping with \ic{_} works as it does everywhere else
+(\ic{1_0b}).
+
+\paragraph{Multiline strings.} A string delimited by three quotes,
+\ic{"""}~\ldots~\ic{"""}, spans lines and may hold a \ic{"}:
+
+\begin{center}
+\ic{let m = """line one}\\
+\ic{line "two"""";}
+\end{center}
+
+\noindent Everything between the delimiters is the text, newlines
+included, and the escapes above still mean what they mean. An f-string
+takes the same delimiter, \ic{f"""..."""}, so a field may sit in a
+multiline literal:
+
+\begin{center}
+\ic{f"""line \{n\}}\\
+\ic{next"""}
+\end{center}
 
 \paragraph{Format strings.} \ic{f"..."} is a string literal with
 \emph{fields}, as in Python:

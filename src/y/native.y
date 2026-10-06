@@ -318,7 +318,7 @@ def std_text(s: str) -> str {
 // Textual, deliberately: it runs before tokenizing. It skips what the
 // lexer skips -- blanks, `//` and `/* */` comments (which do not nest) --
 // and the insides of string literals: `"..."`, and `'...'`, since outside
-// a literal or a comment a `'` only ever opens `b'..'` or `c'..'`; a
+// a literal or a comment a `'` only ever opens `b'..'` or `'..'`; a
 // backslash escapes the byte after it. Whole words only: `executable` is
 // not `exec`, nor `counter` `count`. Each of those rules fixed a real
 // failure of the scan it replaced (an index_of per name over the text
@@ -359,18 +359,18 @@ def words_scan(code: str, lo: long, n: long, names: [str], seen: [long]) -> long
         let c = byte_at(code, i);
         if (blank_byte(c)) {
             i = i + 1;
-        } else if (c == c'/' && i + 1 < n && byte_at(code, i + 1) == c'/') {
+        } else if (c == '/' && i + 1 < n && byte_at(code, i + 1) == '/') {
             // `//`: up to the newline
             i = i + 2;
-            while (i < n && byte_at(code, i) != c'\n') {
+            while (i < n && byte_at(code, i) != '\n') {
                 i = i + 1;
             };
-        } else if (c == c'/' && i + 1 < n && byte_at(code, i + 1) == c'*') {
+        } else if (c == '/' && i + 1 < n && byte_at(code, i + 1) == '*') {
             // `/*`: past the first `*/`
             i = i + 2;
             let open = true;
             while (open && i < n) {
-                if (byte_at(code, i) == c'*' && i + 1 < n && byte_at(code, i + 1) == c'/') {
+                if (byte_at(code, i) == '*' && i + 1 < n && byte_at(code, i + 1) == '/') {
                     open = false;
                     i = i + 1;
                 }
@@ -378,10 +378,10 @@ def words_scan(code: str, lo: long, n: long, names: [str], seen: [long]) -> long
             };
         } else {
             if (pend >= 0) {
-                if (c == c'(') { seen[pend] = 2; }
+                if (c == '(') { seen[pend] = 2; }
                 pend = 0 - 1;
             }
-            if (c == c'\"' || c == c'\'') {
+            if (c == '\"' || c == '\'') {
                 // a string literal: past its closing quote (lit_end, the
                 // lexer.y scanner -- one scanner, so the lexer and this
                 // cannot disagree about where a literal ends)
@@ -391,7 +391,7 @@ def words_scan(code: str, lo: long, n: long, names: [str], seen: [long]) -> long
                 while (j < n && word_byte(byte_at(code, j))) {
                     j = j + 1;
                 };
-                if (j == i + 1 && c == c'f' && j < n && byte_at(code, j) == c'\"') {
+                if (j == i + 1 && c == 'f' && j < n && byte_at(code, j) == '\"') {
                     // f"...": the fields, and whether one has a spec
                     let w = lexer.fstr_walk(code, j);
                     let fs = w.fields;
@@ -408,7 +408,7 @@ def words_scan(code: str, lo: long, n: long, names: [str], seen: [long]) -> long
                         let nm: str = names[m];
                         if (len(nm) == j - i && word_at(code, i, nm)) {
                             if (seen[m] == 0) { seen[m] = 1; }
-                            if (prev == c'.') { pend = m; }
+                            if (prev == '.') { pend = m; }
                         }
                         m = m + 1;
                     };
@@ -1054,15 +1054,15 @@ def quote_text(s: str) -> str {
     while (i < n) {
         let c: long = b[i];
         let esc = "";
-        if (c == c'\\') {
+        if (c == '\\') {
             esc = "\\\\";
-        } else if (c == c'\"') {
+        } else if (c == '\"') {
             esc = "\\\"";
-        } else if (c == c'\n') {
+        } else if (c == '\n') {
             esc = "\\n";
-        } else if (c == c'\r') {
+        } else if (c == '\r') {
             esc = "\\r";
-        } else if (c < c' ' && c != c'\t') {
+        } else if (c < ' ' && c != '\t') {
             esc = "\\x" + hex[c / 16:c / 16 + 1] + hex[c % 16:c % 16 + 1];
         }
         if (len(esc) > 0) {
@@ -1103,10 +1103,10 @@ def quote_text(s: str) -> str {
 def is_id_b(c: long) -> bool {
     // letters, digits, `_`, `$` and `.` (a module's names are qualified:
     // `yfn_12_fs.exists$3`); most bytes are lowercase, decided first
-    if (c >= c'a') { c <= c'z' }
-    else if (c >= c'A') { c <= c'Z' || c == c'_' }
-    else if (c >= c'0') { c <= c'9' }
-    else { c == c'$' || c == c'.' }
+    if (c >= 'a') { c <= 'z' }
+    else if (c >= 'A') { c <= 'Z' || c == '_' }
+    else if (c >= '0') { c <= '9' }
+    else { c == '$' || c == '.' }
 };
 
 // First non-blank offset in [i, hi); blank means space (the asm dialect
@@ -1118,7 +1118,7 @@ def skip_sp(b: [byte], i: long, hi: long) -> long {
         if (p >= hi) {
             go = false;
         } else {
-            if (b[p] == c' ') {
+            if (b[p] == ' ') {
                 p = p + 1;
             } else {
                 go = false;
@@ -1133,7 +1133,7 @@ def skip_sp(b: [byte], i: long, hi: long) -> long {
 def tok_end_b(b: [byte], i: long, hi: long) -> long {
     let p = i;
     if (p < hi) {
-        if (b[p] == c'$') { p = p + 1; }
+        if (b[p] == '$') { p = p + 1; }
     }
     let go = true;
     while (go) {
@@ -1154,7 +1154,7 @@ def tok_end_b(b: [byte], i: long, hi: long) -> long {
 def tok_at_b(text: str, b: [byte], i: long, hi: long) -> str {
     let s = i;
     if (s < hi) {
-        if (b[s] == c'$') { s = s + 1; }
+        if (b[s] == '$') { s = s + 1; }
     }
     let e = tok_end_b(b, i, hi);
     if (e > s) { text[s:e] } else { "" }
@@ -1208,7 +1208,7 @@ def line_refs_b(text: str, b: [byte], lo: long, hi: long, out: [str], want_jumps
                 if (q >= hi) {
                     go = false;
                 } else {
-                    if (b[q] == c'$') {
+                    if (b[q] == '$') {
                         go = false;
                     } else {
                         q = q + 1;
@@ -1220,7 +1220,7 @@ def line_refs_b(text: str, b: [byte], lo: long, hi: long, out: [str], want_jumps
                 out = tok_push(out, t);
                 let after = tok_end_b(b, q, hi);
                 if (after < hi) {
-                    if (b[after] == c'-') {
+                    if (b[after] == '-') {
                         out = tok_push(out, tok_at_b(text, b, after + 1, hi));
                     }
                 }
@@ -1239,13 +1239,13 @@ def line_refs_b(text: str, b: [byte], lo: long, hi: long, out: [str], want_jumps
                 let q2 = op;
                 let seen = false;
                 while (q2 < hi && !seen) {
-                    if (b[q2] == c',' || b[q2] == c'$') {
+                    if (b[q2] == ',' || b[q2] == '$') {
                         seen = true;
                     } else {
                         q2 = q2 + 1;
                     };
                 };
-                if (seen && b[q2] == c',') {
+                if (seen && b[q2] == ',') {
                     let t2 = tok_at_b(text, b, skip_sp(b, q2 + 1, hi), hi);
                     if (t2 != "") {
                         out = tok_push(out, t2);
@@ -1269,7 +1269,7 @@ def refs_range(text: str, b: [byte], lo: long, hi: long, out: [str], want_jumps:
     let i = lo;
     let res = out;
     while (i < hi) {
-        if (b[i] == c'\n') {
+        if (b[i] == '\n') {
             if (!directive_line_b(b, ls)) {
                 res = line_refs_b(text, b, ls, i, res, want_jumps);
             };
@@ -1297,7 +1297,7 @@ def refs_range(text: str, b: [byte], lo: long, hi: long, out: [str], want_jumps:
 // that matters (P4's five tables are ~1 KB), and it is why the skip is worth a
 // measured 0.85% rather than a guess.
 def directive_line_b(b: [byte], ls: long) -> bool {
-    if (ls < len(b)) { b[ls] == c'.' } else { false }
+    if (ls < len(b)) { b[ls] == '.' } else { false }
 };
 
 // `text_refs` (the text scan that answered this over a body's text) is gone:
@@ -1417,9 +1417,9 @@ def label_at(text: str, b: [byte], lo: long, hi: long) -> str {
     let lab = "";
     if (e > p) {
         if (e < hi) {
-            if (b[e] == c':') {
+            if (b[e] == ':') {
                 let s = p;
-                if (b[s] == c'$') { s = s + 1; }
+                if (b[s] == '$') { s = s + 1; }
                 lab = text[s:e];
             }
         }
@@ -1438,7 +1438,7 @@ def is_data_line_b(text: str, b: [byte], lo: long, hi: long) -> bool {
     if (p >= hi) {
         true
     } else {
-        b[p] == c'.'
+        b[p] == '.'
     }
 };
 
@@ -1454,7 +1454,7 @@ def block_falls_b(text: str, b: [byte], lo: long, hi: long) -> bool {
         let p = lo;
         let i = lo;
         while (i < end) {
-            if (b[i] == c'\n') {
+            if (b[i] == '\n') {
                 p = i + 1;
             }
             i = i + 1;
@@ -1617,7 +1617,7 @@ def shake_refs(text: str, root_refs: [str]) -> str {
     let i = 0;
     let ls = 0;
     while (i < n) {
-        if (b[i] == c'\n') {
+        if (b[i] == '\n') {
             let lab = label_at(text, b, ls, i);
             if (len(lab) > 0) {
                 names += lab;
@@ -1768,7 +1768,7 @@ def arch_label_name(l: str) -> str {
         let i = 0;
         while (i < len(nm)) {
             let c = byte_at(nm, i);
-            if (c == c'_' || (c >= c'a' && c <= c'z') || (c >= c'A' && c <= c'Z') || (c >= c'0' && c <= c'9')) { } else { ok = false; };
+            if (c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) { } else { ok = false; };
             i = i + 1;
         };
         if (ok) { nm } else { "" }
@@ -1835,7 +1835,7 @@ def lines_fall(lines: [str], lo: long, hi: long) -> bool {
         let p = skip_sp(b0, 0, len(b0));
         if (len(lab) > 0) { p = skip_sp(b0, p + 1 + len(lab), len(b0)); };
         if (p < len(b0)) {
-            if (b0[p] == c'.') { falls = false; }
+            if (b0[p] == '.') { falls = false; }
         };
     };
     falls
@@ -2458,15 +2458,15 @@ def esc_asm(s: str) -> str {
     while (i < n) {
         let o: long = b[i];
         let esc = "";
-        if (o == c'\\') {
+        if (o == '\\') {
             esc = "\\\\";
-        } else if (o == c'\"') {
+        } else if (o == '\"') {
             esc = "\\\"";
-        } else if (o == c'\n') {
+        } else if (o == '\n') {
             esc = "\\n";
-        } else if (o == c'\t') {
+        } else if (o == '\t') {
             esc = "\\t";
-        } else if (o < c' ' || o > c'~') {
+        } else if (o < ' ' || o > '~') {
             esc = "\\" + tostring(o / 64) + tostring((o / 8) % 8) + tostring(o % 8);
         }
         if (len(esc) > 0) {
@@ -7735,14 +7735,14 @@ def gen_arrrep_esz(st: EmitSt, node: ArrRep, esz: long, ety: Type) -> EmitSt {
 def hexval_ch(c: str) -> long {
     let o = ord(c);
     let v = 0;
-    if (o >= c'0') {
-        if (o <= c'9') { v = o - c'0'; }
+    if (o >= '0') {
+        if (o <= '9') { v = o - '0'; }
     }
-    if (o >= c'a') {
-        if (o <= c'f') { v = o - c'a' + 10; }
+    if (o >= 'a') {
+        if (o <= 'f') { v = o - 'a' + 10; }
     }
-    if (o >= c'A') {
-        if (o <= c'F') { v = o - c'A' + 10; }
+    if (o >= 'A') {
+        if (o <= 'F') { v = o - 'A' + 10; }
     }
     v
 };
@@ -8254,10 +8254,10 @@ def num_i64(s: str) -> long {
     let i = 0;
     while (i < len(s)) {
         let c = ord(s[i:i + 1]);
-        if (c >= c'0' && c <= c'9') {
-            v = v * 10 + c - c'0';
+        if (c >= '0' && c <= '9') {
+            v = v * 10 + c - '0';
         } else {
-            if (c == c'-' && i == 0) { neg = true; };
+            if (c == '-' && i == 0) { neg = true; };
         };
         i = i + 1;
     };
@@ -9730,7 +9730,7 @@ def gen_fmt(st: EmitSt, node: Call) -> EmitSt {
             if (kind == 1) { ty = 100; } else if (kind == 2) { ty = 102; } else { ty = 115; };
         }
         let code = fmt_code(f, kind, ty);
-        if (ty == c's') {
+        if (ty == 's') {
             st = gen_tostring(st, ts);
             st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
             st = fmt_push(st, code);
@@ -9738,7 +9738,7 @@ def gen_fmt(st: EmitSt, node: Call) -> EmitSt {
             st = fmt_push(st, f.prec);
             st = emit_insn(st, insn.F_CALL_L, lbl_new("y_fmt_s"), 0, 0, 0, 0, 0, 0);
             emit_insn(st, insn.F_ADD_I_R, 32, insn.R_RSP, 64, 0, 0, 0, 0)
-        } else if (ty == c'd' || ty == c'x' || ty == c'X' || ty == c'o' || ty == c'b' || ty == c'c') {
+        } else if (ty == 'd' || ty == 'x' || ty == 'X' || ty == 'o' || ty == 'b' || ty == 'c') {
             st = gen(st, a0);
             st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
             st = fmt_push(st, code);
@@ -9751,7 +9751,7 @@ def gen_fmt(st: EmitSt, node: Call) -> EmitSt {
                 st = emit_insn(st, insn.F_CVTSI2SD_R_R, insn.R_RAX, 64, insn.R_XMM0, 128, 0, 0, 0);
                 st = emit_insn(st, insn.F_MOVQ_R_R, insn.R_XMM0, 128, insn.R_RAX, 64, 0, 0, 0);
             }
-            if (ty == c'%') {
+            if (ty == '%') {
                 st = emit_insn(st, insn.F_MOVQ_R_R, insn.R_RAX, 64, insn.R_XMM0, 128, 0, 0, 0);
                 st = emit_insn(st, insn.F_MOV_I_R, 100, insn.R_RAX, 64, 0, 0, 0, 0);
                 st = emit_insn(st, insn.F_CVTSI2SD_R_R, insn.R_RAX, 64, insn.R_XMM1, 128, 0, 0, 0);
@@ -9786,9 +9786,9 @@ def fmt_code(f: FmtSpec, kind: long, ty: long) -> long {
         if (kind != 0) { align = 62; } else { align = 60; };
     }
     let sg = 0;
-    if (f.sign == c'+') { sg = 1; } else if (f.sign == c' ') { sg = 2; }
+    if (f.sign == '+') { sg = 1; } else if (f.sign == ' ') { sg = 2; }
     if (f.alt) { sg = sg + 4; }
-    if (f.grp == c',') { sg = sg + 8; } else if (f.grp == c'_') { sg = sg + 16; }
+    if (f.grp == ',') { sg = sg + 8; } else if (f.grp == '_') { sg = sg + 16; }
     ty + 256 * fill + 65536 * align + 16777216 * sg
 };
 
@@ -12086,7 +12086,7 @@ def tdecode_go(cur: Cursor) -> Type {
         while (i < n) {
             let fname = pack_get(cur);
             // `name?`: an optional field (tcode_go)
-            let fopt = len(fname) > 0 && fname[len(fname) - 1] == c'?';
+            let fopt = len(fname) > 0 && fname[len(fname) - 1] == '?';
             if (fopt) { fname = fname[0:len(fname) - 1]; };
             fields += { name: fname, opt: fopt, typ: tdecode_go(cur) };
             i = i + 1;
@@ -12180,8 +12180,8 @@ def pack_len(cur: Cursor) -> long {
     let p = cur.p;
     let n = 0;
     let c = byte_at(s, p);
-    while (c != c':' && p < len(s)) {
-        n = n * 10 + c - c'0';
+    while (c != ':' && p < len(s)) {
+        n = n * 10 + c - '0';
         p = p + 1;
         c = byte_at(s, p);
     };

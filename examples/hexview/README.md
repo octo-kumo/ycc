@@ -573,7 +573,7 @@ measurement.
 | `&buf[i]` for the `syscall(1, 1, …)` in the buffered writer and in `selftest.say` | `hexview.y`, `selftest.y` | `syscall` accepts a `*byte` and `&buf[i]` yields one; `p + got` on a `*byte` is the missing half of **#12**, so the offset is carried in the index instead. |
 | `hexview --check` needs `exec`, so it needs a binary **not** built with `ycc --no-exec` | `gate.conf` | `exec` is spliced in only when the program mentions it, and `--no-exec` omits it entirely. Sections 1–10 and the `EXPECTED` run need nothing. |
 | a guard flag with an explicit terminal assignment for early exit | `selftest.y` §10 | there is no `break` and no `continue` in this language (`ORCHESTRATOR.md` §2.10). |
-| byte literals written as numbers (`K_Q = 113`), never `'q'` | `hexview.y` | no character literals: `'a'` is a lexer error, the form is `c'a'`. |
+| byte values written as numbers (`K_Q = 113`) rather than `'q'` | `hexview.y` | the module predates character literals being spelled `'a'`. |
 
 **Filed, both narrow and both measured, neither a bug:**
 

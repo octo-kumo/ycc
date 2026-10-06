@@ -123,7 +123,7 @@ const HOST = "/tmp/indexer-check/host";
 // order cmp_path says it must come out, written out BY HAND -- one name per
 // line, ordered by the rules in ix.y's header:
 //
-//   '.' (0x2E) < 'c' (0x63) < 'd' < 'o' < 'r' < 's', so
+//   '.' (0x2E) < '' (0x63) < 'd' < 'o' < 'r' < 's', so
 //   .gitignore, caf<e9>.txt, data/*, docs/*, odd..., README.md, src/*
 //   and inside one first letter the shorter prefix goes first.
 //

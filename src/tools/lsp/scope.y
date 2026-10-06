@@ -239,7 +239,7 @@ def is_char(s: Span, src: str, c: byte) -> bool {
 }
 
 // The punctuations the walks below look for, as bytes. Written as numbers
-// because a c'(' literal reads as a character and these are compared as bytes,
+// because a '(' literal reads as a character and these are compared as bytes,
 // and a reader should not have to work out which.
 const CH_COMMA = 44;
 const CH_LP = 40;

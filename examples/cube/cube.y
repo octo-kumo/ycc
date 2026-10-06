@@ -150,15 +150,15 @@ const G_H: long = 9472;      // U+2500 box drawings light horizontal
 const G_V: long = 9474;      // U+2502 box drawings light vertical
 const G_C: long = 9532;      // U+2534 box drawings light up and horizontal
 const G_DOT: long = 183;     // U+00B7 middle dot, the floor grid at its faintest
-const G_FLOOR_ASC: long = c'.';
+const G_FLOOR_ASC: long = '.';
 
-// Keys.  A Y character literal is `c'q'`, never a bare `'q'` -- and it is a
+// Keys.  A Y character literal is `'q'`, never a bare `'q'` -- and it is a
 // `byte`, so every one of these carries an explicit `long` annotation, which is
 // the only bridge from a character to a whole number.
-const K_Q: long = c'q';       // quit
-const K_S: long = c's';       // toggle solid / wireframe
-const K_C: long = c'c';       // next colour mode
-const K_CTRL_C: long = c'\x03';  // arrives as a byte, since raw mode cleared ISIG
+const K_Q: long = 'q';       // quit
+const K_S: long = 's';       // toggle solid / wireframe
+const K_C: long = 'c';       // next colour mode
+const K_CTRL_C: long = '\x03';  // arrives as a byte, since raw mode cleared ISIG
 
 // ════════════════════════════════════════════════════════════════ options ══
 
@@ -734,9 +734,9 @@ def draw_frame(fno: long) {
 // The three glyphs an edge can be drawn with, picked once per call site by
 // whether there is a font: ASCII for `mono` and for the plain-text capture,
 // box drawing otherwise.
-def edge_h_glyph() -> long { if (CMODE == C_MONO || NOTTY) { return c'-'; }; G_H };
-def edge_v_glyph() -> long { if (CMODE == C_MONO || NOTTY) { return c'|'; }; G_V };
-def edge_c_glyph() -> long { if (CMODE == C_MONO || NOTTY) { return c'+'; }; G_C };
+def edge_h_glyph() -> long { if (CMODE == C_MONO || NOTTY) { return '-'; }; G_H };
+def edge_v_glyph() -> long { if (CMODE == C_MONO || NOTTY) { return '|'; }; G_V };
+def edge_c_glyph() -> long { if (CMODE == C_MONO || NOTTY) { return '+'; }; G_C };
 
 // ═════════════════════════════════════════════════════════════════ self test ══
 //

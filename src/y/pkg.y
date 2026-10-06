@@ -146,8 +146,8 @@ def pk_skip(cur: Cursor) -> long {
 };
 
 def pk_keych(c: long) -> bool {
-    (c >= c'a' && c <= c'z') || (c >= c'A' && c <= c'Z')
-        || (c >= c'0' && c <= c'9') || c == c'_' || c == c'-'
+    (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+        || (c >= '0' && c <= '9') || c == '_' || c == '-'
 };
 
 // A bare key: letters, digits, `_` and `-`.
@@ -166,7 +166,7 @@ def pk_is_ident(s: str) -> bool {
     let ok = pk_is_key(s) && index_of(s, "-") < 0;
     if (ok) {
         let c = byte_at(s, 0);
-        ok = c < c'0' || c > c'9';
+        ok = c < '0' || c > '9';
     }
     ok
 };

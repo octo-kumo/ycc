@@ -68,16 +68,16 @@ def reg_num(name: str) -> long {
 
 def reg_size(name: str) -> long {
     let c = name[1];
-    if (c == c'x') {
+    if (c == 'x') {
         // %xmmN: SSE register (size 128 marks the class apart from GPRs)
         128
-    } else if (c == c'r') {
+    } else if (c == 'r') {
         // %r..: 64-bit, unless ends in d/b
         let last = name[len(name) - 1];
-        if (last == c'd') { 32 } else if (last == c'b') { 8 } else { 64 }
+        if (last == 'd') { 32 } else if (last == 'b') { 8 } else { 64 }
     } else {
         // %e..: 32-bit; %..l / %..h legacy: 8-bit; %r.. handled above
-        if (c == c'e') { 32 } else { 8 }
+        if (c == 'e') { 32 } else { 8 }
     }
 };
 

@@ -133,7 +133,7 @@ def greet(who: str = "world") -> str { greeting + " " + who };
 def maybe(n: long) -> long? { if (n > 0) { some(n) } else { none } };
 def shout(s: str) -> str { s.upper() };
 def sq(x: long) -> long { x * x };
-def dfl(a: long = -3, s: str = "q\"x\t", b: bool = true, ch: byte = c'z', fl: float = -1.5, o?: long) -> str {
+def dfl(a: long = -3, s: str = "q\"x\t", b: bool = true, ch: byte = 'z', fl: float = -1.5, o?: long) -> str {
     let os = "-";
     if (o != none) { os = tostring(unwrap(o)); 0; } else { 0; };
     tostring(a) + s + tostring(b) + tostring(ch) + tostring(fl) + os
@@ -195,7 +195,7 @@ let m = c.maybe(5);
 if (m != none) { puts("some " + tostring(unwrap(m)) + "\n"); } else { puts("none\n"); };
 def sq(x: long) -> long { x * x * x };
 puts(tostring(sq(2)) + " " + tostring(c.sq(2)) + " " + tostring(a.doubled) + "\n");
-puts(c.dfl() + "|" + c.dfl(1, "s", false, c'y', 2.5, 9) + "\n");
+puts(c.dfl() + "|" + c.dfl(1, "s", false, 'y', 2.5, 9) + "\n");
 EOF
 mk "$P/app/tool.y" <<'EOF'
 import c;

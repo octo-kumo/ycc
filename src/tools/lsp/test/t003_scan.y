@@ -88,7 +88,11 @@ print(one("\"with \\\"escape\\\"\""));
 print(one("'single'"));
 print(one("b\"bytes\""));
 print(one("b'bytes'"));
-print(one("c'a'"));
+print(one("c'a'"));          // the removed spelling: one error span
+print(one("\"\"\"line\nline\"\"\""));
+print(one("f\"\"\"x = {x}\nmore\"\"\""));
+print(one("129b"));
+print(one("0b10001b"));
 print(one("\"tab\\there\""));
 print(one("\"\\x41\\n\""));
 

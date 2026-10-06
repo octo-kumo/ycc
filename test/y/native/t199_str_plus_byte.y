@@ -7,7 +7,7 @@
 // diagnostic anywhere (the checker types the expression as `str`).
 
 // an annotated byte, and the mirror with the byte on the left
-let b: byte = c'A';
+let b: byte = 'A';
 print("x" + b);
 print(b + "x");
 
@@ -23,7 +23,7 @@ print(out);
 // the other sources of a byte the entry lists
 let fixed: [byte; 4] = [65; 4];
 print("f=" + fixed[1]);
-let bs: [byte] = [c'Z'];
+let bs: [byte] = ['Z'];
 print("a=" + bs[0]);
 
 // a byte from a call, not a load: the value is the same either way

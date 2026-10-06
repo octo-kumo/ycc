@@ -185,56 +185,6 @@ tuple holding a `str` and a `long` has no representation today. `.0` is also
 not a `Dot`: `Dot.key` is a `str` (`parser.y`), so index access is either a
 parser change or sugar that lowers to an `Index`.
 
-## 7. Byte literals — the `b` suffix
-
-**Useful because** the `byte` type and `[byte]` arrays exist and `bytes("hi")`
-converts, but there is no way to *write* a byte value in source. Byte data
-turns up constantly in this codebase's own domain — `struct.y`, `crypto.y`,
-`x509.y` and the ELF writer are all byte manipulation — and every such literal
-today has to be spelled as a decimal `long` and converted, or assembled into a
-`[byte]` array element by element.
-
-```y
-// wanted
-let a = 129b;              // decimal byte
-let b = 0b10001b;          // binary byte
-let c = 0bx1b;             // hex byte, forced, so 0x1b is never confused with 0x1b
-let d = 255b;              // the maximum
-// and the errors, per RFC-style literal rules:
-//   256b    -- does not fit in a byte
-//   0 - 1b  -- byte literals are unsigned, so negative is an error
-//   3.14b   -- a byte is not a floating point value
-```
-
-Today:
-
-```y
-let a = 129b;
-```
-```
-1:12: error: expected ';', got 'b'
-```
-
-and the forced-hex form fails differently, because the lexer takes `0b` as a
-binary prefix and then finds no digits:
-
-```y
-let c = 0bx1b;
-```
-```
-1:9: error: binary literal '0bx1b' has no digits
-```
-
-**Cost.** Small to medium, and it is a lexer change with real care in the
-grammar. The lexer has no `b`-suffix handling at all today. The awkward part is
-`0bx1b` versus `0b1010b`: `0b` is already a binary prefix, so a suffix cannot
-simply follow the digits — the scan has to decide `0b1010b` is a suffixed binary
-literal while `0b1010` is a plain one, and `0b` alone stays the existing
-"no digits" error (`docs/src/02-lexical.tex:58`). Digit grouping with `_` and
-the range/negative/float checks all have to compose with it. `byte` is a
-distinct type from `long`, so a suffixed literal also needs to infer as `byte`
-and reject an out-of-range value rather than silently wrap.
-
 ## 8. Parameter types inferred from context
 
 **Useful because** it is the one item here that would shorten every signature in

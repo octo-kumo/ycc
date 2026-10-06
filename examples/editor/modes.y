@@ -9,7 +9,7 @@
 // ===========================================================================
 // NO CHARACTER-LITERAL SYNTAX TO READ
 //
-// `'a'` is a LEXER ERROR in Y; the character literal is `c'a'` (see
+// `'a'` is a LEXER ERROR in Y; the character literal is `'a'` (see
 // examples/BUGS.md, "'a' is not a character literal").  Every key test here is
 // `ord("a")`, which needs no annotation and reads the same in the source.
 // There is no `s[i]` byte in any of it either: indexing a str yields a byte

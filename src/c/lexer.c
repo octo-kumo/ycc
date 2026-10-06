@@ -75,6 +75,42 @@ int isspace(ylong c) {
     return c == ' ' || c == '\t' || c == '\n' || c == '\r';
 }
 
+/* Is the slice one identifier byte (a letter, a digit or `_`)? The empty
+ * slice -- one past the end of the source -- is not, so `1b` at EOF is a byte
+ * literal and `1bx` is not. */
+int lex_word_slice(Yv *s) {
+    if (yv_len(s) != 1) { return 0; }
+    ylong c = ys_byte_at(s, 0);
+    return isalnum(c) || c == '_';
+}
+
+/* The value of one digit byte in a radix literal (0-9a-fA-F). */
+ylong lex_digit_val(ylong c) {
+    if (c >= '0' && c <= '9') { return c - '0'; }
+    else if (c >= 'a' && c <= 'f') { return c - 'a' + 10; }
+    else { return c - 'A' + 10; }
+}
+
+/* The value of an integer literal's text, `_` separators skipped and the
+ * radix's two-byte prefix skipped when there is one. radix 0 means DECIMAL,
+ * the convention radix_of uses; a literal with a prefix carries it in its
+ * first two bytes, which are skipped. (The first cut skipped two bytes for
+ * any radix > 0 and was called with 10 for decimal: `65b` then read only the
+ * `5` after the skip and became 5.) */
+ylong lex_int_value(Yv *txt, ylong radix) {
+    ylong v = 0;
+    ylong r = radix;
+    ylong i = 0;
+    ylong n = yv_len(txt);
+    if (r == 0) { r = 10; } else { i = 2; }
+    while (i < n) {
+        ylong c = ys_byte_at(txt, i);
+        if (c != '_') { v = v * r + lex_digit_val(c); }
+        i = i + 1;
+    }
+    return v;
+}
+
 // NOTE: isdigit/isalpha/isalnum-style names MUST avoid underscores AND the
 // is_* prefix: Y's own lexer (this file) treats "_" as a word character for
 // isalpha(), but the C toolchain's parser.c parse_identifier splits "isdigit"
@@ -142,6 +178,43 @@ Yv *lex_quoted(Yv *src, ylong i, ylong line, ylong col, Yv *what) {
         ;
     }
     return yr(5, "text", buf, "end", yv_long(i), "line", yv_long(line), "col", yv_long(col), "err", err);
+}
+
+/* """...""" -- a multiline string. Everything between the triple quotes is
+ * the text, newlines and single `"` included; a backslash escape still means
+ * what it means in a one-line string (`\n`, `\"`, `\\`), so the only thing
+ * this spelling adds is a terminator a `"` cannot be confused with. */
+Yv *lex_triple(Yv *src, ylong i, ylong line, ylong col, Yv *what) {
+    ylong n = yv_len(src);
+    i = i + 3;
+    col = col + 3;
+    ylong start = i;
+    int open = 1;
+    int closed = 0;
+    int hasesc = 0;
+    while (open) {
+        if (i + 3 > n) {
+            open = 0;
+        } else {
+            ylong ch = ys_byte_at(src, i);
+            if (ch == '\\') { hasesc = 1; i = i + 2; col = col + 2; }
+            else if (ys_eq_lit(ys_slice(src, i, i + 3), "\"\"\"")) { open = 0; closed = 1; }
+            else {
+                if (ch == '\n') { line = line + 1; col = 1; }
+                else { col = col + 1; }
+                i = i + 1;
+            }
+        }
+    }
+    Yv *raw = ys_slice(src, start, i);
+    i = i + 3;
+    col = col + 3;
+    Yv *buf = raw;
+    if (hasesc) { buf = unescape(raw, 0); }
+    Yv *err = ys("");
+    if (!closed) { err = ys_cat(ys("unterminated "), what); }
+    return yr(5, "text", buf, "end", yv_long(i), "line", yv_long(line),
+              "col", yv_long(col), "err", err);
 }
 
 /* A literal's text from its raw source: \n \t \r, \xHH, and `\<c>` drops
@@ -316,6 +389,10 @@ Yv *fstr_walk(Yv *src, ylong q) {
     Yv *fields = yav(0);
     Yv *err = ys("");
     ylong at = q;
+    /* the opening delimiter is one quote or three, and the closing one has to
+     * match: inside f""" a lone `"` does not end the string */
+    ylong qlen = 1;
+    if (ys_eq_lit(ys_slice(src, q, q + 3), "\"\"\"")) { qlen = 3; }
     ylong i = q + 1;
     int open = 1;
     while (open) {
@@ -329,8 +406,8 @@ Yv *fstr_walk(Yv *src, ylong q) {
                 i = i + 2;
                 ;
             } else if (c == 34) {
-                i = i + 1;
-                open = 0;
+                if (qlen == 3 && !ys_eq_lit(ys_slice(src, i, i + 3), "\"\"\"")) { i = i + 1; }
+                else { i = i + qlen; open = 0; }
                 ;
             } else if ((c == 123 || c == 125) && i + 1 < n &&
                        ys_byte_at(src, i + 1) == c) {
@@ -415,7 +492,8 @@ Yv *fstr_walk(Yv *src, ylong q) {
     };
     ylong end = i;
     if (!ys_eq_lit(err, "")) { end = lit_end(src, q, &ignored); ; }
-    return yr(4, "end", yv_long(end), "err", err, "at", yv_long(at), "fields", fields);
+    return yr(5, "end", yv_long(end), "err", err, "at", yv_long(at),
+              "fields", fields, "qlen", yv_long(qlen));
 }
 
 /* The position (line, col) moves to over src[a:b]. */
@@ -442,6 +520,7 @@ static Yv *fstr_adv(Yv *src, ylong a, ylong b, ylong line, ylong col) {
  * error where the walk stopped. */
 static Yv *lex_fstring(Yv *src, ylong q, ylong line, ylong col, Yv *toks) {
     Yv *w = fstr_walk(src, q);
+    ylong qlen = yv_l(yr_get(w, "qlen"));
     Yv *fs = yr_get(w, "fields");
     if (!ys_eq_lit(yr_get(w, "err"), "")) {
         Yv *ep = fstr_adv(src, q - 1, yv_l(yr_get(w, "at")), line, col);
@@ -451,13 +530,13 @@ static Yv *lex_fstring(Yv *src, ylong q, ylong line, ylong col, Yv *toks) {
         ;
     } else if (yv_len(fs) == 0) {
         toks = ya_push(toks, mktok(ys("str"),
-                                   unescape(ys_slice(src, q + 1,
-                                                     yv_l(yr_get(w, "end")) - 1), 1),
+                                   unescape(ys_slice(src, q + qlen,
+                                                     yv_l(yr_get(w, "end")) - qlen), 1),
                                    line, col));
         ;
     } else {
         toks = ya_push(toks, mktok(ys("punct"), ys("("), line, col));
-        ylong from = q + 1;
+        ylong from = q + qlen;
         ylong at = q - 1;
         ylong bl = line;
         ylong bc = col;
@@ -517,10 +596,10 @@ static Yv *lex_fstring(Yv *src, ylong q, ylong line, ylong col, Yv *toks) {
             ;
         };
         ylong end = yv_l(yr_get(w, "end"));
-        if (end - 1 > from) {
+        if (end - qlen > from) {
             toks = ya_push(toks, mktok(ys("op"), ys("+"), bl, bc));
             toks = ya_push(toks, mktok(ys("str"),
-                                       unescape(ys_slice(src, from, end - 1), 1),
+                                       unescape(ys_slice(src, from, end - qlen), 1),
                                        bl, bc));
             ;
         }
@@ -640,6 +719,11 @@ Yv *tokenize(Yv *src) {
             if (c == '0') { radix = radix_of(ys_slice(src, i, i + 2)); }
             // the message of a malformed literal (an ferr token), or ""
             Yv *err = ys("");
+            // >= 0: this literal carries the `b` suffix and its value, and the
+            // token tail below is what emits it (emitting it HERE as well put
+            // two tokens in the stream for one literal: `expected ';', got
+            // '0b10001b'`)
+            ylong bval = -1;
             if (radix > 0) {
                 i = i + 2;
                 col = col + 2;
@@ -665,6 +749,23 @@ Yv *tokenize(Yv *src) {
                     if (radix == 16) { what = ys("hex"); }
                     else if (radix == 8) { what = ys("octal"); }
                     err = ys_cat(ys_cat(ys_cat(what, ys(" literal '")), ys_slice(src, start, i)), ys("' has no digits"));
+                } else if (ys_eq_lit(ys_slice(src, i, i + 1), "b") &&
+                           !lex_word_slice(ys_slice(src, i + 1, i + 2))) {
+                    /* `0b10001b` / `0o17b`: a BYTE literal. `b` is not a digit
+                     * of any radix that can take the suffix (which is why hex
+                     * cannot: see the note below), so the digits end where it
+                     * starts. The node this becomes is the one `'a'` already
+                     * builds -- one byte, typed byte -- so nothing past the
+                     * lexer changes. */
+                    i = i + 1;
+                    col = col + 1;
+                    ylong bv = lex_int_value(ys_slice(src, start, i - 1), radix);
+                    if (bv > 255) {
+                        err = ys_cat(ys_cat(ys("byte literal '"), ys_slice(src, start, i)),
+                                     ys("' does not fit in a byte"));
+                    } else {
+                        bval = bv;
+                    }
                 }
                 ;
             } else {
@@ -727,6 +828,31 @@ Yv *tokenize(Yv *src) {
             Yv *txt = ys_slice(src, start, i);
             if (!ys_eq_lit(err, "")) {
                 toks = ya_push(toks, mktok(ys("ferr"), err, line, startcol));
+            } else if (bval >= 0) {
+                toks = ya_push(toks, mktok(ys("char"), ys_chr(bval), line, startcol));
+            } else if (ys_eq_lit(ys_slice(src, i, i + 1), "b") &&
+                       !lex_word_slice(ys_slice(src, i + 1, i + 2))) {
+                /* `129b`: a BYTE literal, and the same node `'a'` builds. A hex
+                 * literal cannot take this suffix (`0x1Fb` is the hex number
+                 * 507, because `b` is a hex digit) and a float cannot either,
+                 * which is the two errors below. */
+                i = i + 1;
+                col = col + 1;
+                if (ys_index_of(txt, ys(".")) >= 0 || ys_index_of(txt, ys("e")) >= 0 ||
+                    ys_index_of(txt, ys("E")) >= 0) {
+                    toks = ya_push(toks, mktok(ys("ferr"),
+                        ys_cat(ys_cat(ys("byte literal '"), ys_slice(src, start, i)),
+                               ys("' is a float; a byte is a whole number")), line, startcol));
+                } else {
+                    ylong bv = lex_int_value(txt, radix);
+                    if (bv > 255) {
+                        toks = ya_push(toks, mktok(ys("ferr"),
+                            ys_cat(ys_cat(ys("byte literal '"), ys_slice(src, start, i)),
+                                   ys("' does not fit in a byte")), line, startcol));
+                    } else {
+                        toks = ya_push(toks, mktok(ys("char"), ys_chr(bv), line, startcol));
+                    }
+                }
             } else {
                 if (radix == 0) { txt = strip_seps(txt); }
                 toks = ya_push(toks, mktok(ys("num"), txt, line, startcol));
@@ -788,19 +914,23 @@ Yv *tokenize(Yv *src) {
                 };
                 ;
             } else if (ys_eq_lit(word, "c") && ys_eq_lit(ys_slice(src, i, i + 1), "'")) {
-                // c'a' -- a character literal: one byte, typed `byte`.
+                /* c'a' is no longer a spelling: a character literal is 'a'.
+                 * The run is consumed whole so the message is one token, and
+                 * so the closing quote cannot become a name the parser charges
+                 * a second message to. */
                 ylong cline = line;
                 Yv *cq = lex_quoted(src, i, line, col, ys("character literal"));
                 i = yv_l(yr_get(cq, "end"));
                 line = yv_l(yr_get(cq, "line"));
                 col = yv_l(yr_get(cq, "col"));
+                Yv *ctxt = yr_get(cq, "text");
+                Yv *cmsg = ys_cat(ys_cat(ys_cat(ys("a character literal is written '"), ctxt),
+                                         ys("'; the c'")), ys_cat(ctxt, ys("' form is gone")));
                 if (!ys_eq_lit(yr_get(cq, "err"), "")) {
-                    toks = ya_push(toks, mktok(ys("ferr"), yr_get(cq, "err"), cline, startcol));
-                    ;
-                } else {
-                    toks = ya_push(toks, mktok(ys("char"), yr_get(cq, "text"), cline, startcol));
+                    cmsg = ys_cat(cmsg, ys(" (and the quote is never closed)"));
                     ;
                 }
+                toks = ya_push(toks, mktok(ys("ferr"), cmsg, cline, startcol));
                 ;
             } else if (ys_eq_lit(word, "f") &&
                        ys_eq_lit(ys_slice(src, i, i + 1), "\"")) {
@@ -812,6 +942,24 @@ Yv *tokenize(Yv *src) {
                 ;
             } else {
                 toks = ya_push(toks, mktok(ty, word, line, startcol));
+                ;
+            }
+            ;
+        } else if (c == '\x22' && ys_eq_lit(ys_slice(src, i, i + 3), "\"\"\"")) {
+            // """...""" -- a string that spans lines and may hold a `"`.
+            // Escapes mean what they always mean, so a `\n` is still a
+            // newline and the raw text between the delimiters is the value.
+            ylong startline = line;
+            ylong startcol = col;
+            Yv *tq = lex_triple(src, i, line, col, ys("string literal"));
+            i = yv_l(yr_get(tq, "end"));
+            line = yv_l(yr_get(tq, "line"));
+            col = yv_l(yr_get(tq, "col"));
+            if (!ys_eq_lit(yr_get(tq, "err"), "")) {
+                toks = ya_push(toks, mktok(ys("ferr"), yr_get(tq, "err"), startline, startcol));
+                ;
+            } else {
+                toks = ya_push(toks, mktok(ys("str"), yr_get(tq, "text"), startline, startcol));
                 ;
             }
             ;
@@ -918,33 +1066,23 @@ Yv *tokenize(Yv *src) {
                 col = col + yv_len(op);
                 ;
             } else if (c == 0x27) {
-                /* A bare apostrophe: Y spells a character literal c'a' and a
-                 * byte string b'a', so no token starts with one, and every
-                 * apostrophe reaching here is a mistake. Said here, where it
-                 * is, naming the spelling -- and as ONE token over the run
-                 * the reader wrote, because 'a' is one mistake: as two
-                 * tokens the closing quote became a name the parser charged
-                 * a message to (`expected ')', got 'q'`), and a second pair
-                 * in a file made the next b or c word take the byte-string
-                 * arm and scan to end of file, the position-less fatal
-                 * "unterminated string literal". lex_quoted walks the run and
-                 * says whether it closed; an unclosed one is a second fault
-                 * on top of this one, and this is the message that helps. */
+                /* 'a' -- a CHARACTER literal: one byte, typed `byte`. It is
+                 * not a string (a byte string is b'a'), so the c'a' prefix
+                 * this used to need bought nothing and is gone. The parser
+                 * rejects a run that is not exactly one byte. */
                 ylong aline = line;
                 ylong acol = col;
                 Yv *aq = lex_quoted(src, i, line, col, ys("character literal"));
                 i = yv_l(yr_get(aq, "end"));
                 line = yv_l(yr_get(aq, "line"));
                 col = yv_l(yr_get(aq, "col"));
-                Yv *txt = yr_get(aq, "text");
-                Yv *t1 = ys_cat(ys("a character literal is spelled c'"), txt);
-                Yv *t2 = ys_cat(t1, ys("' (a byte string b'"));
-                Yv *msg = ys_cat(ys_cat(t2, txt), ys("'); a bare ' is not one"));
                 if (!ys_eq_lit(yr_get(aq, "err"), "")) {
-                    msg = ys_cat(msg, ys(" (and the quote is never closed)"));
+                    toks = ya_push(toks, mktok(ys("ferr"), yr_get(aq, "err"), aline, acol));
+                    ;
+                } else {
+                    toks = ya_push(toks, mktok(ys("char"), yr_get(aq, "text"), aline, acol));
                     ;
                 }
-                toks = ya_push(toks, mktok(ys("ferr"), msg, aline, acol));
                 ;
             } else if (issingleop(c)) {
                 toks = ya_push(toks, mktok(ys("op"), ys_slice(src, i, i + 1), line, col));

@@ -79,17 +79,17 @@ type AsmBytes = { bytes: [byte], err: str };
 // the one-character range tests below are exact.
 // A decimal digit.
 def is_digit_ch(c: byte) -> bool {
-    c >= c'0' && c <= c'9'
+    c >= '0' && c <= '9'
 };
 
 // An octal digit.
 def is_oct_ch(c: byte) -> bool {
-    c >= c'0' && c <= c'7'
+    c >= '0' && c <= '7'
 };
 
 // A letter or `_`.
 def is_alpha_ch(c: byte) -> bool {
-    c == c'_' || (c >= c'A' && c <= c'Z') || (c >= c'a' && c <= c'z')
+    c == '_' || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
 };
 
 // parse a decimal integer (optional leading -). Returns {ok, v}.
@@ -113,7 +113,7 @@ def parse_num_go(s: str, i: long, neg: bool) -> AsmNum {
     while (i < len(s)) {
         let c = s[i];
         if (is_digit_ch(c)) {
-            v = v * 10 + c - c'0';
+            v = v * 10 + c - '0';
         } else {
             ok = false;
         };
@@ -140,9 +140,9 @@ def split_ops(s: str) -> [str] {
     let n = len(s);
     while (i < n) {
         let b = byte_at(s, i);
-        if (b == c'(') { depth++ };
-        if (b == c')') { depth-- };
-        if (b == c',') {
+        if (b == '(') { depth++ };
+        if (b == ')') { depth-- };
+        if (b == ',') {
             if (depth == 0) {
                 out += trim(s[start:i]);
                 start = i + 1;
@@ -433,7 +433,7 @@ def decode_str(s: str) -> {ok: bool, bytes: [byte], error: str} {
     let err = "";
     while (i < n) {
         let c = s[i];
-        if (c != c'\\') {                // '\\'
+        if (c != '\\') {                // '\\'
             out += c;
             i = i + 1;
         } else if (i + 1 >= n) {
@@ -442,20 +442,20 @@ def decode_str(s: str) -> {ok: bool, bytes: [byte], error: str} {
             i = n;
         } else {
             let e = s[i + 1];
-            if (e == c'n') {            // 'n', the letter of \n
-                out += c'\n';
+            if (e == 'n') {            // 'n', the letter of \n
+                out += '\n';
                 i = i + 2;
-            } else if (e == c't') {      // 't', the letter of \t
-                out += c'\t';
+            } else if (e == 't') {      // 't', the letter of \t
+                out += '\t';
                 i = i + 2;
-            } else if (e == c'r') {      // 'r', the letter of \r
-                out += c'\r';
+            } else if (e == 'r') {      // 'r', the letter of \r
+                out += '\r';
                 i = i + 2;
-            } else if (e == c'\\') {      // '\\'
-                out += c'\\';
+            } else if (e == '\\') {      // '\\'
+                out += '\\';
                 i = i + 2;
-            } else if (e == c'\x22') {      // '"'
-                out += c'\x22';
+            } else if (e == '\x22') {      // '"'
+                out += '\x22';
                 i = i + 2;
             } else if (is_oct_ch(e)) {
                 // NOTE: nested ifs, not `&&` (see is_digit_ch note); `0;`
@@ -482,14 +482,14 @@ def decode_oct(s: str, k: long, n: long) -> {v: long, k: long, err: str} {
     // `{ok,bytes,error}` shape is built ONLY in decode_str.
     // NOTE: `0;` tails (see parser.y parse_binary note).
     let e = s[k - 1];
-    let v = e - c'0';
+    let v = e - '0';
     let kk = k;
     let nd = 1;
     while (nd < 3) {
         if (kk < n) {
             let d = s[kk];
             if (is_oct_ch(d)) {
-                v = v * 8 + d - c'0';
+                v = v * 8 + d - '0';
                 kk = kk + 1;
                 nd = nd + 1;
             } else {

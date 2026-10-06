@@ -62,11 +62,11 @@ def element(b: [byte], e: Tlv) -> [byte] { b[e.start:e.end] };
 // ── base64 and PEM ───────────────────────────────────────────────────────
 
 def b64_value(c: byte) -> long {
-    if (c >= c'A' && c <= c'Z') { c - c'A' }
-    else if (c >= c'a' && c <= c'z') { c - c'a' + 26 }
-    else if (c >= c'0' && c <= c'9') { c - c'0' + 52 }
-    else if (c == c'+') { 62 }
-    else if (c == c'/') { 63 }
+    if (c >= 'A' && c <= 'Z') { c - 'A' }
+    else if (c >= 'a' && c <= 'z') { c - 'a' + 26 }
+    else if (c >= '0' && c <= '9') { c - '0' + 52 }
+    else if (c == '+') { 62 }
+    else if (c == '/') { 63 }
     else { -1 }
 };
 
@@ -77,7 +77,7 @@ def b64_decode(s: str) -> [byte] {
     let acc = 0;
     let bits = 0;
     let i = 0;
-    while (i < len(s) && s[i] != c'=') {
+    while (i < len(s) && s[i] != '=') {
         let v = b64_value(s[i]);
         if (v >= 0) {
             acc = ((acc << 6) | v) & 0xffffff;
@@ -132,8 +132,8 @@ def digits(b: [byte], p: long, n: long) -> long {
     let i = 0;
     while (i < n) {
         let c = b[p + i];
-        if (c < c'0' || c > c'9') { return -1; };
-        v = v * 10 + (c - c'0');
+        if (c < '0' || c > '9') { return -1; };
+        v = v * 10 + (c - '0');
         i = i + 1;
     };
     v
@@ -155,7 +155,7 @@ def asn1_time(b: [byte], e: Tlv) -> long {
         y = digits(b, p, 4);
         p = p + 4;
     };
-    if (y < 0 || b[e.end - 1] != c'Z') { return -1; };
+    if (y < 0 || b[e.end - 1] != 'Z') { return -1; };
     let mo = digits(b, p, 2);
     let d = digits(b, p + 2, 2);
     let h = digits(b, p + 4, 2);
@@ -374,7 +374,7 @@ def name_matches(pattern: str, host: str) -> bool {
     let p = pattern.lower();
     let h = host.lower();
     if (p == h) { return true; };
-    if (len(p) > 2 && p[0] == c'*' && p[1] == c'.') {
+    if (len(p) > 2 && p[0] == '*' && p[1] == '.') {
         let rest = p[1:len(p)];
         let cut = len(h) - len(rest);
         cut > 0 && h[cut:len(h)] == rest && index_of(h[0:cut], ".") < 0

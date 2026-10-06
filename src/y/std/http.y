@@ -313,9 +313,9 @@ def hex_size(s: str) -> long {
     while (i < len(s)) {
         let c = s[i];
         let d = -1;
-        if (c >= c'0' && c <= c'9') { d = c - c'0'; }
-        else if (c >= c'a' && c <= c'f') { d = c - c'a' + 10; }
-        else if (c >= c'A' && c <= c'F') { d = c - c'A' + 10; };
+        if (c >= '0' && c <= '9') { d = c - '0'; }
+        else if (c >= 'a' && c <= 'f') { d = c - 'a' + 10; }
+        else if (c >= 'A' && c <= 'F') { d = c - 'A' + 10; };
         if (d < 0) { i = len(s); } else {
             v = v * 16 + d;
             n = n + 1;

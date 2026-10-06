@@ -3,30 +3,30 @@
 // 8 bits. Every store path, with the expected value alongside.
 let b: byte = 258;
 print(b);                           // 2
-let f: float = c'A';
+let f: float = 'A';
 print(f);                           // 65.000000
 let g: float = 3;
 print(g);                           // 3.000000
 def h(x: float) -> float { x };
 print(h(2));                        // 2.000000
-print(h(c'A'));                     // 65.000000
+print(h('A'));                     // 65.000000
 def hb(x: byte) -> long { x + 0 };
 print(hb(300));                     // 44
-let arr: [byte] = [c'a', c'b'];
+let arr: [byte] = ['a', 'b'];
 arr[0] = 300;
 print(arr[0]);                      // 44 (packed store)
-let fb: [byte; 2] = [c'a'; 2];
+let fb: [byte; 2] = ['a'; 2];
 fb[1] = 258;
 print(fb[1]);                       // 2
-let bb: byte = c'A';
+let bb: byte = 'A';
 let lf: float = bb;
 print(lf);                          // 65.000000
 let ll: long = bb;
 print(ll);                          // 65
 let fx: float = 0.5;
-fx = c'B';
+fx = 'B';
 print(fx);                          // 66.000000
-let by: byte = c'z';
+let by: byte = 'z';
 by = 513;
 print(by);                          // 1
 def tsum(n: long, s: float) -> float { if (n == 0) { s } else { self(n - 1, n) } };
@@ -51,7 +51,7 @@ let lo = [7, 8];
 let cat = fl + lo;
 print(cat[2]);                      // 8.000000 ([float] + [long])
 let lb: [long] = [1];
-let bs1: [byte] = [c'a'];
+let bs1: [byte] = ['a'];
 let cat2 = lb + bs1;
 print(cat2[1]);                     // 97 ([long] + [byte])
 let cat3 = bs1 + lo;
@@ -78,7 +78,7 @@ def rb() -> byte { 300 };
 print(rb());                        // 44
 let nb: byte = -1;
 print(nb);                          // 255
-let ub: byte = c'a';
+let ub: byte = 'a';
 let ng: byte = -ub;
 print(ng);                          // 159
 print(-ub);                         // -97 (negation is long arithmetic)

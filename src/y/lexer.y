@@ -12,17 +12,17 @@ type Cursor = { s: str, p: long };
 
 // NOTE: short underscore-free names (isdigit/isalpha/...) — see below.
 def isdigit(c: byte) -> bool {
-    c >= c'0' && c <= c'9'
+    c >= '0' && c <= '9'
 };
 
 // An upper-case letter.
 def isupper(c: byte) -> bool {
-    c >= c'A' && c <= c'Z'
+    c >= 'A' && c <= 'Z'
 };
 
 // A lower-case letter.
 def islower(c: byte) -> bool {
-    c >= c'a' && c <= c'z'
+    c >= 'a' && c <= 'z'
 };
 
 def isalpha(c: byte) -> bool {
@@ -31,7 +31,7 @@ def isalpha(c: byte) -> bool {
     // character is isalnum (letters + digits + "_"). The C twin's isalpha
     // /isalnum are the same two tests (src/c/lexer.c), so both lexers split
     // identifiers identically.
-    islower(c) || isupper(c) || c == c'_' || isdigit(c)
+    islower(c) || isupper(c) || c == '_' || isdigit(c)
 };
 
 def isalnum(c: byte) -> bool {
@@ -55,10 +55,10 @@ def radix_of(s: str) -> long {
 
 // Digit of a radix literal (0x.. / 0o.. / 0b..), including `_` separators.
 def is_radix_ch(c: byte, radix: long) -> bool {
-    if ( c == c'_') { true }
-    else if (radix == 2) { c == c'0' || c == c'1' }
-    else if (radix == 8) { c >= c'0' && c <= c'7' }
-    else { isdigit(c) || (c >= c'a' && c <= c'f') || (c >= c'A' && c <= c'F') }
+    if ( c == '_') { true }
+    else if (radix == 2) { c == '0' || c == '1' }
+    else if (radix == 8) { c >= '0' && c <= '7' }
+    else { isdigit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F') }
 };
 
 // A decimal literal's text without its `_` digit separators: its num token
@@ -69,9 +69,44 @@ def strip_seps(s: str) -> str {
     if (index_of(s, "_") < 0) { s } else { join(split(s, "_"), "") }
 };
 
+// Is the slice one identifier byte (a letter, a digit or `_`)? The empty
+// slice -- one past the end of the source -- is not, so `1b` at EOF is a byte
+// literal and `1bx` is not.
+def lex_word_slice(s: str) -> bool {
+    len(s) == 1 && (isalnum(s[0]) || s[0] == '_')
+};
+
+// The value of one digit byte in a radix literal (0-9a-fA-F).
+def lex_digit_val(c: byte) -> long {
+    if (c >= '0' && c <= '9') { c - '0' }
+    else if (c >= 'a' && c <= 'f') { c - 'a' + 10 }
+    else { c - 'A' + 10 }
+};
+
+// The value of an integer literal's text, `_` separators skipped and the
+// radix's two-byte prefix skipped when there is one. This is the byte
+// literal's range test; it is lexer-local because the one in native.y
+// (norm_num) is on the other side of the dependency.
+def lex_int_value(txt: str, radix: long) -> long {
+    // radix 0 means DECIMAL, the convention radix_of uses; a literal with a
+    // prefix carries it in its first two bytes, which are skipped. (The first
+    // cut skipped two bytes for any radix > 0 and was called with 10 for
+    // decimal: `65b` then read only the `5` after the skip and became 5.)
+    let v = 0;
+    let r = radix;
+    let i = 0;
+    if (r == 0) { r = 10; } else { i = 2; };
+    while (i < len(txt)) {
+        let c = txt[i];
+        if (c != '_') { v = v * r + lex_digit_val(c); };
+        i = i + 1;
+    };
+    v
+};
+
 // A space, tab, newline or carriage return.
 def isspace(c: byte) -> bool {
-    c == c' ' || c == c'\t' || c == c'\n' || c == c'\r'
+    c == ' ' || c == '\t' || c == '\n' || c == '\r'
 };
 
 // NOTE: these predicates keep the flat C spellings isdigit/isupper/islower/
@@ -85,8 +120,8 @@ def isspace(c: byte) -> bool {
 // is c one of the single-char punctuation symbols?
 // One of the nine punctuation characters Y uses.
 def ispunct(c: byte) -> bool {
-    c == c'(' || c == c')' || c == c'{' || c == c'}' || c == c'[' ||
-    c == c']' || c == c',' || c == c';' || c == c':'
+    c == '(' || c == ')' || c == '{' || c == '}' || c == '[' ||
+    c == ']' || c == ',' || c == ';' || c == ':'
 };
 
 
@@ -97,7 +132,7 @@ def ispunct(c: byte) -> bool {
 // `err` instead of being printed here: a lexer that exits takes the whole
 // compilation down with a message carrying no line and no column, where a
 // token the parser turns into an error reports the fault in place.
-def lex_quoted(src: str, i: long, line: long, col: long, what: str) -> { text: str, end: long, line: long, col: long, err: str } {
+def lex_quoted(src: str, i: long, line: long, col: long, what: str) -> LitScan {
     let q = src[i:i + 1];
     let n = len(src);
     i = i + 1;
@@ -133,6 +168,47 @@ def lex_quoted(src: str, i: long, line: long, col: long, what: str) -> { text: s
     if (!closed) {
         err = "unterminated " + what;
     };
+    { text: buf, end: i, line: line, col: col, err: err }
+};
+
+// What lex_quoted and lex_triple both report: the decoded text, the position
+// just past the literal, and "" or the message. Named because it is written
+// out twice (lint.y's rule).
+type LitScan = { text: str, end: long, line: long, col: long, err: str };
+
+// """...""" -- a multiline string. Everything between the triple quotes is
+// the text, newlines and single `"` included; a backslash escape still means
+// what it means in a one-line string (`\n`, `\"`, `\\`), so the only thing
+// this spelling adds is a terminator a `"` cannot be confused with.
+def lex_triple(src: str, i: long, line: long, col: long, what: str) -> LitScan {
+    let n = len(src);
+    i = i + 3;
+    col = col + 3;
+    let start = i;
+    let open = true;
+    let closed = false;
+    let hasesc = false;
+    while (open) {
+        if (i + 3 > n) {
+            open = false;
+        } else {
+            let ch = src[i:i + 1];
+            if (ch == "\\") { hasesc = true; i = i + 2; col = col + 2; }
+            else if (src[i:i + 3] == "\"\"\"") { open = false; closed = true; }
+            else {
+                if (ch == "\n") { line = line + 1; col = 1; }
+                else { col = col + 1; };
+                i = i + 1;
+            };
+        };
+    };
+    let raw = src[start:i];
+    i = i + 3;
+    col = col + 3;
+    let buf = raw;
+    if (hasesc) { buf = unescape(raw, false); };
+    let err = "";
+    if (!closed) { err = "unterminated " + what; };
     { text: buf, end: i, line: line, col: col, err: err }
 };
 
@@ -208,7 +284,7 @@ def lit_end(src: str, q: long, closed: [long]) -> long {
     let was = false;
     while (open && i < n) {
         let c = byte_at(src, i);
-        if (c == c'\\') { i = i + 2; }
+        if (c == '\\') { i = i + 2; }
         else if (c == qc) { end = i + 1; open = false; was = true; }
         else { i = i + 1; };
     };
@@ -229,31 +305,31 @@ def fstr_expr_end(src: str, lo: long) -> long {
     let go = true;
     while (go && i < n) {
         let c = byte_at(src, i);
-        if (c == c'"' || c == c'\'') {
-            if (c == c'"' && i > lo && byte_at(src, i - 1) == 102 && (i - 1 == lo || !wordbyte(byte_at(src, i - 2)))) {
+        if (c == '"' || c == '\'') {
+            if (c == '"' && i > lo && byte_at(src, i - 1) == 102 && (i - 1 == lo || !wordbyte(byte_at(src, i - 2)))) {
                 // a nested f"..."
                 i = fstr_walk(src, i).end;
             } else {
                 i = lit_end(src, i, [0]);
             };
-        } else if (c == c'(' || c == c'[' || c == c'{') {
+        } else if (c == '(' || c == '[' || c == '{') {
             depth = depth + 1;
             i = i + 1;
         } else if (depth > 0) {
-            if (c == c')' || c == c']' || c == c'}') { depth = depth - 1; }
+            if (c == ')' || c == ']' || c == '}') { depth = depth - 1; }
             i = i + 1;
-        } else if (c == c'?' && i + 1 < n && byte_at(src, i + 1) == 46) {
+        } else if (c == '?' && i + 1 < n && byte_at(src, i + 1) == 46) {
             // `?.` (option propagation) is one token and opens no ternary,
             // so a format spec's `:` after it is the spec's own -- without
             // this, `f"{o?.p:x}"` reads as the ternary `o ? .p : x`.
             i = i + 2;
-        } else if (c == c'?') {
+        } else if (c == '?') {
             tern = tern + 1;
             i = i + 1;
-        } else if (c == c':' && tern > 0) {
+        } else if (c == ':' && tern > 0) {
             tern = tern - 1;
             i = i + 1;
-        } else if (c == c'}' || c == c':' || c == c',' || c == c';' || c == c')' || c == c']') {
+        } else if (c == '}' || c == ':' || c == ',' || c == ';' || c == ')' || c == ']') {
             stop = i;
             go = false;
         } else {
@@ -282,8 +358,12 @@ def fstr_blank(src: str, lo: long, hi: long) -> bool {
 // (lex_fstring) and native.y's splice scan reads the same fields as code
 // (words_scan), so the two always agree. A broken f-string ends where a
 // plain literal would.
-def fstr_walk(src: str, q: long) -> { end: long, err: str, at: long, fields: [long] } {
+def fstr_walk(src: str, q: long) -> { end: long, err: str, at: long, fields: [long], qlen: long } {
     let n = len(src);
+    // The opening delimiter is one quote or three, and the closing one has to
+    // match: inside f""" a lone `"` does not end the string.
+    let qlen = 1;
+    if (src[q:q + 3] == "\"\"\"") { qlen = 3; };
     let fields: [long] = [];
     let err = "";
     let at = q;
@@ -295,23 +375,25 @@ def fstr_walk(src: str, q: long) -> { end: long, err: str, at: long, fields: [lo
             open = false;
         } else {
             let c = byte_at(src, i);
-            if (c == c'\\') {
+            if (c == '\\') {
                 i = i + 2;
-            } else if (c == c'\x22') {
-                i = i + 1;
-                open = false;
-            } else if ((c == c'{' || c == c'}') && i + 1 < n && byte_at(src, i + 1) == c) {
+        } else if (c == '\x22') {
+                // the closing delimiter is as long as the opening one: a
+                // single `"` inside a `"""` f-string does not end it
+                if (qlen == 3 && src[i:i + 3] != "\"\"\"") { i = i + 1; }
+                else { i = i + qlen; open = false; };
+            } else if ((c == '{' || c == '}') && i + 1 < n && byte_at(src, i + 1) == c) {
                 i = i + 2;
-            } else if (c == c'}') {
+            } else if (c == '}') {
                 err = "single '}' in an f-string (a literal brace is '}}')";
                 at = i;
                 open = false;
-            } else if (c == c'{') {
+            } else if (c == '{') {
                 let lo = i + 1;
                 let hi = fstr_expr_end(src, lo);
                 let hc = 0;
                 if (hi < n) { hc = byte_at(src, hi); }
-                if (hc != c'}' && hc != c':') {
+                if (hc != '}' && hc != ':') {
                     if (hi >= n) {
                         err = "unterminated f-string field";
                         at = i;
@@ -324,7 +406,7 @@ def fstr_walk(src: str, q: long) -> { end: long, err: str, at: long, fields: [lo
                     err = "empty f-string field";
                     at = i;
                     open = false;
-                } else if (hc == c'}') {
+                } else if (hc == '}') {
                     fields += lo;
                     fields += hi;
                     fields += 0 - 1;
@@ -360,7 +442,7 @@ def fstr_walk(src: str, q: long) -> { end: long, err: str, at: long, fields: [lo
     };
     let end = i;
     if (err != "") { end = lit_end(src, q, [0]); }
-    { end: end, err: err, at: at, fields: fields }
+    { end: end, err: err, at: at, fields: fields, qlen: qlen }
 };
 
 // The position (line, col) moves to over src[a:b].
@@ -386,15 +468,16 @@ def fstr_adv(src: str, a: long, b: long, line: long, col: long) -> { line: long,
 // error where the walk stopped.
 def lex_fstring(src: str, q: long, line: long, col: long, toks: [Tok]) -> { end: long, line: long, col: long } {
     let w = fstr_walk(src, q);
+    let qlen = w.qlen;
     let fs = w.fields;
     if (w.err != "") {
         let ep = fstr_adv(src, q - 1, w.at, line, col);
         toks += mktok("ferr", w.err, ep.line, ep.col);
     } else if (len(fs) == 0) {
-        toks += mktok("str", unescape(src[q + 1:w.end - 1], true), line, col);
+        toks += mktok("str", unescape(src[q + qlen:w.end - qlen], true), line, col);
     } else {
         toks += mktok("punct", "(", line, col);
-        let from = q + 1;
+        let from = q + qlen;
         let at = q - 1;
         let bl = line;
         let bc = col;
@@ -436,9 +519,9 @@ def lex_fstring(src: str, q: long, line: long, col: long, toks: [Tok]) -> { end:
             toks += mktok("punct", ")", bl, bc);
             k = k + 4;
         };
-        if (w.end - 1 > from) {
+        if (w.end - qlen > from) {
             toks += mktok("op", "+", bl, bc);
-            toks += mktok("str", unescape(src[from:w.end - 1], true), bl, bc);
+            toks += mktok("str", unescape(src[from:w.end - qlen], true), bl, bc);
         }
         toks += mktok("punct", ")", bl, bc);
     };
@@ -453,9 +536,9 @@ def mktok(t: str, v: str, line: long, col: long) -> Tok {
 // Value of a single hex digit char (0-15), or -1 if not a hex digit.
 def hexvalx(c: str) -> long {
     let o = ord(c);
-    if (o >= c'0' && o <= c'9') { o - c'0' }
-    else if (o >= c'A' && o <= c'F') { o - c'A' + 10 }
-    else if (o >= c'a' && o <= c'f') { o - c'a' + 10 }
+    if (o >= '0' && o <= '9') { o - '0' }
+    else if (o >= 'A' && o <= 'F') { o - 'A' + 10 }
+    else if (o >= 'a' && o <= 'f') { o - 'a' + 10 }
     else { -1 }
 };
 
@@ -495,9 +578,9 @@ def twocharop(src: str, i: long) -> str {
 
 // A one-character operator.
 def issingleop(c: byte) -> bool {
-    c == c'+' || c == c'-' || c == c'*' || c == c'/' || c == c'%' ||
-    c == c'<' || c == c'>' || c == c'=' || c == c'.' || c == c'!' ||
-    c == c'&' || c == c'?' || c == c'|' || c == c'^' || c == c'~'
+    c == '+' || c == '-' || c == '*' || c == '/' || c == '%' ||
+    c == '<' || c == '>' || c == '=' || c == '.' || c == '!' ||
+    c == '&' || c == '?' || c == '|' || c == '^' || c == '~'
 };
 
 // The slash character, in one place: this file's own source contains no bare
@@ -509,16 +592,16 @@ def slash() -> str { "/" };
 
 def isdigitch(c: byte) -> bool {
     // single-char predicate on a 1-char string (native-safe: no ord()).
-    if ( c == c'0') { true }
-    else if ( c == c'1') { true }
-    else if ( c == c'2') { true }
-    else if ( c == c'3') { true }
-    else if ( c == c'4') { true }
-    else if ( c == c'5') { true }
-    else if ( c == c'6') { true }
-    else if ( c == c'7') { true }
-    else if ( c == c'8') { true }
-    else { c == c'9' }
+    if ( c == '0') { true }
+    else if ( c == '1') { true }
+    else if ( c == '2') { true }
+    else if ( c == '3') { true }
+    else if ( c == '4') { true }
+    else if ( c == '5') { true }
+    else if ( c == '6') { true }
+    else if ( c == '7') { true }
+    else if ( c == '8') { true }
+    else { c == '9' }
 };
 
 def tokenize(src: str) -> [Tok] {
@@ -530,7 +613,7 @@ def tokenize(src: str) -> [Tok] {
     while (i < n) {
         let c = src[i];
         if (isspace(c)) {
-            if (c == c'\n') { line = line + 1; col = 1; }
+            if (c == '\n') { line = line + 1; col = 1; }
             else { col = col + 1; };
             i = i + 1;
         } else if (isdigit(c)) {
@@ -539,9 +622,14 @@ def tokenize(src: str) -> [Tok] {
             // 0x../0X.. (hex), 0o../0O.. (octal) and 0b../0B.. (binary)
             // integer literals. radix_of is the one prefix test.
             let radix = 0;
-            if (c == c'0') { radix = radix_of(src[i:i + 2]); };
+            if (c == '0') { radix = radix_of(src[i:i + 2]); };
             // the message of a malformed literal (an ferr token), or ""
             let err = "";
+            // >= 0: this literal carries the `b` suffix and its value, and the
+            // token tail below is what emits it (emitting it HERE as well put
+            // two tokens in the stream for one literal: `expected ';', got
+            // '0b10001b'`)
+            let bval = -1;
             if (radix > 0) {
                 i = i + 2;
                 col = col + 2;
@@ -551,7 +639,7 @@ def tokenize(src: str) -> [Tok] {
                     if (i < n) {
                         let rc = src[i];
                         if (is_radix_ch(rc, radix)) {
-                            if (rc != c'_') { digits = true; };
+                            if (rc != '_') { digits = true; };
                             i = i + 1;
                             col = col + 1;
                         } else { rdone = true; };
@@ -566,6 +654,21 @@ def tokenize(src: str) -> [Tok] {
                     if (radix == 16) { what = "hex"; }
                     else if (radix == 8) { what = "octal"; };
                     err = what + " literal '" + src[start:i] + "' has no digits";
+                } else if (src[i:i + 1] == "b" && !lex_word_slice(src[i + 1:i + 2])) {
+                    // `0b10001b` / `0o17b`: a BYTE literal. `b` is not a
+                    // digit of any radix that can take the suffix (which is
+                    // why hex cannot: see the note below), so the digits end
+                    // where it starts. The node this becomes is the one
+                    // `'a'` already builds -- one byte, typed byte -- so
+                    // nothing past the lexer changes.
+                    i = i + 1;
+                    col = col + 1;
+                    let bv = lex_int_value(src[start:i - 1], radix);
+                    if (bv > 255) {
+                        err = "byte literal '" + src[start:i] + "' does not fit in a byte";
+                    } else {
+                        bval = bv;
+                    };
                 };
             } else {
             // The first digit is already known from the branch condition.
@@ -577,7 +680,7 @@ def tokenize(src: str) -> [Tok] {
             while (ind == false) {
                 if (i < n) {
                     let dc = src[i];
-                    if (isdigit(dc) || dc == c'_') { i = i + 1; col = col + 1; }
+                    if (isdigit(dc) || dc == '_') { i = i + 1; col = col + 1; }
                     else { ind = true; };
                 } else { ind = true; };
             };
@@ -590,7 +693,7 @@ def tokenize(src: str) -> [Tok] {
                 while (frd == false) {
                     if (i < n) {
                         let fc = src[i];
-                        if (isdigit(fc) || (fc == c'_' && i > fs)) { i = i + 1; col = col + 1; }
+                        if (isdigit(fc) || (fc == '_' && i > fs)) { i = i + 1; col = col + 1; }
                         else { frd = true; };
                     } else { frd = true; };
                 };
@@ -612,7 +715,7 @@ def tokenize(src: str) -> [Tok] {
                     while (exd == false) {
                         if (i < n) {
                             let xc = src[i];
-                            if (isdigit(xc) || xc == c'_') { i = i + 1; col = col + 1; }
+                            if (isdigit(xc) || xc == '_') { i = i + 1; col = col + 1; }
                             else { exd = true; };
                         } else { exd = true; };
                     };
@@ -622,6 +725,25 @@ def tokenize(src: str) -> [Tok] {
             let txt = src[start:i];
             if (err != "") {
                 toks += mktok("ferr", err, line, startcol);
+            } else if (bval >= 0) {
+                toks += mktok("char", chr(bval), line, startcol);
+            } else if (src[i:i + 1] == "b" && !lex_word_slice(src[i + 1:i + 2])) {
+                // `129b`: a BYTE literal, and the same node `'a'` builds.
+                // A hex literal cannot take this suffix (`0x1Fb` is the hex
+                // number 507, because `b` is a hex digit) and a float cannot
+                // either, which is the two errors below.
+                i = i + 1;
+                col = col + 1;
+                if (index_of(txt, ".") >= 0 || index_of(txt, "e") >= 0 || index_of(txt, "E") >= 0) {
+                    toks += mktok("ferr", "byte literal '" + src[start:i] + "' is a float; a byte is a whole number", line, startcol);
+                } else {
+                    let bv = lex_int_value(txt, radix);
+                    if (bv > 255) {
+                        toks += mktok("ferr", "byte literal '" + src[start:i] + "' does not fit in a byte", line, startcol);
+                    } else {
+                        toks += mktok("char", chr(bv), line, startcol);
+                    };
+                };
             } else {
                 if (radix == 0) { txt = strip_seps(txt); };
                 toks += mktok("num", txt, line, startcol);
@@ -676,19 +798,23 @@ def tokenize(src: str) -> [Tok] {
                     toks += mktok(ty, word, line, startcol);
                 };
             } else if (word == "c" && src[i:i + 1] == "'") {
-                // c'a' -- a character literal: one byte, typed `byte`.
+                // 'a' is no longer a spelling: a character literal is 'a'.
+                // The run is consumed whole so the message is one token, and
+                // so the closing quote cannot become a name the parser
+                // charges a second message to.
                 let cline = line;
                 let cq = lex_quoted(src, i, line, col, "character literal");
                 i = cq.end;
                 line = cq.line;
                 col = cq.col;
+                let cmsg = "a character literal is written '" + cq.text + "'; the c'" + cq.text + "' form is gone";
                 if (cq.err != "") {
-                    toks += mktok("ferr", cq.err, cline, startcol);
-                } else {
-                    toks += mktok("char", cq.text, cline, startcol);
+                    cmsg = cmsg + " (and the quote is never closed)";
                 };
+                toks += mktok("ferr", cmsg, cline, startcol);
             } else if (word == "f" && src[i:i + 1] == "\"") {
-                // f"..." -- an f-string (lex_fstring)
+                // f"..." / f"""...""" -- an f-string (lex_fstring). The
+                // triple form spans lines and may hold a `"`.
                 let fq = lex_fstring(src, i, line, startcol, toks);
                 i = fq.end;
                 line = fq.line;
@@ -696,7 +822,22 @@ def tokenize(src: str) -> [Tok] {
             } else {
                 toks += mktok(ty, word, line, startcol);
             };
-        } else if (c == c'\x22') {
+        } else if (c == '\x22' && src[i:i + 3] == "\"\"\"") {
+            // """...""" -- a string that spans lines and may hold a `"`.
+            // Escapes mean what they always mean, so a `\n` is still a
+            // newline and the raw text between the delimiters is the value.
+            let startline = line;
+            let startcol = col;
+            let tq = lex_triple(src, i, line, col, "string literal");
+            i = tq.end;
+            line = tq.line;
+            col = tq.col;
+            if (tq.err != "") {
+                toks += mktok("ferr", tq.err, startline, startcol);
+            } else {
+                toks += mktok("str", tq.text, startline, startcol);
+            };
+        } else if (c == '\x22') {
             // string literal with escapes. NOTE: this arm precedes the slash
             // arms below: every slash inside quotes is consumed here, so the
             // slash arms only ever see real comment openers or operators.
@@ -711,7 +852,8 @@ def tokenize(src: str) -> [Tok] {
             } else {
                 toks += mktok("str", q.text, startline, startcol);
             };
-        } else if (c == c'/') {
+
+        } else if (c == '/') {
             // Slash: comment opener, block comment, or division operator.
             // (The string arm above consumed every slash inside quotes, so a
             // slash reaching here is real code.) Look ahead one char:
@@ -779,30 +921,22 @@ def tokenize(src: str) -> [Tok] {
                 toks += mktok("op", op, line, col);
                 i = i + len(op);
                 col = col + len(op);
-            } else if (c == c'\x27') {
-                // A bare apostrophe: Y spells a character literal c'a' and a
-                // byte string b'a', so no token starts with one, and every
-                // apostrophe reaching here is a mistake. Said here, where it
-                // is, naming the spelling -- and as ONE token over the run
-                // the reader wrote, because 'a' is one mistake: as two
-                // tokens the closing quote became a name the parser charged
-                // a message to (`expected ')', got 'q'`), and a second pair
-                // in a file made the next b or c word take the byte-string
-                // arm and scan to end of file, the position-less fatal
-                // "unterminated string literal". lex_quoted walks the run and
-                // says whether it closed; an unclosed one is a second fault
-                // on top of this one, and this is the message that helps.
+            } else if (c == '\x27') {
+                // 'a' -- a CHARACTER literal: one byte, typed `byte`. It is
+                // not a string (a byte string is b'a'), so the 'a' prefix
+                // this used to need bought nothing and is gone. The parser
+                // rejects a run that is not exactly one byte.
                 let aline = line;
                 let acol = col;
                 let aq = lex_quoted(src, i, line, col, "character literal");
                 i = aq.end;
                 line = aq.line;
                 col = aq.col;
-                let msg = "a character literal is spelled c'" + aq.text + "' (a byte string b'" + aq.text + "'); a bare ' is not one";
                 if (aq.err != "") {
-                    msg = msg + " (and the quote is never closed)";
+                    toks += mktok("ferr", aq.err, aline, acol);
+                } else {
+                    toks += mktok("char", aq.text, aline, acol);
                 };
-                toks += mktok("ferr", msg, aline, acol);
             } else if (issingleop(c)) {
                 toks += mktok("op", src[i:i + 1], line, col);
                 i = i + 1;

@@ -319,7 +319,7 @@ most `freecells - remarea` cells can be abandoned in a row.
 
 Nothing here needs a workaround: no `break`/`continue` (guard flags and
 positive conditions instead), no `sort` (an insertion sort over six shape
-indices), no `float`, no character literals (`c':'`), no fixed-point. The
+indices), no `float`, no character literals (`':'`), no fixed-point. The
 arena rule is respected — the scratch arrays are module-level and grown once.
 
 Two things about this language that cost me a trap each and are worth knowing

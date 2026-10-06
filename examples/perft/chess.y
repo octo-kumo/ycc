@@ -98,7 +98,7 @@ type Pos = {
 
 def new_pos() -> Pos {
     let p: Pos = {
-        bd: [c'\xff'; 120],
+        bd: ['\xff'; 120],
         mv: [0; 2560],
         ksq: [0; 2],
         oe: [0; 12],

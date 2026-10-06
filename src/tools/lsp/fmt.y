@@ -149,7 +149,7 @@ def gap_space(src: str, from: long, to: long) -> bool {
     while (i < to && i < len(src)) {
         let c = byte_at(src, i);
         if (c == 32 || c == 9) { found = true; }
-        if (c == c'\n') { found = false; }
+        if (c == '\n') { found = false; }
         i = i + 1;
     }
     found
@@ -160,7 +160,7 @@ def gap_lines(src: str, from: long, to: long) -> long {
     let n = 0;
     let i = from;
     while (i < to && i < len(src)) {
-        if (byte_at(src, i) == c'\n') { n = n + 1; }
+        if (byte_at(src, i) == '\n') { n = n + 1; }
         i = i + 1;
     }
     n

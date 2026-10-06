@@ -810,7 +810,7 @@ while (quit == false) {
     let k = tui.read_key_timeout(16);
     if (k != tui.KEY_NONE) {
         // Keys come back as bytes, so they are compared as bytes: Y has no
-        // bare character literal (c'a' is the syntax), so ord() is how a name
+        // bare character literal ('a' is the syntax), so ord() is how a name
         // becomes the byte it means.
         let pan = mandel.md_span() / 8;
         let panx = pan / 2;

@@ -283,7 +283,7 @@ Everything here is a property of Y as documented, not a bug and not filed:
   "index out of bounds" and taking the whole program down. (Verified and
   measured in `queue_test.y`'s history: `for` gives each iteration a fresh
   variable, `let`+`while` gives one cell.)
-- **`[c'\x00'; 120]`**, not `[0; 120]`, for a fixed `byte` array: `[v; n]` is n
+- **`['\x00'; 120]`**, not `[0; 120]`, for a fixed `byte` array: `[v; n]` is n
   copies of v, and `0` is a `long`. The literal size must be a literal.
 - **`lock m { … }` allocates a closure** (16–40 B, once per call, never freed).
   It is a per-*call* cost, so it is fine in a loop bounded by the root move
