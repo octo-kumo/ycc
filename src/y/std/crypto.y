@@ -84,8 +84,21 @@ def random_bytes(n: long) -> [byte] {
     };
     let got = 0;
     while (got < n) {
-        let k = syscall(318, &out[got], n - got, 0);
-        if (k > 0) { got = got + k; };
+        // Through the named layer (B2): the Windows half of y_os_random is in
+        // wsys.s and answers ENOSYS, because BCryptGenRandom is a DLL export
+        // and the PE writer has no import table yet. So this FAILS CLOSED:
+        // the old loop ignored a failure, which would have spun forever on
+        // ENOSYS (a negative k never advances `got`), and on a target whose
+        // syscall number meant something else it would have taken a positive
+        // NTSTATUS for a byte count. A random source that cannot produce
+        // randomness has to say so.
+        let k = os_call("y_os_random", &out[got], n - got);
+        if (k > 0) { got = got + k; }
+        else {
+            eputs("runtime error: no randomness source on this target\n");
+            exit(1);
+            0
+        };
     };
     out
 };

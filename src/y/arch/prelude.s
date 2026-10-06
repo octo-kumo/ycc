@@ -496,6 +496,19 @@ y_os_read:
     xor %eax, %eax
     syscall
     ret
+# y_os_random(buf, len) -> the bytes written, or a negative errno. Two
+# arguments and frameless, so arg2 (the length) is at 8(%rsp) and arg1 (the
+# buffer) at 16. getrandom(2) with flags 0, which blocks only until the
+# kernel's pool is initialised. This is the ONE place std/crypto.y reaches for
+# randomness; the Windows half is in wsys.s and answers ENOSYS, which is why
+# random_bytes below fails closed rather than trusting whatever came back.
+y_os_random:
+    mov 16(%rsp), %rdi
+    mov 8(%rsp), %rsi
+    xor %edx, %edx
+    mov $318, %eax
+    syscall
+    ret
 # y_os_wait4(pid, status) -> the pid that changed state, or a negative errno.
 # wait4(2) with options 0, so the wait is not WNOHANG and not __WCLONE. The
 # status word is written as a plain 32-bit int, which is what rt.y's

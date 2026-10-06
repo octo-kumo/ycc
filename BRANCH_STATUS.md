@@ -164,20 +164,33 @@ generation (`meta`), and Windows support (`win`), plus LSP and docs work.
 ### In progress at the tip
 
 - **`B2` — the remaining std units onto the named layer.** Raw `syscall(`
-  sites still in `std`: `tui.y` 29, `net.y` 21, `fs.y` 11, `http.y` 2,
-  `tls.y` 2, `crypto.y` 1 (getrandom). Each needs a Linux half in
-  `arch/prelude.s` and a Windows half in `wsys.s`; the NT halves for
-  directory/stat I/O and `std/net` are the large ones.
+  sites still in `std`: `tui.y` 29, `net.y` 21, `http.y` 2, `tls.y` 2. Each
+  needs a Linux half in `arch/prelude.s` and a Windows half in `wsys.s`; the
+  NT halves for console I/O and `std/net` are the large ones.
+  **`crypto.y` is off the list**: its one raw site was `getrandom`, now
+  `os_call("y_os_random", buf, len)` with the Linux body in `prelude.s` and a
+  Windows body in `wsys.s` that answers ENOSYS (-38, the file's established
+  answer-for-unimplementable). The refusal is deliberate rather than lazy:
+  NT's source is `BCryptGenRandom`, a **DLL export**, and the PE writer emits
+  no import table yet -- so the alternative was to seed from the clock and the
+  TSC, and a cryptographic RNG that returns predictable bytes is worse than
+  one that returns nothing. `std/crypto.y`'s `random_bytes` now **fails
+  closed** on a non-positive answer, which also fixed a latent bug: the old
+  loop ignored failures, so on a target whose raw 318 meant something else it
+  would take a positive NTSTATUS for a byte count (garbage), and on ENOSYS it
+  would spin forever. A PE now prints `runtime error: no randomness source on
+  this target` and exits 1.
+  (`fs.y` reads 0 raw sites now, not 11 -- that count was stale.)
 
 ### Yet to do
 
 | item | why it is open |
 |---|---|
 | **`B2`** the rest of the named-syscall layer | the work above; needs NT bodies for `newfstatat`, `getdents64`, `mkdirat`, `renameat`, `unlinkat`, `fchmodat`, `getcwd`/`chdir`, console `readline`, `exec`, threads/`fork`, net, crypto |
-| **`W1`** `cycc.exe` under mingw-w64 | **DONE for non-meta programs.** `x86_64-w64-mingw32-gcc` is installed, `make cycc.exe` builds from the same `src/c`, and `test/sh/cycc-win.sh` reports 532 same / 11 different over the corpus. All 11 are the meta fixtures: their M1 runner forks and maps a memfd, which is the NT `fork`/`mmap` work below. |
+| **`W1`** `cycc.exe` under mingw-w64 | **DONE for non-meta programs.** `x86_64-w64-mingw32-gcc` is installed, `make cycc.exe` builds from the same `src/c`, and `test/sh/cycc-win.sh` reports 557 same / 6 different over the corpus. All 11 are the meta fixtures: their M1 runner forks and maps a memfd, which is the NT `fork`/`mmap` work below. |
 | **`W5`** the std split | largely superseded by `B1`'s named layer for the packed units; the rest is `B2` |
 | **`W6`** the Windows harness | job-object memory cap (`ulimit -v` has no Windows equivalent), a PE `test_debug.sh` branch, `llvm-*` tool swap |
-| **`w_self_test_lines()`** | the startup probe that checks one `Nt*` call per class. It is **not implemented** (the comment now says so instead of claiming otherwise); the syscall numbers remain pinned to one ntdll sample with nothing verifying them at runtime |
+| **`w_self_test_lines()`** | **DONE.** `src/y/arch/wselftest.s` (5.2 KB) is the probe: one `Nt*` call per class, once at program start, each NTSTATUS checked, so a stale `w_sysno` number that now names a different real Nt function fails by name in the first instruction instead of surfacing later as wrong memory. `arch_x64.y`'s `w_self_test_lines` returns the lines (and `arch_x64.c` its twin), `native.y` feeds them to the prelude so the tree shaker keeps `y_os_write`/`y_os_exit`, and the `_start` prologue calls `y_w_self_test` on the Windows target only -- no lines and no call are emitted for an ELF. `pe-gate.sh` is the gate: a PE must load, run, and NOT print the self-test's message. |
 | **`fork`/`spawn`/threads on NT**, `std/crypto` on BCrypt, console `readline` | per-call redesigns, listed in `ideas/WINDOWS.md` |
 | **PDB**, `--target=macos`, PE-side program profiling | explicitly deferred by the design |
 

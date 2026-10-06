@@ -482,6 +482,22 @@ y_os_wait4:
 y_os_fork:
     mov $-38, %rax
     ret
+# y_os_random(buf, len) -> a negative errno.
+#
+# NOT IMPLEMENTED, and this one is a deliberate refusal rather than a missing
+# piece of work. NT's random source is BCryptGenRandom, which lives in
+# bcrypt.dll (or ProcessPrng in bcryptprimitives.dll): a DLL export, not a
+# syscall, and the PE writer emits no import table yet -- so there is nothing
+# this block could call. The alternative was to seed from the clock and the
+# TSC, and a cryptographic random number generator that returns predictable
+# bytes is worse than one that returns nothing: callers get ENOSYS here, and
+# std/crypto.y's random_bytes traps on it instead of handing out rubbish.
+# Turning this into a real body is the BCrypt item in ideas/WINDOWS.md and it
+# starts with imports in elf.y's PE writer.
+#=== replace: y_os_random ===
+y_os_random:
+    mov $-38, %rax
+    ret
 # y_os_execve(path, argv, envp) -> does not return on success; a negative errno
 # on failure.
 #
