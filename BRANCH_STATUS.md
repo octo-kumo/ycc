@@ -277,6 +277,36 @@ branch-disjointness false positive.
   2000, where stat's own layout has exactly 2000. `y_os_close` (NtClose, 15) was
   written the same round and reverted with it, untested, for the same reason:
   it is only reachable through a file handle that openat has to produce first.
+- **`y_os_lseek` works (round 43)**, so NINE of the thirteen entries have
+  Windows bodies and FOUR do not: `y_os_rename`, `y_os_getcwd`, `y_os_chdir`,
+  `y_os_list`. Verified byte-identical on ELF and PE for all three whences --
+  SEEK_SET to 3, SEEK_CUR reading back 3, SEEK_END reading the size 10, a
+  position past the end (legal), and a negative position (refused) -- and
+  `pe-gate.sh`'s fixture covers it.
+  Windows has no lseek, so it is a query/set pair: NtQueryInformationFile (17)
+  reads the position (FilePositionInformation, class 14, an 8-byte
+  LARGE_INTEGER) and NtSetInformationFile (39) writes it, while
+  FileStandardInformation (class 5) carries the SIZE at offset 8 of its 24
+  bytes for SEEK_END. `add` takes no memory operand in this assembler, so the
+  offset is loaded into a register first.
+- **`y_os_rename`: written, did not work, reverted -- and it found a hazard that
+  applies to EVERY NtCreateFile block.** It opens the source with DELETE access
+  and sets FileRenameInformation (class 10), whose information is
+  FILE_RENAME_INFORMATION with the target path INLINE at +20 and FileNameLength
+  a byte at a time at +16 (an 8-byte store there runs into the name). Two real
+  bugs were fixed on the way -- the second y_w_path call clobbers %r8, which
+  held the SOURCE's unit count, so the open was handed the target's length; and
+  the length must survive the syscall in a frame slot. Neither was the failure:
+  **the stack arguments go at 40(%rsp), so a 4800-byte frame puts them at
+  rbp-4760, which was that block's IO_STATUS_BLOCK** -- the call overwrote the
+  block it was about to be handed and answered STATUS_INVALID_PARAMETER
+  (0xC000000D), which reads exactly like a bad path. Enlarging the frame to 5200
+  did not make rename work either, so something else is also wrong, but the rule
+  is now written down where it belongs: **an NtCreateFile frame must be deeper
+  than the stack-argument area is far down, or the arguments land on the block.**
+  `y_os_lseek`'s own 80-byte frame puts 40(%rsp) at rbp-40, which clears its
+  IO_STATUS_BLOCK at -32 by eight bytes -- it works, and it is worth knowing
+  that it is that close.
 - **`y_os_mkdir`, `y_os_unlink` and `y_os_set_mode` work (round 42)**, so EIGHT
   of fs.y's thirteen layer entries now have Windows bodies and FIVE do not:
   `y_os_lseek`, `y_os_rename`, `y_os_getcwd`, `y_os_chdir`, `y_os_list`.

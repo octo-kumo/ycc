@@ -25,5 +25,16 @@ print(fs.write_file("pefsrt_dir/inner.txt", "inner\n"));
 print(fs.read_file("pefsrt_dir/inner.txt")!);
 print(fs.remove_dir("pefsrt_dir"));
 print(fs.exists("pefsrt_dir"));
+// lseek, all three whences: SET to 3, CUR back to where we are, END at the
+// size, and a position past the end (legal), then one before the start
+// (refused).
+let fd = fs.open_file("pefsrt.txt", "r");
+print(fs.seek(fd, 3, 0));
+print(fs.seek(fd, 0, 1));
+print(fs.seek(fd, 0, 2));
+print(fs.seek(fd, 1000, 0));
+print(fs.seek(fd, -1, 0));
+print(fs.seek(fd, -12345, 0));
+print(fs.close_file(fd));
 print(fs.remove_file("pefsrt.txt"));
 print(fs.exists("pefsrt.txt"));

@@ -592,14 +592,14 @@ ywp_rel:
     mov -16(%rbp), %rsi
     mov -24(%rbp), %rcx
     cmp $0, %rcx
-    je ywp_fail
+    je ywp_e_empty
     xor %r9d, %r9d
 ywp_loop:
     cmp %rcx, %r9
     jge ywp_done
     movzbq (%rsi,%r9,1), %rax
     cmp $128, %rax
-    jge ywp_fail
+    jge ywp_e_hi
     cmp $47, %rax
     jne ywp_keep
     mov $92, %rax
@@ -610,12 +610,27 @@ ywp_keep:
     add $1, %r8
     add $1, %r9
     cmp $1000, %r8
-    jg ywp_fail
+    jg ywp_e_long
     jmp ywp_loop
 ywp_done:
     movb $0, (%rdi)
     movb $0, 1(%rdi)
     mov %r8, %rax
+    mov %rbp, %rsp
+    pop %rbp
+    ret
+ywp_e_empty:
+    mov $-2, %rax
+    mov %rbp, %rsp
+    pop %rbp
+    ret
+ywp_e_hi:
+    mov $-3, %rax
+    mov %rbp, %rsp
+    pop %rbp
+    ret
+ywp_e_long:
+    mov $-4, %rax
     mov %rbp, %rsp
     pop %rbp
     ret
@@ -1154,4 +1169,91 @@ youn_fail:
 #=== replace: y_os_set_mode ===
 y_os_set_mode:
     xor %eax, %eax
+    ret
+# y_os_lseek(fd, off, whence) -> the new offset, or -1.
+#
+# Windows has no lseek. There is a file POSITION, which NtQueryInformationFile
+# (17) reads and NtSetInformationFile (39) writes, both as an 8-byte
+# LARGE_INTEGER under FilePositionInformation (class 14) -- and there is a file
+# SIZE, which FileStandardInformation (class 5) carries at offset 8 of its 24
+# bytes. So the three whences are:
+#   0 SEEK_SET  the offset itself
+#   1 SEEK_CUR  the queried position + off
+#   2 SEEK_END  the queried size + off
+# and then one set-information call, whose information is just the 8-byte
+# target position. The answer is that position, read back out of the frame
+# rather than out of a register: the set call clobbers %rcx and %r11, and the
+# value has to survive it.
+#
+# THREE ARGUMENTS, FRAMELESS in the ELF body: whence (arg3) at 8(%rsp) ->
+# 16(%rbp), off (arg2) at 16 -> 24, fd (arg1) at 24 -> 32. The fd is a handle
+# (fs.y only seeks what y_os_openat returned) and goes through as it stands.
+#
+# `add` takes no memory operand in this assembler, so the offset is loaded into a
+# register first -- "arith reg form in 'add'" is what the direct form reports.
+#
+# An offset that lands before the start of the file is refused by the kernel,
+# which is also what lseek(2) does with a negative result.
+#
+# Frame: the IO_STATUS_BLOCK at -32 (16 bytes), the position at -8, and the
+# 24-byte file standard information at -64. 80 keeps rsp 0 mod 16.
+#=== replace: y_os_lseek ===
+y_os_lseek:
+    push %rbp
+    mov %rsp, %rbp
+    sub $80, %rsp
+    mov 32(%rbp), %r10
+    mov 16(%rbp), %rax
+    cmp $0, %rax
+    jne yols_cur
+    mov 24(%rbp), %rax
+    mov %rax, -8(%rbp)
+    jmp yols_set
+yols_cur:
+    cmp $1, %rax
+    jne yols_end
+    lea -32(%rbp), %rdx
+    lea -8(%rbp), %r8
+    mov $8, %r9
+    mov $14, 40(%rsp)
+    mov $17, %eax
+    syscall
+    test %eax, %eax
+    jne yols_fail
+    mov -8(%rbp), %rax
+    mov 24(%rbp), %r11
+    add %r11, %rax
+    mov %rax, -8(%rbp)
+    jmp yols_set
+yols_end:
+    lea -32(%rbp), %rdx
+    lea -64(%rbp), %r8
+    mov $24, %r9
+    mov $5, 40(%rsp)
+    mov $17, %eax
+    syscall
+    test %eax, %eax
+    jne yols_fail
+    mov -56(%rbp), %rax
+    mov 24(%rbp), %r11
+    add %r11, %rax
+    mov %rax, -8(%rbp)
+yols_set:
+    mov 32(%rbp), %r10
+    lea -32(%rbp), %rdx
+    lea -8(%rbp), %r8
+    mov $8, %r9
+    mov $14, 40(%rsp)
+    mov $39, %eax
+    syscall
+    test %eax, %eax
+    jne yols_fail
+    mov -8(%rbp), %rax
+    mov %rbp, %rsp
+    pop %rbp
+    ret
+yols_fail:
+    mov $-1, %rax
+    mov %rbp, %rsp
+    pop %rbp
     ret
