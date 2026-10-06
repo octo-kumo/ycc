@@ -1285,6 +1285,7 @@ y_w_path:
     jne ywp_rel
     jmp ywp_abs
 ywp_rel:
+# The process's current directory, copied in whole...
     mov %gs:96, %rax
     mov 32(%rax), %rax
     mov 56(%rax), %rcx
@@ -1297,7 +1298,7 @@ ywp_rel:
     mov $0, %rax
 ywp_cploop:
     cmp %rcx, %rax
-    jge ywp_cpdone
+    jge ywp_components
     mov %rdx, %rbx
     add %rax, %rbx
     movzbq (%rbx), %rbx
@@ -1305,17 +1306,120 @@ ywp_cploop:
     add $1, %r14
     add $1, %rax
     jmp ywp_cploop
-ywp_cpdone:
-# a separator, unless the directory already ends with one (the low byte of its
-# last unit: every character here is ASCII)
+ywp_components:
+# ...then the relative path ONE COMPONENT AT A TIME, so "." drops out and ".."
+# truncates the component before it. NT has no dot components at all -- the
+# Win32 layer normalizes them before NT ever sees a name -- and passing them
+# through is what made fs.list_dir(".") answer STATUS_OBJECT_PATH_SYNTAX_BAD.
+    mov $0, %r15
+ywp_comp:
+    cmp %r13, %r15
+    jge ywp_done
+    mov %r12, %rax
+    add %r15, %rax
+    movzbq (%rax), %rbx
+    cmp $47, %rbx
+    jne ywp_cstart
+    inc %r15
+    jmp ywp_comp
+ywp_cstart:
+    mov %r15, %rcx
+    mov %r15, %rdx
+ywp_cend:
+    cmp %r13, %rdx
+    jge ywp_chave
+    mov %r12, %rax
+    add %rdx, %rax
+    movzbq (%rax), %rbx
+    cmp $47, %rbx
+    je ywp_chave
+    inc %rdx
+    jmp ywp_cend
+ywp_chave:
     mov %rdx, %rax
-    add %rcx, %rax
-    movzbq -2(%rax), %rbx
+    sub %rcx, %rax
+    cmp $1, %rax
+    jne ywp_cdotdot
+    mov %r12, %rbx
+    add %rcx, %rbx
+    movzbq (%rbx), %rbx
+    cmp $46, %rbx
+    jne ywp_cappend
+    mov %rdx, %r15
+    jmp ywp_comp
+ywp_cdotdot:
+    cmp $2, %rax
+    jne ywp_cappend
+# %rsi holds the component's address and %rbx the byte: reusing %rbx for both
+# made the second load read address 0x2E ("." as a pointer) and faulted
+    mov %r12, %rsi
+    add %rcx, %rsi
+    movzbq (%rsi), %rbx
+    cmp $46, %rbx
+    jne ywp_cappend
+    movzbq 1(%rsi), %rbx
+    cmp $46, %rbx
+    jne ywp_cappend
+# "..": move the cursor back to just after the previous separator, never above
+# the drive root -- "\??\X:\" is 14 bytes
+    mov %r14, %rbx
+    sub $2, %rbx
+ywp_up:
+    mov -48(%rbp), %rdi
+    mov %rbx, %rax
+    sub %rdi, %rax
+    cmp $14, %rax
+    jle ywp_upfloor
+    movzbq (%rbx), %rax
+    cmp $92, %rax
+    je ywp_upfound
+    sub $2, %rbx
+    jmp ywp_up
+ywp_upfound:
+    add $2, %rbx
+    mov %rbx, %r14
+    mov %rdx, %r15
+    jmp ywp_comp
+ywp_upfloor:
+    lea 14(%rdi), %r14
+    mov %rdx, %r15
+    jmp ywp_comp
+ywp_cappend:
+# a separator first, unless the cursor already sits after one
+    mov %r14, %rax
+    sub $2, %rax
+    movzbq (%rax), %rbx
     cmp $92, %rbx
-    je ywp_abs
+    je ywp_ano
     mov $92, %rax
     mov %rax, (%r14)
     add $2, %r14
+ywp_ano:
+    mov -48(%rbp), %rdi
+    mov %r14, %rax
+    sub %rdi, %rax
+    cmp $1990, %rax
+    jg ywp_bad
+ywp_aloop:
+    cmp %rdx, %rcx
+    jge ywp_adone
+    mov %r12, %rax
+    add %rcx, %rax
+    movzbq (%rax), %rax
+    cmp $128, %rax
+    jge ywp_bad
+    mov %rax, (%r14)
+    add $2, %r14
+    mov -48(%rbp), %rdi
+    mov %r14, %rax
+    sub %rdi, %rax
+    cmp $1990, %rax
+    jg ywp_bad
+    inc %rcx
+    jmp ywp_aloop
+ywp_adone:
+    mov %rdx, %r15
+    jmp ywp_comp
 ywp_abs:
 # Widen the path: one byte in, one UTF-16 unit out, '/' folded to '\'. The
 # in-tree assembler has no 16-bit store form (enc_mov's memory arm is 64-bit
@@ -2221,6 +2325,135 @@ yorn_cfail:
 yorn_fail:
     mov $-1, %rax
 yorn_out:
+    mov %rbp, %rsp
+    pop %rbp
+    ret
+# y_os_list(fd, buf, len, restart) -> the number of BYTES written, or -1. The
+# same NUL-separated names as the ELF half (see prelude.s), so fs.list_dir does
+# not branch on the target. NtQueryDirectoryFile returns
+# FILE_DIRECTORY_INFORMATION records -- NextEntryOffset at +0,
+# FileNameLength at +60, the UTF-16 name at +64 -- and each name is converted
+# in place to ASCII bytes with a NUL after it, "." and ".." dropped. The
+# records are read from the front while the packed names are written there, and
+# a record's 64-byte header plus the two-bytes-per-character name make the
+# output always shorter, so the write cursor cannot catch the read cursor.
+# `restart` is RestartScan: TRUE for the first call on a handle, FALSE after.
+# BUFFER_OVERFLOW (0x80000005) is a WARNING carrying records, not a failure:
+# its sign bit is set, so the failure test below cannot be the plain js.
+#=== replace: y_os_list ===
+y_os_list:
+    push %rbp
+    mov %rsp, %rbp
+    sub $256, %rsp
+    mov 40(%rbp), %rax
+    mov %rax, -8(%rbp)
+    mov 32(%rbp), %rax
+    mov %rax, -16(%rbp)
+    mov 24(%rbp), %rax
+    mov %rax, -24(%rbp)
+    mov 16(%rbp), %rax
+    mov %rax, -32(%rbp)
+    mov -8(%rbp), %r10
+    xor %edx, %edx
+    xor %r8d, %r8d
+    xor %r9d, %r9d
+    lea -64(%rbp), %rax
+    mov %rax, 40(%rsp)
+    mov -16(%rbp), %rax
+    mov %rax, 48(%rsp)
+    mov -24(%rbp), %rax
+    mov %rax, 56(%rsp)
+    mov $1, %rax
+    mov %rax, 64(%rsp)
+    mov $0, %rax
+    mov %rax, 72(%rsp)
+    mov %rax, 80(%rsp)
+    mov -32(%rbp), %rax
+    mov %rax, 88(%rsp)
+    mov $53, %eax
+    syscall
+    test %eax, %eax
+    jns yolq_ok
+    mov $2147483653, %rcx
+    cmp %rcx, %rax
+    jne yolq_fail
+yolq_ok:
+    mov -56(%rbp), %rax
+    mov %rax, -40(%rbp)
+    mov $0, %r8
+    mov $0, %r9
+    mov -40(%rbp), %r11
+yolq_rec:
+    cmp %r11, %r8
+    jge yolq_done
+    mov -16(%rbp), %rcx
+    add %r8, %rcx
+    mov 60(%rcx), %r10
+    and $65535, %r10
+    cmp $2, %r10
+    jne yolq_nd1
+    movzbq 64(%rcx), %rax
+    cmp $46, %rax
+    jne yolq_nd1
+    jmp yolq_next
+yolq_nd1:
+    cmp $4, %r10
+    jne yolq_copy
+    movzbq 64(%rcx), %rax
+    cmp $46, %rax
+    jne yolq_copy
+    movzbq 66(%rcx), %rax
+    cmp $46, %rax
+    jne yolq_copy
+    jmp yolq_next
+yolq_copy:
+    mov %r10, %rcx
+    shr $1, %rcx
+    mov $0, %rdx
+yolq_cloop:
+    cmp %rcx, %rdx
+    jge yolq_cend
+    mov -16(%rbp), %rax
+    add %r8, %rax
+    add $64, %rax
+    mov %rdx, %rsi
+    shl $1, %rsi
+    add %rsi, %rax
+    movzbq 1(%rax), %rdi
+    cmp $0, %rdi
+    jne yolq_fail
+    movzbq (%rax), %rax
+    mov -16(%rbp), %rsi
+    add %r9, %rsi
+    mov %rax, (%rsi)
+    add $1, %r9
+    inc %rdx
+    jmp yolq_cloop
+yolq_cend:
+    mov -16(%rbp), %rsi
+    add %r9, %rsi
+    mov $0, %rax
+    mov %rax, (%rsi)
+    add $1, %r9
+yolq_next:
+    mov -16(%rbp), %rax
+    add %r8, %rax
+    mov (%rax), %r10
+# the mask is 32 bits and `and $4294967295` does not fit a signed imm32:
+# shift the high half out and back instead (the encoder's mov has no 32-bit
+# register form, so a zero-extension has to be two shifts)
+    shl $32, %r10
+    shr $32, %r10
+    cmp $0, %r10
+    je yolq_done
+    add %r10, %r8
+    jmp yolq_rec
+yolq_done:
+    mov %r9, %rax
+    jmp yolq_out
+yolq_fail:
+    mov $-1, %rax
+yolq_out:
     mov %rbp, %rsp
     pop %rbp
     ret

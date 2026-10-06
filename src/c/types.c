@@ -161,12 +161,13 @@ static int os_call_name(Yv *nm) {
 }
 
 Yv *os_call_names(void) {
-    return yav(18, ys("y_os_write"), ys("y_os_read"), ys("y_os_lseek"),
+    return yav(19, ys("y_os_write"), ys("y_os_read"), ys("y_os_lseek"),
                ys("y_os_clock_gettime"), ys("y_os_nanosleep"), ys("y_os_wait4"),
                ys("y_os_fork"), ys("y_os_execve"), ys("y_os_openat"),
                ys("y_os_stat"), ys("y_os_mkdir"), ys("y_os_unlink"),
                ys("y_os_rename"), ys("y_os_getcwd"), ys("y_os_chdir"),
-               ys("y_os_close"), ys("y_os_pipe"), ys("y_os_dup2"));
+               ys("y_os_list"), ys("y_os_close"), ys("y_os_pipe"),
+               ys("y_os_dup2"));
 }
 
 static Yv *typeof_call(Yv *st, Yv *node);

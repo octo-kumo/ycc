@@ -1940,6 +1940,70 @@ y_os_chdir:
     mov $-1, %rax
 yochdir_ret:
     ret
+# y_os_list(fd, buf, len, restart) -> the number of BYTES written to buf, or -1.
+# The bytes are NUL-terminated names, "." and ".." left out -- ONE format on
+# both kernels, because fs.list_dir parses it and must not branch on the
+# target. This half reads getdents64 records and rewrites them in place: a
+# record is 19 bytes of header plus a NUL-terminated name, so the packed output
+# is always shorter than the input and writing at the front cannot catch up
+# with the read cursor. FOUR arguments, frameless, so fd is at 32, buf at 24,
+# len at 16 and restart (unused here) at 8.
+y_os_list:
+    mov 32(%rsp), %rdi
+    mov 24(%rsp), %rsi
+    mov 16(%rsp), %rdx
+    mov $217, %eax
+    syscall
+    test %rax, %rax
+    js yolist_fail
+    mov $0, %r8
+    mov $0, %r9
+yolist_rec:
+    cmp %rax, %r8
+    jge yolist_done
+    mov %rsi, %rcx
+    add %r8, %rcx
+    movzbq 16(%rcx), %r10
+    movzbq 17(%rcx), %rdx
+    shl $8, %rdx
+    add %rdx, %r10
+    lea 19(%rcx), %r11
+# "." and ".." are dropped here so that every consumer of y_os_list sees the
+# same names
+    movzbq (%r11), %rdx
+    cmp $46, %rdx
+    jne yolist_copy
+    movzbq 1(%r11), %rdx
+    cmp $0, %rdx
+    je yolist_next
+    cmp $46, %rdx
+    jne yolist_copy
+    movzbq 2(%r11), %rdx
+    cmp $0, %rdx
+    je yolist_next
+yolist_copy:
+    mov $0, %rcx
+yolist_cloop:
+    mov %r11, %rdx
+    add %rcx, %rdx
+    movzbq (%rdx), %rdx
+    mov %rsi, %rdi
+    add %r9, %rdi
+    mov %rdx, (%rdi)
+    add $1, %r9
+    cmp $0, %rdx
+    je yolist_next
+    add $1, %rcx
+    jmp yolist_cloop
+yolist_next:
+    add %r10, %r8
+    jmp yolist_rec
+yolist_done:
+    mov %r9, %rax
+    ret
+yolist_fail:
+    mov $-1, %rax
+    ret
 # y_os_close(fd) -> 0, or -1. One contract on both kernels: zero for success,
 # negative for failure, which is what fs.close_file's `== 0` asks for and what
 # close(2) already returns. NtClose answers an NTSTATUS instead, so the Windows

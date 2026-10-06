@@ -10,6 +10,13 @@
 // descriptor on the other); whether it is usable is.
 import fs;
 
+// A name test, because [str] has no contains().
+def has_name(xs: [str], v: str) -> bool {
+    let f = false;
+    foreach (x in xs) { if (x == v) { f = true; }; };
+    f
+};
+
 let p = "peg_fs.txt";
 print("w=" + tostring(fs.write_file(p, "one\n")));
 print("r=" + tostring(fs.read_file(p)));
@@ -28,6 +35,16 @@ if (fd >= 0) {
 };
 print("missing=" + tostring(fs.exists("peg_nope.txt")));
 
+// list_dir: y_os_list's NUL-separated names, with "." and ".." already gone
+// (the two kernels' own record shapes -- dirent64 and
+// FILE_DIRECTORY_INFORMATION -- never reach here)
+let ls = fs.list_dir(".");
+if (ls == none) { print("list=none"); } else {
+    print("listed=" + tostring(has_name(ls!, "peg_fs.txt")));
+    print("nodots=" + tostring(!has_name(ls!, ".") && !has_name(ls!, "..")));
+};
+print("listmissing=" + tostring(fs.list_dir("peg_nope_dir") == none));
+
 // directories: make_dir, make_dirs, remove_dir -- and the EEXIST answer
 // (mkdir twice is false the second time, which is what mkdirat(2) says and
 // what fs.make_dirs depends on)
@@ -36,6 +53,9 @@ print("isdir=" + tostring(fs.is_dir("peg_dir")));
 print("mkdir2=" + tostring(fs.make_dir("peg_dir")));
 print("mkdeep=" + tostring(fs.make_dirs("peg_d/a/b")));
 print("deepdir=" + tostring(fs.is_dir("peg_d/a/b")));
+// a ".." COMPONENT in the middle of a relative path: y_w_path resolves it
+// component by component, because NT has no dot components at all
+print("dotdot=" + tostring(fs.exists("peg_d/a/../a/b")));
 print("rmdir=" + tostring(fs.remove_dir("peg_dir")));
 print("dirgone=" + tostring(fs.exists("peg_dir")));
 

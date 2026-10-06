@@ -240,22 +240,27 @@ def make_dirs(path: str, mode: long = 0o755) -> bool {
 
 // The names in directory path (without "." and ".."), sorted.
 def list_dir(path: str) -> [str]? {
-    let fd = syscall(257, fs_at_cwd(), path, 65536 + 524288, 0);
+    let fd = os_call("y_os_openat", fs_at_cwd(), path, len(path), 65536 + 524288, 0);
     if (fd < 0) { none } else {
         let names: [str] = [];
+        // 32760, not 32768: y_os_list writes each name with an 8-byte store
+        // and a name may end at the last byte it was given, so the call gets
+        // seven bytes less than the array to keep that store inside it.
         let buf: [byte; 32768] = [0; 32768];
         let go = true;
+        let first = 1;
         while (go) {
-            let k = syscall(217, fd, &buf[0], 32768);
+            let k = os_call("y_os_list", fd, &buf[0], 32760, first);
+            first = 0;
             if (k <= 0) { go = false; } else {
+                // NUL-separated names, whatever the kernel's own record shape
+                // is -- that is y_os_list's contract on both targets.
                 let off = 0;
                 while (off < k) {
-                    let reclen = buf[off + 16] + 256 * buf[off + 17];
-                    let e = off + 19;
+                    let e = off;
                     while (buf[e] != 0) { e = e + 1; };
-                    let name = from_bytes(buf[off + 19:e]);
-                    if (name != "." && name != "..") { names += name; }
-                    off = off + reclen;
+                    names += from_bytes(buf[off:e]);
+                    off = e + 1;
                 };
             };
         };

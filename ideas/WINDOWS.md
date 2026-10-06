@@ -940,8 +940,17 @@ reason this section exists:
   left in the stored path (the Win32 layer normalizes them away before NT
   ever sees a name). An embedded `a/../b` is still joined literally and NT
   refuses the component, so the call fails rather than opening another file.
-  **Still raw `syscall(` in `fs.y`**: `list_dir` (217/257), `set_mode` (268)
-  -- the rest of the B2 slice.
+  `list_dir` is named as well, through `y_os_list`: the ONE portable format is
+  NUL-separated names with "." and ".." already dropped, so fs.list_dir never
+  sees dirent64 or FILE_DIRECTORY_INFORMATION. The ELF half rewrites
+  getdents64 records in place; the Windows half asks
+  `NtQueryDirectoryFile` (class FileDirectoryInformation, `RestartScan` from a
+  fourth argument, and STATUS_BUFFER_OVERFLOW -- 0x80000005, a WARNING, sign
+  bit set -- accepted as data) and rewrites those records in place. Path
+  resolution grew a COMPONENT WALKER for the same reason: NT has no dot
+  components, so `fs.list_dir(".")` was STATUS_OBJECT_PATH_SYNTAX_BAD, and
+  "a/../b" now resolves rather than failing. **Still raw `syscall(` in
+  `fs.y`**: `set_mode` (268) -- the last of the B2 slice.
 - **`std/math.y` is not embedded, and that is correct.** Only the four packed units
   (`rt`, `prelude`, `exec`, `str`) are in `STD_EMBEDS`; `std/math.y` is spliced
   from source per target like `fs.y`/`net.y`, so the pack never carries it and
