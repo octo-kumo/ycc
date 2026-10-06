@@ -277,6 +277,41 @@ branch-disjointness false positive.
   2000, where stat's own layout has exactly 2000. `y_os_close` (NtClose, 15) was
   written the same round and reverted with it, untested, for the same reason:
   it is only reachable through a file handle that openat has to produce first.
+- **`readline` WORKS ON NT (round 51).** `std/prelude.y`'s `readline` goes
+  through `y_os_read`, which already has a Windows body, and a PE reading two
+  piped lines prints what the Linux run prints: `a=hello`, `5`,
+  `b=second line`. That closes the goal's "console readline" item for the
+  PIPE case. What is NOT tested here is a real interactive console: this
+  harness has no tty for wine, so a console handle (as opposed to a pipe) is
+  unverified, and `test_std_suites.sh`'s `term_test` needs a pty and only runs
+  against ELF.
+- **A REAL PORT DIVERGENCE, found by accident and reproducible in one line
+  (round 51): `./cycc --target=windows -g FILE` TRAPS where `./ycc` succeeds.**
+
+      $ ./cycc --target=windows -g hello.y -o /tmp/g.exe
+      runtime error: index out of bounds
+
+  `hello.y` is `print(7);`. Without `-g` the same command works, the Y compiler
+  works with or without `-g`, and `pe-gate.sh` never saw it because it builds
+  its `-g` PE with `./ycc` -- so this is a hole in the PORT GATE rather than in
+  the PE path: the port suite compiles the corpus for Linux only, and a
+  divergence that needs `--target=windows -g` is invisible to it.
+  Where it is, from gdb: `ys_byte_at` (src/c/yv.c:397) is called with
+  `i >= s->u.s.n` from `words_scan` at src/c/native.c:920 -- the first statement
+  of its scan loop, `ylong c = ys_byte_at(code, i);` -- reached from
+  `words_seen` (native.c:905) and `resolve_unit` (native.c:728). The value IS a
+  string (`code->tag == Y_STR`, `n == 9`, and the conditional breakpoint on
+  `code->tag != Y_STR` never fires), so the scan is reading past the END of its
+  own text rather than being handed the wrong type. The Y twin's loop head is
+  `let c = byte_at(code, i);` under the same `while (i < n)`, so the two scans
+  differ somewhere between those two lines -- and the next step is the
+  line-by-line comparison of `words_scan` in `src/y/native.y` (line 209 on) and
+  `src/c/native.c` (line 912 on), which is what this round should have done
+  instead of chasing the breakpoint. The Y is the reference: whatever it does,
+  the C has to do, and `test/sh/cycc-win.sh` (W1) is where a fixture for this
+  belongs once it is fixed.
+  Nothing is committed for it: the tree is unchanged and make ycc verifies
+  byte-identical.
 - **`std/crypto` RANDOMNESS WORKS ON NT (round 50), by NOT using bcrypt.** The
   body is `RtlGenRandom`, which advapi32 exports by the name
   `SystemFunction036`:
