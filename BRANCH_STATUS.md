@@ -285,6 +285,40 @@ branch-disjointness false positive.
   harness has no tty for wine, so a console handle (as opposed to a pipe) is
   unverified, and `test_std_suites.sh`'s `term_test` needs a pty and only runs
   against ELF.
+- **THE NEXT PE BUG IS A RUNAWAY RECORD WALK IN `y_os_list` (round 60),
+  with a four-line reproducer.** After round 59's absolute-path fix, this
+  fails on PE and passes on Linux:
+  ```y
+  import fs;
+  let d = "/tmp/yt351";
+  fs.remove_all(d);
+  print(fs.make_dir(d));            // true
+  print(fs.list_dir(d)!.length);    // Linux 0,   PE 32734
+  print(fs.write_file(d + "/a.txt", "A"));
+  print(fs.list_dir(d)!.length);    // Linux 1,   PE 29989
+  print(fs.remove_all(d));
+  ```
+  The counts are the CAPACITY, so the walk is not stopping where the kernel's
+  records stop -- and the caller then faults (write to 0x0 / 0x10, at
+  0x14000166x-0x1400016A2).
+  The mechanism, from reading the walk: `y_os_list` packs its output into the
+  SAME buffer the kernel filled with records, writing names from offset 0
+  upward while it reads records from `%r8` upward. That is only safe while
+  `.` and `..` come first, because they advance `%r8` past the write position
+  before any name is copied; a first record that is NOT `.` or `..` has its own
+  `NextEntryOffset` overwritten by the name written at offset 0, so the next
+  offset is read out of name bytes and the walk runs to the capacity.
+  An attempted fix -- saving `NextEntryOffset` in a stack slot before copying
+  the name -- was written, built and REVERTED: it changed the failure to a write
+  to 0x0 at 0x1400016A2 without making the reproducer pass, so it was not a fix
+  and no unverified change to the emitted compiler is being kept. The next
+  attempt should start from that reproducer, not from the analysis.
+  Two more things measured on the way, both absolute-path-only on PE:
+  `fs.remove_all(<an absolute path that does not exist>)` returns false where
+  Linux returns true, and the fixture corpus's `t150_fs` now matches its first
+  three lines before faulting, so it is this bug rather than the round-59 one.
+  `t345_list_dir_twice` reports the same family (`false false true`, two
+  listings of one directory disagreeing) and is still open.
 - **EVERY ABSOLUTE PATH WAS BROKEN ON PE (round 59) -- and this is what the
   round-58 mystery was standing next to.** `y_w_path` walks from the PROCESS'S
   CURRENT DIRECTORY, and for an absolute path it kept walking instead of
