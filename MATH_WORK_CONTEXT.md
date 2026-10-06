@@ -156,23 +156,34 @@ cb2e4dc math: hypot is within 1 ulp everywhere, for 2.2% -- and the cheap form i
 
 ## Next Steps (Prioritized)
 
-### Immediate (IR Reduction)
-- [ ] Hoist `nf` split in `rem_pio2` line 1389 — ~15 float ops saved per large-argument trig call
-- [ ] Hoist shared splits in `cbrt` correction step
-- [ ] Consider targeted CSE in `prod_err` callers (manual, not compiler pass)
+> **Merged.** This branch is in `master` now, and the IR items below were
+> finished in the integration pass. See `BRANCH_STATUS.md` for the consolidated
+> done / doing / yet-to-do ledger. This section is kept as the record of what
+> was open at the tip.
 
-### Verification
-- [ ] Run `make check` after each IR change
-- [ ] Verify `t328_split_unrolled.y` still passes (bit-identical)
-- [ ] Verify `test_math.sh` 10 PASS
+### Immediate (IR Reduction) — DONE
+- [x] Hoist the `nf` split in `rem_pio2` — `split_hi`/`split_lo` once, both
+      `prod_err_s` calls share it
+- [x] Hoist the shared splits in `cbrt`'s correction step — `y` and `y2` split
+      once each instead of 3× and 2×
+- [x] Target `prod_err`'s callers by hand — `prod_err` is now
+      `split_hi`/`split_lo` + `prod_err_s`; a general compiler CSE pass is not
+      attempted
+- [x] `asin_half`'s `2.0 * s` bound once; `fvariance`'s `len(a)` bound once
+      (its `find_repeats.py` KNOWN entry retired)
 
-### Sync
-- [ ] Monitor master for new commits; merge early
-- [ ] Never clobber shared artifacts (`cycc`, `ycc`, `refs/ycc.ref`, `_check/`)
+Each is bit-identical by construction and was checked bit-for-bit against the
+pre-change `math.y`.
 
-### Documentation
-- [ ] Update AGENTS.md with any new gates/patterns
-- [ ] COVERAGE.md rows for any new manual sections
+### Verification — DONE
+- [x] `t328_split_unrolled.y` (32,024 identical-bit questions) passes
+- [x] `test_math.sh` green: 8,404 cases, worst gap 1 ulp, 0 over 1
+
+### Sync — DONE
+- [x] `master` carries the branch (merged with `meta-win` into `master`)
+
+### Documentation — DONE
+- [x] `BRANCH_STATUS.md` records the merged state and the remaining Windows work
 
 ---
 
