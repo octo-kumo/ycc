@@ -138,18 +138,30 @@ branch-disjointness false positive.
   descriptor chain, the per-DLL ILT/IAT offsets or the name table, and because
   the second is exactly what the BCrypt body needs. `pe-gate.sh` asserts both
   by name.
-  **What is left for BCrypt is the call**, and it is mechanical now:
-  (1) reserve one 8-byte `.bss` cell per imported function (the linker's
-  `gls`, so the shaker keeps them when the body that references them is kept);
-  (2) set the descriptor's `FirstThunk` to that cell's RVA instead of the
-  in-`.idata` IAT -- `asm.y` already has the label map, so the offset is
-  `label_addr` minus the `.bss` start, and `pe.y` needs it passed in;
-  (3) write `y_os_random`'s NT body as `mov y_iat_BCryptGenRandom(%rip), %rax;
-  call *%rax` -- the load form and `F_CALL_IND` both already exist, used by
-  closures -- with the Win64 argument registers (rcx/rdx/r8/r9) and 32 bytes of
-  shadow space;
-  (4) flip `t158_crypto.y`'s PE expectation from the ENOSYS trap to real bytes.
-  The functions themselves are still scaffolding: nothing calls them yet. The
+  **The import list now lives in `arch_x64.y`** (`w_imports`, plus
+  `w_iat_label`/`w_iat_term_label`), because two things need it from opposite
+  ends of the build: the linker reserves a `.bss` cell per imported function
+  and the PE writer emits the table that fills them. One list, or the two
+  drift. (Declaring the record type twice is a warning, so `pe.y` uses
+  `WImport` directly -- `src/y` must compile without one.)
+  **What is left for BCrypt is one piece, and it has to land as one piece**,
+  because the cells are inert until something references them:
+  (1) `native.y`'s link: for a Windows target, `gls += w_iat_label(fn)` for
+  every function in `w_imports()` and one `w_iat_term_label(dll)` per DLL --
+  the cells then exist in `.bss`, in that order, which is what makes the
+  loader's sequential write land in the right slots;
+  (2) `asm.y` resolves each label's `.bss` offset from its label map and
+  passes the list to `pe_build`; `pe.y` sets `FirstThunk` to `.bss`'s RVA plus
+  that offset instead of the in-`.idata` IAT (the ILT, which carries the names,
+  stays in `.idata` -- the loader walks it and writes the IAT);
+  (3) `wsys.s`'s `y_os_random` becomes `mov y_iat_BCryptGenRandom(%rip), %rax;
+  call *%rax` with rcx = `BCRYPT_USE_SYSTEM_PREFERRED_RNG` (2), rdx = buffer,
+  r8 = length, r9 = 0, 32 bytes of shadow space and `rsp % 16 == 0` at the
+  call -- the load form and `F_CALL_IND` both already exist, used by closures;
+  (4) a property fixture (16 bytes, non-zero, two draws differ) whose output is
+  deterministic, so it passes on BOTH targets -- `t158_crypto.y` cannot be the
+  gate because its own output depends on the random bytes.
+  The two functions are still scaffolding: nothing calls them yet, and the
   order is deliberate -- the loader's resolution path is exercised end to end
   *before* a BCrypt body depends on it, so a missing import is a "DLL Name"
   line rather than a mystery.

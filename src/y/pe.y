@@ -183,23 +183,15 @@ def pe_pad(out: [byte], upto: long) -> [byte] {
 // GetCurrentProcessId, so the loader's resolution path is exercised end to end
 // (objdump -p reads the table, and wine refuses an image whose table is
 // malformed) before anything depends on it.
-// The imports the image carries, in the order the descriptors appear. Every
-// function named here needs an IAT slot the code can reach (see pe_build), and
-// every DLL named here must exist on the machine or the loader refuses the
-// image -- which is why this list is short and deliberate.
-type PeImport = { dll: str, funcs: [str] };
-
-// `bcrypt.dll!BCryptGenRandom` is the one the next step needs: Windows has no
-// syscall for randomness, so std/crypto.y's `y_os_random` has nothing to call
-// until this import exists -- and the NT half of that body is the BCrypt item
-// in ideas/WINDOWS.md. It is listed here, with the table exercising two DLLs
-// rather than one, so that step is only the call itself.
-def pe_imports() -> [PeImport] {
-    [
-        { dll: "KERNEL32.dll", funcs: ["GetCurrentProcessId"] },
-        { dll: "bcrypt.dll", funcs: ["BCryptGenRandom"] }
-    ]
-};
+// The imports the image carries, in the order the descriptors appear -- the
+// list itself is arch_x64's, because the linker has to reserve a .bss cell for
+// every function named in it and that happens long before this writer runs.
+// `bcrypt.dll!BCryptGenRandom` is the one std/crypto.y's `y_os_random` needs
+// on NT: Windows has no syscall for randomness.
+// The import list's type is arch_x64's WImport -- declared there because the
+// linker needs it too, and one record type with two names is a warning (a
+// record type IS its set of fields, so the alias bought nothing anyway).
+def pe_imports() -> [WImport] { arch.w_imports() };
 
 // Four little-endian bytes of `v` at `at`, in place.
 def pe_put32(b: [byte], at: long, v: long) -> void {
@@ -253,7 +245,7 @@ def pe_put_str(b: [byte], at: long, s: str) -> void {
 // headers depend on it) and the RVAs are not known until after, which is why
 // this is called twice. Every pointer is an RVA, which survives wherever the
 // image loads, and that is what lets the image stay RELOCS_STRIPPED.
-def pe_import_bytes(spec: [PeImport], rva: long) -> [byte] {
+def pe_import_bytes(spec: [WImport], rva: long) -> [byte] {
     let nd = len(spec);
     let descs = 20 * (nd + 1);
     // One ILT and one IAT per DLL, in DLL order.
@@ -317,7 +309,7 @@ def pe_import_bytes(spec: [PeImport], rva: long) -> [byte] {
     out
 };
 
-def pe_build(code: [byte], rodata: [byte], entry_off: long, bss_len: long, pdata: [byte], xdata: [byte], dsecs: [PeSecHdr], ddata: [[byte]], symtab: [byte], imp: [PeImport]) -> [byte] {
+def pe_build(code: [byte], rodata: [byte], entry_off: long, bss_len: long, pdata: [byte], xdata: [byte], dsecs: [PeSecHdr], ddata: [[byte]], symtab: [byte], imp: [WImport]) -> [byte] {
     let codesz = len(code);
     let ro_len = len(rodata);
     let trailer: [byte] = [0, 0, 0, 0, 0, 0, 0, 0];

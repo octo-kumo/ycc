@@ -189,6 +189,34 @@ Yv *arch_global_cell(Yv *label) {
 //   and a larger one gets a mapping of its own. mmap memory is zeroed,
 //   like the brk memory this replaced -- and unlike brk it has no 8 MB
 //   cap under valgrind.
+/* ── the Windows imports ──────────────────────────────────────────────
+   Windows has no syscall for randomness (BCryptGenRandom is a DLL export), for
+   sockets (Winsock) or for the console API, so those arrive as PE imports. The
+   list lives here, in the arch module, because two things need it and they are
+   on opposite sides of the build: the linker (native.c) reserves one .bss cell
+   per imported function so the code can reach the resolved pointer, and the PE
+   writer (pe.c) emits the descriptor, ILT and name table that fills those
+   cells. One list, or the two would drift. */
+Yv *w_imports(void) {
+    return yav(2,
+        yr(2, "dll", ys("KERNEL32.dll"),
+              "funcs", yav(1, ys("GetCurrentProcessId"))),
+        yr(2, "dll", ys("bcrypt.dll"),
+              "funcs", yav(1, ys("BCryptGenRandom"))));
+}
+
+/* The .bss cell the loader writes an imported function's address into. The
+   code calls through it -- `mov y_iat_X(%rip), %rax; call *%rax` -- which is
+   why it has to be a cell with a label rather than a slot inside .idata: only
+   .text, .bss and the unwind sections have addresses the assembler knows. */
+Yv *w_iat_label(Yv *fn) { return ys_cat(ys("y_iat_"), fn); }
+
+/* The terminator slot of a DLL's IAT: the image format wants the array to end
+   in a zero entry, and the loader writes it along with the resolved addresses
+   (it walks the ILT, which carries the names, and fills one IAT slot per entry
+   plus that zero). One per DLL, named after it so two DLLs cannot share. */
+Yv *w_iat_term_label(Yv *dll) { return ys_cat(ys("y_iatz_"), dll); }
+
 Yv *arch_heap_cells(void) {
     /* y_heap_base holds the main heap's bytes handed out before the program's
        own top-level code runs -- the argv copies y_argv_init makes, which are

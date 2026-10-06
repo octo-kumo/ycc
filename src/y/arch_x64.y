@@ -141,6 +141,35 @@ def arch_text() -> str {
 };
 
 // One zeroed 8-byte cell per global (see emit_program in native.y).
+// ── the Windows imports ─────────────────────────────────────────────────
+// Windows has no syscall for randomness (BCryptGenRandom is a DLL export), for
+// sockets (Winsock) or for the console API, so those arrive as PE imports. The
+// list lives here, in the arch module, because two things need it and they are
+// on opposite sides of the build: the linker (native.y) reserves one .bss cell
+// per imported function so the code can reach the resolved pointer, and the PE
+// writer (pe.y) emits the descriptor, ILT and name table that fills those
+// cells. One list, or the two would drift.
+type WImport = { dll: str, funcs: [str] };
+
+def w_imports() -> [WImport] {
+    [
+        { dll: "KERNEL32.dll", funcs: ["GetCurrentProcessId"] },
+        { dll: "bcrypt.dll", funcs: ["BCryptGenRandom"] }
+    ]
+};
+
+// The .bss cell the loader writes an imported function's address into. The
+// code calls through it -- `mov y_iat_X(%rip), %rax; call *%rax` -- which is
+// why it has to be a cell with a label rather than a slot inside .idata: only
+// .text, .bss and the unwind sections have addresses the assembler knows.
+def w_iat_label(fn: str) -> str { "y_iat_" + fn };
+
+// The terminator slot of a DLL's IAT: the image format wants the array to end
+// in a zero entry, and the loader writes it along with the resolved addresses
+// (it walks the ILT, which carries the names, and fills one IAT slot per
+// entry plus that zero). One per DLL, named after it so two DLLs cannot share.
+def w_iat_term_label(dll: str) -> str { "y_iatz_" + dll };
+
 def arch_bss() -> str {
     ".section .bss\n"
 };
@@ -450,4 +479,4 @@ def arch_consts() -> str {
     ], "\n") + "\n"
 };
 
-export { arch_id, arch_word, arch_sysno, arch_fn_label, arch_global_label, arch_loc_label, arch_str_label, arch_header, arch_rodata, arch_text, arch_bss, arch_global_cell, arch_heap_cells, arch_prelude_lines, arch_prelude_threads_lines, arch_math_lines, w_self_test_lines, arch_consts, arch_frame, arch_exit };
+export { WImport, w_imports, w_iat_label, w_iat_term_label, arch_id, arch_word, arch_sysno, arch_fn_label, arch_global_label, arch_loc_label, arch_str_label, arch_header, arch_rodata, arch_text, arch_bss, arch_global_cell, arch_heap_cells, arch_prelude_lines, arch_prelude_threads_lines, arch_math_lines, w_self_test_lines, arch_consts, arch_frame, arch_exit };

@@ -13,6 +13,7 @@
 #include "pe.h"
 #include "elf.h"
 #include "enc64.h"
+#include "arch_x64.h"
 
 /* imported */
 /* none — pe.y calls no other module's defs. The helpers it needs
@@ -395,13 +396,12 @@ static Yv *pe_shdr(Yv *out, Yv *s) {
    until this import exists -- and the NT half of that body is the BCrypt item
    in ideas/WINDOWS.md. It is listed here, with the table exercising two DLLs
    rather than one, so that step is only the call itself. */
-Yv *pe_imports(void) {
-    return yav(2,
-        yr(2, "dll", ys("KERNEL32.dll"),
-              "funcs", yav(1, ys("GetCurrentProcessId"))),
-        yr(2, "dll", ys("bcrypt.dll"),
-              "funcs", yav(1, ys("BCryptGenRandom"))));
-}
+/* The imports the image carries, in the order the descriptors appear -- the
+   list itself is arch_x64's, because the linker has to reserve a .bss cell for
+   every function named in it and that happens long before this writer runs.
+   `bcrypt.dll!BCryptGenRandom` is the one std/crypto.y's `y_os_random` needs
+   on NT: Windows has no syscall for randomness. */
+Yv *pe_imports(void) { return w_imports(); }
 
 /* Four little-endian bytes of `v` at `at`, in place. */
 static void pe_put32(Yv *b, ylong at, ylong v) {
