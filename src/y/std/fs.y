@@ -14,6 +14,21 @@
 // "w+", "a+") -- and gives an fd (-1 when it fails), which read_all,
 // read_some, write_text, write_data, seek and close_file take.
 
+// The buffer `list_dir` reads a directory's names into, and the size it is
+// grown to on the first call. It is module state on purpose: the heap is an
+// arena that never frees, so allocating it per call cost 32 KiB for every
+// directory of every walk -- measured, on a 30-name directory, 43 592 B of
+// arena a call, and 6.56 MB a walk over a 201-directory tree
+// (examples/SUGGESTIONS.md 22). One buffer for the process is the same trick
+// `examples/indexer`'s read_dirs uses. It is built on FIRST USE rather than at
+// startup, because a program that imports fs to read one file must not pay
+// 32 KiB of arena for a directory listing it never makes (an eager buffer
+// costs every fs-importing program 32 864 B). The `y_` prefix keeps it out of
+// the module's surface, and it is NOT reentrant: two threads that call
+// list_dir at the same time share it.
+const FS_LISTBUF = 32768;
+let y_fs_listbuf: [byte] = [];
+
 // openat's dirfd for a path relative to the working directory.
 def fs_at_cwd() -> long { -100 };
 
@@ -246,7 +261,13 @@ def list_dir(path: str) -> [str]? {
         // 32760, not 32768: y_os_list writes each name with an 8-byte store
         // and a name may end at the last byte it was given, so the call gets
         // seven bytes less than the array to keep that store inside it.
-        let buf: [byte; 32768] = [0; 32768];
+        if (len(y_fs_listbuf) < FS_LISTBUF) {
+            let b: [byte] = [];
+            let z = 0;
+            while (z < FS_LISTBUF) { b += 0; z = z + 1; };
+            y_fs_listbuf = b;
+        };
+        let buf: [byte] = y_fs_listbuf;
         let go = true;
         let first = 1;
         while (go) {

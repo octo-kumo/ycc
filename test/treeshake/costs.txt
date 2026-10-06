@@ -6,13 +6,19 @@
 # dropped, top-level globals are not. math's 6705 bytes are `const pi`,
 # `const e`, `const tau` and the rest of its constants, emitted and
 # initialized at startup whether anything reads them or not. A unit whose top
-# level has nothing to initialize (fs, struct) is free already.
-fs 0
+# level has nothing to initialize (struct) is free already.
+#
+# fs is 72 and net 86 rather than 0 and 14 since list_dir's 32 KiB getdents
+# buffer became lazy module state (SUGGESTIONS.md 22): the first-use check and
+# the growth loop are code, and code is what this measures. net pays fs's 72
+# because it imports fs. That is the whole price of not spending 32 864 bytes
+# of arena on every program that imports fs to read one file.
+fs 72
 struct 0
-net 14
+net 86
 json 53
 regex 182
 crypto 420
-x509 637
-tls 651
+x509 709
+tls 723
 math 6705

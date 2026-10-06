@@ -30,7 +30,10 @@ same semantics.
   not contain the startup self-test's message), `pe-packinv.sh` (a PE from the
   std pack and one from `--std-src` are identical, 230/230) and
   `pe-fixtures.sh` (every `t*.y` fixture run both ways; four `ELF-OUTPUT-DIFF`
-  baseline failures are pre-existing). A PE runs the W3 syscall self-test at
+  baseline failures are pre-existing, and the four `t34{1,2,3,4}_threads_*`
+  fixtures are PE-only failures because the PE target has no `spawn`/`mutex`/
+  `sem` yet -- that is the "fork/spawn/threads on NT" item in the goal, not a
+  regression). A PE runs the W3 syscall self-test at
   startup — `src/y/arch/wselftest.s`, returned by `w_self_test_lines` and
   called from the `_start` prologue on that target only — so a `w_sysno`
   number that drifted on another Windows build prints `runtime error: NT
