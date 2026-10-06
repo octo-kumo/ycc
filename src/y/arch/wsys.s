@@ -534,6 +534,16 @@ yor_fail:
     mov %rbp, %rsp
     pop %rbp
     ret
+# AN ABSOLUTE PATH REPLACES THE CWD, IT DOES NOT EXTEND IT. The floor y_w_path
+# walks from is the PROCESS'S CURRENT DIRECTORY, so without the ywp_root branch
+# below, /tmp/x became <cwd>\tmp\x. Measured before the fix: every
+# absolute-path file operation on a PE returned false while every relative one
+# worked -- fs.write_file("/tmp/y") failed, fs.read_file("/tmp/y") then
+# unwrapped none, and every fixture using an absolute path failed (t150_fs,
+# t167_read_dir_errors, t177, t345's listing) while pe-fs.y, which uses relative
+# paths, passed. -32/-40(%rbp) hold the drive root ("Z:\": 3 units after the 4
+# the \??\ prefix occupies), saved while the cwd was copied. DosPath is always
+# "X:\..." here; a UNC cwd would need more than this.
 #=== add: y_w_path ===
 y_w_path:
     push %rbp
@@ -568,6 +578,10 @@ ywp_cwd:
     add $2, %rdi
     add $1, %r8
     sub $1, %r11
+    cmp $7, %r8
+    jne ywp_cwd
+    mov %rdi, -32(%rbp)
+    mov %r8, -40(%rbp)
     jmp ywp_cwd
 ywp_sep:
     movzbq -2(%rdi), %rax
@@ -582,6 +596,16 @@ ywp_rel:
     mov -24(%rbp), %rcx
     cmp $0, %rcx
     je ywp_e_empty
+    movzbq (%rsi), %rax
+    cmp $47, %rax
+    je ywp_root
+    cmp $92, %rax
+    je ywp_root
+    jmp ywp_walk
+ywp_root:
+    mov -32(%rbp), %rdi
+    mov -40(%rbp), %r8
+ywp_walk:
     xor %r9d, %r9d
 ywp_loop:
     cmp %rcx, %r9

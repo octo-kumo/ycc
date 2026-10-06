@@ -285,6 +285,33 @@ branch-disjointness false positive.
   harness has no tty for wine, so a console handle (as opposed to a pipe) is
   unverified, and `test_std_suites.sh`'s `term_test` needs a pty and only runs
   against ELF.
+- **EVERY ABSOLUTE PATH WAS BROKEN ON PE (round 59) -- and this is what the
+  round-58 mystery was standing next to.** `y_w_path` walks from the PROCESS'S
+  CURRENT DIRECTORY, and for an absolute path it kept walking instead of
+  starting again at the drive root, so `/tmp/x` became `<cwd>\tmp\x`. Measured:
+  `fs.write_file("/tmp/w58_abs.txt")` returned FALSE while
+  `fs.write_file("w58_rel.txt")` returned true, `fs.make_dir("/tmp/w58_d")`
+  false, and `fs.exists` on both absolute paths false -- every absolute-path
+  file operation failed while every relative one worked. That is why `pe-fs.y`,
+  which uses relative paths, always passed, and why the fixtures that use
+  /tmp (t150_fs, t167_read_dir_errors, t177, ...) failed.
+  The fix: on a leading `/` (or `\`) reset the output to the drive root
+  (`\??\Z:\`), which the cwd copy saves on its way past (3 units in; DosPath
+  is always "X:\..." here, a UNC cwd would need more).
+  Before/after on the reproducer: `rel true / abs false / cwd false / mkdir
+  false` -> all four true, with the files and the directory actually created.
+  In the fixture corpus: t167_read_dir_errors now PASSES, and t150_fs no longer
+  dies at its first write -- it matches its first three lines and then page
+  faults on a WRITE to address 0x10 at 0x140001666, which is a second, deeper
+  bug and is recorded as such rather than folded into this one.
+  t345_list_dir_twice is NOT this: it still reports `false false true`, so
+  whatever it is, it is independent of the absolute-path bug.
+  Gates: rebless (which now runs BOTH halves of the port gate) ref
+  bd2d5bc3f193cb2c; make ycc verified byte-identical; pe-gate green; bench-ir
+  +0.00% (the change is in the generated program's runtime path, not in
+  compile time). The Linux suites were NOT re-run: nothing about the
+  Linux-target behaviour changed, and the PE gates are the ones that can see
+  this.
 - **`t345_list_dir_twice` FAILS ONLY UNDER THE HARNESS, and the harness now
   prints what it saw (round 58).** The fixture compares three consecutive
   `fs.list_dir(".")` calls; `pe-fixtures.sh` reports it PE-only, consistently
