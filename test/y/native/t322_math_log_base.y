@@ -25,7 +25,10 @@
 // measured over a spread UNIFORM IN THE DECADES rather than log-uniformly: the
 // 1-in-12026 above is a log-uniform number, and a decade-uniform spread of
 // 20000 arguments (test/math/audit_float.py) finds log10 2 ulps out on 379 of
-// them -- 1.9%, spread across EVERY decade, not concentrated near zero.
+// them -- 1.9%, spread across EVERY decade, not concentrated near zero. The
+// constant log10_2_lo has since been added (see the module) and that is 288 of
+// 20000, 1.44%; the figure 379 is what the three compensated-z-series attempts
+// below each left unchanged.
 //
 // An earlier version of this comment blamed the two terms being of COMPARABLE
 // size -- e*log10(2) beside ln(m)*log10(e) -- so that ln(m)'s error was not
