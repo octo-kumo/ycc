@@ -121,7 +121,17 @@ fi
 if ! objdump -p "$OUT/imp.exe" 2>/dev/null | grep -q 'GetCurrentProcessId'; then
     echo "pe-gate: FAIL (the PE does not import GetCurrentProcessId)"; exit 1
 fi
-echo "pe-gate: import table ok (KERNEL32.dll!GetCurrentProcessId)"
+# Two DLLs, not one: the second is bcrypt.dll!BCryptGenRandom, which is what
+# std/crypto.y's y_os_random will call on NT -- Windows has no syscall for
+# randomness. A table that only ever carried one DLL would not have proven the
+# descriptor chain, the per-DLL ILT/IAT offsets or the name table.
+if ! objdump -p "$OUT/imp.exe" 2>/dev/null | grep -q 'DLL Name: bcrypt.dll'; then
+    echo "pe-gate: FAIL (the PE imports no bcrypt.dll)"; exit 1
+fi
+if ! objdump -p "$OUT/imp.exe" 2>/dev/null | grep -q 'BCryptGenRandom'; then
+    echo "pe-gate: FAIL (the PE does not import BCryptGenRandom)"; exit 1
+fi
+echo "pe-gate: import table ok (KERNEL32.dll!GetCurrentProcessId, bcrypt.dll!BCryptGenRandom)"
 # A -g PE must carry its debug sections WITH their bytes: pe_build used to look
 # up the section records it built rather than the placed ones, so every
 # .debug_* of a PE was written from file offset 0 with SizeOfRawData 0 -- an

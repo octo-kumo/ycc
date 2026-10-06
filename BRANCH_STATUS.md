@@ -133,10 +133,26 @@ branch-disjointness false positive.
   (`DLL Name: KERNEL32.dll` / `Member-Name: GetCurrentProcessId`), the PE still
   runs under wine, and `pe-gate.sh` now asserts both, because nothing else
   looked at an import at all.
-  The function itself is scaffolding: nothing calls it yet. It is there so the
-  loader's resolution path is exercised end to end *before* a BCrypt body
-  depends on it, which is the order that turns a missing import into a
-  "DLL Name" line rather than a mystery.
+  The table now carries **two** DLLs -- `KERNEL32.dll!GetCurrentProcessId` and
+  `bcrypt.dll!BCryptGenRandom` -- because one DLL would not have exercised the
+  descriptor chain, the per-DLL ILT/IAT offsets or the name table, and because
+  the second is exactly what the BCrypt body needs. `pe-gate.sh` asserts both
+  by name.
+  **What is left for BCrypt is the call**, and it is mechanical now:
+  (1) reserve one 8-byte `.bss` cell per imported function (the linker's
+  `gls`, so the shaker keeps them when the body that references them is kept);
+  (2) set the descriptor's `FirstThunk` to that cell's RVA instead of the
+  in-`.idata` IAT -- `asm.y` already has the label map, so the offset is
+  `label_addr` minus the `.bss` start, and `pe.y` needs it passed in;
+  (3) write `y_os_random`'s NT body as `mov y_iat_BCryptGenRandom(%rip), %rax;
+  call *%rax` -- the load form and `F_CALL_IND` both already exist, used by
+  closures -- with the Win64 argument registers (rcx/rdx/r8/r9) and 32 bytes of
+  shadow space;
+  (4) flip `t158_crypto.y`'s PE expectation from the ENOSYS trap to real bytes.
+  The functions themselves are still scaffolding: nothing calls them yet. The
+  order is deliberate -- the loader's resolution path is exercised end to end
+  *before* a BCrypt body depends on it, so a missing import is a "DLL Name"
+  line rather than a mystery.
 - **A latent PE bug found while doing that, and fixed**: `pe_build` looked each
   extra section up in the record list it had just built rather than in the
   placed one, so every `.debug_*` section of a `-g` PE was written from file

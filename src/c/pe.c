@@ -385,8 +385,23 @@ static Yv *pe_shdr(Yv *out, Yv *s) {
    GetCurrentProcessId, so the loader's resolution path is exercised end to end
    (objdump -p reads the table, and wine refuses an image whose table is
    malformed) before anything depends on it. */
-Yv *pe_import_dll(void) { return ys("KERNEL32.dll"); }
-Yv *pe_import_funcs(void) { return yav(1, ys("GetCurrentProcessId")); }
+/* The imports the image carries, in the order the descriptors appear. Every
+   function named here needs an IAT slot the code can reach (see pe_build), and
+   every DLL named here must exist on the machine or the loader refuses the
+   image -- which is why this list is short and deliberate.
+
+   `bcrypt.dll!BCryptGenRandom` is the one the next step needs: Windows has no
+   syscall for randomness, so std/crypto.y's `y_os_random` has nothing to call
+   until this import exists -- and the NT half of that body is the BCrypt item
+   in ideas/WINDOWS.md. It is listed here, with the table exercising two DLLs
+   rather than one, so that step is only the call itself. */
+Yv *pe_imports(void) {
+    return yav(2,
+        yr(2, "dll", ys("KERNEL32.dll"),
+              "funcs", yav(1, ys("GetCurrentProcessId"))),
+        yr(2, "dll", ys("bcrypt.dll"),
+              "funcs", yav(1, ys("BCryptGenRandom"))));
+}
 
 /* Four little-endian bytes of `v` at `at`, in place. */
 static void pe_put32(Yv *b, ylong at, ylong v) {
@@ -425,46 +440,72 @@ static void pe_put_str(Yv *b, ylong at, Yv *s) {
    headers depend on it) and the RVAs are not known until after, which is why
    this is called twice. Every pointer is an RVA, which survives wherever the
    image loads, and that is what lets the image stay RELOCS_STRIPPED. */
-static Yv *pe_import_bytes(Yv *dll, Yv *funcs, ylong rva) {
-    ylong n = yv_len(funcs);
-    ylong ilt = 40;
-    ylong iat = ilt + 8 * (n + 1);
-    ylong hn = iat + 8 * (n + 1);
-    Yv *offs = yav(0);
-    ylong at = hn;
+static Yv *pe_import_bytes(Yv *spec, ylong rva) {
+    ylong nd = yv_len(spec);
+    ylong descs = 20 * (nd + 1);
+    Yv *ilt = yav(0);
+    Yv *iat = yav(0);
+    ylong at = descs;
     ylong i = 0;
-    while (i < n) {
-        offs = ya_push(offs, yv_long(at));
-        at = at + 2 + yv_len(ya_get(funcs, i)) + 1;
-        if (at % 2 != 0) { at = at + 1; }
+    while (i < nd) {
+        ilt = ya_push(ilt, yv_long(at));
+        at = at + 8 * (yv_len(yr_get(ya_get(spec, i), "funcs")) + 1);
         i = i + 1;
     }
-    ylong names_at = at;
-    ylong total = names_at + yv_len(dll) + 1;
+    i = 0;
+    while (i < nd) {
+        iat = ya_push(iat, yv_long(at));
+        at = at + 8 * (yv_len(yr_get(ya_get(spec, i), "funcs")) + 1);
+        i = i + 1;
+    }
+    Yv *hoff = yav(0);
+    i = 0;
+    while (i < nd) {
+        Yv *row = yav(0);
+        Yv *fs = yr_get(ya_get(spec, i), "funcs");
+        ylong k = 0;
+        while (k < yv_len(fs)) {
+            row = ya_push(row, yv_long(at));
+            at = at + 2 + yv_len(ya_get(fs, k)) + 1;
+            if (at % 2 != 0) { at = at + 1; }
+            k = k + 1;
+        }
+        hoff = ya_push(hoff, row);
+        i = i + 1;
+    }
+    Yv *noff = yav(0);
+    i = 0;
+    while (i < nd) {
+        noff = ya_push(noff, yv_long(at));
+        at = at + yv_len(yr_get(ya_get(spec, i), "dll")) + 1;
+        i = i + 1;
+    }
+    ylong total = at;
     Yv *out = yav(0);
     ylong z = 0;
     while (z < total) { out = ya_push(out, yv_long(0)); z = z + 1; }
-    pe_put32(out, 0, rva + ilt);
-    pe_put32(out, 12, rva + names_at);
-    pe_put32(out, 16, rva + iat);
     i = 0;
-    while (i < n) {
-        pe_put64(out, ilt + 8 * i, rva + yv_l(ya_get(offs, i)));
-        pe_put64(out, iat + 8 * i, rva + yv_l(ya_get(offs, i)));
+    while (i < nd) {
+        ylong d = 20 * i;
+        Yv *fs = yr_get(ya_get(spec, i), "funcs");
+        Yv *row = ya_get(hoff, i);
+        pe_put32(out, d, rva + yv_l(ya_get(ilt, i)));
+        pe_put32(out, d + 12, rva + yv_l(ya_get(noff, i)));
+        pe_put32(out, d + 16, rva + yv_l(ya_get(iat, i)));
+        ylong k = 0;
+        while (k < yv_len(fs)) {
+            pe_put64(out, yv_l(ya_get(ilt, i)) + 8 * k, rva + yv_l(ya_get(row, k)));
+            pe_put64(out, yv_l(ya_get(iat, i)) + 8 * k, rva + yv_l(ya_get(row, k)));
+            pe_put_str(out, yv_l(ya_get(row, k)) + 2, ya_get(fs, k));
+            k = k + 1;
+        }
+        pe_put_str(out, yv_l(ya_get(noff, i)), yr_get(ya_get(spec, i), "dll"));
         i = i + 1;
     }
-    i = 0;
-    while (i < n) {
-        pe_put_str(out, yv_l(ya_get(offs, i)) + 2, ya_get(funcs, i));
-        i = i + 1;
-    }
-    pe_put_str(out, names_at, dll);
     return out;
 }
-
 Yv *pe_build(Yv *code, Yv *rodata, ylong entry_off, ylong bss_len, Yv *pdata,
-             Yv *xdata, Yv *dsecs, Yv *ddata, Yv *symtab, Yv *imp_dll,
-             Yv *imp_funcs) {
+             Yv *xdata, Yv *dsecs, Yv *ddata, Yv *symtab, Yv *imp) {
     ylong codesz = yv_len(code);
     ylong ro_len = yv_len(rodata);
     Yv *trailer = yav(8, yv_long(0), yv_long(0), yv_long(0), yv_long(0),
@@ -481,10 +522,10 @@ Yv *pe_build(Yv *code, Yv *rodata, ylong entry_off, ylong bss_len, Yv *pdata,
         di = di + 1;
     }
     ylong imp_sz = 0;
-    if (yv_len(imp_funcs) > 0) {
-        imp_sz = yv_len(pe_import_bytes(imp_dll, imp_funcs, 0));
+    if (yv_len(imp) > 0) {
+        imp_sz = yv_len(pe_import_bytes(imp, 0));
         dsecs2 = ya_push(dsecs2, pe_sec(ys(".idata"), imp_sz, 0, 0, PE_CH_RW));
-        ddata2 = ya_push(ddata2, pe_import_bytes(imp_dll, imp_funcs, 0));
+        ddata2 = ya_push(ddata2, pe_import_bytes(imp, 0));
     }
     Yv *secs = pe_sections(textlen, bss_len, pdata, xdata, dsecs2);
     /* A RUNTIME_FUNCTION's UnwindData is an RVA, and the .xdata section's
@@ -499,7 +540,7 @@ Yv *pe_build(Yv *code, Yv *rodata, ylong entry_off, ylong bss_len, Yv *pdata,
         ylong dj = 0;
         while (dj < yv_len(dsecs2)) {
             if (ys_eq_lit(yr_get(ya_get(dsecs2, dj), "name"), ".idata")) {
-                ya_set(ddata2, dj, pe_import_bytes(imp_dll, imp_funcs, idr));
+                ya_set(ddata2, dj, pe_import_bytes(imp, idr));
             }
             dj = dj + 1;
         }

@@ -183,8 +183,23 @@ def pe_pad(out: [byte], upto: long) -> [byte] {
 // GetCurrentProcessId, so the loader's resolution path is exercised end to end
 // (objdump -p reads the table, and wine refuses an image whose table is
 // malformed) before anything depends on it.
-def pe_import_dll() -> str { "KERNEL32.dll" };
-def pe_import_funcs() -> [str] { ["GetCurrentProcessId"] };
+// The imports the image carries, in the order the descriptors appear. Every
+// function named here needs an IAT slot the code can reach (see pe_build), and
+// every DLL named here must exist on the machine or the loader refuses the
+// image -- which is why this list is short and deliberate.
+type PeImport = { dll: str, funcs: [str] };
+
+// `bcrypt.dll!BCryptGenRandom` is the one the next step needs: Windows has no
+// syscall for randomness, so std/crypto.y's `y_os_random` has nothing to call
+// until this import exists -- and the NT half of that body is the BCrypt item
+// in ideas/WINDOWS.md. It is listed here, with the table exercising two DLLs
+// rather than one, so that step is only the call itself.
+def pe_imports() -> [PeImport] {
+    [
+        { dll: "KERNEL32.dll", funcs: ["GetCurrentProcessId"] },
+        { dll: "bcrypt.dll", funcs: ["BCryptGenRandom"] }
+    ]
+};
 
 // Four little-endian bytes of `v` at `at`, in place.
 def pe_put32(b: [byte], at: long, v: long) -> void {
@@ -224,44 +239,85 @@ def pe_put_str(b: [byte], at: long, s: str) -> void {
 // this is called twice. Every pointer is an RVA, which survives wherever the
 // image loads; nothing here is a virtual address, which is the property that
 // lets the image stay RELOCS_STRIPPED.
-def pe_import_bytes(dll: str, funcs: [str], rva: long) -> [byte] {
-    let n = len(funcs);
-    let ilt = 40;
-    let iat = ilt + 8 * (n + 1);
-    let hn = iat + 8 * (n + 1);
-    let offs: [long] = [];
-    let at = hn;
+// The .idata image for every DLL in `spec`. The layout, all offsets from the
+// section's start (nd = number of DLLs, nf[i] = functions of DLL i):
+//
+//   0            nd+1 IMAGE_IMPORT_DESCRIPTORs, the last all zero
+//   d_off        the ILTs, one per DLL: 8 bytes a function, then a zero
+//   i_off        the IATs, the same shape; the loader overwrites these
+//   h_off        hint/name entries: a 2-byte hint, the name, NUL, even
+//   n_off        the DLL names, NUL terminated
+//
+// `rva` is the section's own RVA when the bytes are real and 0 when only the
+// LENGTH is wanted -- the size has to be known before placement (the section
+// headers depend on it) and the RVAs are not known until after, which is why
+// this is called twice. Every pointer is an RVA, which survives wherever the
+// image loads, and that is what lets the image stay RELOCS_STRIPPED.
+def pe_import_bytes(spec: [PeImport], rva: long) -> [byte] {
+    let nd = len(spec);
+    let descs = 20 * (nd + 1);
+    // One ILT and one IAT per DLL, in DLL order.
+    let ilt: [long] = [];
+    let iat: [long] = [];
+    let at = descs;
     let i = 0;
-    while (i < n) {
-        offs += at;
-        at = at + 2 + len(funcs[i]) + 1;
-        if (at % 2 != 0) { at = at + 1; };
+    while (i < nd) {
+        ilt += at;
+        at = at + 8 * (len(spec[i].funcs) + 1);
         i = i + 1;
     };
-    let names_at = at;
-    let total = names_at + len(dll) + 1;
+    i = 0;
+    while (i < nd) {
+        iat += at;
+        at = at + 8 * (len(spec[i].funcs) + 1);
+        i = i + 1;
+    };
+    // The hint/name entries, then the DLL names.
+    let hoff: [[long]] = [];
+    i = 0;
+    while (i < nd) {
+        let row: [long] = [];
+        let k = 0;
+        while (k < len(spec[i].funcs)) {
+            row += at;
+            at = at + 2 + len(spec[i].funcs[k]) + 1;
+            if (at % 2 != 0) { at = at + 1; };
+            k = k + 1;
+        };
+        hoff += row;
+        i = i + 1;
+    };
+    let noff: [long] = [];
+    i = 0;
+    while (i < nd) {
+        noff += at;
+        at = at + len(spec[i].dll) + 1;
+        i = i + 1;
+    };
+    let total = at;
     let out: [byte] = [];
     let z = 0;
     while (z < total) { out += 0; z = z + 1; };
-    pe_put32(out, 0, rva + ilt);            // OriginalFirstThunk
-    pe_put32(out, 12, rva + names_at);      // Name
-    pe_put32(out, 16, rva + iat);           // FirstThunk
     i = 0;
-    while (i < n) {
-        pe_put64(out, ilt + 8 * i, rva + offs[i]);
-        pe_put64(out, iat + 8 * i, rva + offs[i]);
+    while (i < nd) {
+        let d = 20 * i;
+        pe_put32(out, d, rva + ilt[i]);         // OriginalFirstThunk
+        pe_put32(out, d + 12, rva + noff[i]);   // Name
+        pe_put32(out, d + 16, rva + iat[i]);    // FirstThunk
+        let k = 0;
+        while (k < len(spec[i].funcs)) {
+            pe_put64(out, ilt[i] + 8 * k, rva + hoff[i][k]);
+            pe_put64(out, iat[i] + 8 * k, rva + hoff[i][k]);
+            pe_put_str(out, hoff[i][k] + 2, spec[i].funcs[k]);
+            k = k + 1;
+        };
+        pe_put_str(out, noff[i], spec[i].dll);
         i = i + 1;
     };
-    i = 0;
-    while (i < n) {
-        pe_put_str(out, offs[i] + 2, funcs[i]);
-        i = i + 1;
-    };
-    pe_put_str(out, names_at, dll);
     out
 };
 
-def pe_build(code: [byte], rodata: [byte], entry_off: long, bss_len: long, pdata: [byte], xdata: [byte], dsecs: [PeSecHdr], ddata: [[byte]], symtab: [byte], imp_dll: str, imp_funcs: [str]) -> [byte] {
+def pe_build(code: [byte], rodata: [byte], entry_off: long, bss_len: long, pdata: [byte], xdata: [byte], dsecs: [PeSecHdr], ddata: [[byte]], symtab: [byte], imp: [PeImport]) -> [byte] {
     let codesz = len(code);
     let ro_len = len(rodata);
     let trailer: [byte] = [0, 0, 0, 0, 0, 0, 0, 0];
@@ -273,10 +329,10 @@ def pe_build(code: [byte], rodata: [byte], entry_off: long, bss_len: long, pdata
     let di = 0;
     while (di < len(dsecs)) { dsecs2 += dsecs[di]; ddata2 += ddata[di]; di = di + 1; };
     let imp_sz = 0;
-    if (len(imp_funcs) > 0) {
-        imp_sz = len(pe_import_bytes(imp_dll, imp_funcs, 0));
+    if (len(imp) > 0) {
+        imp_sz = len(pe_import_bytes(imp, 0));
         dsecs2 += pe_sec(".idata", imp_sz, 0, 0, PE_CH_RW);
-        ddata2 += pe_import_bytes(imp_dll, imp_funcs, 0);
+        ddata2 += pe_import_bytes(imp, 0);
     };
     let secs = pe_sections(textlen, bss_len, pdata, xdata, dsecs2);
     // A RUNTIME_FUNCTION's UnwindData is an RVA, and the .xdata section's
@@ -291,7 +347,7 @@ def pe_build(code: [byte], rodata: [byte], entry_off: long, bss_len: long, pdata
         let dj = 0;
         while (dj < len(dsecs2)) {
             if (dsecs2[dj].name == ".idata") {
-                ddata2[dj] = pe_import_bytes(imp_dll, imp_funcs, idr);
+                ddata2[dj] = pe_import_bytes(imp, idr);
             };
             dj = dj + 1;
         };

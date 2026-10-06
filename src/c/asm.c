@@ -43,9 +43,8 @@ extern Yv *elf_build(Yv *code, Yv *rodata, ylong entry_off, ylong bss_len,
    asm_image's note. */
 extern Yv *pe_build(Yv *code, Yv *rodata, ylong entry_off, ylong bss_len,
                     Yv *pdata, Yv *xdata, Yv *dsecs, Yv *ddata, Yv *symtab,
-                    Yv *imp_dll, Yv *imp_funcs);
-extern Yv *pe_import_dll(void);
-extern Yv *pe_import_funcs(void);
+                    Yv *imp);
+extern Yv *pe_imports(void);
 extern ylong pe_text_base(void);
 extern ylong pe_bss_from_ro(ylong code_len, ylong ro_len, ylong bss_len);
 extern Yv *pe_sec(Yv *name, ylong vsz, ylong rva, ylong rawptr, ylong chars);
@@ -2537,7 +2536,7 @@ static Yv *pe_image(Yv *code, Yv *ro, ylong entry_off, ylong bss_len, Yv *syms,
        arrive as imports, and this is the first one (see pe.c's import table). */
     return pe_build(code, ro, entry_off, bss_len, yr_get(un, "pdata"),
                     yr_get(un, "xdata"), dsecs2, ddata, coff,
-                    pe_import_dll(), pe_import_funcs());
+                    pe_imports());
 }
 
 /* ── PE unwind data ─────────────────────────────────────────────────────

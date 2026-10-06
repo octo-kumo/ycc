@@ -1674,9 +1674,9 @@ def pe_image(code: [byte], ro: [byte], entry_off: long, bss_len: long, syms: [El
     };
     let coff = pe_coff_syms(syms);
     // Windows has no syscall for randomness, sockets or the console: those
-    // arrive as imports, and this is the first one (see pe.y's import table).
+    // arrive as imports (see pe.y's import table).
     pe.pe_build(code, ro, entry_off, bss_len, un.pdata, un.xdata, dsecs2, ddata,
-                coff, pe.pe_import_dll(), pe.pe_import_funcs())
+                coff, pe.pe_imports())
 };
 
 def patch_item(code: [byte], it: AsmItem, lmap: [AsmLabel], code_len: long, pad: long) -> AsmBytes {
