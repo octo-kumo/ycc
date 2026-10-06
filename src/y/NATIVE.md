@@ -325,9 +325,12 @@ writing a kernel.
   as sixty labels would cost every program ~120K instructions forever.
 * **`.quad` is a 64-bit bit pattern**, so a negative value is a legitimate one
   and half of every double's pattern is negative (that is the sign bit). A
-  range check cannot replace the old non-negativity rule either: `tolong` wraps
-  at 64 bits, so 2^63 comes back as -2^63 and the eight bytes stored are the
-  same ones.
+  range check cannot replace the old non-negativity rule either: the read is
+  `parse_num` --- the same one `is_num_text` validated --- which accumulates
+  modulo 2^64, so 2^63 comes back as -2^63 and the eight bytes stored are the
+  same ones. `tolong` is the wrong read here and was a trap for a while: it
+  requires a fully valid `long` and answers `none` outside the range, where a
+  `.quad` is a bit pattern and wants the wrap.
 
 Verified byte-for-byte behaviorally against
 binutils-built binaries for the whole corpus. The assembled bytes go straight

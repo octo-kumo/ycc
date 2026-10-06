@@ -442,14 +442,13 @@ def to_int(x: float) -> long {
     }
 };
 
-// SUGGESTIONS.md 4: a CHECKED integer parse. The builtin tolong() guesses and
-// every guess is silent -- measured: tolong("12abc") is 12, tolong("") is 0,
-// tolong(" 12 ") is 0 (no whitespace is skipped, though trailing junk is),
-// tolong("0x10") is 0, and a 21-digit number WRAPS
-// (tolong("999999999999999999999") is 3875820019684212735). This accepts
-// exactly one spelling -- an optional + or - then one or more digits, nothing
-// else -- and answers none for anything else, including a value too large for a
-// long, so a caller can tell "not a number" from "0".
+// A CHECKED integer parse, written for SUGGESTIONS.md 4 when the builtin
+// guessed (tolong("12abc") was 12, "" was 0, " 12 " was 0, "0x10" was 0 and a
+// 21-digit number wrapped). tolong answers an option of its own now, so this is
+// narrower than the builtin in exactly one way -- it does NOT skip whitespace
+// around the number, where tolong(" 42 ") is some(42) and this is none. The
+// fixture that contrasts the two (test/y/native/t352_parse_long.y) is the only
+// reason it is still here; it is a candidate for removal.
 //
 // The magnitude is carried as a NEGATIVE long when the sign is negative: the
 // most negative long has no positive counterpart, so -(acc*10) - d is the way

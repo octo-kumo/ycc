@@ -63,6 +63,19 @@ The design question is only whether `f * 0.5` should convert
 implicitly anywhere a `long` is wanted, or whether it should require
 an explicit `long(f)` form.
 
+### Status (after the `T?` change, 2026-10-06) — the FLOAT half is an option now too
+
+`tolong` and `tofloat` return `long?` and `float?` (merged as `81c5c37`), so the
+truncation this entry's escape hatch performs is `tolong(3.7)` = `some(3)` and
+`none` for a NaN or a magnitude at or past 2^63, where it used to trap. That
+also settles the ORIGINAL complaint of entry 4 -- "`tolong` guesses silently"
+-- in the language itself rather than in a library, which is why that entry is
+gone. `std/math.parse_long`, added here as the checked reader, is now narrower than
+the builtin in exactly one way -- it does not skip whitespace around the
+number, where the builtin does -- and is a candidate for removal.
+
+What remains open is the whole of this entry: a float in a `long` position.
+
 ### Status (round 63, 2026-10-06) — NARROWED: `tolong(f)` closed the FLOAT half; the IMPLICIT form is what is left
 
 Re-probed on this tree. `tolong(3.7)` is 3 and `tolong(-3.7)` is -3, so the

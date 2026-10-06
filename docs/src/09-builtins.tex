@@ -105,25 +105,33 @@ a record still calls the field. \ic{s.length} is a property, so
   \ic{"\{k: v, ...\}"}, maps as \ic{"\{"k": v, ...\}"} (string keys
   quoted). A function is \emph{not} accepted here (only \ic{print} takes
   one, Section~\ref{sec:builtin-io}).
-\item[\ic{tolong(x)}] A \ic{long} from either a \ic{str} or a \ic{float}.
-  On a \ic{str} it parses a decimal integer: the scan takes an optional
-  \ic{-} and then digits, and \emph{stops} at the first byte that is
-  neither, so a prefix is used and the rest ignored (\ic{tolong("12x")} is
-  \ic{12}, \ic{tolong("3.14")} is \ic{3}), and only a string with no such
-  prefix at all gives \ic{0}. On a \ic{float} it \emph{truncates toward
-  zero} --- \ic{tolong(-3.99)} is \ic{-3}, not \ic{-4}, which is
-  \ic{floor} and not \ic{trunc}. A float with no long answer at all traps:
-  a NaN, or a magnitude at or past \ic{2\textasciicircum 63} (\ic{-2\textasciicircum 63}
-  \emph{is} a long, and comes back as such).
-\item[\ic{tofloat(x)}] A \ic{float} from either a \ic{str} or a \ic{long}.
-  On a \ic{str} it reads the same scan with a fraction, stopping where
-  \ic{tolong} stops, and accumulating in \ic{double} as it goes --- so
-  \ic{tofloat("3.14")} is the double nearest \ic{3.14}, the same answer the
-  literal \ic{3.14} has and the same one every other language's parser
-  gives. An exponent is not read (\ic{tofloat("1e9")} is \ic{1.0}). On a
-  \ic{long} it is the widening the language already does implicitly, made
-  explicit so that \ic{tolong} and \ic{tofloat} are a pair; a long beyond
-  \ic{2\textasciicircum 53} rounds to the nearest double, as widening always does.
+\item[\ic{tolong(x)}] A \ic{long?} from either a \ic{str} or a \ic{float}.
+  The \ic{str} arm is exact rather than a prefix scan: optional whitespace,
+  an optional \ic{+} or \ic{-}, one or more digits, and then only
+  whitespace. Anything else is \ic{none} --- \ic{tolong("12x")},
+  \ic{tolong("3.14")}, \ic{tolong("")} and \ic{tolong("0x10")} all are,
+  where they used to answer \ic{12}, \ic{3}, \ic{0} and \ic{0} and say
+  nothing about what they had ignored --- and so is a value outside the
+  \ic{long} range, rather than the wrapped number the prefix scan produced.
+  Whitespace \emph{around} the number is fine, interior whitespace is not:
+  \ic{tolong(" 42 ")} is \ic{some(42)} and \ic{tolong("4 2")} is \ic{none}.
+  On a \ic{float} it \emph{truncates toward zero} --- \ic{tolong(-3.99)} is
+  \ic{some(-3)}, not \ic{-4}, which is \ic{floor} and not \ic{trunc} ---
+  and a float with no long answer is \ic{none} rather than a trap: a NaN, or
+  a magnitude at or past \ic{2\textasciicircum 63} (\ic{-2\textasciicircum 63}
+  \emph{is} a long, and comes back as \ic{some(\ldots)}).
+\item[\ic{tofloat(x)}] A \ic{float?} from either a \ic{str} or a \ic{long}.
+  A \ic{str} is read by \ic{tolong}'s rule with at most one point: at least
+  one digit, so \ic{tofloat(".5")} and \ic{tofloat("1.")} are both
+  \ic{some(\ldots)}, while \ic{tofloat("1e9")}, \ic{tofloat(".")} and
+  \ic{tofloat("")} are \ic{none}. It accumulates in \ic{double} as it goes,
+  so \ic{tofloat("3.14")} is the double nearest \ic{3.14}, the same answer
+  the literal \ic{3.14} has and the same one every other language's parser
+  gives. An exponent is not read, and is \ic{none} rather than the digits
+  before the \ic{e}. On a \ic{long} it is the widening the language already
+  does implicitly, made explicit so that \ic{tolong} and \ic{tofloat} are a
+  pair; a long beyond \ic{2\textasciicircum 53} rounds to the nearest
+  double, as widening always does, and that arm is always \ic{some(\ldots)}.
 \item[\ic{mod(a, b)}] The \emph{floored} remainder of two \ic{long}s: the
   result has the sign of \ic{b}, so \ic{mod(-949, 100)} is \ic{51} and
   \ic{mod(949, -100)} is \ic{-51}. The \ic{\%} operator is C's --- it
@@ -1705,8 +1713,9 @@ the text away would have nothing to hand back.
   \ic{json.as\_arr(v)}, \ic{json.as\_obj(v)}, \ic{json.is\_null(v)}] The shape
   asked for, or \ic{none} if \ic{v} is another one. \ic{as\_long} is
   \ic{tolong} over the literal text and is emphatically \emph{not} a numeric
-  conversion: it stops at the point, so \ic{"3.9"} is \ic{3} and \ic{"1e10"} is
-  \ic{1}, and it wraps past 64 bits.
+  conversion: a number with a fraction or an exponent is \ic{none}
+  (\ic{"3.9"}, \ic{"1e10"}) rather than a truncation, and so is one past 64
+  bits. \ic{get\_long} below keeps the caller's default for all of those.
 \item[\ic{json.get\_long(o, k, d)}, \ic{json.get\_str(o, k, d)},
   \ic{json.get\_arr(o, k)}] That member as a number, a string or an array, or
   the default. \ic{get\_long} takes the default for a missing key, a null and a

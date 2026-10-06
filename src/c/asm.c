@@ -1440,7 +1440,11 @@ static Yv *asm_quad_err(Yv *line, ylong lno, ylong sec, Yv *offs, Yv *rest) {
 
 static Yv *asm_quad_go(ylong sec, Yv *offs, Yv *rest) {
     /* (split: data-item shape built ONLY here.) */
-    Yv *bytes = le64(ys_tolong(rest));
+    /* parse_num, not ys_tolong: a .quad is a 64-bit bit pattern and the read
+       is meant to be modulo 2^64 (ys_tolong is strtoll, which CLAMPS at the
+       ends of the range instead). It is also the read asm_quad_bad validated,
+       so the two cannot disagree. */
+    Yv *bytes = le64(yv_l(yr_get(parse_num(rest), "v")));
     Yv *item = yr(7, "sec", yv_long(sec), "off", ya_get(offs, sec), "len", yv_long(yv_len(bytes)),
                   "kind", ys("data"), "bytes", bytes, "fix", yav(0), "br", yv_long(-1));
     ya_set(offs, sec, yv_long(yv_l(ya_get(offs, sec)) + yv_len(bytes)));

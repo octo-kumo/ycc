@@ -1051,8 +1051,8 @@ def asm_quad_bad(rest: str) -> bool {
     // every double's pattern reads as a negative long, because that is the sign
     // bit. The old check rejected those, which made a table of IEEE-754
     // constants impossible to write, and a range check cannot replace it either
-    // because tolong wraps at 64 bits (2^63 comes back as -2^63) and the eight
-    // bytes stored are the same ones.
+    // because the READ is parse_num, which accumulates modulo 2^64 (2^63 comes
+    // back as -2^63) and the eight bytes stored are the same ones.
     if (!is_num_text(rest)) { true } else { false }
 };
 
@@ -1063,7 +1063,16 @@ def asm_quad_err(line: str, lno: long, sec: long, offs: [long], rest: str) -> As
 
 def asm_quad_go(sec: long, offs: [long], rest: str) -> AsmContent {
     // (split: data-item shape built ONLY here.)
-    let bytes = enc.le64(tolong(rest)!);
+    //
+    // The value comes from parse_num, the SAME read is_num_text validated, and
+    // not from tolong: tolong requires a fully valid long and answers none
+    // outside the range, so a .quad literal at or past 2^63 would trap here,
+    // where the eight bytes are a bit pattern and the arithmetic is meant to be
+    // modulo 2^64. parse_num accumulates with wraparound, which is exactly that
+    // -- and it is what this read did before tolong became strict. Calling it
+    // twice (once in asm_quad_bad) is the price of not threading the value
+    // through; a .quad is a compile-time directive, not a hot path.
+    let bytes = enc.le64(parse_num(rest).v);
     let item: AsmItem = { sec: sec, off: offs[sec], len: len(bytes), kind: "data", bytes: bytes, fix: [], br: -1 };
     offs[sec] = offs[sec] + len(bytes);
     { err: "", sec: sec, offs: offs, item: item }

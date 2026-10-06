@@ -207,9 +207,12 @@ Consequence: **do your arithmetic in integers.** The shipped
 fixed point for exactly this reason. `test/std/fx.y` is
 the shared integer-math module.
 
-Escape hatch when a float genuinely arises:
-`tolong(tostring(f))` truncates toward zero (`3.7`→`3`, `-3.7`→`-3`),
-but carries only 6 decimals of precision.
+Escape hatch when a float genuinely arises: `tolong(f)` truncates toward
+zero (`3.7`→`3`, `-3.7`→`-3`) and answers `none` for a NaN or a magnitude at
+or past 2^63, where `math.to_int(f)` traps instead. (The
+`tolong(tostring(f))` this used to recommend no longer works at all: the
+string form requires a fully valid number, and a formatted float has a point
+in it.)
 
 **(b) No math functions.** No `sin cos tan asin acos atan atan2
 sqrt exp log log2 log10 pow abs floor ceil round trunc fmod hypot`,
