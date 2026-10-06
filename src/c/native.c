@@ -61,6 +61,7 @@ ylong arch_frame(ylong slots);
 Yv *arch_prelude_lines(void);
 Yv *arch_prelude_threads_lines(void);
 Yv *arch_math_lines(void);
+Yv *w_self_test_lines(void);
 Yv *arch_consts(void);
 /* src/y/types.y */
 Yv *tstr(Yv *t);
@@ -11721,6 +11722,12 @@ Yv *emit_one_fn(Yv *st, Yv *label, ylong fuid, Yv *func, int is_main,
         ;
     }
     if (is_main) {
+        /* The Windows syscall self-test runs BEFORE anything else: its whole
+           point is that a drifted w_sysno number is caught in the first
+           instruction rather than in the first wrong write. */
+        if (target_is_windows()) {
+            body = ir_push(body, F_CALL_L, yv_l(lbl_new(ys("y_w_self_test"))), 0, 0, 0, 0, 0, 0);
+        }
         if (want_argv) {
             /* _start prologue: at process entry %rsp -> [argc][argv0ptr]....
              * argv (char**) is the ADDRESS rsp+8 (lea, not a load!); argc
@@ -13321,6 +13328,15 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
     Yv *keep = yr_get(shaken, "keep");
     Yv *body_refs = yr_get(shaken, "refs");
     Yv *core_lines = arch_prelude_lines();
+    /* The Windows syscall self-test (arch/wselftest.s): no lines off Windows,
+       and on Windows the _start prologue below calls the label it defines. It
+       goes through the prelude so the shaker sees what it references. */
+    Yv *self_test_lines = w_self_test_lines();
+    ylong sti = 0;
+    while (sti < yv_len(self_test_lines)) {
+        core_lines = ya_push(core_lines, ya_get(self_test_lines, sti));
+        sti = sti + 1;
+    }
     int thr = uses_threads(body_refs);
     int mth = uses_math(body_refs);
     Yv *pb = prelude_blocks(prelude_with(core_lines, thr, mth));

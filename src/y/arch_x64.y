@@ -17,6 +17,10 @@ embed W_SYS_ASM from "./arch/wsys.s";
 // The float primitives std/math.y's kernels reach for (`native def`s with no
 // body -- see NATIVE.md, "Backend"), one embedded copy like the rest.
 embed MATH_ASM from "./arch/math.s";
+// The Windows syscall self-test: the probe w_self_test_lines returns, run
+// from _start before anything else on that target. Its own file so GNU as
+// reads it (make asm-check) like the other arch assembly.
+embed WSELFTEST_ASM from "./arch/wselftest.s";
 
 // `text` as prelude lines: one per line, indentation kept (the -S output
 // shows it). Dropped: a whole-line '#' comment (the in-tree assembler treats a
@@ -96,15 +100,17 @@ def w_sysno(name: str) -> long {
     else { -1 }
 };
 
-// The Windows syscall self-test is NOT implemented. The design is in
-// ideas/WINDOWS.md (Risks): one Nt call per class -- memory, file, time,
-// thread -- with its NTSTATUS checked once at program start, so a number that
-// drifted on a different Windows build fails loudly instead of calling some
-// other real Nt function. It is a real gap rather than a postponed detail:
-// w_sysno's numbers are pinned to one ntdll sample and nothing verifies them
-// at runtime. This stub returns no lines, and says so, because a comment that
-// promises a probe nobody runs is worse than no comment.
-def w_self_test_lines() -> [str] { [] };
+// The Windows syscall self-test (ideas/WINDOWS.md W3), its lines in
+// arch/wselftest.s: one Nt call per class -- memory, time, file -- with its
+// NTSTATUS checked once at program start, so a number that drifted on a
+// different Windows build fails loudly instead of calling some other real Nt
+// function. native.y feeds these lines to the prelude (so the shaker keeps
+// y_os_write/y_os_exit for them) and the _start prologue calls
+// y_w_self_test, both on the Windows target only: on Linux this returns no
+// lines and no call is emitted.
+def w_self_test_lines() -> [str] {
+    if (target_is_windows()) { arch_asm_lines(WSELFTEST_ASM) } else { [] }
+};
 
 def arch_fn_label(uid: long, name: str) -> str {
     "yfn_" + uid + "_" + name
@@ -432,7 +438,9 @@ def arch_consts() -> str {
         "ystr_opt_end:",
         "ystr_int: .ascii \"runtime error: a float with no integer part a long holds\\n\"",
         "ystr_int_end:",
+        "ystr_wselftest: .ascii \"runtime error: NT syscall self-test failed (a w_sysno number does not match this Windows build)\\n\"",
+        "ystr_wselftest_end:",
     ], "\n") + "\n"
 };
 
-export { arch_id, arch_word, arch_sysno, arch_fn_label, arch_global_label, arch_loc_label, arch_str_label, arch_header, arch_rodata, arch_text, arch_bss, arch_global_cell, arch_heap_cells, arch_prelude_lines, arch_prelude_threads_lines, arch_math_lines, arch_consts, arch_frame, arch_exit };
+export { arch_id, arch_word, arch_sysno, arch_fn_label, arch_global_label, arch_loc_label, arch_str_label, arch_header, arch_rodata, arch_text, arch_bss, arch_global_cell, arch_heap_cells, arch_prelude_lines, arch_prelude_threads_lines, arch_math_lines, w_self_test_lines, arch_consts, arch_frame, arch_exit };

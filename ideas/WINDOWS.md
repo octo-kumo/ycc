@@ -775,12 +775,20 @@ of which an earlier draft called unsolvable and is not:
   new pass — but two things are not bookkeeping: every emitted function needs a
   `RUNTIME_FUNCTION` entry and the table must cover `.text`, and `RELOCS_STRIPPED`
   does not exempt it.
-- **`w_self_test_lines()` is still unimplemented — the comment no longer pretends
-  otherwise.** The startup self-test was specified (W3) and the numbers are in
-  `arch_x64.y`'s `w_sysno`, but the body returns no lines. The false comment was
-  deleted (both twins now say the probe does not exist and why that is a gap); the
-  probe itself is still open, and until it exists nothing verifies the number table
-  at runtime.
+- **`w_self_test_lines()` — DONE.** The startup self-test runs: its lines are in
+  `src/y/arch/wselftest.s` (embedded, read by GNU `as` like the other arch
+  assembly), `arch_x64.y`'s `w_self_test_lines` returns them on the Windows
+  target only, native.y feeds them through the prelude so the shaker keeps
+  `y_os_write`/`y_os_exit` for them, and the `_start` prologue calls
+  `y_w_self_test` before anything else. One Nt call per class with its NTSTATUS
+  checked -- memory (`NtAllocateVirtualMemory`, `NtProtectVirtualMemory`,
+  `NtFreeVirtualMemory`), time (`NtQueryPerformanceCounter`,
+  `NtQuerySystemTime`, `NtDelayExecution`), file (a zero-length `NtWriteFile`
+  to the PEB's stdout handle) -- and a wrong number prints
+  `runtime error: NT syscall self-test failed ...` to stderr and exits 1.
+  Proved both ways under Wine: a PE prints and exits 0 with the table as
+  pinned, and one with a single check inverted prints the message and exits 1.
+  Nothing is emitted for an ELF, so the Linux output is byte-identical.
 - **An encoder guard against absolute addresses — DONE.** The "no `.reloc`" claim
   rests on nothing ever emitting one, and `enc64.y` has no `movabs` form for a
   relocated address, so an absolute fixup kind would have been written as a
@@ -945,13 +953,15 @@ allocator's growth policy is tuned against.
 5. ~~Which Windows version is the pinned syscall-number target?~~ **Half answered by
    implementation.** The numbers are no longer guesses: every one in `arch_x64.y`'s
    `w_sysno` was read out of a real `ntdll`'s stub rather than written from memory, so
-   the pin is "whatever that `ntdll` was". What is still open — and it is the half that
-   matters — is the **guard**: `w_self_test_lines()` returns `[]` and its comment now
-   says so, but the probe it would emit does not exist, so a `ycc` built against a
-   Windows version whose numbers have drifted would fail silently rather than at
-   startup. Until the self-test exists, "pinned" means "pinned to one unverified
-   sample", and the number-drift risk below is the only thing standing between a wrong
-   number and silently wrong memory or I/O.
+   the pin is "whatever that `ntdll` was". The guard is now in place:
+   `w_self_test_lines()` returns the probe in `src/y/arch/wselftest.s`, and the
+   `_start` prologue calls it before anything else on the Windows target, so a
+   `ycc` built against a Windows version whose numbers have drifted fails loudly
+   at startup ("runtime error: NT syscall self-test failed ...", exit 1) instead
+   of calling some other real Nt function. A number that changes still needs the
+   pin updated -- the probe names the failure, it does not fix the number -- but
+   "pinned" now means "pinned and verified on every run" rather than "pinned to
+   one unverified sample".
 
 ## Landing order
 

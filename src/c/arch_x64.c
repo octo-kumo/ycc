@@ -16,6 +16,10 @@ Y_EMBED(W_SYS_ASM, "src/y/arch/wsys.s")
 /* The float primitives std/math.y's kernels reach for (`native def`s with no
    body -- see NATIVE.md, "Backend"), one embedded copy like the rest. */
 Y_EMBED(MATH_ASM, "src/y/arch/math.s")
+/* The Windows syscall self-test: the probe w_self_test_lines returns, run
+   from _start before anything else on that target. Its own file so GNU as
+   reads it (make asm-check) like the other arch assembly. */
+Y_EMBED(WSELFTEST_ASM, "src/y/arch/wselftest.s")
 
 /* imported */
 /* target.c's res_target / target_is_windows (target.y), the one other module
@@ -130,7 +134,7 @@ static ylong w_sysno(Yv *name) {
    external linkage keeps the twin honest; leaving it out of the header keeps
    the header matching the Y export list exactly. */
 Yv *w_self_test_lines(void) {
-    return yav(0);
+    if (target_is_windows()) { return arch_asm_lines(WSELFTEST_ASM()); } else { return yav(0); }
 }
 
 Yv *arch_fn_label(ylong uid, Yv *name) {
@@ -259,6 +263,8 @@ Yv *arch_consts(void) {
     lines = ya_push(lines, ys("ystr_opt_end:"));
     lines = ya_push(lines, ys("ystr_int: .ascii \"runtime error: a float with no integer part a long holds\\n\""));
     lines = ya_push(lines, ys("ystr_int_end:"));
+    lines = ya_push(lines, ys("ystr_wselftest: .ascii \"runtime error: NT syscall self-test failed (a w_sysno number does not match this Windows build)\\n\""));
+    lines = ya_push(lines, ys("ystr_wselftest_end:"));
     return ys_cat(ys_join(lines, ys("\n")), ys("\n"));
 }
 

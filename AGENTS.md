@@ -25,7 +25,17 @@ same semantics.
   Linux `cycc`'s, diagnostics and `-S` listing included (`-g` is not compared
   across hosts — DWARF records the host's own absolute path). Meta fixtures
   are the known gap (the M1 runner forks and maps a memfd). Not in
-  `make test`.
+  `make test`. The `--target=windows` PE path is gated by
+  `test/sh/pe-gate.sh` (a PE loads and runs under wine, and its output must
+  not contain the startup self-test's message), `pe-packinv.sh` (a PE from the
+  std pack and one from `--std-src` are identical, 230/230) and
+  `pe-fixtures.sh` (every `t*.y` fixture run both ways; four `ELF-OUTPUT-DIFF`
+  baseline failures are pre-existing). A PE runs the W3 syscall self-test at
+  startup — `src/y/arch/wselftest.s`, returned by `w_self_test_lines` and
+  called from the `_start` prologue on that target only — so a `w_sysno`
+  number that drifted on another Windows build prints `runtime error: NT
+  syscall self-test failed ...` and exits 1 instead of calling some other real
+  Nt function. Nothing is emitted for an ELF.
 - `make ytest` → `./ytest`, the test/metrics runner written in Y
   (`src/tools/ytest/README.md`): `./ytest suites` times each `test/sh` suite,
   `./ytest coverage` reports gcov line coverage of the C copy over a corpus,

@@ -28,6 +28,7 @@ Yv *arch_heap_cells(void);
 Yv *arch_prelude_lines(void);
 Yv *arch_prelude_threads_lines(void);
 Yv *arch_math_lines(void);
+Yv *w_self_test_lines(void);
 Yv *arch_consts(void);
 ylong arch_frame(ylong slots);
 Yv *arch_exit(void);

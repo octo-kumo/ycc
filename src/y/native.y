@@ -10130,6 +10130,12 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
         if (is_main) { body = ir_loc(body, 0); } else { body = ir_loc(body, func.line); };
     }
     if (is_main) {
+        // The Windows syscall self-test runs BEFORE anything else: its whole
+        // point is that a drifted w_sysno number is caught in the first
+        // instruction rather than in the first wrong write.
+        if (target_is_windows()) {
+            body = insn.ir_push(body, insn.F_CALL_L, lbl_new("y_w_self_test"), 0, 0, 0, 0, 0, 0);
+        };
         if (want_argv) {
             // _start prologue: at process entry %rsp -> [argc][argv0ptr]....
             // argv (char**) is the ADDRESS rsp+8 (lea, not a load!); argc is
@@ -11429,6 +11435,10 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
     let keep = shaken.keep;
     let body_refs = shaken.refs;
     let core_lines = check_os_call_names(arch.arch_prelude_lines());
+    // The Windows syscall self-test (arch/wselftest.s): no lines off Windows,
+    // and on Windows the _start prologue below calls the label it defines. It
+    // goes through the prelude so the shaker sees what it references.
+    core_lines += arch.w_self_test_lines();
     let thr = uses_threads(body_refs);
     let mth = uses_math(body_refs);
     let pb = prelude_blocks(prelude_with(core_lines, thr, mth));

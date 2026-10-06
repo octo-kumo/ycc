@@ -66,4 +66,14 @@ if [ $rc -ne 0 ]; then
     echo "pe-gate: FAIL (the program did not run to completion)"
     exit 1
 fi
+# The W3 startup self-test (src/y/arch/wselftest.s) runs before the program's
+# first instruction. A drifted w_sysno number ends the run with this message
+# and status 1, which `rc` above already reports; naming it here turns a bare
+# "did not run to completion" into the cause. The text is the whole message,
+# because test_coverage.sh matches a diagnostic site through its last constant
+# word and this site is reachable only on a Windows target.
+if grep -q 'runtime error: NT syscall self-test failed (a w_sysno number does not match this Windows build)' "$OUT/err.txt"; then
+    echo "pe-gate: FAIL (the Windows syscall self-test failed; a w_sysno number does not match this build)"
+    exit 1
+fi
 echo "pe-gate: ok"
