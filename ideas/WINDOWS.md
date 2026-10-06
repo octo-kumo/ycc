@@ -433,6 +433,122 @@ tested `syscall(8, 0, 0 - unread, 1) >= 0`), `src/y/std/rt.y:210` (`r < 0`, `wai
 comparisons move into one layer, which is the single place the polarity then has to
 be right; a `js`→`jns` sweep is not enough, because a reversed check is silent.
 
+### File I/O is Y, not assembly: the design, proven
+
+`std/fs.y` is the only std unit that never adopted the named-syscall layer
+(18 raw `syscall(` sites), and it is what stops `ycc.exe`. The obvious port is
+thirteen hand-written assembly entry points. **That is not necessary**, and
+knowing why changes the size of the phase.
+
+A Y program can build the NT structures itself and call the kernel with the
+`syscall` intrinsic, because `gen_syscall` already implements the Win64
+register layout (arg1 `%r10`, arg2 `%rdx`, arg3 `%r8`, arg4 `%r9`, arg5+
+at `40(%rsp)` upwards). So the whole of NT file I/O is:
+
+* `UNICODE_STRING` {Length u16, MaximumLength u16, pad, PWSTR at +8} — 16 bytes
+* `OBJECT_ATTRIBUTES` {Length=48, RootDirectory, ObjectName, Attributes,
+  SecurityDescriptor, SecurityQualityOfService} — 48 bytes
+* `IO_STATUS_BLOCK` {Status, Information} — 16 bytes, and `Information` is
+  where `NtReadFile`/`NtWriteFile` return the byte count
+
+all written into one `[byte]` buffer with `put16`/`put32`/`put64` helpers
+(`&b[0]` is the pointer; note `[byte; N]` does NOT pass as `[byte]`, so the
+buffer must be built dynamically).
+
+**Measured, under wine, from a program compiled by `ycc --target=windows`:**
+
+```
+  \??\Z:\home\yun\...\Makefile
+  NtOpenFile   status = 0x0000000000000000    handle = 0x0000000000000038
+  NtReadFile   status = 0x0000000000000000    bytes read = 64
+  first line: def main(args: [str]) ->
+```
+
+and a missing file gives `0xC0000034` STATUS_OBJECT_NAME_NOT_FOUND with the
+read then failing `0xC0000008` STATUS_INVALID_HANDLE on the handle that was
+never filled. So open-then-read works end to end from Y, and the failure path
+is a real NTSTATUS rather than a fabricated error.
+
+**A finding that changes the size of the port: argv hands over WINDOWS paths.**
+The object name above arrived at `NtOpenFile` as `Z:\home\yun\...`, which is
+`args[1]` after exactly two steps: the loader rewrote the Unix path in the
+command line into DOS form, and the code prefixed `\??\`. In other words a
+user's path arguments -- the ones `ycc` is actually invoked with -- need no
+`/`-to-`\` conversion on a PE at all, because by the time `argv` returns them
+they are already Windows paths. That is most of the work `fs.y`'s path handling
+would otherwise carry, and it is why the probe handles the two forms
+separately instead of assuming one.
+
+The consequence for `fs_at_cwd()` is the same shape as on Linux: `-100` means
+"resolve against the process's current directory" there, and here it means
+"resolve against `RTL_USER_PROCESS_PARAMETERS.CurrentDirectory`" -- which is
+what a relative object name does by default. **Measured:** a *relative*
+`\??\ideas\ntfile_probe.y` returns `0xC000003A`
+STATUS_OBJECT_NAME_INVALID, so a relative path does need its directory made
+absolute first (from the PEB's `CurrentDirectory`, which is the answer to the
+"chdir/getcwd have no NT equivalent" problem) -- or an
+`OBJECT_ATTRIBUTES.RootDirectory` handle. That is the one place the
+`fs_at_cwd()` design is not free.
+
+Four things cost a cycle each and are worth writing down, because each one
+looks like a bug in the port rather than in the caller:
+
+* **The access mask must be computed, not recalled.** `FILE_GENERIC_READ` is
+  `0x120089` = **1179785**. A mask typed from memory (1183881) produced
+  `STATUS_INVALID_PARAMETER` and looked like a structural bug.
+* **The NT namespace prefix is `\??\`** -- one backslash before `??`. Two
+  gives STATUS_OBJECT_PATH_NOT_FOUND (0xC0000033), none at all gives
+  STATUS_OBJECT_NAME_INVALID (0xC000003A), and `Z:` needs its own trailing
+  separator or the same invalid-name status. Build all of it with `chr(92)`:
+  a shell passing the path through eats `\t` and `\n`.
+* **`FILE_DIRECTORY_FILE` (0x1) is NOT "not a directory".** Passing options
+  `33` (which includes it) gives `0xC0000103` STATUS_NOT_A_DIRECTORY for a
+  perfectly good file. A regular file wants
+  `FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE` = `0x20|0x40` = 96.
+* **`NtCreateFile` cannot be called from Y at all.** It takes 11 arguments,
+  and the intrinsic's Windows ceiling is 10 (`maxargs` in types.y:3955,
+  already target-dependent). So the ceiling has to rise to 12, OR every create
+  path goes through an assembly wrapper. `NtOpenFile` takes 6 and is inside
+  the ceiling today, which is why the proof above could use it -- and read-only
+  paths (which is most of what `ycc.exe` needs to compile one file) do not
+  need `NtCreateFile` at all.
+
+**What this means for the layer.** `os_call` does not have to be the *only*
+mechanism, but the discipline it enforces is the right one: a `y_os_*` label
+whose two halves are (Linux) a syscall stub and (Windows) a Y-visible helper
+with the NT number baked in. `wsys.s` already proves a block can call a `y_`
+def by its bare label, so the Windows half can be Y with the number resolved
+at link time -- which is what keeps the number out of std and the std pack
+target-free, and it is what makes `pe-packinv` stay at 210/210.
+
+**The numbers, verified rather than written from memory.** Read out of a real
+ntdll's export table (1479 names, 1202 code RVAs), each one's syscall stub
+decoded; the eight already in `w_sysno` are all confirmed, which is the check
+that the method is sound:
+
+| | | | |
+|---|---|---|---|
+| 6 NtReadFile | 8 NtWriteFile | 15 NtClose | 17 NtQueryInformationFile |
+| 24 NtAllocateVirtualMemory | 30 NtFreeVirtualMemory | 39 NtSetInformationFile | 44 NtTerminateProcess |
+| 49 NtQueryPerformanceCounter | 51 **NtOpenFile** | 52 NtDelayExecution | 53 NtQueryDirectoryFile |
+| 57 NtFsControlFile | 61 NtQueryAttributesFile | 73 NtQueryVolumeInformationFile | 75 NtFlushBuffersFile |
+| 80 NtProtectVirtualMemory | 85 **NtCreateFile** | 88 NtOpenDirectoryObject | 90 NtQuerySystemTime |
+| 125 NtCreateDirectoryObject | 147 NtDeleteFile | 196 NtQueryFullAttributesFile | |
+
+The thirteen in bold-adjacent set that `w_sysno` does not yet carry:
+NtOpenFile 51, NtCreateFile 85, NtQueryInformationFile 17, NtSetInformationFile
+39, NtQueryDirectoryFile 53, NtQueryAttributesFile 61,
+NtQueryFullAttributesFile 196, NtDeleteFile 147, NtFsControlFile 57,
+NtFlushBuffersFile 75, NtQueryVolumeInformationFile 73,
+NtCreateDirectoryObject 125, NtOpenDirectoryObject 88.
+
+`RtlDosPathNameToNtPathName_U` and the other Rtl helpers are **exported but
+have no syscall stub** in this ntdll, so they are not reachable by number --
+another reason the `\??\` prefix is built by hand above.
+
+The working proof is kept as `ideas/ntfile_probe.y`: a self-contained program
+that opens and reads a file with no imports and no new arch code.
+
 ### The per-thread block pointer moves out of TLS
 
 `%fs:24` (`src/y/arch/prelude.s:345`, `:403`; `src/y/arch/threads.s:51`, `:179`) has no clean Windows
