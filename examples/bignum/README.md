@@ -504,7 +504,7 @@ these is a compiler bug, and none is filed here.**
 
 ## Toolkit: none vendored
 
-**No file from `examples/_toolkit/` is present, and none is needed.** Confirmed
+**No file from `test/std/` is present, and none is needed.** Confirmed
 rather than assumed: the folder contains exactly three sources (`bignum.y`,
 `bn.y`, `check.y`), the only imports in all three are `bn` and `check` (this
 folder's own modules) plus `fs` — a **std** module from the compiler's own std

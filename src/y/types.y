@@ -1669,6 +1669,15 @@ def tci_note(node: Node, t: Type) {
         // Only when the index is on, so a real compile pays nothing: this is
         // inside tci_note, which typeof_expr does not even call.
         let nk = node.k;
+        if (nk == K.decl) {
+            // A `let`/`def` records its type at its NAME's position as well as the
+            // keyword's, for the same reason a member access does: the keyword is
+            // where the node sits and the name is where a cursor goes. Without this
+            // a hover on `b` in `let b = 1` showed the name and nothing else, while
+            // a hover on a USE of `b` showed `long` -- the same name, two answers.
+            let d: Decl = node;
+            if (d.nline > 0 && d.ncol > 0) { tci_note_key(d.nline * 65536 + d.ncol, t); };
+        };
         if (nk == K.dot) {
             let d: Dot = node;
             if (d.nline > 0 && d.ncol > 0) { tci_note_key(d.nline * 65536 + d.ncol, t); };
@@ -3246,7 +3255,31 @@ def typeof_fmt(st: TcSt, node: Call) -> TcRes {
     tc_res(type_node({ k: K.tstr }), st)
 };
 
+// The call's own type, recorded at the CALLEE's position when the index is on.
+//
+// An intrinsic is matched by name inside the body below, so its callee identifier
+// is never an expression and `typeof_expr` never visits it -- which is why hovering
+// `clock_us` showed nothing at all while hovering a call's RESULT showed its type
+// perfectly. The return type is what is recorded, because that is what the name
+// means to a reader at that position; the argument types are in the manual and in
+// the compiler, and inventing a signature string here would be a second copy of
+// knowledge that already exists.
 def typeof_call(st: TcSt, node: Call) -> TcRes {
+    let r = typeof_call_go(st, node);
+    if (tc_index) {
+        let callee: Node = node.callee;
+        // A DOT callee records its own function type at the key's position in the
+        // `!id` arm below, where the signature is known; here only an id is filled
+        // in, so the two do not fight over one key.
+        if (callee.k == K.id) {
+            let leaf: Leaf = callee;
+            if (leaf.line > 0 && leaf.col > 0) { tci_note_key(leaf.line * 65536 + leaf.col, r.typ); };
+        };
+    };
+    r
+}
+
+def typeof_call_go(st: TcSt, node: Call) -> TcRes {
     // Two callee shapes: a plain id (the `else` arm below — a hoisted def,
     // an intrinsic, `self`, or a local holding a closure) and an arbitrary
     // expression (the `if` arm — an immediately-invoked literal, an element
@@ -3276,6 +3309,23 @@ def typeof_call(st: TcSt, node: Call) -> TcRes {
             cf = typeof_expr(st, ccal);
         };
         st = cf.st;
+        // A member call's own type, at the member NAME's position -- so hovering
+        // `exp` in `math.exp(0.0)` answers rather than showing nothing. Before this,
+        // `math.pi` answered `float` (a constant needs no extern) while every
+        // imported FUNCTION answered nothing, which is the shape of a bug that reads
+        // as "imports are not typed" and is really "calls are not indexed".
+        //
+        // The SIGNATURE, because the field's own type IS the function type here and
+        // it is what the name means. Recording the call's RETURN type instead made
+        // `mk` hover as `{ a: long, b: str }` -- the record `mk(1, "x")` produces --
+        // which reads as though `mk` were that record. An intrinsic has no such
+        // object (it is matched by name), so the id arm in `typeof_call` records its
+        // return type, which is the whole of what the checker knows about it; the
+        // asymmetry is the honest one and both are the checker's own answer.
+        if (tc_index && ccal.k == K.dot && !smeth) {
+            let cdot: Dot = ccal;
+            if (cdot.nline > 0 && cdot.ncol > 0) { tci_note_key(cdot.nline * 65536 + cdot.ncol, cf.typ); };
+        };
         if (smeth) {
             let dot: Dot = ccal;
             typeof_method(st, node, dot.key)
@@ -4298,6 +4348,11 @@ def typeof_def(st: TcSt, name: str, func: Func, line: long, col: long, nline: lo
         // whatever shape the env holds for `func`).
         let fparams: [str] = func.params;
         let fptypes: [Type] = func.ptypes;
+        // Each parameter NAME's own position, when the parser recorded it. Empty
+        // for a hand-built Func, and then the binding falls back to the def's own
+        // position -- which is the imprecision, not a silent wrong answer, because
+        // the name is still bound and every use still resolves.
+        let fpos: [long] = func.ppos;
         let i = 0;
         let ok = true;
         while (i < len(fparams)) {
@@ -4357,9 +4412,25 @@ def typeof_def(st: TcSt, name: str, func: Func, line: long, col: long, nline: lo
         st = st_fdepth(st, saved_depth + 1);
         let j = 0;
         while (j < len(fparams)) {
-            // A parameter has no node of its own -- the Func's is the nearest thing, and
-            // its name token is at the parameter list, which the parser does not keep.
-            st = st_bind(st, fparams[j], args[j], "param", nline, ncol);
+            // The binding's position is the FUNCTION's, because a parameter has no
+            // node of its own -- but the parser does now keep each name's own
+            // position (`Func.ppos`), and that is where a hover, a semantic token
+            // and a go-to-definition all need to point. Binding at `nline`/`ncol`
+            // was the one thing `Binding.line/col` could not answer, and it is why
+            // hovering a parameter's own name showed nothing.
+            let pl = nline;
+            let pc = ncol;
+            if (j < len(fpos) && fpos[j] > 0) {
+                pl = fpos[j] / 65536;
+                pc = fpos[j] % 65536;
+            };
+            st = st_bind(st, fparams[j], args[j], "param", pl, pc);
+            // And into the type index, at the name's own position. A parameter is
+            // a bare string in `Func.params`, so there is no node for `typeof_expr`
+            // to visit and nothing else would ever record it -- which is why
+            // hovering the `p` in `def g(p: P)` showed nothing while hovering a USE
+            // of `p` showed `P`.
+            if (tc_index) { tci_note_key(pl * 65536 + pc, args[j]); };
             j = j + 1;
         };
         st = st_self(st, ft);

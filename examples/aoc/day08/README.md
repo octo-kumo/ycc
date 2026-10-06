@@ -360,7 +360,7 @@ language facts, each handled in the code rather than papered over:
 | `day08` | the built binary (gitignored by the repo's rules) |
 
 **Toolkit: none vendored.** This example needs no file from
-`examples/_toolkit/` and no std unit beyond `fs` — no `fx.y` (all arithmetic
+`test/std/` and no std unit beyond `fs` — no `fx.y` (all arithmetic
 is integer, no trig), no `tui` (no terminal drawing, nothing timed
 in-process), no `args` (the four flags are a 30-line hand-rolled loop). Nothing is
 edited and nothing is imported across folders; `day08.y` imports only `fs` from

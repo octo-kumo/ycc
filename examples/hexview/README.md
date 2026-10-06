@@ -477,7 +477,7 @@ Named rather than left implied:
 
 * **The vendored toolkit.** `inject.py` mutates only `hx.y` and `hexview.y`. A
   defect in `tui` or `args` is out of scope by
-  construction — they are byte-identical copies of `examples/_toolkit/` and must
+  construction — they are byte-identical copies of `test/std/` and must
   not be edited. `pty_check.py` exercises them heavily but cannot attribute a
   failure to them.
 * **`struct`'s readers are an oracle, not a subject.** §5 checks `struct` against
@@ -542,7 +542,7 @@ Two shapes worth calling out:
 
 ## The std units this uses
 
-Copied byte-identical from `examples/_toolkit/` with `cp`, never edited:
+Copied byte-identical from `test/std/` with `cp`, never edited:
 
 `fx.y` is **not** vendored: a hex editor does trigonometry and square roots
 never. Nothing in this folder imports across folders.

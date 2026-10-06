@@ -386,9 +386,9 @@ checked rather than assumed (§3 of `ORCHESTRATOR.md`).
 
 | file | sha256 (prefix) | lines | what it is used for |
 |---|---|---|---|
-| `fx.y` | `4b47a9bfef0c1e30` | 687 | integer fixed point: `ONE`, `sin`, `cos`, `isqrt`, `abs`, `TWO_PI`. No floats, no state, no allocation |
+| `fx.y` | `4b47a9bfef0c1e30` | 694 | integer fixed point: `ONE`, `sin`, `cos`, `isqrt`, `abs`, `TWO_PI`. No floats, no state, no allocation |
 
-**Vendored unmodified from `examples/_toolkit/` — all five are byte-identical to
+**Vendored unmodified from `test/std/` — all five are byte-identical to
 the canonical copies.** Nothing in this folder edits any of them. Where the
 toolkit's behaviour was not what this program needed, the workaround is a
 separate file next to it: `textout.y` is copied from `examples/donut/textout.y`

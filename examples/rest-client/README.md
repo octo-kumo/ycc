@@ -459,14 +459,14 @@ it was std's `json` that replaced it. `json.as_bool`, `json.parse_err` and
 
 ## Frozen toolkit
 
-Vendored from `examples/_toolkit/`, byte-identical, **not edited**:
+Vendored from `test/std/`, byte-identical, **not edited**:
 
 ```
 cdac36da1cf2cd8551bd06b1bf2a7b608736bc55106e64f5be3b7aa9332e9d28
 cdac36da1cf2cd8551bd06b1bf2a7b608736bc55106e64f5be3b7aa9332e9d28
 ```
 
-Toolkit revision frozen: `examples/_toolkit` at tree commit `a42992c`.
+Toolkit revision frozen: `test/std` at tree commit `a42992c`.
 `jint.y`, `server.y` and `store.y` are this example's own.
 
 ## The pinned compiler

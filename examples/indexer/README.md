@@ -138,7 +138,7 @@ python3 gen_tree.py              # regenerate data/tree
 
 ## No toolkit is vendored
 
-`examples/_toolkit/` holds `fx.y tui tui args tui. **This folder
+`test/std/` holds `fx.y tui tui args tui. **This folder
 vendors none of them, and that is deliberate, not an omission.**
 
 - `tui` — indexer does not own a terminal in the raw-mode sense; it takes

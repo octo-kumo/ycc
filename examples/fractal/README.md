@@ -891,12 +891,12 @@ right; see the section above for what item 8 now reports.
 
 ## The std units this uses
 
-Vendored byte-identical from `examples/_toolkit/` and **not edited** (the folder
+Vendored byte-identical from `test/std/` and **not edited** (the folder
 contract, `ORCHESTRATOR.md` §4):
 
 | file | sha256 prefix | lines |
 |---|---|---|
-| `fx.y` | `4b47a9bfef0c1e30` | 687 |
+| `fx.y` | `4b47a9bfef0c1e30` | 694 |
 
 ```sh
 cd examples/fractal && sha256sum fx.y tui tui tui args
@@ -911,7 +911,7 @@ cd examples/fractal && sha256sum fx.y tui tui tui args
 > `4b47a9bfef0c1e30…`. std `tui` and `args`
 > did not move. The two shas above are what this folder is built and verified
 > against now, and `sha256sum` in this folder reports the same thing as
-> `sha256sum` in `examples/_toolkit/` — which is the check worth running after
+> `sha256sum` in `test/std/` — which is the check worth running after
 > any re-vendor. See *The toolkit bug that was here, and what happened*.
 
 ---

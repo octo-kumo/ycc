@@ -34,8 +34,8 @@ def ok(cond: bool, name: str, detail: str) {
     };
 };
 
-def eq(got: long, want: long, name: str) {
-    ok(got == want, name, "got " + tostring(got) + ", want " + tostring(want));
+def eq(got: long, exp: long, name: str) {
+    ok(got == exp, name, "got " + tostring(got) + ", want " + tostring(exp));
 };
 
 // A deterministic synthetic scene: box border, a per-cell glyph and
@@ -201,10 +201,10 @@ eq(tui.shade_half(6, 10), 9604, "shade_half(6) is ▄");
 // monotonic in codepoint order even though it is in coverage. That is
 // exactly what the previous suite misread.
 let blk = true;
-let want: [long] = [32, 9617, 9618, 9619, 9608];
+let want_cps: [long] = [32, 9617, 9618, 9619, 9608];
 k = 0;
 while (k <= 4) {
-    if (tui.shade_blocks(k * 10 / 5, 10) != want[k]) { blk = false; };
+    if (tui.shade_blocks(k * 10 / 5, 10) != want_cps[k]) { blk = false; };
     k = k + 1;
 };
 ok(blk, "shade_blocks matches its documented ramp", "table mismatch");

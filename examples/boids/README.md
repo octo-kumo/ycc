@@ -370,7 +370,7 @@ pty.
 
 ## The vendored toolkit — frozen, copied, never edited
 
-Copied byte-identical with `cp` from `examples/_toolkit/` and **not modified**:
+Copied byte-identical with `cp` from `test/std/` and **not modified**:
 
 | file | sha256 |
 |---|---|

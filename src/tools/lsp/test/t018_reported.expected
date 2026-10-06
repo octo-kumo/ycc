@@ -1,0 +1,62 @@
+-- 1. a DECLARATION's own name answers, not only a use of it
+b, at `let b`: ```y|long|```||```y|b|```
+b, at its use on line 12: ```y|long|```||```y|b|```
+r, at `let r`: ```y|long|```||```y|r|```
+t, at `let t`: ```y|long|```||```y|t|```
+d, at `let d`: ```y|long|```||```y|d|```
+p, at its own parameter declaration: { a: long, b: str }
+p, at its use: ```y|{ a: long, b: str }|```||```y|p: P|```
+name, a parameter of show: str
+f, a parameter typed as a FUNCTION: () -> long
+-- 2. a BUILTIN answers
+clock_us: long
+clock_us, in the subtraction: long
+len: long
+print: void
+clock_us, painted as a builtin: builtin
+len, painted as a builtin: builtin
+-- 3. an f-string is sub-tokenized, not one blob
+line 15: 5 spans, 26 tokens
+name inside the interpolation: variable
+its format spec `:`, `<`: punctuation/NO-SUCH-COLUMN
+its width `14`: number
+us, the second interpolation: variable
+the literal ` ns/call` stays a string: string
+the opening f": string
+a brace: punctuation/NO-SUCH-COLUMN
+print, outside the string: builtin
+line 20, a plain string: 10 spans, 10 tokens
+line 18, a comment: 1 spans, 1 tokens
+-- 4. the language's TYPE NAMES are painted as types
+long, a return type: type
+str, a parameter type: type
+float, a parameter type: type
+P, an alias: type
+a `long` that is a variable: variable
+a field of a record type: variable
+-- 5. a comment is ONE token, so nothing inside it is highlighted
+the comment's span: comment
+a bracket inside it: comment
+its closing bracket agrees: comment
+a paren inside it agrees too: comment/comment
+#strings comes before #comments: true
+at 178 and 219
+the `//` in line 19's string scans as a string: string
+-- 6. an IMPORTED name answers
+exp of math.exp, at the call: float
+e, bound from an import: ```y|float|```||```y|e|```
+math itself: ```y|math|```
+the import statement's own name: ```y|math|```
+-- 7. completion after a `.` is the object's OWN members
+math. offers 170 items: min,max,abs,clamp,sign,gcd
+  string methods wrongly among them: none
+z. (a record literal) offers: z
+a. (a record variable) offers: a
+p. (a parameter) offers: a,b
+and a str offers 26 items: split,join,trim,strip,trim_start,lstrip, all of them its own
+-- and the NON-answers, which are the other half of the rule
+hovering inside a string literal: ""
+hovering a line that is not there: true
+hovering an import's own name: ""
+tokens outside the legend: 0 of 215
+done

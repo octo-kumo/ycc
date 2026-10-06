@@ -8,7 +8,7 @@ split on line 11: 14
 a needle the buffer does not have: -1
 -- a hover shows the type the checker inferred
 p, where it is READ: ```y|{ a: long, b: str }|```||```y|p: P = mk(1, "x"|```
-p, where it is BOUND: ```y|p: P = mk(1, "x"|```
+p, where it is BOUND: ```y|{ a: long, b: str }|```||```y|p: P = mk(1, "x"|```
 mk: ```y|mk(a: long, b: str) -> P|```
 -- an expression that is not a name still has a type
 the 1 of 1 + 2: ```y|long|```

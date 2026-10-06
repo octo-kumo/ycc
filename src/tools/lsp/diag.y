@@ -214,13 +214,35 @@ def diagnose(text: str, dir: str, path: str, pack: str, wlevel: long) -> [Findin
 // rather than guessed from the splice order, because a program can import the
 // same module twice, nest imports, or have an import whose own source declares
 // things -- the order is an implementation detail and the map is the truth.
-type Prepared = { names: [str], lines: { str => long }, files: { str => str }, mine: [long] };
+// `self_path` is the buffer's own path, so "which of these names came from
+// somewhere else" is answerable: `files` maps every spliced top-level name to its
+// origin file, and a module's members are the ones that are not this file's.
+//
+// `units` is every linked unit the buffer asked for, with each one's `exports`
+// (`Sym` = name, label, type) already compiled. It is here because a module's
+// members are the ONLY complete answer to "what can follow this `.`", and the LSP
+// had no way to get them: `names`/`files` cover the buffer's own path imports and
+// nothing else, so `math.` fell through to the string methods.
+//
+// The units come from the SAME `std_units(nr.std, pack)` call the checker needs,
+// so this is the list that was loaded anyway rather than a second load.
+type Prepared = { names: [str], lines: { str => long }, files: { str => str }, mine: [long], units: [Unit], self_path: str };
 
 // The prepared index for `text`, or none when it cannot be resolved -- a missing
 // import, an unterminated literal, a path that does not exist. None is the
 // honest answer in each case, and it is not an error: `diagnose` reports those
 // separately and says so.
-def xref_for(text: str, dir: str, path: str) -> Prepared? {
+// `pack` is the std pack, or "" to compile the std units from source -- the same
+// argument `diagnose` takes, and for the same reason it matters here too.
+//
+// It used to be `externs_none()`, i.e. the checker was asked about the spliced
+// program with NO std units linked. Every std name therefore came back
+// "undefined function", every expression that used one got `tunk` instead of a
+// type, and the consequence reached the editor: hovering `math.exp` showed
+// nothing, because there was no type to show. The diagnostics path was right all
+// along -- `diagnose` has always passed the real `externs_for(su, nr.std)` -- so
+// the two disagreed about the same buffer, which is worse than either being wrong.
+def xref_for(text: str, dir: str, path: str, pack: str) -> Prepared? {
     let out: Prepared? = none;
     let rp = scan.repair(text);
     if (len(rp.bad) == 0) {
@@ -249,6 +271,7 @@ def xref_for(text: str, dir: str, path: str) -> Prepared? {
             // save. Binding it to a name would only have made the compiler warn.
             let ast3: Block = rename.rename_program_x2(ast2, [], nr.origin.file, nr.origin.mods).ast;
             let x = xref.tops_of(ast3);
+            let units = std_units(nr.std, pack);
             let mine = xref.own_lines(
                 xref.nlines(nr.src),
                 xref.nlines(rp.text),
@@ -269,7 +292,7 @@ def xref_for(text: str, dir: str, path: str) -> Prepared? {
             // expr_type() reads it from -- so the LSP never copies a type, it
             // asks the checker for the one it already computed.
             type_index_on();
-            let errs = check_program(ast3, externs_none().ext);
+            let errs = check_program(ast3, externs_for(units, nr.std));
             type_index_off();
             // The errors themselves are diagnose()'s job; xref_for only wants the
             // side effect. A buffer that does not type-check still navigates and
@@ -277,7 +300,7 @@ def xref_for(text: str, dir: str, path: str) -> Prepared? {
             // refusing to answer because of them would make the editor feel broken
             // in exactly the situation where a person is trying to fix it.
             let _ = errs;
-            out = some({ names: names, lines: lines, files: files, mine: mine });
+            out = some({ names: names, lines: lines, files: files, mine: mine, units: units, self_path: path });
         };
     };
     out

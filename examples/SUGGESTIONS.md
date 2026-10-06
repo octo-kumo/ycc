@@ -205,7 +205,7 @@ term.enter_alt_screen();
 **Costs** One more std unit, and the same shape as the existing ones
 — Y source, no compiler change. It is the least risky item on this
 list and the one with the widest reach: every terminal example in
-the backlog depends on it, and `examples/_toolkit/term.y` is where
+the backlog depends on it, and `test/std/term.y` is where
 the shared, tested version lives today.
 
 ## 4. A checked integer parse — `tolong` that answers `none` instead of guessing
@@ -222,7 +222,7 @@ that takes `--seed=N`, `--width=N`, `--iters=N` or `--zoom=N` has to
 write its own whole-string validator to get an error instead of a wrong
 answer, and there is nothing in the language to build it on.
 
-Today — `examples/_toolkit/args.y` carries this scanner, and so will
+Today — `test/std/args.y` carries this scanner, and so will
 every example that vendors a copy of it:
 
 ```y
@@ -312,7 +312,7 @@ is exactly the kind of transposition that reads as "the keyboard does not
 work" with nothing printed.
 
 Today — every out-parameter buffer is a hand-rolled `[byte; 64]` plus manual
-little-endian packing, and `examples/_toolkit/term.y` carries ~40 lines of
+little-endian packing, and `test/std/term.y` carries ~40 lines of
 `rd16`/`rd32`/`wr32` helpers and a comment block about which offsets are
 right precisely so that forty example folders do not each rediscover them.
 `poll(2)`/`select(2)` cannot be used for a millisecond-resolution timed read
@@ -1924,7 +1924,7 @@ false for a real HELP request and true for a declared one — a distinction
 nothing documents. The trap is that the correct code and the code that
 silently drops `--help` look identical, and both exit 0.
 
-This cost the campaign a deferral. `examples/_toolkit/args.y` is the file a
+This cost the campaign a deferral. `test/std/args.y` is the file a
 toolkit author opens first, and the behaviour was written down only in
 `args_test.y` checks 6e–6h, where it is testable but where nobody reads. It
 is now documented in `args.y`'s own header as well, and `args.y` was
@@ -1956,7 +1956,7 @@ recommendation is **B first**, then A once the escape hatch exists.
 
 ### Workarounds
 
-`examples/_toolkit/args.y` documents it in the header, and `args_test.y`
+`test/std/args.y` documents it in the header, and `args_test.y`
 checks 6e–6h pin all four statements in both directions, so a change to the
 behaviour fails the suite rather than passing unnoticed.
 
@@ -2206,7 +2206,7 @@ deletes nine files and one concept.
 `str`, `regex` and `rt`, which are all layered on `rt.y`. The real design
 question is the cell representation: `Surface` currently stores four parallel
 planes *and* packs colour into one long, and a std unit should pick one and say
-why. `examples/_toolkit/fb.y` is the tested version (41 assertions).
+why. `test/std/fb.y` is the tested version (41 assertions).
 
 ## 26. An `args` module — flag parsing, so no program writes one
 
@@ -2237,7 +2237,7 @@ lets `--help` be generated from the same data the parser reads, which is
 exactly the invariant #23 says is unenforced.
 
 **Costs** One std unit. It has no dependencies, touches no syscall, and is
-already 24 functions with a test suite (`_toolkit/args_test.y`, 61
+already 24 functions with a test suite (`test/std/args_test.y`, 61
 assertions). This is the lowest-risk item on the list.
 
 ## 27. A `time` module — the clock, a pacer, and an fps meter

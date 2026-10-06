@@ -123,6 +123,7 @@ static Yv *typeof_expr(Yv *st, Yv *node);
 static Yv *incdec_check(Yv *st, Yv *node, Yv *tt);
 static Yv *opassign_check(Yv *st, Yv *node, Yv *tt, Yv *vt);
 static Yv *typeof_call(Yv *st, Yv *node);
+static Yv *typeof_call_go(Yv *st, Yv *node);
 static Yv *typeof_block(Yv *st, Yv *node);
 static Yv *typeof_block_want(Yv *st, Yv *node, Yv *want);
 static Yv *typeof_want(Yv *st, Yv *node, Yv *want);
@@ -2075,6 +2076,15 @@ static void tci_note(Yv *node, Yv *t) {
          * Only when the index is on, so a real compile pays nothing: this is
          * inside tci_note, which typeof_expr does not even call. */
         long nk = yv_l(yr_get(node, "k"));
+        /* A `let`/`def` records its type at its NAME's position as well as the
+         * keyword's, for the same reason a member access does: the keyword is
+         * where the node sits and the name is where a cursor goes. Without this a
+         * hover on `b` in `let b = 1` showed the name and nothing else, while a
+         * hover on a USE of `b` showed `long` -- the same name, two answers. */
+        if (nk == K_decl && yv_l(yr_get(node, "nline")) > 0 &&
+            yv_l(yr_get(node, "ncol")) > 0) {
+            tci_note_key(yv_l(yr_get(node, "nline")) * 65536 + yv_l(yr_get(node, "ncol")), t);
+        }
         if ((nk == K_dot || nk == K_dotassign) && yv_l(yr_get(node, "nline")) > 0 &&
             yv_l(yr_get(node, "ncol")) > 0) {
             tci_note_key(yv_l(yr_get(node, "nline")) * 65536 + yv_l(yr_get(node, "ncol")), t);
@@ -4248,7 +4258,35 @@ static Yv *typeof_fmt(Yv *st, Yv *node) {
     return yr(2, "typ", yr(1, "k", yv_long(K_tstr)), "st", st);
 }
 
+/* The call's own type, recorded at the CALLEE's position when the index is on.
+ *
+ * An intrinsic is matched by name inside the body below, so its callee identifier
+ * is never an expression and typeof_expr never visits it -- which is why hovering
+ * `clock_us` showed nothing at all while hovering a call's RESULT showed its type
+ * perfectly. The return type is what is recorded, because that is what the name
+ * means to a reader at that position; the argument types are in the manual and in
+ * the compiler, and inventing a signature string here would be a second copy of
+ * knowledge that already exists. */
 static Yv *typeof_call(Yv *st, Yv *node) {
+    Yv *r = typeof_call_go(st, node);
+    if (tc_index) {
+        Yv *callee = yr_get(node, "callee");
+        /* A DOT callee records its own function type at the key's position in the
+         * !id arm below, where the signature is known; here only an id is filled
+         * in, so the two do not fight over one key. */
+        if (yv_l(yr_get(callee, "k")) == K_id &&
+            yv_l(yr_get(callee, "line")) > 0 &&
+            yv_l(yr_get(callee, "col")) > 0) {
+            tci_note_key(yv_l(yr_get(callee, "line")) * 65536 +
+                             yv_l(yr_get(callee, "col")),
+                         yr_get(r, "typ"));
+        }
+        ;
+    }
+    return r;
+}
+
+static Yv *typeof_call_go(Yv *st, Yv *node) {
     // Two callee shapes: a plain id (the `else` arm below — a hoisted def,
     // an intrinsic, `self`, or a local holding a closure) and an arbitrary
     // expression (the `if` arm — an immediately-invoked literal, an element
@@ -4280,6 +4318,25 @@ static Yv *typeof_call(Yv *st, Yv *node) {
             ;
         }
         st = yr_get(cf, "st");
+        /* A member call's own type, at the member NAME's position -- so hovering
+         * `exp` in `math.exp(0.0)` answers rather than showing nothing. Before this,
+         * `math.pi` answered `float` (a constant needs no extern) while every
+         * imported FUNCTION answered nothing, which is the shape of a bug that reads
+         * as "imports are not typed" and is really "calls are not indexed".
+         *
+         * The SIGNATURE, because the field's own type IS the function type here and
+         * it is what the name means. Recording the call's RETURN type instead made
+         * `mk` hover as `{ a: long, b: str }` -- the record `mk(1, "x")` produces --
+         * which reads as though `mk` were that record. An intrinsic has no such
+         * object (it is matched by name), so the id arm in typeof_call records its
+         * return type, which is the whole of what the checker knows about it; the
+         * asymmetry is the honest one and both are the checker's own answer. */
+        if (tc_index && yv_l(yr_get(ccal, "k")) == K_dot && !smeth &&
+            yv_l(yr_get(ccal, "nline")) > 0 && yv_l(yr_get(ccal, "ncol")) > 0) {
+            tci_note_key(yv_l(yr_get(ccal, "nline")) * 65536 +
+                             yv_l(yr_get(ccal, "ncol")),
+                         yr_get(cf, "typ"));
+        }
         if (smeth) {
             return typeof_method(st, node, yr_get(ccal, "key"));
         } else if (yv_l(yr_get(yr_get(cf, "typ"), "k")) == K_tfunc) {
@@ -5685,6 +5742,11 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col, Yv *nline
         // whatever shape the env holds for `func`).
         Yv *fparams = yr_get(func, "params");
         Yv *fptypes = yr_get(func, "ptypes");
+        /* Each parameter NAME's own position, when the parser recorded it. Empty
+         * for a hand-built Func, and then the binding falls back to the def's own
+         * position -- which is the imprecision, not a silent wrong answer, because
+         * the name is still bound and every use still resolves. */
+        Yv *fpos = yr_get(func, "ppos");
         long i = 0;
         int ok = 1;
         while (i < yv_len(fparams)) {
@@ -5768,7 +5830,29 @@ static Yv *typeof_def(Yv *st, Yv *name, Yv *func, long line, long col, Yv *nline
         st = st_fdepth(st, saved_depth + 1);
         long j = 0;
         while (j < yv_len(fparams)) {
-            st = st_bind(st, ya_get(fparams, j), ya_get(args, j), ys("param"), nline, ncol );
+            /* The binding's position is the FUNCTION's, because a parameter has no
+             * node of its own -- but the parser does now keep each name's own
+             * position (`Func.ppos`), and that is where a hover, a semantic token
+             * and a go-to-definition all need to point. Binding at `nline`/`ncol`
+             * was the one thing `Binding.line/col` could not answer, and it is why
+             * hovering a parameter's own name showed nothing. */
+            long pl = yv_l(nline);
+            long pc = yv_l(ncol);
+            if (j < yv_len(fpos) && yv_l(ya_get(fpos, j)) > 0) {
+                pl = yv_l(ya_get(fpos, j)) / 65536;
+                pc = yv_l(ya_get(fpos, j)) % 65536;
+                ;
+            }
+            st = st_bind(st, ya_get(fparams, j), ya_get(args, j), ys("param"),
+                         yv_long(pl), yv_long(pc));
+            /* And into the type index, at the name's own position. A parameter is
+             * a bare string in `Func.params`, so there is no node for typeof_expr
+             * to visit and nothing else would ever record it -- which is why
+             * hovering the `p` in `def g(p: P)` showed nothing while hovering a USE
+             * of `p` showed `P`. */
+            if (tc_index) {
+                tci_note_key(pl * 65536 + pc, ya_get(args, j));
+            }
             j = j + 1;
         }
         st = st_self(st, ft);

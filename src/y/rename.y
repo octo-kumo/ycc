@@ -1290,9 +1290,11 @@ def rn_decl_native_lookup(node: Decl, u: str, st: RnSt) -> RnRes {
 
 def rn_decl_native_go(node: Decl, u: str, st: RnSt) -> RnRes {
     let f: Func = node.v;
+    // `ppos` carried through unchanged: the renamer renames names, not positions,
+    // and a native declaration's parameters are exactly where they were written.
     let nf: Func = { k: K.func, params: f.params, ptypes: rn_types(st, f.ptypes),
       ret: rn_type(st, f.ret), body: f.body, defs: f.defs, label: f.label,
-      line: f.line, col: f.col };
+      line: f.line, col: f.col, ppos: f.ppos };
     { st: st, node: { k: K.decl, kind: "native", name: u, typ: rn_type(st, node.typ), v: nf, line: node.line, col: node.col, nline: node.nline, ncol: node.ncol } }
 };
 
@@ -1395,39 +1397,50 @@ def rn_func_p3(func: Func, fparams: [str], fptypes: [Type], fret: Type, st: RnSt
 };
 
 def rn_func_p4(func: Func, fparams: [str], fptypes: [Type], fret: Type, fbody: Block, st: RnSt) -> RnRes {
-    rn_func_p5(fparams, fptypes, fret, fbody, func.line, func.col, st)
+    rn_func_p5(fparams, fptypes, fret, fbody, func.line, func.col, func.ppos, st)
 };
 
-def rn_func_p5(fparams: [str], fptypes: [Type], fret: Type, fbody: Block, fline: long, fcol: long, st: RnSt) -> RnRes {
-    rn_func_params(fparams, fptypes, fret, fbody, fline, fcol, st)
+def rn_func_p5(fparams: [str], fptypes: [Type], fret: Type, fbody: Block, fline: long, fcol: long, fppos: [long], st: RnSt) -> RnRes {
+    rn_func_params(fparams, fptypes, fret, fbody, fline, fcol, fppos, st)
 };
 
-def rn_func_params(fparams: [str], fptypes: [Type], fret: Type, fbody: Block, fline: long, fcol: long, st: RnSt) -> RnRes {
-    rn_func_go(fparams, fptypes, fret, fbody, fline, fcol, [], 0, st)
+def rn_func_params(fparams: [str], fptypes: [Type], fret: Type, fbody: Block, fline: long, fcol: long, fppos: [long], st: RnSt) -> RnRes {
+    rn_func_go(fparams, fptypes, fret, fbody, fline, fcol, fppos, [], 0, st)
 };
 
-def rn_func_go(fparams: [str], fptypes: [Type], fret: Type, fbody: Block, fline: long, fcol: long, params: [str], i: long, st: RnSt) -> RnRes {
+def rn_func_go(fparams: [str], fptypes: [Type], fret: Type, fbody: Block, fline: long, fcol: long, fppos: [long], params: [str], i: long, st: RnSt) -> RnRes {
     // NOTE: recursion over the param list (replaces the while loop): the
     // loop's `st = b.st` rebind poisoned the merged-shape read of st.
     // fparams stays BARE (like res(node)): the single `fparams[i]` read
     // unifies via the tcompat law (tnone).
     if (i >= len(fparams)) {
-        rn_func_body(fptypes, fret, fbody, fline, fcol, params, st)
+        rn_func_body(fptypes, fret, fbody, fline, fcol, fppos, params, st)
     } else {
-        // A parameter has no node: the Func's own line is the nearest site.
-        let b = rn_bind(st, fparams[i], fline, fcol);
+        // The parameter's OWN position, from the parser, when it has one. It used to
+        // be the Func's line for every parameter, which put every parameter's def
+        // site on the `def` keyword -- so a go-to-definition on a parameter landed on
+        // the function, not on the parameter. An empty `fppos` (a hand-built Func)
+        // falls back to the Func's own position, which is the imprecision rather
+        // than a wrong answer.
+        let pl = fline;
+        let pc = fcol;
+        if (i < len(fppos) && fppos[i] > 0) {
+            pl = fppos[i] / 65536;
+            pc = fppos[i] % 65536;
+        };
+        let b = rn_bind(st, fparams[i], pl, pc);
         params += b.uniq;
-        rn_func_go(fparams, fptypes, fret, fbody, fline, fcol, params, i + 1, b.st)
+        rn_func_go(fparams, fptypes, fret, fbody, fline, fcol, fppos, params, i + 1, b.st)
     }
 };
 
-def rn_func_body(fptypes: [Type], fret: Type, fbody: Block, fline: long, fcol: long, params: [str], st: RnSt) -> RnRes {
+def rn_func_body(fptypes: [Type], fret: Type, fbody: Block, fline: long, fcol: long, fppos: [long], params: [str], st: RnSt) -> RnRes {
     // NOTE: fbody read ONCE here (one read site — no merge).
     let b = rn_block(fbody.stmts, st);
-    rn_func_finish(fptypes, fret, fbody, fline, fcol, params, b.stmts, rn_pop(b.st))
+    rn_func_finish(fptypes, fret, fbody, fline, fcol, fppos, params, b.stmts, rn_pop(b.st))
 };
 
-def rn_func_finish(fptypes: [Type], fret: Type, fbody: Block, fline: long, fcol: long, params: [str], stmts: [Node], st: RnSt) -> RnRes {
+def rn_func_finish(fptypes: [Type], fret: Type, fbody: Block, fline: long, fcol: long, fppos: [long], params: [str], stmts: [Node], st: RnSt) -> RnRes {
     // NOTE: NO record reads here — all values are params already. `fbody`
     // rides along for signature parity with the C twin and is never read.
     let un = rn_unknown_list(st, fptypes);
@@ -1435,7 +1448,11 @@ def rn_func_finish(fptypes: [Type], fret: Type, fbody: Block, fline: long, fcol:
     let body: [Node] = [];
     if (un != "") { body += rn_unknown_err(un, fline, fcol); }
     body += stmts;
-    { st: st, node: { k: K.func, params: params, ptypes: rn_types(st, fptypes), ret: rn_type(st, fret), body: { k: K.block, stmts: body, line: fline, col: fcol }, line: fline, col: fcol, defs: [], label: "" } }
+    // `ppos` again: the parameter list is renamed in place, so each name keeps the
+    // position it was written at. Empty here rather than unknown -- this rebuild is
+    // for a function LITERAL, whose parameters the parser also recorded, so it is
+    // `fppos` below and not a literal [].
+    { st: st, node: { k: K.func, params: params, ptypes: rn_types(st, fptypes), ret: rn_type(st, fret), body: { k: K.block, stmts: body, line: fline, col: fcol }, line: fline, col: fcol, defs: [], label: "", ppos: fppos } }
 };
 
 

@@ -118,15 +118,15 @@ Yv *rn_func_p3(Yv *func, Yv *fparams, Yv *fptypes, Yv *fret, Yv *st);
 Yv *rn_func_p4(Yv *func, Yv *fparams, Yv *fptypes, Yv *fret, Yv *fbody,
                Yv *st);
 Yv *rn_func_p5(Yv *fparams, Yv *fptypes, Yv *fret, Yv *fbody, long fline,
-               long fcol, Yv *st);
+               long fcol, Yv *fppos, Yv *st);
 Yv *rn_func_params(Yv *fparams, Yv *fptypes, Yv *fret, Yv *fbody, long fline,
-                   long fcol, Yv *st);
+                   long fcol, Yv *fppos, Yv *st);
 Yv *rn_func_go(Yv *fparams, Yv *fptypes, Yv *fret, Yv *fbody, long fline,
-               long fcol, Yv *params, long i, Yv *st);
+               long fcol, Yv *fppos, Yv *params, long i, Yv *st);
 Yv *rn_func_body(Yv *fptypes, Yv *fret, Yv *fbody, long fline, long fcol,
-                 Yv *params, Yv *st);
+                 Yv *fppos, Yv *params, Yv *st);
 Yv *rn_func_finish(Yv *fptypes, Yv *fret, Yv *fbody, long fline, long fcol,
-                   Yv *params, Yv *stmts, Yv *st);
+                   Yv *fppos, Yv *params, Yv *stmts, Yv *st);
 
 /* the module entry points (rename.y: export { rename_program,
  * rename_program_x }) */

@@ -66,7 +66,7 @@ name; looks next to the importer and in std/)` -- the compiler resolves its std
 relative to its own path. That is ORCHESTRATOR.md 3, not a bug, and it cost one
 confusing build here.
 
-**Frozen toolkit.** Vendored byte-identical from `examples/_toolkit/`, revision
+**Frozen toolkit.** Vendored byte-identical from `test/std/`, revision
 as of 2026-10-04:
 
 **`tui` is deliberately NOT used — but that is now a choice, not a
@@ -80,7 +80,7 @@ emits every place down to units — and verified against this folder's use:
 the current `tui` writes `ESC [ 106 ; 108 H` for cell (105, 107), where
 the old one wrote `16;18`. See `examples/BUGS.md`, "`tui`'s `emit_num`
 drops a zero digit", and the regression test now in
-`examples/_toolkit/fb_test.y` §8 that pins `203;101;100` and friends.
+`test/std/fb_test.y` §8 that pins `203;101;100` and friends.
 
 So `screen.y` keeps its own single `[byte; 262144]` frame buffer and one
 `write(2)` per frame — a defensible design for a full-screen editor that

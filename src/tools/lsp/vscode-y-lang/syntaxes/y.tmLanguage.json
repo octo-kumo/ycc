@@ -4,10 +4,10 @@
   "scopeName": "source.y",
   "patterns": [
     {
-      "include": "#comments"
+      "include": "#strings"
     },
     {
-      "include": "#strings"
+      "include": "#comments"
     },
     {
       "include": "#numbers"

@@ -112,7 +112,7 @@ Known numbers (x86-64): `read`=0, `write`=1, `close`=3, `lseek`=8,
 
 No termios helper, no raw mode, no `getch`, no window-size query, no
 `isatty`, no key decoder. **Every interactive example writes its
-own.** `examples/_toolkit/term.y` is the shared, tested version.
+own.** `test/std/term.y` is the shared, tested version.
 
 ### 2.3 Raw mode, verified end to end
 
@@ -170,7 +170,7 @@ little-endian values — **row first**, at bytes 0–1.
 One keypress: `syscall(0, 0, &b[0], 1)`. `readline()` does not work
 in raw mode (its buffer assumes canonical mode).
 
-`examples/_toolkit/term.y` handles the whole sequence **including
+`test/std/term.y` handles the whole sequence **including
 restoring the terminal on every exit path** — that is the hard part,
 and the reason it is shared rather than rewritten 15 times. It is
 verified: 111 checks, including SIGKILL of the program with the
@@ -204,7 +204,7 @@ list is `long→float`, `long→byte` (annotated sites only),
 
 Consequence: **do your arithmetic in integers.** The shipped
 `examples/badapple` players do all their colour fitting in `long`
-fixed point for exactly this reason. `examples/_toolkit/fx.y` is
+fixed point for exactly this reason. `test/std/fx.y` is
 the shared integer-math module.
 
 Escape hatch when a float genuinely arises:
@@ -216,7 +216,7 @@ sqrt exp log log2 log10 pow abs floor ceil round trunc fmod hypot`,
 and no `PI`. They do not exist anywhere in the tree — the only
 float examples (`test/y/examples/math.y`, `pi.y`) use only
 `+ - * / %`. **Write them yourself**, in integer fixed point, via
-`examples/_toolkit/fx.y`. Do not file this as a bug; it is a known,
+`test/std/fx.y`. Do not file this as a bug; it is a known,
 deliberate gap and belongs in a *todo*, not a bug report.
 
 **(c) No JSON.** There is no `src/y/std/json.y`, and no JSON
@@ -268,7 +268,7 @@ count** traps; `unwrap`/`!` of `none` traps.
 The heap is an arena. Long-running loops that allocate per frame
 will exhaust the 3.5 GiB cap. Render and simulation loops must
 **reuse fixed buffers** — `let buf: [byte; 8192] = [0; 8192];` and
-overwrite in place. `examples/_toolkit/fb.y` is written this way;
+overwrite in place. `test/std/fb.y` is written this way;
 copy that discipline.
 
 `s += t` on a `str` *variable* that owns its buffer is amortised
@@ -884,12 +884,12 @@ depend on the terminal size, the clock or the network, because that
 is the line whose output is diffed against `EXPECTED`.
 
 **Self-contained means vendored.** A shared helper is *copied* into
-your folder, not imported from `../_toolkit/`. Two reasons: the
+your folder, not imported from `../../test/std/`. Two reasons: the
 example keeps working when the toolkit moves on, and it matches the
 `examples/badapple` precedent, which ships its own `tbrender.y` and
 its own copy of `ycc`.
 
-The canonical, tested toolkit lives in `examples/_toolkit/`:
+The canonical, tested toolkit lives in `test/std/`:
 
 | file | what |
 |---|---|
@@ -903,7 +903,7 @@ The canonical, tested toolkit lives in `examples/_toolkit/`:
 Record which toolkit revision you froze in your README. **Do not
 edit the copy** — if you need different behaviour, add your own file
 next to it. If you find a genuine bug in the toolkit, fix it in
-`examples/_toolkit/` *and* note in your README that your copy
+`test/std/` *and* note in your README that your copy
 differs and why. Two examples freezing different revisions is
 acceptable and expected; drift should be deliberate, never silent.
 
@@ -1129,7 +1129,7 @@ answering *their* puzzle. What is **not** acceptable is an
 
 **Escalation.** A subagent that hits the same compile error three
 times stops and reports, rather than looping. Two subagents needing
-the same toolkit change are serialised: land it in `_toolkit/`, then
+the same toolkit change are serialised: land it in `test/std/`, then
 re-vendor.
 
 ---

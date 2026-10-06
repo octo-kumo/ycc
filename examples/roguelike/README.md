@@ -514,12 +514,12 @@ that does not restore the terminal. The watchdog is armed, which is what covers
 
 ## The std units this uses
 
-Copied in from `examples/_toolkit/` and **not edited** — this folder is
+Copied in from `test/std/` and **not edited** — this folder is
 self-contained and does not import across folders (`ORCHESTRATOR.md` §4).
 
 | file | sha256 (16) | lines | what |
 |---|---|---|---|
-| `fx.y` | `4b47a9bfef0c1e30` | 687 | integer Q30 fixed-point maths — used only by `fov.ray` |
+| `fx.y` | `4b47a9bfef0c1e30` | 694 | integer Q30 fixed-point maths — used only by `fov.ray` |
 
 `tui` comes from std and is imported, but only `--time` uses it — the game itself never
 paces, because a turn-based roguelike waits for a key.

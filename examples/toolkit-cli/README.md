@@ -338,7 +338,7 @@ compiler generates, not an absent feature.
 
 ## The std units this uses
 
-Vendored from `examples/_toolkit/` at the revision the campaign table
+Vendored from `test/std/` at the revision the campaign table
 records, copied in **byte-identically** and **not edited** — only
 `args` is needed, since this example has no terminal, no framebuffer and
 no trigonometry.

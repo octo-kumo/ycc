@@ -104,7 +104,7 @@ def xref_of(st: State, d: Doc) -> Prepared? {
             if (is_some(st.xc[d.uri])) { return st.xc[d.uri]; } else { return none; };
         };
     };
-    let got = diag.xref_for(d.text, doc_dir(st, d.path), d.path);
+    let got = diag.xref_for(d.text, doc_dir(st, d.path), d.path, st.pack);
     st.xc_ver[d.uri] = d.version;
     if is_some(got) {
         let pr: Prepared = got!;
@@ -671,6 +671,14 @@ def semantic_overrides(text: str, path: str) -> [long] {
     let bn = intrinsic_names();
     let bi = 0;
     while (bi < len(bn)) { builtins[bn[bi]] = 1; bi = bi + 1; };
+    // The language's own TYPE NAMES, from the parser's own list. Without these a
+    // `long` in `def f(a: long)` painted as an ordinary variable, which is the
+    // plainest way for a highlighter to say nothing: every type in the language
+    // looked like a name.
+    let tnames: { str => long } = {};
+    let tn = type_word_names();
+    let ti = 0;
+    while (ti < len(tn)) { tnames[tn[ti]] = 1; ti = ti + 1; };
     // ONE forward pass for the positions, not one per identifier.
     //
     // `scan.scan_full` returns spans in source order, so the line and the line's
@@ -692,7 +700,7 @@ def semantic_overrides(text: str, path: str) -> [long] {
         };
         let t = 0;
         if (s.kind == scan.K_ident && s.end > s.off && s.end <= len(text)) {
-            t = class_of_span(text, s, idx, byname, builtins, cur_line, s.off - cur_start, s.end);
+            t = class_of_span(text, s, idx, byname, builtins, tnames, cur_line, s.off - cur_start, s.end);
         };
         out += t;
         i = i + 1;
@@ -714,7 +722,7 @@ def index_of_char(text: str, ch: long, from: long) -> long {
 // the single forward pass in semantic_overrides rather than recomputed per identifier,
 // and `after` is the byte offset just past the name -- which is where a
 // declaration's tail text starts.
-def class_of_span(text: str, sp: Span, idx: FileIdx, byname: { str => [IdxDecl] }, builtins: { str => long }, ln: long, ch: long, after: long) -> long {
+def class_of_span(text: str, sp: Span, idx: FileIdx, byname: { str => [IdxDecl] }, builtins: { str => long }, tnames: { str => long }, ln: long, ch: long, after: long) -> long {
     let out = 0;
     let s = sp;
     let w = text[s.off:s.end];
@@ -722,6 +730,11 @@ def class_of_span(text: str, sp: Span, idx: FileIdx, byname: { str => [IdxDecl] 
         out = sem.T_property;
     } else if (is_some(builtins[w])) {
         out = sem.T_builtin;
+    } else if (is_some(tnames[w]) && !is_some(nav.resolve_decl(byname, idx, w, ln, ch))) {
+        // A type name that is not ALSO a binding of the user's. The second half
+        // matters: a `let long = 1` is a variable named `long`, and painting it as a
+        // type would be wrong in the other direction.
+        out = sem.T_type;
     } else {
         // A token that IS a declaration is asked about differently from a USE of
         // one, and it has to be: `nav.find_decl` answers "what does this name
@@ -943,8 +956,12 @@ def do_definition(st: State, id: json.Val, p: { str => json.Val }) -> str {
 // `ch` is a 0-based LSP character. The compiler's columns are 1-based BYTES, so
 // this converts twice and says so, because getting either wrong is a type that is
 // merely plausible.
+// `tunk()`, not `tnone()`, for "the checker has no answer here". `tnone` is a type
+// a program can write, so returning it made "no answer" indistinguishable from "the
+// checker says none" -- and a caller testing for it never fired. That is the same
+// rule types.expr_type follows, and for the same reason.
 def type_at(st: State, d: Doc, line: long, ch: long) -> Type {
-    let out: Type = none_type();
+    let out: Type = expr_type(0, 0);
     let x = xref_of(st, d);
     if is_some(x) {
         let pr: Prepared = x!;
@@ -1132,15 +1149,27 @@ def hover_msg(id: json.Val, w: Hit, md: str) -> str {
 // works; a newline stops the walk, because `.` at the end of one line and a
 // name at the start of the next is not a member access in any language anyone
 // writes.
+// Is `off` the member position -- the character just after a `.`, or the `.`
+// itself?
+//
+// Both, because `off` is where the word being typed STARTS, and with nothing typed
+// after the dot that is the dot's own offset. Looking only one character back then
+// finds the `z` of `z.` and answers "not a member position", so the request fell
+// through to the NAME list and `z.` offered every name in the file. The two cases
+// are the same position; a cursor on the dot and a cursor after it differ by one
+// keystroke of nothing.
 def after_dot(text: str, off: long) -> bool {
     let out = false;
-    let i = off;
-    while (i > 0) {
-        let c = byte_at(text, i - 1);
-        if (c == 32 || c == 9) { i = i - 1; }
-        else {
-            if (c == 46) { out = true; };
-            i = 0;
+    if (off >= 0 && off < len(text) && byte_at(text, off) == 46) { out = true; };
+    if (!out) {
+        let i = off;
+        while (i > 0) {
+            let c = byte_at(text, i - 1);
+            if (c == 32 || c == 9) { i = i - 1; }
+            else {
+                if (c == 46) { out = true; };
+                i = 0;
+            };
         };
     };
     out
@@ -1215,7 +1244,15 @@ def do_hover(st: State, id: json.Val, p: { str => json.Val }) -> str {
             if (is_some(found)) {
                 let wh: Where = found!;
                 let sig = hover_text(wh.dcl);
-                body = if (body == "") { sig } else { "```y\n" + body + "\n```\n\n" + sig };
+                // The type line is for what the declaration does NOT already say: a
+                // `let` has no annotation, a record field has no declaration at all,
+                // a literal has neither. A def or a parameter's declaration IS its
+                // signature, so printing the type above it says the same thing twice
+                // -- and when they were read together it was worse than twice, because
+                // `mk` showed the record its CALL returns.
+                let says_type = index_of(sig, "->") >= 0;
+                if (body == "" || says_type) { body = sig; }
+                else { body = "```y\n" + body + "\n```\n\n" + sig; };
             };
             let contents = json.obj();
             contents["kind"] = json.str("markdown");
@@ -1291,13 +1328,17 @@ def do_completion(st: State, id: json.Val, p: { str => json.Val }) -> str {
         let after_member = after_dot(d.text, word_start);
         let members_done = false;
         if (after_member) {
-            let ocol = object_col(d.text, sps, word_start);
+            // The object's byte offset -- `word_start` IS the member position, and
+            // `object_col` already knows to step back over the dot from it -- and the
+            // object's character, which is what the type table is keyed by. Both, in
+            // one place, because the two consumers want different ones.
+            let ooff = word_start;
+            let ocol = object_col(d.text, sps, ooff);
             // The object's own type, via type_at rather than inferred_at: the
             // latter falls back to the dot before the column when it finds nothing,
             // which is right for a FIELD's hover and wrong here -- this position is
             // already the object's own start, so a fallback would reach past it.
-            let obj: Type = none_type();
-            if (ocol >= 0) { obj = type_at(st, d, at.line, ocol); };
+            let obj = type_of_object(st, d, at.line, ocol, ooff);
             let otype = obj.k;
             if (otype == K.trec) {
                 let flds = record_fields(obj);
@@ -1328,6 +1369,31 @@ def do_completion(st: State, id: json.Val, p: { str => json.Val }) -> str {
             // Stage A answer, and t014_strm pins that list at 26. That is honest
             // because the server does not know the receiver -- it is not claiming
             // the receiver IS a string, only that this is what it can offer.
+            // A MODULE offers its own members, which is the case the string-method
+            // fallback used to swallow: `math.` offered `byte_at, bytes, center`.
+            // Two sources, in order, because the compiler knows both and a partial
+            // list is worse than none:
+            //
+            //   1. the linked unit's `exports` -- every name it binds, with its
+            //      label and type. Complete for a std unit and for a path import.
+            //   2. the buffer's own spliced top level, filtered to the names whose
+            //      origin file is the module's -- which is what a module that is
+            //      not a linked unit (a sibling file) can offer.
+            if (!members_done) {
+                let mods = module_members(st, d, ooff);
+                let obj_name = member_object_name(d.text, sps, ooff);
+                if (len(mods) > 0) {
+                    let mi = 0;
+                    while (mi < len(mods)) {
+                        let nm = module_label(mods[mi], obj_name);
+                        if (nm != "" && (prefix == "" || (len(nm) >= len(prefix) && nm[:len(prefix)] == prefix))) {
+                            items += module_item(nm);
+                        };
+                        mi = mi + 1;
+                    };
+                    members_done = true;
+                };
+            };
             if (!members_done && (otype == K.tstr || otype == K.tnone)) {
                 foreach (m in strm.matching(prefix)) { items += str_method_item(m); };
             };
@@ -1361,6 +1427,212 @@ def do_completion(st: State, id: json.Val, p: { str => json.Val }) -> str {
     result_msg(id, json.jobj(r))
 }
 
+// The type of the object of a member access, by the object NAME.
+//
+// Two places to ask, and the second is the one that matters while a line is being
+// typed. `z.` on a line of its own does not parse -- there is no name after the dot
+// -- so nothing is indexed at that position and the first question answers "nothing
+// here". The DECLARATION is not mid-edit, though: `let z = { z: 1 };` typechecks,
+// and its type is recorded at the name's own position (Decl.nline/ncol, §9.2 A5).
+//
+// So: ask at the use, and if the checker has nothing, resolve the name through the
+// scope index and ask at the declaration. Both answers come from the checker; the
+// second is a position, not a re-derivation.
+//
+// `off` is the object's byte offset (from `object_col`) and `ocol` its character,
+// because the two functions need different ones and a caller that has to convert
+// between them is a caller that will eventually forget.
+def type_of_object(st: State, d: Doc, line: long, ocol: long, off: long) -> Type {
+    let out: Type = none_type();
+    if (ocol >= 0) {
+        out = type_at(st, d, line, ocol);
+        if (out.k == K.tunk) { out = type_at_decl(st, d, off); };
+        if (out.k == K.tunk) { out = none_type(); };
+    };
+    out
+}
+
+def type_at_decl(st: State, d: Doc, off: long) -> Type {
+    let out: Type = none_type();
+    let idx = scope.index_src(d.text, d.path);
+    let w = object_hit(d.text, scan.scan_full(d.text).spans, off);
+    if (is_some(w)) {
+        let hit: Hit = w!;
+        let found = nav.resolve_decl(nav.by_name(idx), idx, hit.name, hit.line, hit.ch);
+        if (is_some(found)) {
+            let dc: IdxDecl = found!;
+            let x = xref_of(st, d);
+            if (is_some(x)) {
+                let pr: Prepared = x!;
+                let sl = xref.indexed_line(pr.mine, dc.line + 1);
+                if (sl > 0) {
+                    let t = expr_type(sl, pos.from_lsp(d.text, dc.line, dc.ch));
+                    if (t.k != K.tunk) { out = t; };
+                };
+            };
+        };
+    };
+    out
+}
+
+// The names a MODULE at (line, col) offers, or an empty list when it is not a
+// module -- which is the answer that has to be right, because the alternative is
+// offering a `str`'s methods for something that is not a `str`.
+// `off` is the object's BYTE OFFSET, the same one `object_col` was handed.
+def module_members(st: State, d: Doc, off: long) -> [str] {
+    let out: [str] = [];
+    if (off > 0) {
+        let idx = scope.index_src(d.text, d.path);
+        let w = object_hit(d.text, scan.scan_full(d.text).spans, off);
+        if is_some(w) {
+            let hit: Hit = w!;
+            // `resolve_decl`, not `decl_at`: the object of `helper.` is a USE of
+            // the import binding, not the import statement itself, so asking "is
+            // this token some declaration's own name" cannot match. Asking what the
+            // name resolves to HERE is the question, and the import is visible at
+            // the point of use.
+            let found = nav.resolve_decl(nav.by_name(idx), idx, hit.name, hit.line, hit.ch);
+            if (is_some(found)) {
+                let dc: IdxDecl = found!;
+                if (dc.kind == scope.D_IMPORT) {
+                    out = module_exports(st, d, hit.name, dc);
+                };
+            };
+        };
+    };
+    out
+}
+
+// One module's member names.
+//
+// Three sources, and the order matters: the most complete answer wins, and a
+// partial list is worse than none because a completion list is read as "these are
+// the things you can put here".
+//
+//  1. the linked unit's `exports` -- every name it binds, with its label and type.
+//     Complete, and the compiler's own answer, when the unit was linked at all.
+//  2. the spliced top level, filtered to the names whose ORIGIN FILE is the
+//     module's. `Prepared.files` maps each spliced name to the file it came from,
+//     so this is exact rather than a guess -- but it needs the module's file.
+//
+// Getting that file is the part `import math;` makes awkward: a std unit is named,
+// not pathed, so the import statement carries no path to resolve. And a std unit
+// resolved from a BUFFER's directory is often not linked at all -- `nr.std` for a
+// buffer outside the compiler tree comes back as just `str,rt` -- which is why
+// `math.` had nothing to offer and fell through to the string methods.
+//
+// So the file is found by its BASENAME: a module is named after its file, which is
+// the same rule `check-names.py` polices because `strip_ns` rewrites any
+// `name.field` as a module reference. `math` -> `math.y`, `helper` -> `helper.y`.
+// It is a text match on a real path, and when two modules share a basename in one
+// buffer the first is taken -- which is stated rather than pretended away, and is
+// the only case here that is not exact.
+def module_exports(st: State, d: Doc, modname: str, dc: IdxDecl) -> [str] {
+    let out: [str] = [];
+    let x = xref_of(st, d);
+    if is_some(x) {
+        let pr: Prepared = x!;
+        let us = pr.units;
+        let ui = 0;
+        while (ui < len(us) && len(out) == 0) {
+            let u = us[ui];
+            if (u.name == modname) {
+                let es = u.exports;
+                let ei = 0;
+                while (ei < len(es)) { out += es[ei].name; ei = ei + 1; };
+            };
+            ui = ui + 1;
+        };
+        if (len(out) == 0) {
+            // A path import states its own target, which is better than a basename
+            // match and is used when there is one.
+            let want = "";
+            if (dc.detail != "") { want = resolve_import_path(d, dc.detail); };
+            let want_base = basename_of(want);
+            let i = 0;
+            // NOT `&& len(out) == 0` in the condition: that guard is on the block
+            // above, and inside the loop it stopped after the FIRST member -- so
+            // `helper.` offered `twice` and not `TOP`, which reads as "this module
+            // has one member" rather than as the bug it is.
+            while (i < len(pr.names)) {
+                let nm = pr.names[i];
+                let f = pr.files[nm];
+                if (is_some(f)) {
+                    let fp = f!;
+                    let mine = pr.self_path;
+                    if (want != "" && fp == want) { out += nm; }
+                    else if (want_base != "" && basename_of(fp) == want_base) { out += nm; }
+                    else if (fp != mine) { out += nm; };
+                };
+                i = i + 1;
+            };
+        };
+    };
+    out
+}
+
+// A path's file name, with no directory: `helper.y` from `/tmp/ws/helper.y`.
+def basename_of(p: str) -> str {
+    let cut = last_index_of(p, "/");
+    let out = p;
+    if (cut >= 0) { out = p[cut + 1:len(p)]; };
+    out
+}
+
+// A path's directory, with no State: the import's own path is all this needs, and
+// threading the server state through to answer "what is next to this file" would
+// be a dependency this does not have.
+def dir_of_path(p: str) -> str {
+    let cut = last_index_of(p, "/");
+    if (cut < 0) { "" } else { p[0:cut] }
+}
+
+// An `import`'s target, resolved against the importing file's directory.
+def resolve_import_path(d: Doc, target: str) -> str {
+    let out = target;
+    if (len(target) > 0 && target[0:1] == ".") {
+        out = norm_path(dir_of_path(d.path) + "/" + target);
+    };
+    out
+}
+
+// What the user types after a `.` for a member the spliced index spells QUALIFIED.
+//
+// A std unit's declarations keep their `math.` prefix through the splice -- which
+// is the compiler's own naming and not something to argue with -- so offering the
+// index's spelling verbatim would insert `math.min` after `math.`, giving
+// `math.math.min`. Strip the module's own prefix and nothing else: a PATH import's
+// members are already bare (`twice`, not `helper.twice`), and stripping a prefix
+// that is not there is a no-op.
+def module_label(nm: str, modname: str) -> str {
+    let out = nm;
+    let cut = modname + ".";
+    if (modname != "" && len(nm) > len(cut) && nm[:len(cut)] == cut) { out = nm[len(cut):len(nm)]; };
+    out
+}
+
+// The object's own name at a member position, or "" -- which is what makes
+// `module_label` strip the right prefix.
+def member_object_name(text: str, sps: [Span], off: long) -> str {
+    let out = "";
+    let h = object_hit(text, sps, off);
+    if (is_some(h)) { let hit: Hit = h!; out = hit.name; };
+    out
+}
+
+// A module member as a completion item: kind 3, Function, because every export of
+// a linked unit is callable or a constant and the protocol has no better single
+// answer. The label is the name, which is what the user types.
+def module_item(name: str) -> json.Val {
+    let o = json.obj();
+    o["label"] = json.str(name);
+    o["kind"] = json.num(3);
+    let te = json.obj();
+    te["newText"] = json.str(name);
+    o["textEdit"] = json.jobj(te);
+    json.jobj(o)
+}
+
 // The 0-based character column at which the object of a member access begins, or
 // -1 when the object is not something this can type.
 //
@@ -1374,18 +1646,51 @@ def do_completion(st: State, id: json.Val, p: { str => json.Val }) -> str {
 // So the rule is a text one and it refuses rather than approximates: the token
 // before the dot must be an identifier, and the token before THAT must not be a
 // `.` -- which is what makes it a chain rather than a bare name.
-def object_col(text: str, sps: [Span], dot_col: long) -> long {
-    let out = 0 - 1;
-    if (dot_col > 0) {
-        let h = nav.ident_at(sps, text, dot_col - 1);
-        if is_some(h) {
-            let hit: Hit = h!;
-            let ob = before_dot_col(text, hit.line, hit.ch);
-            if (ob < 0) { out = hit.ch; };
-        };
+// The 0-based CHARACTER column at which the object of a member access begins, or
+// -1 when there is none.
+//
+// `off` is the BYTE OFFSET of the member position (where the word being typed
+// starts), which is what `nav.ident_at` takes and what the caller's `word_start`
+// already is. An intermediate version of this took the LINE and a CHARACTER and
+// converted them back to an offset -- and passed the byte offset through as the
+// character, so on line 8 of a nine-line fixture it asked about byte 124 of line 8,
+// which does not exist, found nothing, and answered -1. A record's fields then went
+// nowhere and `p.a` offered the string methods that match the prefix. The rule is
+// the same one as everywhere else here: bytes go to the scanner, characters come
+// back out of it, and the two are converted exactly once, in `ident_at`.
+// The identifier immediately before the member position at `off`, or none.
+//
+// This is the ONE place that steps back over the dot, and everything that needs
+// "what is the object of this member access" comes through here -- the type
+// lookup, the record fields, the module check. It is one place because a second
+// one got it wrong: the type lookup and the module check each asked
+// `ident_at(sps, text, off)` at the member position itself, which with nothing
+// typed after the dot is the DOT, and a dot is not an identifier. So both
+// silently found nothing and `z.` and `math.` fell through to the string methods.
+def object_hit(text: str, sps: [Span], off: long) -> Hit? {
+    let out: Hit? = none;
+    if (off > 0) {
+        // Step back over the dot itself and over any space before it, so `x . y`
+        // works as well as `x.y` and a cursor sitting ON the dot works too.
+        let k = off - 1;
+        while (k > 0 && is_blank_at(text[k])) { k = k - 1; };
+        out = nav.ident_at(sps, text, k);
     };
     out
 }
+
+def object_col(text: str, sps: [Span], off: long) -> long {
+    let out = 0 - 1;
+    let h = object_hit(text, sps, off);
+    if (is_some(h)) {
+        let hit: Hit = h!;
+        let ob = before_dot_col(text, hit.line, hit.ch);
+        if (ob < 0) { out = hit.ch; };
+    };
+    out
+}
+
+def is_blank_at(c: long) -> bool { c == 32 || c == 9 }
 
 // The fields of a record type, as the checker's own Field records.
 def record_fields(trec: Type) -> [Field] {

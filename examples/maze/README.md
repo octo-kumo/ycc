@@ -555,7 +555,7 @@ RESULT                  : PASS
 | `capture.py` | 120 | rebuilds `golden/`, including a pyte replay of the interactive view |
 | `pty_check.py` | 113 | drives the interactive path under a real pty |
 | `gate.sh` | 150 | the whole acceptance gate, re-runnable |
-| `fx.y` | `4b47a9bfef0c1e30` | 694 | | the vendored toolkit, byte-identical to `examples/_toolkit/` |
+| `fx.y` | `4b47a9bfef0c1e30` | 694 | | the vendored toolkit, byte-identical to `test/std/` |
 | `README.md` | 703 | this file |
 | `EXPECTED` | 6574 bytes | the stdout of the `run=` line in `gate.conf` |
 | `golden/*.txt` | 4 files | the three generators as text, plus the interactive view as the terminal rendered it |
@@ -564,12 +564,12 @@ RESULT                  : PASS
 
 ## The std units this uses
 
-These five files are **copies of `examples/_toolkit/` and are NOT edited** —
+These five files are **copies of `test/std/` and are NOT edited** —
 verified by sha256 at the top of `gate.sh`'s sibling check and again here:
 
 | file | sha256 (first 16) | lines |
 |---|---|---|
-| `fx.y` | `4b47a9bfef0c1e30` | 687 |
+| `fx.y` | `4b47a9bfef0c1e30` | 694 |
 
 This folder reaches std for `tui` -- the frame pacer, raw mode, the alt screen,
 keys, the restore guarantee and the interactive surface are all in it now -- and
@@ -661,7 +661,7 @@ The vendored copy cannot be edited, so `maze.y` works around it two ways:
   digit.**
 
 std `tui` has the helper (`put_num`) once, so the fix
-belongs in `examples/_toolkit/` and reaches every example at the next
+belongs in `test/std/` and reaches every example at the next
 re-vendor.
 
 ### 3. Everything else, and where it bites
