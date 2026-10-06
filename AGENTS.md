@@ -117,6 +117,17 @@ corpus-diff` (`FILES="a.y b.y"` narrows it; fails on any change of
 behavior or diagnostics), `make bench`, `make bench-ir` (see
 "Performance" below).
 
+**What the loop costs, measured** (8 cores here), because "rebless is slow"
+is a belief worth replacing with numbers: `make rebless` is **9.5 s** — 0.98 s
+for `cycc` to compile the compiler, 0.44 s for the Y self-compile, hundredths
+for the `cmp` and the pack, and **8.4 s (87%) for the port suite** over 142
+fixtures, each compiled by both compilers, which is the gate. `make cycc` from
+a clean tree is 5.5 s and `make -j8 cycc` is the same 5.5 s —
+`src/c/native.c` is one 12,000-line translation unit and it *is* the build, so
+there is nothing to overlap. The full 20-suite run is 37 s, and `make check`
+adds the compare and bench phases on top of that; *those* are the slow steps,
+not the bless. Numbers above the `rebless` target in the Makefile.
+
 ## Run / verify (use these exact forms)
 
 - Compile + run: `./ycc file.y -o /tmp/t_bin && /tmp/t_bin`

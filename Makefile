@@ -287,6 +287,27 @@ bench-ir: $(NEW_DEP)
 # program; on ycc.y it is that build) with its std pack attached; it
 # becomes ./ycc too. Run `make check` first: it runs every suite on this
 # same build.
+# What the bless actually costs, measured on this machine (8 cores) — the
+# question "why does rebless take so long" is answered by these five numbers,
+# and the answer is that it does not: the two self-compiles are 1.4 s
+# together, the pack and the cmp are hundredths, and the port suite over 141
+# fixtures is 8.4 s of the 9.7 s total.
+#
+#   cycc -o _rb1 src/y/ycc.y     0.98 s   (the C copy compiles the compiler)
+#   _rb1 -o _rb2 src/y/ycc.y     0.44 s   (the Y self-compile)
+#   cmp _rb1 _rb2                0.00 s
+#   the pack                     0.01 s
+#   the port suite, -j 8         8.36 s   (142 fixtures, each compiled twice)
+#   ----------------------------- 9.48 s
+#
+# The slowness people are remembering is elsewhere: `make cycc` from a clean
+# tree is 5.5 s (and `make -j8 cycc` is the same 5.5 s -- src/c/native.c is one
+# 12,000-line translation unit and it IS the build, so there is nothing for
+# the job server to overlap), the full 20-suite run is 37 s, and `make check`
+# adds the compare and bench phases on top of that. Those are the numbers to
+# look at before touching this target: the port suite is 87% of it, and it is
+# 87% of it because it compiles every fixture with both compilers, which is
+# the whole point of the gate.
 rebless: cycc
 	ulimit -v $(CYCC_MEM_KB); ./cycc -o _rb1 src/y/ycc.y
 	ulimit -v $(YCC_MEM_KB); ./_rb1 -o _rb2 src/y/ycc.y
