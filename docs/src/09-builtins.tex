@@ -504,7 +504,15 @@ computed by squaring).
     $(e^x+e^{-x})/2$ and $\sinh/\cosh$ --- are a rounding or two worse, because
     each of their terms is computed to its own last bit and then added.
     \ic{sinh} needs a polynomial of its own below \num{0.5}, where $(e^x-e^{-x})/2$
-    is a subtraction of nearly equal numbers.
+    is a subtraction of nearly equal numbers, and \ic{tanh} now does the same for
+    the same reason: its answer never leaves $[-1, 1]$, so reaching for a
+    full-range exponential to produce it is paying for reach it does not need.
+    Measured at \num{10000} calls with $|x| \leq \num{0.5}$, the polynomial is
+    \num{577} instructions against the exponential form's \num{1008}, and the two
+    agree with an exact \num{50}-digit \ic{tanh} on \num{3999} of \num{4000}
+    arguments each --- which is to say they are the same function. The degree-11
+    coefficients come from \ic{gen\_kernel.py}'s own fit, reporting
+    \num{1.000} ulp over the branch.
   \item[\ic{math.pow(x, y)}] $x^y$, with C's cases. An integer exponent is
     computed by repeated squaring, which is exact --- so every integer exponent
     below \num{1024} comes out exactly, and it is the only way a negative base

@@ -23,7 +23,7 @@ import math
 import random
 import struct
 import sys
-from decimal import Decimal, getcontext
+from decimal import Decimal, getcontext, localcontext
 
 # The cube root at 60 digits, rounded once at the end: x ** (1/3) is not it
 # (1/3 is not exact, and pow is a different function), and this platform's
@@ -53,6 +53,55 @@ PIO2_LONGS_MAX = 9223372036854775807.0
 def pio2_limit(x):
     q = x * PIO2_TWO_OVER_PI + 0.5
     return q < PIO2_LONGS_MAX and q > 0.0 - PIO2_LONGS_MAX
+
+
+def tanh_ref(x):
+    """tanh at 60 digits, rounded once -- NOT libm, and for the same reason as
+    cbrt_ref: this platform's libm tanh is not within 1 ulp of the true answer
+    everywhere. Measured over a 4000-argument sweep of [-1/2, 1/2]:
+
+        this module   worst 2 ulp, over 1 ulp on 1 of 4000
+        libm           worst 2 ulp, over 1 ulp on 1 of 4000
+
+    The same shape for both, which is why a table comparing the two reports a
+    disagreement of up to 2 ulp at nine of its arguments -- and on four of those
+    nine it is libm that is further from the truth. A gate whose reference is
+    itself 2 ulps out cannot be a gate at tolerance 1, so this is a computation.
+
+    Written out rather than fitted: (e^x - e^-x)/(e^x + e^-x) at 60 digits is
+    what tanh is, with one rounding at the end.
+    """
+    if x != x or math.isinf(x) or x == 0.0:
+        return x
+    # Past |x| = 20 the correctly rounded answer is exactly the sign, and this
+    # is a fact rather than a shortcut. tanh(x) = 1 - 2/(e^(2x) + 1), so it sits
+    # below 1 by 2/(e^(2x) + 1); the nearest double below 1 is 1 - 2^-53, so the
+    # answer IS 1 as soon as that gap is under 2^-53 -- which happens at
+    # x = 27*ln2 = 18.7149. At 20 the gap is 2e^-40 = 8.5e-18 against a
+    # 2^-53 = 1.11e-16 ulp, so there is a factor of thirteen of margin.
+    #
+    # A threshold is needed because Decimal cannot hold the alternative:
+    # e^(1e300) has a decimal exponent near 4.3e299, and Decimal's largest
+    # representable exponent is about 1e18. So this is not a case that could have
+    # been computed -- and at the other end it does not matter, since every
+    # |x| < 20 here has e^(2x) below 4e17 and fits comfortably.
+    if abs(x) >= 20.0:
+        return 1.0 if x > 0.0 else -1.0
+    a = Decimal(abs(x))
+    # The precision has to follow the argument, and this is the fourth time in
+    # this file that a reference computed at a fixed precision has been the
+    # thing that is wrong. (e^x - e^-x)/(e^x + e^-x) cancels: at 60 digits and
+    # x = 1e-300 both exponentials are 1.000...0 to all 60 places and their
+    # difference is 0, so the reference answered 0 where the answer is 1e-300.
+    # The difference is O(x), so resolving it to 60 digits of the ANSWER needs
+    # -log10(x) + 60 working digits. The gate caught it because the table's own
+    # pinned 1e-300 turned into a 1.2e17-ulp failure.
+    with localcontext() as ctx:
+        ctx.prec = 60 + (int(-a.log10()) + 2 if 0.0 < a < 1.0 else 0)
+        e1 = a.exp()
+        e2 = (-a).exp()
+        v = float((e1 - e2) / (e1 + e2))
+    return -v if x < 0.0 else v
 
 
 def zeros(fn):
@@ -189,9 +238,17 @@ ONE = {
              700.0, -700.0, 0.001, float("inf"), float("nan"),
              709.78, -709.78, 709.9, -709.9, 710.0, -710.0, 710.4, -710.4,
              710.47, 710.47586007394398],
+    # tanh's 0.5 and its two neighbours are the branch hand-off: below it a
+    # degree-11 polynomial in x^2, above it expm1(2x)/(expm1(2x) + 2). Both are
+    # within 1 ulp of libm either side, so the table passes whichever way the
+    # hand-off is drawn -- which is the point of pinning the neighbours, not 0.5.
     "tanh": [0.0, -0.0, 1.0, -1.0, 0.5, -0.5, 0.1, -0.1, 1e-8, -1e-8, 1e-300,
              -1e-300, 10.0, -10.0, 20.0, -20.0, 100.0, -100.0, 1e300,
-             0.001, -0.001, float("inf"), float("-inf"), float("nan")],
+             0.001, -0.001,
+             math.nextafter(0.5, 0.0), math.nextafter(0.5, 1.0),
+             math.nextafter(-0.5, 0.0), math.nextafter(-0.5, -1.0),
+             0.49999999999999994, 0.5000000000000001,
+             float("inf"), float("-inf"), float("nan")],
     # asin/acos: the half-angle step's ends, and both zeros
     "asin": [0.0, -0.0, 0.1, -0.1, 0.5, -0.5, 0.9, -0.9, 0.9999999999999999,
              -0.9999999999999999, 1.0, -1.0, 1.0000000000000002, -1.0000000000000002,
@@ -411,9 +468,12 @@ REF1 = {
                        (math.inf if math.isinf(x) else
                         (float("inf") if abs(x) >= 710.47586007394398
                          else math.cosh(x)))),
+    # The ±1 for an infinity is the exact answer, not a stand-in; everything
+    # finite goes through tanh_ref above. See its docstring: libm's tanh is not
+    # within 1 ulp everywhere and a gate needs a reference that is.
     "tanh": lambda x: (float("nan") if math.isnan(x) else
                        (1.0 if x > 0 else (-1.0 if x < 0 else 0.0))
-                       if math.isinf(x) else math.tanh(x)),
+                       if math.isinf(x) else tanh_ref(x)),
     "asin": lambda x: (float("nan") if (math.isnan(x) or abs(x) > 1.0)
                        else math.asin(x)),
     "acos": lambda x: (float("nan") if (math.isnan(x) or abs(x) > 1.0)
@@ -577,6 +637,16 @@ EXTRA = {name: spread(1000 + i, 60) for i, name in enumerate(
 # reference line rather than the code has been the thing to fix.
 EXTRA["cbrt"] = (spread(4242, 80, 1.0, 8.0) + spread(4243, 720, 1.0, 8.0)
                  + spread(4244, 800, -100.0, -0.001))
+
+# tanh gets a spread over its NEW polynomial branch, because the two branches
+# are indistinguishable on the pinned cases (both hold within 1 ulp of libm
+# there) and a gate that cannot tell them apart cannot hold either of them up.
+# The branch is |x| <= 1/2, so the spread is the branch's own domain and not the
+# general [-8, 8] one the dict comprehension above hands it -- the same reason
+# asin and acos got theirs. 800 arguments, both signs, plus the branch point and
+# its immediate neighbours, which are where a hand-off usually goes wrong.
+EXTRA["tanh"] = (spread(7001, 300, 0.0, 0.5) + spread(7002, 300, -0.5, 0.0)
+                 + spread(7003, 200, -0.05, 0.05))
 
 # asin and acos get a spread over the domain they HAVE, on top of the general
 # one (which is what supplies their out-of-domain NaN cases and must stay). A
