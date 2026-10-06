@@ -277,6 +277,25 @@ branch-disjointness false positive.
   2000, where stat's own layout has exactly 2000. `y_os_close` (NtClose, 15) was
   written the same round and reverted with it, untested, for the same reason:
   it is only reachable through a file handle that openat has to produce first.
+- **`y_os_rename` WORKS (round 44)**, so TEN of the thirteen entries have
+  Windows bodies and THREE do not: `y_os_getcwd`, `y_os_chdir`, `y_os_list` --
+  the directory trio. Verified byte-identical on ELF and PE: write a file,
+  rename it, the source is gone, the target has the content, renaming a missing
+  source fails, and a DIRECTORY renames too. `pe-gate.sh`'s fixture covers it.
+  Round 43's diagnosis was right about the mechanism and wrong about the state:
+  **the frame was the whole bug.** With `sub $4800`, NtCreateFile's stack
+  arguments at 40(%rsp) land on rbp-4760 -- the block's own IO_STATUS_BLOCK --
+  and the call overwrites what it is about to be handed, answering
+  STATUS_INVALID_PARAMETER (0xC000000D), which reads exactly like a bad path.
+  `sub $5200` puts the argument area at rbp-5160 and everything works. The
+  "5200 did not fix it either" in that round's note came from a hand-edited
+  block that the edit itself had mangled; rebuilding the block from scratch is
+  what showed it. Two more real bugs in the same block, both fixed and both
+  worth remembering:
+    * the second y_w_path call clobbers %r8, which held the SOURCE's unit count,
+      so the open was handed the TARGET's length;
+    * FileNameLength is at struct+16 and the name is INLINE at +20, so that
+      field is written a BYTE at a time -- an 8-byte store runs into the name.
 - **`y_os_lseek` works (round 43)**, so NINE of the thirteen entries have
   Windows bodies and FOUR do not: `y_os_rename`, `y_os_getcwd`, `y_os_chdir`,
   `y_os_list`. Verified byte-identical on ELF and PE for all three whences --

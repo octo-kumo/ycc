@@ -36,5 +36,13 @@ print(fs.seek(fd, 1000, 0));
 print(fs.seek(fd, -1, 0));
 print(fs.seek(fd, -12345, 0));
 print(fs.close_file(fd));
+// rename: the source is gone, the target has the content, and a source that
+// does not exist fails.
+print(fs.write_file("pefsrt_ren.txt", "renamed\n"));
+print(fs.rename("pefsrt_ren.txt", "pefsrt_ren2.txt"));
+print(fs.exists("pefsrt_ren.txt"));
+print(fs.read_file("pefsrt_ren2.txt")!);
+print(fs.rename("pefsrt_nope.txt", "pefsrt_x.txt"));
+print(fs.remove_file("pefsrt_ren2.txt"));
 print(fs.remove_file("pefsrt.txt"));
 print(fs.exists("pefsrt.txt"));

@@ -1257,3 +1257,158 @@ yols_fail:
     mov %rbp, %rsp
     pop %rbp
     ret
+# y_os_rename(from, len, to, len2) -> 0, or -1.
+#
+# FOUR ARGUMENTS, FRAMELESS in the ELF body: len2 (arg4) at 8(%rsp) -> 16(%rbp),
+# to (arg3) at 16 -> 24, len (arg2) at 24 -> 32, from (arg1) at 32 -> 40.
+#
+# Renaming is not a path-to-path call. It is open the SOURCE with DELETE access
+# (65536) and then NtSetInformationFile (39) with FileRenameInformation
+# (class 10), whose information is a FILE_RENAME_INFORMATION:
+#
+#   +0   BOOLEAN ReplaceIfExists   -- 1, which is what rename(2) does
+#   +8   HANDLE  RootDirectory     -- 0, because the name is absolute
+#   +16  ULONG   FileNameLength    -- BYTES, and only the name
+#   +20  WCHAR   FileName[]        -- the full absolute TARGET path
+#
+# FileName is INLINE, so the target is built straight into the struct: y_w_path
+# is pointed at struct+20 and writes upward from there. FileNameLength is
+# written a BYTE at a time, because an 8-byte store at +16 would run into the
+# name that starts at +20. The information length is 20 + 2*units.
+#
+# TWO UNIT COUNTS LIVE IN FRAME SLOTS, not registers. The second y_w_path call
+# clobbers %r8, so the source's count has to be saved before it; and the target's
+# count is needed after the open, which is another chance to lose it. The first
+# version kept the source's in %r8 and built the UNICODE_STRING with the
+# TARGET's length, so the open was handed the wrong name entirely.
+#
+# AND THE FRAME MUST BE DEEPER THAN THE STACK ARGUMENTS ARE FAR DOWN. NtCreateFile
+# puts six arguments at 40(%rsp) and up: with a 4800-byte frame that is
+# rbp-4760, which was this block's IO_STATUS_BLOCK, so the call overwrote the
+# block it was about to be handed and answered STATUS_INVALID_PARAMETER
+# (0xC000000D) -- which reads exactly like a bad path. 5200 puts the argument
+# area at rbp-5160, clear of every object here.
+#
+# Layout: the SOURCE path at -2200 (y_w_path writes upward to -200 at most), the
+# rename struct at -4600 with its name from -4580 (upward to -2580, so the two
+# paths cannot meet), the handle at -4640, the UNICODE_STRING at -4680, the
+# OBJECT_ATTRIBUTES at -4740, the IO_STATUS_BLOCK at -4760, and three scratch
+# words at -4776, -4784 and -4792.
+#=== replace: y_os_rename ===
+y_os_rename:
+    push %rbp
+    mov %rsp, %rbp
+    sub $5200, %rsp
+    lea -2200(%rbp), %rdi
+    mov 40(%rbp), %rsi
+    mov 32(%rbp), %rcx
+    call y_w_path
+    cmp $0, %rax
+    jl yorn_fail
+    mov %rax, -4792(%rbp)
+    lea -4580(%rbp), %rdi
+    mov 24(%rbp), %rsi
+    mov 16(%rbp), %rcx
+    call y_w_path
+    cmp $0, %rax
+    jl yorn_fail
+    mov %rax, -4784(%rbp)
+    movb $1, -4600(%rbp)
+    mov $0, %rax
+    mov %rax, -4592(%rbp)
+    add %rax, %rax
+    mov -4784(%rbp), %rax
+    add %rax, %rax
+    movb %al, -4584(%rbp)
+    shr $8, %rax
+    movb %al, -4583(%rbp)
+    shr $8, %rax
+    movb %al, -4582(%rbp)
+    shr $8, %rax
+    movb %al, -4581(%rbp)
+    mov -4792(%rbp), %r8
+    mov %r8, %rax
+    add %rax, %rax
+    movb %al, -4680(%rbp)
+    shr $8, %rax
+    movb %al, -4679(%rbp)
+    add $2, %r8
+    mov %r8, %rax
+    movb %al, -4678(%rbp)
+    shr $8, %rax
+    movb %al, -4677(%rbp)
+    lea -2200(%rbp), %rax
+    mov %rax, -4672(%rbp)
+    mov $48, %rax
+    mov %rax, -4740(%rbp)
+    mov $0, %rax
+    mov %rax, -4732(%rbp)
+    lea -4680(%rbp), %rax
+    mov %rax, -4724(%rbp)
+    mov $64, %rax
+    mov %rax, -4716(%rbp)
+    mov $0, %rax
+    mov %rax, -4708(%rbp)
+    mov $0, %rax
+    mov %rax, -4700(%rbp)
+    mov $1114112, %rdx
+    mov $0, 40(%rsp)
+    mov $128, 48(%rsp)
+    mov $7, 56(%rsp)
+    mov $1, 64(%rsp)
+    mov $32, 72(%rsp)
+    mov $0, 80(%rsp)
+    mov $0, 88(%rsp)
+    lea -4640(%rbp), %r10
+    lea -4740(%rbp), %r8
+    lea -4760(%rbp), %r9
+    mov $85, %eax
+    syscall
+    test %eax, %eax
+    jne yorn_openfail
+    mov -4640(%rbp), %r10
+    lea -4760(%rbp), %rdx
+    lea -4600(%rbp), %r8
+    mov -4784(%rbp), %r9
+    add %r9, %r9
+    add $20, %r9
+    mov $10, 40(%rsp)
+    mov $39, %eax
+    syscall
+    mov %rax, -4776(%rbp)
+    mov -4640(%rbp), %r10
+    mov $15, %eax
+    syscall
+    mov -4776(%rbp), %rax
+    test %eax, %eax
+    je yorn_ok
+    cmp $259, %eax
+    jne yorn_setfail
+yorn_ok:
+    xor %eax, %eax
+    mov %rbp, %rsp
+    pop %rbp
+    ret
+yorn_openfail:
+    mov %rax, -4776(%rbp)
+    mov -4640(%rbp), %r10
+    mov $15, %eax
+    syscall
+    mov -4776(%rbp), %rax
+    shl $32, %rax
+    shr $32, %rax
+    mov %rbp, %rsp
+    pop %rbp
+    ret
+yorn_setfail:
+    shl $32, %rax
+    shr $32, %rax
+    mov %r11, %r11
+    mov %rbp, %rsp
+    pop %rbp
+    ret
+yorn_fail:
+    mov $-1, %rax
+    mov %rbp, %rsp
+    pop %rbp
+    ret
