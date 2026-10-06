@@ -125,6 +125,35 @@ for cc in "$CYCC" "$YCC"; do
     fi
 done
 
+# The ratchet on REPEATED COMPUTATIONS, which is a different question from every
+# other one in this suite and the only one that is static.
+#
+# The defect class is "a behaviour decided by an accident of expression order",
+# and the accident need not be in the order -- it can be in the SPELLING. Two
+# places meaning the same thing and written differently means a later change
+# reaches one and not the other, which is how sin_cos_k came to compute x*x three
+# times and have the multiplier and the kernel's argument agree only by
+# coincidence. find_repeats.py looks for that, and it is a RATCHET: the two
+# findings it reports are in its KNOWN with the reason each is acceptable, and
+# anything new fails. A new entry has to arrive with a reason.
+if out=$(python3 "$ROOT/test/math/find_repeats.py" "$ROOT/src/y/std/math.y" 2>&1); then
+    echo "$out" | sed 's/^/  /'
+    pass "no new repeated computation in src/y/std/math.y"
+else
+    echo "$out" | sed 's/^/  /'
+    fail "a new repeated computation in src/y/std/math.y (above); it is a defect, or it needs a reason in KNOWN"
+fi
+
+# And the finder itself, or it proves nothing: each detector must find a plant of
+# the thing it claims to find. A detector that silently stops detecting is worse
+# than no detector, because the ratchet above would then read as coverage.
+if python3 "$ROOT/test/math/find_repeats.py" --selftest >/dev/null 2>&1; then
+    pass "each repeated-computation detector finds its plant"
+else
+    fail "a detector in find_repeats.py stopped finding its plant"
+    python3 "$ROOT/test/math/find_repeats.py" --selftest 2>&1 | sed 's/^/  /'
+fi
+
 # A function in the table the harness cannot dispatch would pass silently, so
 # every name in the table has to be one it knows.
 missing=$(awk '!/^#/ && NF {print $1}' "$TABLE" | sort -u | while read -r fn; do

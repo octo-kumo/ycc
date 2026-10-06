@@ -227,6 +227,33 @@ very build was just compared (`make test`, `check`, `rebless` do);
   table from this platform's libm (mpmath is not installed here, and a platform
   libm is the *relevant* reference anyway — the promise is to match what C
   gives), and `gen_kernel.py` fits and checks the kernels' coefficients.
+  Three more things run here, and none of them is the ulp table:
+
+  - `test/y/native/t328_split_unrolled.y`, which asks each of the module's eight
+    **generated** polynomial kernels (`poly_exp`, `poly_log`, `poly_sinh`,
+    `poly_tanh`, `poly_atan`, `poly_asin`, `poly_sin`, `poly_cos`) and
+    `poly_split`, the loop each replaced, the same 32024 questions and requires
+    the same **bits**. The chains perform the same operations in the same order,
+    so anything but equality is a defect. The table cannot catch this class: it
+    sees answers, and a kernel that drifts half an ulp hides inside the final
+    rounding. Run under both compilers here, so a port that emitted a different
+    chain would show as a disagreement rather than as nothing.
+  - `gen_split_unroll.py --verify`, the other question: does `src/y/std/math.y`
+    still hold byte-for-byte what the generator writes? It catches what t328
+    cannot — a chain hand-edited after generation, or a banner whose caller list
+    has gone stale, still answers within an ulp, because the coefficients are
+    right and only the arrangement moved.
+  - `test/math/find_repeats.py`, a **ratchet** on repeated computations, and the
+    one static check in this suite. The defect class it looks for is "a behaviour
+    decided by an accident of expression order", where the accident is in the
+    *spelling* rather than the order: two places meaning the same thing and
+    written differently, so a change reaches one and not the other. That is how
+    `sin_cos_k` came to compute `x * x` three times. Its findings are in its
+    `KNOWN` with the reason each is acceptable (two today, one a branch-
+    disjointness false positive) and anything new fails; its `--selftest` plants
+    one of each thing it claims to find, because a detector that silently stops
+    detecting would leave the ratchet reading as coverage.
+
 - `test_std_suites.sh` [std-suites] — the self-test suites for the std units
   that have one, in `test/std/`: `fx_test.y` (292 checks, the vendored `fx.y`),
   `args_test.y` (61, `std/args.y` and the pacer it paces with),
@@ -504,7 +531,8 @@ replaces the std one at link time).
   `examples/` regression corpus, `ycc/` unit fixtures, `net/` servers
   for `test_net.sh`), `test/std/` (the std self-test suites + their
   goldens and the pty driver; `test_std_suites.sh`), `test/math/`
-  (`ulp_table.txt` + `ulp_check.y` + the generators; `test_math.sh`),
+  (`ulp_table.txt` + `ulp_check.y` + the generators + `find_repeats.py`;
+  `test_math.sh`),
   `test/COVERAGE.md` (feature → test matrix).
 - `bench/` — benchmarks + `compare.sh` + `profile.sh` + `compile_ir.sh`
   (see the workflow above).
