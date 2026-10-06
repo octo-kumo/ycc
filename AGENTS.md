@@ -251,6 +251,28 @@ very build was just compared (`make test`, `check`, `rebless` do);
   1 ulp; pointed at the pre-fix module it reports 4 over for `hypot` and 18 for
   `atan2`. `YPAIRS` sets the count (4000 in the suite).
 
+  That sweep was then shown **blind to a whole class**, and the reason generalises.
+  `hypot` answered `+inf` for every `m` in `(9.4808e153, 1e154)` when `s` was
+  comparable to it, because the direct path's `m*m + s*s` overflows while the
+  answer does not. Of 20000 independently drawn pairs, 6 landed in that decade and
+  **none** of the six had `s` within a factor of ten of `m`; the expected number
+  where both conditions hold is `(1/628) x (2/600)`, so `20000 x that = 0.11` —
+  about one chance in nine. Independent draws and correlated draws are not two
+  settings of one knob, they are opposite: drawing the exponents independently is
+  what makes *wide* ratios common and it is exactly what makes `s == m` rare.
+  `audit_pairs.py` now carries both families.
+
+  The defect was found instead by **pinned boundary cases**, and the rule that
+  came out of it is the one to reuse: *every numeric literal a comparison in
+  `std/math.y` tests against gets itself and its two neighbouring doubles,
+  crossed with a partner close enough to it that the second condition also
+  holds.* A sweep finds defects by **area** — it finds what is spread over the
+  decades and is blind to a sliver of one — while a threshold is only findable if
+  something names it. `gen_ulp_table.py` pins the code's constants **and** the
+  true seam `sqrt(DBL_MAX/2)`, because the module's `1e153` stands well inside it
+  and the reasoning that produced `1e154` is the reasoning a reader will repeat.
+  Both catch the wrong bound: 2 cases, exit 1.
+
   The three thinnest **rounding** functions were then grown, on the reasoning
   that an exact function needs few cases (finitely many answers) and a rounding
   function does not: `sqrt` had 23, `atan2` 35 and `hypot` **14**, and fourteen

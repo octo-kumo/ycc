@@ -771,58 +771,54 @@ def hypot_scaled(m: float, s: float) -> float {
         // negative, so hypot(0.0, -0.0) is +0 whichever zero came second.
         0.0
     } else {
-        // BOTH squares, and never `1.0 + p*p`. That was the form before this
-        // one, and getting rid of it is a story worth keeping because the reason
-        // is the whole lesson: I "simplified" m*sqrt(1 + p*p) to m*sqrt(p*p + 1),
-        // checked the two Pythagorean triples that are exact (3,4,5 and 5,12,13),
-        // saw them pass, and nearly committed it. hypot(2.0, 3.0) is not one of
-        // those: p = 2/3 does not square-and-add back to 1 exactly, so the 1.0
-        // form rounds it. Both forms give the same answer for 3,4 and for 1,1 --
-        // which is what a form that is only SOMETIMES wrong looks like, and is
-        // why the check has to be on an argument where the two disagree.
-        // Scale BOTH operands by a power of two, not one by a ratio.
+        // THREE PATHS, and which one runs is a DECISION about the argument
+        // rather than a compromise. What the function is for is m * sqrt(1 + p^2)
+        // without letting the intermediate leave the range -- and the form that
+        // does that is not the form that does it cheapest, so the choice had to
+        // be measured rather than reasoned.
         //
-        // m * sqrt((s/m)^2 + 1) divides once and multiplies once by an ARBITRARY
-        // float, and both of those round at full size: the division's half-ulp
+        // NOT m * sqrt((s/m)^2 + 1). That divides once and multiplies once by an
+        // ARBITRARY float, and both round at full size: the division's half-ulp
         // comes back doubled through the square, and the multiply's half-ulp is a
-        // half-ulp of the answer. Measured over 400 pairs with |s/m| from 1e-8 to
-        // 1e-1, that form was 2 ulps out on 0.75% of them and never 3.
+        // half-ulp of the answer. Over 400 pairs with |s/m| from 1e-8 to 1e-1 it
+        // was 2 ulps out on 0.75% of them and never 3.
         //
-        // Scaling by 2^-k instead puts m in [1, 2) -- so m*m is in [1, 4) and
-        // CANNOT overflow, which the ratio form never had to worry about -- and
-        // scaling the ANSWER back by 2^k is exact, because multiplying by a power
-        // of two only changes the exponent. So one of the two full-size roundings
-        // is gone rather than compensated, which is the cheaper of the two fixes
-        // and the one that cannot be argued with.
+        // (It is also why this never reads `1.0 + p*p`: that is the same identity
+        // and a different number, and I "simplified" to it once, checked the two
+        // Pythagorean triples that are exact -- 3,4,5 and 5,12,13 -- saw them pass
+        // and nearly committed. hypot(2.0, 3.0) is not one of those: p = 2/3 does
+        // not square-and-add back to 1 exactly. Both forms give the same answer for
+        // 3,4 and for 1,1, which is what a form that is only SOMETIMES wrong looks
+        // like, and is why the check has to be on an argument where they disagree.)
         //
-        // s2 may underflow to zero, and that is right rather than lucky: s2 is
-        // s/m to within the scale, so s2 == 0 means (s/m)^2 is below 2^-1074 and
-        // contributes nothing a double can hold. Its square would be zero anyway.
-        // TWO PATHS, and which one is used is a DECISION about the range rather
-        // than a compromise.
+        // ── the middle: no scaling at all ──
         //
-        // In the middle of the range no scaling is needed at all: m*m cannot
-        // overflow while m is under 1.34e154, and it is a NORMAL number while m
-        // is over 1.5e-154. There the answer is just sqrt(m*m + s*s) -- which is
-        // not merely cheaper than the scaled form, it is MORE ACCURATE, having
-        // three roundings to the scaled form's four and neither of them spent on
-        // a scale factor.
+        // sqrt(m*m + s*s) directly, with three roundings where the scaled form has
+        // four and NONE of them spent on a scale factor -- so it is more accurate
+        // as well as cheaper, which is the opposite of what I expected and the
+        // reason it is worth having. About half of all arguments land here.
         //
-        // The low end is 1e-152 rather than the 1.5e-154 that is the true bound,
-        // and the margin is deliberate: at m = 1.4e-154 the square is 1.96e-308,
-        // which is SUBNORMAL, and a subnormal square has lost its low bits before
-        // the square root ever sees them. Writing the exact bound there would be
-        // correct on the day and a latent defect after it, because the arguments
-        // that reach it are one part in 10^150 of the domain.
+        // BOTH bounds are the size of what this line ACTUALLY computes, and
+        // getting either wrong is the defect class this module has produced
+        // before: an intermediate leaves the range while the answer does not.
         //
-        // The scaled path is for the two decades-wide ends, and it is expensive:
-        // ldexp is 178 instructions a call and the path needs two of them, which
-        // measured 964 instructions a call against the ratio form's 299. Paying
-        // that on every argument to serve the half of the range that needs it
-        // would be a bad trade, and the middle band is about half of all
-        // arguments under a decade-uniform spread -- so it is paid for half the
-        // time.
-        if (m < 1e154 && m > 1e-152) {
+        // The high bound is 1e153 where the true bound is sqrt(DBL_MAX/2) =
+        // 9.4808e153. It WAS 1e154, which is wrong by a factor of ten, and it was
+        // wrong because it was reasoned from m*m ALONE: at m = 1e154 the square is
+        // 1e308 and fits. What does not fit is the SUM, which is up to 2*m*m --
+        // and the sum is what the line evaluates. So every m in (9.48e153, 1e154)
+        // took the direct path and answered INFINITY for an answer of about
+        // 1.4e154, which is a perfectly ordinary double. Only the boundary cases
+        // in the table found it; the decade-uniform sweep did not, and neither did
+        // 20000 randomly drawn pairs.
+        //
+        // The low bound is 1e152 where the true bound is 1.5e-154, and the margin
+        // is deliberate in the other direction: at m = 1.4e-154 the square is
+        // 1.96e-308, which is SUBNORMAL, and a subnormal square has lost its low
+        // bits before the square root ever sees them. Writing the exact bound
+        // there would be correct on the day and a latent defect after it, because
+        // the arguments that reach it are one part in 10^150 of the domain.
+        if (m < 1e153 && m > 1e-152) {
             sqrt(m * m + s * s)
         } else {
             let p = s / m;
@@ -842,7 +838,7 @@ def hypot_scaled(m: float, s: float) -> float {
                 // SIZE all over again.
                 m + p * s * 0.5
             } else {
-                // and only here is the scaling needed: m outside [1e-152, 1e154]
+                // and only here is the scaling needed: m outside [1e-152, 1e153]
                 // AND the ratio not small, which under a decade-uniform pair
                 // spread is under one per cent of arguments.
                 let k = exp_field(m) - 1023;

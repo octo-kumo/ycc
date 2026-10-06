@@ -855,6 +855,56 @@ TWO_EXTRA["hypot"] = decade_pair(1903, 200) + [
     (a, b) for a in (1.0, 1e300, 1e-300, 5e-324, 1e308, float("inf"))
     for b in (1.0, 1e-300, 1e300, 5e-324, 1e308, float("inf"))
 ]
+# THE THREE THRESHOLDS, pinned from both sides. hypot_scaled picks between three
+# forms on `m < 1e154 && m > 1e-152` and then on `s/m < 1e-4`, so those three
+# numbers are DECISION POINTS: a value exactly at one takes one path and one ulp
+# past it takes another, and a decade-uniform spread lands on neither. The sweep
+# reaches all three paths -- 103 direct, 136 series, 11 scaled of the 250 cases
+# above -- and reaches none of the boundaries, which is the shape of a gate that
+# reads as coverage: every region is exercised and no seam between them is.
+#
+# Each threshold gets the value itself and its two neighbours, crossed with a
+# partner that keeps the OTHER test from deciding, so the only thing that changes
+# between the three cases is which side of the seam it is on.
+def _around(v):
+    """v and its two neighbouring doubles."""
+    return [math.nextafter(v, -math.inf), v, math.nextafter(v, math.inf)]
+
+
+# THE CONSTANTS THE CODE BRANCHES ON, walked across with a CORRELATED partner --
+# and the general rule is worth more than these cases. A sweep finds defects by
+# AREA, so it finds what is spread over the decades and is blind to what lives in
+# a sliver of one: hypot answered +inf for every m in (9.4808e153, 1e154) when s
+# was comparable to it, which is the top 5.8% of a single decade, and 20000
+# decade-uniform draws would have found it about one time in nine even with the
+# defect's own threshold in front of them (P = (1/628) x (2/600), so 20000 x that
+# = 0.11). What found it was a case built from the CONSTANT THE CODE TESTS, which
+# is why both that one and the true one are here: a threshold is only findable if
+# something names it.
+#
+# So the rule for adding to this table is: every numeric literal a comparison in
+# std/math.y tests against gets itself and its two neighbours, crossed with a
+# partner close enough to it that the second condition also holds. The partner is
+# the point -- an independent draw makes s == m rare, which is the shape the
+# overflow needs.
+TWO_EXTRA["hypot"] = TWO_EXTRA["hypot"] + [
+    (a, b)
+    for a in _around(1e-152) + _around(1e154) + _around(1e153)
+    # sqrt(DBL_MAX/2), where m*m + s*s with s == m stops fitting in a double. It is
+    # NOT a literal in the module -- the module's 1e153 stands well inside it --
+    # and it is pinned here anyway, because it is the seam a reader reasoning
+    # about the bound will get wrong, which is exactly what happened.
+    + _around(math.sqrt(1.7976931348623157e308 / 2.0))
+    for b in (a * 0.5, a, a * 2.0)
+] + [
+    # the p seam, with m far outside the band so the p test is what decides.
+    # 1e200 and 1e-4 are exactly representable enough that p = s/m lands on 1e-4
+    # to the last bit or one ulp either side of it.
+    (m, m * 1e-4) for m in (1e200, 1e-200, 1e308, 5e-324)
+] + [
+    (m, s) for m in (1e200, 1e308) for s in (m * 1e-4, math.nextafter(m * 1e-4, 0.0),
+                                            math.nextafter(m * 1e-4, math.inf))
+]
 TWO_EXTRA["atan2"] = decade_pair(1904, 200) + [
     # every quadrant at every scale, which the independent draw gives in
     # proportion but not in position: the four axis pairs and the four diagonals

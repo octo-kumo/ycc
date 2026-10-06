@@ -278,6 +278,27 @@ def pair_spread(n):
     every combination of the edges -- the zeros, the subnormals, the infinities,
     the NaN -- is asked at least once. That is where the sign-of-zero defects
     live, and a random spread would reach them by luck.
+
+    AND A CORRELATED FAMILY, which this file did not have and should have had from
+    the start. Drawing the two exponents INDEPENDENTLY is what makes wide ratios
+    common, and it is exactly what makes s == m RARE -- so the independent sweep
+    was blind to a whole class of defect, and measurably so. hypot answered
+    INFINITY for every m in (9.4808e153, 1e154) when s was comparable to it,
+    because the direct path's m*m + s*s overflows while the answer does not. Of
+    20000 independent draws, 6 landed in that decade and NONE of the six had s
+    within a factor of ten of m; the expected number that both conditions hold is
+
+        P(m in the decade) x P(|s/m| in [0.1, 10]) = (1/628) x (2/600)
+        20000 x that                                                    = 0.11
+
+    So this sweep had about one chance in nine of finding that defect even with
+    the defect's own threshold in the code. It was found instead by the pinned
+    boundary cases in ulp_table.txt, which cross a threshold with a, a/2 and 2a
+    -- correlated BY CONSTRUCTION.
+
+    The lesson is worth more than the family: independent draws and correlated
+    draws are not two settings of one knob, they are opposite, and choosing one
+    for its strength silently disables the other. Both are here now.
     """
     rng = random.Random(SEED)
     head = [0.0, -0.0, 1.0, -1.0, 5e-324, -5e-324, 1e-320,
@@ -285,6 +306,42 @@ def pair_spread(n):
             1e-300, 1e-8, 1e8, 1e300, 1.7976931348623157e308,
             -1.7976931348623157e308, math.inf, -math.inf, math.nan]
     out = [(a, b) for a in head for b in head]
+    # The correlated family: every decade, a handful of small ratios. The
+    # ratios are the ones a program writes -- equal, twice, half, the 3-4-5
+    # family, and the 1e-8 that is where the wide-ratio band starts.
+    for d in range(-323, 309, 2):
+        m = rng.uniform(1.0, 10.0) * (10.0 ** d)
+        for r in (1.0, 2.0, 0.5, 3.0, 1.0 / 3.0, 0.75, 1e-8):
+            out.append((m * r, m))
+            out.append((-m * r, -m))
+    # AND the thresholds themselves, crossed with a CORRELATED partner.
+    #
+    # The decade family above still missed the overflow defect, and the reason is
+    # worth stating because it is not a tuning problem: the defect lives in the top
+    # 5.8 per cent of ONE decade, and a mantissa drawn uniform in [1, 10) lands
+    # there about one time in seventeen. No quantity of extra draws fixes that --
+    # a sweep finds defects by AREA, and this one is a sliver.
+    #
+    # So the thresholds are named here and walked across, with the partner kept
+    # comparable to m because that is the second condition the overflow needs.
+    # Both families are needed and they are not substitutes: the decade family
+    # finds defects spread over decades, these find defects that live at a
+    # SEAM, and 20000 draws of anything will not walk a seam.
+    #
+    # AND THE LIMIT OF THIS FAMILY, which cost a run to establish: it walks the
+    # constants THE CODE TESTS, so it cannot find a defect at a seam the code got
+    # WRONG. Restoring the bad 1e154 bound still gave NOTHING OVER 1 ULP here,
+    # because 1e154 is not one of the constants named above -- the defect was a
+    # decade away from every one of them. What caught it was ulp_table.txt's
+    # boundary block, which crosses BOTH the code's constants and the true seam
+    # sqrt(DBL_MAX/2). The division of labour is therefore: this file walks what
+    # the code declares it branches on, the table walks those and the physics.
+    for t in (1e-152, 1e153):
+        for m in (math.nextafter(t, 0.0), t, math.nextafter(t, math.inf),
+                  math.nextafter(t, -math.inf)):
+            for r in (1.0, 2.0, 0.5, 0.999, 1.001):
+                out.append((m * r, m))
+                out.append((-m * r, -m))
     while len(out) < n:
         p = []
         for _ in range(2):
