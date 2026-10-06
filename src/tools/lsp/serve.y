@@ -87,14 +87,19 @@ type State = {
     // and the linter on every keystroke"; it does NOT mean "ignore the change",
     // because every other feature reads this buffer and a stale one is worse than
     // a slow check. See on_did_change.
-    check_on_change: bool
+    check_on_change: bool,
+    // Per-request timing lines to the client's log. OFF by default: they cost
+    // the extension host an appendLine each, two per request, and this extension
+    // was reported making a cold open freeze the editor. A diagnostic that is on by
+    // default is a diagnostic that can be the cause of what it is diagnosing.
+    timing: bool
 };
 
 def server_state(root: str, pack: str, wlevel: long) -> State {
     let m: { str => Doc } = {};
     let e: { str => Prepared } = {};
     let v: { str => long } = {};
-    let s: State = { docs: m, open: [], xc: e, xc_none: [], xc_ver: v, root: root, pack: pack, wlevel: wlevel, shutting: false, exiting: false, initialized: false, check_on_change: true };
+    let s: State = { docs: m, open: [], xc: e, xc_none: [], xc_ver: v, root: root, pack: pack, wlevel: wlevel, shutting: false, exiting: false, initialized: false, check_on_change: true, timing: false };
     s
 }
 
@@ -523,6 +528,17 @@ def on_did_close(st: State, p: { str => json.Val }) -> [str] {
 // malformed value is also "on" rather than an error: this is a performance switch,
 // and refusing to start over it would be a worse outcome than checking when the
 // user asked not to.
+// `initializationOptions.timing`: whether to write the per-request timing lines.
+// Read in the PARENT, for the same reason read_check_on_change is (dispatch.y
+// apply_state) -- a flag set in do_initialize lives in the child that read it.
+def read_timing(p: { str => json.Val }) -> bool {
+    let out = false;
+    let io = members_of(field_of(p, "initializationOptions"));
+    let got = field_of(io, "timing");
+    if let json.Bool b = got { out = b.b; };
+    out
+}
+
 def read_check_on_change(p: { str => json.Val }) -> bool {
     let out = true;
     // `members_of` because `initializationOptions` is a `json.Val` -- a value
@@ -2074,7 +2090,7 @@ export {
   sort_text,
   note_open, note_change, note_close,
   on_did_open, on_did_change, on_did_save, on_did_close, on_exit,
-  do_initialize, read_check_on_change, do_shutdown, do_formatting,
+  do_initialize, read_check_on_change, read_timing, do_shutdown, do_formatting,
   do_semantic_tokens, do_document_symbols, numbers, symbols_json,
   end_position, count_lines,
   field_of, members_of, str_field, long_field, params_of,

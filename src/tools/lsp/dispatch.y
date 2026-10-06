@@ -63,6 +63,10 @@ def apply_state(st: State, raw: str) -> bool {
         // session still published on every change. This function is the only code
         // the parent runs, so this is the only place the setting can be recorded.
         st.check_on_change = serve.read_check_on_change(p);
+        // Same placement, same reason: the per-request timing lines are written by
+        // the CHILDREN, so the flag has to be on the parent's State for them to
+        // inherit it.
+        st.timing = serve.read_timing(p);
     }
     else if (method == "shutdown") { st.shutting = true; }
     else if (method == "exit") { serve.on_exit(st); }

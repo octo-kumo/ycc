@@ -344,7 +344,7 @@ def serve_loop(st: State, fd_in: long) -> long {
         idle_since = clock_us();
         // A gap under 200 ms is ordinary -- a person thinking -- and logging every
         // one would bury the lines that matter. A gap this size IS the freeze.
-        if (idle_us > 200000) { log_idle(idle_us); };
+        if (idle_us > 200000 && st.timing) { log_idle(idle_us); };
         if (!is_some(got)) {
             // Clean end of input: the client closed the connection. Exiting 0
             // here is right -- this is how a client says "I am done", and the
@@ -367,6 +367,7 @@ def serve_loop(st: State, fd_in: long) -> long {
                 // compiler prints -- an import it cannot open, a trap message --
                 // lands in the client's log instead of in the framed stream.
                 syscall(33, FD_LOG, FD_OUT, 0);
+                let timed = st.timing;
                 let t0 = clock_us();
                 let bodies = handle_one(st, raw);
                 let k = 0;
@@ -374,7 +375,7 @@ def serve_loop(st: State, fd_in: long) -> long {
                     rpc.write_frame(reply, bodies[k]);
                     k = k + 1;
                 };
-                log_work(method_of_raw(raw), clock_us() - t0);
+                if (timed) { log_work(method_of_raw(raw), clock_us() - t0); };
                 // exit_group(0): the child must not return into the runtime's
                 // normal exit path, which would flush the parent's buffers and
                 // run atexit handlers twice.
@@ -387,7 +388,7 @@ def serve_loop(st: State, fd_in: long) -> long {
                 // spin forever on a resource limit.
                 let w0 = clock_us();
                 let status = wait_pid(child);
-                log_blocked(clock_us() - w0);
+                if (st.timing) { log_blocked(clock_us() - w0); };
                 if (status < 0) {
                     // The child died on a signal, or wait4 itself failed. A
                     // request that crashes the child must not take the server
