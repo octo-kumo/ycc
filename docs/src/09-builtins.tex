@@ -862,9 +862,11 @@ reference against a base URL the way a browser would.
 \ic{import crypto;} has what TLS uses, in plain Y over \ic{[byte]}:
 \ic{sha256}, \ic{sha384}, \ic{sha512}, and \ic{hmac}.
 The hashes are \ic{crypto.hash\_sha256()},
-\ic{crypto.hash\_sha384()} and \ic{crypto.hash\_sha512()}, and
-\ic{crypto.hkdf\_extract} with \ic{crypto.hkdf\_expand} is the
-key derivation TLS 1.3 asks for;
+\ic{crypto.hash\_sha384()} and \ic{crypto.hash\_sha512()}, and each
+is a \ic{crypto.Hash} --- which names the digest to use.
+\ic{crypto.hmac} takes one, and so do \ic{crypto.hkdf\_extract},
+\ic{crypto.hkdf\_expand} and \ic{crypto.rsa\_verify\_pss}; the last two
+together are the key derivation TLS 1.3 asks for;
 \ic{chacha\_seal}/\ic{chacha\_open} (ChaCha20-Poly1305) and
 \ic{gcm\_seal}/\ic{gcm\_open} (AES-GCM), each \ic{(key, nonce, aad,
 data)}, an open giving \ic{none} for a forged message; the AES key is 16,
@@ -876,7 +878,8 @@ implemented); \ic{x25519} and \ic{x25519\_base}, each a 32-byte scalar
 and a 32-byte point, where a peer point of low order --- one that would
 make the shared secret all zeros --- stops the program, as RFC 8446
 \S7.4.2 requires; \ic{rsa\_verify\_pkcs1}, \ic{rsa\_verify\_pss} and
-\ic{ecdsa\_verify} (over \ic{crypto.p256()} or \ic{crypto.p384()});
+\ic{ecdsa\_verify}, whose first argument is the \ic{crypto.Curve} that
+\ic{crypto.p256()} and \ic{crypto.p384()} each answer;
 \ic{random\_bytes(n)}, \ic{hex} and \ic{unhex}. The primitives those
 use are exported too, for building something the above does not cover:
 \ic{bytes\_eq} (a constant-time compare of two \ic{[byte]}), the
@@ -1369,10 +1372,14 @@ the text away would have nothing to hand back.
   \ic{[byte]} as UTF-8 --- the two-, three- and four-byte forms are built here,
   because \ic{chr} gives one byte --- and two lowercase hex digits of a byte
   value.
-\item[\ic{json.at(p)}, \ic{json.lit(p, t)}, \ic{json.p\_show(s, i)},
-  \ic{json.hexval(c)}] The parser's own cursor, for a caller writing a parser
-  over the same primitives: the byte at the cursor, a literal matched and
-  consumed, the fragment the diagnostics quote, and one hex digit.
+\item[\ic{json.p\_show(s, i)}, \ic{json.hexval(c)}] Two things here are
+  exported and not reachable: \ic{json.at(p)} and \ic{json.lit(p, t)} take
+  the parser's own cursor, a \ic{json.P}, and the module exports no way to
+  make one --- nothing returns or constructs a \ic{json.P} --- so a program
+  cannot call either. They are named here because they are in the module's
+  interface, not because they can be used. What a program \emph{can} reach is
+  the fragment the diagnostics quote (\ic{json.p\_show(s, i)}) and one hex
+  digit (\ic{json.hexval(c)}).
 \item[\ic{json.json\_depth\_max}, \ic{json.json\_depth\_error}] The nesting
   limit, \textbf{200}, and the text that stands in for a subtree past it.
 \end{description}
