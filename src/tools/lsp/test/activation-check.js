@@ -76,6 +76,51 @@ check(
 check('package.json: vscode-languageclient is a RUNTIME dependency',
     !!(pkg.dependencies && pkg.dependencies['vscode-languageclient']),
     'it is in devDependencies, so the packaged .vsix cannot require it');
+
+// Every setting the manifest offers must be READ by the client, and every setting
+// the client reads must be OFFERED.
+//
+// Both directions have happened. `y.lsp.checkOnChange` was in LSP.md's
+// requirements as R1.8 for as long as that document existed and was read by
+// nobody -- the server dropped `initialize`'s params, so there was nowhere for the
+// value to arrive even if the client had sent it (t019). A setting that appears in
+// the settings UI and does nothing is the quietest kind of broken, because the
+// user changes it, sees no difference, and concludes the feature is unreliable.
+//
+// The reverse is the `y.lsp.semantic` LSP.md promised: a switch that does not
+// exist at all. Documentation claiming a setting is not catchable from here, but
+// the manifest is.
+const settings = ((pkg.contributes && pkg.contributes.configuration) || {}).properties || {};
+const srcDir = path.join(extDir, 'src');
+const clientSrc = fs
+    .readdirSync(srcDir)
+    .filter((f) => f.endsWith('.ts'))
+    .map((f) => fs.readFileSync(path.join(srcDir, f), 'utf8'))
+    .join('\n');
+const settingKeys = Object.keys(settings).map((k) => k.replace(/^y\.lsp\./, ''));
+check(
+    'package.json: every setting it offers is READ by the client',
+    settingKeys.every((k) => clientSrc.includes("'" + k + "'")),
+    'unread: ' + settingKeys.filter((k) => !clientSrc.includes("'" + k + "'")).join(','),
+);
+const readKeys = [...clientSrc.matchAll(/get<[^>]*>\('([a-zA-Z.]+)'/g)].map((m) => m[1]);
+check(
+    'package.json: every setting the client reads is OFFERED',
+    readKeys.every((k) => settingKeys.includes(k)),
+    'read but not declared: ' + readKeys.filter((k) => !settingKeys.includes(k)).join(','),
+);
+// The two booleans are pinned by name and by default, not only by type. Both
+// default to what the server already does (check on change, warn at level 0), so
+// adding a setting here cannot quietly change what every existing user sees.
+check(
+    'package.json: the five settings, and the two booleans default to what the server already does',
+    settingKeys.length === 5 &&
+        settings['y.lsp.checkOnChange'].type === 'boolean' &&
+        settings['y.lsp.checkOnChange'].default === true &&
+        settings['y.lsp.warnings'].type === 'boolean' &&
+        settings['y.lsp.warnings'].default === false,
+    'settings: ' + settingKeys.join(','),
+);
 check('package.json: it is not ALSO in devDependencies',
     !(pkg.devDependencies && pkg.devDependencies['vscode-languageclient']));
 
@@ -97,11 +142,16 @@ Module._resolveFilename = function (request, ...rest) {
 
 const stub = require(stubPath);
 
-// Count real spawns of the server, so "started" is not taken on trust.
+// Count real spawns of the server, so "started" is not taken on trust -- and keep
+// the ARGV, because that is where the settings land. Both settings that map to a
+// flag (`y.lsp.rootPath` -> `--root`, `y.lsp.warnings` -> `-W`) are checked below
+// against these, which is the only place the client's half of either can be seen.
 let spawned = [];
+let spawnArgs = [];
 const originalSpawn = cp.spawn;
 cp.spawn = function (cmd, ...rest) {
     spawned.push(String(cmd));
+    spawnArgs.push(rest[0] || []);
     return originalSpawn.call(this, cmd, ...rest);
 };
 
@@ -127,6 +177,7 @@ check('the module exports activate and deactivate',
 async function activateAt(dir) {
     stub.__reset();
     spawned = [];
+    spawnArgs = [];
     const ctx = { extensionPath: dir, subscriptions: [] };
     await ext.activate(ctx);
     // Give the client time to spawn and complete initialize. The handshake is a
@@ -165,6 +216,17 @@ async function activateAt(dir) {
     check('activate: actually spawned the server', spawned.length === 1, JSON.stringify(spawned));
     check('activate: the server it spawned is the one we placed', spawned[0] === serverPath,
         JSON.stringify(spawned));
+    // The argv the client built, with the settings at their DEFAULTS. NOT `-W`,
+    // because `y.lsp.warnings` defaults off and `yserve` defaults to level 0 --
+    // this pins "the setting's default is what the server already did", which is
+    // the only safe default for a setting added after the fact. And NOT `--root`
+    // either: this stub has no `workspaceFolders` and the setting is empty, so
+    // there is no root to pass. Both are asserted positively in the settings run
+    // below, which is what stops this pair from passing for the wrong reason.
+    check('activate: argv at default settings is just --stdio',
+        (spawnArgs[0] || []).join(' ') === '--stdio', JSON.stringify(spawnArgs[0]));
+    check('activate: argv does NOT carry -W, because y.lsp.warnings defaults off',
+        !(spawnArgs[0] || []).includes('-W'), JSON.stringify(spawnArgs[0]));
     check('activate: no error dialog when the server is there',
         !stub.__messages.some((m) => m.includes('Could not find')),
         JSON.stringify(stub.__messages));
@@ -186,6 +248,23 @@ async function activateAt(dir) {
     await ext.deactivate();
     check('deactivate: stopped the server it started', spawned.length >= 1);
 
+// R1.6 and the root, with both settings ON. The positive half of the argv checks
+// above, and the only place `serverArgs(root, warnings)` is seen doing its job:
+// a setting that reaches `package.json` and the client and still never reaches the
+// server passes every static check there is.
+// `serverPath` too: `config.__override` REPLACES the whole configuration rather
+// than merging with it, so a run that sets only `warnings` leaves the search with
+// nothing to find -- which is exactly what the first version of this did, and the
+// symptom was "nothing was spawned", not a wrong argument.
+stub.__config = { serverPath: serverPath, rootPath: goodDir, warnings: true };
+await activateAt(goodDir);
+check('activate with y.lsp.rootPath: argv carries --root AND the path',
+    spawnArgs[0] && spawnArgs[0][spawnArgs[0].indexOf('--root') + 1] === goodDir,
+    'spawned: ' + JSON.stringify(spawned) + ' argv: ' + JSON.stringify(spawnArgs[0]));
+check('activate with y.lsp.warnings: argv carries -W',
+    (spawnArgs[0] || []).includes('-W'), JSON.stringify(spawnArgs[0]));
+stub.__config = undefined;
+
     // 2. the failure path: nowhere to find yserve. It must SAY so -- a client
     //    that silently does nothing is the worst outcome, because the user has
     //    no way to tell "no errors" from "not working".
@@ -206,6 +285,7 @@ async function activateAt(dir) {
     //    than failing.
     stub.__reset();
     spawned = [];
+    spawnArgs = [];
     stub.__config = { serverPath: '/nonexistent/yserve' };
     await ext.activate({ extensionPath: serverBin, subscriptions: [] });
     await new Promise((r) => setTimeout(r, 1500));
