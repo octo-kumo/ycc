@@ -277,6 +277,39 @@ branch-disjointness false positive.
   2000, where stat's own layout has exactly 2000. `y_os_close` (NtClose, 15) was
   written the same round and reverted with it, untested, for the same reason:
   it is only reachable through a file handle that openat has to produce first.
+- **BCrypt on wine: `OpenAlgorithmProvider` WORKS and is MEASURED, so round
+  35's diagnosis was wrong; `GenRandom` is what fails, and the next step is a
+  different entry point entirely.**
+  Round 35 concluded that "the call that ran was not the function the label
+  names -- the cells and the offsets disagree". That is DISPROVED by
+  measurement: a temporary body that made the Open call and wrote its results
+  into the caller's buffer (dumped through a helper in std/fs.y, which is read
+  from source and needs no rebless) got **status 0 and handle 227328
+  (0x37800)** -- a real handle from a real bcrypt. The deterministic .bss IAT,
+  `FirstThunk` pointing at it, the three-import table and the Win64 call are all
+  working; pe-gate.sh asserts the first two.
+  What still fails is `BCryptGenRandom(h, buf, len, 0)` with that SAME valid
+  handle: wine's bcrypt page-faults on a handle of -1 inside its own code
+  (address 0x6FFFFF9D514B), and round 35 measured that the documented
+  pseudo-handle (BCRYPT_USE_SYSTEM_PREFERRED_RNG = 2) page-faults too. So both
+  routes into wine 11.17's bcrypt fail, the arguments are demonstrably right,
+  and the blocker is the library rather than this layer. The body is reverted
+  again; the tree is the round-48 state and make ycc verifies byte-identical.
+  **The concrete next step is to stop using bcrypt: `SystemFunction036`
+  (`RtlGenRandom`) in advapi32.dll** is the classic Windows RNG, it is present
+  in this prefix, and its signature is `BOOLEAN SystemFunction036(PVOID, ULONG)`
+  -- ONE call, no provider, no handle, no close, and therefore none of the
+  three-call dance that wine cannot do. It needs one more entry in
+  `w_imports()` and a body about ten instructions long.
+  **And a method lesson that cost this round an hour:** the edit that tried to
+  insert the body used `s[:i] + body`, which TRUNCATES the file at the block --
+  and `y_os_random` sits in the middle of wsys.s now, so it silently deleted the
+  ten bodies added since round 42. The build still succeeded (a missing body just
+  falls back to the ELF one), every test still ran, and only grepping for
+  `y_os_list` showed it. Replace a block by matching its exact text, never by
+  index-and-truncate; restore from `git checkout` (the /tmp backup was damaged
+  by the same splice) and treat "the compiler still has the old body" as a
+  suspicion about the SOURCE before the build.
 - **B2's FILE LAYER IS DONE (round 48). `pe-fs.y` MATCHES LINUX EXACTLY.** The
   45-line portable file-path program that pe-gate.sh has carried as a known gap
   since round 39 -- when it stopped failing and started TIMING OUT -- now
