@@ -942,6 +942,29 @@ def num_is_float(s: str) -> bool {
     }
 };
 
+// Whether a float literal's MANTISSA is zero -- every character before the
+// exponent is a '0', whatever the exponent says.
+//
+// Zero times anything is zero: `0e999999` is exactly zero, C's strtod takes it,
+// and the range check in typeof_expr_go rejects it because it looks at the
+// exponent alone. That check exists to catch "a mistake, not a value", and a zero
+// written with a huge exponent is not a magnitude anybody could have meant.
+def num_mantissa_zero(s: str) -> bool {
+    let end = len(s);
+    let eb = index_of(s, "e");
+    if (eb < 0) { eb = index_of(s, "E"); };
+    if (eb >= 0) { end = eb };
+    let i = 0;
+    if (s[0:1] == "-" || s[0:1] == "+") { i = 1 };
+    let all = true;
+    while (all && i < end) {
+        let c = s[i:i + 1];
+        if (c != "0" && c != ".") { all = false };
+        i = i + 1
+    };
+    all
+};
+
 // Merge one field into a record literal's field list, in place: the array is
 // the caller's (every call site assigns the result straight back) and Y arrays
 // are references. A name the list does not have yet -- all but a repeated key
@@ -1734,8 +1757,12 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
             if (dp > 100000 || dp < 0 - 100000) {
                 // out of range by thousands of decades: a mistake, not a
                 // value. A literal merely past the double's range (1e400) is
-                // still accepted and becomes inf, as IEEE says.
-                st = fail(st, "float literal magnitude out of range (a double holds 10^-308 to 10^308)", lit.line, lit.col);
+                // still accepted and becomes inf, as IEEE says. And a zero
+                // mantissa is exempt however large the exponent, because 0 times
+                // anything is 0 -- `0e999999` is exactly zero and C takes it.
+                if (!num_mantissa_zero(lit.v)) {
+                    st = fail(st, "float literal magnitude out of range (a double holds 10^-308 to 10^308)", lit.line, lit.col);
+                }
             };
             tc_res(type_node({ k: K.tfloat }), st)
         } else {

@@ -68,6 +68,7 @@ static int str_in(Yv *xs, Yv *s);
 static Yv *trec_field_type(Yv *rec, Yv *key);
 static Yv *tstr_go(Yv *t);
 static int num_is_float(Yv *s);
+static int num_mantissa_zero(Yv *s);
 static long num_net_exp(Yv *s);
 static int is_value_type(Yv *t);
 static int t_poisoned(Yv *t);
@@ -1128,6 +1129,32 @@ static long num_net_exp(Yv *s) {
 /* A numeric literal denotes a float when it has a fraction or an exponent.
  * Radix literals are checked first: 0xE1 and 0xbeef contain 'e'/'E'/'b'.
  * (native.y keeps its own copy -- the two modules never share helpers.) */
+static int num_mantissa_zero(Yv *s) {
+    /* Whether a float literal's MANTISSA is zero -- every character before the
+     * exponent is a '0', whatever the exponent says.
+     *
+     * Zero times anything is zero: `0e999999` is exactly zero, C's strtod takes
+     * it, and the range check in typeof_expr_go rejects it because it looks at
+     * the exponent alone. That check exists to catch "a mistake, not a value",
+     * and a zero written with a huge exponent is not a magnitude anybody could
+     * have meant. */
+    long end = yv_len(s);
+    long eb = ys_index_of(s, ys("e"));
+    long i = 0;
+    int all = 1;
+    if (eb < 0) { eb = ys_index_of(s, ys("E")); }
+    if (eb >= 0) { end = eb; }
+    if (ys_eq_lit(ys_slice(s, 0, 1), "-") || ys_eq_lit(ys_slice(s, 0, 1), "+")) {
+        i = 1;
+    }
+    while (all && i < end) {
+        Yv *c = ys_slice(s, i, i + 1);
+        if (!ys_eq_lit(c, "0") && !ys_eq_lit(c, ".")) { all = 0; }
+        i = i + 1;
+    }
+    return all;
+}
+
 static int num_is_float(Yv *s) {
     int radix = 0;
     if (yv_len(s) > 2) {
@@ -2147,11 +2174,15 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
             if (dp > 100000 || dp < -100000) {
                 /* out of range by thousands of decades: a mistake, not a value.
                  * A literal merely past the double's range (1e400) is still
-                 * accepted and becomes inf, as IEEE says. */
-                st = fail(st,
-                          ys("float literal magnitude out of range (a double holds 10^-308 to 10^308)"),
-                          yv_l(yr_get(node, "line")),
-                          yv_l(yr_get(node, "col")));
+                 * accepted and becomes inf, as IEEE says. And a zero mantissa is
+                 * exempt however large the exponent, because 0 times anything is
+                 * 0 -- `0e999999` is exactly zero and C takes it. */
+                if (!num_mantissa_zero(yr_get(node, "v"))) {
+                    st = fail(st,
+                              ys("float literal magnitude out of range (a double holds 10^-308 to 10^308)"),
+                              yv_l(yr_get(node, "line")),
+                              yv_l(yr_get(node, "col")));
+                }
             }
             return yr(2, "typ", yr(1, "k", yv_long(K_tfloat)), "st", st);
         } else {
