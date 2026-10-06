@@ -2134,9 +2134,23 @@ def splitmix64(state: [long]) -> long {
     m ^ (m >>> 31)
 };
 
-// x <<< k | x >>> (64 - k), for 1 <= k <= 63.
+// Rotate left by k bits. The count is taken mod 64, so a multiple of 64 is the
+// identity and no argument kills the program.
+//
+// It was `x << k | x >>> (64 - k)` under a comment saying "for 1 <= k <= 63",
+// and that comment was wrong in a way worth recording. k = 0 and k = 64 both
+// HAPPEN to be right -- (x << 0) | (x >>> 64) is x | 0, and (x << 64) |
+// (x >>> 0) is 0 | x -- so the function behaved as if it took 0, while 65
+// killed the program, because 64 - 65 is -1 and a negative shift count traps.
+// A gate that walked the count would have found this in a moment; rotl had no
+// gate at all, which is the other half of it.
+//
+// Masking is what the instruction does -- ROL masks its count to six bits -- and
+// it turns rotl(x, 64) == x from a coincidence into a fact. Every other count
+// out there in this module merely zeroes; a rotate was the one that died.
 def rotl(x: long, k: long) -> long {
-    (x << k) | (x >>> (64 - k))
+    let r = k & 63;
+    if (r == 0) { x } else { (x << r) | (x >>> (64 - r)) }
 };
 
 // Fill a four-element state from one seed with SplitMix64, the standard way: all

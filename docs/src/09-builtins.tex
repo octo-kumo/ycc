@@ -563,6 +563,18 @@ computed by squaring).
   \ic{math.popcount(-1)} is \ic{64} and \ic{math.clz(-1)} is \ic{0}.
 \item[\ic{math.next\_pow2(x)}] The smallest power of two $\geq$ \ty{x}; \ic{1}
   for $x \leq 1$, and \ic{0} past \ic{2\^{}62}, where no such power fits.
+\item[\ic{math.rotl(x, k)}] \ty{x} rotated left by $k$ bits, with $k$ taken
+  modulo \num{64}: a multiple of \num{64} is the identity, and no argument ends
+  the program. That last part is the whole point, and it was not true. The
+  function was \ic{x << k | x >>> (64 - k)} under a comment saying
+  \emph{for $1 \leq k \leq 63$}, and \ic{k = 0} and \ic{k = 64} both
+  \emph{happened} to be right --- \ic{x | 0} and \ic{0 | x} --- so it read as
+  though it took \ic{0}, while \ic{k = 65} \emph{killed the program}, because
+  \ic{64 - 65} is \ic{-1} and a negative shift count traps. Every other count out
+  of range in this section merely zeroes; the rotation was the one that died.
+  Masking is what \ic{ROL} does, and it makes \ic{rotl(x, 64) == x} a fact rather
+  than a coincidence. \ic{t321\_math\_rotl.y} holds it down, including the
+  identity at \ic{0}, \ic{64} and \ic{128} and both directions.
 \item[\ic{math.mul\_mod(a, b, m)}, \ic{math.pow\_mod(b, e, m)}] \ic{a * b} and
   \ic{b\^{}e} reduced modulo \ic{m}, for \ic{0 < m <= 2147483647}: the operands
   are reduced first, so the product cannot overflow a \ty{long}. A larger
