@@ -327,6 +327,34 @@ branch-disjointness false positive.
   kernel wrote; the capacity is wrong and the IOSB is not the answer either.
   Both attempts cost their build; neither is kept, because no unverified change
   to the emitted compiler is being committed.
+- **MEASURED (round 62), and two earlier claims are corrected.** A temporary
+  diagnostic path in `y_os_list` (copy the 32 bytes of IOSB and the first 64
+  bytes the kernel left in the buffer, return 96) plus a temporary
+  `y_diag_dir(path)` helper in the SOURCE-READ `std/fs.y` -- so `make cycc` was
+  the only build needed, no `make ycc` and no rebless -- produced this for a
+  directory holding one file:
+    * the buffer begins with a VALID record: `NextEntryOffset = 0` (so there is
+      one entry), a real NT timestamp (`0x01DD29C829 29E49E`), and
+      `FileNameLength = 16`.
+    * **WINE RETURNS NEITHER `.` NOR `..`.** That kills the assumption the
+      whole body was built on ("`.` and `..` come first, so they advance %r8
+      past the write position before any name is copied"). The FIRST name copy
+      therefore writes at offset 0 and clobbers the FIRST record's
+      `NextEntryOffset` -- MECHANISM 1, CONFIRMED BY MEASUREMENT rather than by
+      reading. It is why the walk runs away.
+    * the IOSB's `Information` was 96 when the capacity was 96 -- i.e. the
+      capacity, not the record length. That agrees with round 61's 32758-against
+      -a-32760-capacity, and it means bounding by `Information` is wrong too.
+  AND `fs.list_dir` DOES SORT: `sort_names`, a merge sort, is right there in
+  fs.y. Round 58's story for `t345_list_dir_twice` ("two listings of one
+  directory disagreeing about ORDER") is therefore wrong -- two different sets
+  of GARBAGE sort to different results, so `t345` is this same runaway bug and
+  not an independent one. `t345`'s fixture even says so in its own header: it
+  exists to catch a stale shared buffer.
+  The probe's own asm was buggy (it wrote through %rsi having been zeroed), so
+  the SECOND call -- `first = 0`, the one that says "the directory is finished"
+  -- is still unmeasured. The next probe should write the 32 IOSB bytes with
+  plain 64-bit stores and no byte loops, and capture both calls in one open.
   Two more things measured on the way, both absolute-path-only on PE:
   `fs.remove_all(<an absolute path that does not exist>)` returns false where
   Linux returns true, and the fixture corpus's `t150_fs` now matches its first
