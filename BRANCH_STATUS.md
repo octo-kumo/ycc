@@ -266,6 +266,14 @@ benchmarks against the same on-disk `std/math.y`.
   no Y twin.
 - **`ycc run FILE -- ARG...`** — the program's own argv, so a test can drive
   arguments without the driver reading them as its own flags.
+- **`ycc run` is NOT faster than compile-then-run, measured.** The objective
+  asked to switch the suites to it; three runs each, `ycc run FILE` vs
+  `ycc FILE -o /tmp/b && /tmp/b`: t45_fib 3 vs 3 ms, t204_std_json 50 vs 51 ms,
+  t300_math_int 51 vs 48 ms. The compile dominates and `run` still compiles;
+  it saves the ELF write and the `exec`, about a millisecond of ~15. So the
+  suites were NOT switched — the speedups that exist are `run_all.sh -j`'s
+  sharding and the std pack. `ycc run` was kept for what it does buy: no
+  output file, and (with `--`) a program argv.
 
 ## 5. Environment notes (gotchas worth keeping)
 
