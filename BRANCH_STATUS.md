@@ -277,6 +277,51 @@ branch-disjointness false positive.
   2000, where stat's own layout has exactly 2000. `y_os_close` (NtClose, 15) was
   written the same round and reverted with it, untested, for the same reason:
   it is only reachable through a file handle that openat has to produce first.
+- **`y_os_openat` WORKS (round 41), and two rounds of the record were wrong.**
+  Round 39's commit message says the body was "written and REVERTED". It was
+  not: the revert restored a backup that had been taken AFTER the body was
+  appended, so the broken `y_os_openat` and `y_os_close` stayed in the tree and
+  were BLESSED. The observable consequence was recorded in that same commit
+  without being connected to its cause -- `pe-gate.sh`'s file-path program
+  changed from failing to TIMING OUT. Round 40 then said "wsys.s is back to its
+  committed state", which was true and beside the point: the committed state
+  contained the body, so round 40's measurements describe it (they hold) and its
+  "fresh rewrite" landed next to it, which is why the assembler reported
+  `symbol 'y_os_openat' is already defined` this round.
+  The lesson is about `cp` as a revert: a backup taken after the change is not a
+  backup of before it, and a commit message that says "reverted" without
+  checking the file is a claim, not evidence. `git show HEAD:src/y/arch/wsys.s |
+  grep -c 'yoap_fail:'` answers it in one line.
+  **What it actually took**, all six measured:
+    1. TWO ATTEMPTS at the disposition. FILE_OVERWRITE (4) for O_TRUNC, else
+       FILE_OPEN (1); only NAME_NOT_FOUND (0xC0000034) with O_CREAT triggers
+       FILE_CREATE (2); only COLLISION (0xC0000035) retries the first shape.
+       Wine's NtCreateFile treats FILE_OPEN_IF (3) and FILE_OVERWRITE_IF (5) as
+       open-only -- both answer NAME_NOT_FOUND for a file that is not there,
+       while FILE_CREATE on the identical call creates it.
+    2. EVERY argument is set again for the retry, not just the disposition. A
+       second syscall cannot assume the stack area below rsp survived the first:
+       the retry answered STATUS_INVALID_PARAMETER while the first answered
+       NAME_NOT_FOUND, and 48(%rsp) is FileAttributes.
+    3. FILE_SYNCHRONOUS_IO_NONALERT (32) in CreateOptions. Without it the handle
+       is asynchronous, NtWriteFile answers STATUS_PENDING instead of writing,
+       and the program gets a zero-byte file with the create having succeeded.
+    4. y_os_close (NtClose, 15). fs.y's write_file is open, write, CLOSE, and
+       without this body the close falls into the ELF one -- Linux syscall 3,
+       which on NT is an unimplemented ntdll function, so wine ABORTS after the
+       file is written and it reads as "the write failed" when it did not.
+    5. Comments only ABOVE the `#=== replace:` marker: a `#` line inside a
+       replaced region reaches the in-tree assembler, which has no comment
+       syntax and reports `unexpected comment (backend bug)`.
+    6. NTSTATUS immediates must be the SIGNED form -- `cmp $-1073741772, %eax`
+       for 0xC0000034 -- because the number reader rejects anything that does not
+       fit in 32 signed bits, and 0xC00000xx never does.
+  Verified: `fs.write_file`, `fs.read_file`, `fs.append_file` and `fs.file_size`
+  produce byte-identical output on ELF and PE over a real file (create, write,
+  read, append, read, size 29, open, close), and `pe-gate.sh` now checks exactly
+  that with `test/sh/pe-fsrt.y` against its Linux output. `fs.open_file` on an
+  existing file and STATUS_OBJECT_PATH_NOT_FOUND for a missing directory were
+  already working and still are.
 - **`y_os_openat`: what round 40 measured, and the one thing still unexplained.**
   The round-39 statuses (NAME_INVALID etc.) came from calling `os_call`
   DIRECTLY from a plain program, and that channel is NOT reliable: a direct

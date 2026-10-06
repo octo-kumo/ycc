@@ -714,49 +714,65 @@ yostat_fail:
     mov %rbp, %rsp
     pop %rbp
     ret
-# y_os_openat(dirfd, path, len, flags, mode) -> a handle, or a negative errno.
-# The handle is what the rest of fs.y passes back as an "fd", and y_os_handle
-# hands anything >= 3 straight through -- which is why that comment in its block
-# says "fs.y's y_os_openat returns an NtCreateFile handle" and why this body is
-# the thing that makes it true.
+# y_os_openat(dirfd, path, len, flags, mode) -> a handle, or -1.
 #
-# FIVE ARGUMENTS, FRAMELESS in the ELF body: flags at 8(%rsp) -> 16(%rbp), mode
-# at 16 -> 24, len at 24 -> 32, path at 32 -> 40, dirfd at 40 -> 48. dirfd is
-# ignored (y_w_path builds an absolute name) and so is mode: NT has no mode
-# bits, an ACL is a different mechanism entirely, and fs.y's default 0o644 is
-# not expressible here.
+# The handle is what fs.y passes back as an "fd"; y_os_handle hands anything >=
+# 3 straight through, which is what makes its comment about "fs.y's y_os_openat
+# returns an NtCreateFile handle" true.
 #
-# THE FLAG MAPPING is the interesting part, because Linux's open flags and NT's
-# three separate parameters do not line up:
-#   access       SYNCHRONIZE | FILE_READ_ATTRIBUTES always, plus FILE_READ_DATA
-#                unless O_WRONLY, plus FILE_WRITE_DATA -- or FILE_APPEND_DATA
-#                when O_APPEND, which is what makes writes go to the end
-#                without an explicit seek
-#   share        FILE_SHARE_READ|WRITE|DELETE (7): permissive, and the closest
-#                thing to Linux's "no sharing restrictions"
-#   disposition  FILE_OPEN (1), FILE_OVERWRITE (4) for O_TRUNC alone,
-#                FILE_OPEN_IF (3) for O_CREAT, FILE_OVERWRITE_IF (5) for
-#                O_CREAT|O_TRUNC, FILE_CREATE (2) for O_CREAT|O_EXCL
-#   options      FILE_DIRECTORY_FILE (1) when O_DIRECTORY, else 0
-#   attributes   FILE_ATTRIBUTE_NORMAL (128)
+# FIVE ARGUMENTS, FRAMELESS in the ELF body: mode (arg5) at 8(%rsp) -> 16(%rbp),
+# FLAGS (arg4) at 16 -> 24, len at 24 -> 32, path at 32 -> 40, dirfd at 40 -> 48.
+# dirfd is ignored (y_w_path builds an absolute name) and so is mode: NT has no
+# mode bits, an ACL is a different mechanism, and fs.y's 0o644 default is not
+# expressible here.
 #
-# NtCreateFile (85) takes five arguments in registers and SIX on the stack. The
-# stack copy is written at 40(%rsp) and up, which with this frame is
-# rbp-2360; the path buffer, the UNICODE_STRING, the handle, the
-# OBJECT_ATTRIBUTES and the IO_STATUS_BLOCK all live above it and do not
-# overlap: path at -2200 (y_w_path writes upward), UNICODE_STRING at -300,
-# handle at -280, OBJECT_ATTRIBUTES at -272 (48 bytes) and IO_STATUS_BLOCK at
-# -224 (16). 2400 is a multiple of 16.
+# TWO ATTEMPTS, because of what wine's NtCreateFile actually does. The
+# documented create dispositions are FILE_OPEN_IF (3) and FILE_OVERWRITE_IF (5),
+# and wine answers STATUS_OBJECT_NAME_NOT_FOUND (0xC0000034) for BOTH when the
+# file does not exist -- measured, with FILE_CREATE (2) on the identical call
+# succeeding. So the first attempt is the disposition that fits the flags if the
+# file is already there (FILE_OVERWRITE (4) for O_TRUNC, else FILE_OPEN (1)),
+# and only a NAME_NOT_FOUND with O_CREAT set triggers the second, FILE_CREATE
+# (2). The third shape -- FILE_CREATE losing a race and answering
+# STATUS_OBJECT_NAME_COLLISION (0xC0000035) -- retries the first disposition,
+# which by then is the right one. Writing it this way keeps the common case
+# (opening a file that exists) on exactly the code path it had when it worked.
 #
-# The access mask is copied OUT of %r9 into %rdx before %r9 is reloaded with
-# &iosb: they are arg2 and arg4, and doing it in the other order passes the
-# IO_STATUS_BLOCK's address as the access mask, which fails with
-# STATUS_INVALID_PARAMETER and looks like a path problem.
+# The two NTSTATUS values are written as NEGATIVE immediates (-1073741772 is
+# 0xC0000034): the in-tree assembler's number reader rejects anything that does
+# not fit in 32 SIGNED bits, so the way a 0xC00000xx constant is spelled here is
+# its two's-complement negative.
+#
+# THE OPTIONS CARRY FILE_SYNCHRONOUS_IO_NONALERT (32). Without it the handle is
+# asynchronous, NtWriteFile answers STATUS_PENDING instead of writing, and a
+# program that creates a file and writes to it gets a zero-byte file with the
+# create having succeeded and no error anywhere obvious. FILE_DIRECTORY_FILE (1)
+# is added for O_DIRECTORY.
+#
+# NtCreateFile (85) takes five arguments in registers and SIX on the stack at
+# 40(%rsp) and up, which with this frame is rbp-2960 -- so the frame is big
+# enough that the path buffer's growth (1000 units from -2200, i.e. to -200)
+# cannot reach the objects: they are BELOW the buffer's start, at -2300 and
+# down, where an upward-growing write never goes. (The first cut put them above
+# its start, inside the range it grows into.)
+#
+# The access mask is copied OUT of %r9 into %rdx BEFORE %r9 is reloaded with
+# &iosb: they are arg2 and arg4, and the other order passes the IO_STATUS_BLOCK
+# address as the access mask. It is also saved in the frame, because the retry
+# sets EVERY argument again rather than only the disposition: a second syscall
+# cannot assume the stack area below rsp survived the first, and the second
+# attempt answering STATUS_INVALID_PARAMETER while the first answered
+# NAME_NOT_FOUND is exactly what a clobbered 48(%rsp) -- FileAttributes -- looks
+# like.
+#
+# Every comment in this block is ABOVE this marker on purpose: a `#` line inside
+# a replaced region reaches the in-tree assembler, which has no comment syntax
+# and reports `unexpected comment (backend bug)`.
 #=== replace: y_os_openat ===
 y_os_openat:
     push %rbp
     mov %rsp, %rbp
-    sub $2400, %rsp
+    sub $3000, %rsp
     lea -2200(%rbp), %rdi
     mov 40(%rbp), %rsi
     mov 32(%rbp), %rcx
@@ -766,29 +782,29 @@ y_os_openat:
     mov %rax, %r8
     add %r8, %r8
     mov %r8, %rax
-    movb %al, -300(%rbp)
+    movb %al, -2320(%rbp)
     shr $8, %rax
-    movb %al, -299(%rbp)
+    movb %al, -2319(%rbp)
     add $2, %r8
     mov %r8, %rax
-    movb %al, -298(%rbp)
+    movb %al, -2318(%rbp)
     shr $8, %rax
-    movb %al, -297(%rbp)
+    movb %al, -2317(%rbp)
     lea -2200(%rbp), %rax
-    mov %rax, -292(%rbp)
+    mov %rax, -2312(%rbp)
     mov $48, %rax
-    mov %rax, -272(%rbp)
+    mov %rax, -2380(%rbp)
     mov $0, %rax
-    mov %rax, -264(%rbp)
-    lea -300(%rbp), %rax
-    mov %rax, -256(%rbp)
+    mov %rax, -2372(%rbp)
+    lea -2320(%rbp), %rax
+    mov %rax, -2364(%rbp)
     mov $64, %rax
-    mov %rax, -248(%rbp)
+    mov %rax, -2356(%rbp)
     mov $0, %rax
-    mov %rax, -240(%rbp)
+    mov %rax, -2348(%rbp)
     mov $0, %rax
-    mov %rax, -232(%rbp)
-    mov 16(%rbp), %r11
+    mov %rax, -2340(%rbp)
+    mov 24(%rbp), %r11
     mov $1048704, %r9
     mov %r11, %rax
     and $3, %rax
@@ -811,52 +827,82 @@ yoap_wwrite:
     or $2, %r9
 yoap_acc_done:
     mov %r9, %rdx
+    mov %r9, -2208(%rbp)
     mov $1, %r11
-    mov 16(%rbp), %rax
+    mov 24(%rbp), %rax
     and $512, %rax
     cmp $0, %rax
-    je yoap_disp_creat
+    je yoap_disp1
     mov $4, %r11
-yoap_disp_creat:
-    mov 16(%rbp), %rax
-    and $64, %rax
-    cmp $0, %rax
-    je yoap_disp_done
-    mov $3, %r11
-    mov 16(%rbp), %rax
-    and $512, %rax
-    cmp $0, %rax
-    je yoap_disp_excl
-    mov $5, %r11
-yoap_disp_excl:
-    mov 16(%rbp), %rax
-    and $128, %rax
-    cmp $0, %rax
-    je yoap_disp_done
-    mov $2, %r11
-yoap_disp_done:
+yoap_disp1:
     mov $0, 40(%rsp)
     mov $128, 48(%rsp)
     mov $7, 56(%rsp)
     mov %r11, 64(%rsp)
-    mov $0, %rax
-    mov 16(%rbp), %r11
+    mov $32, %rax
+    mov 24(%rbp), %r11
     and $65536, %r11
     cmp $0, %r11
-    je yoap_opt_done
-    mov $1, %rax
-yoap_opt_done:
+    je yoap_opt1
+    or $1, %rax
+yoap_opt1:
     mov %rax, 72(%rsp)
     mov $0, 80(%rsp)
     mov $0, 88(%rsp)
-    lea -280(%rbp), %r10
-    lea -272(%rbp), %r8
-    lea -224(%rbp), %r9
+    lea -2300(%rbp), %r10
+    lea -2380(%rbp), %r8
+    lea -2400(%rbp), %r9
+    mov $85, %eax
+    syscall
+    test %eax, %eax
+    je yoap_ok
+    cmp $-1073741772, %eax
+    jne yoap_collide
+    mov 24(%rbp), %r11
+    and $64, %r11
+    cmp $0, %r11
+    je yoap_fail
+    mov $2, %r11
+    jmp yoap_again
+yoap_collide:
+    cmp $-1073741771, %eax
+    jne yoap_fail
+    mov 24(%rbp), %r11
+    and $64, %r11
+    cmp $0, %r11
+    je yoap_fail
+    mov $1, %r11
+    mov 24(%rbp), %rax
+    and $512, %rax
+    cmp $0, %rax
+    je yoap_again
+    mov $4, %r11
+    jmp yoap_again
+yoap_again:
+    mov %r11, 64(%rsp)
+    mov $0, 40(%rsp)
+    mov $128, 48(%rsp)
+    mov $7, 56(%rsp)
+    mov -2208(%rbp), %rdx
+    mov $32, %rax
+    mov 24(%rbp), %r11
+    and $65536, %r11
+    cmp $0, %r11
+    je yoap_opt2
+    or $1, %rax
+yoap_opt2:
+    mov %rax, 72(%rsp)
+    mov $0, 80(%rsp)
+    mov $0, 88(%rsp)
+    lea -2300(%rbp), %r10
+    lea -2380(%rbp), %r8
+    lea -2400(%rbp), %r9
     mov $85, %eax
     syscall
     test %eax, %eax
     jne yoap_fail
-    mov -280(%rbp), %rax
+yoap_ok:
+    mov -2300(%rbp), %rax
     test %rax, %rax
     je yoap_fail
     mov %rbp, %rsp
@@ -868,11 +914,18 @@ yoap_fail:
     pop %rbp
     ret
 # y_os_close(fd) -> 0, or -1. One argument and frameless, so the fd is at
-# 8(%rsp). NtClose (15) takes the handle in %r10, like every other Nt call here.
-# The fd is NOT passed through y_os_handle: fs.y only ever closes what
-# y_os_openat returned, and a file handle is already a handle (y_os_handle
-# passes >= 3 through, so the two agree anyway -- but this is not the place to
-# depend on that).
+# 8(%rsp). NtClose (15) takes the handle in %r10 like every other Nt call here.
+#
+# It matters more than it looks: fs.y's write_file is open, write, CLOSE, and
+# without this body the close falls through to the ELF one -- a raw Linux
+# syscall 3, which on NT is an unimplemented ntdll function. The file is written
+# correctly and the process then dies in wine's abort handler, which reads as
+# "the write failed" when it did not.
+#
+# The fd is passed through as it stands: fs.y only closes what y_os_openat
+# returned, and that is already a handle. (y_os_handle would agree -- it passes
+# anything >= 3 through untouched -- but depending on that here would be a
+# second thing to keep true.)
 #=== replace: y_os_close ===
 y_os_close:
     mov 8(%rsp), %r10

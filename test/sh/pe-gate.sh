@@ -84,6 +84,27 @@ echo "pe-gate: ok"
 #    number nobody checks. This is the regression test for the file-I/O bugs
 #    (the UTF-16 name, the NtOpenFile/NtCreateFile argument slots, the
 #    SYNCHRONIZE requirement, the handle and close conventions).
+# The file ROUND TRIP, which works: create, write, read, append, read, size,
+# open, close, all compared against the same program's Linux output. This is a
+# separate program from pe-fs.y below because it is a separate question -- that
+# one needs the layer entries that still have no Windows body (openat is in now,
+# but mkdir/unlink/list/getcwd/lseek/rename/chdir/set_mode are not), this one
+# needs only what exists.
+RTSRC="$ROOT/test/sh/pe-fsrt.y"
+RTEXP="$ROOT/test/sh/pe-fsrt.expected"
+if (cd "$ROOT" && "$YCC" --target=windows "$RTSRC" -o "$OUT/fsrt.exe") >/dev/null 2>&1; then
+    ( cd "$OUT" && rm -f pefsrt.txt; WINEARCH=win64 WINEDEBUG=-all \
+        timeout 60 wine ./fsrt.exe >fsrt.out 2>fsrt.err )
+    if diff -u "$RTEXP" "$OUT/fsrt.out" >"$OUT/fsrt.diff"; then
+        echo "pe-gate: file round trip ok (create/write/read/append/size, PE == Linux)"
+    else
+        sed 's/^/    /' "$OUT/fsrt.diff" | head -10
+        echo "pe-gate: FAIL (the PE's file round trip differs from the Linux output)"; exit 1
+    fi
+else
+    echo "pe-gate: FAIL (the compiler refused the file round-trip program)"; exit 1
+fi
+
 FSSRC="$ROOT/test/sh/pe-fs.y"
 FSEXP="$ROOT/test/sh/pe-fs.expected"
 echo "pe-gate: $YCC --target=windows $FSSRC"
@@ -93,11 +114,11 @@ fi
 ( cd "$OUT" && rm -f peg_fs.txt; ulimit -v 3670016 2>/dev/null; WINEARCH=win64 WINEDEBUG=-all \
     timeout 60 wine ./fs.exe >fs.out 2>fs.err )
 frc=$?
-# KNOWN GAP, loud on purpose: wsys.s has Windows bodies for only THREE of the
-# thirteen named-layer entries fs.y calls (y_os_read, y_os_write and -- since
-# the absolute-path work -- y_os_stat), so this program runs raw LINUX syscall
-# numbers on NT for the rest --
-#   y_os_openat y_os_close y_os_lseek y_os_mkdir y_os_unlink
+# KNOWN GAP, loud on purpose: wsys.s has Windows bodies for only FIVE of the
+# thirteen named-layer entries fs.y calls (y_os_read, y_os_write, y_os_stat,
+# y_os_openat and y_os_close), so this program runs raw LINUX syscall numbers on
+# NT for the rest --
+#   y_os_lseek y_os_mkdir y_os_unlink
 #   y_os_rename y_os_getcwd y_os_chdir y_os_list y_os_set_mode
 # -- and whatever those numbers mean to ntdll is what runs. Measured with a
 # pre-import-table compiler: fs.cwd() answers a non-empty string whose first
@@ -107,14 +128,14 @@ frc=$?
 # reports rather than fails, so the rest of this file stays a gate.
 if [ $frc -ne 0 ]; then
     grep -v '^$' "$OUT/fs.err" | head -3 | sed 's/^/    ! /'
-    echo "pe-gate: file path is a KNOWN GAP (exited $frc): 10 of fs.y's 13 layer entries have no Windows body yet"
+    echo "pe-gate: file path is a KNOWN GAP (exited $frc): 8 of fs.y's 13 layer entries have no Windows body yet"
     exit 0
 fi
 if diff -u "$FSEXP" "$OUT/fs.out" >"$OUT/fs.diff"; then
     echo "pe-gate: file path ok ($(wc -l <"$FSEXP") lines, PE == the Linux output)"
 else
     sed 's/^/    /' "$OUT/fs.diff" | head -6
-    echo "pe-gate: file path is a KNOWN GAP (output differs): 10 of fs.y's 13 layer entries have no Windows body yet"
+    echo "pe-gate: file path is a KNOWN GAP (output differs): 8 of fs.y's 13 layer entries have no Windows body yet"
     exit 0
 fi
 rm -f "$OUT/peg_fs.txt"
