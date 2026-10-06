@@ -291,7 +291,7 @@ def prelude_names() -> [str] {
 };
 
 def exec_names() -> [str] {
-    ["exec"]
+    ["exec", "popen", "pwrite", "pread", "pclose", "pclose_in", "exec_capture", "exec_capture_in"]
 };
 
 // The string methods std/str.y implements (types.y str_method maps each

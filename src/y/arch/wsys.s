@@ -1450,3 +1450,15 @@ yocl_ret:
     mov %rbp, %rsp
     pop %rbp
     ret
+#=== replace: y_os_pipe ===
+# No Windows answer yet. A pipe here is NtCreateNamedPipeFile plus two handles,
+# not one descriptor pair, and its only caller (exec.y's popen) is a
+# fork-and-exec design whose fork half is ENOSYS too. The failure is honest and
+# reaches popen's caller as [].
+y_os_pipe:
+    mov $-1, %rax
+    ret
+#=== replace: y_os_dup2 ===
+y_os_dup2:
+    mov $-1, %rax
+    ret

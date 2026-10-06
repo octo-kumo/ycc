@@ -820,7 +820,9 @@ Yv *prelude_names(void) {
 }
 
 Yv *exec_names(void) {
-    return ya_push(yav(0), ys("exec"));
+    return yav(8, ys("exec"), ys("popen"), ys("pwrite"), ys("pread"),
+               ys("pclose"), ys("pclose_in"), ys("exec_capture"),
+               ys("exec_capture_in"));
 }
 
 /* The string methods std/str.y implements (types.y str_method maps each

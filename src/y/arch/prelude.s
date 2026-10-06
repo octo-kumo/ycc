@@ -525,6 +525,26 @@ y_os_execve:
     mov $59, %eax
     syscall
     ret
+# y_os_pipe(buf) -> 0, or a negative errno. pipe(2) writes the two 32-bit
+# descriptors as ONE 8-byte int[2], so the caller passes an 8-byte buffer and
+# splits it: fds[0] arrives as 0x00000004_00000003 for descriptors 3 and 4
+# (low half first on this little-endian machine), and exec.y's popen does the
+# masking. Widening them here would need a 32-bit `mov reg, mem`, which the
+# in-tree assembler does not encode (enc64.y's mov r,mem is 64-bit only), and
+# the one caller that cares is on the one target that has pipe(2) at all.
+y_os_pipe:
+    mov 8(%rsp), %rdi
+    mov $22, %eax
+    syscall
+    ret
+# y_os_dup2(old, new) -> new, or a negative errno. dup2(2). popen uses it in
+# the child to put the two pipe ends on fds 0 and 1 before execve.
+y_os_dup2:
+    mov 16(%rsp), %rdi
+    mov 8(%rsp), %rsi
+    mov $33, %eax
+    syscall
+    ret
 y_heap_used:
     lea y_heap(%rip), %rcx
     mov 24(%rcx), %rdx

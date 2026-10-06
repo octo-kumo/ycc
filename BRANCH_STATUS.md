@@ -20,10 +20,11 @@ Last updated by the integration pass that merged them (see *The merge* below).
 - **Finished in this pass:** the math branch's pending IR reductions, the
   encoder guard the Windows design claimed but never had, and the two stale
   comments that promised things nobody had built.
-- **Still open:** the Windows work that needs a Windows toolchain or a Windows
-  std split — `W1`, `W5`, `W6`, the rest of the named-syscall layer (`B2`), and
-  the PE syscall self-test. None of it is reachable from this checkout; it is
-  enumerated in §3.
+- **Still open:** the Windows work that needs NT implementations — the rest of
+  the named-syscall layer (`B2`), the PE syscall self-test, NT `fork`/threads,
+  BCrypt crypto, console `readline`, and `W6`'s harness. `W1` is done as far as
+  the corpus can take it (mingw-w64 + wine are now installed): every fixture but
+  the meta ones compiles byte-identically under `cycc.exe`. See §3.
 
 ---
 
@@ -66,8 +67,9 @@ one in the other worktrees is for a different base). The merged tree was
 therefore blessed as the new reference — `make ynew` builds it from source,
 `make port-check` shows `cycc` and `ynew` agree on every fixture, `make ycc`
 reports `cycc output == refs/ycc.ref == ycc self-compile (byte-identical)`, and
-`refs/ycc.ref` is now sha256 `9ef011d4a1c10080…` (the pre-`pe_no_abs` reference
-this replaces was `d7b7c8fe1b296a29…`).
+`refs/ycc.ref` is now sha256 `35ba76615fc38845…` (it has moved twice since
+the merge — `d7b7c8fe1b296a29…` at the merge, `9ef011d4a1c10080…` after the
+`pe_no_abs` guard, and this one after the W1/popen changes).
 
 ---
 
@@ -168,7 +170,7 @@ generation (`meta`), and Windows support (`win`), plus LSP and docs work.
 | item | why it is open |
 |---|---|
 | **`B2`** the rest of the named-syscall layer | the work above; needs NT bodies for `newfstatat`, `getdents64`, `mkdirat`, `renameat`, `unlinkat`, `fchmodat`, `getcwd`/`chdir`, console `readline`, `exec`, threads/`fork`, net, crypto |
-| **`W1`** `cycc.exe` under mingw-w64 | no mingw toolchain here; predicted, not verified |
+| **`W1`** `cycc.exe` under mingw-w64 | **DONE for non-meta programs.** `x86_64-w64-mingw32-gcc` is installed, `make cycc.exe` builds from the same `src/c`, and `test/sh/cycc-win.sh` reports 532 same / 11 different over the corpus. All 11 are the meta fixtures: their M1 runner forks and maps a memfd, which is the NT `fork`/`mmap` work below. |
 | **`W5`** the std split | largely superseded by `B1`'s named layer for the packed units; the rest is `B2` |
 | **`W6`** the Windows harness | job-object memory cap (`ulimit -v` has no Windows equivalent), a PE `test_debug.sh` branch, `llvm-*` tool swap |
 | **`w_self_test_lines()`** | the startup probe that checks one `Nt*` call per class. It is **not implemented** (the comment now says so instead of claiming otherwise); the syscall numbers remain pinned to one ntdll sample with nothing verifying them at runtime |
@@ -184,6 +186,19 @@ generation (`meta`), and Windows support (`win`), plus LSP and docs work.
   `asm.c`, and `patch_item_kind2` refuses any kind outside
   `rel32`/`rel8`/`rip32`/`imm32diff` by name. It is output-neutral (all four
   kinds are position-independent), so every emitted binary is unchanged.
+- **`W1` — `cycc.exe`.** The C copy now cross-builds for Windows and runs under
+  wine. The keystone was `src/c/ylong.h`: Windows is LLP64, so C's `long` is 32
+  bits where the whole value model needs 64 (12 overflow sites, a `jmp` that
+  became 32-bit and would not assemble, and any long past 2^31 wrong). With
+  `ylong` (and the host shim of commit `0a74bd4`) `make cycc.exe` is the same
+  compiler for a second host. `test/sh/cycc-win.sh` is the gate; `-S` is
+  byte-identical too. `-g` is not compared across hosts (DWARF records the host's
+  own absolute path).
+- **A child's stdio: `popen`/`pwrite`/`pclose_in`/`pread`/`pclose` and
+  `exec_capture`/`exec_capture_in`** in `std/exec.y`, over a new `y_os_pipe` and
+  `y_os_dup2` in the named layer (Linux in `prelude.s`, ENOSYS in `wsys.s`), so
+  a Y program can run a tool and read its answer. Fixture
+  `test/y/native/t333_exec_pipe.y`.
 - **The two false comments.** `w_self_test_lines`'s comment (and the sentence
   in `arch_sysno` that pointed at it) described a probe nobody runs; both now
   say the probe is unimplemented and why that is a real gap. The C twin's
