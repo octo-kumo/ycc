@@ -1339,68 +1339,91 @@ yoa_acc_set:
     mov $7, %rax
     mov %rax, -48(%rbp)
 # CreateDisposition from O_APPEND, then O_TRUNC, then O_CREAT|O_EXCL, then O_CREAT
-    mov %rbx, %rax
-    and $1024, %rax
-    cmp $0, %rax
-    jne yoa_disp_openif
-    mov %rbx, %rax
-    and $512, %rax
-    cmp $0, %rax
-    jne yoa_disp_super
-    mov %rbx, %rax
-    and $192, %rax
-    cmp $64, %rax
-    je yoa_disp_openif
-    cmp $192, %rax
-    je yoa_disp_create
-yoa_disp_open:
-    mov $1, %rax
-    jmp yoa_disp_set
-yoa_disp_super:
-    mov $0, %rax
-    jmp yoa_disp_set
-yoa_disp_create:
-    mov $2, %rax
-    jmp yoa_disp_set
-yoa_disp_openif:
-    mov $3, %rax
-yoa_disp_set:
-    mov %rax, -56(%rbp)
-    mov $64, %rax
-    mov %rax, -64(%rbp)
-    mov $128, %rax
-    mov %rax, -72(%rbp)
-# NtCreateFile: rdi handle-out, rsi access, rdx ObjectAttributes,
-# rcx IoStatusBlock, r8 AllocationSize(NULL), r9 FileAttributes,
-# then ShareAccess, CreateDisposition, CreateOptions, EaBuffer, EaLength
-    lea -272(%rbp), %rdi
-    mov -40(%rbp), %rsi
-    lea -208(%rbp), %rdx
-    lea -16(%rbp), %rcx
-    mov $0, %r8
-    mov $128, %r9d
-    mov -48(%rbp), %rax
-    mov %rax, 40(%rsp)
-    mov -56(%rbp), %rax
-    mov %rax, 48(%rsp)
-    mov -64(%rbp), %rax
-    mov %rax, 56(%rsp)
-    mov $0, %rax
-    mov %rax, 64(%rsp)
-    mov $0, %rax
-    mov %rax, 72(%rsp)
-    mov $85, %eax
-    syscall
-    test %eax, %eax
-    js yoa_bad
-    mov -272(%rbp), %rax
+      mov %rbx, %rax
+      and $1024, %rax
+      cmp $0, %rax
+      jne yoa_disp_openif
+      mov %rbx, %rax
+      and $512, %rax
+      cmp $0, %rax
+      jne yoa_disp_super
+      mov %rbx, %rax
+      and $192, %rax
+      cmp $64, %rax
+      je yoa_disp_openif
+      cmp $192, %rax
+      je yoa_disp_create
+  yoa_disp_open:
+      mov $1, %rax
+      jmp yoa_disp_set
+  yoa_disp_super:
+      mov $0, %rax
+      jmp yoa_disp_set
+  yoa_disp_create:
+      mov $2, %rax
+      jmp yoa_disp_set
+  yoa_disp_openif:
+      mov $3, %rax
+  yoa_disp_set:
+      mov %rax, -56(%rbp)
+      mov $64, %rax
+      mov %rax, -64(%rbp)
+      mov $128, %rax
+      mov %rax, -72(%rbp)
+
+
+      mov %rbx, %rax
+      and $67, %rax
+      cmp $0, %rax
+      jne yoa_create
+
+
+      lea -16(%rbp), %r10
+      mov -24(%rbp), %rdx
+      lea -208(%rbp), %r8
+      lea -16(%rbp), %r9
+      mov $7, %rcx
+      mov %rcx, 40(%rsp)
+      mov $96, %rcx
+      mov %rcx, 48(%rsp)
+      mov $51, %eax
+      syscall
+      test %eax, %eax
+      js yoa_diag
+      mov -16(%rbp), %rax
+      jmp yoa_ret
+yoa_diag:
     jmp yoa_ret
-yoa_bad:
-    mov $-1, %rax
-yoa_ret:
-    mov %rbp, %rsp
-    pop %rbp
-    ret
+  yoa_create:
+
+
+
+      lea -272(%rbp), %r10
+      mov -40(%rbp), %rdx
+      lea -208(%rbp), %r8
+      lea -16(%rbp), %r9
+      mov $0, %rax
+      mov %rax, 40(%rsp)
+      mov -48(%rbp), %rax
+      mov %rax, 48(%rsp)
+      mov -56(%rbp), %rax
+      mov %rax, 56(%rsp)
+      mov -64(%rbp), %rax
+      mov %rax, 64(%rsp)
+      mov -64(%rbp), %rax
+      mov %rax, 72(%rsp)
+      mov $85, %eax
+      syscall
+      test %eax, %eax
+      js yoa_bad
+      mov -272(%rbp), %rax
+      jmp yoa_ret
+  yoa_bad:
+      mov $-1, %rax
+  yoa_ret:
+      mov %rbp, %rsp
+      pop %rbp
+      ret
 # y_os_close(fd) -> 0, or -1. The other half of the shared close above.
 #=== replace: y_os_close ===
 # A POSIX close(2) returns 0 and leaves errno for the failure; NtClose answers
