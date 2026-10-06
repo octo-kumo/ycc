@@ -20,6 +20,7 @@
  * Parameters, loop variables, top-level bindings and any name starting
  * with `_` are exempt from the unused-binding rules. */
 #include "ylong.h"
+#include "lexer.h"
 #include "lint.h"
 #include "tags.h"
 
@@ -855,10 +856,8 @@ static int lint_zero(Yv *node) {
 }
 
 static int lint_zero_text(Yv *s) {
-    Yv *p = ys_slice(s, 0, 2);
     Yv *digits = s;
-    if (ys_eq_lit(p, "0x") || ys_eq_lit(p, "0X") || ys_eq_lit(p, "0b") ||
-        ys_eq_lit(p, "0B")) {
+    if (radix_of(s) != 0) {
         digits = ys_slice_from(s, 2);
     } else if (ys_index_of(s, ys(".")) >= 0 || ys_index_of(s, ys("e")) >= 0 ||
                ys_index_of(s, ys("E")) >= 0) {

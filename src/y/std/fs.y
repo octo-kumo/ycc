@@ -5,7 +5,7 @@
 // Whole files read and write as a str (text) or a [byte] (anything); a
 // read gives none when the file cannot be read, a write false when it
 // cannot be written. Paths are relative to the working directory. A mode
-// is the usual octal permission number (0o644 is 420, 0o755 493);
+// is the usual octal permission number, written as one (0o644, 0o755);
 // -1 leaves a new file at 0o644 minus the umask.
 //
 // fds: open_file(path, how) takes a mode string as most languages do --
@@ -35,10 +35,10 @@ def open_flags(how: str) -> long {
 
 // Open `path` as `how` says (see the top); a file it creates gets `mode`.
 // The fd, or -1.
-def open_file(path: str, how: str, mode: long = 420) -> long {
+def open_file(path: str, how: str, mode: long = 0o644) -> long {
     let fl = open_flags(how);
     let m = mode;
-    if (m < 0) { m = 420; }
+    if (m < 0) { m = 0o644; }
     if (fl < 0) { -1 } else {
         let fd = os_call("y_os_openat", fs_at_cwd(), path, len(path), fl + 524288, m);
         if (fd < 0) { -1 } else { fd }
@@ -222,11 +222,11 @@ def remove_all(path: str) -> bool {
     } else { remove_file(path) }
 };
 
-def make_dir(path: str, mode: long = 493) -> bool { syscall(258, fs_at_cwd(), path, mode) == 0 };
+def make_dir(path: str, mode: long = 0o755) -> bool { syscall(258, fs_at_cwd(), path, mode) == 0 };
 
 // path and every directory above it that is missing (true when path is a
 // directory already).
-def make_dirs(path: str, mode: long = 493) -> bool {
+def make_dirs(path: str, mode: long = 0o755) -> bool {
     if (is_dir(path)) { true }
     else {
         let cut = path.last_index_of("/");

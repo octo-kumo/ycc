@@ -48,6 +48,7 @@ int isupper(ylong c);                 /* (c: byte) -> bool */
 int islower(ylong c);                 /* (c: byte) -> bool */
 int isalpha(ylong c);                 /* (c: byte) -> bool */
 int isalnum(ylong c);                 /* (c: byte) -> bool */
+ylong radix_of(Yv *s);               /* (s: str) -> long */
 int is_radix_ch(ylong c, ylong radix); /* (c: byte, radix: long) -> bool */
 Yv *strip_seps(Yv *s);               /* (s: str) -> str */
 int isspace(ylong c);                 /* (c: byte) -> bool */

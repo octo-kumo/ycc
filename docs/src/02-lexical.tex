@@ -180,16 +180,22 @@ because the declaration it introduces has no other spelling.
 \subsection{Literals}
 \label{sec:literals}
 
-\paragraph{Integers.} Decimal, binary (\ic{0b1010}) and hexadecimal
-(\ic{0x1F}) radix literals are supported. Any of them may group digits
-with \ic{\_}, which is ignored: a radix literal (\ic{0x} / \ic{0b},
-either case) in any position after the prefix (\ic{0xFF\_FF},
-\ic{0b1010\_1010}), a decimal one anywhere after its first digit
+\paragraph{Integers.} Decimal, binary (\ic{0b1010}), octal (\ic{0o755})
+and hexadecimal (\ic{0x1F}) radix literals are supported. Any of them may
+group digits
+with \ic{\_}, which is ignored: a radix literal (\ic{0x} / \ic{0o} /
+\ic{0b}, either case) in any position after the prefix (\ic{0xFF\_FF},
+\ic{0o7\_5\_5}, \ic{0b1010\_1010}), a decimal one anywhere after its
+first digit
 (\ic{1\_000\_000}; a leading \ic{\_} starts an identifier instead).
-A prefix needs a digit of its radix: \ic{0x}, \ic{0b\_} and \ic{0b2}
-are errors (\ic{binary literal '0b2' has no digits}), one for the whole
+A prefix needs a digit of its radix: \ic{0x}, \ic{0o8}, \ic{0b\_} and
+\ic{0b2}
+are errors (\ic{binary literal '0b2' has no digits}, \ic{octal literal
+'0o8' has no digits}), one for the whole
 word.
-There is no octal form: \ic{017} is decimal seventeen. All integer
+A leading zero with no \ic{o} is decimal, so \ic{017} is seventeen;
+\ic{0o755} is four hundred and ninety-three, which is what a file mode is
+written as. All integer
 literals are \ty{long} (64-bit). A radix literal spells the 64 bits
 themselves, so a mask may set the top bit:
 \ic{0xFFFF\_FFFF\_FFFF\_FFFF} is \ic{-1} and

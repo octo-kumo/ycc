@@ -741,9 +741,8 @@ def lint_zero(node: Node) -> bool {
 };
 
 def lint_zero_text(s: str) -> bool {
-    let p = s[:2];
     let digits = s;
-    if (p == "0x" || p == "0X" || p == "0b" || p == "0B") {
+    if (radix_of(s) != 0) {
         digits = s[2:];
     } else if (index_of(s, ".") >= 0 || index_of(s, "e") >= 0 || index_of(s, "E") >= 0) {
         digits = "";

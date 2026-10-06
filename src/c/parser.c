@@ -9,6 +9,7 @@
 // PORTING.md type map: toks is [Yv] (array of {t,v,line,col} token records),
 // result records are Yv *, long -> long, bool -> int, str -> Yv *.
 #include "ylong.h"
+#include "lexer.h"
 #include "parser.h"
 #include "tags.h"
 
@@ -736,11 +737,9 @@ Yv *block1(Yv *e, ylong ln, ylong cl) {
 // from 0 to 2147483647 (2^31 - 1). Its value, or -1 for any other num
 // token (a float, a larger number).
 ylong size_lit(Yv *s) {
-    Yv *p = ys_slice(s, 0, 2);
-    ylong radix = 10;
+    ylong radix = radix_of(s);
     ylong i = 0;
-    if (ys_eq_lit(p, "0x") || ys_eq_lit(p, "0X")) { radix = 16; i = 2; }
-    else if (ys_eq_lit(p, "0b") || ys_eq_lit(p, "0B")) { radix = 2; i = 2; }
+    if (radix == 0) { radix = 10; } else { i = 2; }
     ylong v = 0;
     while (i < yv_len(s) && v >= 0) {
         ylong o = ys_ord(ys_slice(s, i, i + 1));
@@ -1418,8 +1417,7 @@ Yv *topt_of(Yv *t) {
 // float when the literal has a fraction or an exponent (radix literals
 // like 0xE1 never do).
 Yv *num_lit_type(Yv *s) {
-    Yv *p = ys_slice(s, 0, 2);
-    if (ys_eq_lit(p, "0x") || ys_eq_lit(p, "0X") || ys_eq_lit(p, "0b") || ys_eq_lit(p, "0B")) {
+    if (radix_of(s) != 0) {
         return yr(1, "k", yv_long(K_tlong));
     } else if (ys_index_of(s, ys(".")) >= 0 || ys_index_of(s, ys("e")) >= 0 || ys_index_of(s, ys("E")) >= 0) {
         return yr(1, "k", yv_long(K_tfloat));

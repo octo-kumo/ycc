@@ -7721,15 +7721,8 @@ def hexval_ch(c: str) -> long {
 // A numeric literal denotes a float when it has a fraction or an exponent.
 // Radix literals are checked first: 0xE1 and 0xbeef contain 'e'/'E'/'b'.
 def lit_is_float(s: str) -> bool {
-    let radix = false;
-    if (len(s) > 2) {
-        let p = s[:2];
-        if (p == "0x") { radix = true; }
-        if (p == "0X") { radix = true; }
-        if (p == "0b") { radix = true; }
-        if (p == "0B") { radix = true; }
-    }
-    if (radix) { false } else {
+    // the one prefix test (lexer.y radix_of); this was a copy of types.y's
+    if (radix_of(s) != 0) { false } else {
         let f = false;
         if (index_of(s, ".") >= 0) { f = true; }
         if (index_of(s, "e") >= 0) { f = true; }
@@ -7739,14 +7732,7 @@ def lit_is_float(s: str) -> bool {
 };
 
 def norm_num(s: str) -> str {
-    let radix = 0;
-    if (len(s) > 2) {
-        let p = s[:2];
-        if (p == "0x") { radix = 16; }
-        if (p == "0X") { radix = 16; }
-        if (p == "0b") { radix = 2; }
-        if (p == "0B") { radix = 2; }
-    }
+    let radix = radix_of(s);
     if (radix == 0) {
         s
     } else {

@@ -1006,8 +1006,8 @@ the program named like one wins.
 or bytes (\ic{[byte]}), paths, directories and file descriptors, all over
 raw syscalls. A read gives \ic{none} and a write \ic{false} when it
 fails; paths are relative to the working directory. A \ty{mode} is the
-octal permission number (\ic{420} is \ic{0644}, \ic{493} is \ic{0755});
-\ic{-1} leaves a new file at \ic{0644} minus the umask.
+octal permission number, written as one (\ic{0o644}, \ic{0o755});
+\ic{-1} leaves a new file at \ic{0o644} minus the umask.
 
 \begin{description}[style=nextline,leftmargin=5.2em]
 \item[\ic{fs.read\_file(path)}] The file as \ic{str?}.
@@ -1029,8 +1029,8 @@ octal permission number (\ic{420} is \ic{0644}, \ic{493} is \ic{0755});
 \item[\ic{fs.is\_dir(path)}] A directory.
 \item[\ic{fs.file\_size(path)}] Its size in bytes, \ic{long?}.
 \item[\ic{fs.set\_mode(path, mode)}] Set the permissions; \ic{bool}.
-\item[\ic{fs.make\_dir(path, mode = 493)}] \ic{bool}.
-\item[\ic{fs.make\_dirs(path, mode = 493)}] The directory and every one
+\item[\ic{fs.make\_dir(path, mode = 0o755)}] \ic{bool}.
+\item[\ic{fs.make\_dirs(path, mode = 0o755)}] The directory and every one
   above it that is missing; \ic{true} when it exists already.
 \item[\ic{fs.list\_dir(path)}] The names in a directory, sorted, without
   \ic{.} and \ic{..}; \ic{[str]?}.
@@ -1041,7 +1041,7 @@ octal permission number (\ic{420} is \ic{0644}, \ic{493} is \ic{0755});
   different path, and names what the link names.
 \item[\ic{fs.cwd()}] The working directory.
 \item[\ic{fs.chdir(path)}] Change it; \ic{bool}.
-\item[\ic{fs.open\_file(path, how, mode = 420)}] Open with a mode string:
+\item[\ic{fs.open\_file(path, how, mode = 0o644)}] Open with a mode string:
   \ic{"r"} read, \ic{"w"} write (create, truncate), \ic{"a"} append
   (create), \ic{"x"} create a file that must not exist; a trailing
   \ic{+} adds the other direction (\ic{"r+"}, \ic{"w+"}, \ic{"a+"}). The

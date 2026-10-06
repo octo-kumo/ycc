@@ -39,9 +39,25 @@ int isalnum(ylong c) {
 }
 
 // Digit of a radix literal (0x.. / 0b..), including `_` separators.
+/* The radix a literal's own prefix names: 16 for 0x/0X, 8 for 0o/0O, 2 for
+   0b/0B, 0 for a literal with no prefix (decimal, or a float). ONE function
+   because the prefix test used to be copied into lexer, parser, types, native
+   and lint -- and the copies drifted -- so octal arrived as one more arm here
+   rather than as five. */
+ylong radix_of(Yv *s) {
+    if (yv_len(s) > 1 && ys_byte_at(s, 0) == '0') {
+        ylong p = ys_byte_at(s, 1);
+        if (p == 'x' || p == 'X') { return 16; }
+        else if (p == 'o' || p == 'O') { return 8; }
+        else if (p == 'b' || p == 'B') { return 2; }
+        else { return 0; }
+    } else { return 0; }
+}
+
 int is_radix_ch(ylong c, ylong radix) {
     if (c == '_') { return 1; }
     else if (radix == 2) { return c == '0' || c == '1'; }
+    else if (radix == 8) { return c >= '0' && c <= '7'; }
     else { return isdigit(c) ||
         (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'); }
 }
@@ -618,15 +634,10 @@ Yv *tokenize(Yv *src) {
         } else if (isdigit(c)) {
             ylong start = i;
             ylong startcol = col;
-            // 0x../0X.. (hex) and 0b../0B.. (binary) integer literals.
+            // 0x../0X.. (hex), 0o../0O.. (octal) and 0b../0B.. (binary)
+            // integer literals. radix_of is the one prefix test.
             ylong radix = 0;
-            if (c == '0') {
-                /* one past the last byte is a peek, not an index: Y reads
-                 * src[i + 1:i + 2] here, and a slice clamps */
-                ylong nxt = ys_byte_peek(src, i + 1);
-                if (nxt == 'x' || nxt == 'X') { radix = 16; }
-                else if (nxt == 'b' || nxt == 'B') { radix = 2; }
-            }
+            if (c == '0') { radix = radix_of(ys_slice(src, i, i + 2)); }
             // the message of a malformed literal (an ferr token), or ""
             Yv *err = ys("");
             if (radix > 0) {
@@ -650,8 +661,10 @@ Yv *tokenize(Yv *src) {
                     // number: the word characters after it are taken into
                     // the bad literal, reported once, where it starts.
                     while (i < n && isalnum(ys_byte_at(src, i))) { i = i + 1; col = col + 1; }
-                    if (radix == 16) { err = ys_cat(ys_cat(ys("hex literal '"), ys_slice(src, start, i)), ys("' has no digits")); }
-                    else { err = ys_cat(ys_cat(ys("binary literal '"), ys_slice(src, start, i)), ys("' has no digits")); }
+                    Yv *what = ys("binary");
+                    if (radix == 16) { what = ys("hex"); }
+                    else if (radix == 8) { what = ys("octal"); }
+                    err = ys_cat(ys_cat(ys_cat(what, ys(" literal '")), ys_slice(src, start, i)), ys("' has no digits"));
                 }
                 ;
             } else {

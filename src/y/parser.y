@@ -709,11 +709,9 @@ def block1(e: Node, ln: long, cl: long) -> Block {
 // from 0 to 2147483647 (2^31 - 1). Its value, or -1 for any other num
 // token (a float, a larger number).
 def size_lit(s: str) -> long {
-    let p = s[0:2];
-    let radix = 10;
+    let radix = radix_of(s);
     let i = 0;
-    if (p == "0x" || p == "0X") { radix = 16; i = 2; }
-    else if (p == "0b" || p == "0B") { radix = 2; i = 2; };
+    if (radix == 0) { radix = 10; } else { i = 2; };
     let v = 0;
     while (i < len(s) && v >= 0) {
         let o = ord(s[i:i + 1]);
@@ -1305,8 +1303,7 @@ def topt_of(t: Type) -> TOf { { k: K.topt, of: t } };
 // float when the literal has a fraction or an exponent (radix literals
 // like 0xE1 never do).
 def num_lit_type(s: str) -> Type {
-    let p = s[0:2];
-    if (p == "0x" || p == "0X" || p == "0b" || p == "0B") { { k: K.tlong } }
+    if (radix_of(s) != 0) { { k: K.tlong } }
     else if (index_of(s, ".") >= 0 || index_of(s, "e") >= 0 || index_of(s, "E") >= 0) { { k: K.tfloat } }
     else { { k: K.tlong } }
 };

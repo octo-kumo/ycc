@@ -9006,28 +9006,7 @@ ylong hexval_ch(Yv *c) {
 /* A numeric literal denotes a float when it has a fraction or an exponent.
  * Radix literals are checked first: 0xE1 and 0xbeef contain 'e'/'E'/'b'. */
 int lit_is_float(Yv *s) {
-    int radix = 0;
-    if (yv_len(s) > 2) {
-        Yv *p = ys_slice(s, 0, 2);
-        if (ys_eq_lit(p, "0x")) {
-            radix = 1;
-            ;
-        }
-        if (ys_eq_lit(p, "0X")) {
-            radix = 1;
-            ;
-        }
-        if (ys_eq_lit(p, "0b")) {
-            radix = 1;
-            ;
-        }
-        if (ys_eq_lit(p, "0B")) {
-            radix = 1;
-            ;
-        }
-        ;
-    }
-    if (radix) {
+    if (radix_of(s) != 0) {
         return 0;
     } else {
         int f = 0;
@@ -9048,27 +9027,7 @@ int lit_is_float(Yv *s) {
 }
 
 Yv *norm_num(Yv *s) {
-    ylong radix = 0;
-    if (yv_len(s) > 2) {
-        Yv *p = ys_slice(s, 0, 2);
-        if (ys_eq_lit(p, "0x")) {
-            radix = 16;
-            ;
-        }
-        if (ys_eq_lit(p, "0X")) {
-            radix = 16;
-            ;
-        }
-        if (ys_eq_lit(p, "0b")) {
-            radix = 2;
-            ;
-        }
-        if (ys_eq_lit(p, "0B")) {
-            radix = 2;
-            ;
-        }
-        ;
-    }
+    ylong radix = radix_of(s);
     if (radix == 0) {
         return s;
     } else {

@@ -922,18 +922,12 @@ def num_net_exp(s: str) -> long {
 };
 
 // A numeric literal denotes a float when it has a fraction or an exponent.
-// Radix literals are checked first: 0xE1 and 0xbeef contain 'e'/'E'/'b'.
-// (native.y keeps its own copy — the two modules never share helpers.)
+// Radix literals are checked first, through the one prefix test (lexer.y
+// radix_of): 0xE1 and 0xbeef contain 'e'/'E'/'b', and an octal 0o17 is not a
+// float either. This used to be a copy in this file and another in native.y,
+// byte-identical apart from the name.
 def num_is_float(s: str) -> bool {
-    let radix = false;
-    if (len(s) > 2) {
-        let p = s[0:2];
-        if (p == "0x") { radix = true; }
-        if (p == "0X") { radix = true; }
-        if (p == "0b") { radix = true; }
-        if (p == "0B") { radix = true; }
-    }
-    if (radix) { false } else {
+    if (radix_of(s) != 0) { false } else {
         let f = false;
         if (index_of(s, ".") >= 0) { f = true; }
         if (index_of(s, "e") >= 0) { f = true; }

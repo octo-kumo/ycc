@@ -38,11 +38,26 @@ def isalnum(c: byte) -> bool {
     isdigit(c) || isalpha(c)
 };
 
-// Digit of a radix literal (0x.. / 0b..), including `_` separators.
-// Digit of a radix literal (0x.. / 0b..), including `_` separators.
+// The radix a literal's own prefix names: 16 for 0x/0X, 8 for 0o/0O, 2 for
+// 0b/0B, and 0 for a literal with no prefix (decimal, or a float). ONE
+// function because the prefix test used to be copied into lexer, parser,
+// types, native and lint -- and the copies drifted -- so octal arrived as one
+// more arm here rather than as five.
+def radix_of(s: str) -> long {
+    if (len(s) > 1 && s[0:1] == "0") {
+        let p = s[1:2];
+        if (p == "x" || p == "X") { 16 }
+        else if (p == "o" || p == "O") { 8 }
+        else if (p == "b" || p == "B") { 2 }
+        else { 0 }
+    } else { 0 }
+};
+
+// Digit of a radix literal (0x.. / 0o.. / 0b..), including `_` separators.
 def is_radix_ch(c: byte, radix: long) -> bool {
     if ( c == c'_') { true }
     else if (radix == 2) { c == c'0' || c == c'1' }
+    else if (radix == 8) { c >= c'0' && c <= c'7' }
     else { isdigit(c) || (c >= c'a' && c <= c'f') || (c >= c'A' && c <= c'F') }
 };
 
@@ -521,13 +536,10 @@ def tokenize(src: str) -> [Tok] {
         } else if (isdigit(c)) {
             let start = i;
             let startcol = col;
-            // 0x../0X.. (hex) and 0b../0B.. (binary) integer literals.
+            // 0x../0X.. (hex), 0o../0O.. (octal) and 0b../0B.. (binary)
+            // integer literals. radix_of is the one prefix test.
             let radix = 0;
-            if (c == c'0') {
-                let nxt = src[i + 1:i + 2];
-                if (nxt == "x" || nxt == "X") { radix = 16; }
-                else if (nxt == "b" || nxt == "B") { radix = 2; };
-            };
+            if (c == c'0') { radix = radix_of(src[i:i + 2]); };
             // the message of a malformed literal (an ferr token), or ""
             let err = "";
             if (radix > 0) {
@@ -550,8 +562,10 @@ def tokenize(src: str) -> [Tok] {
                     // number: the word characters after it are taken into
                     // the bad literal, reported once, where it starts.
                     while (i < n && isalnum(src[i])) { i = i + 1; col = col + 1; };
-                    if (radix == 16) { err = "hex literal '" + src[start:i] + "' has no digits"; }
-                    else { err = "binary literal '" + src[start:i] + "' has no digits"; };
+                    let what = "binary";
+                    if (radix == 16) { what = "hex"; }
+                    else if (radix == 8) { what = "octal"; };
+                    err = what + " literal '" + src[start:i] + "' has no digits";
                 };
             } else {
             // The first digit is already known from the branch condition.

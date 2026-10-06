@@ -33,6 +33,7 @@
  * `0;` value-tails of Y if-arms are `;` here; tail values of blocks in
  * return position are `return`. */
 #include "ylong.h"
+#include "lexer.h"
 #include "types.h"
 #include "target.h"
 #include "yv.h"
@@ -1201,28 +1202,7 @@ static int num_mantissa_zero(Yv *s) {
 }
 
 static int num_is_float(Yv *s) {
-    int radix = 0;
-    if (yv_len(s) > 2) {
-        Yv *p = ys_slice(s, 0, 2);
-        if (ys_eq_lit(p, "0x")) {
-            radix = 1;
-            ;
-        }
-        if (ys_eq_lit(p, "0X")) {
-            radix = 1;
-            ;
-        }
-        if (ys_eq_lit(p, "0b")) {
-            radix = 1;
-            ;
-        }
-        if (ys_eq_lit(p, "0B")) {
-            radix = 1;
-            ;
-        }
-        ;
-    }
-    if (radix) {
+    if (radix_of(s) != 0) {
         return 0;
     } else {
         int f = 0;
