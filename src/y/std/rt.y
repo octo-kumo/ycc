@@ -197,21 +197,20 @@ def y_range(n: long) -> [long] {
     out
 };
 
-// Time: clock_gettime / nanosleep. NOT yet through the named syscall layer --
-// these two are the remaining raw `syscall(` sites in this unit, and they are
-// what B1a left for B1b (the Windows halves need to convert a FILETIME and a
-// QPC tick into the caller's struct timespec, which is real work in asm rather
-// than a transliteration). clock_us is CLOCK_MONOTONIC microseconds, time_us
+// Time: clock_gettime / nanosleep, through the named syscall layer like every
+// other call in this unit -- the Windows halves convert a FILETIME and a QPC
+// tick into the same struct timespec, so the code above the arch module is the
+// same bytes on both targets. clock_us is CLOCK_MONOTONIC microseconds, time_us
 // CLOCK_REALTIME's: the wall clock, since the Unix epoch. (heap_used
 // reads the allocator's own counter: y_heap_used in arch_x64.y.)
 def y_clock_us() -> long {
     let ts: [long; 2] = [0; 2];
-    syscall(228, 1, &ts[0]);
+    os_call("y_os_clock_gettime", 1, &ts[0]);
     ts[0] * 1000000 + ts[1] / 1000
 };
 def y_time_us() -> long {
     let ts: [long; 2] = [0; 2];
-    syscall(228, 0, &ts[0]);
+    os_call("y_os_clock_gettime", 0, &ts[0]);
     ts[0] * 1000000 + ts[1] / 1000
 };
 // wait_pid(pid): wait4 for a child (fork) -> its exit code, 128 + the
@@ -228,7 +227,7 @@ def y_sleep(ms: long) -> long {
     let ts: [long; 2] = [0; 2];
     ts[0] = m / 1000;
     ts[1] = (m % 1000) * 1000000;
-    syscall(35, &ts[0], 0)
+    os_call("y_os_nanosleep", &ts[0])
 };
 
 // b'...' -- Python-style byte-string repr: printable ASCII verbatim,

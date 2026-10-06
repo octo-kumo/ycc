@@ -158,7 +158,8 @@ static int os_call_name(Yv *nm) {
 }
 
 Yv *os_call_names(void) {
-    return yav(5, ys("y_os_write"), ys("y_os_read"), ys("y_os_wait4"),
+    return yav(8, ys("y_os_write"), ys("y_os_read"), ys("y_os_lseek"),
+               ys("y_os_clock_gettime"), ys("y_os_nanosleep"), ys("y_os_wait4"),
                ys("y_os_fork"), ys("y_os_execve"));
 }
 

@@ -334,16 +334,32 @@ y_alloc_map_go:
 # Two conventions, both forced by the same fact -- a `call` does not put
 # arguments in registers, so every block takes them off the stack:
 #
-#   - A block with a frame reads its parameters at 16(%rbp) (the LAST one
-#     pushed is the FIRST parameter, so it sits lowest). A frameless block
-#     reads them at 8(%rsp), just above the return address. y_os_write above
-#     uses 16/24/32(%rbp); the frameless blocks below use 8(%rsp).
+#   - Parameter k of n is at 16+8*(n-k)(%rbp) in a block with a frame: the
+#     LAST parameter pushed is the FIRST one, so it sits lowest. n=3 reads
+#     32/24/16, n=2 reads 24/16, n=1 reads 16. A frameless block reads the same
+#     offsets off %rsp instead (8/16/24), because there the return address
+#     pushes everything up by 8 -- which is why y_os_write above uses
+#     32/24/16(%rbp) and prelude.s's Linux halves use 24/16/8(%rsp) for the
+#     SAME three parameters. Getting this wrong is silent: the block runs, and
+#     reads whatever the stack held.
 #   - A block that needs scratch registers pushes them AFTER `push %rbp`, so
 #     they sit BELOW %rbp (-8, -16, -24, ...) and the epilogue restores them
 #     with explicit loads, not pops. `mov %rbp,%rsp; pop %rbp; ret` is only
 #     right when nothing was pushed between the frame pointer and the `sub`.
 #     The saved registers therefore own the top three words below %rbp, and
 #     any local goes below -32.
+#
+# The argument registers, because getting one wrong is silent: a call that
+# writes its second argument through %rsi instead of %rdx still returns
+# STATUS_SUCCESS, and the out-parameter it did not write keeps whatever the
+# stack held -- a clock frequency read as 1.2e14 and a monotonic clock frozen at
+# zero. The set is the one native.y's w_syscall_reg implements and
+# gen_syscall stages:
+#
+#     arg1 %r10   arg2 %rdx   arg3 %r8   arg4 %r9   arg5+ at 40(%rsp), 48, ...
+#
+# NOT %rsi for argument two (that is the SysV order, and it is the mistake this
+# note was written for), and not r10/r9/r8/rdx/rcx/r11.
 #
 # NTSTATUS polarity: every Nt* call returns a signed status, NEGATIVE meaning
 # failure, while the Linux caller wants a negative errno and reads the return
@@ -464,4 +480,251 @@ y_os_fork:
 #=== replace: y_os_execve ===
 y_os_execve:
     mov $-38, %rax
+    ret
+# y_os_lseek(fd, off, whence) -> the new offset, or a negative errno.
+#
+# NOT a transliteration, because Windows has no lseek. Its two halves:
+#
+#   SEEK_CUR (1) with a NEGATIVE offset -- which is the only form prelude.y's
+#   y_stdin_sync uses, to push back the bytes readline buffered but did not
+#   return -- is expressed with NtSetInformationFile (index 13) and
+#   FILE_POSITION_INFORMATION { LARGE_INTEGER Offset; ULONG FilePointer; } at
+#   -72(%rbp): the NT offset is ABSOLUTE, so the current size comes first, from
+#   NtQueryInformationFile (index 23) with FileStandardInformation (1) into a
+#   24-byte buffer at -56(%rbp) whose EndOfFile is the LARGE_INTEGER at -48.
+#
+#   SEEK_SET (0) is the same SetInformationFile with the offset as given.
+#   Anything else answers -22 (EINVAL) rather than doing the wrong thing: "works
+#   for the one caller" is not a contract a named entry point can make, and a
+#   silent wrong answer in a seek is the kind of bug that shows up as corrupt
+#   input three layers away.
+#
+# Both Nt calls take five arguments -- handle, the IO_STATUS_BLOCK, the
+# information buffer, its length, the class -- so the class is the fifth and goes
+# to 40(%rsp), which is why this block reserves 160 bytes rather than 128. The
+# handle comes from y_os_handle, because a "fd" is not a handle.
+#=== replace: y_os_lseek ===
+y_os_lseek:
+    push %rbp
+    mov %rsp, %rbp
+    push %rbx
+    push %r12
+    push %r13
+    sub $160, %rsp
+    mov 32(%rbp), %rbx
+    mov 24(%rbp), %r12
+    mov 16(%rbp), %r13
+    cmp $1, %r13
+    jne yol_seekset
+    cmp $0, %r12
+    jns yol_bad
+    mov %rbx, %rdi
+    call y_os_handle
+    mov %rax, -32(%rbp)
+    lea -48(%rbp), %rdx
+    lea -80(%rbp), %r8
+    mov $24, %r9d
+    mov $1, 40(%rsp)
+    mov -32(%rbp), %r10
+    mov $23, %eax
+    syscall
+    test %eax, %eax
+    js yol_fail
+    mov -72(%rbp), %rax
+    add %r12, %rax
+    jmp yol_set
+yol_seekset:
+    test %r12, %r12
+    js yol_bad
+    mov %r12, %rax
+yol_set:
+    mov %rax, -96(%rbp)
+    mov %rbx, %rdi
+    call y_os_handle
+    mov %rax, -32(%rbp)
+    lea -48(%rbp), %rdx
+    lea -96(%rbp), %r8
+    mov $12, %r9d
+    mov $13, 40(%rsp)
+    mov -32(%rbp), %r10
+    mov $13, %eax
+    syscall
+    test %eax, %eax
+    jns yol_out
+yol_fail:
+    mov $-1, %rax
+    jmp yol_out
+yol_bad:
+    mov $-22, %rax
+yol_out:
+    mov -24(%rbp), %r13
+    mov -16(%rbp), %r12
+    mov -8(%rbp), %rbx
+    mov %rbp, %rsp
+    pop %rbp
+    ret
+# y_os_clock_gettime(clock, ts) -> 0, or a negative errno. Two NT calls, because
+# the two clocks Linux offers are two different things here:
+#
+#   clock 0, CLOCK_REALTIME  -> NtQuerySystemTime (index 90), one argument, the
+#     LARGE_INTEGER it fills being 100 ns ticks since 1601-01-01 -- so a tick is
+#     100 ns and a second is 10^7 of them. Converted into the caller's struct
+#     timespec AND shifted to the Unix epoch, which is
+#     why the 11644473600 seconds between the two are built at run time out of
+#     three small multiplies rather than one immediate: the difference in 100 ns
+#     units is 1.16e17, and this assembler has no movabs (a 64-bit immediate
+#     would be silently truncated, which pe.h is explicit about).
+#
+#   clock 1, CLOCK_MONOTONIC -> NtQueryPerformanceCounter (index 49), the
+#     counter at -16(%rbp) and its frequency at -24(%rbp). QPC ticks are in
+#     units the frequency gives, NOT nanoseconds, so the conversion is a real
+#     division and not a shift. It is done as
+#         ns = (ticks / freq) * 1e9 + (ticks % freq) * 1e9 / freq
+#     rather than ticks * 1e9 / freq because that product overflows 64 bits;
+#     the split form cannot, since the frequency is a 32-bit field, so the
+#     remainder is below 2^32 and the product below 2^62.
+#
+# Writing a struct timespec into the caller's buffer is the whole trick. Nothing
+# above the arch module knows that a FILETIME is two 32-bit fields or that a
+# QPC tick is not a nanosecond: rt.y allocates { i64 sec; i64 nsec; } and reads
+# it back, on both targets, unchanged.
+#=== replace: y_os_clock_gettime ===
+y_os_clock_gettime:
+    push %rbp
+    mov %rsp, %rbp
+    push %rbx
+    sub $48, %rsp
+    mov 16(%rbp), %rbx
+    mov 24(%rbp), %rcx
+    test %rcx, %rcx
+    je yoc_realtime
+    lea -16(%rbp), %r10
+    lea -24(%rbp), %rdx
+    xor %r8d, %r8d
+    xor %r9d, %r9d
+    mov $49, %eax
+    syscall
+    test %eax, %eax
+    js yoc_fail
+    mov -24(%rbp), %rcx
+    test %rcx, %rcx
+    jz yoc_fail
+    mov -16(%rbp), %rax
+    xor %edx, %edx
+    div %rcx
+    mov %rax, %rsi
+    mov $1000000000, %rdi
+    imul %rdi, %rsi
+    mov %rdx, %rax
+    imul %rdi, %rax
+    mov %rcx, %rdi
+    xor %edx, %edx
+    div %rdi
+    add %rsi, %rax
+    mov $1000000000, %rdi
+    xor %edx, %edx
+    div %rdi
+    mov %rax, (%rbx)
+    mov %rdx, 8(%rbx)
+    xor %eax, %eax
+    jmp yoc_out
+yoc_realtime:
+    mov %rbx, %r10
+    xor %esi, %esi
+    xor %edx, %edx
+    xor %r8d, %r8d
+    xor %r9d, %r9d
+    mov $90, %eax
+    syscall
+    test %eax, %eax
+    js yoc_fail
+    mov (%rbx), %rax
+    mov $1000000, %rdi
+    mov $116444736, %rsi
+    imul %rdi, %rsi
+    mov $1000, %rdi
+    imul %rdi, %rsi
+    sub %rsi, %rax
+    mov $10000000, %rdi
+    xor %edx, %edx
+    div %rdi
+    mov %rax, (%rbx)
+    mov $100, %rdi
+    imul %rdi, %rdx
+    mov %rdx, 8(%rbx)
+    xor %eax, %eax
+    jmp yoc_out
+yoc_fail:
+    mov $-1, %rax
+yoc_out:
+    mov -8(%rbp), %rbx
+    mov %rbp, %rsp
+    pop %rbp
+    ret
+# y_os_nanosleep(ts) -> 0, or a negative errno. NtDelayExecution (index 52)
+# takes a LARGE_INTEGER in 100 ns ticks, and NEGATIVE: the NT field is a
+# relative interval expressed as a negative count, the opposite sign to the
+# timespec rt.y hands in. ONE TICK IS 100 NANOSECONDS, so the conversion is a
+# division by 100 -- multiplied by 10000 instead (which is what an earlier
+# revision of this block did) it is 100000 times too long, and a program asking
+# for a 50 ms sleep hangs for fourteen hours instead of failing.
+#
+# The caller's two longs are folded into one interval in a register and stored
+# into this frame's own scratch, which is the buffer the call points at. Note
+# Three things about that division, all three of which this block got wrong at
+# once and in two different revisions:
+#
+#   - `div` reads the dividend from rdx:rax, so the interval has to END UP in
+#     %rax. An earlier revision left it in %rdx and divided 0:%rax, which is a
+#     ten-fold short sleep rather than an error.
+#   - the high half must be cleared with `xor %edx, %edx`, not `xor %eax, %eax`:
+#     leaving the low half of the dividend in rdx is a divide OVERFLOW, which is
+#     the same #DE the trap calls "divide by zero" -- so it looked like a hang.
+#   - and the DIVISOR cannot be the register being cleared, which is how an
+#     intermediate revision divided by zero exactly.
+#
+# `div` is UNSIGNED, so the interval must reach it as a POSITIVE count of
+# nanoseconds -- sec*10^9 + nsec, not nsec - sec*10^9 as an earlier revision had
+# it. A timespec with sec = 1 and nsec = 500000000 is half a second, but the
+# subtraction makes it minus half, the unsigned division of that by 1000 is
+# 1.8e16, and NtDelayExecution is asked to sleep for 54 years: every sub-second
+# sleep worked and every one-second sleep hung, which is a symptom worth more
+# than the fix. `neg` at the end is where the sign belongs, because the NT field
+# wants a negative count.
+#
+# EINTR is not special-cased: a negative result is what a Linux caller checks
+# and rt.y's sleep ignores the return.
+#=== replace: y_os_nanosleep ===
+y_os_nanosleep:
+    push %rbp
+    mov %rsp, %rbp
+    sub $64, %rsp
+    mov 16(%rbp), %rdi
+    mov (%rdi), %rax
+    mov $1000000000, %rcx
+    imul %rcx, %rax
+    mov 8(%rdi), %rdx
+    add %rdx, %rax
+    mov $10, %rcx
+    imul %rcx, %rax
+    mov $1000, %rcx
+    xor %edx, %edx
+    div %rcx
+    neg %rax
+    mov %rax, -8(%rbp)
+    lea -8(%rbp), %rdx
+    xor %r10d, %r10d
+    xor %r8d, %r8d
+    xor %r9d, %r9d
+    mov $52, %eax
+    syscall
+    test %eax, %eax
+    js yon_fail
+    xor %eax, %eax
+    jmp yon_out
+yon_fail:
+    mov $-1, %rax
+yon_out:
+    mov %rbp, %rsp
+    pop %rbp
     ret

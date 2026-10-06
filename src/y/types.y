@@ -3078,7 +3078,8 @@ def os_call_name(nm: str) -> bool {
 };
 
 def os_call_names() -> [str] {
-    ["y_os_write", "y_os_read", "y_os_wait4", "y_os_fork", "y_os_execve"]
+    ["y_os_write", "y_os_read", "y_os_lseek", "y_os_clock_gettime",
+     "y_os_nanosleep", "y_os_wait4", "y_os_fork", "y_os_execve"]
 };
 
 def typeof_call(st: TcSt, node: Call) -> TcRes {

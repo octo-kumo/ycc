@@ -74,7 +74,7 @@ def readline() -> str? {
 def y_stdin_sync() -> long {
     let unread = y_rl_end - y_rl_pos;
     if (unread > 0) {
-        if (syscall(8, 0, 0 - unread, 1) >= 0) {
+        if (os_call("y_os_lseek", 0, 0 - unread, 1) >= 0) {
             y_rl_pos = 0;
             y_rl_end = 0;
         };

@@ -453,7 +453,42 @@ yosw_fail:
 # the other is a link error on the target that is missing it, and native.y
 # check_os_call_names turns that into a compile error here instead.
 #
+# These three read and fill a struct timespec { i64 sec; i64 nsec; }, which is
+# the Linux layout and is also what rt.y allocates. The Windows halves CONVERT
+# -- a FILETIME is two 32-bit fields and a QPC tick is not a nanosecond -- so
+# nothing above the arch module has to know either.
+#
 # y_os_read(fd, buf, len) -> bytes read, or a negative errno. read(2).
+# y_os_lseek(fd, off, whence) -> the new offset, or a negative errno. lseek(2).
+# prelude.y's readline uses it to push back what it read too much of: whence 1
+# (SEEK_CUR) with a negative offset. The Windows half is not a transliteration
+# of this one -- Windows has no lseek at all -- and says so.
+y_os_lseek:
+    mov 24(%rsp), %rdi
+    mov 16(%rsp), %rsi
+    mov 8(%rsp), %rdx
+    mov $8, %eax
+    syscall
+    ret
+# y_os_clock_gettime(clock, ts) -> 0, or a negative errno. clock is 0 for
+# CLOCK_REALTIME (microseconds since the epoch) and 1 for CLOCK_MONOTONIC.
+# clock_gettime(2) is ONE syscall number for every clock, hence one entry in
+# arch_x64.y's table rather than two.
+y_os_clock_gettime:
+    mov 16(%rsp), %rdi
+    mov 8(%rsp), %rsi
+    mov $228, %eax
+    syscall
+    ret
+# y_os_nanosleep(ts) -> 0, or a negative errno (a negative EINTR means the sleep
+# was cut short, which rt.y's sleep ignores). nanosleep(2). The second argument
+# stays 0: `rem` is the remaining time and nothing here wants it.
+y_os_nanosleep:
+    mov 16(%rsp), %rdi
+    xor %esi, %esi
+    mov $35, %eax
+    syscall
+    ret
 y_os_read:
     mov 24(%rsp), %rdi
     mov 16(%rsp), %rsi
