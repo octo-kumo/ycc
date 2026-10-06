@@ -758,8 +758,9 @@ octal permission number (\ic{420} is \ic{0644}, \ic{493} is \ic{0755});
 
 \ic{import http;} is an HTTP/1.1 client, \ic{https} included, in plain Y
 (it brings the modules below with it). One call makes a request; its
-options are a record whose fields may all be left out
-(Section~\ref{sec:type-records}):
+options are an \ic{http.Opts} record whose fields may all be left out
+(Section~\ref{sec:type-records}), so a program that wants to name the
+type can:
 
 \begin{lstlisting}
 import http;
@@ -777,7 +778,7 @@ client's own of the same name), \ic{body}, \ic{timeout} (seconds a read
 or a connect may wait, 30), \ic{redirects} (how many to follow, 5),
 \ic{insecure} (do not check an \ic{https} server's chain) and
 \ic{anchors} (PEM certificates to trust instead of the system's). The
-response is a record: \ic{status} (0 when none came, and then \ic{err}
+response is an \ic{http.Response}: \ic{status} (0 when none came, and then \ic{err}
 says why), \ic{reason}, \ic{headers} (names in lower case; a repeated
 header's values joined by \ic{", "}, \ic{set-cookie}'s by newlines),
 \ic{size} (the Content-Length, or $-1$), \ic{url} (after redirects), and
@@ -791,7 +792,10 @@ gives the same bytes twice and \ic{text()} twice the same text;
 Many requests that look alike go through a session: a base URL their
 paths resolve against, headers for every request (\ic{s.header(name,
 value)} adds one), connections kept open and used again, and the cookies
-servers set, sent back:
+servers set, sent back. \ic{http.session(opts)} answers an \ic{http.Session} --- a
+record of the request methods, each taking a path and answering an
+\ic{http.Response} --- and its argument is an \ic{http.SessionOpts}, the same
+optional fields as \ic{http.Opts} with \ic{base} added:
 
 \begin{lstlisting}
 import http;
@@ -803,12 +807,12 @@ let gone = s.request("DELETE", "/users/7", { timeout: 5 });
 s.close();
 \end{lstlisting}
 
-\ic{import tls;} is the TLS 1.3 client underneath:
-\ic{tls.connect(host, port)} gives a
-connection whose \ic{err} is \ic{""} when the handshake held, and
-\ic{tls.send(c, bytes)}, \ic{tls.recv(c)} (the next data, \ic{none} at the
-end) and \ic{tls.close(c)} work on it. \ic{tls.connect\_with(host, port,
-opts)} is the same with \ic{anchors}, \ic{alpn}, \ic{insecure} and
+\ic{import tls;} is the TLS 1.3 client underneath, and
+\ic{tls.connect(host, port)} gives a \ic{tls.Conn} whose
+\ic{err} is \ic{""} when the handshake held. \ic{tls.send(c, bytes)},
+\ic{tls.recv(c)} (the next data, \ic{none} at the end) and
+\ic{tls.close(c)} work on it. \ic{tls.connect\_with(host, port,
+opts)} is the same, with an \ic{tls.Opts} of \ic{anchors}, \ic{alpn}, \ic{insecure} and
 \ic{timeout} to choose instead. The server's chain must reach a
 trust anchor and name the host; X25519 and three suites are offered;
 there is no TLS 1.2.
@@ -848,7 +852,8 @@ process is out of descriptors.
 
 Two URL helpers stand apart from the requests, since a redirect or a
 \ic{<base>} path is often already split: \ic{http.parse\_url(s)} gives
-the parts of a URL, and \ic{http.resolve\_ref(base, ref)} resolves a
+the parts of a URL as an \ic{http.Url} --- \ic{ok}, \ic{secure}, \ic{host},
+\ic{port}, \ic{path} --- and \ic{http.resolve\_ref(base, ref)} resolves a
 reference against a base URL the way a browser would.
 
 \subsection{Cryptography (the crypto and x509 modules)}
@@ -886,12 +891,13 @@ the anchors (\ic{x509.anchors\_pem(text)}), and \ic{x509.pem\_certs(text)}
 splits a PEM file while \ic{x509.system\_roots()} gives the system's own
 as PEM.
 
-A single certificate is \ic{x509.parse\_cert(der)},
-\ic{x509.verify\_signed(cert, signature, key)}
-checks it and \ic{x509.name\_matches(cert, host)} matches it to a
-name. \ic{x509.days\_from\_civil(y, m, d)} is the date arithmetic
-\ic{x509.verify\_chain} uses, and
-\ic{x509.b64\_decode} the Base64 one it needs to read a PEM file.
+A single certificate is an \ic{x509.Cert}, and \ic{x509.parse\_cert(der)} is
+how one is read out of its DER.
+\ic{x509.verify\_signed(cert, signature, key)} checks it,
+\ic{x509.name\_matches(cert, host)} matches it to a name, and
+\ic{x509.days\_from\_civil(y, m, d)} is the date arithmetic
+\ic{x509.verify\_chain} uses. \ic{x509.b64\_decode} is the Base64 decoder it
+needs to read a PEM file.
 
 \subsection{The terminal (the tui module)}
 \label{sec:builtin-tui}
@@ -963,9 +969,11 @@ frame clock and the frame meter.
   wipes the screen.
 \item[\ic{tui.new(rows, cols)}] A \ic{Surface}. It allocates six
   \ic{[long; 32768]} arrays --- 1.5 MiB --- \emph{once}, whatever size it is asked
-  for, and the surface is capped at 32768 cells: a 128x256 screen. A larger one
-  does not fit, which is why a program wanting 320x240 keeps its own byte buffer
-  instead. Cells above \ic{rows * cols} are never flushed.
+  for, and the surface is capped at 32768 cells: a 128x256 screen. Those three
+  numbers are \ic{tui.MAX\_CELLS}, \ic{tui.MAX\_ROWS} and
+  \ic{tui.MAX\_COLS}, so a program can name the limit it is checking
+  against; a request above it is clamped, not refused. A larger screen does not
+  fit, which is why a program wanting 320x240 keeps its own byte buffer instead. Cells above \ic{rows * cols} are never flushed.
 \item[\ic{tui.resize(s, rows, cols)}] The same surface at another size, without a
   second allocation, and \ic{tui.rows(s)} / \ic{tui.cols(s)} read its size back.
 \item[\ic{tui.clear(s, bg)}, \ic{tui.fill(s, cp, fg, bg)}] Every cell to a space, or to
