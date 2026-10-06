@@ -50,7 +50,20 @@ def apply_state(st: State, raw: str) -> bool {
     let msg = json.jobj(parsed!);
     let method = msg_method(msg);
     let p = msg_params(msg);
-    if (method == "initialize") { st.initialized = true; }
+    if (method == "initialize") {
+        st.initialized = true;
+        // R1.8's `checkOnChange`, read HERE and not in `do_initialize`, and the
+        // placement is the whole reason this took two attempts.
+        //
+        // The server forks per request: the parent records what must survive, the
+        // child answers from a COPY and dies (LSP.md section 4.2). So a flag set
+        // in `do_initialize` lives in the child that read it, and the next
+        // keystroke gets a server that has forgotten it -- which is exactly what
+        // happened: the client said `false`, the child honoured it, and the
+        // session still published on every change. This function is the only code
+        // the parent runs, so this is the only place the setting can be recorded.
+        st.check_on_change = serve.read_check_on_change(p);
+    }
     else if (method == "shutdown") { st.shutting = true; }
     else if (method == "exit") { serve.on_exit(st); }
     else if (method == "textDocument/didOpen") { serve.note_open(st, p); }
