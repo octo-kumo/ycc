@@ -1455,52 +1455,6 @@ warning would matter, and the numbers are unchanged with `s` printed.)
 per-frame figure (136 B) is `--frames N --time` from `examples/hexview`, before
 and after the two-call rewrite.
 
-## 21. `eputs` writes no newline, `puts` does, and neither the manual nor the error path mentions it — so two diagnostics run together
-
-**Useful because** `eputs` is how every diagnostic in Y leaves the program,
-and the difference between `puts` and `eputs` is currently a trap with no
-diagnostic of its own. Three independent examples in this campaign wrote
-`eputs("indexer: no such path")`, and all three got
-
-```
-indexer: no such pathindexer: try 'indexer --help' for the list of flags
-```
-
-on one line. It reads as a truncated message, not as a missing `\n`, and the
-fix is invisible once you have been told — which is the whole problem.
-
-Today:
-
-```y
-eputs("indexer: " + msg + "\n");     // every call carries its own newline
-// and there is no way to ask which convention a function uses, so a helper
-// that prints needs a comment saying which one it is
-```
-
-Wanted:
-
-```y
-enputs(v)          // e puts: fd 2, WITH a newline -- puts' convention
-eput(v)            // fd 2, WITHOUT one, for a caller assembling a line
-// or, the smaller ask: one line in the manual saying which of the two
-// does not append a newline, because "e" for "no newline" is a naming
-// convention nobody can guess
-```
-
-**Costs** Two more builtin names in `types.y`/`native.y` next to `puts`, and
-one row in the manual's builtin table. The naming is the real design work:
-`eputs` already means "no newline", so `enputs` is an awkward partner for it.
-If only one thing is done, document it — that costs a sentence and removes
-every instance of this bug.
-
-### Workarounds
-
-`examples/indexer/cli.y` and `indexer.y` append `\n` at every `eputs` call
-site, with a comment saying why. See the header of `indexer.y`, "EXIT CODES,
-and why no path here reaches a trap".
-
----
-
 ## 22. `fs.list_dir` allocates a 32 KiB `getdents` buffer per call, so walking a tree costs 32 KiB per directory in a heap that never frees
 
 **Useful because** `fs.list_dir` is the only way to enumerate a directory in

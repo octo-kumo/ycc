@@ -892,10 +892,16 @@ print(add);      // <function (long, long) -> long>
   written as \ic{tostring} would and they are concatenated with no
   separator, so \ic{print(n, " ", xs)} prints \ic{7 [1, 2]}. A call with
   no argument at all is an error (\ic{print takes exactly 1 argument}).
-\item[\ic{puts(s)}] Write to stdout, no newline added. A \ic{long},
+  \ic{print} is the only builtin that ends the line: it appends one
+  \ic{\bs n} for the whole call, whatever the argument count.
+\item[\ic{puts(s)}] Write to stdout with NO newline added --- the
+  contrast is \ic{print}, not a convention you can guess, so a call that
+  ends a line carries its own \ic{"\bs n"}. A \ic{long},
   \ic{bool} or \ic{float} is written as \ic{tostring} would.
 \item[\ic{eputs(s)}] Same, to stderr (keeps \ic{--time} output and
-  program output apart); the same three numeric types as \ic{puts}.
+  program output apart); the same three numeric types as \ic{puts}, and
+  the same rule: no newline of its own, which is why two diagnostics
+  written without one run together on a single line.
 \item[\ic{readline()}] One line from stdin without its newline, or
   \ic{none} at end of input (\ic{str?}). Stdin is buffered (16\,KB per
   \ic{read(2)}); before \ic{exec()} starts a child, the unread part is
