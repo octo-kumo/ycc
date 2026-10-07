@@ -1609,3 +1609,25 @@ see inside it: a temporary yfs_debug() returning yfs_ok, and a print inside
 yfs_name_at's loop showing i, the byte and the compared character.  That is a
 five-minute change and it ends the guessing; the alternative -- porting these
 three lines into the fixture one at a time -- costs three round trips.
+
+### Round 97: the filesystem-to-ring-3 boot path WORKS (u007_fsexec)
+
+The driver builds a YFS1 image in memory, copies the program's ELF into it as the
+file /prog, and loads and runs it OUT OF THE FILESYSTEM: yfs_init,
+yfs_lookup_path("/prog"), yfs_size, elf_map on the file's own data block, then
+vm_new_dir/task_frame/sched_add/task_start.  The transcript:
+
+    fs ok=true ino=2 size=405
+    from the filesystem
+
+So the path a real system takes -- filesystem bytes to a ring-3 process -- is
+exercised end to end here, with the ELF coming from YFS1 rather than a raw module,
+which is what /init, /bin/sh and /bin/ycc will use.
+
+ONE BUG FOUND, and the fixture is committed without an .exit because of it: the
+run ends with qemu status 1, not the 19 that kexit(9) produces, so after a program
+loaded from the filesystem prints and exits, the machine does not reach the
+driver's kexit(9).  It is the same shape as this branch's first bug (exit_group
+returning somewhere unexpected) and it is the next thing to chase; the fixture
+keeps its transcript check meanwhile, which is what makes the boot path itself
+safe from regressions.
