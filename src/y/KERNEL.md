@@ -837,3 +837,32 @@ which is exactly the value the fault reads.
 Next measurement, and it is the same one that localized this case before: print,
 from the kernel, the buffer address the receiver registered and what
 vm_translate returns for it.
+
+### Round 56: the fault is INSIDE ipc_recv -- the blocking/resume path
+
+Instrumented the server (same driver, same program otherwise):
+
+    srv: p>0 true len 5          <- the array is valid and len is 5 BEFORE the call
+    <blank>
+    trap vector=14 err=5 cr2=0
+
+The line printed AFTER `syscall(1025, p)` never appeared, so the fault happens
+during that syscall -- and a syscall cannot fault the caller's own instruction
+stream, which means the SERVER DID NOT RESUME CORRECTLY: ipc_recv blocked it,
+the scheduler switched to the client, the client's ipc_call delivered, and what
+came back was not the server's continuation.  `cr2=0` with the header still
+intact (p>0 true, len 5 before the call) says the same thing the earlier
+disassembly did, from the other side.
+
+That is the last M2 mechanism never exercised before: wait4's blocking works in
+the suite (a child's exit completes the parent through task_exit), but ipc_recv
+is the first case where the completion comes from ANOTHER TASK'S syscall --
+sys_ipc_call -> task_deliver -> task_complete -- with the sender running on the
+sender's CR3 and the receiver suspended at its own canonical point.  Everything
+else on both sides is now measured innocent: the guest allocation, the array
+header and elements, the message contents up to S2, and the delivery write
+itself.
+
+Next: instrument task_deliver/task_complete for this path (the receiver's saved
+rsp, the value written, and what the switch restores), which is the same shape of
+measurement that localized every fault in this file before.
