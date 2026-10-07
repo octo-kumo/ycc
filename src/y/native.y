@@ -1810,7 +1810,9 @@ def shake_refs(text: str, root_refs: [str]) -> str {
 // are scanned for references. Blocks and rules are shake_refs'.
 type PBlocks = { lines: [str], starts: [long], names: [str], ix: [AsmLabel] };
 // The kept text, and every reference the kept blocks make.
-type PShake = { text: str, refs: [str] };
+// The kept prelude: its text, every reference the kept blocks make, and the
+// per-block [name, direct refs] the --gc analysis closes over.
+type PShake = { text: str, refs: [str], bnames: [str], brefs: [[str]] };
 
 // Every name in types.y's os_call_names must be a label in the arch lines
 // that were actually emitted. This runs on both targets, and it is here rather
@@ -1978,6 +1980,8 @@ def shake_prelude(pb: PBlocks, roots: [str]) -> PShake {
     };
     let pieces: [str] = [];
     let out: [str] = [];
+    let knames: [str] = [];
+    let krefs: [[str]] = [];
     k = 0;
     while (k < nb) {
         if (keep[k]) {
@@ -1989,10 +1993,12 @@ def shake_prelude(pb: PBlocks, roots: [str]) -> PShake {
                 pieces += "\n";
             };
             out += brefs[k];
+            knames += names[k];
+            krefs += brefs[k];
         };
         k++;
     };
-    { text: join(pieces, ""), refs: out }
+    { text: join(pieces, ""), refs: out, bnames: knames, brefs: krefs }
 };
 
 // The prelude's lines, then the thread runtime's and the float primitives'
@@ -12194,7 +12200,195 @@ def dup_y_label(deps: [Unit], prog: Unit) -> void {
     };
 };
 
-def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
+// 0 = auto (decide from the program), 1 = always, 2 = never: the --gc switch,
+// set by the driver before compiling. Auto keeps the collector whenever an
+// allocation could happen more than once -- a loop or a recursion that
+// reaches the allocator -- because a wrong "no" is an unbounded heap.
+let gc_mode: long = 0;
+
+def set_gc_mode(m: long) -> void { gc_mode = m; };
+
+// ── the --gc decision ───────────────────────────────────────────────────
+// The collector is needed exactly when an allocation site can run more than
+// once: a loop or a recursion that can reach y_alloc. Everything here errs
+// toward keeping it -- a wrong "no" is an unbounded heap, a wrong "yes" is a
+// few KB of runtime.
+//
+// A backward jump inside one body's IR (a jump to a label defined earlier in
+// the same body) is a loop.
+def ir_has_loop(ir: [long]) -> bool {
+    let lid: [long] = [];
+    let lpos: [long] = [];
+    let at = 0;
+    while (at < len(ir)) {
+        if (ir[at] == insn.IR_LABEL) {
+            lid += ir[at + 1];
+            lpos += at;
+        };
+        at += insn.IR_W;
+    };
+    let found = false;
+    at = 0;
+    while (at < len(ir)) {
+        let f = ir[at];
+        if (f < insn.IR_LABEL) {
+            let form = insn.ir_form(f);
+            if (form.mn[0:1] == "j") {
+                let wp = at + 1;
+                form.kinds.foreach((k) => {
+                    if (k == insn.O_LBL) {
+                        let t = ir[wp];
+                        let i = 0;
+                        while (i < len(lid)) {
+                            if (lid[i] == t && lpos[i] < at) { found = true; };
+                            i++;
+                        };
+                    };
+                    wp = wp + insn.ir_kind_words(k);
+                });
+            };
+        };
+        at += insn.IR_W;
+    };
+    found
+};
+
+// Every label that can reach y_alloc, over kept bodies and kept prelude
+// blocks: the reverse closure of y_alloc. Plain loops, not closures: a lambda
+// here captures a dozen bindings, and this file is compiler source.
+def gc_users(labels: [str], refs: [[str]], keep: [bool], ps: PShake) -> [str] {
+    let names: [str] = [];
+    let edges: [[str]] = [];
+    let i = 0;
+    while (i < len(labels)) {
+        if (keep[i]) {
+            names += labels[i];
+            edges += refs[i];
+        };
+        i++;
+    };
+    let bn = ps.bnames;
+    let br = ps.brefs;
+    i = 0;
+    while (i < len(bn)) {
+        names += bn[i];
+        edges += br[i];
+        i++;
+    };
+    let rev: [[str]] = [];
+    i = 0;
+    while (i < len(names)) {
+        let none: [str] = [];
+        rev += [none];
+        i++;
+    };
+    let ix = namemap_build(names);
+    i = 0;
+    while (i < len(names)) {
+        let es = edges[i];
+        let j = 0;
+        while (j < len(es)) {
+            let k = namemap_get(ix, es[j]);
+            if (k >= 0) { rev[k] += names[i]; };
+            j++;
+        };
+        i++;
+    };
+    let out: [str] = [];
+    let work: [str] = [];
+    if (namemap_get(ix, "y_alloc") >= 0) {
+        out += "y_alloc";
+        work += "y_alloc";
+        while (len(work) > 0) {
+            let w = work[0];
+            work = work[1:len(work)];
+            let j = namemap_get(ix, w);
+            if (j >= 0) {
+                let rs = rev[j];
+                let k = 0;
+                while (k < len(rs)) {
+                    if (!(name_in(out, rs[k]))) {
+                        out += rs[k];
+                        work += rs[k];
+                    };
+                    k++;
+                };
+            };
+        };
+    };
+    out
+};
+
+// A body that calls back into itself, directly or through a cycle, and can
+// reach y_alloc. Only consulted when nothing has a loop, so the walk is over
+// a handful of nodes.
+def gc_recursive(labels: [str], refs: [[str]], keep: [bool], users: [str]) -> bool {
+    let ix = namemap_build(labels);
+    let found = false;
+    let i = 0;
+    while (i < len(labels) && !found) {
+        if (keep[i] && name_in(users, labels[i])) {
+            let stack: [str] = [];
+            let rs = refs[i];
+            let j = 0;
+            while (j < len(rs)) { stack += rs[j]; j++; };
+            let seen: [str] = [];
+            while (len(stack) > 0 && !found) {
+                let w = stack[len(stack) - 1];
+                stack = stack[0:len(stack) - 1];
+                if (w == labels[i]) {
+                    found = true;
+                } else if (!(name_in(seen, w))) {
+                    seen += w;
+                    let k = namemap_get(ix, w);
+                    if (k >= 0 && keep[k]) {
+                        let ks = refs[k];
+                        let m = 0;
+                        while (m < len(ks)) { stack += ks[m]; m++; };
+                    };
+                };
+            };
+        };
+        i++;
+    };
+    found
+};
+
+// auto (0): link the collector only when an allocation can repeat. always (1)
+// and never (2) say so outright.
+def gc_decide(mode: long, labels: [str], refs: [[str]], keep: [bool], all: [[long]], allblob: [str], ps: PShake, threads: bool) -> bool {
+    if (mode == 1) { true }
+    else if (mode == 2) { false }
+    else if (threads) { true }
+    else {
+        let users = gc_users(labels, refs, keep, ps);
+        // a kept body with a loop that can reach y_alloc
+        let loops = false;
+        let i = 0;
+        while (i < len(labels) && !loops) {
+            if (keep[i] && name_in(users, labels[i])) {
+                let bd: [long] = all[i];
+                if (len(bd) == 0) { bd = unpack_body(allblob[i]); };
+                if (len(bd) > 0 && ir_has_loop(bd)) { loops = true; };
+            };
+            i++;
+        };
+        if (loops) { true } else {
+            // a kept prelude block other than the allocator's own that can
+            // reach y_alloc: the helpers loop, and their asm is not parsed
+            let pu = false;
+            let bn = ps.bnames;
+            i = 0;
+            while (i < len(bn) && !pu) {
+                if (!(bn[i][0:7] == "y_alloc") && name_in(users, bn[i])) { pu = true; };
+                i++;
+            };
+            if (pu) { true } else { gc_recursive(labels, refs, keep, users) }
+        }
+    }
+};
+
+def link_units(std: [Unit], deps: [Unit], prog: Unit, gcmode: long) -> [LinkPart] {
     let units: [Unit] = [];
     units += std;
     units += deps;
@@ -12368,6 +12562,14 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
         };
         ps = shake_prelude(pb, body_refs);
         more = unkept_refs(ps.refs, bmap, keep);
+    };
+    // --gc: when the collector cannot be needed, its three entry points become
+    // stubs, so the registry, metadata arena, marker, sweeper and free lists go
+    // unreachable and shake out. The allocator and heap_used() are untouched.
+    if (!(gc_decide(gcmode, labels, refs, keep, all, allblob, ps, thr))) {
+        core_lines = arch.arch_nogc_lines(core_lines);
+        pb = prelude_blocks(prelude_with(core_lines, thr, mth));
+        ps = shake_prelude(pb, body_refs);
     };
     // Everything the kept code can reach: the kept bodies' own references
     // plus the kept prelude's. Computed before the rodata, which uses it as
@@ -13254,7 +13456,7 @@ def emit_program(ast: Block, nr: Resolved, debug: bool, wlevel: long, std: [Unit
         dup_y_label(deps, r.unit);
         let pt = clock_us();
         let ph = heap_used();
-        let parts = link_units(std, deps, r.unit);
+        let parts = link_units(std, deps, r.unit, gc_mode);
         let pr = phase_end(times, "asm_parts", pt, ph);
         { ok: true, asm: parts, errors: r.errors, warnings: r.warnings,
             times: pr.times }

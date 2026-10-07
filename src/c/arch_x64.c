@@ -519,6 +519,52 @@ static int arch_is_label_line(Yv *l) {
 
 // `lines` walked; at a label a replacing block claims, that block's lines and
 // not the prelude's. The new blocks go after the last replaced one.
+/* Replace the block that starts at the column-0 label `name` (through the line
+   before the next label) with `repl`. */
+static Yv *arch_block_sub(Yv *lines, Yv *name, Yv *repl) {
+    Yv *out = yav(0);
+    ylong i = 0;
+    while (i < yv_len(lines)) {
+        Yv *l = ya_get(lines, i);
+        if (arch_is_label_line(l)
+            && ys_eq(ys_trim(ys_slice(l, 0, yv_len(l) - 1)), name)) {
+            ylong r = 0;
+            while (r < yv_len(repl)) {
+                out = ya_push(out, ya_get(repl, r));
+                r = r + 1;
+            }
+            i = i + 1;
+            while (i < yv_len(lines) && !arch_is_label_line(ya_get(lines, i))) {
+                i = i + 1;
+            }
+        } else {
+            out = ya_push(out, l);
+            i = i + 1;
+        }
+    }
+    return out;
+}
+
+/* The GC-free runtime: a program whose heap cannot grow does not link the
+   collector at all (--gc, or the auto analysis). The allocator itself is
+   UNCHANGED -- only the collector's three entry points become stubs -- so the
+   chunk layout and heap_used() accounting are bit-identical, and every other
+   collector block (the registry, metadata arena, marker, sweeper, free lists)
+   becomes unreachable and is shaken out.
+     y_gc_maybe      never runs a cycle
+     y_gc_alloc_free never recycles a block (0 = none)
+     y_gc_chunk_add  returns the base the allocator wants, registers nothing */
+Yv *arch_nogc_lines(Yv *lines) {
+    Yv *out = arch_block_sub(lines, ys("y_gc_maybe"),
+                             yavs(ys("y_gc_maybe:"), ys("    ret"), NULL));
+    out = arch_block_sub(out, ys("y_gc_alloc_free"),
+                         yavs(ys("y_gc_alloc_free:"), ys("    xor %eax, %eax"),
+                              ys("    ret"), NULL));
+    return arch_block_sub(out, ys("y_gc_chunk_add"),
+                          yavs(ys("y_gc_chunk_add:"), ys("    mov %rdi, %rax"),
+                               ys("    ret"), NULL));
+}
+
 static Yv *arch_win_sub(Yv *lines, Yv *blocks) {
     Yv *out = yav(0);
     ylong i = 0;

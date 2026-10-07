@@ -115,10 +115,13 @@ allocates therefore carries neither the allocator nor the collector --
 `y_alloc` call or a `collector:` string comes back. `print(<integer>)` formats
 into a stack buffer too (`y_print_long` -> arch `y_os_print_int`, through the
 checker's named `os_call` layer so the documented override still works), so
-`test/treeshake/minimal.y` fell from 3,120 to 440 bytes. What still carries the
-collector is a program that really allocates -- an array, a string, a float
-`tostring` -- where it is needed; the `--gc` switch for a provably bounded
-program is the next item below.
+`test/treeshake/minimal.y` fell from 3,120 to 440 bytes. A program that allocates but cannot
+*grow* now leaves it out too: `--gc` (auto/always/never, default auto) stubs the
+collector's three entry points in the arch module when no loop or recursion can
+reach `y_alloc`, so the rest of the runtime goes unreachable and shakes out.
+`let a = [1, 2, 3]; print(a[0]);` is 3,428 B with `--gc=always` and 1,312 B with
+the default; `test/sh/test_treeshake.sh` gates auto/always/never and the corpus
+still carries the collector.
 
 `make ynew` (generations 2 and 3 byte-identical), `make cycc`,
 `make port-check` and the heap fixtures `t101`/`t138`/`t139`
@@ -130,9 +133,10 @@ or died).
 
 1. **Threads.** A cycle is only safe while one thread runs; `y_gc_collect`
    returns immediately once `y_heap+24` (the spawned-a-thread flag) is set,
-   so a threaded program still leaks. The plan: stop-the-world at the
-   allocator's slow path (the one place a thread can be parked) and scan
-   each thread's stack from its own control block.
+   so a threaded program still leaks -- and `--gc=auto` keeps the collector
+   for it, so the omission never applies to a program that spawned. The plan
+   is unchanged: stop-the-world at the allocator's slow path (the one place a
+   thread can be parked) and scan each thread's stack from its control block.
 2. **Performance.** Strings and primitive arrays are scanned word by word
    even though they cannot hold a reference. `y_alloc_pf` exists for
    this (`bit 2` = pointer-free, the drain skips such payloads) but no call

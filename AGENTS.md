@@ -72,6 +72,9 @@ moved with the callgrind table, `perf`, or `ycc --time`.
 ## Run / verify
 
 - `./ycc f.y -o /tmp/b && /tmp/b`; the same through `./cycc`; `./ycc -S f.y`.
+- `--gc=auto|always|never` (default `auto`): whether the collector is linked.
+  Auto omits it when no loop or recursion can reach the allocator, so a program
+  that allocates once carries neither; `always` is the escape hatch.
 - `ycc run f.y` compiles and runs in one step; `ycc -E f.y` dumps the source the
   pass saw (meta blocks expanded); `ycc build` / `ycc vendor` for `y.toml`
   projects.
@@ -108,7 +111,7 @@ moved with the callgrind table, `perf`, or `ycc --time`.
 | lsp | the server's fixtures under both compilers, `check-refs.py`, `check-names.py`, formatter idempotence |
 | math | `test/math/ulp_table.txt` within 1 ulp, plus the kernel and threshold audits |
 | coverage | every diagnostic and manual section has a checked test (`test/COVERAGE.md`) |
-| treeshake, std-suites | the unused-code cost ratchets, plus three checks a runtime addition must pass: a program that allocates nothing names no `y_alloc` and no collector block, `test/sh/deadcode.py` counts instructions the shake leaves unreachable (`test/treeshake/deadcode.txt`), and `test/treeshake/shapes.txt` records the size of the shapes a runtime change moves first; the `test/std/` self-test suites |
+| treeshake, std-suites | the unused-code cost ratchets, plus four checks a runtime addition must pass: a program that allocates nothing names no `y_alloc` and no collector block, `--gc=auto` omits the collector for a one-shot allocation while `always` keeps and `never` drops it (same output), `test/sh/deadcode.py` counts instructions the shake leaves unreachable (`test/treeshake/deadcode.txt`), and `test/treeshake/shapes.txt` records the size of the shapes a runtime change moves first; the `test/std/` self-test suites |
 
 Run by hand (not in `make test`): `test/sh/cycc-win.sh` (wine),
 `test/sh/w_sysno.py`, `test/sh/run-parity.sh` (`ycc run` == compile + execute),

@@ -342,6 +342,34 @@ interleaving is unchanged). It is reached through the checker's named layer --
 `heap_used() > 0` is now `false` (printing no longer allocates) and the fixture says so.
 `test/y/native/t379_print_int_no_alloc.y` pins the heap delta across six prints at 0.
 
+### A7. `--gc`: do not link the collector a program cannot grow into (done)
+
+**Problem.** A program that allocates once -- `let a = [1, 2, 3]; print(a[0]);` --
+still linked the whole collector (3,428 B), because `y_alloc`'s slow path calls it
+and nothing asked whether an allocation could ever happen twice.
+
+**Fix.** The allocator is untouched; only the collector's three entry points become
+stubs (`arch_block_sub`/`arch_nogc_lines` in `arch_x64.y`/`.c`): `y_gc_maybe` never
+runs a cycle, `y_gc_alloc_free` never recycles a block, `y_gc_chunk_add` only
+returns the base. Every other collector block (registry, metadata arena, marker,
+sweeper, free lists) becomes unreachable and the existing shake drops it, so the
+chunk layout and `heap_used()` are bit-identical.
+
+`--gc=auto|always|never` (default `auto`) decides in `link_units`. Auto is
+conservative and sound: keep the collector if threads are used, or a kept prelude
+block other than the allocator's own can reach `y_alloc`, or a kept body with a
+**loop** (a backward jump in its IR) can reach `y_alloc`, or -- only when nothing
+loops -- a **recursive** body can reach `y_alloc`. A wrong "no" would be an
+unbounded heap; a wrong "yes" is a few KB.
+
+**Result.** `test/treeshake/alloc_once.y` **3,428 → 1,312 B** and
+`test/treeshake/dead.y` **3,667 → 1,551 B**, both with no `y_gc_collect` in the
+listing, while every `ideas/oom/` program keeps the collector and stays bounded
+under a 256 MiB cap (recursion, a `foreach` whose lambda allocates, and `s01`/`s05`/
+`s12` were checked by hand). `test/sh/test_treeshake.sh` gates all three: auto must
+omit it for a one-shot allocation, always must keep it, never must drop it, and the
+two builds must print the same thing.
+
 ---
 
 ## Part 2 — Codegen: fewer instructions
