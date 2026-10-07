@@ -5,5 +5,4 @@ import kernel;
 kernel.init();
 puts("hello from a Y kernel\n");
 print(6 * 7);
-puts("\n");
 kernel.halt();

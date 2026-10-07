@@ -767,7 +767,15 @@ def ktramp_pre(pt: long, gdtr: long) -> [byte] {
     b = kb1(b, 163);                        // mov %eax, pdpt
     b = kbput32(b, pt + 4096);
     b = kb3(b, 15, 32, 224);                // mov %cr4, %eax
-    b = kb3(b, 131, 200, 32);               // or $0x20, %eax     (PAE)
+    // or $0x620, %eax: PAE (5) plus OSFXSR (9) and OSXMMEXCPT (10).  The
+    // last two are not optional: without OSFXSR every SSE instruction is
+    // #UD, and the Y backend uses XMM for every float operation -- so
+    // `print(1.0 * 2.0)` stopped the machine at its first `movq %rax,%xmm0`
+    // while `print(7.0)` (a literal, passed in a GPR) worked.  A hosted
+    // program never notices because Linux sets these before entering user
+    // space.
+    b = kb1(b, 13);
+    b = kbput32(b, 1568);
     b = kb3(b, 15, 34, 224);                // mov %eax, %cr4
     b = kb_imm32(b, 0, pt);                 // mov $pml4, %eax
     b = kb3(b, 15, 34, 216);                // mov %eax, %cr3
