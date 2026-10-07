@@ -1285,3 +1285,38 @@ That completes the gate picture for this branch:
 
 Every red suite is therefore pre-existing, and the kernel -- the thing this
 branch is for -- is 33/33 inside that same run.
+
+## Where to pick this up (end of the current run)
+
+M0, M1, M2: DONE, verified, 33/33 inside the full gate.  Nothing outstanding.
+The shake fix that unblocked them is committed and blessed (ir_drop_inits must
+not delete a dead cell's initializer range for a kernel target).
+
+M3: HALF DONE, and the hard part works.  os/kernel/ipc.y's ports and
+ipc_call/recv/reply are implemented, and round 62 demonstrated the whole path:
+the client received its answer, the server ran to completion and exited.  The
+one thing between that and a committed fixture is the CALLEE-SAVED FRAME CHANGE
+(the Y ABI promises rbx/rbp/r12-r15 across a call; the canonical frame saves only
+the syscall ABI's nine).  Its recipe is fully specified above, its four parts are
+individually verified by reading, and the ONE measurement left is: with all four
+parts applied, print the rsp each stub holds at its iretq.  Applying all four
+produces err=6 cr2=0x6000638 (a user write to its own stack, i.e. an iretq with a
+wrong RSP), so one of the two paths reads its frame's top five words at the wrong
+offset; that print names which.  After that: commit u005_ipc as a fixture
+(_ktmp/wip/u005_ipc.{user,driver}.y, with .expected and .exit), then the rest of
+M3 -- sys_io and IRQ delivery for the tty, the fd broker, and the YFS1 file
+system with its host-side mkfs.
+
+M4: NOT STARTED.  Userland: init, sh, ls, cat, echo, mkdir, rm, rmdir, mv, cp,
+pwd, wc, head, ps, halt, the ed editor, and /bin/sh for std/exec.y.
+
+M5: NOT STARTED.  ycc on target: /bin/ycc plus /bin/std, /proc/self/exe for
+openat+readlink, /proc/self/environ.
+
+M6: partly done (this file, BUGS.md, the harness and the budget ratchet);
+outstanding are the final docs and any remaining ratchets.
+
+Two rules that each cost rounds in this run, both proved here: rebuild BOTH
+engines after touching an embedded arch/*.s (make cycc as well as the Y one)
+before reading any suite number, and run the main tree's compiler as a control
+before believing that something on this branch is broken.
