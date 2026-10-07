@@ -1388,3 +1388,23 @@ left the suite red for a moment.  Strip the colour before matching on harness
 output.
 
 Suite: 34 passed, 0 failed / 34 total.
+
+### Round 84: the u006 blocker is the DRIVER, not the program
+
+With the poll made unbounded, the manual run still produced the right transcript
+(module bytes / it is an elf / entering ring 3 / read 1 byte 90) and the harness
+still differed -- and its "got" is the diagnostic: only THREE lines, ending at
+"entering ring 3", with no read line at all.  So the harness's run never got as
+far as the read, while the same program under test/kernel/uland.y does.
+
+That is a driver difference, not a program or timing one: u005_ipc passes because
+it ships its OWN .driver.y (it spawns the server, talks to it, and stays alive
+long enough), while u006 had none and fell back to whatever the harness uses by
+default -- which prints the same opening lines but does not keep the machine
+around long enough for a program that waits on the console (or does not run the
+initrd program the way uland.y does).
+
+Next: give u006_serialin its own .driver.y, modelled on u005_ipc's -- spawn the
+program, then stay alive (wait4 or an IPC wait) so the console read can complete.
+The program itself is verified by hand and its poll is unbounded, so this is a
+harness-shape problem, not a kernel one.
