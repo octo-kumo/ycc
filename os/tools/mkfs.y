@@ -75,9 +75,18 @@ if (len(a) < 3 || ((len(a) - 2) % 2) != 0) {
         while (c < len(nm)) { img[eoff + 8 + c] = nm[c]; c = c + 1; };
         eoff = eoff + round4(8 + len(nm));
         let foff = BS + (j + 2) * 64;
+        let nb = blocks_for(len(datas[j]));
+        if (nb > 12) {
+            eputs("mkfs: " + nm + " needs " + tostring(nb) + " blocks; the indirect block is not written yet\n");
+        } else {
+            let di = 0;
+            while (di < nb) {
+                put32(img, foff + 8 + di * 4, blk + di);
+                di = di + 1;
+            };
+        };
         put32(img, foff, 1);
         put32(img, foff + 4, len(datas[j]));
-        put32(img, foff + 8, blk);
         let off = blk * BS;
         let c2 = 0;
         while (c2 < len(datas[j])) { img[off + c2] = datas[j][c2]; c2 = c2 + 1; };
