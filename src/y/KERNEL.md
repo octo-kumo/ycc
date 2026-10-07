@@ -643,3 +643,21 @@ printing "minimal" is the bug.  Always `make rebless` before reading a
 kernel-suite number after touching src/y (a stale ./ycc cost two rounds).
 Run the main tree's compiler as a control before believing a compiler bug on
 this branch (it would have caught two wrong bug reports).
+
+### Round 46: publishing the region into the runtime's heap cells does not fix it
+
+Tried, measured, reverted.  The runtime's allocator reads its own cells
+(`lea y_heap(%rip); cur = (%rcx); end = 8(%rcx); used = 16(%rcx)`), and this
+branch's y_heap_region_set publishes the region only into its own cells
+(y_heap_bias/limit/next), so the runtime sees {0,0,0} and takes the slow path for
+every allocation.  Making y_heap_region_set fill the runtime's cells too (cur =
+the region's start, end = its top, used = 0) changes nothing: the same
+`err=5 cr2=0` remains, so the read-at-0 is NOT the allocator's cell pair.
+
+Also re-learned the assembler rule the hard way (again): a `#` comment inside an
+asm block BODY is `error: assemble: L2209: unexpected comment (backend bug)` --
+comments go in the block header, above the `#=== add: ===` marker's body.
+
+Standing: round 45's fix DOES hold (the extra 8 is gone from the bump, and the
+kernel image's fault is the reduced `err=5 cr2=0` rather than the write at 0x18).
+The remaining read-at-0 is the next thing to find, and it is not the heap cells.
