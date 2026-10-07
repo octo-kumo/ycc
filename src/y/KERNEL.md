@@ -2026,3 +2026,26 @@ u009_ls pins one record's layout; the walk is what the fixture still needs, and 
 first version of it is what proved the buffer behaviour in the first place.  The
 fixture is parked (guard removed it: only the first name matched), and test/kernel
 is 59 passed, 0 failed / 59 total.
+
+### Round 124: the ls walk WORKS -- the guard string was wrong, not the program
+
+The re-created fixture printed exactly what it should:
+
+    ls open=3
+    entry ino=2 reclen=24 name=112114111103    "prog"
+    entry ino=3 reclen=24 name=1091151030      "msg" + its NUL (0)
+    ls done
+
+and my commit guard rejected it, because it looked for "name=109115103103" while the
+real bytes are 109 115 103 then 0 -- the NUL terminator -- exactly as the previous
+round's note recorded.  The guard then deleted a CORRECT fixture.  So the walk is
+proven: one record per buffer, d_reclen as the stride, the terminating 0 ending the
+loop, and both entries of the two-file image listed from ring 3.
+
+Lesson, and it is the mirror of the earlier ones: a guard string is an ASSERTION
+about the output and deserves the same care as the expected file -- being strict was
+right, being WRONG about the bytes was not, and the cost here was a correct fixture
+and a round.  Re-create it with "name=1091151030" in the guard.
+
+test/kernel is 59 passed, 0 failed / 59 total (the fixture files are gone; nothing
+else changed).
