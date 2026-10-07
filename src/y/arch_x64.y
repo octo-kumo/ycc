@@ -232,7 +232,21 @@ def arch_heap_cells() -> str {
     // character of argv[0]). y_heap_used subtracts it, on the main heap only:
     // a spawned thread gets a heap of its own, and the argv copies are not in
     // it.
-    "y_heap:\n.zero 32\ny_heap_base:\n.zero 8\n"
+    //
+    // The y_gc_* cells are the collector's state (arch/prelude.s): the stack
+    // top _start records, the heap's low/high bounds, the chunk list and its
+    // hash table, the metadata bump, the free-list heads and mark stack, the
+    // live-byte and trigger counters, and the running/off guards. They are
+    // words, so a program that never allocates shakes them out with y_alloc
+    // and every other program carries a few hundred zeroed .bss bytes.
+    "y_heap:\n.zero 32\ny_heap_base:\n.zero 8\n" +
+    "y_gc_stack_top:\n.zero 8\ny_gc_lo:\n.zero 8\ny_gc_hi:\n.zero 8\n" +
+    "y_gc_all:\n.zero 8\ny_gc_tab:\n.zero 8\ny_gc_tabn:\n.zero 8\n" +
+    "y_gc_meta_cur:\n.zero 8\ny_gc_meta_end:\n.zero 8\n" +
+    "y_gc_free:\n.zero 8\ny_gc_ms_cur:\n.zero 8\ny_gc_ms_end:\n.zero 8\n" +
+    "y_gc_ms_seg:\n.zero 8\n" +
+    "y_gc_live:\n.zero 8\ny_gc_last:\n.zero 8\n" +
+    "y_gc_run:\n.zero 8\ny_gc_off:\n.zero 8\n"
 };
 
 def arch_frame(slots: long) -> long {

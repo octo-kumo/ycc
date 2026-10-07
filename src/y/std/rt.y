@@ -60,7 +60,11 @@ def y_bool_tostr(b: bool) -> str {
 
 // The print/put/eput family: every value becomes a string first,
 // so the only output primitive is a byte write above.
-def y_print_long(v: long) -> long { y_print_hstr(tostring(v)) };
+// print(<integer>) formats into a stack buffer through the arch layer
+// (y_os_print_int), so it allocates nothing: a program that only prints
+// numbers never links the allocator -- or the collector behind it. A
+// program may still shadow this def to intercept print(int).
+def y_print_long(v: long) -> long { os_call("y_os_print_int", v) };
 def y_print_bool(b: bool) -> long { y_print_hstr(y_bool_tostr(b)) };
 def y_print_float(f: float) -> long { y_print_hstr(tostring(f)) };
 def y_put_long(v: long) -> long { y_put_hstr(tostring(v)) };

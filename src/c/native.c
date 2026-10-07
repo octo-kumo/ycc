@@ -2251,9 +2251,13 @@ static Yv *ir_refs_item(Yv *ir, ylong at, Yv *out) {
             out = ir_refs_push(out, lname(ya_get(ir, wp)));
             out = ir_refs_push(out, lname(ya_get(ir, wp + 1)));
         } else if (k == O_MEM || k == O_MEM0) {
-            if (ys_eq_lit(yr_get(fo, "mn"), "lea")) {
-                out = ir_refs_push(out, lname(ya_get(ir, wp + 4)));
-            };
+            /* A label a memory operand names is a reference whether the
+               instruction loads or stores: dropping the cell (or the rodata)
+               while the instruction that names it stays emitted is an
+               undefined label at assembly. cell_reads is the other half -- it
+               decides whether that name is a READ, for the dead-global
+               initializer pass. */
+            out = ir_refs_push(out, lname(ya_get(ir, wp + 4)));
         };
         wp = wp + ir_kind_words(k);
         i = i + 1;
@@ -11859,8 +11863,10 @@ Yv *elem_store_rdx_const(Yv *st, ylong esz, ylong base, ylong k) {
 /* The array header is {len, cap, data, front} and NEVER moves: elements
  * live in a separate block, so growth keeps every alias valid (that is
  * what makes `arr += v` in-place). front, the free slots before data, is
- * the header's fourth word: y_alloc(arr_header_size()) hands out 32
- * zeroed bytes (NATIVE.md). This is the block size for n elements. */
+ * the header's fourth word: the header is all four words (NATIVE.md), and
+ * the request must cover them, since y_alloc hands out at most the bytes
+ * asked for (the collector's 8-byte block header sits in what used to be
+ * the allocator's spare). This is the block size for n elements. */
 ylong arr_alloc_size(ylong esz, ylong n) {
     ylong b = n * esz;
     if (b < 8) {
@@ -11870,8 +11876,8 @@ ylong arr_alloc_size(ylong esz, ylong n) {
     }
 }
 
-/* Bytes to allocate for the header itself. */
-ylong arr_header_size(void) { return 24; }
+/* Bytes to allocate for the header itself: {len, cap, data, front}. */
+ylong arr_header_size(void) { return 32; }
 
 Yv *gen_dot(Yv *st, Yv *node) {
     /* dobj is read twice (infer, then gen). */
@@ -12578,7 +12584,7 @@ Yv *gen_join_conv(Yv *st, Yv *node, Yv *tostr_fn, ylong esz) {
     st = emit_insn(st, F_SHL_I_R, 3, R_RDI, 64, 0, 0, 0, 0);
     st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_alloc"))), 0, 0, 0, 0, 0, 0);
     st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
-    st = emit_insn(st, F_MOV_I_R, 24, R_RDI, 64, 0, 0, 0, 0);
+    st = emit_insn(st, F_MOV_I_R, arr_header_size(), R_RDI, 64, 0, 0, 0, 0);
     st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_alloc"))), 0, 0, 0, 0, 0, 0);
     st = emit_insn(st, F_POP_R, R_RDX, 64, 0, 0, 0, 0, 0);
     st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, doff, -1);
@@ -13004,6 +13010,11 @@ Yv *emit_one_fn(Yv *st, Yv *label, ylong fuid, Yv *func, int is_main,
         ;
     }
     if (is_main) {
+        /* The collector scans the stack for roots, so the process entry has to
+           remember where the stack began: every live value sits below it. This
+           is the first instruction, before any allocation can happen. */
+        body = ir_push(body, F_MOV_R_P, R_RSP, 64, -1, -1, 1, 0,
+                       yv_l(lbl_new(ys("y_gc_stack_top"))));
         /* The Windows syscall self-test runs BEFORE anything else: its whole
            point is that a drifted w_sysno number is caught in the first
            instruction rather than in the first wrong write. */
@@ -14685,6 +14696,93 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
     int mth = uses_math(body_refs);
     Yv *pb = prelude_blocks(prelude_with(core_lines, thr, mth));
     Yv *ps = shake_prelude(pb, body_refs);
+    /* A cell no kept code reads, whose initializer only allocates, is dead:
+       dropping that range is what keeps the allocator -- and with it the whole
+       collector -- out of a program that never allocates. Every unit's cells
+       count, not just the program's (rt.y's CLK_TS is `[0; 2]`, and its
+       initializer was the only thing naming y_alloc in hello.y), and a packed
+       body's items are decoded so a cell is read only if a body really reads
+       it. The prelude is then shaken again, because the drop can remove the
+       last reference to a prelude block. */
+    Yv *reads = yav(0);
+    ylong gcri = 0;
+    while (gcri < yv_len(all)) {
+        if (yv_b(ya_get(keep, gcri))) {
+            Yv *bd = ya_get(all, gcri);
+            if (yv_len(bd) == 0) { bd = unpack_body(ya_get(allblob, gcri)); }
+            if (yv_len(bd) > 0) {
+                reads = cell_reads(bd, reads);
+            } else {
+                /* No blob: the refs are all that can be seen and they include
+                   the stores, so this body's cells look read. Conservative on
+                   purpose -- a cell dropped while a body reads it is an
+                   undefined label at assembly. */
+                Yv *rrefs = ya_get(refs, gcri);
+                ylong rj = 0;
+                while (rj < yv_len(rrefs)) {
+                    reads = ya_push(reads, ya_get(rrefs, rj));
+                    rj = rj + 1;
+                }
+            }
+        }
+        gcri = gcri + 1;
+    }
+    ylong gcprf = 0;
+    while (gcprf < yv_len(yr_get(ps, "refs"))) {
+        reads = ya_push(reads, ya_get(yr_get(ps, "refs"), gcprf));
+        gcprf = gcprf + 1;
+    }
+    Yv *gccells = yav(0);
+    ylong gccu = 0;
+    while (gccu < yv_len(units)) {
+        Yv *ug = yr_get(ya_get(units, gccu), "globals");
+        ylong gcgi = 0;
+        while (gcgi < yv_len(ug)) {
+            gccells = ya_push(gccells, ya_get(ug, gcgi));
+            gcgi = gcgi + 1;
+        }
+        gccu = gccu + 1;
+    }
+    Yv *gcpg = yr_get(prog, "globals");
+    ylong gcpi = 0;
+    while (gcpi < yv_len(gcpg)) {
+        gccells = ya_push(gccells, ya_get(gcpg, gcpi));
+        gcpi = gcpi + 1;
+    }
+    Yv *gcdead = yav(0);
+    ylong gcci = 0;
+    while (gcci < yv_len(gccells)) {
+        Yv *cell = ya_get(gccells, gcci);
+        if (!name_in(reads, cell)) { gcdead = ya_push(gcdead, cell); }
+        gcci = gcci + 1;
+    }
+    if (yv_len(gcdead) > 0) {
+        ylong gcdj = 0;
+        while (gcdj < yv_len(all)) {
+            if (yv_b(ya_get(keep, gcdj))) {
+                /* A packed body's items have to be decoded before its
+                   initializer range can be dropped; the decoded IR is kept in
+                   `all`, which the emission loop reuses. */
+                Yv *bd = ya_get(all, gcdj);
+                if (yv_len(bd) == 0) { bd = unpack_body(ya_get(allblob, gcdj)); }
+                if (yv_len(bd) > 0) {
+                    Yv *ni = ir_drop_inits(bd, gcdead);
+                    if (yv_len(ni) != yv_len(bd)) {
+                        ya_set(all, gcdj, ni);
+                        ya_set(refs, gcdj, ir_refs(ni));
+                    }
+                }
+            }
+            gcdj = gcdj + 1;
+        }
+        /* The CELLS stay: a dead cell is one `.bss` slot, which costs no file
+           bytes, and keeping it is the conservative half of this pass. */
+        shaken = prune_bodies(labels, refs, extra);
+        keep = yr_get(shaken, "keep");
+        body_refs = yr_get(shaken, "refs");
+        pb = prelude_blocks(prelude_with(core_lines, thr, mth));
+        ps = shake_prelude(pb, body_refs);
+    }
     /* A kept prelude block may call a Y helper (none does today): the
      * helper is kept too, and everything shaken again from there. */
     Yv *bmap = namemap_build(labels);
@@ -14757,59 +14855,6 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
     while (pgi < yv_len(pg)) {
         gls = ya_push(gls, ya_get(pg, pgi));
         pgi = pgi + 1;
-    }
-    /* Which of the PROGRAM's globals the kept code reads. Only these: a unit
-       from the std pack carries packed bodies, whose references are not IR
-       that can be walked, so a cell whose only reader lives in one would look
-       dead. A packed unit cannot read a program global anyway -- it was
-       compiled before the program existed -- and the spliced units this is
-       for (std/math.y and friends) are the program's own. */
-    Yv *reads = yav(0);
-    ylong ri = 0;
-    while (ri < yv_len(all)) {
-        if (yv_b(ya_get(keep, ri))) {
-            Yv *bodyitems = ya_get(all, ri);
-            if (yv_len(bodyitems) > 0) {
-                reads = cell_reads(bodyitems, reads);
-            } else {
-                /* A body from the std pack carries no items: its REFS are all
-                   that can be seen, and they include the stores, so a packed
-                   unit's cells look read and are never dropped. Conservative
-                   on purpose. */
-                Yv *rrefs = ya_get(refs, ri);
-                ylong rj = 0;
-                while (rj < yv_len(rrefs)) {
-                    reads = ya_push(reads, ya_get(rrefs, rj));
-                    rj = rj + 1;
-                }
-            }
-        }
-        ri = ri + 1;
-    }
-    Yv *dead_cells = yav(0);
-    ylong di2 = 0;
-    while (di2 < yv_len(pg)) {
-        Yv *cell = ya_get(pg, di2);
-        if (!name_in(reads, cell)) { dead_cells = ya_push(dead_cells, cell); }
-        di2 = di2 + 1;
-    }
-    if (yv_len(dead_cells) > 0) {
-        ylong dj = 0;
-        while (dj < yv_len(all)) {
-            if (yv_b(ya_get(keep, dj)) && yv_len(ya_get(all, dj)) > 0) {
-                Yv *ni = ir_drop_inits(ya_get(all, dj), dead_cells);
-                if (yv_len(ni) != yv_len(ya_get(all, dj))) {
-                    ya_set(all, dj, ni);
-                    ya_set(refs, dj, ir_refs(ni));
-                }
-            }
-            dj = dj + 1;
-        }
-        /* Their CELLS stay: a dropped cell is only a `.bss` slot, which costs
-           no file bytes, and keeping it is the conservative half of this pass
-           -- if the read analysis ever misses a reader, a zero cell is a wrong
-           value rather than an undefined label at assembly. The Y twin keeps
-           them too, which is what makes the two outputs byte-identical. */
     }
     Yv *interned = rodata_intern(yav(0), allrod, const_refs);
     Yv *rodpieces = yr_get(interned, "pieces");

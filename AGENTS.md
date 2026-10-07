@@ -108,7 +108,7 @@ moved with the callgrind table, `perf`, or `ycc --time`.
 | lsp | the server's fixtures under both compilers, `check-refs.py`, `check-names.py`, formatter idempotence |
 | math | `test/math/ulp_table.txt` within 1 ulp, plus the kernel and threshold audits |
 | coverage | every diagnostic and manual section has a checked test (`test/COVERAGE.md`) |
-| treeshake, std-suites | the unused-code cost ratchets; the `test/std/` self-test suites |
+| treeshake, std-suites | the unused-code cost ratchets, plus three checks a runtime addition must pass: a program that allocates nothing names no `y_alloc` and no collector block, `test/sh/deadcode.py` counts instructions the shake leaves unreachable (`test/treeshake/deadcode.txt`), and `test/treeshake/shapes.txt` records the size of the shapes a runtime change moves first; the `test/std/` self-test suites |
 
 Run by hand (not in `make test`): `test/sh/cycc-win.sh` (wine),
 `test/sh/w_sysno.py`, `test/sh/run-parity.sh` (`ycc run` == compile + execute),

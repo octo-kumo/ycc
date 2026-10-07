@@ -286,6 +286,62 @@ in `arch_x64.y`'s prelude and every length load in the emitter.
 
 **Only after A3**, and only once the literal set is final. Medium risk, low priority.
 
+### A5. Do not link the runtime a program cannot use (done)
+
+**Problem.** Every binary carried the whole collector. `bench/y/hello.y` was **3,069 B**
+with 29 `y_gc_*` labels: `print("hello")` allocates nothing, but it linked `y_alloc` --
+and the allocator's slow path calls the collector -- because of one **global
+initializer**. `src/y/std/rt.y:336` declares `let CLK_TS: [long; 2] = [0; 2];`, and a
+fixed array is a heap cell, so the startup initializer called `y_alloc` twice. It was
+kept because the dead-global-initializer pass only looked at the *program* unit's cells
+and, for a body from the std pack (whose items were not decoded), treated every cell as
+read.
+
+**Fix.**
+* `link_units` computes cell reads from the **exact IR of every kept body**, decoding a
+  packed body's items with `unpack_body` when `all[i]` is empty.
+* `dead_cells` covers **every unit's globals**, not just `prog.globals`; a kept prelude
+  block's references join the read set.
+* `ir_drop_inits` decodes a packed body before dropping its initializer range, and the
+  decoded IR is left in `all` for the emission loop.
+* The pass moved **before** the prelude shake, which is then re-shaken: the dropped
+  range's own references (`y_alloc`, and through it the collector) are the prelude's
+  roots.
+* `ir_refs_item` records the label of **any** memory operand, not only `lea`: a
+  `mov %rsp, y_gc_stack_top(%rip)` store names a cell, and the shake must keep that cell
+  or the store is an undefined label at assembly.
+
+**Result.** `bench/y/hello.y` **3,069 → 390 B**, with no allocator call and no collector
+label; `json`, `x509` and `tls` unused-import cost `25/94/94 → 0`. A program that does
+allocate (`print(1)`, whose number formatting allocates) still carries the collector --
+that is the `--gc` work below.
+
+**Gate.** `test/sh/test_treeshake.sh` grew three checks: a hello world may not name the
+allocator or a collector block; `test/sh/deadcode.py` counts instructions that cannot
+execute (`test/treeshake/deadcode.txt` ratchet); `test/treeshake/shapes.txt` records the
+size of the shapes a runtime addition moves first. The same dead-code tool gates the
+foreach/raw-loop instruction ratio (`test/treeshake/foreach.y` vs `forloop.y`).
+
+### A6. print(<integer>) formats on the stack (done)
+
+**Problem.** `y_print_long` was `y_print_hstr(tostring(v))` (`std/rt.y:63`), so every
+`print(1)` allocated a heap string -- which meant every program that prints a number
+linked `y_alloc` and therefore the whole collector. `test/treeshake/minimal.y` was
+3,120 B.
+
+**Fix.** The digits already lived in a stack buffer in `y_long_tostr`; the new arch
+block `y_os_print_int` (`arch/prelude.s`) formats there and writes digits+newline with
+**two writes** (the same two `y_os_write` calls `y_print_hstr` made, so stdout/stderr
+interleaving is unchanged). It is reached through the checker's named layer --
+`os_call_names()` gained `y_os_print_int` and `std/rt.y`'s `y_print_long` is now
+`os_call("y_os_print_int", v)` -- which keeps the documented override: a program's own
+`y_print_long` still shadows the runtime's and intercepts `print(int)`
+(`test/sh/test_link.sh`, "a program's `y_print_long` replaces the runtime's").
+
+**Result.** `minimal.y` **3,120 → 440 B**, no `y_alloc` and no collector; `t73`'s
+`heap_used() > 0` is now `false` (printing no longer allocates) and the fixture says so.
+`test/y/native/t379_print_int_no_alloc.y` pins the heap delta across six prints at 0.
+
 ---
 
 ## Part 2 — Codegen: fewer instructions

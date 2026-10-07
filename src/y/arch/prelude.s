@@ -315,6 +315,16 @@ y_cast_trap:
     mov $231, %rax
     mov $1, %rdi
     syscall
+# y_alloc(n) -> a payload of at least n bytes. Each block carries an 8-byte
+# header at its base -- the block size in the high bits and three flags in
+# the low three (1 allocated, 2 marked, 4 pointer-free) -- and the payload
+# is base+8. The header costs nothing: the old allocator handed out
+# p = (n + 15) & -8 bytes, whose last 8 were spare room for the word-at-a-time
+# copy loops, and the payload is now p - 8 >= n with the header in those 8
+# bytes. A block's size is therefore exactly the p the old allocator bumped,
+# so a chunk can be walked block by block and peak memory does not move.
+# `used` still counts that p, never anything extra, so heap_used() is
+# unchanged.
 y_alloc:
     lea 15(%rdi), %rax
     and $-8, %rax
@@ -330,7 +340,20 @@ y_alloc_go:
     mov 16(%rcx), %rdi
     add %rax, %rdi
     mov %rdi, 16(%rcx)
+    lea 1(%rax), %r11
+    mov %r11, (%rdx)
+    add $8, %rdx
     mov %rdx, %rax
+    ret
+# y_alloc_pf(n): the same, with the pointer-free flag set -- the payload can
+# never hold a heap reference (string bytes, a [byte]/[long]/... array), so
+# the collector skips it instead of scanning its words.
+y_alloc_pf:
+    push %rbp
+    mov %rsp, %rbp
+    call y_alloc
+    or $4, -8(%rax)
+    pop %rbp
     ret
 # Once a thread was spawned (y_heap's flag) the global block is empty,
 # so every thread's bump on it fails and lands here, then retries in
@@ -344,6 +367,12 @@ y_alloc_slow:
     je y_alloc_more
     mov %fs:24, %rcx
     jmp y_alloc_go
+# Every register that can hold a live value is pushed before the collector
+# runs: the stack scan is the collector's root set, and a pointer in a
+# callee-saved register (an asm helper holding a fresh block in %r14, say)
+# is only a root once it is on the stack. Nine pushes leave %rsp 8 mod 16,
+# so a padding word keeps the calls aligned -- padding with a real register
+# would clobber it, and %rax is the one the slow path returns in.
 y_alloc_more:
     push %rbp
     mov %rsp, %rbp
@@ -353,13 +382,28 @@ y_alloc_more:
     push %r9
     push %r10
     push %r12
+    push %r13
+    push %r14
+    push %r15
+    sub $8, %rsp
     mov %rax, %rbx
     mov %rcx, %r12
+# The heap is full: collect when the bytes handed out since the last cycle
+# reach the threshold, then take a recycled block if one fits before mapping.
+    call y_gc_maybe
+    mov %rbx, %rdi
+    call y_gc_alloc_free
+    test %rax, %rax
+    jnz y_alloc_free_hit
     mov $262144, %rsi
     cmp %rsi, %rbx
     jge y_alloc_big
     mov $4194304, %rsi
     call y_alloc_map
+    mov %rax, %rdi
+    mov $4194304, %rsi
+    xor %edx, %edx
+    call y_gc_chunk_add
     mov %rax, %rdx
     add %rbx, %rdx
     mov %rdx, 0(%r12)
@@ -372,10 +416,28 @@ y_alloc_big:
     add $4095, %rsi
     and $-4096, %rsi
     call y_alloc_map
+    mov %rax, %rdi
+    mov $1, %edx
+    call y_gc_chunk_add
+    jmp y_alloc_out
+y_alloc_free_hit:
+    mov 16(%r12), %rdx
+    add %rbx, %rdx
+    mov %rdx, 16(%r12)
+    add $8, %rax
+    jmp y_alloc_ret
 y_alloc_out:
     mov 16(%r12), %rdx
     add %rbx, %rdx
     mov %rdx, 16(%r12)
+    lea 1(%rbx), %rdx
+    mov %rdx, (%rax)
+    add $8, %rax
+y_alloc_ret:
+    add $8, %rsp
+    pop %r15
+    pop %r14
+    pop %r13
     pop %r12
     pop %r10
     pop %r9
@@ -383,6 +445,12 @@ y_alloc_out:
     pop %rsi
     pop %rbx
     pop %rbp
+    ret
+# y_gc_unmap(addr, len): the collector returns a dedicated large block to
+# the kernel when a sweep finds it unreachable.
+y_gc_unmap:
+    mov $11, %rax
+    syscall
     ret
 y_alloc_map:
     mov $9, %rax
@@ -395,6 +463,720 @@ y_alloc_map:
     test %rax, %rax
     js y_alloc_fail
     ret
+
+# ── the collector ───────────────────────────────────────────────────────
+# STATUS: the allocator side of the plan has landed (every block carries an
+# 8-byte size/flag header in what used to be the allocator's spare, block
+# sizes are 16-byte classed, heap_used() is unchanged). The collector below
+# is wired up again (y_alloc_more calls y_gc_maybe / y_gc_alloc_free /
+# y_gc_chunk_add) with coalescing free runs and largest-run splitting; see
+# ideas/lifetime_gc.md for the state and the acceptance tests.
+# One non-moving, conservative mark-sweep over every block the allocator
+# hands out. A block's 8-byte header is its size in the high bits with three
+# flags in the low three (1 allocated, 2 marked, 4 pointer-free). A chunk is
+# one mapping (4 MB, or one dedicated large block); its blocks are walked
+# from the base until a zero header, so the never-allocated tail needs no
+# length. A per-chunk bit map -- one bit per 8 bytes, a set bit meaning "a
+# block starts here" -- is how an interior pointer (a str's value at
+# base+16, a .ptr + n) resolves to its block. Roots are the stack (its top
+# was recorded by _start), the writable data (y_bss_lo/hi, the assembler's)
+# and the registers y_alloc_more saved before it called in. Nothing moves,
+# so every pointer stays valid; false retention is allowed, dangling is not.
+
+# y_gc_meta_alloc(n) -> n zeroed bytes the collector owns. These mappings
+# are never collected and never counted by heap_used.
+y_gc_meta_alloc:
+    push %rbp
+    mov %rsp, %rbp
+    push %rbx
+    mov %rdi, %rbx
+    mov y_gc_meta_cur(%rip), %rax
+    mov %rax, %rdx
+    add %rbx, %rdx
+    mov y_gc_meta_end(%rip), %rcx
+    cmp %rcx, %rdx
+    ja ygma_more
+    mov %rdx, y_gc_meta_cur(%rip)
+    jmp ygma_out
+ygma_more:
+    mov $1048576, %rsi
+    cmp %rsi, %rbx
+    jbe ygma_map
+    lea 4095(%rbx), %rsi
+    and $-4096, %rsi
+ygma_map:
+    push %rsi
+    call y_alloc_map
+    pop %rsi
+    mov %rax, %rdx
+    add %rsi, %rdx
+    mov %rdx, y_gc_meta_end(%rip)
+    mov %rax, %rdx
+    add %rbx, %rdx
+    mov %rdx, y_gc_meta_cur(%rip)
+ygma_out:
+    pop %rbx
+    pop %rbp
+    ret
+
+# y_gc_chunk_add(base, size) -> base: register one mapping. A 40-byte
+# descriptor {base, end, map, all_next} joins y_gc_all, and one 16-byte
+# window link {bucket_next, desc} per 4 MB window the mapping overlaps joins
+# that window's y_gc_tab bucket, so a candidate address finds its chunk in
+# one probe.
+y_gc_chunk_add:
+    push %rbp
+    mov %rsp, %rbp
+    push %rbx
+    push %r12
+    push %r13
+    push %r14
+    push %r15
+    sub $8, %rsp
+    mov %rdi, %rbx
+    mov %rsi, %r12
+    mov %rdx, %r14
+    mov y_gc_tab(%rip), %rax
+    test %rax, %rax
+    jnz ygca_tab
+    mov $131072, %rdi
+    call y_gc_meta_alloc
+    mov %rax, y_gc_tab(%rip)
+ygca_tab:
+    mov $40, %rdi
+    call y_gc_meta_alloc
+    mov %rax, %r13
+    mov %rbx, 0(%r13)
+    mov %rbx, %rdx
+    add %r12, %rdx
+    mov %rdx, 8(%r13)
+    mov %r14, 32(%r13)
+    mov %r12, %rdi
+    shr $3, %rdi
+    add $7, %rdi
+    shr $3, %rdi
+    call y_gc_meta_alloc
+    mov %rax, 16(%r13)
+    mov y_gc_all(%rip), %rax
+    mov %rax, 24(%r13)
+    mov %r13, y_gc_all(%rip)
+    mov %rbx, %r14
+    shr $22, %r14
+    mov 8(%r13), %r15
+    dec %r15
+    shr $22, %r15
+ygca_win:
+    mov $16, %rdi
+    call y_gc_meta_alloc
+    mov %r13, 8(%rax)
+    mov %r14, %rdx
+    and $16383, %rdx
+    mov y_gc_tab(%rip), %rcx
+    lea (%rcx,%rdx,8), %rdx
+    mov (%rdx), %rcx
+    mov %rcx, 0(%rax)
+    mov %rax, (%rdx)
+    cmp %r15, %r14
+    jae ygca_bounds
+    inc %r14
+    jmp ygca_win
+ygca_bounds:
+    mov y_gc_lo(%rip), %rax
+    test %rax, %rax
+    jz ygca_setlo
+    cmp %rbx, %rax
+    jbe ygca_hi
+ygca_setlo:
+    mov %rbx, y_gc_lo(%rip)
+ygca_hi:
+    mov 8(%r13), %rdx
+    mov y_gc_hi(%rip), %rcx
+    cmp %rcx, %rdx
+    jbe ygca_out
+    mov %rdx, y_gc_hi(%rip)
+ygca_out:
+    mov %rbx, %rax
+    add $8, %rsp
+    pop %r15
+    pop %r14
+    pop %r13
+    pop %r12
+    pop %rbx
+    pop %rbp
+    ret
+
+# y_gc_mark(block base): set the mark bit and push the block on the worklist.
+y_gc_mark:
+    mov (%rdi), %rax
+    test $1, %rax
+    jz ygm_no
+    test $2, %rax
+    jnz ygm_no
+    mov %rax, %rcx
+    or $2, %rcx
+    mov %rcx, (%rdi)
+    mov y_gc_ms_end(%rip), %rdx
+    mov y_gc_ms_cur(%rip), %rcx
+    cmp %rdx, %rcx
+    jb ygm_push
+    mov y_gc_ms_seg(%rip), %rsi
+    mov %rcx, %r8
+    sub %rsi, %r8
+    add %r8, %r8
+    mov $1048576, %r9
+    cmp %r9, %r8
+    jae ygm_gsz
+    mov %r9, %r8
+ygm_gsz:
+    push %rdi
+    push %r8
+    mov %r8, %rdi
+    call y_gc_meta_alloc
+    pop %r8
+    pop %rdi
+    mov y_gc_ms_seg(%rip), %rsi
+    mov y_gc_ms_cur(%rip), %rcx
+    mov %rcx, %r9
+    sub %rsi, %r9
+    mov %rax, %r10
+    xor %edx, %edx
+ygm_gcp:
+    cmp %r9, %rdx
+    jae ygm_gdone
+    mov (%rsi,%rdx,1), %rcx
+    mov %rcx, (%r10,%rdx,1)
+    add $8, %rdx
+    jmp ygm_gcp
+ygm_gdone:
+    mov %r10, y_gc_ms_seg(%rip)
+    lea (%r10,%r9,1), %rcx
+    mov %rcx, y_gc_ms_cur(%rip)
+    lea (%r10,%r8,1), %rdx
+    mov %rdx, y_gc_ms_end(%rip)
+ygm_push:
+    mov %rdi, (%rcx)
+    add $8, %rcx
+    mov %rcx, y_gc_ms_cur(%rip)
+ygm_no:
+    ret
+
+# y_gc_resolve(w): conservatively mark the block w points into, if any.
+# w-8 (a value at its block's payload) and w-16 (a str's value) are the two
+# offsets every Y value uses; anything else -- pointer arithmetic, a false
+# candidate -- falls back to a linear walk of the chunk, which is rare.
+y_gc_resolve:
+    mov y_gc_lo(%rip), %rax
+    cmp %rax, %rdi
+    jb ygr_no
+    mov y_gc_hi(%rip), %rax
+    cmp %rax, %rdi
+    jae ygr_no
+    mov %rdi, %rax
+    shr $22, %rax
+    and $16383, %rax
+    mov y_gc_tab(%rip), %rdx
+    mov (%rdx,%rax,8), %rcx
+ygr_chain:
+    test %rcx, %rcx
+    jz ygr_no
+    mov 8(%rcx), %r8
+    mov 0(%r8), %r9
+    test %r9, %r9
+    jz ygr_next
+    cmp %r9, %rdi
+    jb ygr_next
+    mov 8(%r8), %r10
+    cmp %r10, %rdi
+    jb ygr_chunk
+ygr_next:
+    mov 0(%rcx), %rcx
+    jmp ygr_chain
+ygr_chunk:
+    mov 16(%r8), %rdx
+    xor %r10d, %r10d
+ygr_d:
+    cmp %r10, %rdi
+    jb ygr_linear
+    mov %rdi, %rax
+    sub %r10, %rax
+    cmp %r9, %rax
+    jb ygr_dnext
+    mov %rax, %r11
+    sub %r9, %r11
+    shr $3, %r11
+    mov %r11, %rcx
+    and $7, %ecx
+    mov $1, %rsi
+    shl %cl, %rsi
+    mov %r11, %rcx
+    shr $3, %rcx
+    movzbq (%rdx,%rcx,1), %rcx
+    test %rsi, %rcx
+    jz ygr_dnext
+    mov (%rax), %rcx
+    test $1, %rcx
+    jz ygr_dnext
+    mov %rcx, %rsi
+    and $-8, %rsi
+    add %rax, %rsi
+    cmp %rsi, %rdi
+    jae ygr_dnext
+    mov %rax, %rdi
+    call y_gc_mark
+    ret
+ygr_dnext:
+    add $8, %r10
+    cmp $16, %r10
+    jbe ygr_d
+ygr_linear:
+    mov 8(%r8), %rsi
+    mov 0(%r8), %rcx
+ygr_lin:
+    cmp %rsi, %rcx
+    jae ygr_no
+    mov (%rcx), %rax
+    test %rax, %rax
+    jz ygr_no
+    mov %rax, %r11
+    and $-8, %r11
+    add %rcx, %r11
+    cmp %r11, %rdi
+    jb ygr_lin_hit
+    mov %r11, %rcx
+    jmp ygr_lin
+ygr_lin_hit:
+    cmp %rcx, %rdi
+    jb ygr_no
+    mov %rcx, %rdi
+    call y_gc_mark
+ygr_no:
+    ret
+
+# y_gc_scan_words(from, to): every 8-byte word in [from, to) is a candidate
+# root.
+y_gc_scan_words:
+    push %rbp
+    mov %rsp, %rbp
+    push %rbx
+    push %r12
+    mov %rdi, %rbx
+    mov %rsi, %r12
+ygsw_loop:
+    cmp %r12, %rbx
+    jae ygsw_done
+    mov (%rbx), %rdi
+    call y_gc_resolve
+    add $8, %rbx
+    jmp ygsw_loop
+ygsw_done:
+    pop %r12
+    pop %rbx
+    pop %rbp
+    ret
+
+# y_gc_roots: the stack below the entry point, the writable data, and the
+# registers (already pushed on the stack by y_alloc_more).
+y_gc_roots:
+    push %rbp
+    mov %rsp, %rbp
+    mov %rsp, %rdi
+    mov y_gc_stack_top(%rip), %rsi
+    call y_gc_scan_words
+    lea y_bss_lo(%rip), %rdi
+    lea y_bss_hi(%rip), %rsi
+    call y_gc_scan_words
+    pop %rbp
+    ret
+
+# y_gc_pass1: record every block start in its chunk's bit map.
+y_gc_pass1:
+    push %rbp
+    mov %rsp, %rbp
+    push %rbx
+    push %r12
+    push %r13
+    push %r14
+    push %r15
+    sub $8, %rsp
+    mov y_gc_all(%rip), %rbx
+ygp1_chunk:
+    test %rbx, %rbx
+    jz ygp1_done
+    mov 0(%rbx), %r11
+    test %r11, %r11
+    jz ygp1_next
+    mov %r11, %r12
+    mov 16(%rbx), %r13
+# Rebuild the start map from scratch: a bit left over from a block that has
+# since been coalesced into a larger free run would otherwise resolve a
+# candidate to the middle of that run -- and shadow the real block, so a
+# live object could go unmarked.
+    mov 8(%rbx), %rdx
+    sub %r11, %rdx
+    add $63, %rdx
+    shr $6, %rdx
+    add $7, %rdx
+    shr $3, %rdx
+    mov %r13, %rcx
+    test %rdx, %rdx
+    jz ygp1_block
+ygp1_zmap:
+    xor %eax, %eax
+    mov %rax, (%rcx)
+    add $8, %rcx
+    dec %rdx
+    jnz ygp1_zmap
+ygp1_block:
+    mov 8(%rbx), %rcx
+    cmp %rcx, %r12
+    jae ygp1_next
+    mov (%r12), %r14
+    test %r14, %r14
+    jz ygp1_next
+    mov %r14, %r15
+    and $-8, %r15
+    test %r15, %r15
+    jz y_bad_trap
+    mov %r12, %rdx
+    add %r15, %rdx
+    cmp %rcx, %rdx
+    ja y_bad_trap
+    mov %r12, %r8
+    sub %r11, %r8
+    shr $3, %r8
+    mov %r8, %r9
+    shr $3, %r9
+    movzbq (%r13,%r9,1), %rdx
+    mov %r8, %rcx
+    and $7, %ecx
+    mov $1, %rax
+    shl %cl, %rax
+    or %rax, %rdx
+    mov %dl, (%r13,%r9,1)
+    add %r15, %r12
+    jmp ygp1_block
+ygp1_next:
+    mov 24(%rbx), %rbx
+    jmp ygp1_chunk
+ygp1_done:
+    add $8, %rsp
+    pop %r15
+    pop %r14
+    pop %r13
+    pop %r12
+    pop %rbx
+    pop %rbp
+    ret
+
+# y_gc_drain: process the mark worklist. A marked block's payload words are
+# candidates too, unless the block is pointer-free.
+y_gc_drain:
+    push %rbp
+    mov %rsp, %rbp
+    push %rbx
+    push %r12
+ygd_loop:
+    mov y_gc_ms_cur(%rip), %rbx
+    mov y_gc_ms_seg(%rip), %rax
+    cmp %rax, %rbx
+    jbe ygd_done
+    sub $8, %rbx
+    mov %rbx, y_gc_ms_cur(%rip)
+    mov (%rbx), %r12
+    mov (%r12), %rax
+    test $4, %rax
+    jnz ygd_loop
+    mov %rax, %rsi
+    and $-8, %rsi
+    lea 8(%r12), %rdi
+    add %r12, %rsi
+    call y_gc_scan_words
+    jmp ygd_loop
+ygd_done:
+    pop %r12
+    pop %rbx
+    pop %rbp
+    ret
+
+# y_gc_collect: the whole cycle. Callers are the allocator's slow path, so
+# every live value is on the stack or in a saved register.
+y_gc_collect:
+    push %rbp
+    mov %rsp, %rbp
+    push %rbx
+    push %r12
+    push %r13
+    push %r14
+    push %r15
+    sub $8, %rsp
+    mov y_gc_run(%rip), %rax
+    test %rax, %rax
+    jnz ygc_out
+    mov y_gc_off(%rip), %rax
+    test %rax, %rax
+    jnz ygc_out
+    lea y_heap(%rip), %rax
+    mov 24(%rax), %rax
+    test %rax, %rax
+    jnz ygc_out
+    mov $1, %rax
+    mov %rax, y_gc_run(%rip)
+    mov y_gc_ms_seg(%rip), %rax
+    mov %rax, y_gc_ms_cur(%rip)
+    call y_gc_pass1
+    call y_gc_roots
+    call y_gc_drain
+# The free lists are rebuilt from the walk below, so drop last cycle's:
+# a run that was on a list and is now coalesced into a bigger one would
+# otherwise stay reachable through its old slot, and a later pop would hand
+# out memory inside the new run. A null table is allocated (zeroed) by the
+# first flush.
+    mov y_gc_free(%rip), %rcx
+    test %rcx, %rcx
+    jz ygc_clear_done
+    mov $524289, %rdx
+    xor %eax, %eax
+ygc_clear:
+    mov %rax, (%rcx)
+    add $8, %rcx
+    dec %rdx
+    jnz ygc_clear
+    mov %rax, y_gc_tabn(%rip)
+ygc_clear_done:
+    xor %r12d, %r12d
+    xor %r14d, %r14d
+    xor %r15d, %r15d
+    mov y_gc_all(%rip), %rbx
+ygc_sweep_chunk:
+    test %rbx, %rbx
+    jz ygc_sweep_done
+    mov 0(%rbx), %r13
+    test %r13, %r13
+    jz ygc_sweep_next
+ygc_sweep_block:
+    mov 8(%rbx), %r10
+    cmp %r10, %r13
+    jae ygc_sweep_runend
+    mov (%r13), %rax
+    test %rax, %rax
+    jz ygc_sweep_runend
+    mov %rax, %rsi
+    and $-8, %rsi
+    test %rsi, %rsi
+    jz y_bad_trap
+    mov %r13, %rcx
+    add %rsi, %rcx
+    cmp %r10, %rcx
+    ja y_bad_trap
+    test $1, %rax
+    jz ygc_sweep_dead
+    test $2, %rax
+    jz ygc_sweep_dead
+    call y_gc_flush_run
+    mov (%r13), %rax
+    mov %rax, %rsi
+    and $-8, %rsi
+    and $-3, %rax
+    mov %rax, (%r13)
+    add %rsi, %r12
+    add %rsi, %r13
+    jmp ygc_sweep_block
+ygc_sweep_dead:
+    cmp $0, 32(%rbx)
+    jne ygc_sweep_big
+    test %r14, %r14
+    jz ygc_sweep_open
+    add %rsi, %r15
+    add %rsi, %r13
+    jmp ygc_sweep_block
+ygc_sweep_open:
+    mov %r13, %r14
+    mov %rsi, %r15
+    add %rsi, %r13
+    jmp ygc_sweep_block
+ygc_sweep_big:
+    call y_gc_flush_run
+    mov 0(%rbx), %rdi
+    mov 8(%rbx), %rsi
+    sub %rdi, %rsi
+    call y_gc_unmap
+    xor %ecx, %ecx
+    mov %rcx, 0(%rbx)
+    jmp ygc_sweep_next
+ygc_sweep_runend:
+    call y_gc_flush_run
+ygc_sweep_next:
+    mov 24(%rbx), %rbx
+    jmp ygc_sweep_chunk
+ygc_sweep_done:
+    call y_gc_flush_run
+    mov %r12, y_gc_live(%rip)
+    lea y_heap(%rip), %rax
+    mov 16(%rax), %rax
+    mov %rax, y_gc_last(%rip)
+    xor %eax, %eax
+    mov %rax, y_gc_run(%rip)
+ygc_out:
+    add $8, %rsp
+    pop %r15
+    pop %r14
+    pop %r13
+    pop %r12
+    pop %rbx
+    pop %rbp
+    ret
+
+# y_gc_flush_run: close the open run of adjacent free blocks (r14 start,
+# r15 size) as one free block and push it on its exact size class, keeping
+# the highest-class watermark in y_gc_tabn.
+y_gc_flush_run:
+    test %r14, %r14
+    jz ygfr_done
+    mov y_gc_free(%rip), %rdx
+    test %rdx, %rdx
+    jnz ygfr_tab
+    push %r9
+    push %rcx
+    push %rsi
+    push %r8
+    mov $4194312, %rdi
+    call y_gc_meta_alloc
+    pop %r8
+    pop %rsi
+    pop %rcx
+    pop %r9
+    mov %rax, y_gc_free(%rip)
+    mov %rax, %rdx
+ygfr_tab:
+    mov %r15, (%r14)
+    mov %r15, %rcx
+    shr $3, %rcx
+    mov (%rdx,%rcx,8), %r8
+    mov %r8, 8(%r14)
+    mov %r14, (%rdx,%rcx,8)
+    mov y_gc_tabn(%rip), %r9
+    cmp %r9, %rcx
+    jbe ygfr_clear
+    mov %rcx, y_gc_tabn(%rip)
+ygfr_clear:
+    xor %r14d, %r14d
+    xor %r15d, %r15d
+ygfr_done:
+    ret
+
+# y_gc_maybe: collect when the bytes handed out since the last cycle reach
+# max(live, 8 MB). Called from the allocator's slow path.
+y_gc_maybe:
+    lea y_heap(%rip), %rax
+    mov 16(%rax), %rax
+    mov %rax, %rdx
+    mov y_gc_last(%rip), %rcx
+    sub %rcx, %rdx
+    mov y_gc_live(%rip), %rcx
+    cmp $8388608, %rcx
+    jae ygmb_cmp
+    mov $8388608, %rcx
+ygmb_cmp:
+    cmp %rcx, %rdx
+    jb ygmb_out
+    call y_gc_collect
+ygmb_out:
+    ret
+
+# y_gc_alloc_free(p) -> the base of a recycled block of exactly p bytes, or
+# 0. Free lists are segregated by block size (8-byte steps up to 256 KB,
+# every size a non-dedicated block can have); the link is the block's first
+# payload word, and the payload is zeroed, so a recycled block looks like
+# the fresh mmap memory it replaces.
+y_gc_alloc_free:
+    mov y_gc_free(%rip), %rdx
+    test %rdx, %rdx
+    jnz ygaf_tab
+    push %rdi
+    mov $4194312, %rdi
+    call y_gc_meta_alloc
+    pop %rdi
+    mov %rax, y_gc_free(%rip)
+    mov %rax, %rdx
+ygaf_tab:
+    mov %rdi, %rcx
+    shr $3, %rcx
+    cmp $524289, %rcx
+    jae ygaf_no
+    mov (%rdx,%rcx,8), %rax
+    test %rax, %rax
+    jz ygaf_hi
+    mov 8(%rax), %r8
+    mov %r8, (%rdx,%rcx,8)
+    lea 1(%rdi), %r8
+    mov %r8, (%rax)
+    jmp ygaf_zero
+ygaf_hi:
+    mov y_gc_tabn(%rip), %r9
+    cmp %rcx, %r9
+    jbe ygaf_no
+    mov (%rdx,%r9,8), %rax
+    test %rax, %rax
+    jz ygaf_lower
+    mov 8(%rax), %r8
+    mov %r8, (%rdx,%r9,8)
+    mov (%rax), %r8
+    and $-8, %r8
+    mov %r8, %r10
+    sub %rdi, %r10
+    cmp $32, %r10
+    jl ygaf_whole
+    lea (%rax,%rdi,1), %r11
+    mov %r10, (%r11)
+    mov %r10, %rcx
+    shr $3, %rcx
+    mov (%rdx,%rcx,8), %r8
+    mov %r8, 8(%r11)
+    mov %r11, (%rdx,%rcx,8)
+    lea 1(%rdi), %r8
+    mov %r8, (%rax)
+    jmp ygaf_zero
+ygaf_whole:
+    or $1, %r8
+    mov %r8, (%rax)
+    mov %r8, %rdi
+    and $-8, %rdi
+    jmp ygaf_zero
+ygaf_lower:
+    dec %r9
+    mov %r9, y_gc_tabn(%rip)
+    jmp ygaf_hi
+ygaf_zero:
+    lea 8(%rax), %rsi
+    lea (%rax,%rdi,1), %r9
+    mov %rsi, %r8
+ygaf_z:
+    cmp %r9, %r8
+    jae ygaf_zdone
+    xor %ecx, %ecx
+    mov %rcx, (%r8)
+    add $8, %r8
+    jmp ygaf_z
+ygaf_zdone:
+    ret
+ygaf_no:
+    xor %eax, %eax
+    ret
+
+# y_bad_trap: an internal collector invariant failed (a block header whose
+# size runs past its chunk, or a zero size). Traps loudly rather than
+# walking off the end of a chunk.
+y_bad_trap:
+    mov $1, %rax
+    mov $1, %rdi
+    lea ystr_bad(%rip), %rsi
+    mov $ystr_bad_end-ystr_bad, %rdx
+    syscall
+    mov $231, %rax
+    mov $1, %rdi
+    syscall
+ystr_bad: .ascii "collector: bad block header\n"
+ystr_bad_end:
 # y_os_exit(status) -- exit_group(status), and it does NOT return. Called from
 # the emitter's `exit(N)` rather than inlined, because rt.y's own error paths
 # call exit(1): rt.y is compiled into the std pack, and the pack is written by
@@ -642,7 +1424,7 @@ yas_sz:
     pop %r9
     mov %rax, %r15
     push %r15
-    mov $24, %rdi
+    mov $32, %rdi
     call y_alloc
     pop %r15
     mov %r14, (%rax)
@@ -803,6 +1585,64 @@ ylts_cp:
 ylts_done:
     movb $0, 8(%rax,%rbx,1)
     add $32, %rsp
+    pop %r12
+    pop %rbx
+    pop %rbp
+    ret
+# y_os_print_int(v): print a long as decimal and a newline, writing the digits
+# from a STACK buffer -- no allocation. print(<integer>) reaches this instead
+# of y_print_long (which builds a heap string), so a program that only prints
+# numbers never allocates and the allocator and collector shake out of it
+# (test/treeshake/minimal.y is the gate). Same digit loop as y_long_tostr
+# above, then ONE write of digits+newline. It goes through the named syscall
+# layer (y_os_write) so it is the same bytes on both targets.
+y_os_print_int:
+    push %rbp
+    mov %rsp, %rbp
+    push %rbx
+    push %r12
+    sub $56, %rsp
+    mov 16(%rbp), %rax
+    lea -24(%rbp), %rsi
+    mov $10, %rcx
+ypi_loop:
+    cqo
+    idiv %rcx
+    test %rdx, %rdx
+    jns ypi_pos
+    neg %rdx
+ypi_pos:
+    add $48, %rdx
+    dec %rsi
+    movb %dl, (%rsi)
+    test %rax, %rax
+    jnz ypi_loop
+    mov 16(%rbp), %rax
+    test %rax, %rax
+    jns ypi_nl
+    dec %rsi
+    movb $45, (%rsi)
+ypi_nl:
+    lea -24(%rbp), %rbx
+    sub %rsi, %rbx
+    mov %rsi, %r12
+    mov $1, %rax
+    push %rax
+    push %rsi
+    push %rbx
+    call y_os_write
+    add $24, %rsp
+    lea (%r12,%rbx,1), %rsi
+    movb $10, (%rsi)
+    mov $1, %rax
+    push %rax
+    push %rsi
+    mov $1, %rax
+    push %rax
+    call y_os_write
+    add $24, %rsp
+    xor %eax, %eax
+    add $56, %rsp
     pop %r12
     pop %rbx
     pop %rbp
@@ -1232,7 +2072,7 @@ y_str_split:
     mov $8, %rdi
     call y_alloc
     push %rax
-    mov $24, %rdi
+    mov $32, %rdi
     call y_alloc
     pop %rdx
     mov %rdx, 16(%rax)
@@ -1336,7 +2176,7 @@ ycat_sz:
     pop %r13
     mov %rax, %r14
     push %r14
-    mov $24, %rdi
+    mov $32, %rdi
     call y_alloc
     pop %r14
     mov %r13, (%rax)
@@ -1760,7 +2600,7 @@ yai_sz:
     pop %rbx
     mov %rax, %r14
     push %r14
-    mov $24, %rdi
+    mov $32, %rdi
     call y_alloc
     pop %r14
     mov %rax, %r15
@@ -1887,7 +2727,7 @@ ystb_sz:
     call y_alloc
     mov %rax, %r14
     push %r14
-    mov $24, %rdi
+    mov $32, %rdi
     call y_alloc
     pop %r14
     mov %r13, (%rax)

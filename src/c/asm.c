@@ -2022,24 +2022,42 @@ static Yv *asm_link(Yv *items, Yv *labels, int debug) {
         ;
     };
     /* A .bss label resolves like a rodata one, past the mapped image (see
-       asm_bss_shift), so the fixups below only know two sections. */
-    Yv *labs = labels;
+       asm_bss_shift), so the fixups below only know two sections. The
+       collector brackets the writable data with y_bss_lo/y_bss_hi so it can
+       scan it for roots; `y_` is reserved, so they cannot collide with a
+       program's own globals. They join the shift below with the .bss labels
+       (relax_place never saw them, so their offsets are already final). */
+    Yv *labs = yav(0);
     if (bss_len > 0) {
-        ylong bshift = asm_bss_shift(code_len, ro_len, bss_len);
-        labs = yav(0);
+        labs = ya_push(labs, yr(3, "name", ys("y_bss_lo"), "sec", yv_long(2), "off", yv_long(0)));
+    }
+    {
         ylong j = 0;
         while (j < yv_len(labels)) {
-            Yv *lb = ya_get(labels, j);
+            labs = ya_push(labs, ya_get(labels, j));
+            j = j + 1;
+        }
+    }
+    if (bss_len > 0) {
+        labs = ya_push(labs, yr(3, "name", ys("y_bss_hi"), "sec", yv_long(2), "off", yv_long(bss_len)));
+    }
+    if (bss_len > 0) {
+        ylong bshift = asm_bss_shift(code_len, ro_len, bss_len);
+        Yv *shifted = yav(0);
+        ylong j = 0;
+        while (j < yv_len(labs)) {
+            Yv *lb = ya_get(labs, j);
             if (yv_l(yr_get(lb, "sec")) == 2) {
-                labs = ya_push(
-                    labs,
+                shifted = ya_push(
+                    shifted,
                     yr(3, "name", yr_get(lb, "name"), "sec", yv_long(1),
                        "off", yv_long(bshift + yv_l(yr_get(lb, "off")))));
             } else {
-                labs = ya_push(labs, lb);
+                shifted = ya_push(shifted, lb);
             }
             j = j + 1;
         }
+        labs = shifted;
     }
     Yv *lm = labmap_build(labs);
     ylong lt1 = clock_us();

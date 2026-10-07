@@ -2,6 +2,8 @@ import fs;
 let value: long = 7;
 print(byte_at("A", 0));
 let values = [1, 2];
+// false: print(<integer>) formats into a stack buffer, so it allocates
+// nothing (t379 pins that); heap_used stays 0 until something really does.
 print(heap_used() > 0);
 print(ptr_addr(&value) != 0);
 eputs("eputs-called\n");
