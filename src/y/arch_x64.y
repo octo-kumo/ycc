@@ -285,6 +285,10 @@ def arch_kernel_bss() -> str {
     // The kernel's own GDT (six entries), its descriptor and the TSS are
     // built by std/kernel.y's gdt_init in heap memory, not here: a descriptor
     // table is a data structure, and only `lgdt`/`ltr` have to be instructions.
+    // The syscall path's two words: where the user stack was when SYSCALL
+    // arrived, and the kernel stack it switched to (M2 gives each task one).
+    "y_user_rsp:\n.zero 8\n" +
+    "y_syscall_stack:\n.zero 8\n" +
     "y_heap_start:\n.zero 8\n" +
     "y_heap_bias:\n.zero 8\n" +
     "y_heap_next:\n.zero 8\n" +

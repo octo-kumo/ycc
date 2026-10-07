@@ -328,6 +328,78 @@ y_heap_limit_get:
     mov y_heap_limit(%rip), %rax
     ret
 
+#=== add: y_syscall_entry ===
+# The SYSCALL entry, addressed by LSTAR.  The instruction has already: masked
+# the flags FMASK names, put the return rip in %rcx and the flags in %r11, and
+# left %rsp pointing at the USER stack -- which is the one thing it does not
+# change, so the first move here is to take a kernel one.
+#
+# The Y ABI is stack-passed -- the LAST argument is lowest, at 8(%rsp) at the
+# callee's entry -- so the seven words y_sys_dispatch takes go on in that
+# order, and nothing else may be pushed between them and the call: a padding
+# word put in front of them shifts every argument by one, which dispatched
+# exit_group as read and left the ring-3 program looping instead of leaving.
+# The nine pushes leave %rsp 16-aligned, which is what the call wants.  The
+# cleanup adds the seven argument words (56) -- %r11 and %rcx sit just above
+# them -- and not the whole frame: skipping past %rcx made the pops read the
+# kernel stack, which restored a garbage RFLAGS with TF set, and the program's
+# next instruction was a #DB.
+# %rcx and %r11 are caller-saved and the dispatcher may use them, so they go
+# on the stack before the arguments and come back before SYSRETQ, which is
+# what makes the return possible.
+y_syscall_entry:
+    mov %rsp, y_user_rsp(%rip)
+    mov y_syscall_stack(%rip), %rsp
+    push %rcx
+    push %r11
+    push %rax
+    push %rdi
+    push %rsi
+    push %rdx
+    push %r10
+    push %r8
+    push %r9
+    call y_sys_dispatch
+    add $56, %rsp
+    pop %r11
+    pop %rcx
+    mov y_user_rsp(%rip), %rsp
+    .ascii "\110\017\007"
+    ret
+
+#=== add: y_syscall_entry_addr ===
+# Where the syscall entry is, for LSTAR.
+y_syscall_entry_addr:
+    lea y_syscall_entry(%rip), %rax
+    ret
+
+#=== add: y_syscall_stack_set ===
+# y_syscall_stack_set(top): the kernel stack SYSCALL switches to.  M2 makes it
+# per task; until then one is enough, and it must differ from the stack the
+# stub is entered on or the push of the user state would overwrite itself.
+y_syscall_stack_set:
+    mov 8(%rsp), %rax
+    mov %rax, y_syscall_stack(%rip)
+    ret
+
+#=== add: y_enter_user ===
+# y_enter_user(rip, rsp, rflags): leave for ring 3.  The iretq frame is
+# [SS][RSP][RFLAGS][CS][RIP] and the CPU pops it in that order, so it is built
+# in reverse; the two selectors are the user ones with RPL 3, which is what
+# STAR's upper half also encodes for SYSRET (0x1B data, 0x23 code).
+y_enter_user:
+    mov 8(%rsp), %rax
+    mov 16(%rsp), %rdx
+    mov 24(%rsp), %rcx
+    mov $27, %r8
+    push %r8
+    push %rdx
+    push %rax
+    mov $35, %r9
+    push %r9
+    push %rcx
+    iretq
+
 #=== add: y_lgdt ===
 # y_lgdt(addr): load a GDT whose 10-byte descriptor the caller built in memory
 # (std/kernel.y builds it with two aligned 64-bit writes).  `lgdt m16&64` has

@@ -62,6 +62,7 @@ def init() -> void {
     y_kernel_cli();
     phys_init();
     gdt_init();
+    syscall_init(y_kernel_stack_top_get());
     y_serial_init();
     y_pic_remap();
     y_kernel_irq_init();
@@ -137,6 +138,12 @@ let mem_word: long = 0;
 // way).  Mixing the two is the one way to get this wrong.
 const DIRECT_BASE = -131391639519232;
 
+// ALIGNMENT RULE: the low bits of an address come out with `& 7`, never with
+// `% 8`.  A direct-map address (0xFFFF8880...) is NEGATIVE as a signed long
+// and Y's `%` truncates toward zero, so `addr % 8` is -4 where the offset is
+// +4 -- which is a *negative shift count*, the runtime's own trap, and it is
+// how the TSS's RSP0 field announced this one.
+//
 // The aligned 8-byte word at PHYSICAL `addr`, which is the one operation
 // pointer arithmetic gives us: `*(p + k)` addresses p + 8k, so `addr` has to
 // be 8-byte aligned.  Everything else is built on top of it, and the mask is
@@ -156,13 +163,13 @@ def poke_word(addr: long, v: long) -> void {
 // u64 fields sit at offset 4 of a 24-byte entry -- 4-aligned, not 8 -- so
 // this is the primitive, and the 64-bit read below is two of them.
 def peek32(addr: long) -> long {
-    let sh = (addr % 8) * 8;
-    ((peek_word(addr - addr % 8) >> sh) << 32) >>> 32
+    let sh = (addr & 7) * 8;
+    ((peek_word(addr - (addr & 7)) >> sh) << 32) >>> 32
 };
 
 def poke32(addr: long, v: long) -> void {
-    let base = addr - addr % 8;
-    let sh = (addr % 8) * 8;
+    let base = addr - (addr & 7);
+    let sh = (addr & 7) * 8;
     let w = peek_word(base);
     let mask = 4294967295 << sh;
     poke_word(base, (w & ~mask) | (((v << 32) >>> 32) << sh));
@@ -197,13 +204,13 @@ def poke64(addr: long, v: long) -> void {
 
 // A byte, any alignment.
 def peek8(addr: long) -> long {
-    let sh = (addr % 8) * 8;
-    (peek_word(addr - addr % 8) >> sh) & 255
+    let sh = (addr & 7) * 8;
+    (peek_word(addr - (addr & 7)) >> sh) & 255
 };
 
 def poke8(addr: long, v: long) -> void {
-    let base = addr - addr % 8;
-    let sh = (addr % 8) * 8;
+    let base = addr - (addr & 7);
+    let sh = (addr & 7) * 8;
     let w = peek_word(base);
     let mask = 255 << sh;
     poke_word(base, (w & ~mask) | ((v & 255) << sh));
@@ -483,28 +490,34 @@ def vm_next_table(entry: long, create: bool) -> long {
 // cannot be made inside a large page, so an entry with PS set at either
 // level refuses (0) rather than being read as a table address; splitting a
 // large page is a page-table operation this runtime does not have yet.
-def vm_slot(dir: long, v: long, create: bool) -> long {
+def vm_slot(dir: long, v: long, create: bool, user: bool) -> long {
+    // The U/S bit is checked at EVERY level, so a user mapping's intermediate
+    // tables need it too: a user page under a supervisor PDPT/PD is present
+    // and still forbidden (that is a #PF with err=5 -- present, user, read --
+    // which is how the first ring-3 entry announced itself).
+    let xf = PTE_P | PTE_W;
+    if (user) { xf = xf | PTE_U; };
     let e4 = peek64(dir + pml4_index(v) * 8);
     let l4 = vm_next_table(e4, create);
     if (l4 == 0) { return 0; };
     if ((e4 & PTE_PS) != 0) { return 0; };
-    if (create) { poke64(dir + pml4_index(v) * 8, l4 | PTE_P | PTE_W); };
+    if (create) { poke64(dir + pml4_index(v) * 8, l4 | xf); };
     let e3 = peek64(l4 + pdpt_index(v) * 8);
     let l3 = vm_next_table(e3, create);
     if (l3 == 0) { return 0; };
     if ((e3 & PTE_PS) != 0) { return 0; };
-    if (create) { poke64(l4 + pdpt_index(v) * 8, l3 | PTE_P | PTE_W); };
+    if (create) { poke64(l4 + pdpt_index(v) * 8, l3 | xf); };
     let e2 = peek64(l3 + pd_index(v) * 8);
     let l2 = vm_next_table(e2, create);
     if (l2 == 0) { return 0; };
     if ((e2 & PTE_PS) != 0) { return 0; };
-    if (create) { poke64(l3 + pd_index(v) * 8, l2 | PTE_P | PTE_W); };
+    if (create) { poke64(l3 + pd_index(v) * 8, l2 | xf); };
     l2 + pt_index(v) * 8
 };
 
 // Map one 4 KB page: `v` (the virtual address) sees `p` (the physical one).
 def vm_map(dir: long, v: long, p: long, flags: long) -> bool {
-    let slot = vm_slot(dir, v, true);
+    let slot = vm_slot(dir, v, true, (flags & PTE_U) != 0);
     if (slot == 0) { return false; };
     poke64(slot, (p & PHYS_MASK) | flags | PTE_P);
     vm_flush(v);
@@ -523,7 +536,7 @@ def vm_map_range(dir: long, v: long, p: long, pages: long, flags: long) -> long 
 };
 
 def vm_unmap(dir: long, v: long) -> void {
-    let slot = vm_slot(dir, v, false);
+    let slot = vm_slot(dir, v, false, false);
     if (slot != 0) { poke64(slot, 0); vm_flush(v); };
 };
 
@@ -647,13 +660,15 @@ ndef y_kernel_stack_top_get() -> long = "y_kernel_stack_top_get";
 
 // A flat 64-bit segment descriptor: base 0, limit 4 GB, one byte of access
 // rights and the flags/limit nibble the SDM's figure wants.  0x9A is a
-// ring-0 code segment, 0x92 ring-0 data, and DPL adds 0x60.
+// ring-0 code segment, 0x92 ring-0 data, and the DPL is bits 5-6 of that
+// byte -- so a privilege level adds 32, not 96 (this was 96 for one round,
+// and the #GP's error code was 0x20: the user code selector with DPL 0).
 def gdt_code(dpl: long) -> long {
-    65535 | ((154 + dpl * 96) << 40) | (175 << 48)
+    65535 | ((154 + dpl * 32) << 40) | (175 << 48)
 };
 
 def gdt_data(dpl: long) -> long {
-    65535 | ((146 + dpl * 96) << 40) | (175 << 48)
+    65535 | ((146 + dpl * 32) << 40) | (175 << 48)
 };
 
 // A 64-bit TSS descriptor, in the two halves the architecture splits it into
@@ -695,8 +710,12 @@ def gdt_build() -> long {
         poke_va64(t + i * 8, 0);
         i = i + 1;
     };
-    // RSP0: the kernel stack an interrupt from ring 3 switches to.
-    poke_va64(t + 4, y_kernel_stack_top_get());
+    // RSP0: the kernel stack an interrupt from ring 3 switches to.  The TSS
+    // layout puts it at offset 4 -- the SDM's, not ours -- so it is written as
+    // two 4-aligned halves.
+    let rsp0 = y_kernel_stack_top_get();
+    poke_va32(t + 4, rsp0);
+    poke_va32(t + 8, rsp0 >>> 32);
     poke_va64(g + 40, tss_desc_lo(t, 103));
     poke_va64(g + 48, tss_desc_hi(t));
     g
@@ -723,4 +742,116 @@ def gdt_init() -> void {
     let g = gdt_build();
     gdt_load(g);
     tss_load();
+};
+
+// ── the syscall path ────────────────────────────────────────────────────
+// x86-64's fast system call: the number in %rax, the arguments in %rdi, %rsi,
+// %rdx, %r10, %r8, %r9, then `syscall`.  That is exactly what a ycc-compiled
+// Linux binary does (arch/prelude.s's y_os_* bodies), and it is the whole
+// point of the ABI: the same binary runs here and on Linux.
+const MSR_EFER = 3221225600;
+const MSR_STAR = 3221225601;
+const MSR_LSTAR = 3221225602;
+const MSR_FMASK = 3221225604;
+
+ndef y_msr_read(reg: long) -> long = "y_msr_read";
+ndef y_msr_write(reg: long, value: long) -> long = "y_msr_write";
+ndef y_syscall_entry_addr() -> long = "y_syscall_entry_addr";
+ndef y_syscall_stack_set(top: long) -> long = "y_syscall_stack_set";
+ndef y_enter_user(rip: long, rsp: long, rflags: long) -> long = "y_enter_user";
+
+def enter_user(rip: long, rsp: long, rflags: long) -> void {
+    y_enter_user(rip, rsp, rflags);
+};
+
+def syscall_entry_addr() -> long { y_syscall_entry_addr() };
+def msr_read(reg: long) -> long { y_msr_read(reg) };
+def msr_write(reg: long, v: long) -> void { y_msr_write(reg, v) };
+
+// Bring the syscall path up.  STAR is the selectors: SYSCALL loads CS from
+// [47:32] and SS from +8, SYSRET loads SS from [63:48]+8 and CS from +16 --
+// 0x08 here and 0x13 there are what make SYSRET land on 0x1B/0x23, the user
+// selectors with RPL 3.  FMASK clears IF (0x200) so the kernel is not
+// preempted mid-syscall and DF (0x400) so the return restores the program's
+// own direction flag with forward string operations in between.
+def syscall_init(stack_top: long) -> void {
+    y_syscall_stack_set(stack_top);
+    y_msr_write(MSR_EFER, y_msr_read(MSR_EFER) | 1);
+    y_msr_write(MSR_STAR, (SEL_KCODE << 32) | (19 << 48));
+    y_msr_write(MSR_LSTAR, y_syscall_entry_addr());
+    y_msr_write(MSR_FMASK, 512 | 1024);
+};
+
+// The Linux numbers this kernel answers, and the errors it returns for the
+// rest: a program built for Linux expects ENOSYS, not a wrong answer.
+const SYS_READ = 0;
+const SYS_WRITE = 1;
+const SYS_MMAP = 9;
+const SYS_EXIT_GROUP = 231;
+const E_NOSYS = 0 - 38;
+const E_FAULT = 0 - 14;
+// The user half: everything below the kernel's own mappings.  A syscall may
+// touch nothing else, or a bug (or a hostile program) makes the kernel a
+// confused deputy on its own page tables.
+const USER_LIMIT = 140737488355328;
+
+def user_ok(addr: long, len: long) -> bool {
+    addr > 0 && len >= 0 && addr < USER_LIMIT && addr + len <= USER_LIMIT
+};
+
+def peek_va8(addr: long) -> long {
+    let sh = (addr & 7) * 8;
+    (peek_va64(addr - (addr & 7)) >> sh) & 255
+};
+
+// The 32- and 8-bit writers of the virtual family.  peek_va64/poke_va64 move
+// in whole 8-byte words -- `*(p + k)` addresses p + 8k -- so a field that is
+// not 8-byte aligned needs one of these: the TSS's RSP0 is at offset 4, and
+// writing it with poke_va64 put it at offset 0, left RSP0 zero, and made the
+// first ring-3 fault a #SS (#DF, then a triple fault).
+def poke_va32(addr: long, v: long) -> void {
+    let base = addr - (addr & 7);
+    let sh = (addr & 7) * 8;
+    let w = peek_va64(base);
+    let mask = 4294967295 << sh;
+    poke_va64(base, (w & ~mask) | (((v << 32) >>> 32) << sh));
+};
+
+def poke_va8(addr: long, v: long) -> void {
+    let base = addr - (addr & 7);
+    let sh = (addr & 7) * 8;
+    let w = peek_va64(base);
+    let mask = 255 << sh;
+    poke_va64(base, (w & ~mask) | ((v & 255) << sh));
+};
+
+// write(fd, buf, len): there are no file descriptors yet, so 1 and 2 are the
+// serial console -- what the kernel suite's transcripts read.  The buffer is
+// a user address, so every byte goes through the validation above.
+def sys_write(fd: long, buf: long, len: long) -> long {
+    if (!user_ok(buf, len)) { return E_FAULT; };
+    if (fd != 1 && fd != 2) { return E_FAULT; };
+    let i = 0;
+    while (i < len) {
+        y_serial_putb(peek_va8(buf + i));
+        i = i + 1;
+    };
+    len
+};
+
+// exit_group(status): M1 has one task, so the verdict goes to the test
+// harness; M2 turns this into a task teardown and a reschedule.
+def sys_exit_group(status: long) -> long {
+    y_kexit(status & 255);
+    0
+};
+
+// The dispatcher the entry stub calls.  `y_`-prefixed because generated
+// assembly calls it by that label, and kept by the tree shaker as the helper
+// a kept prelude block references.
+def y_sys_dispatch(nr: long, a1: long, a2: long, a3: long, a4: long, a5: long, a6: long) -> long {
+    if (nr == SYS_WRITE) { return sys_write(a1, a2, a3); };
+    if (nr == SYS_EXIT_GROUP) { return sys_exit_group(a1); };
+    if (nr == SYS_READ) { return 0; };
+    E_NOSYS
 };
