@@ -1893,3 +1893,25 @@ identity, which is what the error message is really asking for.
 Worth stating as a rule for the rest of M3/M4: in the kernel's world every module
 reaches the program through std/kernel.y, so a fixture or a server never imports a
 filesystem module by path -- it uses the names the kernel already brought in.
+
+### Round 111: the kernel half of a ring-3 file read works; the program faults
+
+Built the fixture (a driver that makes a YFS1 image holding /prog and /msg =
+"hi from yfs\n", initialises the kernel's filesystem on it, and runs the program;
+the program openat(AT_FDCWD, "/msg") then read(fd, buf, 12) from ring 3).  Result:
+
+    fs ok=true msg=3
+    trap vector=14 err=7 cr2=136
+
+The kernel half is proven: the image is built, yfs_init accepts it, yfs_lookup_path
+finds /msg as inode 3 -- called UNQUALIFIED from a driver, which is the
+single-identity rule working outside the suite's t* cases -- and the program is
+loaded and entered.
+
+The program then faults writing at cr2=136 (0x88) before printing anything, so the
+failure is in the ring-3 program itself, in the first few statements: building the
+NUL-terminated path buffer ([byte] += then += 0), the fixed [byte; 16] buffer, or
+the ptr_addr(&buf[0]) for each.  The fixture is NOT committed (its expected would
+have pinned the fault, the trap this run has hit three times).  Next: put a print
+between those statements to find which one writes at 0x88 -- the technique that
+settled yfs_lookup -- rather than reading the program again.
