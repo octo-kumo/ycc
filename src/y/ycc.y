@@ -66,6 +66,11 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
             };
         } else if (a == "-S") {
             asm_only = true;
+        } else if (a == "--kernel") {
+            // A target, not a flag on the linux target: everything that
+            // reads res_target sees it (target.y), so the emitter, the arch
+            // prelude, the writer and the std set all follow from here.
+            res_target = "kernel";
         } else if (a[0:9] == "--target=") {
             parse_target(a[9:]);
         } else if (a == "--target") {
@@ -122,6 +127,10 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
             puts("  -S           emit assembly only (stdout, or the -o file)\n");
             puts("  --target=NAME  emit for NAME: linux (the default, an ELF)\n");
             puts("               or windows (a PE32+ executable, x64)\n");
+            puts("  --kernel     emit a freestanding x86-64 kernel image (an ELF32\n");
+            puts("               Multiboot-1 payload, load address 0x100000) to run\n");
+            puts("               under `qemu-system-x86_64 -kernel`; the user-space\n");
+            puts("               std units are refused and std/kernel.y is available\n");
             puts("  -E           dump the source the lexer sees, each line tagged with\n");
             puts("               the file and line it came from, and stop\n");
             puts("  run FILE [-- ARG...]  compile FILE and run it in a forked child:\n");
@@ -185,8 +194,10 @@ def parse_target(name: str) -> void {
         res_target = "linux";
     } else if (name == "windows") {
         res_target = "windows";
+    } else if (name == "kernel") {
+        res_target = "kernel";
     } else {
-        puts("ycc: unknown target '" + name + "' (linux, windows)\n");
+        puts("ycc: unknown target '" + name + "' (linux, windows, kernel)\n");
         exit(1);
     };
 };
@@ -879,6 +890,13 @@ def main(cmdline: [str]) -> long {
         exit(0);
     }
     let args = parse_cli_args(cmdline);
+    if (target_is_kernel() && args.debug) {
+        // -g is ELF64/DWARF64 and the kernel image is an ELF32 Multiboot
+        // payload: a line table there is a feature nobody has needed yet,
+        // and half of one would be worse than none.
+        puts("ycc: -g is not supported with --kernel\n");
+        exit(1);
+    };
     // NOTE: vestigial alias (see print_phase_rows) — `args.out` works.
     let pargs = args;
     let out = pargs.out;

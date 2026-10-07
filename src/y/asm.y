@@ -19,6 +19,7 @@
 import tags from "./tags.y";
 import enc from "./enc64.y";
 import elf from "./elf.y";
+import kelf from "./kelf.y";
 import pe from "./pe.y";
 import dwarf from "./dwarf.y";
 import insn from "./ir.y";
@@ -923,6 +924,8 @@ def asm_directive(line: str, lno: long, sec: long, offs: [long]) -> AsmContent {
         asm_quad(line, lno, sec, offs, rest)
     } else if (dir == ".zero") {
         asm_zero(line, lno, sec, offs, rest)
+    } else if (dir == ".align") {
+        asm_align(line, lno, sec, offs, rest)
     } else if (dir == ".loc") {
         asm_loc(lno, sec, offs, rest)
     } else if (dir == ".file") {
@@ -1069,6 +1072,31 @@ def asm_zero(line: str, lno: long, sec: long, offs: [long], rest: str) -> AsmCon
         }
         let item: AsmItem = { sec: sec, off: offs[sec], len: n, kind: "data", bytes: zb, fix: [], br: -1 };
         offs[sec] = offs[sec] + n;
+        { err: "", sec: sec, offs: offs, item: item }
+    }
+};
+
+// .align N: pad to the next multiple of N.  The kernel's IDT and stack want
+// it (a misaligned IDT works by luck, and a misaligned stack breaks the
+// alignment-only-if-it-is-aligned SSE the runtime may one day use) and .bss
+// has no bytes to place, so the pad is a hole like .zero's.  GNU as reads
+// .align N as "N bytes" on x86 too, so asm-check sees the same thing.
+def asm_align(line: str, lno: long, sec: long, offs: [long], rest: str) -> AsmContent {
+    if (asm_quad_bad(rest)) {
+        { err: "L" + tostring(lno) + ": bad .align size '" + rest + "'", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [], br: -1 } }
+    } else {
+        let n = tolong(rest) !;
+        let cur = offs[sec];
+        let pad = 0;
+        if (n > 0 && cur % n != 0) { pad = n - cur % n; };
+        let zb: [byte] = [];
+        if (sec != 2) {
+            for i in 0..pad {
+                zb += 0;
+            };
+        }
+        let item: AsmItem = { sec: sec, off: cur, len: pad, kind: "data", bytes: zb, fix: [], br: -1 };
+        offs[sec] = cur + pad;
         { err: "", sec: sec, offs: offs, item: item }
     }
 };
@@ -1597,28 +1625,37 @@ def asm_link(items: [AsmItem], labels: [AsmLabel], debug: bool) -> AsmOut {
 // offset, since the first segment is mapped at the base), on PE the image
 // base plus the .text section's RVA.
 def asm_image_base(bss_len: long) -> long {
-    if (target_is_windows()) { pe.pe_text_base() } else { 4194304 + elf.elf_code_off(bss_len) }
+    if (target_is_windows()) { pe.pe_text_base() }
+    else if (target_is_kernel()) { kelf.kelf_base() + kelf.kelf_code_off() }
+    else { 4194304 + elf.elf_code_off(bss_len) }
 };
 
 // Where the .bss section starts, as an offset from the rodata's start.  The
-// two writers round it differently (a page plus a page on ELF, the section
-// alignment on PE), so the fixups must measure against the one that will
-// place the bytes.  elf_bss_from_ro takes TWO lengths -- upstream dropped its
-// third, since .bss has no bytes of its own to place and the loader zeroes it
-// -- while pe_bss_from_ro still needs bss_len to round the section up.
+// three writers round it differently (a page plus a page on ELF, the section
+// alignment on PE, the page after the image on the kernel's ELF32), so the
+// fixups must measure against the one that will place the bytes.
 def asm_bss_shift(code_len: long, ro_len: long, bss_len: long) -> long {
-    if (target_is_windows()) { pe.pe_bss_from_ro(code_len, ro_len, bss_len) } else { elf.elf_bss_from_ro(code_len, ro_len) }
+    if (target_is_windows()) { pe.pe_bss_from_ro(code_len, ro_len, bss_len) }
+    else if (target_is_kernel()) { kelf.kelf_bss_from_ro(code_len, ro_len) }
+    else { elf.elf_bss_from_ro(code_len, ro_len) }
 };
 
 // The `ycc --time` row name for the writer, so the table names the format it
 // actually ran.
 def asm_link_row() -> str {
-    if (target_is_windows()) { "l:pe" } else { "l:elf" }
+    if (target_is_windows()) { "l:pe" }
+    else if (target_is_kernel()) { "l:kelf" }
+    else { "l:elf" }
 };
 
 def asm_image(code: [byte], ro: [byte], entry_off: long, bss_len: long, syms: [ElfSym], dsecs: [ElfSec], items: [AsmItem], labels: [AsmLabel]) -> [byte] {
     if (target_is_windows()) {
         pe_image(code, ro, entry_off, bss_len, syms, dsecs, items, labels)
+    } else if (target_is_kernel()) {
+        // No -g on a kernel image (ycc refuses the combination): the two
+        // debug writers here are ELF64/DWARF64, and an ELF32 kernel with a
+        // 64-bit line table would be worse than no line table.
+        kelf.kelf_build(code, ro, entry_off, bss_len)
     } else {
         elf.elf_build(code, ro, entry_off, bss_len, syms, dsecs)
     }

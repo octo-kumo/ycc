@@ -21,6 +21,17 @@ embed MATH_ASM from "./arch/math.s";
 // from _start before anything else on that target. Its own file so GNU as
 // reads it (make asm-check) like the other arch assembly.
 embed WSELFTEST_ASM from "./arch/wselftest.s";
+// The kernel half of the prelude (`ycc --kernel`): the blocks of prelude.s
+// that touch the kernel, replaced whole -- mmap, serial, exit, the traps --
+// plus the pieces a freestanding payload needs and a hosted program does not
+// (port I/O, the PIC, the IDT, the halt loop). Same `#=== replace:` /
+// `#=== add:` mechanism as wsys.s; see arch_replaced_lines.
+embed KERNEL_ASM from "./arch/kernel.s";
+
+// The ELF32 Multiboot writer's layout constants (base, header size, where
+// .bss starts). The trampoline below bakes the same numbers into its 32-bit
+// immediates, so both sides read them from kelf.y rather than spelling them.
+import kelf from "./kelf.y";
 
 // `text` as prelude lines: one per line, indentation kept (the -S output
 // shows it). Dropped: a whole-line '#' comment (the in-tree assembler treats a
@@ -48,7 +59,9 @@ def arch_asm_lines(text: str) -> [str] {
 };
 
 def arch_id() -> str {
-    if (target_is_windows()) { "x86_64-windows" } else { "x86_64-linux" }
+    if (target_is_windows()) { "x86_64-windows" }
+    else if (target_is_kernel()) { "x86_64-kernel" }
+    else { "x86_64-linux" }
 };
 
 def arch_word() -> long {
@@ -65,6 +78,7 @@ def arch_word() -> long {
 // does not yet -- see its own comment below.
 def arch_sysno(name: str) -> long {
     if (target_is_windows()) { w_sysno(name) }
+    else if (target_is_kernel()) { -1 }
     else { l_sysno(name) }
 };
 
@@ -131,7 +145,7 @@ def arch_str_label(i: long) -> str {
 };
 
 def arch_header() -> str {
-    ".text\n.globl _start\n"
+    if (target_is_kernel()) { kernel_head_text() } else { ".text\n.globl _start\n" }
 };
 
 def arch_rodata() -> str {
@@ -243,7 +257,29 @@ def arch_frame(slots: long) -> long {
 
 def arch_exit() -> str {
     if (target_is_windows()) { "    mov \$44, %rax\n    mov \$-1, %r10\n    xor %edi, %edi\n    mov %edi, %r9\n    syscall\n" }
+    else if (target_is_kernel()) { "    jmp y_kernel_halt\n" }
     else { "    mov \$231, %rax\n    xor %edi, %edi\n    syscall\n" }
+};
+
+// The kernel's own .bss: the IDT and its descriptor, the kernel stack, the
+// fixed heap arena `y_alloc_map` hands out of, and the multiboot info
+// pointer.  None of it exists on a hosted target, so native.y emits this
+// only for --kernel.
+def arch_kernel_bss() -> str {
+    // 16 MB of arena: `y_alloc_more` asks for 4 MB at a time and abandons
+    // the tail of the old chunk, so this is four chunks' worth.  A .bss
+    // reservation costs RAM, not file bytes.
+    ".align 16\n" +
+    "y_mb_info:\n.zero 8\n" +
+    ".align 16\n" +
+    "y_kernel_idt:\n.zero 4096\n" +
+    "y_kernel_idtr:\n.zero 16\n" +
+    ".align 16\n" +
+    "y_kernel_stack_bottom:\n.zero 32768\n" +
+    "y_kernel_stack_top:\n" +
+    ".align 4096\n" +
+    "y_kheap:\n.zero 16777216\n" +
+    "y_kheap_used:\n.zero 8\n"
 };
 
 // The prelude as its lines: labels alone at column 0, everything else
@@ -259,7 +295,9 @@ def arch_prelude_lines() -> [str] {
     // string/array cores
     // (eq/cmp/cat/join/slice, arr push/prepend/slice/cat/eq), long and
     // float formatting, str<->[byte] conversion and argv materialization.
-    if (target_is_windows()) { arch_windows_lines() } else { arch_asm_lines(PRELUDE_ASM) }
+    if (target_is_windows()) { arch_windows_lines() }
+    else if (target_is_kernel()) { arch_kernel_lines() }
+    else { arch_asm_lines(PRELUDE_ASM) }
 };
 
 // ── the Windows half of the prelude ─────────────────────────────────────
@@ -293,15 +331,25 @@ def arch_prelude_lines() -> [str] {
 // moved, and the substitution would silently do nothing. `make asm-check`
 // gives GNU as a second opinion on wsys.s as well.
 def arch_windows_lines() -> [str] {
-    let blocks = arch_win_blocks(split(W_SYS_ASM, "\n"));
+    arch_replaced_lines(W_SYS_ASM, "src/y/arch/wsys.s")
+};
+
+// The kernel's replacement blocks (`ycc --kernel`): the same substitution,
+// against src/y/arch/kernel.s.
+def arch_kernel_lines() -> [str] {
+    arch_replaced_lines(KERNEL_ASM, "src/y/arch/kernel.s")
+};
+
+def arch_replaced_lines(sub: str, what: str) -> [str] {
+    let blocks = arch_win_blocks(split(sub, "\n"));
     blocks.foreach((e) => {
-        if (e[1] == "2") {
-            puts("error: arch/wsys.s: bad block marker ('" + e[0] + "'): want '#=== replace: NAME ===' or '#=== add: NAME ==='\n");
+        if (len(e) > 1 && e[1] == "2") {
+            puts("error: " + what + ": bad block marker ('" + e[0] + "'): want '#=== replace: NAME ===' or '#=== add: NAME ==='\n");
             exit(1);
         };
     });
     let lines = arch_asm_lines(PRELUDE_ASM);
-    arch_win_check(lines, blocks);
+    arch_win_check(lines, blocks, what);
     arch_win_sub(lines, blocks)
 };
 
@@ -312,11 +360,11 @@ def arch_windows_lines() -> [str] {
 // code in a Windows binary -- the failure mode with no symptom until the
 // program calls the wrong syscall. It cost one whole debugging session to
 // earn, which is why it is a hard error rather than a comment.
-def arch_win_check(lines: [str], blocks: [[str]]) -> void {
+def arch_win_check(lines: [str], blocks: [[str]], what: str) -> void {
     blocks.foreach((e) => {
         if (e[1] == "0") {
             if (!(arch_win_labeled(lines, e[0]))) {
-                puts("error: arch/wsys.s replaces '" + e[0] + "', which src/y/arch/prelude.s does not define\n");
+                puts("error: " + what + " replaces '" + e[0] + "', which src/y/arch/prelude.s does not define\n");
                 exit(1);
             };
         };
@@ -350,7 +398,7 @@ def arch_win_blocks(lines: [str]) -> [[str]] {
         } else {
             // Comments are documentation here (GNU as reads them too) and
             // must not reach the assembler, which calls one a backend bug.
-            if (len(l) == 0 || l[0] != 35) { cur += l; };
+            if (len(l) > 0 && l[0] != 35) { cur += l; };
             i++;
         };
     };
@@ -360,11 +408,18 @@ def arch_win_blocks(lines: [str]) -> [[str]] {
 
 // "#=== replace: NAME ===" -> "replace: NAME", or "" when the line is not a
 // marker. A line that starts with "#===" but does not parse comes back as "?"
-// and arch_windows_lines makes it a hard error: a silently ignored marker is
+// and arch_replaced_lines makes it a hard error: a silently ignored marker is
 // the one failure this substitution cannot be allowed to have, because the
 // symptom -- a Linux block sitting in a Windows binary -- appears far away.
+//
+// The length gate is load-bearing and was a live trap: a blank line in a
+// replacement file sliced past its own end here (wsys.s has none, kernel.s
+// has one between every block), and the bounds check turned a whole compile
+// into "runtime error: index out of bounds".
 def arch_win_marker(l: str) -> str {
-    if (l[0:4] != "#===") {
+    if (len(l) < 4) {
+        ""
+    } else if (l[0:4] != "#===") {
         ""
     } else {
         let body = l[4:];
@@ -383,9 +438,9 @@ def arch_win_tail(mode: str, name: str) -> str {
 // The [name, mode] head of a block: 0 replaces the same-named prelude block,
 // 1 is new, 2 is a malformed marker.
 def arch_win_head(nm: str) -> [str] {
-    if (nm[0:9] == "replace: ") {
+    if (len(nm) >= 9 && nm[0:9] == "replace: ") {
         [nm[9:], "0"]
-    } else if (nm[0:5] == "add: ") {
+    } else if (len(nm) >= 5 && nm[0:5] == "add: ") {
         [nm[5:], "1"]
     } else {
         ["?", "2"]
@@ -497,4 +552,192 @@ def arch_consts() -> str {
         ], "\n") + "\n"
 };
 
-export { WImport, w_imports, w_iat_label, w_iat_term_label, w_iat_bss_lines, w_iat_offset, arch_id, arch_word, arch_sysno, arch_fn_label, arch_global_label, arch_loc_label, arch_str_label, arch_header, arch_rodata, arch_text, arch_bss, arch_global_cell, arch_heap_cells, arch_prelude_lines, arch_prelude_threads_lines, arch_math_lines, w_self_test_lines, arch_consts, arch_frame, arch_exit };
+// ── the kernel head: a Multiboot header and a 32-bit trampoline ──────────
+// `ycc --kernel` emits an ELF32 Multiboot-1 payload (kelf.y) whose entry is
+// 32-bit code, because that is the mode every Multiboot loader starts an
+// image in.  The 32-bit half does exactly four things and then disappears:
+//
+//   1. build the page tables that identity-map the first 1 GB with 2 MB
+//      pages (the file carries them; the code only points CR3 at them),
+//   2. turn on PAE, LME and paging,
+//   3. load a flat 64-bit GDT and far-jump to the 64-bit entry, which is the
+//      only way to change CS.L and so the only way into long mode,
+//   4. hand %ebx (the Multiboot info pointer) to the 64-bit side.
+//
+// It cannot be written in the in-tree assembly: enc64.y is x86-64-only, and
+// in 32-bit protected mode a `mov %cr4, %eax` has no REX prefix, a `mov
+// $addr, %eax` is an absolute moffs, and rip-relative addressing does not
+// exist at all.  So the trampoline is a byte blob, transcribed from
+// experiments/kernel/boot.s -- the same payload booted under
+// `qemu-system-x86_64 -kernel` with GNU as assembling the blob -- with the
+// addresses patched to where this image actually puts the tables.
+//
+// The 64-bit entry (`y_kernel_entry64`) IS ordinary assembly text: it sets
+// the stack, calls the program's top level (renamed y_kernel_main; the
+// program's `_start` name belongs to the trampoline here) and falls into the
+// halt loop kernel.s defines.
+def kernel_head_text() -> str {
+    let base = kelf.kelf_base();
+    let code_off = kelf.kelf_code_off();
+    let head = kelf.kelf_head_len();
+    // The trampoline's length does not depend on the addresses in it (each
+    // one is a 32-bit immediate), so a first pass with zeros measures it.
+    let pre = ktramp_pre(0, 0);
+    let tlen = len(pre) + 7;
+    // The page tables must be aligned in PHYSICAL memory, so pad between the
+    // trampoline and them until (base + code_off + head + tlen + pad) is a
+    // page.  Everything after that is placed by construction: three 4 KB
+    // tables, then the 24-byte GDT and its 6-byte descriptor.
+    let start = base + code_off + head + tlen;
+    let pad = 0;
+    if (start % 4096 != 0) { pad = 4096 - start % 4096; };
+    let pt = start + pad;
+    let gdt = pt + 12288;
+    let gdtr = gdt + 24;
+    let entry = gdtr + 6;
+    let tramp = ktramp(pre, pt, gdtr, entry);
+    let text = ".text\n.globl _start\n";
+    text += ".ascii \"" + kascii(mb_header_bytes()) + "\"\n";
+    text += "_start:\n";
+    text += ".ascii \"" + kascii(tramp) + "\"\n";
+    // pad to the page the tables start on
+    if (pad > 0) { text += ".zero " + tostring(pad) + "\n"; };
+    text += "y_kernel_pml4:\n.quad " + tostring(pt + 4099) + "\n.zero 4088\n";
+    text += "y_kernel_pdpt:\n.quad " + tostring(pt + 8195) + "\n.zero 4088\n";
+    text += "y_kernel_pd:\n";
+    for i in 0..512 {
+        text += ".quad " + tostring(i * 2097152 + 131) + "\n";
+    };
+    // null, 64-bit code (L=1), data
+    text += "y_kernel_gdt:\n.quad 0\n.quad 49427445715107839\n.quad 49418649622085631\n";
+    // the 6-byte GDTR the 32-bit lgdt reads: limit 23, base gdt
+    let gd = kbput32(kbput16([], 23), gdt);
+    text += "y_kernel_gdtr:\n.ascii \"" + kascii(gd) + "\"\n";
+    text += "y_kernel_entry64:\n";
+    text += "    lea y_kernel_stack_top(%rip), %rsp\n";
+    text += "    xor %rbp, %rbp\n";
+    text += "    call y_kernel_main\n";
+    text += "    jmp y_kernel_halt\n";
+    text
+};
+
+// The 12-byte Multiboot-1 header: magic, flags 0 (no address fields, the
+// ELF program headers say where everything goes), and the checksum that
+// makes the three sum to zero.
+def mb_header_bytes() -> [byte] {
+    let b: [byte] = [];
+    b = kbput32(b, 464367618);      // 0x1BADB002
+    b = kbput32(b, 0);
+    b = kbput32(b, 3830599678);     // 0xE4524FFE -- -(magic + flags)
+    b
+};
+
+// The 32-bit half of the trampoline, everything up to and including the far
+// jump.  `pre` is built twice: once with zeros (to measure it) and once with
+// the real page-table and GDT addresses.
+def ktramp(pre: [byte], pt: long, gdtr: long, entry: long) -> [byte] {
+    let b = ktramp_pre(pt, gdtr);
+    // ljmp $0x08, $entry: the mode switch.  A far jump is the only
+    // instruction that reloads CS with L=1, and it has to name the target
+    // absolutely -- hence the patched constant.
+    b = kb1(b, 234);
+    b = kbput32(b, entry);
+    b = kb1(b, 8);
+    b = kb1(b, 0);
+    b
+};
+
+def ktramp_pre(pt: long, gdtr: long) -> [byte] {
+    let b: [byte] = [];
+    b = kb1(b, 250);                        // cli
+    b = kb1(b, 252);                        // cld
+    b = kb_imm32(b, 0, pt + 4099);          // mov $pml4|3, %eax
+    b = kb1(b, 163);                        // mov %eax, pml4
+    b = kbput32(b, pt);
+    b = kb_imm32(b, 0, pt + 8195);          // mov $pdpt|3, %eax
+    b = kb1(b, 163);                        // mov %eax, pdpt
+    b = kbput32(b, pt + 4096);
+    b = kb3(b, 15, 32, 224);                // mov %cr4, %eax
+    b = kb3(b, 131, 200, 32);               // or $0x20, %eax     (PAE)
+    b = kb3(b, 15, 34, 224);                // mov %eax, %cr4
+    b = kb_imm32(b, 0, pt);                 // mov $pml4, %eax
+    b = kb3(b, 15, 34, 216);                // mov %eax, %cr3
+    b = kb_imm32(b, 1, 3221225600);         // mov $0xC0000080, %ecx
+    b = kb2(b, 15, 50);                     // rdmsr
+    b = kb1(b, 13);                         // or $0x100, %eax    (LME)
+    b = kbput32(b, 256);
+    b = kb2(b, 15, 48);                     // wrmsr
+    b = kb3(b, 15, 32, 192);                // mov %cr0, %eax
+    b = kb1(b, 13);                         // or $0x80010001, %eax (PG|WP|PE)
+    b = kbput32(b, 2147549185);
+    b = kb3(b, 15, 34, 192);                // mov %eax, %cr0
+    b = kb1(b, 102);                        // mov $0x10, %ax
+    b = kb1(b, 184);
+    b = kb1(b, 16);
+    b = kb1(b, 0);
+    b = kb2(b, 142, 216);                   // mov %ax, %ds
+    b = kb2(b, 142, 192);                   // mov %ax, %es
+    b = kb2(b, 142, 208);                   // mov %ax, %ss
+    b = kb3(b, 15, 1, 21);                  // lgdt gdtr
+    b = kbput32(b, gdtr);
+    b
+};
+
+def kb1(b: [byte], v: long) -> [byte] {
+    b += v % 256;
+    b
+};
+
+def kb2(b: [byte], a: long, c: long) -> [byte] {
+    b = kb1(b, a);
+    b = kb1(b, c);
+    b
+};
+
+def kb3(b: [byte], a: long, c: long, d: long) -> [byte] {
+    b = kb2(b, a, c);
+    b = kb1(b, d);
+    b
+};
+
+// `mov $imm32, %reg`: B8+r id.
+def kb_imm32(b: [byte], reg: long, v: long) -> [byte] {
+    b = kb1(b, 184 + reg);
+    b = kbput32(b, v);
+    b
+};
+
+def kbput32(b: [byte], v: long) -> [byte] {
+    b += v % 256;
+    b += (v / 256) % 256;
+    b += (v / 65536) % 256;
+    b += (v / 16777216) % 256;
+    b
+};
+
+def kbput16(b: [byte], v: long) -> [byte] {
+    b += v % 256;
+    b += (v / 256) % 256;
+    b
+};
+
+// Bytes as the payload of an `.ascii "..."`: every byte an octal escape, so
+// the assembler's decode_str (asm.y) reproduces them exactly.  `\0` is the
+// one byte it cannot spell with a short escape.
+def kascii(b: [byte]) -> str {
+    let out = "";
+    b.foreach((e) => {
+        out += "\\";
+        out += k_oct3(e);
+    });
+    out
+};
+
+def k_oct3(v: long) -> str {
+    let a = v / 64;
+    let b = (v / 8) % 8;
+    let c = v % 8;
+    tostring(a) + tostring(b) + tostring(c)
+};
+
+export { WImport, w_imports, w_iat_label, w_iat_term_label, w_iat_bss_lines, w_iat_offset, arch_id, arch_word, arch_sysno, arch_fn_label, arch_global_label, arch_loc_label, arch_str_label, arch_header, arch_rodata, arch_text, arch_bss, arch_global_cell, arch_heap_cells, arch_kernel_bss, arch_prelude_lines, arch_prelude_threads_lines, arch_math_lines, w_self_test_lines, arch_consts, arch_frame, arch_exit };

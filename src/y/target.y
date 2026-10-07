@@ -30,9 +30,20 @@ def target_is_windows() -> bool {
     res_target == "windows"
 };
 
+// True for `ycc --kernel`: a freestanding x86-64 kernel image (an ELF32
+// Multiboot-1 payload loaded at 1 MB, with no OS underneath).  It is a
+// target, not a mode on top of linux: the emitter, the arch prelude, the
+// object writer and the std set all change, and every one of those changes
+// sits behind this predicate so a normal compile pays for none of it.
+def target_is_kernel() -> bool {
+    res_target == "kernel"
+};
+
 // The target name as a program sees it, for the `target` and `os` builtin
 // constants the checker binds (types.y).  Kept next to the global so the
 // name a flag accepts and the name a program reads cannot drift apart.
 def target_os() -> str {
-    if (res_target == "windows") { "windows" } else { "linux" }
+    if (res_target == "windows") { "windows" }
+    else if (res_target == "kernel") { "kernel" }
+    else { "linux" }
 };

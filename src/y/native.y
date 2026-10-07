@@ -2039,6 +2039,12 @@ def prune_bodies(labels: [str], refs: [[str]], extra_roots: [str]) -> { refs: [s
     if ((namemap_get(namemap_build(labels), "_start")) >= 0) {
         roots += "_start";
     }
+    // A kernel image has no `_start` among the program's bodies: that name
+    // belongs to the 32-bit trampoline in the header, and the program's top
+    // level is `y_kernel_main`, which the trampoline calls.
+    if ((namemap_get(namemap_build(labels), "y_kernel_main")) >= 0) {
+        roots += "y_kernel_main";
+    }
     keep = shake_keep(labels, refs, falls, keep, roots);
     let outrefs: [str] = [];
     i = 0;
@@ -5454,15 +5460,22 @@ def w_syscall_regargs() -> long { 4 };
 // (emit_one_fn) rather than through an EmitSt. The status is 0: the Linux
 // side zeroed %edi and the Windows side zeroes %rax before this.
 def ir_terminate(body: [long]) -> [long] {
-    if (target_is_windows()) {
+    if (target_is_kernel()) {
+        // There is nothing to exit to: the kernel's top level falls into the
+        // halt loop kernel.s defines (`cli; hlt; jmp`), which is also where
+        // an explicit exit(N) lands, via y_os_exit.
+        body = insn.ir_push(body, insn.F_CALL_L, lbl_new("y_kernel_halt"), 0, 0, 0, 0, 0, 0);
+    } else if (target_is_windows()) {
         body = insn.ir_push(body, insn.F_MOV_I_R, 0 - 1, insn.R_R10, 64, 0, 0, 0, 0);
         body = insn.ir_push(body, insn.F_XOR_R_R, insn.R_RDX, 32, insn.R_RDX, 32, 0, 0, 0);
         body = insn.ir_push(body, insn.F_MOV_I_R, 44, 0, 64, 0, 0, 0, 0);
+        body = insn.ir_push(body, insn.F_SYSCALL, 0, 0, 0, 0, 0, 0, 0);
     } else {
         body = insn.ir_push(body, insn.F_MOV_I_R, 231, 0, 64, 0, 0, 0, 0);
         body = insn.ir_push(body, insn.F_XOR_R_R, insn.R_RDI, 32, insn.R_RDI, 32, 0, 0, 0);
+        body = insn.ir_push(body, insn.F_SYSCALL, 0, 0, 0, 0, 0, 0, 0);
     };
-    insn.ir_push(body, insn.F_SYSCALL, 0, 0, 0, 0, 0, 0, 0)
+    body
 };
 
 // There is deliberately no EmitSt twin of ir_terminate here. `exit` reaches
@@ -11732,9 +11745,17 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
             // Only pay for argv materialization when the program uses it
             // (or a package it links does).
             let want_argv = uses_argv(ast3.stmts) || xt.argv;
+            // A kernel has no argv and its `_start` name belongs to the
+            // 32-bit trampoline in the image header, so the program's top
+            // level is a plain function the trampoline calls.
+            let mlab = "_start";
+            if (target_is_kernel()) {
+                want_argv = false;
+                mlab = "y_kernel_main";
+            };
             let main_body: Block = { k: K.block, stmts: main_stmts, line: 0, col: 0 };
             let start_fn: EmitMain = { params: [], ptypes: [], ret: type_node({ k: K.tvoid }), body: main_body, line: 0, col: 0 };
-            st = emit_one_fn(st, lbl_new("_start"), rm.uid, start_fn, true, want_argv, [], "");
+            st = emit_one_fn(st, lbl_new(mlab), rm.uid, start_fn, true, want_argv, [], "");
         } else if (len(main_stmts) > 0) {
             init = arch.arch_fn_label(rm.uid, "init");
             let init_body: Block = { k: K.block, stmts: main_stmts, line: 0, col: 0 };
@@ -12280,9 +12301,14 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
     // .bss: the allocator's cells when the kept prelude still uses
     // them, then one cell per global.
     let heap_text = shake_refs(arch.arch_heap_cells(), const_refs);
-    if (len(gls) > 0 || len(heap_text) > 0 || target_is_windows()) {
+    if (len(gls) > 0 || len(heap_text) > 0 || target_is_windows() || target_is_kernel()) {
         let gpieces: [str] = [];
         gpieces += arch.arch_bss();
+        // The kernel's own cells -- the IDT, the stack, the heap arena --
+        // come first, then the allocator's and the globals'.
+        if (target_is_kernel()) {
+            gpieces += arch.arch_kernel_bss();
+        };
         // The Windows import cells come FIRST in .bss, so their offsets are
         // 0, 8, 16, ... in the import table's order and the PE writer computes
         // FirstThunk from the spec rather than asking the assembler's label

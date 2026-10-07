@@ -31,14 +31,14 @@ def r8(n: long) -> Reg { { k: K.reg, n: n, size: 8 } };
 
 // Register number by AT&T name. Supports the registers our backend uses.
 def reg_num(name: str) -> long {
-    if (name in ["%rax", "%eax", "%al"]) { 0 }
-    else if (name in ["%rcx", "%ecx", "%cl"]) { 1 }
-    else if (name in ["%rdx", "%edx", "%dl"]) { 2 }
-    else if (name in ["%rbx", "%ebx", "%bl"]) { 3 }
-    else if (name == "%rsp" || name == "%esp") { 4 }
-    else if (name == "%rbp" || name == "%ebp") { 5 }
-    else if (name in ["%rsi", "%esi", "%sil"]) { 6 }
-    else if (name in ["%rdi", "%edi", "%dil"]) { 7 }
+    if (name in ["%rax", "%eax", "%ax", "%al"]) { 0 }
+    else if (name in ["%rcx", "%ecx", "%cx", "%cl"]) { 1 }
+    else if (name in ["%rdx", "%edx", "%dx", "%dl"]) { 2 }
+    else if (name in ["%rbx", "%ebx", "%bx", "%bl"]) { 3 }
+    else if (name == "%rsp" || name == "%esp" || name == "%sp") { 4 }
+    else if (name == "%rbp" || name == "%ebp" || name == "%bp") { 5 }
+    else if (name in ["%rsi", "%esi", "%si", "%sil"]) { 6 }
+    else if (name in ["%rdi", "%edi", "%di", "%dil"]) { 7 }
     else if (name in ["%r8", "%r8d", "%r8b"]) { 8 }
     else if (name in ["%r9", "%r9d", "%r9b"]) { 9 }
     else if (name in ["%r10", "%r10d", "%r10b"]) { 10 }
@@ -75,6 +75,12 @@ def reg_size(name: str) -> long {
         // %r..: 64-bit, unless ends in d/b
         let last = name[len(name) - 1];
         if (last == 'd') { 32 } else if (last == 'b') { 8 } else { 64 }
+    } else if (name in ["%ax", "%cx", "%dx", "%bx", "%sp", "%bp", "%si", "%di"]) {
+        // The 16-bit GPR names, which the kernel's port I/O needs (%dx
+        // carries a port number for inb/outb): a two-character name whose
+        // second letter is one of the 16-bit mnemonics. `%xmm` above is
+        // matched first, so this arm never sees an SSE name.
+        16
     } else {
         // %e..: 32-bit; %..l / %..h legacy: 8-bit; %r.. handled above
         if (c == 'e') { 32 } else { 8 }
@@ -1196,8 +1202,70 @@ def enc_insn(buf: [byte], at: long, mn: str, ops: [Operand], lng: bool) -> Encod
     } else if (mn == "jbe" || mn == "jna") {
         let e = need1(mn, ops);
         if (e != "") { enc_err(at, e) } else { enc_jcc(buf, at, 134, ops[0], lng) }
+    } else if (mn == "cli") {
+        enc_ok(put(buf, at, 250), [])
+    } else if (mn == "sti") {
+        enc_ok(put(buf, at, 251), [])
+    } else if (mn == "cld") {
+        enc_ok(put(buf, at, 252), [])
+    } else if (mn == "hlt") {
+        enc_ok(put(buf, at, 244), [])
+    } else if (mn == "iretq") {
+        enc_ok(put2(buf, at, 72, 207), [])
+    } else if (mn == "outb") {
+        let e = need2(mn, ops);
+        if (e != "") { enc_err(at, e) } else { enc_outb(buf, at, ops[0], ops[1]) }
+    } else if (mn == "inb") {
+        let e = need2(mn, ops);
+        if (e != "") { enc_err(at, e) } else { enc_inb(buf, at, ops[0], ops[1]) }
+    } else if (mn == "lidt") {
+        let e = need1(mn, ops);
+        if (e != "") { enc_err(at, e) } else { enc_lidt(buf, at, ops[0]) }
     } else {
         enc_err(at, "unknown mnemonic '" + mn + "'")
+    }
+};
+
+// ── the kernel's own instructions ───────────────────────────────────────
+// Everything below exists for `ycc --kernel` (src/y/arch/kernel.s): port I/O
+// for the 16550, the interrupt flag, the halt, the far return from an
+// interrupt, and `lidt`.  Nothing the emitter produces reaches them, and they
+// sit at the end of enc_insn's ladder so a normal compile compares past them
+// once per line rather than paying for them.
+def enc_outb(buf: [byte], at: long, src: Operand, port: Operand) -> Encoded {
+    // outb %al, %dx (EE) or outb %al, $imm8 (E6 ib). A port above 255 -- the
+    // UART's 0x3F8, say -- has only the %dx form.
+    if (src.k != K.reg || op_size(src) != 8 || src.n != 0) {
+        enc_err(at, "outb needs %al as its source")
+    } else if (port.k == K.reg && op_size(port) == 16 && port.n == 2) {
+        enc_ok(put(buf, at, 238), [])
+    } else if (port.k == K.imm && port.v >= 0 && port.v <= 255) {
+        enc_ok(put(buf, (put(buf, at, 230)), port.v), [])
+    } else {
+        enc_err(at, "outb port is $imm8 or %dx")
+    }
+};
+
+def enc_inb(buf: [byte], at: long, port: Operand, dst: Operand) -> Encoded {
+    // inb %dx, %al (EC) or inb $imm8, %al (E4 ib).
+    if (dst.k != K.reg || op_size(dst) != 8 || dst.n != 0) {
+        enc_err(at, "inb needs %al as its destination")
+    } else if (port.k == K.reg && op_size(port) == 16 && port.n == 2) {
+        enc_ok(put(buf, at, 236), [])
+    } else if (port.k == K.imm && port.v >= 0 && port.v <= 255) {
+        enc_ok(put(buf, (put(buf, at, 228)), port.v), [])
+    } else {
+        enc_err(at, "inb port is $imm8 or %dx")
+    }
+};
+
+def enc_lidt(buf: [byte], at: long, o: Operand) -> Encoded {
+    // 0F 01 /3, the operand being the 10-byte descriptor's address.
+    if (o.k != K.mem) {
+        enc_err(at, "lidt needs a memory operand")
+    } else {
+        let t = mem_tail(o, 3);
+        enc_mem_result(buf, mem_tail_put(buf, put3(buf, (put_rex(buf, at, rex_rm(false, 3, o))), 15, 1, t.modrm), t), t)
     }
 };
 
