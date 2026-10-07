@@ -134,9 +134,36 @@ or died).
 1. **Threads.** A cycle is only safe while one thread runs; `y_gc_collect`
    returns immediately once `y_heap+24` (the spawned-a-thread flag) is set,
    so a threaded program still leaks -- and `--gc=auto` keeps the collector
-   for it, so the omission never applies to a program that spawned. The plan
-   is unchanged: stop-the-world at the allocator's slow path (the one place a
-   thread can be parked) and scan each thread's stack from its control block.
+   for it, so the omission never applies to a program that spawned.
+   A stop-the-world implementation is designed and was working end to end
+   (it lives in `_ktmp/threads_gc.patch`, 498 lines, not landed):
+   * the tcb (threads.s) grows to 112 bytes: `next` (10), `rsp` (11), `state`
+     (12), gc mark (13); the main thread's block is a tcb too;
+   * `y_gc_safepoint` parks a thread at the allocator's slow path (every
+     register is pushed there, so publishing `%rsp` publishes its roots);
+     `y_spawn` goes through it before registering, and a thread takes the
+     stop-the-world flag itself before unlinking on exit;
+   * `y_gc_stw_begin` takes the flag with `xchg` and walks the tcb list until
+     every other thread is parked (state 1) or **blocked** (state 3, published
+     by `y_gc_block_begin`/`_end` around the join/mutex/sem futex waits --
+     without that, the common `spawn` + `join` pattern blocks the main thread
+     in `join` and no cycle ever runs). A timeout skips the cycle: a running
+     thread may hold the only pointer to a live object in a register;
+   * `y_gc_roots` uses the *current* thread's stack top (the spawned thread's
+     8 MiB mapping, `y_gc_stack_top` for the main one) and
+     `y_gc_thread_roots` scans every parked/blocked thread's
+     `[published rsp, top)`;
+   * `y_gc_maybe` triggers on the current thread's `used` against its tcb's
+     mark, because the global heap block is empty once threads exist.
+   **What is left** is the allocation-side concurrency: the free lists
+   (`y_gc_free`, `y_gc_tabn`), the chunk registry and the metadata arena are
+   shared, and once threads really collect, one pops from a free list while
+   the sweep rebuilds it -- `ideas/oom`-style stress (`spawn { work(500000) }`
+   twice under a 64 MiB cap) crashed in `y_gc_alloc_free`'s table read. The
+   fix is two spin locks (free lists + registry, then the metadata arena,
+   always in that order) taken *after* the safepoint, so a parked thread
+   never holds one, and the sweep keeps taking them with the world stopped.
+   Until then a threaded program still leaks exactly as before.
 2. **Performance.** The byte buffers are pointer-free now (`y_str_cat`,
    `y_str_app`, the join buffer, `ylts_mk`, `ycs_mk`, `y_bytes_to_str`):
    61.9M -> 49.3M instructions on 120 live ~108 KB strings at the same peak
