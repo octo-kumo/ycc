@@ -1,6 +1,0 @@
-untrack the scratch directory
-
-`_ktmp/msg.txt` rode along in 164fe76: I wrote a commit message to a file
-because /tmp is a full 32 GB tmpfs on this box, and `git add -A` swept the
-file in with the change. AGENTS.md lists `_ktmp/` among the artifacts never
-to commit, and it was never a tracked file before.
