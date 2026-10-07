@@ -19,6 +19,7 @@
 #include "pe.h"
 #include "target.h"
 #include "elf.h"
+#include "kelf.h"
 #include "ir.h"
 #include "labels.h"
 #include "enc64.h"
@@ -131,6 +132,7 @@ static int asm_quad_bad(Yv *rest);
 static Yv *asm_quad_err(Yv *line, ylong lno, ylong sec, Yv *offs, Yv *rest);
 static Yv *asm_quad_go(ylong sec, Yv *offs, Yv *rest);
 static Yv *asm_zero(Yv *line, ylong lno, ylong sec, Yv *offs, Yv *rest);
+static Yv *asm_align(Yv *line, ylong lno, ylong sec, Yv *offs, Yv *rest);
 static Yv *asm_insn(Yv *line, ylong lno, ylong sec, Yv *offs);
 static Yv *asm_encode(Yv *mn, Yv *ops, ylong lno, ylong sec, Yv *offs);
 static Yv *asm_link(Yv *items, Yv *labels, int debug);
@@ -1264,6 +1266,8 @@ static Yv *asm_directive(Yv *line, ylong lno, ylong sec, Yv *offs) {
         return asm_quad(line, lno, sec, offs, rest);
     } else if (ys_eq_lit(dir, ".zero")) {
         return asm_zero(line, lno, sec, offs, rest);
+    } else if (ys_eq_lit(dir, ".align")) {
+        return asm_align(line, lno, sec, offs, rest);
     } else if (ys_eq_lit(dir, ".loc")) {
         return asm_loc(lno, sec, offs, rest);
     } else if (ys_eq_lit(dir, ".file")) {
@@ -1478,6 +1482,45 @@ static Yv *asm_zero(Yv *line, ylong lno, ylong sec, Yv *offs, Yv *rest) {
                       "len", yv_long(n), "kind", ys("data"), "bytes", zb,
                       "fix", yav(0));
         ya_set(offs, sec, yv_long(yv_l(ya_get(offs, sec)) + n));
+        return yr(4, "err", ys(""), "sec", yv_long(sec), "offs", offs,
+                  "item", item);
+    }
+}
+
+/* .align N: pad to the next multiple of N. The kernel's IDT and stack want it
+   (a misaligned IDT works by luck, and a misaligned stack breaks the
+   alignment-only-if-it-is-aligned SSE the runtime may one day use) and .bss
+   has no bytes to place, so the pad is a hole like .zero's. GNU as reads
+   .align N as "N bytes" on x86 too, so asm-check sees the same thing. */
+static Yv *asm_align(Yv *line, ylong lno, ylong sec, Yv *offs, Yv *rest) {
+    if (asm_quad_bad(rest)) {
+        (void)line;
+        return yr(4,
+                  "err", ys_cat(ys_cat(ys_cat(ys_cat(ys("L"), ys_long(lno)),
+                                               ys(": bad .align size '")),
+                                       rest),
+                                ys("'")),
+                  "sec", yv_long(sec), "offs", offs,
+                  "item", yr(7, "sec", yv_long(-1), "off", yv_long(0), "len", yv_long(0),
+                             "kind", ys(""), "bytes", yav(0), "fix", yav(0), "br", yv_long(-1)));
+    } else {
+        (void)line;
+        ylong n = ys_tolong(rest);
+        Yv *cur = ya_get(offs, sec);
+        ylong pad = 0;
+        if (n > 0 && yv_l(cur) % n != 0) { pad = n - yv_l(cur) % n; };
+        Yv *zb = yav(0);
+        if (sec != 2) {
+            ylong i = 0;
+            while (i < pad) {
+                zb = ya_push(zb, yv_long(0));
+                i = i + 1;
+            }
+        }
+        Yv *item = yr(7, "sec", yv_long(sec), "off", cur,
+                      "len", yv_long(pad), "kind", ys("data"), "bytes", zb,
+                      "fix", yav(0), "br", yv_long(-1));
+        ya_set(offs, sec, yv_long(yv_l(cur) + pad));
         return yr(4, "err", ys(""), "sec", yv_long(sec), "offs", offs,
                   "item", item);
     }
@@ -2486,17 +2529,17 @@ Yv *ycc_assemble(Yv *parts, int debug) {
    base plus the .text section's RVA. */
 static ylong asm_image_base(ylong bss_len) {
     if (target_is_windows()) { return pe_text_base(); }
+    else if (target_is_kernel()) { return kelf_base() + kelf_code_off(); }
     else { return 4194304 + elf_code_off(bss_len); }
 }
 
 /* Where the .bss section starts, as an offset from the rodata's start. The
-   two writers round it differently (a page plus a page on ELF, the section
-   alignment on PE), so the fixups must measure against the one that will
-   place the bytes.  elf_bss_from_ro takes TWO lengths -- upstream dropped its
-   third, since .bss has no bytes of its own to place and the loader zeroes it
-   -- while pe_bss_from_ro still needs bss_len to round the section up. */
+   three writers round it differently (a page plus a page on ELF, the section
+   alignment on PE, the page after the image on the kernel's ELF32), so the
+   fixups must measure against the one that will place the bytes. */
 static ylong asm_bss_shift(ylong code_len, ylong ro_len, ylong bss_len) {
     if (target_is_windows()) { return pe_bss_from_ro(code_len, ro_len, bss_len); }
+    else if (target_is_kernel()) { return kelf_bss_from_ro(code_len, ro_len); }
     else { return elf_bss_from_ro(code_len, ro_len); }
 }
 
@@ -2504,6 +2547,7 @@ static ylong asm_bss_shift(ylong code_len, ylong ro_len, ylong bss_len) {
    actually ran. */
 static Yv *asm_link_row(void) {
     if (target_is_windows()) { return ys("l:pe"); }
+    else if (target_is_kernel()) { return ys("l:kelf"); }
     else { return ys("l:elf"); }
 }
 
@@ -2511,6 +2555,11 @@ static Yv *asm_image(Yv *code, Yv *ro, ylong entry_off, ylong bss_len, Yv *syms,
                      Yv *dsecs, Yv *items, Yv *labels) {
     if (target_is_windows()) {
         return pe_image(code, ro, entry_off, bss_len, syms, dsecs, items, labels);
+    } else if (target_is_kernel()) {
+        /* No -g on a kernel image (ycc refuses the combination): the two
+           debug writers here are ELF64/DWARF64, and an ELF32 kernel with a
+           64-bit line table would be worse than no line table. */
+        return kelf_build(code, ro, entry_off, bss_len);
     } else {
         return elf_build(code, ro, entry_off, bss_len, syms, dsecs);
     }

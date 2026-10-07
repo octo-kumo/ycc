@@ -78,6 +78,9 @@ static Yv *enc_cmpb(Yv *buf, ylong at, ylong v, Yv *m);
 static Yv *enc_movb_reg(Yv *buf, ylong at, Yv *dst, Yv *src);
 static Yv *need1(Yv *mn, Yv *ops);
 static Yv *need2(Yv *mn, Yv *ops);
+static Yv *enc_outb(Yv *buf, ylong at, Yv *src, Yv *port);
+static Yv *enc_inb(Yv *buf, ylong at, Yv *port, Yv *dst);
+static Yv *enc_lidt(Yv *buf, ylong at, Yv *o);
 
 Yv *r64(ylong n) {
     return yr(3, "k", yv_long(K_reg), "n", yv_long(n), "size", yv_long(64));
@@ -94,14 +97,14 @@ Yv *r8(ylong n) {
 }
 
 ylong reg_num(Yv *name) {
-    if (ys_eq_lit(name, "%rax") || ys_eq_lit(name, "%eax") || ys_eq_lit(name, "%al")) { return 0; }
-    else if (ys_eq_lit(name, "%rcx") || ys_eq_lit(name, "%ecx") || ys_eq_lit(name, "%cl")) { return 1; }
-    else if (ys_eq_lit(name, "%rdx") || ys_eq_lit(name, "%edx") || ys_eq_lit(name, "%dl")) { return 2; }
-    else if (ys_eq_lit(name, "%rbx") || ys_eq_lit(name, "%ebx") || ys_eq_lit(name, "%bl")) { return 3; }
-    else if (ys_eq_lit(name, "%rsp") || ys_eq_lit(name, "%esp")) { return 4; }
-    else if (ys_eq_lit(name, "%rbp") || ys_eq_lit(name, "%ebp")) { return 5; }
-    else if (ys_eq_lit(name, "%rsi") || ys_eq_lit(name, "%esi") || ys_eq_lit(name, "%sil")) { return 6; }
-    else if (ys_eq_lit(name, "%rdi") || ys_eq_lit(name, "%edi") || ys_eq_lit(name, "%dil")) { return 7; }
+    if (ys_eq_lit(name, "%rax") || ys_eq_lit(name, "%eax") || ys_eq_lit(name, "%ax") || ys_eq_lit(name, "%al")) { return 0; }
+    else if (ys_eq_lit(name, "%rcx") || ys_eq_lit(name, "%ecx") || ys_eq_lit(name, "%cx") || ys_eq_lit(name, "%cl")) { return 1; }
+    else if (ys_eq_lit(name, "%rdx") || ys_eq_lit(name, "%edx") || ys_eq_lit(name, "%dx") || ys_eq_lit(name, "%dl")) { return 2; }
+    else if (ys_eq_lit(name, "%rbx") || ys_eq_lit(name, "%ebx") || ys_eq_lit(name, "%bx") || ys_eq_lit(name, "%bl")) { return 3; }
+    else if (ys_eq_lit(name, "%rsp") || ys_eq_lit(name, "%esp") || ys_eq_lit(name, "%sp")) { return 4; }
+    else if (ys_eq_lit(name, "%rbp") || ys_eq_lit(name, "%ebp") || ys_eq_lit(name, "%bp")) { return 5; }
+    else if (ys_eq_lit(name, "%rsi") || ys_eq_lit(name, "%esi") || ys_eq_lit(name, "%si") || ys_eq_lit(name, "%sil")) { return 6; }
+    else if (ys_eq_lit(name, "%rdi") || ys_eq_lit(name, "%edi") || ys_eq_lit(name, "%di") || ys_eq_lit(name, "%dil")) { return 7; }
     else if (ys_eq_lit(name, "%r8") || ys_eq_lit(name, "%r8d") || ys_eq_lit(name, "%r8b")) { return 8; }
     else if (ys_eq_lit(name, "%r9") || ys_eq_lit(name, "%r9d") || ys_eq_lit(name, "%r9b")) { return 9; }
     else if (ys_eq_lit(name, "%r10") || ys_eq_lit(name, "%r10d") || ys_eq_lit(name, "%r10b")) { return 10; }
@@ -138,6 +141,14 @@ ylong reg_size(Yv *name) {
         /* %r..: 64-bit, unless ends in d/b */
         Yv *last = ys_slice_from(name, yv_len(name) - 1);
         if (ys_eq_lit(last, "d")) { return 32; } else if (ys_eq_lit(last, "b")) { return 8; } else { return 64; }
+    } else if (ys_eq_lit(name, "%ax") || ys_eq_lit(name, "%cx") || ys_eq_lit(name, "%dx") ||
+               ys_eq_lit(name, "%bx") || ys_eq_lit(name, "%sp") || ys_eq_lit(name, "%bp") ||
+               ys_eq_lit(name, "%si") || ys_eq_lit(name, "%di")) {
+        /* The 16-bit GPR names, which the kernel's port I/O needs (%dx
+         * carries a port number for inb/outb): a two-character name whose
+         * second letter is one of the 16-bit mnemonics. `%xmm` above is
+         * matched first, so this arm never sees an SSE name. */
+        return 16;
     } else {
         /* %e..: 32-bit; %..l / %..h legacy: 8-bit; %r.. handled above */
         if (ys_eq_lit(c, "e")) { return 32; } else { return 8; }
@@ -1388,8 +1399,70 @@ Yv *enc_insn(Yv *buf, ylong at, Yv *mn, Yv *ops, int lng) {
         return enc_ok(put2(buf, at, 15, 5), yav(0));
     } else if (ys_eq_lit(mn, "ret")) {
         return enc_ok(put(buf, at, 195), yav(0));
+    } else if (ys_eq_lit(mn, "cli")) {
+        return enc_ok(put(buf, at, 250), yav(0));
+    } else if (ys_eq_lit(mn, "sti")) {
+        return enc_ok(put(buf, at, 251), yav(0));
+    } else if (ys_eq_lit(mn, "cld")) {
+        return enc_ok(put(buf, at, 252), yav(0));
+    } else if (ys_eq_lit(mn, "hlt")) {
+        return enc_ok(put(buf, at, 244), yav(0));
+    } else if (ys_eq_lit(mn, "iretq")) {
+        return enc_ok(put2(buf, at, 72, 207), yav(0));
+    } else if (ys_eq_lit(mn, "outb")) {
+        Yv *e = need2(mn, ops);
+        if (!ys_eq_lit(e, "")) { return enc_err(at, e); } else { return enc_outb(buf, at, ya_get(ops, 0), ya_get(ops, 1)); }
+    } else if (ys_eq_lit(mn, "inb")) {
+        Yv *e = need2(mn, ops);
+        if (!ys_eq_lit(e, "")) { return enc_err(at, e); } else { return enc_inb(buf, at, ya_get(ops, 0), ya_get(ops, 1)); }
+    } else if (ys_eq_lit(mn, "lidt")) {
+        Yv *e = need1(mn, ops);
+        if (!ys_eq_lit(e, "")) { return enc_err(at, e); } else { return enc_lidt(buf, at, ya_get(ops, 0)); }
     } else {
         return enc_err(at, ys_cat(ys_cat(ys("unknown mnemonic '"), mn), ys("'")));
+    }
+}
+
+/* ── the kernel's own instructions ───────────────────────────────────────
+ * Everything below exists for `ycc --kernel` (src/y/arch/kernel.s): port I/O
+ * for the 16550, the interrupt flag, the halt, the far return from an
+ * interrupt, and `lidt`. Nothing the emitter produces reaches them, and they
+ * sit at the end of enc_insn's ladder so a normal compile compares past them
+ * once per line rather than paying for them. */
+static Yv *enc_outb(Yv *buf, ylong at, Yv *src, Yv *port) {
+    /* outb %al, %dx (EE) or outb %al, $imm8 (E6 ib). A port above 255 -- the
+     * UART's 0x3F8, say -- has only the %dx form. */
+    if (yv_l(yr_get(src, "k")) != K_reg || op_size(src) != 8 || yv_l(yr_get(src, "n")) != 0) {
+        return enc_err(at, ys("outb needs %al as its source"));
+    } else if (yv_l(yr_get(port, "k")) == K_reg && op_size(port) == 16 && yv_l(yr_get(port, "n")) == 2) {
+        return enc_ok(put(buf, at, 238), yav(0));
+    } else if (yv_l(yr_get(port, "k")) == K_imm && yv_l(yr_get(port, "v")) >= 0 && yv_l(yr_get(port, "v")) <= 255) {
+        return enc_ok(put(buf, put(buf, at, 230), yv_l(yr_get(port, "v"))), yav(0));
+    } else {
+        return enc_err(at, ys("outb port is $imm8 or %dx"));
+    }
+}
+
+static Yv *enc_inb(Yv *buf, ylong at, Yv *port, Yv *dst) {
+    /* inb %dx, %al (EC) or inb $imm8, %al (E4 ib). */
+    if (yv_l(yr_get(dst, "k")) != K_reg || op_size(dst) != 8 || yv_l(yr_get(dst, "n")) != 0) {
+        return enc_err(at, ys("inb needs %al as its destination"));
+    } else if (yv_l(yr_get(port, "k")) == K_reg && op_size(port) == 16 && yv_l(yr_get(port, "n")) == 2) {
+        return enc_ok(put(buf, at, 236), yav(0));
+    } else if (yv_l(yr_get(port, "k")) == K_imm && yv_l(yr_get(port, "v")) >= 0 && yv_l(yr_get(port, "v")) <= 255) {
+        return enc_ok(put(buf, put(buf, at, 228), yv_l(yr_get(port, "v"))), yav(0));
+    } else {
+        return enc_err(at, ys("inb port is $imm8 or %dx"));
+    }
+}
+
+static Yv *enc_lidt(Yv *buf, ylong at, Yv *o) {
+    /* 0F 01 /3, the operand being the 10-byte descriptor's address. */
+    if (yv_l(yr_get(o, "k")) != K_mem) {
+        return enc_err(at, ys("lidt needs a memory operand"));
+    } else {
+        Yv *t = mem_tail(o, 3);
+        return enc_mem_result(buf, mem_tail_put(buf, put3(buf, put_rex(buf, at, rex_rm(0, 3, o)), 15, 1, yv_l(yr_get(t, "modrm"))), t), t);
     }
 }
 

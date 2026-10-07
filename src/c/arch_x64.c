@@ -20,6 +20,17 @@ Y_EMBED(MATH_ASM, "src/y/arch/math.s")
    from _start before anything else on that target. Its own file so GNU as
    reads it (make asm-check) like the other arch assembly. */
 Y_EMBED(WSELFTEST_ASM, "src/y/arch/wselftest.s")
+/* The kernel half of the prelude (`ycc --kernel`): the blocks of prelude.s
+   that touch the kernel, replaced whole -- mmap, serial, exit, the traps --
+   plus the pieces a freestanding payload needs and a hosted program does not
+   (port I/O, the PIC, the IDT, the halt loop). Same `#=== replace:` /
+   `#=== add:` mechanism as wsys.s; see arch_replaced_lines. */
+Y_EMBED(KERNEL_ASM, "src/y/arch/kernel.s")
+
+/* The ELF32 Multiboot writer's layout constants (base, header size, where
+   .bss starts). The trampoline below bakes the same numbers into its 32-bit
+   immediates, so both sides read them from kelf.c rather than spelling them. */
+#include "kelf.h"
 
 /* imported */
 /* target.c's res_target / target_is_windows (target.y), the one other module
@@ -34,8 +45,10 @@ Y_EMBED(WSELFTEST_ASM, "src/y/arch/wselftest.s")
 static ylong l_sysno(Yv *name);
 static ylong w_sysno(Yv *name);
 static Yv *arch_windows_lines(void);
+static Yv *arch_kernel_lines(void);
+static Yv *arch_replaced_lines(Yv *sub, Yv *what);
 static Yv *arch_win_blocks(Yv *lines);
-static ylong arch_win_check(Yv *lines, Yv *blocks);
+static ylong arch_win_check(Yv *lines, Yv *blocks, Yv *what);
 static int arch_win_labeled(Yv *lines, Yv *nm);
 static Yv *arch_win_marker(Yv *l);
 static Yv *arch_win_tail(Yv *mode, Yv *name);
@@ -45,6 +58,18 @@ static Yv *arch_win_sub(Yv *lines, Yv *blocks);
 static Yv *arch_win_split(Yv *out);
 static ylong arch_win_find(Yv *blocks, Yv *nm);
 static Yv *arch_win_push(Yv *out, Yv *l);
+static Yv *kernel_head_text(void);
+static Yv *mb_header_bytes(void);
+static Yv *ktramp(Yv *pre, ylong pt, ylong gdtr, ylong entry);
+static Yv *ktramp_pre(ylong pt, ylong gdtr);
+static Yv *kb1(Yv *b, ylong v);
+static Yv *kb2(Yv *b, ylong a, ylong c);
+static Yv *kb3(Yv *b, ylong a, ylong c, ylong d);
+static Yv *kb_imm32(Yv *b, ylong reg, ylong v);
+static Yv *kbput32(Yv *b, ylong v);
+static Yv *kbput16(Yv *b, ylong v);
+static Yv *kascii(Yv *b);
+static Yv *k_oct3(ylong v);
 
 /* the twin of arch_x64.y's arch_asm_lines: the embedded text as prelude
    lines, one per line, indentation kept. Dropped: a whole-line '#' comment
@@ -71,6 +96,7 @@ static Yv *arch_asm_lines(Yv *text) {
 
 Yv *arch_id(void) {
     if (target_is_windows()) { return ys("x86_64-windows"); }
+    else if (target_is_kernel()) { return ys("x86_64-kernel"); }
     else { return ys("x86_64-linux"); }
 }
 
@@ -88,6 +114,7 @@ ylong arch_word(void) {
 // does not yet -- see its own comment below.
 ylong arch_sysno(Yv *name) {
     if (target_is_windows()) { return w_sysno(name); }
+    else if (target_is_kernel()) { return -1; }
     else { return l_sysno(name); }
 }
 
@@ -160,7 +187,8 @@ Yv *arch_str_label(ylong i) {
 }
 
 Yv *arch_header(void) {
-    return ys(".text\n.globl _start\n");
+    if (target_is_kernel()) { return kernel_head_text(); }
+    else { return ys(".text\n.globl _start\n"); }
 }
 
 Yv *arch_rodata(void) {
@@ -292,7 +320,29 @@ Yv *arch_exit(void) {
     if (target_is_windows()) {
         return ys("    mov $44, %rax\n    mov $-1, %r10\n    xor %edi, %edi\n    mov %edi, %r9\n    syscall\n");
     }
+    else if (target_is_kernel()) { return ys("    jmp y_kernel_halt\n"); }
     else { return ys("    mov $231, %rax\n    xor %edi, %edi\n    syscall\n"); }
+}
+
+/* The kernel's own .bss: the IDT and its descriptor, the kernel stack, the
+   fixed heap arena `y_alloc_map` hands out of, and the multiboot info
+   pointer. None of it exists on a hosted target, so native.c emits this only
+   for --kernel. */
+Yv *arch_kernel_bss(void) {
+    /* 16 MB of arena: `y_alloc_more` asks for 4 MB at a time and abandons the
+       tail of the old chunk, so this is four chunks' worth. A .bss reservation
+       costs RAM, not file bytes. */
+    return ys(".align 16\n"
+              "y_mb_info:\n.zero 8\n"
+              ".align 16\n"
+              "y_kernel_idt:\n.zero 4096\n"
+              "y_kernel_idtr:\n.zero 16\n"
+              ".align 16\n"
+              "y_kernel_stack_bottom:\n.zero 32768\n"
+              "y_kernel_stack_top:\n"
+              ".align 4096\n"
+              "y_kheap:\n.zero 16777216\n"
+              "y_kheap_used:\n.zero 8\n");
 }
 
 // The prelude as its lines: labels alone at column 0, everything else
@@ -309,6 +359,7 @@ Yv *arch_prelude_lines(void) {
     // (eq/cmp/cat/join/slice, arr push/prepend/slice/cat/eq), long and
     // float formatting, str<->[byte] conversion and argv materialization.
     if (target_is_windows()) { return arch_windows_lines(); }
+    else if (target_is_kernel()) { return arch_kernel_lines(); }
     else { return arch_asm_lines(PRELUDE_ASM()); }
 }
 
@@ -379,19 +430,32 @@ Yv *arch_consts(void) {
 // moved, and the substitution would silently do nothing. `make asm-check`
 // gives GNU as a second opinion on wsys.s as well.
 static Yv *arch_windows_lines(void) {
-    Yv *blocks = arch_win_blocks(ys_split(W_SYS_ASM(), ys("\n")));
+    return arch_replaced_lines(W_SYS_ASM(), ys("src/y/arch/wsys.s"));
+}
+
+// The kernel's replacement blocks (`ycc --kernel`): the same substitution,
+// against src/y/arch/kernel.s.
+static Yv *arch_kernel_lines(void) {
+    return arch_replaced_lines(KERNEL_ASM(), ys("src/y/arch/kernel.s"));
+}
+
+static Yv *arch_replaced_lines(Yv *sub, Yv *what) {
+    Yv *blocks = arch_win_blocks(ys_split(sub, ys("\n")));
+    /* NOTE: index loop, not foreach (PORTING.md rule 9). */
     ylong i = 0;
     while (i < yv_len(blocks)) {
-        if (ys_eq_lit(ya_get(ya_get(blocks, i), 1), "2")) {
-            puts_(ys_cat(ys_cat(ys("error: arch/wsys.s: bad block marker ('"),
-                                  ya_get(ya_get(blocks, i), 0)),
-                         ys("'): want '#=== replace: NAME ===' or '#=== add: NAME ==='\n")));
+        Yv *e = ya_get(blocks, i);
+        if (yv_len(e) > 1 && ys_eq_lit(ya_get(e, 1), "2")) {
+            puts_(ys_cat(ys_cat(ys_cat(ys_cat(ys("error: "), what),
+                                      ys(": bad block marker ('")),
+                              ya_get(e, 0)),
+                      ys("'): want '#=== replace: NAME ===' or '#=== add: NAME ==='\n")));
             exit_(1);
-        }
+        };
         i = i + 1;
     }
     Yv *lines = arch_asm_lines(PRELUDE_ASM());
-    arch_win_check(lines, blocks);
+    arch_win_check(lines, blocks, what);
     return arch_win_sub(lines, blocks);
 }
 
@@ -402,15 +466,16 @@ static Yv *arch_windows_lines(void) {
 // code in a Windows binary -- the failure mode with no symptom until the
 // program calls the wrong syscall. It cost one whole debugging session to
 // earn, which is why it is a hard error rather than a comment.
-static ylong arch_win_check(Yv *lines, Yv *blocks) {
+static ylong arch_win_check(Yv *lines, Yv *blocks, Yv *what) {
     ylong i = 0;
     while (i < yv_len(blocks)) {
         if (ys_eq_lit(ya_get(ya_get(blocks, i), 1), "0")) {
             if (arch_win_labeled(lines, ya_get(ya_get(blocks, i), 0))) { /* found */ }
             else {
-                puts_(ys_cat(ys_cat(ys("error: arch/wsys.s replaces '"),
-                                      ya_get(ya_get(blocks, i), 0)),
-                             ys("', which src/y/arch/prelude.s does not define\n")));
+                puts_(ys_cat(ys_cat(ys_cat(ys("error: "), what),
+                                    ys(" replaces '")),
+                             ys_cat(ya_get(ya_get(blocks, i), 0),
+                                    ys("', which src/y/arch/prelude.s does not define\n"))));
                 exit_(1);
             }
         }
@@ -447,7 +512,7 @@ static Yv *arch_win_blocks(Yv *lines) {
         } else {
             // Comments are documentation here (GNU as reads them too) and
             // must not reach the assembler, which calls one a backend bug.
-            if (yv_len(l) == 0 || ys_byte_at(l, 0) != 35) {
+            if (yv_len(l) > 0 && ys_byte_at(l, 0) != 35) {
                 cur = ya_push(cur, l);
             }
             i = i + 1;
@@ -459,11 +524,18 @@ static Yv *arch_win_blocks(Yv *lines) {
 
 // "#=== replace: NAME ===" -> "replace: NAME", or "" when the line is not a
 // marker. A line that starts with "#===" but does not parse comes back as "?"
-// and arch_windows_lines makes it a hard error: a silently ignored marker is
+// and arch_replaced_lines makes it a hard error: a silently ignored marker is
 // the one failure this substitution cannot be allowed to have, because the
 // symptom -- a Linux block sitting in a Windows binary -- appears far away.
+//
+// The length gate is load-bearing and was a live trap: a blank line in a
+// replacement file sliced past its own end here (wsys.s has none, kernel.s
+// has one between every block), and the bounds check turned a whole compile
+// into "runtime error: index out of bounds".
 static Yv *arch_win_marker(Yv *l) {
-    if (!ys_eq(ys_slice(l, 0, 4), ys("#==="))) {
+    if (yv_len(l) < 4) {
+        return ys("");
+    } else if (!ys_eq(ys_slice(l, 0, 4), ys("#==="))) {
         return ys("");
     }
     Yv *body = ys_slice_from(l, 4);
@@ -487,9 +559,9 @@ static Yv *arch_win_tail(Yv *mode, Yv *name) {
 // The [name, mode] head of a block: 0 replaces the same-named prelude block,
 // 1 is new, 2 is a malformed marker.
 static Yv *arch_win_head(Yv *nm) {
-    if (ys_eq(ys_slice(nm, 0, 9), ys("replace: "))) {
+    if (yv_len(nm) >= 9 && ys_eq(ys_slice(nm, 0, 9), ys("replace: "))) {
         return yav(2, ys_slice_from(nm, 9), ys("0"));
-    } else if (ys_eq(ys_slice(nm, 0, 5), ys("add: "))) {
+    } else if (yv_len(nm) >= 5 && ys_eq(ys_slice(nm, 0, 5), ys("add: "))) {
         return yav(2, ys_slice_from(nm, 5), ys("1"));
     } else {
         return yav(2, ys("?"), ys("2"));
@@ -568,4 +640,354 @@ static ylong arch_win_find(Yv *blocks, Yv *nm) {
 static Yv *arch_win_push(Yv *out, Yv *l) {
     if (yv_len(l) > 0) { out = ya_push(out, l); }
     return out;
+}
+
+// ── the generated interrupt plumbing ─────────────────────────────────────
+// One stub per `irq N def f()` the program declared (target.h's
+// res_irq_stubs), plus the routine that installs them: fill all 256 IDT
+// entries with a stop-the-machine default, overwrite the declared vectors,
+// load the IDT. Generated rather than kept in arch/kernel.s because it names
+// the program's own handler labels; it is a text part, so the tree shaker
+// never sees it -- which is also why it carries its own copy of the
+// entry-packing helper instead of calling one the shaker could drop.
+//
+// The stub is the x86-64 interrupt entry:
+//   - save the CALLER-saved registers. The handler is an ordinary Y function
+//     and is free to clobber rax/rcx/rdx/rsi/rdi/r8-r11; rbx, rbp and r12-r15
+//     are callee-saved and it preserves them itself. %rbp is saved too because
+//     the stub holds the pre-alignment stack in it.
+//   - align %rsp to 16 and call the handler, so the handler's own calls see
+//     the alignment the SysV convention wants (the interrupted stack has no
+//     alignment guarantee).
+//   - acknowledge the 8259 line (slave first, for IRQ8-15).
+//   - iretq.
+// A handler that clobbers an XMM register would need the SSE state saved as
+// well; nothing does that yet, and the Y backend only touches XMM in float
+// code.
+Yv *kernel_irq_text(void) {
+    Yv *out = ys(".text\n");
+    out = ys_cat(out, ys("y_kernel_irq_default:\n"));
+    out = ys_cat(out, ys("    jmp y_kernel_halt\n"));
+    /* NOTE: index loop, not foreach (PORTING.md rule 9). */
+    ylong i = 0;
+    while (i < yv_len(res_irq_stubs)) {
+        Yv *e = ya_get(res_irq_stubs, i);
+        out = ys_cat(out, ys_cat(ys_cat(ys("y_irq_stub_"),
+                                        ys_long(yv_l(yr_get(e, "line")))),
+                                 ys(":\n")));
+        out = ys_cat(out, ys("    push %rbp\n"));
+        out = ys_cat(out, ys("    push %rax\n"));
+        out = ys_cat(out, ys("    push %rcx\n"));
+        out = ys_cat(out, ys("    push %rdx\n"));
+        out = ys_cat(out, ys("    push %rsi\n"));
+        out = ys_cat(out, ys("    push %rdi\n"));
+        out = ys_cat(out, ys("    push %r8\n"));
+        out = ys_cat(out, ys("    push %r9\n"));
+        out = ys_cat(out, ys("    push %r10\n"));
+        out = ys_cat(out, ys("    push %r11\n"));
+        out = ys_cat(out, ys("    mov %rsp, %rbp\n"));
+        out = ys_cat(out, ys("    and $-16, %rsp\n"));
+        out = ys_cat(out, ys_cat(ys_cat(ys("    call "), yr_get(e, "label")), ys("\n")));
+        out = ys_cat(out, ys("    mov %rbp, %rsp\n"));
+        out = ys_cat(out, ys("    pop %r11\n"));
+        out = ys_cat(out, ys("    pop %r10\n"));
+        out = ys_cat(out, ys("    pop %r9\n"));
+        out = ys_cat(out, ys("    pop %r8\n"));
+        out = ys_cat(out, ys("    pop %rdi\n"));
+        out = ys_cat(out, ys("    pop %rsi\n"));
+        out = ys_cat(out, ys("    pop %rdx\n"));
+        out = ys_cat(out, ys("    pop %rcx\n"));
+        out = ys_cat(out, ys("    pop %rax\n"));
+        out = ys_cat(out, ys("    pop %rbp\n"));
+        if (yv_l(yr_get(e, "line")) >= 8) {
+            out = ys_cat(out, ys("    mov $160, %edx\n"));
+            out = ys_cat(out, ys("    mov $32, %eax\n"));
+            out = ys_cat(out, ys("    outb %al, %dx\n"));
+        };
+        out = ys_cat(out, ys("    mov $32, %edx\n"));
+        out = ys_cat(out, ys("    mov $32, %eax\n"));
+        out = ys_cat(out, ys("    outb %al, %dx\n"));
+        out = ys_cat(out, ys("    iretq\n"));
+        i = i + 1;
+    };
+    /* %rax = a handler's address -> %rax = the first 8 bytes of its IDT entry:
+       offset[0:16] | selector 8 << 16 | type 0x8E << 40 | offset[16:32] << 48.
+       The payload lives below 4 GB, so the entry's high half is always zero
+       (the `mov $0, +8` below). */
+    out = ys_cat(out, ys("y_kernel_idt_pack:\n"));
+    out = ys_cat(out, ys("    mov %rax, %rdx\n"));
+    out = ys_cat(out, ys("    shr $16, %rdx\n"));
+    out = ys_cat(out, ys("    shl $48, %rdx\n"));
+    out = ys_cat(out, ys("    and $65535, %rax\n"));
+    out = ys_cat(out, ys("    mov $156130651668480, %rcx\n"));
+    out = ys_cat(out, ys("    or %rcx, %rax\n"));
+    out = ys_cat(out, ys("    or %rdx, %rax\n"));
+    out = ys_cat(out, ys("    ret\n"));
+    out = ys_cat(out, ys("y_kernel_irq_init:\n"));
+    out = ys_cat(out, ys("    push %rbp\n"));
+    out = ys_cat(out, ys("    mov %rsp, %rbp\n"));
+    out = ys_cat(out, ys("    lea y_kernel_irq_default(%rip), %rax\n"));
+    out = ys_cat(out, ys("    call y_kernel_idt_pack\n"));
+    out = ys_cat(out, ys("    lea y_kernel_idt(%rip), %rdi\n"));
+    out = ys_cat(out, ys("    mov $256, %esi\n"));
+    out = ys_cat(out, ys("y_kii_loop:\n"));
+    out = ys_cat(out, ys("    mov %rax, (%rdi)\n"));
+    out = ys_cat(out, ys("    mov $0, 8(%rdi)\n"));
+    out = ys_cat(out, ys("    add $16, %rdi\n"));
+    out = ys_cat(out, ys("    sub $1, %esi\n"));
+    out = ys_cat(out, ys("    cmp $0, %esi\n"));
+    out = ys_cat(out, ys("    jne y_kii_loop\n"));
+    i = 0;
+    while (i < yv_len(res_irq_stubs)) {
+        Yv *e = ya_get(res_irq_stubs, i);
+        ylong v = 32 + yv_l(yr_get(e, "line"));
+        out = ys_cat(out, ys_cat(ys_cat(ys("    lea y_irq_stub_"),
+                                        ys_long(yv_l(yr_get(e, "line")))),
+                                 ys("(%rip), %rax\n")));
+        out = ys_cat(out, ys("    call y_kernel_idt_pack\n"));
+        out = ys_cat(out, ys("    lea y_kernel_idt(%rip), %rdi\n"));
+        out = ys_cat(out, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(v * 16)),
+                                 ys("(%rdi)\n")));
+        out = ys_cat(out, ys_cat(ys_cat(ys("    mov $0, "), ys_long(v * 16 + 8)),
+                                 ys("(%rdi)\n")));
+        i = i + 1;
+    };
+    /* Unmask the declared lines. The compiler knows which they are and the
+       program does not have to: y_pic_remap leaves every line masked, so a
+       handler installed without this would never fire and nothing would say
+       why. One byte per 8259, computed here: a slave line also opens the
+       master's cascade (IRQ2), or the slave's request never reaches the CPU. */
+    ylong mm = 255;
+    ylong sm = 255;
+    ylong ii = 0;
+    while (ii < yv_len(res_irq_stubs)) {
+        ylong ln = yv_l(yr_get(ya_get(res_irq_stubs, ii), "line"));
+        if (ln < 8) {
+            mm = mm & ~(1 << ln);
+        } else {
+            sm = sm & ~(1 << (ln - 8));
+            mm = mm & ~4;
+        };
+        ii++;
+    };
+    if (yv_len(res_irq_stubs) > 0) {
+        out = ys_cat(out, ys("    mov $33, %edx\n"));
+        out = ys_cat(out, ys_cat(ys_cat(ys("    mov $"), ys_long(mm)), ys(", %eax\n")));
+        out = ys_cat(out, ys("    outb %al, %dx\n"));
+        out = ys_cat(out, ys("    mov $161, %edx\n"));
+        out = ys_cat(out, ys_cat(ys_cat(ys("    mov $"), ys_long(sm)), ys(", %eax\n")));
+        out = ys_cat(out, ys("    outb %al, %dx\n"));
+    };
+    out = ys_cat(out, ys("    lea y_kernel_idtr(%rip), %rdi\n"));
+    out = ys_cat(out, ys("    lea y_kernel_idt(%rip), %rax\n"));
+    out = ys_cat(out, ys("    shl $16, %rax\n"));
+    out = ys_cat(out, ys("    or $4095, %rax\n"));
+    out = ys_cat(out, ys("    mov %rax, (%rdi)\n"));
+    out = ys_cat(out, ys("    mov $0, 8(%rdi)\n"));
+    out = ys_cat(out, ys("    lidt y_kernel_idtr(%rip)\n"));
+    out = ys_cat(out, ys("    pop %rbp\n"));
+    out = ys_cat(out, ys("    ret\n"));
+    return out;
+}
+
+// ── the kernel head: a Multiboot header and a 32-bit trampoline ──────────
+// `ycc --kernel` emits an ELF32 Multiboot-1 payload (kelf.c) whose entry is
+// 32-bit code, because that is the mode every Multiboot loader starts an
+// image in. The 32-bit half does exactly four things and then disappears:
+//
+//   1. build the page tables that identity-map the first 1 GB with 2 MB pages
+//      (the file carries them; the code only points CR3 at them),
+//   2. turn on PAE, LME and paging,
+//   3. load a flat 64-bit GDT and far-jump to the 64-bit entry, which is the
+//      only way to change CS.L and so the only way into long mode,
+//   4. hand %ebx (the Multiboot info pointer) to the 64-bit side.
+//
+// It cannot be written in the in-tree assembly: enc64.c is x86-64-only, and in
+// 32-bit protected mode a `mov %cr4, %eax` has no REX prefix, a `mov $addr,
+// %eax` is an absolute moffs, and rip-relative addressing does not exist at
+// all. So the trampoline is a byte blob, transcribed from
+// experiments/kernel/boot.s -- the same payload booted under
+// `qemu-system-x86_64 -kernel` with GNU as assembling the blob -- with the
+// addresses patched to where this image actually puts the tables.
+//
+// The 64-bit entry (`y_kernel_entry64`) IS ordinary assembly text: it sets the
+// stack, calls the program's top level (renamed y_kernel_main; the program's
+// `_start` name belongs to the trampoline here) and falls into the halt loop
+// kernel.s defines.
+static Yv *kernel_head_text(void) {
+    ylong base = kelf_base();
+    ylong code_off = kelf_code_off();
+    ylong head = kelf_head_len();
+    /* The trampoline's length does not depend on the addresses in it (each one
+       is a 32-bit immediate), so a first pass with zeros measures it. */
+    Yv *pre = ktramp_pre(0, 0);
+    ylong tlen = yv_len(pre) + 7;
+    /* The page tables must be aligned in PHYSICAL memory, so pad between the
+       trampoline and them until (base + code_off + head + tlen + pad) is a
+       page. Everything after that is placed by construction: three 4 KB
+       tables, then the 24-byte GDT and its 6-byte descriptor. */
+    ylong start = base + code_off + head + tlen;
+    ylong pad = 0;
+    if (start % 4096 != 0) { pad = 4096 - start % 4096; };
+    ylong pt = start + pad;
+    ylong gdt = pt + 12288;
+    ylong gdtr = gdt + 24;
+    ylong entry = gdtr + 6;
+    Yv *tramp = ktramp(pre, pt, gdtr, entry);
+    Yv *text = ys(".text\n.globl _start\n");
+    text = ys_cat(text, ys_cat(ys_cat(ys(".ascii \""), kascii(mb_header_bytes())), ys("\"\n")));
+    text = ys_cat(text, ys("_start:\n"));
+    text = ys_cat(text, ys_cat(ys_cat(ys(".ascii \""), kascii(tramp)), ys("\"\n")));
+    /* pad to the page the tables start on */
+    if (pad > 0) { text = ys_cat(text, ys_cat(ys_cat(ys(".zero "), ys_long(pad)), ys("\n"))); };
+    text = ys_cat(text, ys_cat(ys_cat(ys("y_kernel_pml4:\n.quad "), ys_long(pt + 4099)), ys("\n.zero 4088\n")));
+    text = ys_cat(text, ys_cat(ys_cat(ys("y_kernel_pdpt:\n.quad "), ys_long(pt + 8195)), ys("\n.zero 4088\n")));
+    text = ys_cat(text, ys("y_kernel_pd:\n"));
+    ylong i = 0;
+    while (i < 512) {
+        text = ys_cat(text, ys_cat(ys_cat(ys(".quad "), ys_long(i * 2097152 + 131)), ys("\n")));
+        i = i + 1;
+    };
+    /* null, 64-bit code (L=1), data */
+    text = ys_cat(text, ys("y_kernel_gdt:\n.quad 0\n.quad 49427445715107839\n.quad 49418649622085631\n"));
+    /* the 6-byte GDTR the 32-bit lgdt reads: limit 23, base gdt */
+    Yv *gd = kbput32(kbput16(yav(0), 23), gdt);
+    text = ys_cat(text, ys_cat(ys_cat(ys("y_kernel_gdtr:\n.ascii \""), kascii(gd)), ys("\"\n")));
+    text = ys_cat(text, ys("y_kernel_entry64:\n"));
+    text = ys_cat(text, ys("    lea y_kernel_stack_top(%rip), %rsp\n"));
+    text = ys_cat(text, ys("    xor %rbp, %rbp\n"));
+    text = ys_cat(text, ys("    call y_kernel_main\n"));
+    text = ys_cat(text, ys("    jmp y_kernel_halt\n"));
+    return text;
+}
+
+// The 12-byte Multiboot-1 header: magic, flags 0 (no address fields, the ELF
+// program headers say where everything goes), and the checksum that makes the
+// three sum to zero.
+static Yv *mb_header_bytes(void) {
+    Yv *b = yav(0);
+    b = kbput32(b, 464367618);      /* 0x1BADB002 */
+    b = kbput32(b, 0);
+    b = kbput32(b, 3830599678);     /* 0xE4524FFE -- -(magic + flags) */
+    return b;
+}
+
+// The 32-bit half of the trampoline, everything up to and including the far
+// jump. `pre` is built twice: once with zeros (to measure it) and once with
+// the real page-table and GDT addresses.
+static Yv *ktramp(Yv *pre, ylong pt, ylong gdtr, ylong entry) {
+    (void)pre;
+    Yv *b = ktramp_pre(pt, gdtr);
+    /* ljmp $0x08, $entry: the mode switch. A far jump is the only instruction
+       that reloads CS with L=1, and it has to name the target absolutely --
+       hence the patched constant. */
+    b = kb1(b, 234);
+    b = kbput32(b, entry);
+    b = kb1(b, 8);
+    b = kb1(b, 0);
+    return b;
+}
+
+static Yv *ktramp_pre(ylong pt, ylong gdtr) {
+    Yv *b = yav(0);
+    b = kb1(b, 250);                        /* cli */
+    b = kb1(b, 252);                        /* cld */
+    b = kb_imm32(b, 0, pt + 4099);          /* mov $pml4|3, %eax */
+    b = kb1(b, 163);                        /* mov %eax, pml4 */
+    b = kbput32(b, pt);
+    b = kb_imm32(b, 0, pt + 8195);          /* mov $pdpt|3, %eax */
+    b = kb1(b, 163);                        /* mov %eax, pdpt */
+    b = kbput32(b, pt + 4096);
+    b = kb3(b, 15, 32, 224);                /* mov %cr4, %eax */
+    /* or $0x620, %eax: PAE (5) plus OSFXSR (9) and OSXMMEXCPT (10). The last
+       two are not optional: without OSFXSR every SSE instruction is #UD, and
+       the Y backend uses XMM for every float operation -- so
+       `print(1.0 * 2.0)` stopped the machine at its first `movq %rax,%xmm0`
+       while `print(7.0)` (a literal, passed in a GPR) worked. A hosted program
+       never notices because Linux sets these before entering user space. */
+    b = kb1(b, 13);
+    b = kbput32(b, 1568);
+    b = kb3(b, 15, 34, 224);                /* mov %eax, %cr4 */
+    b = kb_imm32(b, 0, pt);                 /* mov $pml4, %eax */
+    b = kb3(b, 15, 34, 216);                /* mov %eax, %cr3 */
+    b = kb_imm32(b, 1, 3221225600);         /* mov $0xC0000080, %ecx */
+    b = kb2(b, 15, 50);                     /* rdmsr */
+    b = kb1(b, 13);                         /* or $0x100, %eax    (LME) */
+    b = kbput32(b, 256);
+    b = kb2(b, 15, 48);                     /* wrmsr */
+    b = kb3(b, 15, 32, 192);                /* mov %cr0, %eax */
+    b = kb1(b, 13);                         /* or $0x80010001, %eax (PG|WP|PE) */
+    b = kbput32(b, 2147549185);
+    b = kb3(b, 15, 34, 192);                /* mov %eax, %cr0 */
+    b = kb1(b, 102);                        /* mov $0x10, %ax */
+    b = kb1(b, 184);
+    b = kb1(b, 16);
+    b = kb1(b, 0);
+    b = kb2(b, 142, 216);                   /* mov %ax, %ds */
+    b = kb2(b, 142, 192);                   /* mov %ax, %es */
+    b = kb2(b, 142, 208);                   /* mov %ax, %ss */
+    b = kb3(b, 15, 1, 21);                  /* lgdt gdtr */
+    b = kbput32(b, gdtr);
+    return b;
+}
+
+static Yv *kb1(Yv *b, ylong v) {
+    b = ya_push(b, yv_long(v % 256));
+    return b;
+}
+
+static Yv *kb2(Yv *b, ylong a, ylong c) {
+    b = kb1(b, a);
+    b = kb1(b, c);
+    return b;
+}
+
+static Yv *kb3(Yv *b, ylong a, ylong c, ylong d) {
+    b = kb2(b, a, c);
+    b = kb1(b, d);
+    return b;
+}
+
+/* `mov $imm32, %reg`: B8+r id. */
+static Yv *kb_imm32(Yv *b, ylong reg, ylong v) {
+    b = kb1(b, 184 + reg);
+    b = kbput32(b, v);
+    return b;
+}
+
+static Yv *kbput32(Yv *b, ylong v) {
+    b = ya_push(b, yv_long(v % 256));
+    b = ya_push(b, yv_long((v / 256) % 256));
+    b = ya_push(b, yv_long((v / 65536) % 256));
+    b = ya_push(b, yv_long((v / 16777216) % 256));
+    return b;
+}
+
+static Yv *kbput16(Yv *b, ylong v) {
+    b = ya_push(b, yv_long(v % 256));
+    b = ya_push(b, yv_long((v / 256) % 256));
+    return b;
+}
+
+/* Bytes as the payload of an `.ascii "..."`: every byte an octal escape, so
+   the assembler's decode_str (asm.c) reproduces them exactly. `\0` is the one
+   byte it cannot spell with a short escape. */
+static Yv *kascii(Yv *b) {
+    Yv *out = ys("");
+    /* NOTE: index loop, not foreach (PORTING.md rule 9). */
+    ylong i = 0;
+    while (i < yv_len(b)) {
+        Yv *e = ya_get(b, i);
+        out = ys_cat(out, ys("\\"));
+        out = ys_cat(out, k_oct3(yv_l(e)));
+        i = i + 1;
+    };
+    return out;
+}
+
+static Yv *k_oct3(ylong v) {
+    ylong a = v / 64;
+    ylong b = (v / 8) % 8;
+    ylong c = v % 8;
+    return ys_cat(ys_cat(ys_long(a), ys_long(b)), ys_long(c));
 }

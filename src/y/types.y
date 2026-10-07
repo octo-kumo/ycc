@@ -27,6 +27,13 @@
 
 // For its aliases Field, Node and Type.
 import tags from "./tags.y";
+// For kernel_irq_line: check_irq_def looks an `irq N def` up by name (the
+// same reason parser.y names it).
+// NOTE: the alias is `ktgt`, not `target`: strip_ns rewrites every
+// `name.field` in the unit as a module reference, and a local variable
+// called `target` (types.y has several, `let target: TOf = ...`) would be
+// read as a field of this module.
+import ktgt from "./target.y";
 import parser from "./parser.y";
 
 // A diagnostic: the checker's errors, lint.y's warnings.

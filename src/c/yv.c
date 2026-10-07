@@ -432,6 +432,57 @@ ylong ys_tolong(const Yv *x) {
     return v;
 }
 
+/* `tolong(s)`: the OPTION-returning read, some(n) when s is a whole number
+ * and NOTHING else, none otherwise -- the port of std/rt.y's y_str_tolong,
+ * which is what a Y `tolong(x)` the compiler itself evaluates runs. The
+ * difference from ys_tolong above is the whole point and is observable:
+ * "12abc", "1.5" and "0x10" answer none here (a radix literal is not a
+ * valid `tolong`) where ys_tolong reads what it can. Its one caller is the
+ * parser's `irq N` (parser.c parse_irq_def), where the token is a num, so a
+ * float or a radix literal must be rejected rather than truncated to a line
+ * number. The accumulation mirrors y_str_tolong's own overflow rules rather
+ * than strtoll's errno, so a 21-digit literal answers none in both. */
+Yv *ys_tolong_opt(const Yv *x) {
+    if (!x || x->tag != Y_STR) return yv_none();
+    const char *p = x->u.s.p;
+    ylong n = (ylong)x->u.s.n;
+    ylong i = 0;
+    while (i < n && (p[i] == 32 || (p[i] >= 9 && p[i] <= 13))) { i = i + 1; }
+    int neg = 0;
+    if (i < n) {
+        unsigned char sg = (unsigned char)p[i];
+        if (sg == 45 || sg == 43) {
+            neg = sg == 45;
+            i = i + 1;
+        }
+    }
+    ylong start = i;
+    ylong mag = 0;
+    int ovf = 0;
+    int go = 1;
+    while (i < n && go) {
+        int c = (unsigned char)p[i];
+        if (c < 48 || c > 57) { go = 0; }
+        else {
+            ylong d = c - 48;
+            if (neg) {
+                if (mag < -922337203685477580LL) { ovf = 1; }
+                else if (mag == -922337203685477580LL && d > 8) { ovf = 1; }
+                else { mag = mag * 10 - d; }
+            } else {
+                if (mag > 922337203685477580LL) { ovf = 1; }
+                else if (mag == 922337203685477580LL && d > 7) { ovf = 1; }
+                else { mag = mag * 10 + d; }
+            }
+            if (ovf) { go = 0; } else { i = i + 1; }
+        }
+    }
+    if (ovf || i == start) { return yv_none(); }
+    while (i < n && (p[i] == 32 || (p[i] >= 9 && p[i] <= 13))) { i = i + 1; }
+    if (i < n) { return yv_none(); }
+    return yv_long(mag);
+}
+
 static char *escape_str(const char *s) {
     if (!s) return ystrdup("NULL");
     size_t len = 0;

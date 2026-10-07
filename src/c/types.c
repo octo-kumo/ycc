@@ -83,7 +83,7 @@ static Yv *st_errors(Yv *st, Yv *errs);
 static Yv *st_self(Yv *st, Yv *selfv);
 static Yv *st_ret(Yv *st, Yv *ret);
 static Yv *fail(Yv *st, Yv *msg, ylong line, ylong col);
-static Yv *disp(Yv *name);
+Yv *disp(Yv *name);
 static Yv *check_visible(Yv *st, Yv *got, Yv *name, ylong line, ylong col);
 static Yv *expect_type(Yv *st, Yv *got, Yv *want, Yv *what, ylong line, ylong col);
 static int cast_ok(Yv *got, Yv *want);
@@ -1638,7 +1638,7 @@ static Yv *fail(Yv *st, Yv *msg, ylong line, ylong col) {
 
 // Display name: strip the rename pass's `$N` suffix so errors read like
 // the user's source (`$` is lexer-illegal, so it can only come from rename).
-static Yv *disp(Yv *name) {
+Yv *disp(Yv *name) {
     ylong i = ys_index_of(name, ys("$"));
     if (i < 0) {
         return name;
@@ -6231,12 +6231,56 @@ static Yv *typeof_lit(Yv *st, Yv *node, Yv *target) {
     return yr(2, "typ", target, "st", st);
 }
 
+/* An `irq N def` (target.h's KernelIrq) is an ordinary def with a meaning its
+   signature has to match: no parameters and a void result, because the
+   generated stub calls it from the interrupt entry with nothing to pass and
+   nowhere to put an answer. Checked here, where the CHECKED return type is in
+   hand, so `def rx() { ... }` with an omitted `-> void` whose body is void
+   passes. `st.fdepth` is the nesting depth: a handler nested in another def
+   would be emitted at its creation site, where the generated stub (which
+   calls a top-level label) could not reach it. */
+static Yv *check_irq_def(Yv *st, Yv *node, Yv *ret) {
+    (void)ret;
+    ylong line = kernel_irq_line(disp(yr_get(node, "name")));
+    if (line < 0) {
+        return st;
+    } else {
+        Yv *f = yr_get(node, "v");
+        if (yv_l(yr_get(st, "fdepth")) != 0) {
+            st = fail(st, ys("an irq handler must be declared at the top level"),
+                      yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
+        };
+        if (yv_len(yr_get(f, "params")) > 0) {
+            st = fail(st, ys("an irq handler takes no parameters (it is called from the interrupt entry)"),
+                      yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
+        };
+        /* The result: the annotation, or what the body inferred (typeof_def
+           records an omitted return type in the side table rather than on
+           the Func). `ret` here is the FUNCTION type, so it is not read. */
+        Yv *rt = yr_get(f, "ret");
+        if (yv_l(yr_get(rt, "k")) == K_tnone) {
+            rt = inferred_ret(yv_l(yr_get(f, "line")), yv_l(yr_get(f, "col")));
+        };
+        if (yv_l(yr_get(rt, "k")) != K_tvoid) {
+            st = fail(st, ys("an irq handler returns void"),
+                      yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
+        };
+        return st;
+    }
+}
+
 static Yv *typeof_decl(Yv *st, Yv *node) {
     if (ys_eq_lit(yr_get(node, "kind"), "def")) {
         // named function: full check (signature + body)
-        return typeof_def(st, yr_get(node, "name"), yr_get(node, "v"),
-                          yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")),
-                          yr_get(node, "nline"), yr_get(node, "ncol"), 0);
+        Yv *r = typeof_def(st, yr_get(node, "name"), yr_get(node, "v"),
+                           yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")),
+                           yr_get(node, "nline"), yr_get(node, "ncol"), 0);
+        // An `irq N def` is a def with a meaning the signature has to match
+        // (target.h's KernelIrq): no parameters, void. It is checked here,
+        // where the checked return type is in hand, rather than in the
+        // parser, so an omitted `-> void` whose body is void passes.
+        Yv *st2 = check_irq_def(yr_get(r, "st"), node, yr_get(r, "typ"));
+        return yr(2, "typ", yr_get(r, "typ"), "st", st2);
     } else if (ys_eq_lit(yr_get(node, "kind"), "native")) {
         // native def: the signature, and three rules of its own
         return typeof_def(st, yr_get(node, "name"), yr_get(node, "v"),

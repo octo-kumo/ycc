@@ -45,6 +45,11 @@ Yv *expr_type(ylong line, ylong col);
 void type_index_on(void);
 void type_index_off(void);
 Yv *inferred_ret(ylong line, ylong col); /* typeof_def's inferred return type */
+/* The written name behind a renamed one, `name$3` -> `name`. Not in types.y's
+   export list, but native.c reaches it: a path import flattens every name of
+   its importer, so native.y's `disp(d.name)` (the irq label recording) is this
+   same def, and the C twin's header has to carry it. */
+Yv *disp(Yv *name);
 Yv *str_sorted(Yv *xs);       /* [str] sorted */
 Yv *rec_names(Yv *fs);        /* a record's field names, sorted */
 Yv *type_names(Yv *t);        /* field names a record type / pattern tests */

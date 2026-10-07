@@ -41,6 +41,6 @@ blank (real newlines): 0
 a literal backslash-n:  10
 one char: 5
 no trailing newline: 25
-src/y: 19 files checked, 0 failed
+src/y: 20 files checked, 0 failed
 the corpus was really read: true (a file yielded over 10000 tokens)
 done

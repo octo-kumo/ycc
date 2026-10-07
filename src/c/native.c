@@ -30,6 +30,7 @@
 #include "lint.h"
 #include "asm.h"
 #include "target.h"
+#include "types.h"
 #include "labels.h"
 #include "yv.h"
 #include "tags.h"
@@ -783,14 +784,21 @@ Yv *resolve_unit(Yv *src, Yv *base_dir, ylong depth, int allow_exec,
         ;
     }
     Yv *std = yav(0);
-    if (want_prelude) {
-        std = ya_push(std, ys("prelude"));
-        ;
-    }
-    if (want_exec) {
-        std = ya_push(std, ys("exec"));
-        ;
-    }
+    /* A kernel gets neither: std/prelude.y is readline and the stdin sync
+     * (y_os_read/y_os_lseek on a Linux descriptor) and std/exec.y is fork,
+     * pipe and dup2 -- the two units whose whole job is the process model a
+     * freestanding payload does not have. `import` of either is refused below
+     * as well; this is the auto-link half, which no import reaches. */
+    if (!target_is_kernel()) {
+        if (want_prelude) {
+            std = ya_push(std, ys("prelude"));
+            ;
+        }
+        if (want_exec) {
+            std = ya_push(std, ys("exec"));
+            ;
+        }
+    };
     /* str is linked into EVERY program too, for the same reason rt is:
      * y_float_tostr (the runtime's float printer, arch_x64.y) calls std's
      * y_fmt_f, which writes a double's exact decimal value and rounds half to
@@ -1519,6 +1527,53 @@ Yv *std_resolve(Yv *name, Yv *base_dir) {
  * has added lines.
  * Type SrcLines = { lines, imports, seen, smods, ofile, oline, ogen }. */
 
+/* ── what a kernel cannot import ─────────────────────────────────────────
+ * The std units that reach the OS in a way a freestanding payload has no
+ * answer for, checked in native_resolve_seen the moment a bare `import` names
+ * one. A DENY list, not an allow list: a std unit that is plain computation
+ * (json, regex, math, struct, utf8) is available in a kernel the day it
+ * lands, and only one that calls a syscall has to be added here. The unit is
+ * not missing -- its file is right there and would splice and compile; what
+ * it would do is call a Linux syscall from a machine that has no Linux.
+ * Is `full` the std module `name` (as opposed to a file of the same name
+ * beside the program)? std_resolve's candidates end in exactly
+ * "std/<name>.y" -- "std/fs.y", "src/y/std/fs.y", "<self_dir>/std/fs.y" --
+ * so the suffix is the test. */
+static int kernel_is_std_path(Yv *full, Yv *name) {
+    Yv *want = ys_cat(ys_cat(ys("std/"), name), ys(".y"));
+    if (yv_len(full) >= yv_len(want) &&
+        ys_eq(ys_slice(full, yv_len(full) - yv_len(want), yv_len(full)), want)) {
+        return 1;
+    } else {
+        return 0;
+    }
+}
+
+static Yv *kernel_std_denied(void) {
+    return yavs(ys("fs"), ys("net"), ys("exec"), ys("prelude"), ys("crypto"),
+                ys("x509"), ys("tls"), ys("http"), ys("tui"), ys("args"),
+                ys("random"), ys("test"), NULL);
+}
+
+/* Why, for the diagnostic. One line each, because "not available in kernel
+   mode" without a reason reads like a compiler limitation rather than a fact
+   about the module. */
+static Yv *kernel_std_why(Yv *name) {
+    if (ys_eq_lit(name, "fs")) { return ys("it is openat/read/write/stat on a Linux descriptor"); }
+    else if (ys_eq_lit(name, "net")) { return ys("it is raw socket syscalls"); }
+    else if (ys_eq_lit(name, "exec")) { return ys("it is fork/execve/pipe/dup2"); }
+    else if (ys_eq_lit(name, "prelude")) { return ys("it is readline and the stdin sync"); }
+    else if (ys_eq_lit(name, "crypto")) { return ys("it takes its randomness from getrandom"); }
+    else if (ys_eq_lit(name, "random")) { return ys("it takes its randomness from getrandom"); }
+    else if (ys_eq_lit(name, "x509")) { return ys("it is built on crypto and tls"); }
+    else if (ys_eq_lit(name, "tls")) { return ys("it is a socket client"); }
+    else if (ys_eq_lit(name, "http")) { return ys("it is a socket client"); }
+    else if (ys_eq_lit(name, "tui")) { return ys("it is termios ioctls"); }
+    else if (ys_eq_lit(name, "args")) { return ys("it reads the process's argv from the OS"); }
+    else if (ys_eq_lit(name, "test")) { return ys("it is a test harness, which is a process"); }
+    else { return ys("it uses the OS"); }
+}
+
 /* The program text `src` of file `fid` (its index in the origin map's
  * files: 0 for the program itself, k for seen[k - 1]) with its imports
  * spliced in, as lines; ofile/oline map each one back (see the origin map
@@ -1621,6 +1676,31 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, ylong depth, Yv *seen,
                         ;
                     } else {
                         full = std_resolve(name, base_dir);
+                        /* The resolved module is the STD one (and not a
+                         * program's own kernel.y / fs.y next to it, which
+                         * shadows std and is its own business). Two rules live
+                         * here, one per direction:
+                         *   - kernel mode refuses the units that are a Linux
+                         *     syscall away from working. The file is right
+                         *     there and would splice and compile; what it
+                         *     would do is call the syscall.
+                         *   - a hosted compile refuses std/kernel, which is
+                         *     `ndef`s into assembly that only a kernel image
+                         *     has. */
+                        if (kernel_is_std_path(full, name)) {
+                            if (target_is_kernel()) {
+                                if (name_in(kernel_std_denied(), name)) {
+                                    puts_(ys_cat(ys_cat(ys_cat(ys_cat(ys("error: std/"), name),
+                                                              ys(" is not available in kernel mode: ")),
+                                                      kernel_std_why(name)),
+                                               ys("\n")));
+                                    exit_(1);
+                                };
+                            } else if (ys_eq_lit(name, "kernel")) {
+                                puts_(ys("error: std/kernel is only available in kernel mode (ycc --kernel)\n"));
+                                exit_(1);
+                            };
+                        };
                         ;
                     }
                     ;
@@ -2978,6 +3058,12 @@ Yv *prune_bodies(Yv *labels, Yv *refs, Yv *extra_roots) {
     if (root >= 0) {
         roots = ya_push(roots, ys("_start"));
         ;
+    }
+    /* A kernel image has no `_start` among the program's bodies: that name
+     * belongs to the 32-bit trampoline in the header, and the program's top
+     * level is `y_kernel_main`, which the trampoline calls. */
+    if ((namemap_get(namemap_build(labels), ys("y_kernel_main"))) >= 0) {
+        roots = ya_push(roots, ys("y_kernel_main"));
     }
     keep = shake_keep(labels, refs, falls, keep, roots);
     Yv *outrefs = yav(0);
@@ -12681,15 +12767,22 @@ Yv *gen_exit(Yv *st, Yv *node) {
    (emit_one_fn) rather than through an EmitSt. The status is 0: the Linux
    side zeroed %edi and the Windows side zeroes %rax before this. */
 static Yv *ir_terminate(Yv *body) {
-    if (target_is_windows()) {
+    if (target_is_kernel()) {
+        /* There is nothing to exit to: the kernel's top level falls into the
+         * halt loop kernel.s defines (`cli; hlt; jmp`), which is also where an
+         * explicit exit(N) lands, via y_os_exit. */
+        body = ir_push(body, F_CALL_L, yv_l(lbl_new(ys("y_kernel_halt"))), 0, 0, 0, 0, 0, 0);
+    } else if (target_is_windows()) {
         body = ir_push(body, F_MOV_I_R, 0 - 1, R_R10, 64, 0, 0, 0, 0);
         body = ir_push(body, F_XOR_R_R, R_RDX, 32, R_RDX, 32, 0, 0, 0);
         body = ir_push(body, F_MOV_I_R, 44, 0, 64, 0, 0, 0, 0);
+        body = ir_push(body, F_SYSCALL, 0, 0, 0, 0, 0, 0, 0);
     } else {
         body = ir_push(body, F_MOV_I_R, 231, 0, 64, 0, 0, 0, 0);
         body = ir_push(body, F_XOR_R_R, R_RDI, 32, R_RDI, 32, 0, 0, 0);
-    }
-    return ir_push(body, F_SYSCALL, 0, 0, 0, 0, 0, 0, 0);
+        body = ir_push(body, F_SYSCALL, 0, 0, 0, 0, 0, 0, 0);
+    };
+    return body;
 }
 
 /* ── process I/O (argv) ──────────────────────────────────────────────
@@ -13703,6 +13796,13 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, ylong wlevel,
                     label = fn_label_of(yv_l(yr_get(rl, "uid")),
                                         yr_get(d, "name"));
                 }
+                /* An `irq N def`'s label is what the generated interrupt stub
+                 * calls (arch_x64.c's kernel_irq_text), so it is recorded the
+                 * moment it exists. `disp` strips rename's `$N`. */
+                if (target_is_kernel()) {
+                    ylong il = kernel_irq_line(disp(yr_get(d, "name")));
+                    if (il >= 0) { kernel_irq_stub(il, label); };
+                };
                 Yv *lid = lbl_new(label);
                 hsyms = ya_push(
                     hsyms,
@@ -13907,8 +14007,16 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, ylong wlevel,
              * of its linked units uses it. */
             int want_argv =
                 uses_argv(yr_get(ast3, "stmts")) || yv_b(yr_get(xt, "argv"));
+            /* A kernel has no argv and its `_start` name belongs to the 32-bit
+             * trampoline in the image header, so the program's top level is a
+             * plain function the trampoline calls. */
+            Yv *mlab = ys("_start");
+            if (target_is_kernel()) {
+                want_argv = 0;
+                mlab = ys("y_kernel_main");
+            };
             st = emit_one_fn(
-                st, lbl_new(ys("_start")), yv_l(yr_get(rm, "uid")),
+                st, lbl_new(mlab), yv_l(yr_get(rm, "uid")),
                 yr(6, "params", yav(0), "ptypes", yav(0), "ret",
                    yr(1, "k", yv_long(K_tvoid)), "body",
                    yr(4, "k", yv_long(K_block), "stmts", main_stmts, "line",
@@ -14544,6 +14652,17 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
      * set for shaking the arch prelude, and the kept prelude's references
      * shake the rodata constants. */
     Yv *extra = yav(0);
+    /* An `irq N def` handler has no caller in the program: the generated stub
+     * (a text part the shaker never sees) is what calls it, so it is a root
+     * here or its body is shaken away and the stub names nothing. */
+    if (target_is_kernel()) {
+        /* NOTE: index loop, not foreach (PORTING.md rule 9). */
+        ylong ei = 0;
+        while (ei < yv_len(res_irq_stubs)) {
+            extra = ya_push(extra, yr_get(ya_get(res_irq_stubs, ei), "label"));
+            ei = ei + 1;
+        }
+    };
     Yv *shaken = prune_bodies(labels, refs, extra);
     Yv *keep = yr_get(shaken, "keep");
     Yv *body_refs = yr_get(shaken, "refs");
@@ -14709,6 +14828,14 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
     }
     parts = ya_push(parts, part_text(ys_cat(ys_cat(head, arch_text()),
                                            yr_get(ps, "text"))));
+    /* The generated interrupt plumbing (kernel mode): one stub per declared
+       `irq N def`, and the routine that fills the IDT and loads it. It is a
+       text part and so is never shaken, which is why it carries its own copy
+       of the entry-packing helper rather than calling a prelude block the
+       shaker may drop. */
+    if (target_is_kernel()) {
+        parts = ya_push(parts, part_text(kernel_irq_text()));
+    };
     /* The bodies, kept, as parts: their items, with the `.loc` markers moved
        to the unit's place in the program's file table. Every body is items
        now -- a unit read from a pack came with them (pack_body). */
@@ -14733,9 +14860,14 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
     parts = ya_push(parts, part_text(ys_cat(arch_rodata(), consts_text)));
     parts = ya_push(parts, part_text(ys_join(rodpieces, ys(""))));
     Yv *heap_text = shake_refs(arch_heap_cells(), const_refs);
-    if (yv_len(gls) > 0 || yv_len(heap_text) > 0 || target_is_windows()) {
+    if (yv_len(gls) > 0 || yv_len(heap_text) > 0 || target_is_windows() || target_is_kernel()) {
         Yv *gpieces = yav(0);
         gpieces = ya_push(gpieces, arch_bss());
+        /* The kernel's own cells -- the IDT, the stack, the heap arena -- come
+           first, then the allocator's and the globals'. */
+        if (target_is_kernel()) {
+            gpieces = ya_push(gpieces, arch_kernel_bss());
+        };
         /* The Windows import cells come FIRST in .bss, so their offsets are
            0, 8, 16, ... in the import table's order and the PE writer computes
            FirstThunk from the spec rather than asking the assembler's label

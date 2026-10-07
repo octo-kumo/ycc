@@ -91,6 +91,11 @@ ylong parse_type(Yv *toks, ylong p);
 /* ── function literal ───────────────────────────────────────────────────── */
 Yv *parse_func(Yv *toks, ylong p, int isnat);
 
+/* ── `irq N def` (kernel mode only) ─────────────────────────────────────── */
+Yv *parse_irq_def(Yv *toks, ylong p);
+Yv *parse_irq_finish(Yv *f, ylong v, ylong ln, ylong cl);
+Yv *parse_irq_record(Yv *f, ylong v, ylong ln, ylong cl);
+
 /* ── block { stmt; stmt; ... } ──────────────────────────────────────────── */
 Yv *parse_block(Yv *toks, ylong p);
 Yv *parse_block_go(Yv *toks, ylong p);

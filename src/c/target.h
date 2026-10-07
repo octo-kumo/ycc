@@ -35,6 +35,23 @@
 extern Yv *res_target;
 void target_set(Yv *name);
 
+/* The kernel's IRQ declarations (target.y's KernelIrq/KernelIrqStub): the
+   parser records (line, name), the emitter the handler's (line, label).
+   Both start empty (a NULL array reads as length 0 and `+=` allocates). */
+extern Yv *res_irqs;
+extern Yv *res_irq_stubs;
+
+/* The 8259 line a def is declared for, or -1: the one lookup every stage of
+   the IRQ path goes through. */
+ylong kernel_irq_line(Yv *name);
+void kernel_irq_stub(ylong line, Yv *label);
+
+/* True for `ycc --kernel`: a freestanding x86-64 kernel image. It is a
+   target, not a mode on top of linux: the emitter, the arch prelude, the
+   object writer and the std set all change, and every one of those changes
+   sits behind this predicate so a normal compile pays for none of it. */
+int target_is_kernel(void);
+
 /* True when the target is Windows. Every target test in the tree goes
    through this one predicate, so a third target is a change here first. */
 int target_is_windows(void);

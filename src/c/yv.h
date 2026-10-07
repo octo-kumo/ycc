@@ -146,6 +146,7 @@ Yv *ys_chr(ylong v);
 Yv *ys_tostring(const Yv *v);         /* the format the native tostring prints */
 Yv *ys_long(ylong v);                  /* tostring of a long */
 ylong ys_tolong(const Yv *s);          /* string -> long (0 on garbage) */
+Yv *ys_tolong_opt(const Yv *s);        /* `tolong(s)`: some(n) or none */
 
 /* ── arrays (reference values) ───────────────────────────────────────── */
 /* [v0, v1, ...] from n values (no sentinel). n is the count, and the values

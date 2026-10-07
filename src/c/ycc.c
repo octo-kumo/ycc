@@ -80,6 +80,12 @@ Yv *parse_cli_args(Yv *argv) {
         } else if (ys_eq_lit(a, "-S")) {
             asm_only = 1;
             ;
+        } else if (ys_eq_lit(a, "--kernel")) {
+            /* A target, not a flag on the linux target: everything that reads
+             * res_target sees it (target.c), so the emitter, the arch
+             * prelude, the writer and the std set all follow from here. */
+            res_target = ys("kernel");
+            ;
         } else if (ys_eq_lit(a, "-E")) {
             /* dump the source the lexer would see, with origin markers, and
              * stop: no tokens, no check, no output file. */
@@ -145,6 +151,10 @@ Yv *parse_cli_args(Yv *argv) {
             puts_(ys("  -S           emit assembly only (stdout, or the -o file)\n"));
 puts_(ys("  --target=NAME  emit for NAME: linux (the default, an ELF)\n"));
 puts_(ys("               or windows (a PE32+ executable, x64)\n"));
+puts_(ys("  --kernel     emit a freestanding x86-64 kernel image (an ELF32\n"));
+puts_(ys("               Multiboot-1 payload, load address 0x100000) to run\n"));
+puts_(ys("               under `qemu-system-x86_64 -kernel`; the user-space\n"));
+puts_(ys("               std units are refused and std/kernel.y is available\n"));
 puts_(ys("  -E           dump the source the lexer sees, each line tagged with\n"));
 puts_(ys("               the file and line it came from, and stop\n"));
 puts_(ys("  run FILE [-- ARG...]  compile FILE and run it in a forked child:\n"));
@@ -214,8 +224,10 @@ static ylong parse_target(Yv *name) {
         target_set(ys("linux"));
     } else if (ys_eq_lit(name, "windows")) {
         target_set(ys("windows"));
+    } else if (ys_eq_lit(name, "kernel")) {
+        target_set(ys("kernel"));
     } else {
-        puts_(ys_cat(ys_cat(ys("ycc: unknown target '"), name), ys("' (linux, windows)\n")));
+        puts_(ys_cat(ys_cat(ys("ycc: unknown target '"), name), ys("' (linux, windows, kernel)\n")));
         exit_(1);
     }
     return 0;
@@ -1139,6 +1151,20 @@ ylong y_main(Yv *cmdline) {
         return 0;
     }
     Yv *args = parse_cli_args(cmdline);
+    if (target_is_kernel() && yv_b(yr_get(args, "debug"))) {
+        /* -g is ELF64/DWARF64 and the kernel image is an ELF32 Multiboot
+         * payload: a line table there is a feature nobody has needed yet,
+         * and half of one would be worse than none. */
+        puts_(ys("ycc: -g is not supported with --kernel\n"));
+        exit_(1);
+    };
+    if (target_is_kernel() && yv_b(yr_get(args, "run"))) {
+        /* `ycc run` forks and execs the image it just wrote; an ELF32
+         * Multiboot payload is entered by a boot loader in 32-bit protected
+         * mode, which execve cannot do. qemu -kernel is the way to run one. */
+        puts_(ys("ycc: --kernel cannot run its image (boot it with 'qemu-system-x86_64 -kernel')\n"));
+        exit_(1);
+    };
     /* NOTE: vestigial alias (see print_phase_rows) — `args.out` works. */
     Yv *pargs = args;
     Yv *out = yr_get(pargs, "out");

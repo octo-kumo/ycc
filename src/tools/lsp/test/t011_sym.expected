@@ -32,6 +32,6 @@ empty: 0
 no defs: 1
 only a def name, no body: 0
 unclosed def: 1
-src/y: 19 files, 0 with no symbols
+src/y: 20 files, 0 with no symbols
 the corpus was really read: true (a file yielded over 200 symbols)
 done

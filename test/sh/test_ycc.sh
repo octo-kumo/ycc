@@ -216,7 +216,7 @@ expect_cli_error "-W that would wrap the scan" \
 # unknown TARGET called -o, not a missing one.
 expect_cli_error "--target without a name" "ycc: --target needs a name (linux, windows)" \
     -o /tmp/ycc_target.out "$ROOT/test/y/native/t01_arith.y" --target
-expect_cli_error "--target with an unknown name" "ycc: unknown target 'plan9' (linux, windows)" \
+expect_cli_error "--target with an unknown name" "ycc: unknown target 'plan9' (linux, windows, kernel)" \
     --target=plan9 -o /tmp/ycc_target.out "$ROOT/test/y/native/t01_arith.y"
 expect_cli_error "no input file" "error: no input file (see ycc -h)"
 expect_cli_error "multiple input files" "error: ycc compiles one program; use imports to combine files" \

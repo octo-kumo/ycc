@@ -12,6 +12,7 @@
 #include "lexer.h"
 #include "parser.h"
 #include "tags.h"
+#include "target.h"
 
 /* imported: lexer.y, for its alias Tok only (a record is a Yv * here);
  * otherwise only yv.h builtins: len -> yv_len, push -> ya_push, slicing
@@ -1922,6 +1923,81 @@ Yv *num_lit_type(Yv *s) {
     }
 }
 
+/* `irq N def name() -> void { ... }` -- a kernel IRQ handler (target.h's
+   KernelIrq). Only reachable when target_is_kernel() (parse_stmt's gate), so
+   `irq` stays an ordinary identifier in every other compile.
+
+   N is the 8259 LINE, 0..15, not the IDT vector: the line is what the
+   hardware numbers, what std/kernel.y's IRQ_* constants name and what a
+   datasheet calls IRQ4, and the +32 remap to vectors is the compiler's
+   business. The body is parsed as an ordinary def and the declaration is
+   recorded beside it; the checker validates the signature (no parameters,
+   void) and the emitter generates the stub (arch_x64.c kernel_irq_text). */
+Yv *parse_irq_def(Yv *toks, ylong p) {
+    ylong ln = tline(toks, p);
+    ylong cl = tcol(toks, p);
+    Yv *num = ys_tolong_opt(tv(toks, p + 1));
+    ylong v = -1;
+    if (!yv_is_none(num)) { v = yv_l(num); };
+    ylong pos = p + 2;
+    if (v < 0 || v > 15) {
+        return res(yr(4, "k", yv_long(K_err), "msg",
+                      ys("an irq line is 0..15 (the 8259's lines, remapped to IDT vectors 32..47)"),
+                      "line", yv_long(ln), "col", yv_long(cl)), pos);
+    } else if (!is_kw(toks, pos, ys("def"))) {
+        return res(yr(4, "k", yv_long(K_err), "msg",
+                      ys("expected 'def' after 'irq N': an irq handler is 'irq N def name() -> void { ... }'"),
+                      "line", yv_long(ln), "col", yv_long(cl)), pos);
+    } else {
+        return parse_irq_finish(parse_func(toks, pos, 0), v, ln, cl);
+    }
+}
+
+/* The def parsed; record it, or say why not. A declaration already carrying
+   the name, or a line already carrying a handler, is an error here rather
+   than a duplicate stub label from the assembler. */
+Yv *parse_irq_finish(Yv *f, ylong v, ylong ln, ylong cl) {
+    if (yv_l(yr_get(yr_get(f, "node"), "k")) != K_decl) {
+        return res(yr_get(f, "node"), yv_l(yr_get(f, "pos")));
+    } else {
+        return parse_irq_record(f, v, ln, cl);
+    }
+}
+
+Yv *parse_irq_record(Yv *f, ylong v, ylong ln, ylong cl) {
+    Yv *node = yr_get(f, "node");
+    Yv *name = yr_get(node, "name");
+    if (!ys_eq_lit(yr_get(node, "kind"), "def") || yv_len(name) == 0) {
+        return res(node, yv_l(yr_get(f, "pos")));
+    } else if (kernel_irq_line(name) >= 0) {
+        return res(yr(4, "k", yv_long(K_err), "msg",
+                      ys_cat(ys_cat(ys_cat(ys_cat(ys("'"), name),
+                                           ys("' is declared for irq line ")),
+                                   ys_long(kernel_irq_line(name))),
+                             ys(" twice")),
+                      "line", yv_long(ln), "col", yv_long(cl)), yv_l(yr_get(f, "pos")));
+    } else {
+        // An index loop, not foreach: a foreach closure comparing its element
+        // to a captured value is broken in this compiler (see the bug note in
+        // target.h) and silently answers false.
+        int dup = 0;
+        ylong i = 0;
+        while (i < yv_len(res_irqs)) {
+            if (yv_l(yr_get(ya_get(res_irqs, i), "line")) == v) { dup = 1; };
+            i++;
+        };
+        if (dup) {
+            return res(yr(4, "k", yv_long(K_err), "msg",
+                          ys_cat(ys_cat(ys("irq line "), ys_long(v)),
+                                 ys(" already has a handler")),
+                          "line", yv_long(ln), "col", yv_long(cl)), yv_l(yr_get(f, "pos")));
+        } else {
+            res_irqs = ya_push(res_irqs, yr(2, "line", yv_long(v), "name", name));
+            return res(node, yv_l(yr_get(f, "pos")));
+        }
+    }
+}
+
 Yv *parse_func(Yv *toks, ylong p, int isnat) {
     // Named:    def name(params) -> ret { body }      (top-level declaration)
     // Anonymous: def(params) -> ret { body }           (function expression)
@@ -2328,6 +2404,9 @@ Yv *parse_stmt(Yv *toks, ylong p) {
         // An empty statement; the caller steps over the `;`.
         return res(yr(3, "k", yv_long(K_void), "line", yv_long(tline(toks, p)),
                               "col", yv_long(tcol(toks, p))), p);
+    } else if (target_is_kernel() && ys_eq_lit(tt(toks, p), "id") &&
+               ys_eq_lit(tv(toks, p), "irq") && ys_eq_lit(tt(toks, p + 1), "num")) {
+        return parse_irq_def(toks, p);
     } else if (is_kw(toks, p, ys("let"))) {
         return parse_decl(toks, p);
     } else if (is_kw(toks, p, ys("const"))) {

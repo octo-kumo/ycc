@@ -15,6 +15,16 @@
 
 // For its alias Tok.
 import tags from "./tags.y";
+// For its IRQ registry and target_is_kernel: `irq N def` is a kernel-mode
+// declaration, and the parser is what records it (parse_irq_def).  ycc.y
+// imports target.y first, so inside the compiler this is a no-op -- but the
+// parser is also a library (test/y/ycc/test_parser*.y import it alone), and
+// a module has to name what it uses.
+// NOTE: the alias is `ktgt`, not `target`: strip_ns rewrites every
+// `name.field` in the unit as a module reference, and a local variable
+// called `target` (types.y has several, `let target: TOf = ...`) would be
+// read as a field of this module.
+import ktgt from "./target.y";
 import lexer from "./lexer.y";
 
 // ── loop labels (TODO.md item 5) ─────────────────────────────────────────
