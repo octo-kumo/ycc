@@ -31,18 +31,18 @@ def r8(n: long) -> Reg { { k: K.reg, n: n, size: 8 } };
 
 // Register number by AT&T name. Supports the registers our backend uses.
 def reg_num(name: str) -> long {
-    if (name == "%rax" || name == "%eax" || name == "%al") { 0 }
-    else if (name == "%rcx" || name == "%ecx" || name == "%cl") { 1 }
-    else if (name == "%rdx" || name == "%edx" || name == "%dl") { 2 }
-    else if (name == "%rbx" || name == "%ebx" || name == "%bl") { 3 }
+    if (name in ["%rax", "%eax", "%al"]) { 0 }
+    else if (name in ["%rcx", "%ecx", "%cl"]) { 1 }
+    else if (name in ["%rdx", "%edx", "%dl"]) { 2 }
+    else if (name in ["%rbx", "%ebx", "%bl"]) { 3 }
     else if (name == "%rsp" || name == "%esp") { 4 }
     else if (name == "%rbp" || name == "%ebp") { 5 }
-    else if (name == "%rsi" || name == "%esi" || name == "%sil") { 6 }
-    else if (name == "%rdi" || name == "%edi" || name == "%dil") { 7 }
-    else if (name == "%r8" || name == "%r8d" || name == "%r8b") { 8 }
-    else if (name == "%r9" || name == "%r9d" || name == "%r9b") { 9 }
-    else if (name == "%r10" || name == "%r10d" || name == "%r10b") { 10 }
-    else if (name == "%r11" || name == "%r11d" || name == "%r11b") { 11 }
+    else if (name in ["%rsi", "%esi", "%sil"]) { 6 }
+    else if (name in ["%rdi", "%edi", "%dil"]) { 7 }
+    else if (name in ["%r8", "%r8d", "%r8b"]) { 8 }
+    else if (name in ["%r9", "%r9d", "%r9b"]) { 9 }
+    else if (name in ["%r10", "%r10d", "%r10b"]) { 10 }
+    else if (name in ["%r11", "%r11d", "%r11b"]) { 11 }
     else if (name == "%r12" || name == "%r12d") { 12 }
     else if (name == "%r13" || name == "%r13d") { 13 }
     else if (name == "%r14" || name == "%r14d") { 14 }
@@ -969,7 +969,7 @@ def enc_unary_mem(buf: [byte], at: long, op: str, o: Operand) -> Encoded {
     let opc = 255;
     if (op == "dec") { ext = 1; }
     else if (op == "not") { ext = 2; opc = 247; };
-    if (op == "inc" || op == "dec" || op == "not") {
+    if (op in ["inc", "dec", "not"]) {
         let t = mem_tail(o, ext);
         let n = put_rex(buf, at, rex_rm(true, ext, o));
         let m = put2(buf, n, opc, t.modrm);
@@ -1129,7 +1129,7 @@ def enc_insn(buf: [byte], at: long, mn: str, ops: [Operand], lng: bool) -> Encod
     } else if (mn == "xchg") {
         let e = need2(mn, ops);
         if (e != "") { enc_err(at, e) } else { enc_xchg(buf, at, ops[0], ops[1]) }
-    } else if (mn == "add" || mn == "sub" || mn == "cmp" || mn == "xor" || mn == "and" || mn == "or" || mn == "test") {
+    } else if (mn in ["add", "sub", "cmp", "xor", "and", "or", "test"]) {
         let e = need2(mn, ops);
         if (e != "") {
             enc_err(at, e)
@@ -1137,7 +1137,7 @@ def enc_insn(buf: [byte], at: long, mn: str, ops: [Operand], lng: bool) -> Encod
             let dst = ops[1];
             let src = ops[0];
             if (src.k == K.imm) {
-                if (mn == "add" || mn == "sub" || mn == "cmp" || mn == "xor" || mn == "and" || mn == "or") {
+                if (mn in ["add", "sub", "cmp", "xor", "and", "or"]) {
                     enc_alu_imm(buf, at, mn, dst, src.v)
                 } else {
                     // test is the only mnemonic left in this arm, and its
@@ -1152,10 +1152,10 @@ def enc_insn(buf: [byte], at: long, mn: str, ops: [Operand], lng: bool) -> Encod
                 enc_arith(buf, at, mn, dst, src)
             }
         }
-    } else if (mn == "shl" || mn == "shr" || mn == "sar") {
+    } else if (mn in ["shl", "shr", "sar"]) {
         let e = need2(mn, ops);
         if (e != "") { enc_err(at, e) } else { enc_shift(buf, at, mn, ops[1], ops[0]) }
-    } else if (mn == "addsd" || mn == "subsd" || mn == "mulsd" || mn == "divsd") {
+    } else if (mn in ["addsd", "subsd", "mulsd", "divsd"]) {
         let e = need2(mn, ops);
         if (e != "") { enc_err(at, e) } else { enc_sse_arith(buf, at, mn, ops[1], ops[0]) }
     } else if (mn == "sqrtsd") {
@@ -1176,7 +1176,7 @@ def enc_insn(buf: [byte], at: long, mn: str, ops: [Operand], lng: bool) -> Encod
     } else if (mn == "imul") {
         let e = need2(mn, ops);
         if (e != "") { enc_err(at, e) } else { enc_imul(buf, at, ops[1], ops[0]) }
-    } else if (mn == "neg" || mn == "not" || mn == "idiv" || mn == "div" || mn == "dec" || mn == "inc") {
+    } else if (mn in ["neg", "not", "idiv", "div", "dec", "inc"]) {
         let e = need1(mn, ops);
         if (e != "") { enc_err(at, e) } else { enc_unary(buf, at, mn, ops[0]) }
     } else if (mn == "jmp") {
@@ -1286,7 +1286,7 @@ def enc_insn(buf: [byte], at: long, mn: str, ops: [Operand], lng: bool) -> Encod
     } else if (mn == "ja" || mn == "jnbe") {
         let e = need1(mn, ops);
         if (e != "") { enc_err(at, e) } else { enc_jcc(buf, at, 135, ops[0], lng) }
-    } else if (mn == "jae" || mn == "jnb" || mn == "jnc") {
+    } else if (mn in ["jae", "jnb", "jnc"]) {
         let e = need1(mn, ops);
         if (e != "") { enc_err(at, e) } else { enc_jcc(buf, at, 131, ops[0], lng) }
     } else if (mn == "jbe" || mn == "jna") {

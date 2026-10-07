@@ -172,7 +172,7 @@ def pk_is_ident(s: str) -> bool {
 // The lexer's keywords: a package so named could not be used, as `let.f()`
 // does not parse.
 def pk_is_kw(s: str) -> bool {
-    s == "let" || s == "const" || s == "def" || s == "if" || s == "else" || s == "while"
+    s in ["let", "const", "def", "if", "else", "while"]
         || s == "for" || s == "foreach" || s == "in" || s == "return" || s == "true" || s == "false"
 };
 
@@ -451,7 +451,7 @@ def pk_man_package(m: PkMan, e: PkEnt, at: str) -> void {
     } else if (key == "src") {
         if (e.k != K.a) { pk_die(at + "'src' must be an array of strings"); }
         m.roots = e.items;
-    } else if (key == "version" || key == "description" || key == "license" || key == "authors") {
+    } else if (key in ["version", "description", "license", "authors"]) {
     } else {
         pk_die(at + "unknown key '" + key + "' in [package]");
     };

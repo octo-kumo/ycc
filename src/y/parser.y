@@ -117,9 +117,9 @@ def p_bin_hint(op: str, other: Node) -> Type {
                 else { out = { k: K.tlong }; };
             };
         }
-        else if (op == "<" || op == ">" || op == "<=" || op == ">=") { out = ht; }
+        else if (op in ["<", ">", "<=", ">="]) { out = ht; }
         else if (op == "==" || op == "!=") { out = ht; }
-        else if (op == "&" || op == "|" || op == "^" || op == "<<" || op == ">>" || op == ">>>") { out = { k: K.tlong }; }
+        else if (op in ["&", "|", "^", "<<", ">>", ">>>"]) { out = { k: K.tlong }; }
         else if ((op == "&&" || op == "||") && ht.k == K.tbool) { out = { k: K.tbool }; };
     };
     out
@@ -784,7 +784,7 @@ def parse_primary(toks: [Tok], p: long) -> Parsed {
                 args += block_func(b.node, ln, cl);
                 res({ k: K.call, callee: { k: K.id, v: v, line: ln, col: cl }, args: args, line: ln, col: cl }, b.pos)
             }
-        } else if ((v == "join" || v == "post" || v == "wait") && tt(toks, p + 1) == "id") {
+        } else if ((v in ["join", "post", "wait"]) && tt(toks, p + 1) == "id") {
             // `join t`, `post s`, `wait s`: the builtin on the operand
             let e = parse_postfix(toks, p + 1);
             let args: [Node] = [];
@@ -1340,7 +1340,7 @@ def parse_map(toks: [Tok], p: long) -> Parsed {
                 if (key == "..") {
                     key = "...";
                     pos = pos + 2;
-                } else if (kt == "id" || kt == "str" || kt == "kw" || kt == "num") {
+                } else if (kt in ["id", "str", "kw", "num"]) {
                     if (is_punct(toks, pos + 1, ":")) {
                         pos = pos + 2;
                     } else if (kt == "id" && (is_punct(toks, pos + 1, ",") || is_punct(toks, pos + 1, "}"))) {

@@ -1719,7 +1719,7 @@ def patch_item_loop(code: [byte], it: AsmItem, lmap: [AsmLabel], code_len: long,
 // NAME at assembly time rather than silently written as a difference of two
 // labels and truncated to 32 bits. pe.y's no-.reloc claim rests on this.
 def pe_no_abs(kind: str) -> bool {
-    if (kind == "rel32" || kind == "rel8" || kind == "rip32" || kind == "imm32diff") { true }
+    if (kind in ["rel32", "rel8", "rip32", "imm32diff"]) { true }
     else { false }
 };
 

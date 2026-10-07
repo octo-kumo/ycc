@@ -1489,7 +1489,7 @@ def typeof_arith_long(st: TcSt, op: str, lt: Type, rt: Type, line: long, col: lo
 
 // The bitwise binary operators. (native.y asks too: their result is a long.)
 def is_bits_op(op: str) -> bool {
-    op == "&" || op == "|" || op == "^" || op == "<<" || op == ">>" || op == ">>>"
+    op in ["&", "|", "^", "<<", ">>", ">>>"]
 };
 
 // `&` `|` `^` `<<` `>>` `>>>` take integers only: a byte operand widens and
@@ -3669,7 +3669,7 @@ def typeof_arr_method(st: TcSt, node: Call, key: str, at: Type) -> TcRes {
             st = expect_type(st, r.typ, elem, what + " value", node.line, node.col);
         };
         tc_res(type_node({ k: K.tlong }), st)
-    } else if (key == "foreach" || key == "map" || key == "filter" || key == "all" || key == "some" || key == "find") {
+    } else if (key in ["foreach", "map", "filter", "all", "some", "find"]) {
         if (na != 1) {
             st = fail(st, what + " takes 1 arg, got " + tostring(na), node.line, node.col);
             tc_res(t_unk(), st)

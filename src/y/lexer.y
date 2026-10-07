@@ -545,7 +545,7 @@ def multicharop(src: str, i: long, c: str) -> str {
         let four = src[i:i + 4];
         let three = src[i:i + 3];
         if (four == ">>>=") { four }
-        else if (three == ">>>" || three == ">>=" || three == "<<=") { three }
+        else if (three in [">>>", ">>=", "<<="]) { three }
         else { twocharop(src, i) }
     } else {
         twocharop(src, i)

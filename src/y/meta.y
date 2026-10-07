@@ -1234,7 +1234,7 @@ def mg_thread(w: str) -> bool {
 // the generator namespaces its own names and cannot collide -- but the
 // program's OWN top level is flat, so a def there is the collision.
 def mg_reserved(w: str) -> bool {
-    w == "ycc_meta_expr" || w == "ycc_meta_stmt" || w == "ycc_meta_emit"
+    w in ["ycc_meta_expr", "ycc_meta_stmt", "ycc_meta_emit"]
 };
 
 // The next byte at or after i the scanner must stop at, or n. Only meaningful

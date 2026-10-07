@@ -1939,7 +1939,7 @@ def lines_fall(lines: [str], lo: long, hi: long) -> bool {
         if (s < len(lb)) {
             go = false;
             let w = tok_at_b(l, lb, s, len(lb));
-            if (w == "ret" || w == "jmp" || w == "syscall") { falls = false; };
+            if (w in ["ret", "jmp", "syscall"]) { falls = false; };
         };
         i = i - 1;
     };
@@ -2788,7 +2788,7 @@ def infer_go(st: EmitSt, node: Node) -> Type {
     } else if (k == K.bin) {
         let bin: Bin = node;
         let op = bin.op;
-        if (op == "+" || op == "-" || op == "*" || op == "/" || op == "%" || op == "::") {
+        if (op in ["+", "-", "*", "/", "%", "::"]) {
             let bl = infer(st, bin.l);
             let br = infer(st, bin.r);
             if (op == "+" && (bl.k == K.tarr || bl.k == K.tarrfix)) {
@@ -3127,7 +3127,7 @@ def infer_call(st: EmitSt, node: Call) -> Type {
             types.t_mutex()
         } else if (name == "sem") {
             types.t_sem()
-        } else if (name == "trim" || name == "chr" || name == "join" || name == "tostring" || name == "typeof" || name == "#fmt") {
+        } else if (name in ["trim", "chr", "join", "tostring", "typeof", "#fmt"]) {
             normtype({ k: K.tstr })
         } else if (name == "bytes") {
             normtype({ k: K.tarr, of: normtype({ k: K.tbyte }) })
@@ -3148,9 +3148,9 @@ def infer_call(st: EmitSt, node: Call) -> Type {
             normtype({ k: K.topt, of: normtype({ k: K.tlong }) })
         } else if (name == "tofloat") {
             normtype({ k: K.topt, of: normtype({ k: K.tfloat }) })
-        } else if (name == "ord" || name == "byte_at" || name == "mod" || name == "index_of" || name == "last_index_of") {
+        } else if (name in ["ord", "byte_at", "mod", "index_of", "last_index_of"]) {
             normtype({ k: K.tlong })
-        } else if (name == "clock_us" || name == "time_us" || name == "heap_used") {
+        } else if (name in ["clock_us", "time_us", "heap_used"]) {
             type_node({ k: K.tlong })
         } else if (name == "keys") {
             let kt = infer(st, node.args[0]);
@@ -3164,7 +3164,7 @@ def infer_call(st: EmitSt, node: Call) -> Type {
             normtype({ k: K.tarr, of: normtype({ k: K.tstr }) })
         } else if (name == "range") {
             normtype({ k: K.tarr, of: normtype({ k: K.tlong }) })
-        } else if (name == "push" || name == "prepend" || name == "push$all") {
+        } else if (name in ["push", "prepend", "push$all"]) {
             // all yield the array they take (the header never moves, and
             // the type is the array's either way)
             let gargs: [Node] = node.args;
@@ -5227,7 +5227,7 @@ def gen_bin_rest(st: EmitSt, node: Bin) -> EmitSt {
         gen_cat(st, node, lt, rt)
     } else if (op == "::") {
         gen_cons(st, node)
-    } else if (op == "<<" || op == ">>" || op == ">>>") {
+    } else if (op in ["<<", ">>", ">>>"]) {
         gen_shift(st, node, op)
     } else if (lt.k == K.tbigint || rt.k == K.tbigint) {
         // + - * / % and every comparison go through the runtime bigint
@@ -5255,7 +5255,7 @@ def gen_bin_rest(st: EmitSt, node: Bin) -> EmitSt {
         } else {
             st
         }
-    } else if ((op == "<" || op == ">" || op == "<=" || op == ">=") && lt.k == K.tstr) {
+    } else if ((op in ["<", ">", "<=", ">="]) && lt.k == K.tstr) {
         // Lexicographic ordering: y_str_cmp returns the SIGN, so the normal
         // signed setcc forms work on its result against 0.
         gen_str_cmp(st, node, op)
@@ -6320,7 +6320,7 @@ def gen_arr_iter_method(st: EmitSt, node: Call, key: str, at: Type) -> EmitSt {
         st = emit_label(st, done.label);
         st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, roff, -1, insn.R_RAX, 64);
         st_temp(st, save)
-    } else if (key == "foreach" || key == "all" || key == "some" || key == "find") {
+    } else if (key in ["foreach", "all", "some", "find"]) {
         let fnode = args[0];
         let nargs = arr_closure_nargs(st, fnode);
         let save = st.temp;

@@ -2542,6 +2542,15 @@ def fx_commas(a: [str]) -> str {
     out
 };
 
+// Are all of these 1-char string literals?
+def fx_all_short(lits: [str]) -> bool {
+    for k in 0..len(lits) {
+        let t = lits[k];
+        if (len(t) != 3 || t[0] != 34 || t[2] != 34) { return false; };
+    };
+    true
+};
+
 // The literal of `name == <lit>` (either order), or "".
 def fx_eq_lit(cond: str, name: str) -> str {
     let i = fx_find(cond, name, 0);
@@ -2658,16 +2667,15 @@ def fx_chain(rule: str, name: str, kind: str, ln: long, col: long, lines: [str])
     let rep = "";
     if (rule == "1.7") {
         rep = name + " >= " + lits[0] + " && " + name + " <= " + lits[len(lits) - 1];
-    } else if (kind == "set") {
-        rep = "[" + fx_commas(lits) + "].index(" + name + ") >= 0";
-    } else {
+    } else if (kind == "str" && fx_all_short(lits)) {
+        // `x in "abc"` (index_of) beats building a one-char-string array
         let chars = "";
-        for k in 0..len(lits) {
-            let t = lits[k];
-            if (len(t) != 3 || t[0] != 34 || t[2] != 34) { return lines; };
-            chars += t[1:2];
-        };
-        rep = "index_of(\"" + chars + "\", " + name + ") >= 0";
+        for k in 0..len(lits) { chars += lits[k][1:2]; };
+        rep = name + " in \"" + chars + "\"";
+    } else {
+        // numbers, chars, or strings: `in` on an array compares strings
+        // by content (arr.index), so a set of any strings works
+        rep = name + " in [" + fx_commas(lits) + "]";
     };
     lines[ln - 1] = line[:i] + rep + line[end:];
     lines
@@ -2716,7 +2724,7 @@ def fx_local(line: long, nmap: long, lmap: [long]) -> long {
 // first), and later positions before earlier ones so an edit never moves
 // the text a later fix anchors on.
 def fx_prio(rule: str) -> long {
-    if (rule == "void" || rule == "2.1" || rule == "2.2" || rule == "2.3" || rule == "2.8" || rule == "3.1" || rule == "3.5" || rule == "3.6") { 0 } else { 1 }
+    if (rule in ["void", "2.1", "2.2", "2.3", "2.8", "3.1", "3.5", "3.6"]) { 0 } else { 1 }
 };
 
 def fx_before(x: LintFix, y: LintFix, nmap: long, lmap: [long]) -> bool {
