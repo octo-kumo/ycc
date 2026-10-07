@@ -585,11 +585,7 @@ def pk_visit(st: PkSt, d0: PkDep, by: str, fdir0: str) -> long {
         pk_die("dependency cycle: " + join(st.stack, " -> ") + " -> " + d.name);
     } else if (!pk_has(st.done, d.name)) {
         let at = { dir: "", commit: "" };
-        if (len(d.git) > 0) {
-            at = pk_git_dir(st, d);
-        } else {
-            at = { dir: pk_join(fdir, d.path), commit: "" };
-        };
+        at = len(d.git) > 0 ? pk_git_dir(st, d) : { dir: pk_join(fdir, d.path), commit: "" };
         let m = pk_manifest(at.dir);
         if (m.name != d.name) {
             pk_die("dependency '" + d.name + "' (" + pk_src(d, fdir) + ") is package '" + m.name + "'");

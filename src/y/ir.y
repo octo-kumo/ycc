@@ -416,11 +416,7 @@ def ir_render(ir: [long], txt: [str], at: long, fno: long) -> str {
         let w = at + 1;
         while (i < len(kinds)) {
             let op = ir_render_op(kinds[i], ir, w);
-            if (i == 0) {
-                line = line + " " + op;
-            } else {
-                line = line + ", " + op;
-            };
+            line = i == 0 ? line + " " + op : line + ", " + op;
             w = w + ir_kind_words(kinds[i]);
             i++;
         };

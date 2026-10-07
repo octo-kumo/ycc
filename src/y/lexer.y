@@ -306,12 +306,7 @@ def fstr_expr_end(src: str, lo: long) -> long {
     while (go && i < n) {
         let c = src[i];
         if (c == '"' || c == '\'') {
-            if (c == '"' && i > lo && src[i - 1] == 102 && (i - 1 == lo || !wordbyte(src[i - 2]))) {
-                // a nested f"..."
-                i = fstr_walk(src, i).end;
-            } else {
-                i = lit_end(src, i, [0]);
-            };
+            i = c == '"' && i > lo && src[i - 1] == 102 && (i - 1 == lo || !wordbyte(src[i - 2])) ? fstr_walk(src, i).end : lit_end(src, i, [0]);
         } else if (c == '(' || c == '[' || c == '{') {
             depth++;
             i = i + 1;

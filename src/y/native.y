@@ -4432,11 +4432,7 @@ def gen_slice(st: EmitSt, node: Slice) -> EmitSt {
     let slesz = arr_elem_bytes(infer(st, node.arr));
     st = gen(st, node.arr);
     st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
-    if (lo.k == K.void) {
-        st = emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
-    } else {
-        st = gen(st, lo);
-    };
+    st = lo.k == K.void ? emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0) : gen(st, lo);
     st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     if (hi.k == K.void) {
         // default: the array's length (the header keeps it in slot 0);
@@ -4460,11 +4456,7 @@ def gen_str_slice(st: EmitSt, node: Slice) -> EmitSt {
     let hi = node.hi;
     st = gen(st, node.arr);
     st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
-    if (lo.k == K.void) {
-        st = emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
-    } else {
-        st = gen(st, lo);
-    };
+    st = lo.k == K.void ? emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0) : gen(st, lo);
     st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     if (hi.k == K.void) {
         st = emit_insn(st, insn.F_MOV_D_R, insn.R_RSP, -1, 1, 8, -1, insn.R_RAX, 64);
@@ -4485,11 +4477,7 @@ def gen_sliceassign(st: EmitSt, node: SliceAssign) -> EmitSt {
     let esz = arr_elem_bytes(infer(st, node.arr));
     st = gen(st, node.arr);
     st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
-    if (lo.k == K.void) {
-        st = emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
-    } else {
-        st = gen(st, lo);
-    };
+    st = lo.k == K.void ? emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0) : gen(st, lo);
     st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     if (hi.k == K.void) {
         st = emit_insn(st, insn.F_MOV_D_R, insn.R_RSP, -1, 1, 8, -1, insn.R_RAX, 64);
@@ -5037,11 +5025,7 @@ def gen_float_bin(st: EmitSt, node: Bin, lt: Type, rt: Type) -> EmitSt {
             };
             st = emit_insn(st, insn.F_MOVZBQ_R_R, insn.R_RAX, 8, insn.R_RAX, 64, 0, 0, 0);
             st = emit_insn(st, insn.F_MOVZBQ_R_R, insn.R_RCX, 8, insn.R_RCX, 64, 0, 0, 0);
-            if (op == "==") {
-                st = emit_insn(st, insn.F_AND_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0);
-            } else {
-                st = emit_insn(st, insn.F_OR_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0);
-            };
+            st = op == "==" ? emit_insn(st, insn.F_AND_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0) : emit_insn(st, insn.F_OR_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0);
             st
         }
     }
@@ -5430,11 +5414,7 @@ def gen_shift(st: EmitSt, node: Bin, op: str) -> EmitSt {
         st = ok.st;
         st = emit_insn(st, insn.F_CMP_I_R, 64, insn.R_RCX, 64, 0, 0, 0, 0);
         st = emit_insn(st, insn.F_JB_L, ok.label, 0, 0, 0, 0, 0, 0);
-        if (mn == "sar") {
-            st = emit_insn(st, insn.F_MOV_I_R, 63, insn.R_RCX, 64, 0, 0, 0, 0);
-        } else {
-            st = emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
-        };
+        st = mn == "sar" ? emit_insn(st, insn.F_MOV_I_R, 63, insn.R_RCX, 64, 0, 0, 0, 0) : emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
         st = emit_label(st, ok.label);
         emit_insn(st, fr, insn.R_RCX, 8, insn.R_RAX, 64, 0, 0, 0)
     }
@@ -5548,11 +5528,7 @@ def gen_push_args(st: EmitSt, args: [Node]) -> EmitSt {
 // type of the parameter it binds; arguments past ptypes are pushed as is.
 def gen_push_args_as(st: EmitSt, args: [Node], ptypes: [Type]) -> EmitSt {
     for i in 0..len(args) {
-        if (i < len(ptypes)) {
-            st = gen_as(st, args[i], ptypes[i]);
-        } else {
-            st = gen(st, args[i]);
-        };
+        st = i < len(ptypes) ? gen_as(st, args[i], ptypes[i]) : gen(st, args[i]);
         st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     };
     st
@@ -6009,11 +5985,7 @@ def gen_arr_pop_shift(st: EmitSt, node: Call, shift: bool) -> EmitSt {
         st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, aoff, -1, insn.R_RDX, 64);
         st = emit_insn(st, insn.F_MOV_D_R, insn.R_RDX, -1, 1, 16, -1, insn.R_RDI, 64);
         st = emit_insn(st, insn.F_MOV_R_R, insn.R_RDI, 64, insn.R_RSI, 64, 0, 0, 0);
-        if (esz == 1) {
-            st = emit_insn(st, insn.F_ADD_I_R, 1, insn.R_RSI, 64, 0, 0, 0, 0);
-        } else {
-            st = emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSI, 64, 0, 0, 0, 0);
-        };
+        st = esz == 1 ? emit_insn(st, insn.F_ADD_I_R, 1, insn.R_RSI, 64, 0, 0, 0, 0) : emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSI, 64, 0, 0, 0, 0);
         st = emit_insn(st, insn.F_MOV_0_R, insn.R_RDX, -1, 1, 0, -1, insn.R_RCX, 64);
         st = emit_insn(st, insn.F_DEC_R, insn.R_RCX, 64, 0, 0, 0, 0, 0);
         st = gen_mul_esz(st, insn.R_RCX, esz);
@@ -6099,11 +6071,7 @@ def gen_arr_remove(st: EmitSt, node: Call) -> EmitSt {
     st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, coff, -1, insn.R_RAX, 64);
     st = emit_insn(st, insn.F_SUB_R_R, insn.R_RAX, 64, insn.R_RCX, 64, 0, 0, 0);
     st = emit_insn(st, insn.F_MOV_R_D, insn.R_RCX, 64, insn.R_RDX, -1, 1, 0, -1);
-    if (len(args) == 2) {
-        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, roff, -1, insn.R_RAX, 64);
-    } else {
-        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, voff, -1, insn.R_RAX, 64);
-    };
+    st = len(args) == 2 ? emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, roff, -1, insn.R_RAX, 64) : emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, voff, -1, insn.R_RAX, 64);
     st_temp(st, save)
 };
 
@@ -6118,11 +6086,7 @@ def gen_arr_push_method(st: EmitSt, node: Call, prepend: bool) -> EmitSt {
     st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_MOV_I_R, esz, insn.R_RAX, 64, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
-    if (prepend) {
-        st = emit_insn(st, insn.F_CALL_L, lbl_new("y_arr_prepend"), 0, 0, 0, 0, 0, 0);
-    } else {
-        st = emit_insn(st, insn.F_CALL_L, lbl_new("y_arr_push"), 0, 0, 0, 0, 0, 0);
-    };
+    st = prepend ? emit_insn(st, insn.F_CALL_L, lbl_new("y_arr_prepend"), 0, 0, 0, 0, 0, 0) : emit_insn(st, insn.F_CALL_L, lbl_new("y_arr_push"), 0, 0, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_ADD_I_R, 24, insn.R_RSP, 64, 0, 0, 0, 0);
     emit_insn(st, insn.F_MOV_0_R, insn.R_RAX, -1, 1, 0, -1, insn.R_RAX, 64)
 };
@@ -6576,11 +6540,7 @@ def gen_print(st: EmitSt, node: Call) -> EmitSt {
         // [byte] (Python-style byte strings).
         st = gen(st, pa0);
         let arr: ArrTy = t;
-        if (arr.of.k == K.tbyte) {
-            st = gen_helper1(st, "y_bytes_repr");
-        } else {
-            st = gen_arr_tostr_rax(st, arr.of, []);
-        };
+        st = arr.of.k == K.tbyte ? gen_helper1(st, "y_bytes_repr") : gen_arr_tostr_rax(st, arr.of, []);
         st = gen_helper1(st, "y_print_hstr");
         emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0)
     } else if (t.k == K.topt) {
@@ -6760,11 +6720,7 @@ def gen_cat_arr(st: EmitSt, node: Bin, lt: Type, rt: Type) -> EmitSt {
     if (larr) {
         st = gen(st, node.l);
         st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
-        if (how == "cat") {
-            st = gen(st, node.r);
-        } else {
-            st = gen_array_esz(st, one, esz, ety);
-        };
+        st = how == "cat" ? gen(st, node.r) : gen_array_esz(st, one, esz, ety);
     } else {
         st = gen_array_esz(st, one, esz, ety);
         st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
@@ -7367,11 +7323,7 @@ def gen_tail_call(st: EmitSt, node: Call) -> EmitSt {
     // evaluate each argument into a fresh local
     let offs: [long] = [];
     for i in 0..n {
-        if (i < len(tptypes)) {
-            st = gen_as(st, targs[i], tptypes[i]);
-        } else {
-            st = gen(st, targs[i]);
-        };
+        st = i < len(tptypes) ? gen_as(st, targs[i], tptypes[i]) : gen(st, targs[i]);
         let off = (st.slots + st.temp + 1) * -8;
         st = st_temp(st, st.temp + 1);
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, off, -1);
@@ -7490,11 +7442,7 @@ def gen_block_as(st: EmitSt, node: Block, dropped: bool) -> EmitSt {    // No sc
         if (m > 1 && is_void_node(stmts[m - 1])) { m = m - 1; }
         for i in 0..m {
             st = gen_loc_stmt(st, stmts[i]);
-            if (dropped || i < len(stmts) - 1) {
-                st = gen_stmt(st, stmts[i]);
-            } else {
-                st = gen(st, stmts[i]);
-            };
+            st = dropped || i < len(stmts) - 1 ? gen_stmt(st, stmts[i]) : gen(st, stmts[i]);
             // this statement's own temporaries are dead; the ones of the
             // statement this block sits in are not, hence the depth and not 0.
             st = st_temp(st, tdepth);
@@ -8370,12 +8318,7 @@ def gen_decl(st: EmitSt, node: Decl) -> EmitSt {
             // record literal: heap address (first-class value, plain slot).
             // An empty literal under a map annotation is the map itself
             // (the {keys, vals, boxes} shape the map ops expect).
-            if (unfold(node.typ).k == K.tmap && len(rec.keys) == 0) {
-                st = gen_maplit(st, rec)
-            } else {
-                // created as the declared type (gen_as, gen_reclit)
-                st = gen_as(st, rec, node.typ)
-            };
+            st = unfold(node.typ).k == K.tmap && len(rec.keys) == 0 ? gen_maplit(st, rec) : gen_as(st, rec, node.typ);
             let t: Type = node.typ;
             if (t.k == K.tnone) {
                 t = infer(st, rec);
@@ -8902,11 +8845,7 @@ def flit_finish(digs: [long], ndig: long, dp: long, neg: bool) -> long {
                 mant >>= 1;
                 e2 = e + 1;
             };
-            if (e2 > 1023) {
-                bits = 0x7FF0000000000000;      // past the largest double: inf
-            } else {
-                bits = ((e2 + 1023) << 52) | (mant & 0xFFFFFFFFFFFFF);
-            };
+            bits = e2 > 1023 ? 0x7FF0000000000000 : ((e2 + 1023) << 52) | (mant & 0xFFFFFFFFFFFFF);
         };
         if (neg) { bits | 0x8000000000000000 } else { bits }
     }
@@ -10650,11 +10589,7 @@ def gen_index_of(st: EmitSt, node: Call, last: bool) -> EmitSt {
         st = gen(st, n_num(default_offset(last), node.line, node.col));
         st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     };
-    if (last) {
-        st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_lastidx"), 0, 0, 0, 0, 0, 0);
-    } else {
-        st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_index"), 0, 0, 0, 0, 0, 0);
-    };
+    st = last ? emit_insn(st, insn.F_CALL_L, lbl_new("y_str_lastidx"), 0, 0, 0, 0, 0, 0) : emit_insn(st, insn.F_CALL_L, lbl_new("y_str_index"), 0, 0, 0, 0, 0, 0);
     emit_insn(st, insn.F_ADD_I_R, 24, insn.R_RSP, 64, 0, 0, 0, 0)
 };
 

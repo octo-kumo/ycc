@@ -4486,13 +4486,7 @@ def typeof_call_go(st: TcSt, node: Call) -> TcRes {
                         let r = typeof_want(st, e, cargs_ft[i]);
                         st = r.st;
                         let ak: long = r.typ.k;
-                        if (ak == K.tvoid) {
-                            // void is not a value (an unannotated param
-                            // would otherwise accept it quietly)
-                            st = fail(st, "'" + disp(name) + "' arg " + tostring(i) + ": cannot pass a void value", node.line, node.col);
-                        } else {
-                            st = expect_arg(st, r.typ, cargs_ft[i], e, "'" + disp(name) + "' arg " + tostring(i), node.line, node.col);
-                        };
+                        st = ak == K.tvoid ? fail(st, "'" + disp(name) + "' arg " + tostring(i) + ": cannot pass a void value", node.line, node.col) : expect_arg(st, r.typ, cargs_ft[i], e, "'" + disp(name) + "' arg " + tostring(i), node.line, node.col);
                     });
                     tc_res(call_result(func), st)
                 }
@@ -4672,11 +4666,7 @@ def typeof_lit(st: TcSt, node: RecLit, target: Type) -> TcRes {
         if (field_opt(tu, key) && ft.k == K.topt) {
             let fo: TOf = ft;
             let r = typeof_want(st, vals[i], fo.of);
-            if (opt_wraps(r.typ, ft)) {
-                st = expect_type(r.st, r.typ, fo.of, what, node.line, node.col);
-            } else {
-                st = expect_type(r.st, r.typ, ft, what, node.line, node.col);
-            };
+            st = opt_wraps(r.typ, ft) ? expect_type(r.st, r.typ, fo.of, what, node.line, node.col) : expect_type(r.st, r.typ, ft, what, node.line, node.col);
         } else {
             let r = typeof_want(st, vals[i], ft);
             st = expect_type(r.st, r.typ, ft, what, node.line, node.col);

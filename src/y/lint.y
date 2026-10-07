@@ -1861,6 +1861,73 @@ def fx_semi(tail: str) -> str {
     if (len(tail) > 0 && tail[0] == 59) { ";" } else { "" }
 };
 
+// The position fx_scan last matched: 1-based line, 0-based column.
+let fx_sline: long = 0;
+let fx_scol: long = 0;
+
+// Find the `cc` matching the `oc` at (ln, col), scanning whole lines. The
+// answer is in fx_sline/fx_scol; false when there is none.
+def fx_scan(lines: [str], ln: long, col: long, oc: long, cc: long) -> bool {
+    let d = 0;
+    let q = 0;
+    let l = ln;
+    let j = col;
+    while (l <= len(lines)) {
+        let line = lines[l - 1];
+        while (j < len(line)) {
+            let c = line[j];
+            if (q != 0) {
+                if (c == 92) { j = j + 2; continue; };
+                if (c == q) { q = 0; };
+                j = j + 1;
+            } else if (c == 34 || c == 39) {
+                q = c;
+                j = j + 1;
+            } else if (c == oc) {
+                d++;
+                j = j + 1;
+            } else if (c == cc) {
+                d--;
+                if (d == 0) { fx_sline = l; fx_scol = j; return true; };
+                j = j + 1;
+            } else { j = j + 1; };
+        };
+        l = l + 1;
+        j = 0;
+    };
+    false
+};
+
+// `s` up to a `//` comment (quotes respected).
+def fx_nocomment(s: str) -> str {
+    let q = 0;
+    let i = 0;
+    while (i < len(s)) {
+        let c = s[i];
+        if (q != 0) {
+            if (c == 92) { i += 2; continue; };
+            if (c == q) { q = 0; };
+            i++;
+        } else if (c == 34 || c == 39) {
+            q = c;
+            i++;
+        } else if (c == 47 && i + 1 < len(s) && s[i + 1] == 47) {
+            return s[:i];
+        } else { i++; };
+    };
+    s
+};
+
+// The text between just after (l1,c1) and just before (l2,c2), lines joined
+// with a space. A block's value is one statement, so joining is safe here.
+def fx_text(lines: [str], l1: long, c1: long, l2: long, c2: long) -> str {
+    if (l1 == l2) { return fx_strip(fx_nocomment(lines[l1 - 1][c1 + 1:c2])); };
+    let out = fx_strip(fx_nocomment(lines[l1 - 1][c1 + 1:]));
+    let k = l1 + 1;
+    while (k < l2) { out = out + " " + fx_strip(fx_nocomment(lines[k - 1])); k = k + 1; };
+    fx_strip(out + " " + fx_strip(fx_nocomment(lines[l2 - 1][:c2])))
+};
+
 // 2.1/2.3: an `if`/`else` written on one line. `b` is the 2.1 case (inv,
 // del, both); a multi-line arm is left for a later pass.
 def fx_if_line(rule: str, b: str, ln: long, lines: [str]) -> [str] {
@@ -1880,6 +1947,28 @@ def fx_if_line(rule: str, b: str, ln: long, lines: [str]) -> [str] {
     if (b1 >= len(line) || line[b1] != 123) { return lines; };
     let indent = fx_indent(line);
     let e1 = fx_match(line, b1, 123, 125);
+    if (e1 < 0 && rule == "2.3") {
+        // `if (C) { x = a; } else { x = b; }` spread over lines
+        if (!fx_scan(lines, ln, b1, 123, 125)) { return lines; };
+        let l1 = fx_sline;
+        let c1 = fx_scol;
+        let cline = lines[l1 - 1];
+        let rest = cline[c1 + 1:];
+        let el = fx_find(rest, "else", 0);
+        if (el < 0) { return lines; };
+        let b2r = fx_ws(rest, el + 4);
+        if (b2r >= len(rest) || rest[b2r] != 123) { return lines; };
+        let b2 = c1 + 1 + b2r;
+        if (!fx_scan(lines, l1, b2, 123, 125)) { return lines; };
+        let l2 = fx_sline;
+        let c2 = fx_scol;
+        let av = fx_assign(fx_text(lines, ln, b1, l1, c1));
+        let bv = fx_assign(fx_text(lines, l1, b2, l2, c2));
+        if (av == "" || bv == "" || fx_pipe_name(av) != fx_pipe_name(bv)) { return lines; };
+        let composed = indent + fx_pipe_name(av) + " = " + cond + " ? " + fx_pipe_val(av) + " : " + fx_pipe_val(bv) + ";";
+        lines = lines[:ln - 1] + [composed] + lines[l2:];
+        return lines;
+    };
     if (e1 < 0) {
         // the then block runs on to a later line; its close must be a plain
         // `}` (or `};`) or a plain `} else {` -- never a `} else if`
@@ -1899,7 +1988,7 @@ def fx_if_line(rule: str, b: str, ln: long, lines: [str]) -> [str] {
         };
         return lines;
     };
-    let then = fx_strip(line[b1 + 1:e1]);
+    let then = fx_strip(fx_nocomment(line[b1 + 1:e1]));
     let after = line[e1 + 1:];
     let el = fx_ws(after, 0);
     if (el < len(after) && fx_word(after, el, "else")) {
@@ -1913,7 +2002,7 @@ def fx_if_line(rule: str, b: str, ln: long, lines: [str]) -> [str] {
             };
             return lines;
         };
-        let els = fx_strip(after[b2 + 1:e2]);
+        let els = fx_strip(fx_nocomment(after[b2 + 1:e2]));
         let tail = fx_strip(after[e2 + 1:]);
         if (rule == "2.3") {
             let av = fx_assign(then);
