@@ -1408,3 +1408,26 @@ Next: give u006_serialin its own .driver.y, modelled on u005_ipc's -- spawn the
 program, then stay alive (wait4 or an IPC wait) so the console read can complete.
 The program itself is verified by hand and its poll is unbounded, so this is a
 harness-shape problem, not a kernel one.
+
+### Round 85: serial input proven with a purpose-built driver
+
+Wrote u006_serialin.driver.y (kernel.init, the module's phys/size, sched_init, a
+spawn() built from vm_new_dir + elf_map + elf_setup_stack + pages_alloc_va +
+task_frame + sched_add, then task_start and kexit), and the program with the
+unbounded poll.  Booting exactly that pair and feeding 'Z' through qemu's stdin
+produces:
+
+    waiting for input
+    read 1 byte 90
+
+so the kernel's serial INPUT path is proven end to end with a real byte from the
+host: UART -> y_serial_getb -> sys_read(fd 0) -> the caller's buffer -> printed
+back out through SYS_WRITE.
+
+The committed fixture is still not there: the harness's own run produces a
+different transcript from this identical invocation, so the remaining question is
+entirely about how the harness drives a u* case that has both .driver.y and
+.stdin (u005_ipc passes with a driver and no stdin; u003/u002 have drivers and no
+stdin).  The next thing to read is the harness's u* path itself -- which driver
+it builds into the image, whether it also compiles .user.y into the initrd, and
+whether the stdin feed is attached to the same qemu invocation.
