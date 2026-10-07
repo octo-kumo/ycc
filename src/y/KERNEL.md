@@ -359,3 +359,36 @@ are resolved in favour of THIS branch's kernel files (the kernel sections of
 arch_x64.*, arch/kernel.s, std/kernel.y, os/, test/kernel/).  The first merge
 that turns the kernel image red names the culprit.  The base is restored and
 verified green ("minimal") after every experiment in this round.
+
+### Round 43: THE CULPRIT IS NAMED -- 51c36a5, the collector
+
+Done exactly as the plan said, one merge at a time, and the first merge answers
+it.  `git merge --no-ff 51c36a5` (master at the whole-heap mark-sweep collector,
+and NOTHING else from upstream) onto the green un-merged base:
+
+* src/y and src/c AUTO-MERGED CLEANLY -- the collector's changes and this
+  branch's kernel sections are in distinct regions, so none of the coupling that
+  defeated every partial substitution arises;
+* only the two standing fixture conflicts needed resolving;
+* the build succeeded, and then the kernel image died with
+
+      runtime error: out of memory
+
+  which is the exact symptom seen at merge #1 in round 11.
+
+So the collector commit is where the regression enters.  It is also consistent
+with everything measured since: with the collector LINKED the kernel dies on its
+first allocation ("out of memory"), and with --gc=never (which only arrives with
+9078372, and which this branch forces for --kernel) the collector's entry points
+become stubs and the same kernel dies a different way -- a user-mode fault at
+cr2=0, because the allocation protocol the collector introduced (arr_header_size
+32, requests sized to cover the 8-byte block header) is not what this branch's
+bump allocator and the shared asm were written against.
+
+The merge was ABORTED rather than committed: the branch must stay green, and the
+finding is the deliverable.  Next: make the kernel work WITH the collector's
+protocol -- the bump allocator must hand out blocks the runtime's y_alloc
+expects, which is the "+8" question round 33 measured the wrong half of -- or
+keep the collector out of kernel images deliberately (the --gc=never route) and
+fix whatever the protocol change still breaks.  Either way the target is now a
+NAMED commit and its protocol, not a bisect.
