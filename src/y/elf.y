@@ -96,7 +96,7 @@ def elf_build(code: [byte], rodata: [byte], entry_off: long, bss_len: long, syms
     let phnum = 1;
     if (bss_len > 0) { phnum = 2; }
     out = push_le16(out, phnum);
-    if (dbg.shnum > 0) { out = push_le16(out, 64); } else { out = push_le16(out, 0); };
+    out = dbg.shnum > 0 ? push_le16(out, 64) : push_le16(out, 0);
     out = push_le16(out, dbg.shnum);
     out = push_le16(out, dbg.shstrndx);
     // PHDR: PT_LOAD, R+E

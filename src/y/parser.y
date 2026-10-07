@@ -2144,7 +2144,7 @@ def parse_stmt(toks: [Tok], p: long) -> Parsed {
         // the caller report "expected ';', got <the next statement>", which is
         // what a first attempt did.
         let kind = 0;
-        if (is_kw(toks, p, "break")) { kind = K.kw_break; } else { kind = K.kw_continue; };
+        kind = is_kw(toks, p, "break") ? K.kw_break : K.kw_continue;
         let label = "";
         let pos = p + 1;
         if (tt(toks, pos) == "id") {

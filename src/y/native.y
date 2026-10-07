@@ -7668,7 +7668,7 @@ def tyset_add(lbl: str, form: str) -> long {
             looking = false;
         } else if (cur == lbl) {
             let had: str = ty_forms[i];
-            if (had == form) { out = 0; } else { out = -1; };
+            out = had == form ? 0 : -1;
             looking = false;
         } else {
             i = (i + 1) & mask;
@@ -8009,7 +8009,7 @@ def gen_convert(st: EmitSt, src0: Type, want0: Type, check: bool) -> EmitSt {
         // keeps its layout and tag
         if (within && wk == K.tunion && same_lay(union_shared(s), union_shared(w))) { return st; };
         let ms: [Type] = [];
-        if (within) { ms = types.union_parts(s); } else { ms = cast_members(s, want0); };
+        ms = within ? types.union_parts(s) : cast_members(s, want0);
         // per member: its slots and tag here, its slots and tag there
         let froms: [[str]] = [];
         let tos: [[str]] = [];
@@ -10630,7 +10630,7 @@ def fmt_code(f: FmtSpec, kind: long, ty: long) -> long {
     if (f.zero && align == 0 && kind != 0) { align = 61; }
     if (fill == 0) { fill = 32; }
     if (align == 0) {
-        if (kind != 0) { align = 62; } else { align = 60; };
+        align = kind != 0 ? 62 : 60;
     }
     let sg = 0;
     if (f.sign == '+') { sg = 1; } else if (f.sign == ' ') { sg = 2; }
@@ -11070,7 +11070,7 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
     body = insn.ir_push(body, insn.IR_LABEL, label, 0, 0, 0, 0, 0, 0);
     // -g: the prologue is the def's line; `_start` has none (line 0)
     if (dbg_lines) {
-        if (is_main) { body = ir_loc(body, 0); } else { body = ir_loc(body, func.line); };
+        body = is_main ? ir_loc(body, 0) : ir_loc(body, func.line);
     }
     if (is_main) {
         // The Windows syscall self-test runs BEFORE anything else: its whole
@@ -11777,7 +11777,7 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
                 // A ndef's label is the one it named -- the assembly it
                 // calls into. Everything else gets a generated label.
                 let label = "";
-                if (len(d.func.label) > 0) { label = d.func.label; } else { label = fn_label_of(rl.uid, d.name); };
+                label = len(d.func.label) > 0 ? d.func.label : fn_label_of(rl.uid, d.name);
                 let lid = lbl_new(label);
                 hsyms += { name: d.name, label: label, typ: func_type(d.func) };
                 hids += lid;

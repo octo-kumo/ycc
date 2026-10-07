@@ -1006,8 +1006,7 @@ def main(cmdline: [str]) -> long {
             if (r.ok && pargs.fix) {
                 let fixes = lint.lint_fixes_get();
                 let fids = lint.lint_fix_ids(fixes, nrorigin.file);
-                let fi = 0;
-                while (fi < len(fids)) {
+                for fi in 0..len(fids) {
                     let fid = fids[fi];
                     if (fid >= 0 && fid < len(nrorigin.files)) {
                         let rd = fs.read_file(nrorigin.files[fid]);
@@ -1015,7 +1014,6 @@ def main(cmdline: [str]) -> long {
                             fs.write_file(nrorigin.files[fid], lint.lint_fix_text(fid, fixes, nrorigin.file, nrorigin.line, unwrap(rd)));
                         };
                     };
-                    fi++;
                 };
                 exit(0);
                 0

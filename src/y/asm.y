@@ -1422,7 +1422,7 @@ def relax_round(items: [AsmItem], labels: [AsmLabel], rlmap: [AsmLabel], lens: [
             let fx = it.fix[0];
             let li = relax_target(rlmap, fx.lbl);
             let here = 0;
-            if (first) { here = it.off; } else { here = cum[i]; };
+            here = first ? it.off : cum[i];
             // An unknown target is pass 2's error to report, and a target
             // outside .text has no address to measure yet: grow both, so
             // nothing here can be wrong in a way pass 2 would not catch.

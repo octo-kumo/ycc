@@ -1460,10 +1460,8 @@ def fx_ws(line: str, i: long) -> long {
 
 // The index of `w` as a word at or after `from`, or -1.
 def fx_find(line: str, w: str, from: long) -> long {
-    let i = from;
-    while (i < len(line)) {
+    for i in from..len(line) {
         if (fx_word(line, i, w)) { return i; };
-        i = i + 1;
     };
     -1
 };
@@ -1497,10 +1495,10 @@ def fx_match(line: str, i: long, oc: long, cc: long) -> long {
             q = c;
             j = j + 1;
         } else if (c == oc) {
-            d = d + 1;
+            d++;
             j = j + 1;
         } else if (c == cc) {
-            d = d - 1;
+            d--;
             if (d == 0) { return j; };
             j = j + 1;
         } else { j = j + 1; };
@@ -1513,13 +1511,11 @@ def fx_split_comma(s: str) -> [str] {
     let out: [str] = [];
     let d = 0;
     let cur = "";
-    let i = 0;
-    while (i < len(s)) {
+    for i in 0..len(s) {
         let c = s[i];
-        if (c == 40 || c == 91 || c == 123) { d = d + 1; };
-        if (c == 41 || c == 93 || c == 125) { d = d - 1; };
-        if (c == 44 && d == 0) { out += cur; cur = ""; } else { cur = cur + s[i:i + 1]; };
-        i = i + 1;
+        if (c == 40 || c == 91 || c == 123) { d++; };
+        if (c == 41 || c == 93 || c == 125) { d--; };
+        if (c == 44 && d == 0) { out += cur; cur = ""; } else { cur += s[i:i + 1]; };
     };
     out += cur;
     out
@@ -1655,7 +1651,7 @@ def fx_drop(a: [str], k: long) -> [str] {
 def fx_join(a: [str]) -> str {
     let out = "";
     let i = 0;
-    while (i < len(a)) { out = out + a[i] + "\n"; i = i + 1; };
+    while (i < len(a)) { out = out + a[i] + "\n"; i++; };
     out
 };
 
@@ -1671,15 +1667,15 @@ def fx_sub_index(line: str, arr: str, var: str, el: str) -> str {
                 if (fx_word(line, k, var)) {
                     let m = fx_ws(line, k + len(var));
                     if (m < len(line) && line[m] == 93) {
-                        out = out + el;
+                        out += el;
                         i = m + 1;
                         continue;
                     };
                 };
             };
         };
-        out = out + line[i:i + 1];
-        i = i + 1;
+        out += line[i:i + 1];
+        i++;
     };
     out
 };
@@ -1791,7 +1787,7 @@ def fx_is_name(s: str) -> bool {
     let c0 = s[0];
     if (!((c0 >= 97 && c0 <= 122) || (c0 >= 65 && c0 <= 90) || c0 == 95)) { return false; };
     let i = 1;
-    while (i < len(s)) { if (!fx_ident(s[i])) { return false; }; i = i + 1; };
+    while (i < len(s)) { if (!fx_ident(s[i])) { return false; }; i++; };
     true
 };
 
@@ -1914,20 +1910,18 @@ def fx_before(x: LintFix, y: LintFix, nmap: long, lmap: [long]) -> bool {
 // Sort descending by (line, col): a fix never moves the text a later one
 // anchors on.
 def fx_sort(a: [LintFix], nmap: long, lmap: [long]) -> long {
-    let i = 1;
-    while (i < len(a)) {
+    for i in 1..len(a) {
         let cur = a[i];
         let j = i - 1;
         while (j >= 0 && fx_before(cur, a[j], nmap, lmap)) { a[j + 1] = a[j]; j = j - 1; };
         a[j + 1] = cur;
-        i = i + 1;
     };
     0
 };
 
 def fx_has(a: [long], v: long) -> bool {
     let i = 0;
-    while (i < len(a)) { if (a[i] == v) { return true; }; i = i + 1; };
+    while (i < len(a)) { if (a[i] == v) { return true; }; i++; };
     false
 };
 
@@ -1939,14 +1933,14 @@ def fx_file(fid: long, fixes: [LintFix], src: str, nmap: long, fmap: [long], lma
     while (i < len(fixes)) {
         let f = fixes[i];
         if (fx_fid(f.line, nmap, fmap) == fid) { mine += f; };
-        i = i + 1;
+        i++;
     };
     fx_sort(mine, nmap, lmap);
     i = 0;
     while (i < len(mine)) {
         let f = mine[i];
         lines = fx_one(f.rule, f.a, f.b, fx_local(f.line, nmap, lmap), f.col, lines);
-        i = i + 1;
+        i++;
     };
     let out = "\n".join(lines);
     // split drops a trailing empty field, so put the file's own final
@@ -1961,12 +1955,10 @@ def fx_file(fid: long, fixes: [LintFix], src: str, nmap: long, fmap: [long], lma
 def lint_fix_ids(fixes: [LintFix], fmap: [long]) -> [long] {
     let nmap = len(fmap);
     let fids: [long] = [];
-    let i = 0;
-    while (i < len(fixes)) {
-        let fid = fx_fid(fixes[i].line, nmap, fmap);
+    fixes.foreach((e) => {
+        let fid = fx_fid(e.line, nmap, fmap);
         if (!fx_has(fids, fid)) { fids += fid; };
-        i = i + 1;
-    };
+    });
     fids
 };
 
