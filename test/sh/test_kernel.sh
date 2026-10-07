@@ -58,7 +58,7 @@ fi
 [ "$C_OK" = 1 ] && echo "kernel: two engines ($YCC, $CYCC)" || echo "kernel: one engine ($YCC; $CYCC has no --kernel yet)"
 
 # ── the booted cases ────────────────────────────────────────────────────
-for src in "$KDIR"/t*.y; do
+for src in "$KDIR"/[tx]*.y; do
     base=$(basename "$src" .y)
     exp="$KDIR/$base.expected"
     [ -f "$exp" ] || { kfail "$base: no .expected"; continue; }
@@ -88,6 +88,14 @@ for src in "$KDIR"/t*.y; do
             continue
         fi
     fi
+    # The "kernel must be small" ratchet: the image is ONE 2 MB page of
+    # kernel mapping, and a kernel that outgrows this budget is a design
+    # regression rather than a slow build.
+    imgsz=$(wc -c <"$yimg")
+    if [ "$imgsz" -gt 262144 ]; then
+        kfail "$base: image is $imgsz bytes (budget 262144)"
+        continue
+    fi
     stdin=/dev/null
     [ -f "$KDIR/$base.stdin" ] && stdin="$KDIR/$base.stdin"
     # The input is fed a second in: the guest's serial_init clears the UART's
@@ -96,11 +104,12 @@ for src in "$KDIR"/t*.y; do
     # person types after the machine is up; this is that.
     if [ -f "$KDIR/$base.stdin" ]; then
         { sleep 1; cat "$stdin"; } | timeout "$QTIME" "$QEMU" -kernel "$yimg" -serial stdio \
-            -display none -no-reboot -monitor none >"$WORK/$base.out" 2>/dev/null
+            -display none -no-reboot -device isa-debug-exit -monitor none >"$WORK/$base.out" 2>/dev/null
     else
         timeout "$QTIME" "$QEMU" -kernel "$yimg" -serial stdio -display none \
-            -no-reboot -monitor none </dev/null >"$WORK/$base.out" 2>/dev/null
+            -no-reboot -device isa-debug-exit -monitor none </dev/null >"$WORK/$base.out" 2>/dev/null
     fi
+    qrc=$?
     n=$(wc -c <"$exp")
     head -c "$n" "$WORK/$base.out" >"$WORK/$base.head"
     if cmp -s "$WORK/$base.head" "$exp"; then
@@ -109,6 +118,17 @@ for src in "$KDIR"/t*.y; do
         kfail "$base: serial output differs"
         echo "    expected:"; sed 's/^/      /' "$exp"
         echo "    got:"; sed 's/^/      /' "$WORK/$base.head"
+        continue
+    fi
+    # A case with a `.exit` leaves the machine through kexit, and qemu's own
+    # status is the verdict: (code << 1) | 1 through the isa-debug-exit port.
+    if [ -f "$KDIR/$base.exit" ]; then
+        want=$(cat "$KDIR/$base.exit")
+        if [ "$qrc" = "$want" ]; then
+            pass "$base: kexit -> qemu status $qrc"
+        else
+            kfail "$base: qemu status $qrc, wanted $want"
+        fi
     fi
 done
 

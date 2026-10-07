@@ -10,6 +10,8 @@ print(kernel.vm_map(dir, 1073741824, p, kernel.PTE_W));
 puts("mapped\n");
 print(kernel.vm_translate(dir, 1073741824) == p);
 puts("faulting\n");
-kernel.poke64(1202590848, 1);
+// A VIRTUAL address that was never mapped: poke_va64 reads through the
+// current address space, poke64 through the direct map (physical).
+kernel.poke_va64(1202590848, 1);
 puts("never printed\n");
 kernel.halt();

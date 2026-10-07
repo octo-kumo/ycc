@@ -24,23 +24,23 @@ print("vm_map: " + tostring(kernel.vm_map(dir, 1073741824, p, kernel.PTE_W)));
 print("translate gives the page back: " + tostring(kernel.vm_translate(dir, 1073741824) == p));
 
 // Through the virtual address, back through the physical one: one memory.
-kernel.poke64(1073741824, 305419896);
+kernel.poke_va64(1073741824, 305419896);
 print("write VA, read PA: " + tostring(kernel.peek64(p) == 305419896));
 kernel.poke64(p, 42);
-print("write PA, read VA: " + tostring(kernel.peek64(1073741824) == 42));
+print("write PA, read VA: " + tostring(kernel.peek_va64(1073741824) == 42));
 print("the rest of the page is untouched: " + tostring(kernel.peek64(p + 8) == 0));
 
 // Five more pages, each written through its virtual address and read back.
 print("vm_map_range: " + tostring(kernel.vm_map_range(dir, 1073745920, kernel.pages_alloc(16384), 4, kernel.PTE_W) == 4));
 let i = 0;
 while (i < 4) {
-    kernel.poke64(1073745920 + i * 4096, i + 1);
+    kernel.poke_va64(1073745920 + i * 4096, i + 1);
     i = i + 1;
 };
 i = 0;
 let sum = 0;
 while (i < 4) {
-    sum = sum + kernel.peek64(1073745920 + i * 4096);
+    sum = sum + kernel.peek_va64(1073745920 + i * 4096);
     i = i + 1;
 };
 print("sum over the four pages: " + tostring(sum));

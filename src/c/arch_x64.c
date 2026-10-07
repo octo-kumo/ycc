@@ -329,9 +329,11 @@ Yv *arch_exit(void) {
    pointer. None of it exists on a hosted target, so native.c emits this only
    for --kernel. */
 Yv *arch_kernel_bss(void) {
-    /* 16 MB of arena: `y_alloc_more` asks for 4 MB at a time and abandons the
-       tail of the old chunk, so this is four chunks' worth. A .bss reservation
-       costs RAM, not file bytes. */
+    /* The 16 MB arena that used to live here is gone: it put the image's end
+       18 MB up, which is where user space wants to be (a Linux executable is
+       linked at 0x400000), and the kernel is mapped by ONE 2 MB page. The Y
+       heap now lives in RAM above the image, chosen by std/kernel.y's
+       y_heap_init the first time anything allocates. */
     return ys(".align 16\n"
               "y_mb_info:\n.zero 8\n"
               ".align 16\n"
@@ -340,9 +342,13 @@ Yv *arch_kernel_bss(void) {
               ".align 16\n"
               "y_kernel_stack_bottom:\n.zero 32768\n"
               "y_kernel_stack_top:\n"
-              ".align 4096\n"
-              "y_kheap:\n.zero 16777216\n"
-              "y_kheap_used:\n.zero 8\n"
+              ".align 16\n"
+              /* The Y heap's region: a physical address and direct-map
+                 addresses, set once by y_heap_region_set. */
+              "y_heap_start:\n.zero 8\n"
+              "y_heap_bias:\n.zero 8\n"
+              "y_heap_next:\n.zero 8\n"
+              "y_heap_limit:\n.zero 8\n"
               /* Where the kernel's own memory ends: a physical page
                  allocator starts at the next page after this. */
               "y_kernel_end:\n");
@@ -893,7 +899,11 @@ static Yv *kernel_head_text(void) {
     ylong pad = 0;
     if (start % 4096 != 0) { pad = 4096 - start % 4096; };
     ylong pt = start + pad;
-    ylong gdt = pt + 12288;
+    ylong pdpt_low = pt + 4096;
+    ylong pd_low = pt + 8192;
+    ylong pdpt_dm = pt + 12288;
+    ylong pd_dm = pt + 16384;
+    ylong gdt = pt + 20480;
     ylong gdtr = gdt + 24;
     ylong entry = gdtr + 6;
     Yv *tramp = ktramp(pre, pt, gdtr, entry);
@@ -903,9 +913,16 @@ static Yv *kernel_head_text(void) {
     text = ys_cat(text, ys_cat(ys_cat(ys(".ascii \""), kascii(tramp)), ys("\"\n")));
     /* pad to the page the tables start on */
     if (pad > 0) { text = ys_cat(text, ys_cat(ys_cat(ys(".zero "), ys_long(pad)), ys("\n"))); };
-    text = ys_cat(text, ys_cat(ys_cat(ys("y_kernel_pml4:\n.quad "), ys_long(pt + 4099)), ys("\n.zero 4088\n")));
-    text = ys_cat(text, ys_cat(ys_cat(ys("y_kernel_pdpt:\n.quad "), ys_long(pt + 8195)), ys("\n.zero 4088\n")));
-    text = ys_cat(text, ys("y_kernel_pd:\n"));
+    /* One PML4 entry for the kernel's own 2 MB and one for the direct map.
+     * Nothing else is mapped: PML4[0]'s low half belongs to user space, and
+     * 0x400000 -- where a Linux executable is linked -- has to be free, which
+     * is why the kernel's identity map is one 2 MB page and not a gigabyte. */
+    text = ys_cat(text, ys_cat(ys_cat(ys("y_kernel_pml4:\n.quad "), ys_long(pdpt_low + 3)), ys("\n.zero 2176\n.quad ")));
+    text = ys_cat(text, ys_cat(ys_cat(ys_long(pdpt_dm + 3), ys("\n.zero 1904\n")), ys("")));
+    text = ys_cat(text, ys_cat(ys_cat(ys("y_kernel_pdpt_low:\n.quad "), ys_long(pd_low + 3)), ys("\n.zero 4088\n")));
+    text = ys_cat(text, ys("y_kernel_pd_low:\n.quad 131\n.zero 4088\n"));
+    text = ys_cat(text, ys_cat(ys_cat(ys("y_kernel_pdpt_dir:\n.quad "), ys_long(pd_dm + 3)), ys("\n.zero 4088\n")));
+    text = ys_cat(text, ys("y_kernel_pd_dir:\n"));
     ylong i = 0;
     while (i < 512) {
         text = ys_cat(text, ys_cat(ys_cat(ys(".quad "), ys_long(i * 2097152 + 131)), ys("\n")));
@@ -961,14 +978,11 @@ static Yv *ktramp(Yv *pre, ylong pt, ylong gdtr, ylong entry) {
 
 static Yv *ktramp_pre(ylong pt, ylong gdtr) {
     Yv *b = yav(0);
+    /* No table entries are stored here any more: they are emitted as data
+     * below, and the only thing the 32-bit code does with the tables is
+     * point CR3 at them. */
     b = kb1(b, 250);                        /* cli */
     b = kb1(b, 252);                        /* cld */
-    b = kb_imm32(b, 0, pt + 4099);          /* mov $pml4|3, %eax */
-    b = kb1(b, 163);                        /* mov %eax, pml4 */
-    b = kbput32(b, pt);
-    b = kb_imm32(b, 0, pt + 8195);          /* mov $pdpt|3, %eax */
-    b = kb1(b, 163);                        /* mov %eax, pdpt */
-    b = kbput32(b, pt + 4096);
     b = kb3(b, 15, 32, 224);                /* mov %cr4, %eax */
     /* or $0x620, %eax: PAE (5) plus OSFXSR (9) and OSXMMEXCPT (10). The last
        two are not optional: without OSFXSR every SSE instruction is #UD, and

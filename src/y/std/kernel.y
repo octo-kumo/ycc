@@ -56,9 +56,15 @@ ndef y_kernel_idle() -> long = "y_kernel_idle";
 // machine; the ones a program declared with `irq N def` are installed on top
 // of that by the same generated routine.
 def init() -> void {
+    // Nothing may allocate before phys_init: it is what gives the Y heap its
+    // region.  Interrupts are off for the whole bring-up, so an interrupt's
+    // own allocation cannot land in the middle of the decision.
+    y_kernel_cli();
+    phys_init();
     y_serial_init();
     y_pic_remap();
     y_kernel_irq_init();
+    y_kernel_sti();
 };
 
 // Open COM1's receiver interrupt (IRQ4).  Until this is called the port is
@@ -83,6 +89,12 @@ def cli() -> void {
 // Stop the machine (interrupts off, for good).
 def halt() -> void {
     y_kernel_halt();
+};
+
+// Leave qemu through the isa-debug-exit device; the test harness reads the
+// verdict this way.  `code` is 0..255 and qemu exits with (code << 1) | 1.
+def kexit(code: long) -> void {
+    y_kexit(code);
 };
 
 // Wait for interrupts with them enabled -- where a kernel whose work is done
@@ -112,19 +124,31 @@ def getc() -> long {
 // tables, the Multiboot structure and device memory with no assembly.)
 let mem_word: long = 0;
 
-// The aligned 8-byte word at `addr`, which is the one operation pointer
-// arithmetic gives us: `*(p + k)` addresses p + 8k, so `addr` has to be
-// 8-byte aligned.  Everything else is built on top of it, and the mask is
+// The kernel's own mapping is ONE 2 MB page at 1 MB (arch_x64.y's trampoline):
+// the image and nothing else in the low half, so that 0x400000 -- where a
+// Linux executable is linked -- stays free for user space.  Everything else
+// in RAM is reached through the direct map the trampoline also builds, all of
+// RAM in 2 MB pages at 0xFFFF888000000000.  As a signed 64-bit long that base
+// is negative, and Y's pointer arithmetic carries it exactly.
+//
+// CONVENTION: peek*/poke* take a PHYSICAL address and add this; the Y heap's
+// own pointers are direct-map VIRTUAL addresses (phys_init sets them up that
+// way).  Mixing the two is the one way to get this wrong.
+const DIRECT_BASE = -131391639519232;
+
+// The aligned 8-byte word at PHYSICAL `addr`, which is the one operation
+// pointer arithmetic gives us: `*(p + k)` addresses p + 8k, so `addr` has to
+// be 8-byte aligned.  Everything else is built on top of it, and the mask is
 // spelled out rather than written as 2^52-1 because a 64-bit literal is what
 // the encoder can emit (an ALU immediate is 32 bits).
 def peek_word(addr: long) -> long {
     let p: *long = &mem_word;
-    *(p + (addr - ptr_addr(p)) / 8)
+    *(p + (addr + DIRECT_BASE - ptr_addr(p)) / 8)
 };
 
 def poke_word(addr: long, v: long) -> void {
     let p: *long = &mem_word;
-    *(p + (addr - ptr_addr(p)) / 8) = v;
+    *(p + (addr + DIRECT_BASE - ptr_addr(p)) / 8) = v;
 };
 
 // The 32-bit field at `addr`, zero-extended.  The Multiboot memory map's
@@ -143,7 +167,24 @@ def poke32(addr: long, v: long) -> void {
     poke_word(base, (w & ~mask) | (((v << 32) >>> 32) << sh));
 };
 
-// The 64-bit word at `addr`, any 4-byte alignment.
+// ── the same reads and writes at a VIRTUAL address ──────────────────────
+// peek*/poke* above take physical addresses because that is what page tables,
+// hardware structures and another process's pages are addressed by.  These
+// take an address in the CURRENT address space: the kernel's own image (which
+// is identity-mapped in the first 2 MB) and, while running on a task's CR3,
+// that task's memory.  A syscall that copies to or from a user buffer uses
+// these, after checking the range is the user's.
+def peek_va64(addr: long) -> long {
+    let p: *long = &mem_word;
+    *(p + (addr - ptr_addr(p)) / 8)
+};
+
+def poke_va64(addr: long, v: long) -> void {
+    let p: *long = &mem_word;
+    *(p + (addr - ptr_addr(p)) / 8) = v;
+};
+
+// The 64-bit word at physical `addr`, any 4-byte alignment.
 def peek64(addr: long) -> long {
     peek32(addr) | (peek32(addr + 4) << 32)
 };
@@ -170,6 +211,11 @@ def poke8(addr: long, v: long) -> void {
 // ── physical memory ─────────────────────────────────────────────────────
 ndef y_mb_info_get() -> long = "y_mb_info_get";
 ndef y_kernel_end_get() -> long = "y_kernel_end_get";
+ndef y_heap_region_set(start: long, limit: long) -> long = "y_heap_region_set";
+ndef y_heap_start_get() -> long = "y_heap_start_get";
+ndef y_heap_bias_get() -> long = "y_heap_bias_get";
+ndef y_heap_limit_get() -> long = "y_heap_limit_get";
+ndef y_kexit(code: long) -> long = "y_kexit";
 
 // The Multiboot info structure (`info`), as the loader left it.  Offsets are
 // the Multiboot 1 spec's: flags, mem_lower, mem_upper, boot_device, cmdline,
@@ -257,26 +303,39 @@ def mb_region(i: long) -> MemRegion {
     out
 };
 
-// The first available region that holds memory past the kernel image: what a
-// page allocator hands out of.
-def phys_region() -> MemRegion {
-    let out: MemRegion = { base: 0, len: 0 };
-    let n = mb_region_count();
-    let i = 0;
+// The Multiboot modules (`-initrd` is one): what the loader put in RAM that a
+// page allocator must not hand out.  QEMU's layout is image, then command
+// line, then the module, so the highest end wins.
+def mb_mod_count() -> long {
+    if (mb_present()) { peek32(y_mb_info_get() + 20) } else { 0 }
+};
+
+def mb_mod_addr() -> long {
+    if (mb_present()) { peek32(y_mb_info_get() + 24) } else { 0 }
+};
+
+def mb_mod_end(i: long) -> long {
+    if (mb_present()) { peek32(mb_mod_addr() + i * 16 + 4) } else { 0 }
+};
+
+// The first byte no loader structure occupies: the image's end, raised past
+// the command line and every module.  Allocation-free on purpose -- phys_init
+// runs on the bootstrap heap.
+def reserved_end() -> long {
     let end = y_kernel_end_get();
+    let cl = mb_cmdline_addr();
+    if (cl != 0) {
+        let cle = cl + str_len_at(cl) + 1;
+        if (cle > end) { end = cle; };
+    };
+    let i = 0;
+    let n = mb_mod_count();
     while (i < n) {
-        let r = mb_region(i);
-        if (out.len == 0 && r.base + r.len > end + 65536) { out = r; };
+        let e = mb_mod_end(i);
+        if (e > end) { end = e; };
         i = i + 1;
     };
-    if (out.len == 0) {
-        // No usable map (or no Multiboot info at all): the spec's mem_upper
-        // still says how much RAM is above 1 MB, so fall back to a block
-        // that starts past the kernel and trusts that number.
-        let top = 1048576 + mb_mem_upper_kb() * 1024;
-        if (top > end + 1048576) { out = { base: end, len: top - end }; };
-    };
-    out
+    end
 };
 
 // A bump allocator over that region: the honest first version (no free yet).
@@ -285,26 +344,57 @@ def phys_region() -> MemRegion {
 let phys_next = 0;
 let phys_limit = 0;
 
+// The Y heap's region, chosen from the Multiboot numbers the first time
+// anything allocates -- which may be during ANOTHER module's global
+// initializer, before the hoisted global-init code has run.
+//
+// *** HARD RULE for this function and everything it calls: no Y global and no
+// `const`.  A const's cell is a global like any other, and reading one at this
+// point reads zero -- which is how the first version of this put the heap at
+// the wrong address (HEAP_BYTES read as 0 made `top <= start` fall into the
+// floor branch) and then faulted storing into it.  Literals, asm accessors
+// (y_*_get) and functions that obey the same rule only. ***  arch/kernel.s's
+// y_alloc_map calls this, and the double check makes it safe against an
+// interrupt that allocates while it runs.
+//
+// The region is the 8 MB below the top of RAM: at the top so that nothing the
+// loader left in the low pages (the image, its command line, the initrd) can
+// be inside it, and fixed so that the page allocator, which grows up from the
+// image, has a boundary it can be told about without sharing an allocator.
+const HEAP_BYTES = 8388608;
+
+def y_heap_init() -> void {
+    if (y_heap_limit_get() == 0) {
+        let top = 1048576 + mb_mem_upper_kb() * 1024;
+        if (mb_mem_upper_kb() == 0) { top = y_kernel_end_get() + 67108864; };
+        top = top - top % 4096;
+        let start = top - 8388608;
+        let floor = y_kernel_end_get() + 1048576;
+        if (floor % 4096 != 0) { floor = floor + 4096 - floor % 4096; };
+        if (start < floor) { start = floor; };
+        if (top <= start) { start = floor; };
+        if (y_heap_limit_get() == 0) {
+            // Physical addresses: arch/kernel.s adds the direct-map base, so
+            // this path has no dependency on a global cell being initialized.
+            y_heap_region_set(start, top);
+        };
+    };
+};
+
+// The kernel's memory, decided once.  Two consumers and one boundary: the
+// Y heap owns the last 8 MB of RAM, and physical pages -- address
+// spaces, stacks, a process's memory, every message buffer -- are handed out
+// from the image's end up to the heap's first byte.  `start` clears the
+// loader's command line and every Multiboot module: QEMU puts the initrd in
+// RAM too, and an allocator that starts at the image's end hands the initrd
+// out as if it were free.
 def phys_init() -> void {
     if (phys_next == 0) {
-        let r = phys_region();
-        let start = y_kernel_end_get();
-        // Everything the loader left in the way, above the image: the
-        // command-line string is the one that sits there (QEMU puts it just
-        // past the kernel), and handing out that page would clobber it.
-        let cl = mb_cmdline_addr();
-        if (cl != 0) {
-            let cle = cl + str_len_at(cl) + 1;
-            if (cle > start) { start = cle; };
-        };
+        y_heap_init();
+        let start = reserved_end();
         if (start % 4096 != 0) { start = start + 4096 - start % 4096; };
-        if (r.base > start) { start = r.base; };
-        if (start % 4096 != 0) { start = start + 4096 - start % 4096; };
-        let limit = r.base + r.len;
-        if (mb_mem_upper_kb() > 0) {
-            let top = 1048576 + mb_mem_upper_kb() * 1024;
-            if (top < limit) { limit = top; };
-        };
+        let limit = y_heap_start_get();
+        if (limit < start) { limit = start; };
         phys_next = start;
         phys_limit = limit;
     };
@@ -315,6 +405,16 @@ def phys_free_bytes() -> long {
     phys_init();
     phys_limit - phys_next
 };
+
+// How much RAM the Y heap was given, in bytes (0 before the first allocation).
+def heap_bytes() -> long {
+    y_heap_init();
+    y_heap_limit_get() - y_heap_bias_get()
+};
+
+// Where the heap and the page allocator are, for a test to print.
+def heap_start_phys() -> long { y_heap_init(); y_heap_start_get() };
+def phys_start() -> long { phys_init(); phys_next };
 
 def page_alloc() -> long {
     phys_init();
@@ -477,19 +577,21 @@ def vm_new_dir() -> long {
     if (dir == 0) { return 0; };
     let pdpt = page_alloc();
     if (pdpt == 0) { return 0; };
-    let src = peek64(vm_current()) & PHYS_MASK;
-    let i = 0;
-    while (i < 512) {
-        poke64(pdpt + i * 8, peek64(src + i * 8));
-        i = i + 1;
-    };
-    // entries above the kernel's own gigabyte belong to the process
-    i = 1;
-    while (i < 512) {
-        poke64(pdpt + i * 8, 0);
-        i = i + 1;
-    };
+    let pd = page_alloc();
+    if (pd == 0) { return 0; };
+    // The kernel's own mapping is its boot PD[0] (the first 2 MB), copied in:
+    // its code, its stacks, the IDT and the trap stubs are reachable from
+    // every address space, and nothing else in the low half is.  That is what
+    // leaves 0x400000 -- where a Linux executable is linked -- to the program.
+    let cur = vm_current();
+    let pdpt_low = peek64(cur) & PHYS_MASK;
+    let pd_low = peek64(pdpt_low) & PHYS_MASK;
+    poke64(pd, peek64(pd_low));
+    poke64(pdpt, pd | PTE_P | PTE_W);
     poke64(dir, pdpt | PTE_P | PTE_W);
+    // PML4[273]: the direct map, shared.  The kernel reaches every physical
+    // page through it while running on this address space.
+    poke64(dir + 273 * 8, peek64(cur + 273 * 8));
     dir
 };
 

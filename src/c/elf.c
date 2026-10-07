@@ -162,7 +162,13 @@ Yv *elf_debug(ylong code_off, ylong codesz, ylong ro_len, ylong filesz,
     } else {
         ylong base = 4194304;
         ylong ro_off = code_off + codesz;
-        ylong bss_addr = base + bss_vaddr;
+        /* bss_vaddr is already absolute: elf_write computed it as
+         * base + ... and handed it down (and used it, unmodified, as the
+         * PT_LOAD's p_vaddr).  Adding base a second time put every .bss
+         * symbol and the .bss section header at 0x802000 instead of
+         * 0x402000 -- debug metadata only, so nothing failed, and `nm`
+         * named an address the program never uses. */
+        ylong bss_addr = bss_vaddr;
         ylong bss_idx = 0;
         ylong symtab_idx = 3;
         if (bss_len > 0) {

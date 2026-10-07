@@ -143,21 +143,59 @@ provokes a page fault and checks the report.
 
 `std/kernel.y` carries both, and neither is assembly:
 
-* **raw access** is `peek64`/`poke64`/`peek32`/`peek8`/`poke8` over one
-  global anchor (`mem_word`) moved by pointer arithmetic.  Y has no
-  address-to-pointer conversion (`KERNEL-ROADMAP.md` §3, item 2), so this
-  is the workaround until a cast exists.  Two alignment facts are
+* **the address layout**, and why it is what it is.  A user program is a
+  Linux executable linked at `0x400000`, so that address has to be free in
+  a process's address space; the kernel therefore maps **one 2 MB page**
+  for itself (image, stack, IDT, all below 2 MB) and reaches every other
+  physical byte through a **direct map** at `0xFFFF888000000000`:
+
+  | region | virtual | in every address space |
+  |---|---|---|
+  | user | `0x400000` and up | per process |
+  | kernel image | `0x100000`–`0x200000` (PD[0]) | yes, supervisor |
+  | direct map | `0xFFFF888000000000` + physical | yes, supervisor |
+
+  That is why the 16 MB `.bss` heap arena is gone: it put the image's end
+  18 MB up, straight through where user space wants to be, and it is why
+  every address space is built as "the kernel's `PD[0]`, the direct map,
+  and the process's own low half" (`vm_new_dir`).
+* **two address conventions**, which is the one thing to keep straight:
+  `peek64`/`poke64`/`peek32`/`peek8`/`poke8` take **physical** addresses
+  (page tables, the Multiboot structures, another process's pages), and
+  `peek_va64`/`poke_va64` take a **virtual** address in the current
+  address space (the kernel's own image, and a task's memory while running
+  on its `CR3` — what a syscall's user copy needs).  The Y heap's own
+  pointers are direct-map virtual addresses, set up that way by
+  `y_heap_init`.
+* **raw access** is pointer arithmetic on one global anchor (`mem_word`).
+  Y has no address-to-pointer conversion (`KERNEL-ROADMAP.md` §3, item 2),
+  so this is the workaround until a cast exists.  Two alignment facts are
   load-bearing and commented in the file: the physical-address mask is bits
   12..51 (NOT `2^52-1`, which keeps the low twelve flag bits and makes the
   walk read a misaligned word), and the Multiboot memory map's `u64` fields
   are 4-aligned.
-* **physical memory**: the Multiboot info is parsed (`mb_flags`,
-  `mb_mem_upper_kb`, `mb_region_count`/`mb_region` over the full mmap) and
-  a bump allocator (`page_alloc`, `pages_alloc`, `phys_free_bytes`) hands
-  out pages from the first available region past the kernel image.
-  `phys_init` also steps over the loader's **command line**, which QEMU
-  writes into the pages just past the loaded image — exactly where an
-  allocator wants to start.  The first version handed that page out.
+* **physical memory**: the Y heap owns the last 8 MB of RAM and physical
+  pages are handed out from the image's end up to the heap's first byte
+  (`phys_init`, `page_alloc`, `pages_alloc`, `phys_free_bytes`).  `start`
+  clears the loader's **command line** and every **Multiboot module** —
+  QEMU puts the initrd in RAM too, and an allocator that starts at the
+  image's end hands the initrd out as if it were free (the first version
+  handed the command line out as a page; read `cmdline`, `mods_count` and
+  `mods_addr`).
+* **when the heap is chosen, and the rule that follows from it**: the
+  region is picked lazily, by `y_heap_init`, on the *first* allocation —
+  because a kernel program's globals can allocate before its top level
+  runs.  That first allocation can therefore happen inside ANOTHER
+  module's global initializer, before the hoisted global-init code has run,
+  so `y_heap_init` and everything it calls must read **no Y global and no
+  `const`** — a const's cell is a global like any other and reads zero.
+  (The first version read `HEAP_BYTES` as 0, fell into its floor branch,
+  and then faulted storing into a page below 2 MB.)  Literals, `y_*_get`
+  asm accessors, and functions that obey the same rule only.
+* **`kexit(code)`** leaves qemu through the `isa-debug-exit` device
+  (port 0x501); the device applies `(code << 1) | 1`, so a `kexit(7)` is a
+  runner status of 15.  That is the kernel test harness's verdict path —
+  a freestanding payload has nobody to return a status to.
 * **virtual memory**: the four-level walk (`vm_slot`, `vm_map`,
   `vm_map_range`, `vm_unmap`, `vm_translate`), address spaces
   (`vm_new_dir`, `vm_switch`, `vm_current`) and `vm_flush`.  Large pages
@@ -180,10 +218,11 @@ the SSE state is not saved across an interrupt (the Y backend only touches
 XMM in float code); only the 8259 path is wired (no APIC, no IOAPIC, no
 MSI); a fault stops the machine rather than being resumed (so no demand
 paging or copy-on-write yet); the physical allocator never frees; the
-kernel is identity-mapped in `PML4[0]` with 2 MB pages, which is also where
-user space wants to be, so a new address space copies rather than isolates;
-there is no ring 3, no scheduler, no filesystem; and `-g` is refused (the
-debug writers are ELF64/DWARF64).
+direct map covers the first 1 GB (a bigger guest needs a second PDPT
+entry); a kernel program must call `kernel.init()` (or reach no global
+initializer that allocates) before its first allocation, because the heap
+region is chosen lazily; there is no ring 3, no scheduler, no filesystem;
+and `-g` is refused (the debug writers are ELF64/DWARF64).
 
 ## What a kernel cannot import
 
@@ -222,8 +261,13 @@ only if it reaches the end without matching.
 suite.  Each `t*` case is compiled by both the built compiler and the C
 copy (byte-identical images and `-S` listings), then **booted** under
 qemu with its `.stdin` fed a second in, and its serial output compared to
-its `.expected`.  `e*` cases are compiled with `--kernel` and must print
-every `// expect-error:` line they carry; `h*` are the same without
+its `.expected`.  A case with a `.exit` file ends in `kexit` and qemu's
+own status is checked too (`x001_kexit`: `kexit(7)` is a status of 15).
+Every image is also held to a **256 KB budget** — the kernel must stay
+inside its one 2 MB page — and `t008_heap` pins the layout the rest
+depends on (the heap in RAM above the image, the page region below it,
+nothing overlapping).  `e*` cases are compiled with `--kernel` and must
+print every `// expect-error:` line they carry; `h*` are the same without
 `--kernel`.  No qemu, or a compiler without `--kernel`, skips.
 
 The hand-written reference for the boot path is

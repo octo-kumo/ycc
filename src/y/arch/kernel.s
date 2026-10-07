@@ -258,20 +258,89 @@ y_cr2_get:
 
 #=== replace: y_alloc_map ===
 # The page source under y_alloc.  A hosted build asks mmap; a kernel has no
-# mmap, so this bumps through y_kheap, a 16 MB .bss reservation (arch_x64.y's
-# arch_kernel_bss) whose zero-filled pages cost RAM and no file bytes.
+# mmap, so this bumps a region of RAM that std/kernel.y's y_heap_init chose
+# (as DIRECT-MAP addresses: the kernel's own identity map is one 2 MB page, so
+# RAM above it is only reachable through the direct map).
+#
+# The region is chosen lazily, on the FIRST allocation rather than by a boot
+# step, because a kernel program's globals can allocate before its top level
+# runs.  y_heap_init is in std/kernel.y and is kept by the tree shaker as the
+# helper a kept prelude block calls; a kernel program that does not link that
+# module gets "undefined label 'y_heap_init'" from the assembler, which is the
+# right complaint.
+#
 # Called with %rsi = the size to hand over; answers its base in %rax, and
 # every size y_alloc_more asks for is page-aligned, so the bases are too.
 y_alloc_map:
-    mov y_kheap_used(%rip), %rax
-    lea y_kheap(%rip), %rdx
-    add %rdx, %rax
-    mov y_kheap_used(%rip), %r8
+    mov y_heap_limit(%rip), %rdx
+    test %rdx, %rdx
+    jne y_am_ram
+    push %rsi
+    call y_heap_init
+    pop %rsi
+    mov y_heap_limit(%rip), %rdx
+    test %rdx, %rdx
+    je y_alloc_fail
+y_am_ram:
+    mov y_heap_next(%rip), %rax
+    mov %rax, %r8
     add %rsi, %r8
-    mov %r8, y_kheap_used(%rip)
-    cmp $16777216, %r8
+    cmp %rdx, %r8
     jg y_alloc_fail
+    mov %r8, y_heap_next(%rip)
     ret
+
+#=== add: y_heap_region_set ===
+# y_heap_region_set(start, limit) -> void: hand the Y heap the PHYSICAL RAM
+# region it will use for the rest of the kernel's life.  The direct-map base is
+# added HERE rather than by the caller because this can run before the compiler
+# module's globals are initialized -- the first allocation may be another
+# module's global initializer -- and a `const` read that early reads zero.
+#
+#   y_heap_start  physical, the boundary the page allocator stops at
+#   y_heap_bias   the direct-map address of that boundary
+#   y_heap_limit  ditto for the top: what the bump is compared against
+y_heap_region_set:
+    mov $18446612682070032384, %r10
+    mov 8(%rsp), %rax
+    add %r10, %rax
+    mov %rax, y_heap_limit(%rip)
+    mov 16(%rsp), %rax
+    mov %rax, y_heap_start(%rip)
+    mov %rax, %rdx
+    add %r10, %rdx
+    mov %rdx, y_heap_bias(%rip)
+    mov %rdx, y_heap_next(%rip)
+    ret
+
+#=== add: y_heap_start_get ===
+y_heap_start_get:
+    mov y_heap_start(%rip), %rax
+    ret
+
+#=== add: y_heap_bias_get ===
+y_heap_bias_get:
+    mov y_heap_bias(%rip), %rax
+    ret
+
+#=== add: y_heap_limit_get ===
+y_heap_limit_get:
+    mov y_heap_limit(%rip), %rax
+    ret
+
+#=== add: y_kexit ===
+# kexit(code): leave qemu through the isa-debug-exit device, port 0x501.  The
+# DEVICE applies the encoding -- it exits with (value << 1) | 1 -- so the code
+# goes out as it came in, which is why a `kexit(7)` is a status of 15 at the
+# runner.  A freestanding payload has nobody to return a status to, so this is
+# the test harness's verdict path.  Interrupts are off because this is the
+# machine's last instruction.
+y_kexit:
+    cli
+    mov 8(%rsp), %rax
+    mov $1281, %edx
+    outb %al, %dx
+    jmp y_kernel_halt
 
 #=== replace: y_os_exit ===
 # exit(N): a kernel has no one to return the status to.
