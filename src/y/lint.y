@@ -1021,7 +1021,9 @@ def lint_short_pair(st: LintSt, stmts: [Node], i: long) -> long {
     if (i + 1 >= len(stmts)) { return 0; };
     let d = stmts[i];
     let n = stmts[i + 1];
-    if (d.k == K.decl && n.k == K.kw_if) {
+    if (d.k == K.decl && n.k == K.kw_while) {
+        lint_short_index_loop(st, stmts, i);
+    } else if (d.k == K.decl && n.k == K.kw_if) {
         let decl: Decl = d;
         let iff: If = n;
         if (decl.kind == "let" && decl.typ.k == K.tnone && lint_pure(decl.v) && !iff.has_else && iff.cond.k == K.id) {
@@ -1077,6 +1079,192 @@ def lint_first_stmt(block: Node) -> Node {
     };
     { k: K.void, line: block.line, col: block.col }
 };
+
+// Walk a tree for one of two questions: is the name read, or does the body
+// jump? `mask` is a bit set -- 1 a return, 2 a break, 4 a continue -- and
+// `name` is "" when only the jumps matter. One walker because the rules
+// that come next all need "is this index used after the loop" or "can this
+// body be a closure", and a second copy of the descent would drift.
+def lint_find(node: Node, name: str, mask: long) -> bool {
+    let k: long = node.k;
+    if (k == K.ret && mask & 1 != 0) { return true; };
+    if (k == K.kw_break && mask & 2 != 0) { return true; };
+    if (k == K.kw_continue && mask & 4 != 0) { return true; };
+    if (k == K.id) {
+        if (name == "") { return false; };
+        let l: Leaf = node;
+        l.v == name
+    } else if (k == K.bin) {
+        let b: Bin = node;
+        lint_find(b.l, name, mask) || lint_find(b.r, name, mask)
+    } else if (k == K.un) {
+        let u: Un = node;
+        lint_find(u.e, name, mask)
+    } else if (k == K.call) {
+        let c: Call = node;
+        lint_find(c.callee, name, mask) || lint_find_list(c.args, name, mask)
+    } else if (k == K.dot) {
+        let d: Dot = node;
+        lint_find(d.obj, name, mask)
+    } else if (k == K.index) {
+        let ix: Index = node;
+        lint_find(ix.arr, name, mask) || lint_find(ix.idx, name, mask)
+    } else if (k == K.slice) {
+        let s: Slice = node;
+        lint_find(s.arr, name, mask) || lint_find(s.lo, name, mask) || lint_find(s.hi, name, mask)
+    } else if (k == K.assign) {
+        let a: Assign = node;
+        lint_find(a.v, name, mask)
+    } else if (k == K.opassign) {
+        let o: OpAssign = node;
+        lint_find(o.tgt, name, mask) || lint_find(o.v, name, mask)
+    } else if (k == K.incdec) {
+        let o: IncDec = node;
+        lint_find(o.tgt, name, mask)
+    } else if (k == K.idxassign) {
+        let a: IdxAssign = node;
+        lint_find(a.arr, name, mask) || lint_find(a.idx, name, mask) || lint_find(a.v, name, mask)
+    } else if (k == K.dotassign) {
+        let a: DotAssign = node;
+        lint_find(a.obj, name, mask) || lint_find(a.v, name, mask)
+    } else if (k == K.sliceassign) {
+        let a: SliceAssign = node;
+        lint_find(a.arr, name, mask) || lint_find(a.lo, name, mask) || lint_find(a.hi, name, mask) || lint_find(a.v, name, mask)
+    } else if (k == K.store) {
+        let s: Store = node;
+        lint_find(s.p, name, mask) || lint_find(s.v, name, mask)
+    } else if (k == K.array) {
+        let a: ArrLit = node;
+        lint_find_list(a.elems, name, mask)
+    } else if (k == K.rec || k == K.map) {
+        let r: RecLit = node;
+        lint_find_list(r.vals, name, mask)
+    } else if (k == K.arrrep) {
+        let a: ArrRep = node;
+        lint_find(a.v, name, mask)
+    } else if (k == K.rectest || k == K.narrow) {
+        let n: Narrow = node;
+        lint_find(n.e, name, mask)
+    } else if (k == K.ret || k == K.matchend) {
+        let w: Wrap = node;
+        lint_find(w.e, name, mask)
+    } else if (k == K.block) {
+        let b: Block = node;
+        lint_find_list(b.stmts, name, mask)
+    } else if (k == K.kw_if) {
+        let i2: If = node;
+        lint_find(i2.cond, name, mask) || lint_find(i2.then, name, mask) || lint_find(i2.els, name, mask)
+    } else if (k == K.kw_while) {
+        let w: While = node;
+        lint_find(w.cond, name, mask) || lint_find(w.body, name, mask)
+    } else if (k == K.kw_for) {
+        let f: For = node;
+        lint_find(f.init, name, mask) || lint_find(f.cond, name, mask) || lint_find(f.step, name, mask) || lint_find(f.body, name, mask)
+    } else if (k == K.kw_foreach) {
+        let f: Foreach = node;
+        lint_find(f.iter, name, mask) || lint_find(f.body, name, mask)
+    } else if (k == K.forrange) {
+        let f: ForRange = node;
+        lint_find(f.lo, name, mask) || lint_find(f.hi, name, mask) || lint_find(f.body, name, mask)
+    } else if (k == K.func) {
+        let f: Func = node;
+        lint_find(f.body, name, mask) || lint_find_list(f.defs, name, mask)
+    } else if (k == K.decl) {
+        let d: Decl = node;
+        lint_find(d.v, name, mask)
+    } else { false }
+};
+
+def lint_find_list(nodes: [Node], name: str, mask: long) -> bool {
+    let i = 0;
+    while (i < len(nodes)) {
+        if (lint_find(nodes[i], name, mask)) { return true; };
+        i = i + 1;
+    };
+    false
+};
+
+// Whether the last real statement of a loop body is `iv = iv + 1` (also
+// `iv++`, `iv += 1`).
+def lint_step_one(body: Node, iv: str) -> bool {
+    if (body.k != K.block) { return false; };
+    let b: Block = body;
+    let last: Node = { k: K.void, line: body.line, col: body.col };
+    let i = 0;
+    while (i < len(b.stmts)) {
+        if (b.stmts[i].k != K.void) { last = b.stmts[i]; };
+        i = i + 1;
+    };
+    if (last.k == K.assign) {
+        let a: Assign = last;
+        if (a.name != iv || a.v.k != K.bin) { return false; };
+        let ab: Bin = a.v;
+        if (ab.op != "+" || ab.l.k != K.id) { return false; };
+        let al: Leaf = ab.l;
+        al.v == iv && lint_int_val(ab.r) == 1
+    } else if (last.k == K.opassign) {
+        let o: OpAssign = last;
+        if (o.op != "+" || o.tgt.k != K.id) { return false; };
+        let ot: Leaf = o.tgt;
+        ot.v == iv && lint_int_val(o.v) == 1
+    } else if (last.k == K.incdec) {
+        let inc: IncDec = last;
+        if (inc.tgt.k != K.id || inc.op != "++") { return false; };
+        let it: Leaf = inc.tgt;
+        it.v == iv
+    } else { false }
+};
+
+// The name inside `len(a)`, or "".
+def lint_len_of(node: Node) -> str {
+    if (node.k != K.call) { return ""; };
+    let c: Call = node;
+    if (c.callee.k != K.id || len(c.args) != 1) { return ""; };
+    let id: Leaf = c.callee;
+    if (id.v != "len" || c.args[0].k != K.id) { return ""; };
+    let a: Leaf = c.args[0];
+    a.v
+};
+
+// Rules 2.8/3.1: an index loop that is a `for` range or an array method.
+def lint_short_index_loop(st: LintSt, stmts: [Node], i: long) -> long {
+    if (i + 1 >= len(stmts)) { return 0; };
+    let d = stmts[i];
+    let n = stmts[i + 1];
+    if (d.k != K.decl || n.k != K.kw_while) { return 0; };
+    let decl: Decl = d;
+    if (decl.kind != "let" || decl.typ.k != K.tnone) { return 0; };
+    let loop: While = n;
+    let iv = decl.name;
+    if (loop.cond.k != K.bin) { return 0; };
+    let cb: Bin = loop.cond;
+    if ((cb.op != "<" && cb.op != "<=") || cb.l.k != K.id) { return 0; };
+    let cl: Leaf = cb.l;
+    if (cl.v != iv || !lint_step_one(loop.body, iv)) { return 0; };
+    // The loop variable must not be read after the loop: the rewrite
+    // scopes it to the loop, so a later read would not compile.
+    if (lint_find_from(stmts, i + 2, iv, 0)) { return 0; };
+    let arr = lint_len_of(cb.r);
+    if (cb.op == "<" && arr != "") {
+        if (lint_find(loop.body, "", 7)) { return 0; };
+        lint_warn_at(st, "this index loop can be '" + lint_disp(arr) + ".foreach((e, i) => { ... })'", d);
+    } else {
+        if (lint_find(loop.body, "", 4)) { return 0; };
+        lint_warn_at(st, "this index loop can be 'for " + lint_disp(iv) + " in <lo>..<hi> { ... }'", d);
+    };
+    0
+};
+
+// The statements from index `from` on, walked without copying the list.
+def lint_find_from(nodes: [Node], from: long, name: str, mask: long) -> bool {
+    let i = from;
+    while (i < len(nodes)) {
+        if (lint_find(nodes[i], name, mask)) { return true; };
+        i = i + 1;
+    };
+    false
+};
+
 
 
 

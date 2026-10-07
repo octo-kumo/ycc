@@ -73,6 +73,12 @@ static ylong lint_short_if_ternary(LintSt st, Yv *node);
 static ylong lint_short_if(LintSt st, Yv *node);
 static ylong lint_short_pair(LintSt st, Yv *stmts, ylong i);
 static ylong lint_short_while(LintSt st, Yv *loop);
+static int lint_find(Yv *node, Yv *name, ylong mask);
+static int lint_find_list(Yv *nodes, Yv *name, ylong mask);
+static int lint_find_from(Yv *nodes, ylong from, Yv *name, ylong mask);
+static int lint_step_one(Yv *body, Yv *iv);
+static Yv *lint_len_of(Yv *node);
+static ylong lint_short_index_loop(LintSt st, Yv *stmts, ylong i);
 static ylong lint_loop_body(LintSt st, Yv *body);
 static ylong lint_stmts(LintSt st, Yv *stmts, int used, int top);
 static ylong lint_warn_at(LintSt st, Yv *msg, Yv *node);
@@ -1223,7 +1229,9 @@ static ylong lint_short_pair(LintSt st, Yv *stmts, ylong i) {
     if (i + 1 >= yv_len(stmts)) { return 0; }
     Yv *d = ya_get(stmts, i);
     Yv *n = ya_get(stmts, i + 1);
-    if (yv_l(yr_get(d, "k")) == K_decl && yv_l(yr_get(n, "k")) == K_kw_if) {
+    if (yv_l(yr_get(d, "k")) == K_decl && yv_l(yr_get(n, "k")) == K_kw_while) {
+        (void)lint_short_index_loop(st, stmts, i);
+    } else if (yv_l(yr_get(d, "k")) == K_decl && yv_l(yr_get(n, "k")) == K_kw_if) {
         if (ys_eq_lit(yr_get(d, "kind"), "let") &&
             yv_l(yr_get(yr_get(d, "typ"), "k")) == K_tnone &&
             lint_pure(yr_get(d, "v")) && !yv_b(yr_get(n, "has_else")) &&
@@ -1280,6 +1288,218 @@ static ylong lint_short_while(LintSt st, Yv *loop) {
             ys("'while (true)' with a leading 'break' guard can test the guard "
                "instead"),
             b);
+    }
+    return 0;
+}
+
+/* Walk a tree for one of two questions: is the name read, or does the body
+ * jump? `mask` is a bit set -- 1 a return, 2 a break, 4 a continue -- and
+ * `name` is "" when only the jumps matter. */
+static int lint_find(Yv *node, Yv *name, ylong mask) {
+    ylong k = yv_l(yr_get(node, "k"));
+    if (k == K_ret && (mask & 1) != 0) { return 1; }
+    if (k == K_kw_break && (mask & 2) != 0) { return 1; }
+    if (k == K_kw_continue && (mask & 4) != 0) { return 1; }
+    if (k == K_id) {
+        if (ys_eq_lit(name, "")) { return 0; }
+        return ys_eq(yr_get(node, "v"), name);
+    } else if (k == K_bin) {
+        return lint_find(yr_get(node, "l"), name, mask) ||
+               lint_find(yr_get(node, "r"), name, mask);
+    } else if (k == K_un) {
+        return lint_find(yr_get(node, "e"), name, mask);
+    } else if (k == K_call) {
+        return lint_find(yr_get(node, "callee"), name, mask) ||
+               lint_find_list(yr_get(node, "args"), name, mask);
+    } else if (k == K_dot) {
+        return lint_find(yr_get(node, "obj"), name, mask);
+    } else if (k == K_index) {
+        return lint_find(yr_get(node, "arr"), name, mask) ||
+               lint_find(yr_get(node, "idx"), name, mask);
+    } else if (k == K_slice) {
+        return lint_find(yr_get(node, "arr"), name, mask) ||
+               lint_find(yr_get(node, "lo"), name, mask) ||
+               lint_find(yr_get(node, "hi"), name, mask);
+    } else if (k == K_assign) {
+        return lint_find(yr_get(node, "v"), name, mask);
+    } else if (k == K_opassign) {
+        return lint_find(yr_get(node, "tgt"), name, mask) ||
+               lint_find(yr_get(node, "v"), name, mask);
+    } else if (k == K_incdec) {
+        return lint_find(yr_get(node, "tgt"), name, mask);
+    } else if (k == K_idxassign) {
+        return lint_find(yr_get(node, "arr"), name, mask) ||
+               lint_find(yr_get(node, "idx"), name, mask) ||
+               lint_find(yr_get(node, "v"), name, mask);
+    } else if (k == K_dotassign) {
+        return lint_find(yr_get(node, "obj"), name, mask) ||
+               lint_find(yr_get(node, "v"), name, mask);
+    } else if (k == K_sliceassign) {
+        return lint_find(yr_get(node, "arr"), name, mask) ||
+               lint_find(yr_get(node, "lo"), name, mask) ||
+               lint_find(yr_get(node, "hi"), name, mask) ||
+               lint_find(yr_get(node, "v"), name, mask);
+    } else if (k == K_store) {
+        return lint_find(yr_get(node, "p"), name, mask) ||
+               lint_find(yr_get(node, "v"), name, mask);
+    } else if (k == K_array) {
+        return lint_find_list(yr_get(node, "elems"), name, mask);
+    } else if (k == K_rec || k == K_map) {
+        return lint_find_list(yr_get(node, "vals"), name, mask);
+    } else if (k == K_arrrep) {
+        return lint_find(yr_get(node, "v"), name, mask);
+    } else if (k == K_rectest || k == K_narrow) {
+        return lint_find(yr_get(node, "e"), name, mask);
+    } else if (k == K_ret || k == K_matchend) {
+        return lint_find(yr_get(node, "e"), name, mask);
+    } else if (k == K_block) {
+        return lint_find_list(yr_get(node, "stmts"), name, mask);
+    } else if (k == K_kw_if) {
+        return lint_find(yr_get(node, "cond"), name, mask) ||
+               lint_find(yr_get(node, "then"), name, mask) ||
+               lint_find(yr_get(node, "els"), name, mask);
+    } else if (k == K_kw_while) {
+        return lint_find(yr_get(node, "cond"), name, mask) ||
+               lint_find(yr_get(node, "body"), name, mask);
+    } else if (k == K_kw_for) {
+        return lint_find(yr_get(node, "init"), name, mask) ||
+               lint_find(yr_get(node, "cond"), name, mask) ||
+               lint_find(yr_get(node, "step"), name, mask) ||
+               lint_find(yr_get(node, "body"), name, mask);
+    } else if (k == K_kw_foreach) {
+        return lint_find(yr_get(node, "iter"), name, mask) ||
+               lint_find(yr_get(node, "body"), name, mask);
+    } else if (k == K_forrange) {
+        return lint_find(yr_get(node, "lo"), name, mask) ||
+               lint_find(yr_get(node, "hi"), name, mask) ||
+               lint_find(yr_get(node, "body"), name, mask);
+    } else if (k == K_func) {
+        return lint_find(yr_get(node, "body"), name, mask) ||
+               lint_find_list(yr_get(node, "defs"), name, mask);
+    } else if (k == K_decl) {
+        return lint_find(yr_get(node, "v"), name, mask);
+    }
+    return 0;
+}
+
+static int lint_find_list(Yv *nodes, Yv *name, ylong mask) {
+    ylong i = 0;
+    while (i < yv_len(nodes)) {
+        if (lint_find(ya_get(nodes, i), name, mask)) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+static int lint_find_from(Yv *nodes, ylong from, Yv *name, ylong mask) {
+    ylong i = from;
+    while (i < yv_len(nodes)) {
+        if (lint_find(ya_get(nodes, i), name, mask)) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+/* Whether the last real statement of a loop body is `iv = iv + 1` (also
+ * `iv++`, `iv += 1`). */
+static int lint_step_one(Yv *body, Yv *iv) {
+    if (yv_l(yr_get(body, "k")) != K_block) { return 0; }
+    Yv *stmts = yr_get(body, "stmts");
+    Yv *last = yr(3, "k", yv_long(K_void), "line", yr_get(body, "line"),
+                  "col", yr_get(body, "col"));
+    ylong i = 0;
+    while (i < yv_len(stmts)) {
+        if (yv_l(yr_get(ya_get(stmts, i), "k")) != K_void) {
+            last = ya_get(stmts, i);
+        }
+        i = i + 1;
+    }
+    ylong lk = yv_l(yr_get(last, "k"));
+    if (lk == K_assign) {
+        Yv *v = yr_get(last, "v");
+        if (!ys_eq(yr_get(last, "name"), iv) ||
+            yv_l(yr_get(v, "k")) != K_bin) {
+            return 0;
+        }
+        if (!ys_eq_lit(yr_get(v, "op"), "+") ||
+            yv_l(yr_get(yr_get(v, "l"), "k")) != K_id) {
+            return 0;
+        }
+        return ys_eq(yr_get(yr_get(v, "l"), "v"), iv) &&
+               lint_int_val(yr_get(v, "r")) == 1;
+    } else if (lk == K_opassign) {
+        if (!ys_eq_lit(yr_get(last, "op"), "+") ||
+            yv_l(yr_get(yr_get(last, "tgt"), "k")) != K_id) {
+            return 0;
+        }
+        return ys_eq(yr_get(yr_get(last, "tgt"), "v"), iv) &&
+               lint_int_val(yr_get(last, "v")) == 1;
+    } else if (lk == K_incdec) {
+        if (yv_l(yr_get(yr_get(last, "tgt"), "k")) != K_id ||
+            !ys_eq_lit(yr_get(last, "op"), "++")) {
+            return 0;
+        }
+        return ys_eq(yr_get(yr_get(last, "tgt"), "v"), iv);
+    }
+    return 0;
+}
+
+/* The name inside `len(a)`, or "". */
+static Yv *lint_len_of(Yv *node) {
+    if (yv_l(yr_get(node, "k")) != K_call) { return ys(""); }
+    Yv *args = yr_get(node, "args");
+    if (yv_l(yr_get(yr_get(node, "callee"), "k")) != K_id ||
+        yv_len(args) != 1) {
+        return ys("");
+    }
+    if (!ys_eq_lit(yr_get(yr_get(node, "callee"), "v"), "len")) {
+        return ys("");
+    }
+    if (yv_l(yr_get(ya_get(args, 0), "k")) != K_id) { return ys(""); }
+    return yr_get(ya_get(args, 0), "v");
+}
+
+/* Rules 2.8/3.1: an index loop that is a `for` range or an array method. */
+static ylong lint_short_index_loop(LintSt st, Yv *stmts, ylong i) {
+    if (i + 1 >= yv_len(stmts)) { return 0; }
+    Yv *d = ya_get(stmts, i);
+    Yv *n = ya_get(stmts, i + 1);
+    if (yv_l(yr_get(d, "k")) != K_decl ||
+        yv_l(yr_get(n, "k")) != K_kw_while) {
+        return 0;
+    }
+    if (!ys_eq_lit(yr_get(d, "kind"), "let") ||
+        yv_l(yr_get(yr_get(d, "typ"), "k")) != K_tnone) {
+        return 0;
+    }
+    Yv *iv = yr_get(d, "name");
+    Yv *cond = yr_get(n, "cond");
+    if (yv_l(yr_get(cond, "k")) != K_bin) { return 0; }
+    Yv *op = yr_get(cond, "op");
+    if ((!ys_eq_lit(op, "<") && !ys_eq_lit(op, "<=")) ||
+        yv_l(yr_get(yr_get(cond, "l"), "k")) != K_id) {
+        return 0;
+    }
+    if (!ys_eq(yr_get(yr_get(cond, "l"), "v"), iv) ||
+        !lint_step_one(yr_get(n, "body"), iv)) {
+        return 0;
+    }
+    if (lint_find_from(stmts, i + 2, iv, 0)) { return 0; }
+    Yv *arr = lint_len_of(yr_get(cond, "r"));
+    if (ys_eq_lit(op, "<") && !ys_eq_lit(arr, "")) {
+        if (lint_find(yr_get(n, "body"), ys(""), 7)) { return 0; }
+        (void)lint_warn_at(st,
+                           lint_cat(3, ys("this index loop can be '"),
+                                    lint_disp(arr),
+                                    ys(".foreach((e, i) => { ... })'")),
+                           d);
+    } else {
+        if (lint_find(yr_get(n, "body"), ys(""), 4)) { return 0; }
+        (void)lint_warn_at(st,
+                           lint_cat(3, ys("this index loop can be 'for "),
+                                    lint_disp(iv),
+                                    ys(" in <lo>..<hi> { ... }'")),
+                           d);
     }
     return 0;
 }
