@@ -1,5 +1,8 @@
 # `ycc --kernel` — a freestanding Y kernel
 
+*(What is missing, what the language cannot express yet, and how much work
+each remaining piece is: `KERNEL-ROADMAP.md`.)*
+
 `ycc --kernel prog.y -o prog.elf` compiles a Y program to an **ELF32
 Multiboot-1 payload** that `qemu-system-x86_64 -kernel prog.elf` boots on
 bare metal: no Linux, no libc, the serial port for output.  It is a
@@ -121,11 +124,66 @@ The path runs through all four stages:
   declarations -- `y_pic_remap` leaves them all masked, and a slave line
   also opens the master's cascade) and loads the IDT.
 
-Known limits, all deliberate for a PoC: the SSE state is not saved (the Y
-backend only touches XMM in float code, and no handler here floats), only
-the 8259 path is wired (no APIC/MSI, no IOAPIC), exceptions beyond the
-`irq` lines land on the default stub, and `-g` is refused (the debug
-writers are ELF64/DWARF64).
+## The CPU's exceptions
+
+Vectors 0..31 get their own generated stubs, not the default: each saves the
+caller-saved registers, pushes its vector and the CPU's error code (a dummy
+zero where the CPU pushes none) and calls `y_kernel_trap(vec, err)`.  A
+fault is not resumed from — the handler reports and stops the machine — so
+there is no `iretq` on this path, and `std/kernel.y`'s handler prints the
+vector, the error code, CR2 for `#PF` and a name for `#GP`.
+
+`y_kernel_trap` is the one hook a *bare* kernel gets: the compiler emits a
+halting default when no unit defines the label, and any def with that name
+replaces it (it is a root for the body shaker, because the stub that calls
+it is generated text the shaker cannot see).  `test/kernel/t007_fault.y`
+provokes a page fault and checks the report.
+
+## Physical and virtual memory
+
+`std/kernel.y` carries both, and neither is assembly:
+
+* **raw access** is `peek64`/`poke64`/`peek32`/`peek8`/`poke8` over one
+  global anchor (`mem_word`) moved by pointer arithmetic.  Y has no
+  address-to-pointer conversion (`KERNEL-ROADMAP.md` §3, item 2), so this
+  is the workaround until a cast exists.  Two alignment facts are
+  load-bearing and commented in the file: the physical-address mask is bits
+  12..51 (NOT `2^52-1`, which keeps the low twelve flag bits and makes the
+  walk read a misaligned word), and the Multiboot memory map's `u64` fields
+  are 4-aligned.
+* **physical memory**: the Multiboot info is parsed (`mb_flags`,
+  `mb_mem_upper_kb`, `mb_region_count`/`mb_region` over the full mmap) and
+  a bump allocator (`page_alloc`, `pages_alloc`, `phys_free_bytes`) hands
+  out pages from the first available region past the kernel image.
+  `phys_init` also steps over the loader's **command line**, which QEMU
+  writes into the pages just past the loaded image — exactly where an
+  allocator wants to start.  The first version handed that page out.
+* **virtual memory**: the four-level walk (`vm_slot`, `vm_map`,
+  `vm_map_range`, `vm_unmap`, `vm_translate`), address spaces
+  (`vm_new_dir`, `vm_switch`, `vm_current`) and `vm_flush`.  Large pages
+  are understood, because the kernel's own 1 GB is 512 2 MB pages: a walker
+  that reads a `PS` entry as a table address walks into the mapped memory
+  itself.  A fresh address space copies the kernel's `PDPT[0]` and starts
+  everything above it unmapped — sharing `PML4[0]` itself, which was the
+  first version, shares the whole subtree and gives the second space the
+  first one's user pages.
+
+The machine primitives under all of it are in `arch/kernel.s`: `y_cr3_get`,
+`y_cr3_set`, `y_cr2_get`, `y_invlpg` (four instructions each, three of them
+a raw `.ascii` because the encoder has no control-register operand) and
+`y_mb_info_get`/`y_kernel_end_get` (three each).
+
+## Known limits
+
+Deliberate for a PoC, and each with its cost in `KERNEL-ROADMAP.md` §4:
+the SSE state is not saved across an interrupt (the Y backend only touches
+XMM in float code); only the 8259 path is wired (no APIC, no IOAPIC, no
+MSI); a fault stops the machine rather than being resumed (so no demand
+paging or copy-on-write yet); the physical allocator never frees; the
+kernel is identity-mapped in `PML4[0]` with 2 MB pages, which is also where
+user space wants to be, so a new address space copies rather than isolates;
+there is no ring 3, no scheduler, no filesystem; and `-g` is refused (the
+debug writers are ELF64/DWARF64).
 
 ## What a kernel cannot import
 
