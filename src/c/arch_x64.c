@@ -342,7 +342,10 @@ Yv *arch_kernel_bss(void) {
               "y_kernel_stack_top:\n"
               ".align 4096\n"
               "y_kheap:\n.zero 16777216\n"
-              "y_kheap_used:\n.zero 8\n");
+              "y_kheap_used:\n.zero 8\n"
+              /* Where the kernel's own memory ends: a physical page
+                 allocator starts at the next page after this. */
+              "y_kernel_end:\n");
 }
 
 // The prelude as its lines: labels alone at column 0, everything else
@@ -664,10 +667,58 @@ static Yv *arch_win_push(Yv *out, Yv *l) {
 // A handler that clobbers an XMM register would need the SSE state saved as
 // well; nothing does that yet, and the Y backend only touches XMM in float
 // code.
-Yv *kernel_irq_text(void) {
+/* The vectors whose entry pushes an error code (Intel SDM, "Exception and
+ * Interrupt Vectors"): 8, 10-14, 17, 21, 29, 30.  The rest get a zero so the
+ * handler always reads a second argument. */
+static int trap_has_error_code(ylong v) {
+    return v == 8 || (v >= 10 && v <= 14) || v == 17 || v == 21 || v == 29 || v == 30;
+}
+
+Yv *kernel_irq_text(int has_trap) {
     Yv *out = ys(".text\n");
     out = ys_cat(out, ys("y_kernel_irq_default:\n"));
     out = ys_cat(out, ys("    jmp y_kernel_halt\n"));
+    /* The CPU's own exceptions (vectors 0..31): each stub saves the
+     * caller-saved set, pushes its vector and the CPU's error code and calls
+     * the Y handler y_kernel_trap(vec, err).  A fault is not resumed from, so
+     * there is no `iretq` here.  The vector goes on with a register push
+     * rather than `push $N` (the encoder has no immediate push) and AFTER the
+     * saves, so the interrupted %rax is already safe.  The CPU's error code
+     * ends up just above the ten saved registers, at 80(%rbp). */
+    /* NOTE: index loop, not foreach (PORTING.md rule 9). */
+    ylong v = 0;
+    while (v < 32) {
+        out = ys_cat(out, ys_cat(ys_cat(ys("y_trap_stub_"), ys_long(v)), ys(":\n")));
+        out = ys_cat(out, ys("    push %rbp\n"));
+        out = ys_cat(out, ys("    push %rax\n"));
+        out = ys_cat(out, ys("    push %rcx\n"));
+        out = ys_cat(out, ys("    push %rdx\n"));
+        out = ys_cat(out, ys("    push %rsi\n"));
+        out = ys_cat(out, ys("    push %rdi\n"));
+        out = ys_cat(out, ys("    push %r8\n"));
+        out = ys_cat(out, ys("    push %r9\n"));
+        out = ys_cat(out, ys("    push %r10\n"));
+        out = ys_cat(out, ys("    push %r11\n"));
+        out = ys_cat(out, ys("    mov %rsp, %rbp\n"));
+        out = ys_cat(out, ys("    and $-16, %rsp\n"));
+        out = ys_cat(out, ys_cat(ys_cat(ys("    mov $"), ys_long(v)), ys(", %eax\n")));
+        out = ys_cat(out, ys("    push %rax\n"));
+        if (trap_has_error_code(v)) {
+            out = ys_cat(out, ys("    mov 80(%rbp), %rax\n"));
+        } else {
+            out = ys_cat(out, ys("    mov $0, %eax\n"));
+        };
+        out = ys_cat(out, ys("    push %rax\n"));
+        out = ys_cat(out, ys("    call y_kernel_trap\n"));
+        out = ys_cat(out, ys("    jmp y_kernel_halt\n"));
+        v++;
+    };
+    if (!has_trap) {
+        /* No unit defines one: the stubs must still resolve.  std/kernel.y's
+         * is the diagnostic version; this is what a bare kernel gets. */
+        out = ys_cat(out, ys("y_kernel_trap:\n"));
+        out = ys_cat(out, ys("    jmp y_kernel_halt\n"));
+    };
     /* NOTE: index loop, not foreach (PORTING.md rule 9). */
     ylong i = 0;
     while (i < yv_len(res_irq_stubs)) {
@@ -737,6 +788,18 @@ Yv *kernel_irq_text(void) {
     out = ys_cat(out, ys("    sub $1, %esi\n"));
     out = ys_cat(out, ys("    cmp $0, %esi\n"));
     out = ys_cat(out, ys("    jne y_kii_loop\n"));
+    ylong tv = 0;
+    while (tv < 32) {
+        out = ys_cat(out, ys_cat(ys_cat(ys("    lea y_trap_stub_"), ys_long(tv)),
+                                 ys("(%rip), %rax\n")));
+        out = ys_cat(out, ys("    call y_kernel_idt_pack\n"));
+        out = ys_cat(out, ys("    lea y_kernel_idt(%rip), %rdi\n"));
+        out = ys_cat(out, ys_cat(ys_cat(ys("    mov %rax, "), ys_long(tv * 16)),
+                                 ys("(%rdi)\n")));
+        out = ys_cat(out, ys_cat(ys_cat(ys("    mov $0, "), ys_long(tv * 16 + 8)),
+                                 ys("(%rdi)\n")));
+        tv++;
+    };
     i = 0;
     while (i < yv_len(res_irq_stubs)) {
         Yv *e = ya_get(res_irq_stubs, i);
@@ -856,6 +919,14 @@ static Yv *kernel_head_text(void) {
     text = ys_cat(text, ys("y_kernel_entry64:\n"));
     text = ys_cat(text, ys("    lea y_kernel_stack_top(%rip), %rsp\n"));
     text = ys_cat(text, ys("    xor %rbp, %rbp\n"));
+    /* The Multiboot loader left the info structure's physical address in
+     * %ebx; nothing in the 32-bit half touches it, and the upper half of a
+     * GPR is not defined across the mode switch, so the 32 bits are
+     * zero-extended before the store. */
+    text = ys_cat(text, ys("    mov %rbx, %rax\n"));
+    text = ys_cat(text, ys("    shl $32, %rax\n"));
+    text = ys_cat(text, ys("    shr $32, %rax\n"));
+    text = ys_cat(text, ys("    mov %rax, y_mb_info(%rip)\n"));
     text = ys_cat(text, ys("    call y_kernel_main\n"));
     text = ys_cat(text, ys("    jmp y_kernel_halt\n"));
     return text;

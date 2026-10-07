@@ -14786,6 +14786,11 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
             extra = ya_push(extra, yr_get(ya_get(res_irq_stubs, ei), "label"));
             ei = ei + 1;
         }
+        /* The CPU-exception stubs the generator writes call y_kernel_trap;
+         * generated text is invisible to the shaker, so a unit's handler is
+         * a root or it is dropped and the stub names nothing.  A program
+         * that links no such def gets a generated default instead. */
+        extra = ya_push(extra, ys("y_kernel_trap"));
     };
     Yv *shaken = prune_bodies(labels, refs, extra);
     Yv *keep = yr_get(shaken, "keep");
@@ -14958,7 +14963,10 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
        of the entry-packing helper rather than calling a prelude block the
        shaker may drop. */
     if (target_is_kernel()) {
-        parts = ya_push(parts, part_text(kernel_irq_text()));
+        /* Whether some unit defines the trap handler decides whether the
+         * generated stubs call it or fall back to a halt. */
+        ylong has_trap = namemap_get(namemap_build(labels), ys("y_kernel_trap"));
+        parts = ya_push(parts, part_text(kernel_irq_text(has_trap >= 0)));
     };
     /* The bodies, kept, as parts: their items, with the `.loc` markers moved
        to the unit's place in the program's file table. Every body is items
