@@ -118,7 +118,6 @@ def leading_long(s: str) -> long {
     } else { v }
 };
 
-
 // ── little-endian reads and writes ──────────────────────────────────────
 
 // ── M2: the pass ────────────────────────────────────────────────────────
@@ -247,12 +246,12 @@ let mg_collect = true;
 // user's own text. It is what tells lint which top-level statements the pass
 // put there, so "a top-level statement runs twice" does not fire on them.
 type Scan = { ok: bool, err: str, eline: long, ecol: long,
-              p: [str], pf: [long], pol: [long], gen: [bool],
-              g: [str], gf: [long], gol: [long] };
+    p: [str], pf: [long], pol: [long], gen: [bool],
+    g: [str], gf: [long], gol: [long] };
 
 def scan_bad(err: str, line: long, col: long) -> Scan {
     { ok: false, err: err, eline: line, ecol: col, p: [], pf: [], pol: [],
-      gen: [], g: [], gf: [], gol: [] }
+        gen: [], g: [], gf: [], gol: [] }
 };
 
 // A file with no blocks: P is the file's own lines, G the same, and nothing
@@ -277,7 +276,7 @@ def scan_none(src: str, fid: long) -> Scan {
         i++;
     };
     { ok: true, err: "", eline: 0, ecol: 0, p: lines, pf: f, pol: l, gen: gn,
-      g: lines, gf: f, gol: l }
+        g: lines, gf: f, gol: l }
 };
 
 // ── byte classes (the lexer's own predicates, spelled here because they are
@@ -369,7 +368,7 @@ def put64(buf: [byte], at: long, v: long) -> void {
 // segments are read back out of the bytes elf_build just wrote rather than
 // threading a new signature through asm.y.
 type Img = { ok: bool, err: str, filesz: long, memsz: long, entry: long,
-             bss_delta: long, bss_len: long };
+    bss_delta: long, bss_len: long };
 
 def img_bad(e: str) -> Img {
     { ok: false, err: e, filesz: 0, memsz: 0, entry: 0, bss_delta: 0, bss_len: 0 }
@@ -377,7 +376,7 @@ def img_bad(e: str) -> Img {
 
 def img_ok(bss_delta: long, bss_len: long, entry: long, filesz: long, memsz: long) -> Img {
     { ok: true, err: "", filesz: filesz, memsz: memsz, entry: entry,
-      bss_delta: bss_delta, bss_len: bss_len }
+        bss_delta: bss_delta, bss_len: bss_len }
 };
 
 def elf_img(b: [byte]) -> Img {
@@ -416,7 +415,7 @@ def elf_img_ph(b: [byte], n: long) -> Img {
 };
 
 def elf_img_bss(b: [byte], n: long, phoff: long, phentsize: long, phnum: long,
-                base: long, eoff: long, filesz: long, memsz: long) -> Img {
+    base: long, eoff: long, filesz: long, memsz: long) -> Img {
     let k = 1;
     let found = false;
     let vaddr = 0;
@@ -484,7 +483,7 @@ type RunRes = { ok: bool, status: long, sig: long, out: [byte], err: str };
 
 // Everything the child needs mapped, so it can be undone in one place.
 type Mapd = { img: long, memsz: long, entry: long, span: long,
-              rfd: long, keep: long };
+    rfd: long, keep: long };
 
 // The page sizes and syscall numbers the runner needs. arch_x64's arch_sysno
 // table has only the handful generated code uses, so the rest are spelled out
@@ -608,7 +607,7 @@ def img_span(im: Img) -> long {
 
 def run_image_go(b: [byte], av: [str], want_out: bool, im: Img) -> RunRes {
     let m: Mapd = { img: 0, memsz: im.memsz, entry: im.entry, span: img_span(im),
-                    rfd: 0 - 1, keep: 0 - 1 };
+        rfd: 0 - 1, keep: 0 - 1 };
     if (want_out) {
         let pp = pipe_fds();
         if (!pp.ok) {
@@ -639,7 +638,7 @@ def run_image_fd(b: [byte], av: [str], want_out: bool, im: Img, m0: Mapd, wfd: l
             run_fail("cannot make the image's code read+execute")
         } else {
             let m: Mapd = { img: img, memsz: im.memsz, entry: im.entry, span: m0.span,
-                            rfd: m0.rfd, keep: m0.keep };
+                rfd: m0.rfd, keep: m0.keep };
             run_image_clone(av, want_out, m, wfd)
         }
     }
@@ -649,7 +648,7 @@ def run_image_clone(av: [str], want_out: bool, m: Mapd, wfd: long) -> RunRes {
     let stk: [byte; 131072] = [0; 131072];
     let sp = fab_stack(stk[0:131072], av);
     let m2: Mapd = { img: m.img, memsz: m.memsz, entry: m.entry, span: m.span,
-                     rfd: m.rfd, keep: m.keep };
+        rfd: m.rfd, keep: m.keep };
     if (wfd >= 0) {
         // fd 3 is the child's way back: the injected helpers write pieces
         // there. fd 3 is saved and put back afterwards, so the compiler's own
@@ -735,7 +734,6 @@ def map_release(m: Mapd) -> void {
     if (m.img > 0) { syscall(SYS_MUNMAP, m.img, m.span, 0, 0, 0); };
     0
 };
-
 
 // ── the scanner ─────────────────────────────────────────────────────────
 // The scanner's state is module-level, the way native.y's import bookkeeping
@@ -1865,8 +1863,8 @@ def meta_scan_end() -> Scan {
         sg_gf = [];
         sg_gol = [];
         { ok: true, err: "", eline: 0, ecol: 0, p: sg_p, pf: sg_pf, pol: sg_pol,
-          gen: sg_gen,
-          g: mine, gf: minef, gol: mineol }
+            gen: sg_gen,
+            g: mine, gf: minef, gol: mineol }
     } else {
         scan_bad(sg_err, sg_eline, sg_ecol)
     }
@@ -2125,7 +2123,7 @@ def sg_literal(i: long, n: long) -> long {
 // Whether the quote at i opens an f-string: `f` before it, standing alone.
 def sg_fstring(i: long) -> bool {
     sg_src[i] == 34 && i > 0 && sg_src[i - 1] == 102 &&
-        (i == 1 || !m_word(sg_src[i - 2]))
+    (i == 1 || !m_word(sg_src[i - 2]))
 };
 // ── the driver ──────────────────────────────────────────────────────────
 // `meta_begin`/`mg_*` accumulate across a whole resolve; `meta_run_gen` builds
@@ -2300,22 +2298,22 @@ def mg_report(msg: str) -> void {
 // one write.
 def mg_helpers() -> [str] {
     [
-"def ycc_meta_emit(slot: long, body: str) -> void {",
-"    let h = tostring(slot) + \" \" + tostring(len(body)) + \"\\n\";",
-"    let hb = bytes(h);",
-"    syscall(1, 3, &hb[0], len(hb));",
-"    let b = bytes(body);",
-"    if (len(b) > 0) { syscall(1, 3, &b[0], len(b)); 0; };",
-"    0",
-"};",
-"def ycc_meta_expr(slot: long, body: str) -> str {",
-"    ycc_meta_emit(slot, body);",
-"    body",
-"};",
-"def ycc_meta_stmt(slot: long, body: str) -> void {",
-"    ycc_meta_emit(slot, body);",
-"    0",
-"};",
+        "def ycc_meta_emit(slot: long, body: str) -> void {",
+        "    let h = tostring(slot) + \" \" + tostring(len(body)) + \"\\n\";",
+        "    let hb = bytes(h);",
+        "    syscall(1, 3, &hb[0], len(hb));",
+        "    let b = bytes(body);",
+        "    if (len(b) > 0) { syscall(1, 3, &b[0], len(b)); 0; };",
+        "    0",
+        "};",
+        "def ycc_meta_expr(slot: long, body: str) -> str {",
+        "    ycc_meta_emit(slot, body);",
+        "    body",
+        "};",
+        "def ycc_meta_stmt(slot: long, body: str) -> void {",
+        "    ycc_meta_emit(slot, body);",
+        "    0",
+        "};",
     ]
 };
 
@@ -2594,7 +2592,7 @@ def mg_lines(text: str) -> [str] {
 // "a top-level statement runs twice" check needs to tell the user's own
 // statement from the text a block put there.
 def mg_emit(segs: [str], sego: [long], segp: [bool], fid: long, nl: [str],
-            nf: [long], nll: [long], ngen: [bool]) -> long {
+    nf: [long], nll: [long], ngen: [bool]) -> long {
     let cur = "";
     let curo = 0;
     let cgen = true;
@@ -2653,7 +2651,7 @@ def mg_splice(lo: long, hi: long) -> void {
 // the blocks, so the blocks for this line are the run that starts at the first
 // entry at or after `at` -- the run is skipped to, not merely tested for.
 def mg_splice_line(line: str, ol: long, at: long, lo: long, hi: long,
-                   nl: [str], nf: [long], nll: [long], ngen: [bool]) -> long {
+    nl: [str], nf: [long], nll: [long], ngen: [bool]) -> long {
     let segs: [str] = [];
     let sego: [long] = [];
     let segp: [bool] = [];
@@ -2687,8 +2685,8 @@ def mg_splice_line(line: str, ol: long, at: long, lo: long, hi: long,
     mg_emit(segs, sego, segp, sg_fid, nl, nf, nll, ngen)
 };
 export { run_image, RunRes, Img, elf_img,
-         meta_begin, mg_pass, mg_pending, mg_reduce_on, mg_nest,
-         mg_set, mg_setup, mg_on, mg_check, mg_report,
-         mg_probe, mg_take_pieces, meta_scan, Scan, scan_none,
-         meta_gtext, mg_ghead, mg_glines, mg_gol, mg_gbase, mg_gexec, mg_pkgs, mg_roots,
-         mg_root, MG_NEST, MG_ROUND };
+    meta_begin, mg_pass, mg_pending, mg_reduce_on, mg_nest,
+    mg_set, mg_setup, mg_on, mg_check, mg_report,
+    mg_probe, mg_take_pieces, meta_scan, Scan, scan_none,
+    meta_gtext, mg_ghead, mg_glines, mg_gol, mg_gbase, mg_gexec, mg_pkgs, mg_roots,
+    mg_root, MG_NEST, MG_ROUND };

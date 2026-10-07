@@ -211,10 +211,10 @@ def path_mode(path: str) -> long { mode_of(path, 0) };
 def path_mode_itself(path: str) -> long { mode_of(path, 256) };
 
 def exists(path: str) -> bool { path_mode(path) >= 0 };
-def is_file(path: str) -> bool { (path_mode(path) & 61440) == 32768 };
-def is_dir(path: str) -> bool { (path_mode(path) & 61440) == 16384 };
+def is_file(path: str) -> bool {(path_mode(path) & 61440) == 32768 };
+def is_dir(path: str) -> bool {(path_mode(path) & 61440) == 16384 };
 // A directory itself: a symlink to one is not.
-def is_dir_itself(path: str) -> bool { (path_mode_itself(path) & 61440) == 16384 };
+def is_dir_itself(path: str) -> bool {(path_mode_itself(path) & 61440) == 16384 };
 
 // The size of path in bytes.
 def file_size(path: str) -> long? {
@@ -239,7 +239,7 @@ def remove_all(path: str) -> bool {
         let names = list_dir(path);
         let ok = names != none;
         if (ok) {
-            foreach (n in names!) {
+            foreach (n in names !) {
                 if (!remove_all(path + "/" + n)) { ok = false; }
             };
         }

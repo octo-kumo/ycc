@@ -92,7 +92,7 @@ const K_ERR = 8;
 type PP = {
     pat: str, pos: long, err: str,
     icase: bool, dotall: bool, multiline: bool,
-    groups: long, names: {str => long}, classes: [byte]
+    groups: long, names: { str => long }, classes: [byte]
 };
 
 // ── the results ───────────────────────────────────────────────────────────
@@ -107,13 +107,13 @@ type PP = {
 type Re = {
     pattern: str, prog: [long], classes: [byte], nclass: long,
     first: long, literal: str, need: str, anchored: bool,
-    groups: long, names: {str => long}
+    groups: long, names: { str => long }
 };
 
 // One match. text is subject[start:end] (one copy — a Y string slice always
 // allocates); caps holds two slots per group, group 0 first, -1 for a group that
 // took no part, so m.caps[2 * 1] is group 1's start without a call.
-type Match = { subject: str, text: str, start: long, end: long, caps: [long], names: {str => long} };
+type Match = { subject: str, text: str, start: long, end: long, caps: [long], names: { str => long } };
 
 // What build() hands back: the compiled pattern, or the message. (A Re cannot
 // be spelled empty for the failure case, so the two travel apart.)
@@ -242,7 +242,7 @@ def set_the_one(bm: [byte; 32]) -> long {
     out
 };
 
-def set_has(bm: [byte; 32], c: long) -> bool { (bm[(c >> 3) & 31] & (1 << (c & 7))) != 0 };
+def set_has(bm: [byte; 32], c: long) -> bool {(bm[(c >> 3) & 31] & (1 << (c & 7))) != 0 };
 
 // The same two questions, of set number k in a flat classes array (what the VM
 // asks, so it never has to build a [byte; 32] to ask them).
@@ -354,7 +354,7 @@ def eat(p: PP, c: long) -> bool {
     if (peek(p) == c) { p.pos = p.pos + 1; true } else { false }
 };
 
-def name_start_p(c: long) -> bool { (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 95 };
+def name_start_p(c: long) -> bool {(c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 95 };
 def name_byte_p(c: long) -> bool { name_start_p(c) || is_digit_byte(c) };
 
 def read_name(p: PP) -> str {
@@ -1274,15 +1274,15 @@ def new_run(re: Re, s: str) -> Run {
     while (i < len(re.prog)) { seen += 0; i = i + 1; };
     let ncap = (re.groups + 1) * 2;
     { prog: re.prog, classes: re.classes, subject: s, end: len(s),
-      ninst: len(re.prog), ncap: ncap,
-      cur_pc: [], cur_cap: [], cur_n: 0, nxt_pc: [], nxt_cap: [], nxt_n: 0,
-      seen: seen, gen: 1, wpc: [], wcap: [],
-      // both buffers start at their full width: the group-free match path
-      // writes hit's two slots directly rather than copying into a vector that
-      // has to grow first
-      base: [], hit: blank_caps([], ncap), hit_end: 0, want_end: 0 - 1,
-      free: [], free_n: 0,
-      ok: false, matched: false, look: 0, subs: [] }
+        ninst: len(re.prog), ncap: ncap,
+        cur_pc: [], cur_cap: [], cur_n: 0, nxt_pc: [], nxt_cap: [], nxt_n: 0,
+        seen: seen, gen: 1, wpc: [], wcap: [],
+        // both buffers start at their full width: the group-free match path
+        // writes hit's two slots directly rather than copying into a vector that
+        // has to grow first
+        base: [], hit: blank_caps([], ncap), hit_end: 0, want_end: 0 - 1,
+        free: [], free_n: 0,
+        ok: false, matched: false, look: 0, subs: [] }
 };
 
 // A lookaround's own run: the same program and subject, but its own stamps —
@@ -1293,12 +1293,12 @@ def new_sub(r: Run, depth: long) -> Run {
     let i = 0;
     while (i < r.ninst) { seen += 0; i = i + 1; };
     { prog: r.prog, classes: r.classes, subject: r.subject, end: r.end,
-      ninst: r.ninst, ncap: r.ncap,
-      cur_pc: [], cur_cap: [], cur_n: 0, nxt_pc: [], nxt_cap: [], nxt_n: 0,
-      seen: seen, gen: 1, wpc: [], wcap: [],
-      base: [], hit: blank_caps([], r.ncap), hit_end: 0, want_end: 0 - 1,
-      free: [], free_n: 0,
-      ok: false, matched: false, look: depth, subs: r.subs }
+        ninst: r.ninst, ncap: r.ncap,
+        cur_pc: [], cur_cap: [], cur_n: 0, nxt_pc: [], nxt_cap: [], nxt_n: 0,
+        seen: seen, gen: 1, wpc: [], wcap: [],
+        base: [], hit: blank_caps([], r.ncap), hit_end: 0, want_end: 0 - 1,
+        free: [], free_n: 0,
+        ok: false, matched: false, look: depth, subs: r.subs }
 };
 
 // n slots of "took no part", into dst (which grows once and is then reused).
@@ -1411,7 +1411,6 @@ def clone_caps(c: [long], n: long) -> [long] {
 // with no groups never reaches it.
 // The walk's own stack (see add): the closure path being followed, kept in the
 // Run so it grows once and is reused by every walk from then on.
-
 
 // push and queue, inlined: between them they are called ten million times an
 // 8 MB scan, and at ~30 instructions of call and argument shuffling apiece that
@@ -1676,12 +1675,12 @@ def look_ok(r: Run, packed: long, sub: long, pos: long) -> bool {
 
 // Compile the pattern, or none; check says why. Both run the same pass.
 def build(pat: str) -> Built {
-    let names: {str => long} = {};
+    let names: { str => long } = {};
     let p: PP = { pat: pat, pos: 0, err: "",
-                  icase: false, dotall: false, multiline: false,
-                  groups: 0, names: names, classes: [] };
+        icase: false, dotall: false, multiline: false,
+        groups: 0, names: names, classes: [] };
     let empty: Re = { pattern: pat, prog: [], classes: [], nclass: 0, first: 0 - 1,
-                      literal: "", need: "", anchored: false, groups: 0, names: names };
+        literal: "", need: "", anchored: false, groups: 0, names: names };
     let node = p_alt(p, 0);
     if (p.err != "") { return { re: empty, err: p.err }; };
     if (p.pos < len(p.pat)) {
@@ -1707,8 +1706,8 @@ def build(pat: str) -> Built {
     let first = 0 - 1;
     if (!nullable && !set_full_p(acc)) { first = add_class(p, acc); };
     let re: Re = { pattern: pat, prog: out, classes: p.classes, nclass: len(p.classes) / 32,
-                   first: first, literal: prefix_of(node, p), need: required_of(node, p),
-                   anchored: anchored_p(node), groups: p.groups, names: names };
+        first: first, literal: prefix_of(node, p), need: required_of(node, p),
+        anchored: anchored_p(node), groups: p.groups, names: names };
     { re: re, err: "" }
 };
 
@@ -1836,7 +1835,7 @@ def make_match(re: Re, r: Run) -> Match {
     let st = caps[0];
     let en = caps[1];
     { subject: r.subject, text: r.subject[st:en], start: st, end: en,
-      caps: caps, names: re.names }
+        caps: caps, names: re.names }
 };
 
 // The first match at or after `at` (only at `at` when re.anchored), or none.
@@ -2074,11 +2073,11 @@ def group_num(re: Re, name: str) -> long {
         i = i + 1;
     };
     if (digits) {
-        let v = tolong(name)!;
+        let v = tolong(name) !;
         if (v <= re.groups) { v } else { 0 - 1 }
     } else {
         let got = re.names[name];
-        if (got == none) { 0 - 1 } else { got! }
+        if (got == none) { 0 - 1 } else { got ! }
     }
 };
 
@@ -2105,7 +2104,7 @@ def group(m: Match, n: long) -> str? {
 // The same by name; none when the pattern has no such group.
 def named(m: Match, name: str) -> str? {
     let got = m.names[name];
-    if (got == none) { none } else { group(m, got!) }
+    if (got == none) { none } else { group(m, got !) }
 };
 
 // Group n's start offset, -1 when it took no part.
@@ -2115,4 +2114,4 @@ def start(m: Match, n: long) -> long { m.caps[2 * n] };
 def end(m: Match, n: long) -> long { m.caps[2 * n + 1] };
 
 export { compile, check, escape, match, match_at, full, search, search_at, is_match,
-         find, split, replace, replace_with, group, named, start, end };
+    find, split, replace, replace_with, group, named, start, end };

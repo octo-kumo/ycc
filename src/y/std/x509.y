@@ -349,11 +349,11 @@ def system_roots() -> [Cert] {
     if (!roots_read) {
         roots_read = true;
         let paths = ["/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt",
-                     "/etc/ssl/ca-bundle.pem", "/etc/ssl/cert.pem", "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem"];
+            "/etc/ssl/ca-bundle.pem", "/etc/ssl/cert.pem", "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem"];
         foreach (p in paths) {
             if (len(roots) == 0) {
                 let text = fs.read_file(p);
-                if (text != none) { roots = anchors_pem(text!); };
+                if (text != none) { roots = anchors_pem(text !); };
             };
         };
     };
@@ -433,7 +433,7 @@ def names_host(c: Cert, host: str) -> bool {
         let want = ipv4_bytes(host);
         if (want != none) {
             foreach (a in c.ips) {
-                if (len(a) == 4 && crypto.bytes_eq(a, want!)) { ok = true; };
+                if (len(a) == 4 && crypto.bytes_eq(a, want !)) { ok = true; };
             };
         };
     };

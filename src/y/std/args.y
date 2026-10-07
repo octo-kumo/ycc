@@ -432,7 +432,7 @@ def get_str(name: str, dflt: str) -> str {
 def get_long(name: str, dflt: long) -> long {
     let k = ar_find_long(name);
     let r = dflt;
-    if (k >= 0 && ar_given[k] == 1) { r = tolong(ar_val[k])!; };
+    if (k >= 0 && ar_given[k] == 1) { r = tolong(ar_val[k]) !; };
     r
 };
 

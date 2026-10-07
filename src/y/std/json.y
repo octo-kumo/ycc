@@ -286,13 +286,13 @@ def stringify_obj(o: { str => Val }, depth: long) -> str {
 }
 
 export {
-  Val, Num, Str, Bool, Null, Arr, JObj,
-  obj, arr, jobj, jarr, num, numtext, str, boolean, nul,
-  keys_of, field, index,
-  as_str, as_long, as_bool, as_arr, as_obj, is_null,
-  escape, utf8_put, hex2,
-  stringify, stringify_val, stringify_obj,
-  json_depth_max, json_depth_error
+    Val, Num, Str, Bool, Null, Arr, JObj,
+    obj, arr, jobj, jarr, num, numtext, str, boolean, nul,
+    keys_of, field, index,
+    as_str, as_long, as_bool, as_arr, as_obj, is_null,
+    escape, utf8_put, hex2,
+    stringify, stringify_val, stringify_obj,
+    json_depth_max, json_depth_error
 };
 
 // ── parsing ─────────────────────────────────────────────────────────────
@@ -503,7 +503,7 @@ def p_array(p: P, depth: long) -> Val? {
                 bad = true;
                 go = false;
             } else {
-                items += got!;
+                items += got !;
                 p_ws(p);
                 if (at(p) == 44) {
                     p.i = p.i + 1;
@@ -560,7 +560,7 @@ def p_object(p: P, depth: long) -> Val? {
                             bad = true;
                             go = false;
                         } else {
-                            members[k!] = v!;
+                            members[k !] = v !;
                             p_ws(p);
                             if (at(p) == 44) {
                                 p.i = p.i + 1;
@@ -589,7 +589,7 @@ def p_value(p: P, depth: long) -> Val? {
     if (c == 34) {
         p.i = p.i + 1;
         let s = p_string(p);
-        if (s != none) { r = some(str(s!)); }
+        if (s != none) { r = some(str(s !)); }
     }
     if (r == none && (c == 123 || c == 91)) {
         if (c == 123) { r = p_object(p, depth); } else { r = p_array(p, depth); }
@@ -599,11 +599,10 @@ def p_value(p: P, depth: long) -> Val? {
     if (r == none && c == 110 && lit(p, "null")) { r = some(nul()); }
     if (r == none && (c == 45 || (c >= 48 && c <= 57))) {
         let n = p_number(p);
-        if (n != none) { r = some(numtext(n!)); }
+        if (n != none) { r = some(numtext(n !)); }
     }
     r
 }
-
 
 // ── entry points ────────────────────────────────────────────────────────
 
@@ -627,7 +626,7 @@ def parse(s: str) -> { str => Val }? {
     let r: { str => Val }? = none;
     let v = parse_val(s);
     if (v != none) {
-        let got = as_obj(v!);
+        let got = as_obj(v !);
         if (got != none) { r = got; }
     };
     r
@@ -661,8 +660,8 @@ def p_show(s: str, i: long) -> str {
 }
 
 export {
-  P, hexval, at, lit,
-  parse, parse_val, parse_err, p_show
+    P, hexval, at, lit,
+    parse, parse_val, parse_err, p_show
 };
 
 //
@@ -729,7 +728,7 @@ def fieldv(o: Val, k: str) -> Val {
     let out = nul();
     if let JObj j = o {
         let hit = j.members[k];
-        if (hit != none) { out = hit! };
+        if (hit != none) { out = hit ! };
     };
     out
 }
@@ -768,9 +767,9 @@ def get_long(o: Val, key: str, dflt: long) -> long {
         // A number that is not a whole one (a fraction, an exponent, junk)
         // leaves the caller's default: tolong answers none rather than
         // truncating, and this function's contract is a long, not an option.
-        if let Num n = f! {
+        if let Num n = f ! {
             let v = tolong(n.num);
-            if (v != none) { out = v!; };
+            if (v != none) { out = v !; };
         };
     };
     out
@@ -780,7 +779,7 @@ def get_str(o: Val, key: str, dflt: str) -> str {
     let out = dflt;
     let f = field(o, key);
     if (f != none) {
-        if let Str x = f! { out = x.s };
+        if let Str x = f ! { out = x.s };
     };
     out
 }
@@ -789,7 +788,7 @@ def get_arr(o: Val, key: str) -> [Val]? {
     let out: [Val]? = none;
     let f = field(o, key);
     if (f != none) {
-        if let Arr a = f! { out = some(a.items) };
+        if let Arr a = f ! { out = some(a.items) };
     };
     out
 }
@@ -968,7 +967,7 @@ def pretty_val(v: Val, depth: long, width: long, sorted: bool) -> str {
                 let i = 0;
                 while (i < a.items.length) {
                     out = out + pad1
-                         + pretty_val(a.items[i], depth + 1, width, sorted);
+                    + pretty_val(a.items[i], depth + 1, width, sorted);
                     if (i + 1 < a.items.length) { out = out + "," };
                     out = out + "\n";
                     i = i + 1
@@ -988,7 +987,7 @@ def pretty_val(v: Val, depth: long, width: long, sorted: bool) -> str {
                 let i = 0;
                 while (i < ks.length) {
                     out = out + pad1 + "\"" + escape(ks[i]) + "\": "
-                         + pretty_val(fieldv(v, ks[i]), depth + 1, width, sorted);
+                    + pretty_val(fieldv(v, ks[i]), depth + 1, width, sorted);
                     if (i + 1 < ks.length) { out = out + "," };
                     out = out + "\n";
                     i = i + 1
@@ -1005,7 +1004,7 @@ def pretty(v: Val, indent: long, sorted: bool) -> str {
 }
 
 export {
-  parse_bytes, get_long, get_str, get_arr,
-  same, node_count, max_depth,
-  sort_keys, pretty, pretty_val
+    parse_bytes, get_long, get_str, get_arr,
+    same, node_count, max_depth,
+    sort_keys, pretty, pretty_val
 };

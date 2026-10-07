@@ -199,6 +199,40 @@ yserve: $(LSP_SRC) src/y/std/json.y cycc
 	fi
 	rm -f _yserve0 _yserve1 _yserve1p
 
+# ── formatting (src/tools/lsp/fmt.y, LSP.md R3) ──────────────────────────
+#
+# The formatter is the same code the editor calls on `textDocument/formatting`.
+# Two ways to reach it without a client:
+#
+#   * `yserve --fmt FILE` writes the formatted text to stdout (R3.8);
+#   * `yfmt FILE OUT` (test/drv_fmt_fixedpoint.y) says SAME, DIFFERS or
+#     REFUSED and writes OUT when it differs.
+#
+# `make fmt` rewrites the tree IN PLACE through the small driver, so a format
+# does not wait on the server's std pack. A file scan.y cannot lex is left
+# alone (R3.4) -- half-written code is common in an editor and never on disk.
+#
+# `make fmt-check` is the requirement: idempotence over every .y in the tree
+# (R3.5), plus the src/y fixed-point count as a signal (R3.2). test_lsp.sh
+# runs it too, so `make test` covers it.
+FMT_DRV := src/tools/lsp/test/drv_fmt_fixedpoint.y
+FMT_FILES := $(wildcard src/y/*.y src/y/std/*.y src/tools/lsp/*.y)
+
+yfmt: $(LSP_SRC) $(FMT_DRV) cycc
+	ulimit -v $(CYCC_MEM_KB); ./cycc -o yfmt $(FMT_DRV)
+
+fmt: yfmt
+	@n=0; for f in $(FMT_FILES); do \
+	  r=`./yfmt "$$f" "$$f.fmt"`; \
+	  if [ "$$r" = "DIFFERS" ]; then mv "$$f.fmt" "$$f"; echo "  formatted $$f"; n=$$((n + 1)); \
+	  else rm -f "$$f.fmt"; fi; \
+	done; \
+	echo "fmt: $$n file(s) rewritten, the rest already in style"
+
+fmt-check: cycc
+	@mkdir -p _check/fmt
+	OUT=$(CURDIR)/_check/fmt YCC=$(CURDIR)/cycc sh src/tools/lsp/test/test-fmt.sh
+
 # The extension's TypeScript. Separate from yserve because it needs node and npm,
 # which the compiler itself must never depend on. `npm ci` when a lockfile is
 # present so the build is reproducible, `npm install` otherwise.

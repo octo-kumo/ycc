@@ -47,7 +47,7 @@ import serve from "./serve.y";
 def apply_state(st: State, raw: str) -> bool {
     let parsed = json.parse(raw);
     if (!is_some(parsed)) { return false; }
-    let msg = json.jobj(parsed!);
+    let msg = json.jobj(parsed !);
     let method = msg_method(msg);
     let p = msg_params(msg);
     if (method == "initialize") {
@@ -93,7 +93,7 @@ def msg_id(msg: json.Val) -> json.Val? {
         let m = j.members;
         let got = m["id"];
         if is_some(got) {
-            let v = got!;
+            let v = got !;
             if (!json.is_null(v)) { out = some(v); }
         }
     };
@@ -106,9 +106,9 @@ def msg_method(msg: json.Val) -> str {
         let m = j.members;
         let got = m["method"];
         if is_some(got) {
-            let v = got!;
+            let v = got !;
             let t = json.as_str(v);
-            if is_some(t) { name = t!; }
+            if is_some(t) { name = t !; }
         }
     };
     name
@@ -119,7 +119,7 @@ def msg_params(msg: json.Val) -> { str => json.Val } {
     if let json.JObj j = msg {
         let m = j.members;
         let got = m["params"];
-        if is_some(got) { out = serve.members_of(got!); }
+        if is_some(got) { out = serve.members_of(got !); }
     };
     out
 }
@@ -252,7 +252,7 @@ def not_initialized(id: json.Val) -> str {
 }
 
 export {
-  apply_state,
-  msg_id, msg_method, msg_params,
-  doc_notification, doc_request, lifecycle, not_initialized, recheck_all
+    apply_state,
+    msg_id, msg_method, msg_params,
+    doc_notification, doc_request, lifecycle, not_initialized, recheck_all
 };

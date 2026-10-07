@@ -422,7 +422,7 @@ def mem_scaleVal(t: str, v: long, disp: long, bn: long, xn: long) -> OpRes {
 
 // Decode a quoted GAS string (no surrounding quotes in s).
 // Handles \\ \" \n \t \r and \ooo octal. Returns {ok, bytes, error}.
-def decode_str(s: str) -> {ok: bool, bytes: [byte], error: str} {
+def decode_str(s: str) -> { ok: bool, bytes: [byte], error: str } {
     let out: [byte] = [];
     let i = 0;
     let n = len(s);
@@ -472,7 +472,7 @@ def decode_str(s: str) -> {ok: bool, bytes: [byte], error: str} {
     { ok: err == "", bytes: out, error: err }
 };
 
-def decode_oct(s: str, k: long, n: long) -> {v: long, k: long, err: str} {
+def decode_oct(s: str, k: long, n: long) -> { v: long, k: long, err: str } {
     // Octal escape starting after the backslash (e is already known-octal).
     // Returns {v, k (pos after digits), err}. Split from decode_str: the
     // `{ok,bytes,error}` shape is built ONLY in decode_str.
@@ -500,8 +500,6 @@ def decode_oct(s: str, k: long, n: long) -> {v: long, k: long, err: str} {
         { v: v, k: kk, err: "" }
     }
 };
-
-
 
 // ── label index (hash table: name -> {sec, off}) ─────────────────────────
 // Pass 1 threads a plain labels LIST (cheap amortized pushes); resolving
@@ -632,9 +630,9 @@ def label_addr_off(lmap: [AsmLabel], code_len: long, pad: long, name: str, plus:
         if (e.sec < 0) {
             { ok: false, addr: 0 }
         } else if (e.sec == 0) {
-            { ok: true, addr: e.off + tolong(off)! }
+            { ok: true, addr: e.off + tolong(off) ! }
         } else {
-            { ok: true, addr: code_len + pad + e.off + tolong(off)! }
+            { ok: true, addr: code_len + pad + e.off + tolong(off) ! }
         }
     }
 };
@@ -652,10 +650,10 @@ def asm_assemble(parts: [LinkPart], debug: bool) -> AsmOutI {
         let p = parts[pi];
         if (len(p.text) > 0) {
             segs += { lines: split(p.text, "\n"), ir: [], txt: [], fno: 0,
-                      loc: false };
+                loc: false };
         } else {
             segs += { lines: [], ir: p.ir, txt: p.txt, fno: p.fno,
-                      loc: p.loc };
+                loc: p.loc };
         };
         pi++;
     };
@@ -673,8 +671,8 @@ def asm_assemble(parts: [LinkPart], debug: bool) -> AsmOutI {
             let sg = segs[pi];
             if (len(sg.ir) > 0) {
                 let r = asm_ir_items(sg.ir, sg.txt, sg.fno, sg.loc, st.sec,
-                                     st.offs, st.items, st.labels, st.err,
-                                     st.lno + 1);
+                    st.offs, st.items, st.labels, st.err,
+                    st.lno + 1);
                 st = asm_ir_st(r.sec, r.offs, r.items, r.labels, r.err, r.lno);
             } else {
                 let lines = sg.lines;
@@ -694,8 +692,8 @@ def asm_assemble(parts: [LinkPart], debug: bool) -> AsmOutI {
     let hr0 = heap_used();
     if (err != "") {
         { ok: false, bytes: [], error: err, items: 0,
-          times: [ { name: "a:split", us: t1 - t0, heap: h1 - h0 },
-                   { name: "a:encode", us: tr0 - t1, heap: hr0 - h1 } ] }
+            times: [ { name: "a:split", us: t1 - t0, heap: h1 - h0 },
+                { name: "a:encode", us: tr0 - t1, heap: hr0 - h1 } ] }
     } else {
         asm_relax(items, labels, debug);
         let tr1 = clock_us();
@@ -704,15 +702,15 @@ def asm_assemble(parts: [LinkPart], debug: bool) -> AsmOutI {
         let t3 = clock_us();
         let h3 = heap_used();
         let tl: [Timing] =
-            [ { name: "a:split", us: t1 - t0, heap: h1 - h0 },
-              { name: "a:encode", us: tr0 - t1, heap: hr0 - h1 },
-              { name: "a:relax", us: tr1 - tr0, heap: hr1 - hr0 },
-              { name: "a:link", us: t3 - tr1, heap: h3 - hr1 } ];
+        [ { name: "a:split", us: t1 - t0, heap: h1 - h0 },
+            { name: "a:encode", us: tr0 - t1, heap: hr0 - h1 },
+            { name: "a:relax", us: tr1 - tr0, heap: hr1 - hr0 },
+            { name: "a:link", us: t3 - tr1, heap: h3 - hr1 } ];
         lk.times.foreach((le) => {
             tl += le;
         });
         { ok: lk.ok, bytes: lk.bytes, error: lk.error, items: len(items),
-          times: tl }
+            times: tl }
     }
 };
 
@@ -720,7 +718,7 @@ def asm_assemble(parts: [LinkPart], debug: bool) -> AsmOutI {
 // counter it advances is what an IR_TEXT item's error names).
 def asm_st_seg(st: IrSt, lines: [str], li: long) -> IrSt {
     let r = asm_assemble_line(lines, li, st.lno, st.sec, st.offs, st.items,
-                              st.labels, st.err);
+        st.labels, st.err);
     asm_ir_st(r.sec, r.offs, r.items, r.labels, r.err, st.lno + 1)
 };
 // Per-line state threading for asm_assemble (see note above): one STATE
@@ -950,13 +948,13 @@ def asm_loc(lno: long, sec: long, offs: [long], rest: str) -> AsmContent {
         fs = rest[0:sp];
         ls = trim(rest[sp + 1:]);
     }
-    if (!is_num_text(fs) || !is_num_text(ls) || tolong(fs)! < 1 || tolong(ls)! < 0) {
+    if (!is_num_text(fs) || !is_num_text(ls) || tolong(fs) ! < 1 || tolong(ls) ! < 0) {
         { err: "L" + tostring(lno) + ": bad .loc '" + rest + "'", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [], br: -1 } }
     } else if (sec != 0) {
         { err: "L" + tostring(lno) + ": .loc outside .text", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [], br: -1 } }
     } else {
-        let fx = [{ off: tolong(fs)!, kind: "file", lbl: "", lbl2: "" },
-                  { off: tolong(ls)!, kind: "line", lbl: "", lbl2: "" }];
+        let fx = [{ off: tolong(fs) !, kind: "file", lbl: "", lbl2: "" },
+            { off: tolong(ls) !, kind: "line", lbl: "", lbl2: "" }];
         { err: "", sec: sec, offs: offs, item: { sec: 0, off: offs[0], len: 0, kind: "loc", bytes: [], fix: fx, br: -1 } }
     }
 };
@@ -973,10 +971,10 @@ def asm_file(lno: long, sec: long, offs: [long], rest: str) -> AsmContent {
     if (!asm_strdata_bad(q)) {
         d = decode_str(q[1:len(q) - 1]);
     }
-    if (!is_num_text(ns) || tolong(ns)! < 1 || asm_strdata_bad(q) || !d.ok) {
+    if (!is_num_text(ns) || tolong(ns) ! < 1 || asm_strdata_bad(q) || !d.ok) {
         { err: "L" + tostring(lno) + ": bad .file '" + rest + "'", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [], br: -1 } }
     } else {
-        { err: "", sec: sec, offs: offs, item: { sec: -1, off: tolong(ns)!, len: 0, kind: "file", bytes: [], fix: ([{ off: 0, kind: "file", lbl: from_bytes(d.bytes), lbl2: "" }]), br: -1 } }
+        { err: "", sec: sec, offs: offs, item: { sec: -1, off: tolong(ns) !, len: 0, kind: "file", bytes: [], fix: ([{ off: 0, kind: "file", lbl: from_bytes(d.bytes), lbl2: "" }]), br: -1 } }
     }
 };
 
@@ -1062,7 +1060,7 @@ def asm_zero(line: str, lno: long, sec: long, offs: [long], rest: str) -> AsmCon
     if (asm_quad_bad(rest)) {
         { err: "L" + tostring(lno) + ": bad .zero size '" + rest + "'", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [], br: -1 } }
     } else {
-        let n = tolong(rest)!;
+        let n = tolong(rest) !;
         let zb: [byte] = [];
         if (sec != 2) {
             for i in 0..n {
@@ -1152,21 +1150,21 @@ def asm_encode(mn: str, ops: [Operand], lno: long, sec: long, offs: [long]) -> A
 def ir_operand(ir: [long], wp: long, k: long) -> Operand {
     if (k == insn.O_REG) {
         { k: K.reg, n: ir[wp], size: ir[wp + 1], v: 0, a: "", b: "", name: "",
-          base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }
+            base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }
     } else if (k == insn.O_IND) {
         { k: K.ind, n: ir[wp], size: ir[wp + 1], v: 0, a: "", b: "", name: "",
-          base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }
+            base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }
     } else if (k == insn.O_IMM) {
         { k: K.imm, n: 0, size: 0, v: ir[wp], a: "", b: "", name: "", base: 0,
-          idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }
+            idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }
     } else if (k == insn.O_LBL) {
         { k: K.lbl, n: 0, size: 0, v: 0, a: "", b: "",
-          name: lbl.lname(ir[wp]), base: 0, idx: 0, scale: 0, disp: 0,
-          rip: false, lbl: "" }
+            name: lbl.lname(ir[wp]), base: 0, idx: 0, scale: 0, disp: 0,
+            rip: false, lbl: "" }
     } else if (k == insn.O_DIFF) {
         { k: K.diff, n: 0, size: 0, v: 0, a: lbl.lname(ir[wp]),
-          b: lbl.lname(ir[wp + 1]), name: "", base: 0, idx: 0, scale: 0,
-          disp: 0, rip: false, lbl: "" }
+            b: lbl.lname(ir[wp + 1]), name: "", base: 0, idx: 0, scale: 0,
+            disp: 0, rip: false, lbl: "" }
     } else if (k == insn.O_MEM || k == insn.O_MEM0) {
         // Five words: base, index, scale, disp, label. A label is a symbol at
         // (%rip) -- what parse_mem_rip builds.
@@ -1178,19 +1176,19 @@ def ir_operand(ir: [long], wp: long, k: long) -> Operand {
         let ml = ir[wp + 4];
         if (ml >= 0) {
             { k: K.mem, n: 0, size: 0, v: 0, a: "", b: "", name: "",
-              base: -1, idx: -1, scale: 1, disp: 0, rip: true,
-              lbl: lbl.lname(ml) }
+                base: -1, idx: -1, scale: 1, disp: 0, rip: true,
+                lbl: lbl.lname(ml) }
         } else {
             let disp = ir[wp + 3];
             if (k == insn.O_MEM0) { disp = 0; };
             { k: K.mem, n: 0, size: 0, v: 0, a: "", b: "", name: "",
-              base: ir[wp], idx: ir[wp + 1], scale: ir[wp + 2],
-              disp: disp, rip: false, lbl: "" }
+                base: ir[wp], idx: ir[wp + 1], scale: ir[wp + 2],
+                disp: disp, rip: false, lbl: "" }
         }
     } else {
         // O_FS: the %fs:N word (a thread's own heap block)
         { k: K.fs, n: 0, size: 64, v: 0, a: "", b: "", name: "", base: 0,
-          idx: 0, scale: 0, disp: ir[wp], rip: false, lbl: "" }
+            idx: 0, scale: 0, disp: ir[wp], rip: false, lbl: "" }
     }
 };
 
@@ -1217,12 +1215,12 @@ def ir_enc_item(ir: [long], at: long, sec: long, offs: [long], where: str) -> As
     let r = enc.enc_form(buf, 0, f, fo.mn, ops, false);
     if (r.err != "") {
         { err: where + ": " + r.err + " in '" + fo.mn + "'", sec: sec,
-          offs: offs,
-          item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [], br: -1 } }
+            offs: offs,
+            item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [], br: -1 } }
     } else {
         let blen = r.at;
         let item = { sec: sec, off: offs[sec], len: blen, kind: "insn",
-                     bytes: buf[0:blen], fix: r.fix, br: r.br };
+            bytes: buf[0:blen], fix: r.fix, br: r.br };
         offs[sec] = offs[sec] + blen;
         { err: "", sec: sec, offs: offs, item: item }
     }
@@ -1232,7 +1230,7 @@ def ir_enc_item(ir: [long], at: long, sec: long, offs: [long], where: str) -> As
 // name from the label table rather than from the line.
 def asm_ir_label(id: long, sec: long, offs: [long], items: [AsmItem], labels: [AsmLabel]) -> [AsmLabel] {
     labels += { name: lbl.lname(id), sec: sec, off: offs[sec],
-                at_item: len(items) };
+        at_item: len(items) };
     labels
 };
 
@@ -1240,9 +1238,9 @@ def asm_ir_label(id: long, sec: long, offs: [long], items: [AsmItem], labels: [A
 // the item instead of from a line. No sec check: a body is all .text.
 def asm_ir_loc(file: long, line: long, sec: long, offs: [long], fno: long) -> AsmContent {
     let fx = [{ off: file + fno, kind: "file", lbl: "", lbl2: "" },
-              { off: line, kind: "line", lbl: "", lbl2: "" }];
+        { off: line, kind: "line", lbl: "", lbl2: "" }];
     { err: "", sec: 0, offs: offs,
-      item: { sec: 0, off: offs[0], len: 0, kind: "loc", bytes: [], fix: fx, br: -1 } }
+        item: { sec: 0, off: offs[0], len: 0, kind: "loc", bytes: [], fix: fx, br: -1 } }
 };
 
 // One part's items. `txt` holds the raw lines the IR_TEXT items index (the
@@ -1271,7 +1269,7 @@ def asm_ir_items(ir: [long], txt: [str], fno: long, loc: bool, sec: long, offs: 
             let line = "";
             if (i >= 0 && i < len(txt)) { line = txt[i]; };
             let st = asm_assemble_line([line], 0, lno, sec, offs, items,
-                                       labels, err);
+                labels, err);
             sec = st.sec;
             offs = st.offs;
             items = st.items;
@@ -1525,13 +1523,13 @@ def asm_link(items: [AsmItem], labels: [AsmLabel], debug: bool) -> AsmOut {
     let start = labmap_get(lmap, "_start");
     if (lm.dup != "") {
         { ok: false, bytes: [], error: "duplicate label '" + lm.dup + "'",
-          times: [ { name: "l:labmap", us: lt1 - lt0, heap: lh1 - lh0 } ] }
+            times: [ { name: "l:labmap", us: lt1 - lt0, heap: lh1 - lh0 } ] }
     } else if (start.sec != 0) {
         { ok: false, bytes: [], error: "no _start label (empty program?)",
-          times: [ { name: "l:labmap", us: lt1 - lt0, heap: lh1 - lh0 } ] }
+            times: [ { name: "l:labmap", us: lt1 - lt0, heap: lh1 - lh0 } ] }
     } else if (bss_data) {
         { ok: false, bytes: [], error: "data or code in .bss",
-          times: [ { name: "l:labmap", us: lt1 - lt0, heap: lh1 - lh0 } ] }
+            times: [ { name: "l:labmap", us: lt1 - lt0, heap: lh1 - lh0 } ] }
     } else {
         // No padding between the code and the rodata (mirrors elf.y): the
         // loader zero-fills the last page of the mapping instead, so a
@@ -1565,7 +1563,7 @@ def asm_link(items: [AsmItem], labels: [AsmLabel], debug: bool) -> AsmOut {
         };
         if (err != "") {
             { ok: false, bytes: [], error: err,
-              times: [ { name: "l:labmap", us: lt1 - lt0, heap: lh1 - lh0 } ] }
+                times: [ { name: "l:labmap", us: lt1 - lt0, heap: lh1 - lh0 } ] }
         } else {
             let lt2 = clock_us();
             let lh2 = heap_used();
@@ -1579,9 +1577,9 @@ def asm_link(items: [AsmItem], labels: [AsmLabel], debug: bool) -> AsmOut {
             let lt3 = clock_us();
             let lh3 = heap_used();
             { ok: true, bytes: eb, error: "",
-              times: [ { name: "l:labmap", us: lt1 - lt0, heap: lh1 - lh0 },
-                       { name: "l:patch", us: lt2 - lt1, heap: lh2 - lh1 },
-                       { name: asm_link_row(), us: lt3 - lt2, heap: lh3 - lh2 } ] }
+                times: [ { name: "l:labmap", us: lt1 - lt0, heap: lh1 - lh0 },
+                    { name: "l:patch", us: lt2 - lt1, heap: lh2 - lh1 },
+                    { name: asm_link_row(), us: lt3 - lt2, heap: lh3 - lh2 } ] }
         }
     }
 };
@@ -1642,7 +1640,7 @@ def pe_image(code: [byte], ro: [byte], entry_off: long, bss_len: long, syms: [El
     // Windows has no syscall for randomness, sockets or the console: those
     // arrive as imports (see pe.y's import table).
     pe.pe_build(code, ro, entry_off, bss_len, un.pdata, un.xdata, dsecs2, ddata,
-                coff, pe.pe_imports())
+        coff, pe.pe_imports())
 };
 
 def patch_item(code: [byte], it: AsmItem, lmap: [AsmLabel], code_len: long, pad: long) -> AsmBytes {
@@ -2251,7 +2249,7 @@ def asm_cwd() -> str {
 // `items` is how many items pass 1 built: the assembly text is not built at
 // all on this path (the emitter hands over its items), so that is the size
 // counter ycc --time can still report here.
-def ycc_assemble(parts: [LinkPart], debug: bool) -> {ok: bool, bytes: [byte], octal: str, error: str, times: [Timing], items: long} {
+def ycc_assemble(parts: [LinkPart], debug: bool) -> { ok: bool, bytes: [byte], octal: str, error: str, times: [Timing], items: long } {
     let r = asm_assemble(parts, debug);
     if (!r.ok) {
         { ok: false, bytes: [], octal: "", error: r.error, times: r.times, items: 0 }
@@ -2261,4 +2259,4 @@ def ycc_assemble(parts: [LinkPart], debug: bool) -> {ok: bool, bytes: [byte], oc
 };
 
 export { asm_assemble, ycc_assemble, part_ir, part_text, LinkPart,
-         labmap_new, labmap_put, labmap_get, hash_str };
+    labmap_new, labmap_put, labmap_get, hash_str };

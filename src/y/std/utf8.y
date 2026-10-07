@@ -85,7 +85,7 @@ def codes(s: str) -> [long] {
                 && byte_at(s, i + 2) >= 128 && byte_at(s, i + 2) < 192
                 && byte_at(s, i + 3) >= 128 && byte_at(s, i + 3) < 192) {
                 out += (b0 - 240) * 262144 + (byte_at(s, i + 1) - 128) * 4096
-                     + (byte_at(s, i + 2) - 128) * 64 + (byte_at(s, i + 3) - 128);
+                + (byte_at(s, i + 2) - 128) * 64 + (byte_at(s, i + 3) - 128);
                 i = i + 4;
             } else { out += 65533; i = i + 1; };
         } else {

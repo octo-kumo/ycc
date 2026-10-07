@@ -276,7 +276,7 @@ src/tools/lsp/yserve.y        entry point, framing, fork, pack
 src/tools/lsp/json.y          JSON value, parser, emitter       §7
 src/tools/lsp/rpc.y           Content-Length framing, dispatch    §7
 src/tools/lsp/pos.y           line tables, byte ↔ UTF-16, ranges  §8
-src/tools/lsp/scan.y          tolerant span scanner              §5.1, R2, R3
+src/tools/lsp/scan.y          span view of lexer.tokenize_lsp    §5.1, R2, R3
 src/tools/lsp/sem.y           semantic tokens (M2)                R2
 src/tools/lsp/sym.y           documentSymbol / the outline        R2
 src/tools/lsp/scope.y         declarations, visibility            R4, R5, R6
@@ -322,58 +322,56 @@ none is wanted. `yv.c`/`yv.h` (see `PORTING.md`'s module map) is the existing pr
 or a later reader will try to port `src/tools/`. That is a follow-up, listed
 in §12.
 
-### 5.1 `scan.y` — the tolerant span scanner
-
-One byte-level pass over the buffer that produces a classified span list:
+### 5.1 `scan.y` — the server's span view of the compiler's lexer
 
 ```
 { off: long, end: long, kind: long, line: long, col: long }
 ```
 
-with `kind` covering at least: line comment, block comment, string, byte
-string, char, f-string (with its interior fields delimited separately),
-number (int / float / radix), identifier, keyword, contextual keyword,
-operator, punctuation, and `error`.
+with `kind` covering: line comment, block comment, string, byte string, char,
+f-string, number, identifier, keyword, contextual keyword, operator,
+punctuation, and `error`.
 
-It has three jobs, and two of them exist because the lexer cannot do them:
+**There is one scanner and it is the compiler's.** `lexer.tokenize_lsp` is
+`lexer.tokenize` with three things turned around, all of them needed by an
+editor and none of them by a parser:
 
-- **Comments.** `tokenize` discards them entirely. Nothing downstream of the
-  lexer can recover them; the AST has no comment representation.
-- **Unterminated literals.** `scan.y` reports them as a diagnostic *and*
-  returns a **repaired buffer** — the closing quote, or `*/` — so `tokenize`
-  is never reached with input that would hit either `exit(1)` in `lexer.y`. The
-  repair is for the child process only; the buffer the editor holds is never
-  modified.
-- **Source spans.** See R2 for why these cannot come from `tokenize`.
+- **Comments are kept.** `tokenize` discards them; nothing downstream of the
+  lexer can recover them, because the AST has no comment representation.
+- **An f-string stays whole.** `tokenize` desugars `f"a{x}"` into
+  `("a" + #fmt(x, ""))` during lexing, and those tokens have no source extent —
+  a formatter working from them would re-spell the literal.
+- **A malformed literal is a token, not an exit.** `tokenize` calls `exit(1)`
+  on an unterminated string or block comment, which in a server is a process
+  death on the first `"` a user types.
+- **Every token carries its byte span** (`off`/`end`), which the parser never
+  reads.
 
-`scan.y` and `tokenize` are two classifiers over the same bytes and must agree
-on where every token begins. §11 makes that a test, not a hope.
+`scan.y` is now an ADAPTER over that stream: it maps a token to a span kind
+and hands the compiler's byte span through. It holds no lexing rules — no
+number syntax, no literal ends, no keyword tables beyond the two it needs to
+name a span. `kind_of` is the whole of it.
 
-**It is not a formality: the test found two real bugs in `scan.y` on its first
-run over the corpus**, both in numbers. A `.` only joins a number when a digit
-follows it, so `in 0..1000` is three tokens (`num 0`, `op ..`, `num 1000`) —
-without that rule the scanner read `0.` as one number and the range operator
-lost its start, in 13 corpus files. And a radix prefix with no digit of its own
-radix (`0x`, `0x_`, `0b2`) is not a number: the lexer takes the following word
-characters into the bad literal and reports it once, and so must the scanner.
+This replaced a second, hand-written scanner that had to be compared against
+the lexer to stay honest, and did not. It lexed `0o755` as `0` then `o755`
+(the compiler's lexer had learned octal, this had not) and `5.` as `5` then
+`.`, so `make fmt` wrote `0 o755` back to disk. `test-agree.sh` caught the
+class, but a comparison is a weaker guarantee than not having two things to
+compare — the drift is silent until someone runs the test, and every new
+literal spelling has to be remembered in two places.
 
-The corpus is 493 `.y` files — `src/y`, `src/tools`, `bench`, `test/y`. Two
-regions are excluded from the comparison, and both exclusions are *reasons scan.y
-exists* rather than concessions: comments, which `tokenize` discards, and
-f-strings, which it desugars. The current result is 0 mismatches over ~407 000
-spans and ~423 000 tokens. A ninth file class -- text `tokenize` cannot lex at
-all, because an unterminated literal is `exit(1)` -- is checked separately: all 9
-such corpus files must be *repaired* into text that lexes, which is what stops
-the server dying on the first `"` a user types.
+**Repair is unchanged** and still the reason the server survives an editor
+mid-keystroke: an unterminated literal is reported as a diagnostic *and* a copy
+of the buffer with the literal closed is what the compiler sees, so the rest of
+the document still checks. The editor's buffer is never modified. `repair`
+works from the error spans `tokenize_lsp` produces, which is why an
+unterminated literal must be a *span* with a real end and not just a flag.
 
-The scanner has no `break` and no `continue` either -- written before Y had
-them, so every early exit is still a flag. That is now a choice rather than a
-constraint: `scan.y` could use `break`/`continue` (TODO.md §5 is only the
-*labelled* form). It has not been converted, because the flags are already
-tested against the lexer by `test-agree.sh` and a rewrite would put that
-agreement at risk for no gain in speed or size. An unclosed block comment needs
-its own `ran_out` state either way: left to the loop condition, `bump` takes
-the cursor to the end of the buffer and then takes nothing, and it spins.
+`test-agree.sh` remains as the check that the adapter's classification is
+faithful: `scan_full`'s spans are compared with `tokenize`'s tokens over the
+corpus (comments and f-strings excluded from the token side, since the
+compiler's stream has no such regions), and text the lexer cannot lex at all
+must repair into text that lexes.
 
 ---
 
@@ -490,7 +488,8 @@ like any other.
 is removed from `package.json`'s `contributes`. The grammar file stays in the
 repository, unregistered, so re-enabling it is a one-line revert.
 
-**R2.2** Spans come from `scan.y`, never from `tokenize`. f-strings are
+**R2.2** Spans come from `scan.y` (which is `lexer.tokenize_lsp` named), never
+from `tokenize`. f-strings are
 desugared *inside the lexer* (`lexer.lex_fstring`): `f"a{x}b"` is emitted as
 `(" " + #fmt(x, "") + "b")`, with positions rebased onto the original text
 (the position rebasing inside `lex_fstring`) so they stay in range — but several synthesized tokens
@@ -552,7 +551,7 @@ state, and must survive the round trip: for every fixture, re-deriving
 absolute positions from the delta must reproduce the server's own token list
 byte for byte.
 
-**R2.5** A buffer that does not tokenize still highlights. `scan.y` is
+**R2.5** A buffer that does not tokenize still highlights. `tokenize_lsp` is
 tolerant, so an unterminated string highlights as a string with an error
 marker rather than blanking the file.
 
@@ -603,15 +602,27 @@ which is the right trade for a language whose own source is hand-aligned.
 nested **blocks** tight (`{ ... }};`) but pads nested **records**
 (`{ k: v } }`). Telling them apart needs to know what each brace opened, which
 is parser knowledge this does not have (R3.3), so the padded form wins -- it
-never runs two constructs together. The same goes for the 46 tight-brace
-outliers against 1651 padded ones: the formatter writes the house style.
+never runs two constructs together. An EMPTY block keeps whatever the author
+wrote (`{ }` and `{}` are both in src/y/), because there the space is not a
+separator and the source is the only evidence.
 
-**R3.6c** The measured residue on `src/y/` (29 files, both compilers):
-5 byte-identical, 1184 differing lines, of which ~285 are the column-aligned
-continuations of R3.6a, ~46 the tight-brace outliers of R3.6b, and the rest
-blank-line collapsing and a trailing-newline normalisation (`labels.y` and
-`tags.y` ship without a final newline; R3.6 adds one). Idempotence -- the actual
-requirement of R3.5 -- holds over every file in the tree that lexes.
+**R3.6c** `make fmt` applies the formatter to `src/y/`, `src/y/std/` and
+`src/tools/lsp/` in place, and the fixed point is then **exact**: 38/38 files
+byte-identical, 0 lines differing, measured by `make fmt-check` over both
+compilers. That is the state the tree is kept in, and it is what makes the
+formatter's output reviewable -- a diff after `make fmt` is a style change
+someone made by hand, not the formatter's.
+
+Before it was applied, the residue on `src/y/` was ~1600 lines: blank-line
+collapsing and a trailing-newline normalisation (R3.6), plus the author's
+column-aligned continuations (R3.6a). Those are copied through where a single
+line holds them and normalised where a bracket spans lines -- deliberately,
+per R3.6a, and that is the part a hand-aligned file loses when it is
+formatted for the first time.
+
+Idempotence (R3.5) is the actual requirement and holds over every file in the
+tree that lexes; a buffer that does not lex is refused (R3.4) and counted, not
+failed.
 
 **R3.7** Rules live in one table, overridable per `y.lsp.format.*` settings:
 indent width, column limit, operator spacing.
@@ -913,8 +924,8 @@ protocol.
 
 Nothing is ever written to stdout that is not a frame. The compiler's own
 `puts("error: …")` calls write to **stdout** (the error printer in `ycc.y`), which is why
-process isolation matters and why `scan.y` must intercept the unterminated
-literal cases before they are reached.
+process isolation matters and why `scan.repair` must close an unterminated
+literal before the compiler is reached.
 
 ---
 
@@ -1373,8 +1384,9 @@ rebless of `ycc`. Registering it in `run_all.sh` would couple the two.
 
 ### 11.3 Scanner, encoding, tokens
 
-- `scan.y` and `tokenize` must agree on every token start, over the whole
-  corpus. A disagreement is a highlighting bug and a parsing bug.
+- `scan.y`'s spans must be `tokenize`'s tokens, over the whole corpus
+  (comments and f-strings excepted: the compiler's stream has neither).
+  A disagreement is a highlighting bug and a formatting bug.
 - UTF-16 conversion: fixtures with non-ASCII identifiers, strings and comments
   at known columns.
 - Semantic token delta round-trip (R2.4).
@@ -1636,9 +1648,11 @@ fail with whatever the compiler's own state happened to be. It compares against
 
 1. **C2's branch in the checker's hot loop.** The one genuinely expensive
    requirement. Measured with `make bench-ir` before anything is blessed.
-2. **Two classifiers over the same bytes.** `scan.y` and `tokenize` must
-   agree. A fixture sweep over the whole corpus is the mitigation; a
-   divergence is a parsing bug, not just a colour bug.
+2. **One classifier, so no divergence is possible.** The risk this used to
+   name -- `scan.y` disagreeing with `tokenize` about where a token starts --
+   is gone with the second scanner. What remains is the adapter's
+   classification (`kind_of`), which `test-agree.sh` checks over the corpus;
+   a mistake there is a colour bug, not a parsing one.
 3. **Semantic token cost.** A whole-document token array is re-sent on every
    change as a delta. Large files will need the delta implemented correctly
    rather than approximately.

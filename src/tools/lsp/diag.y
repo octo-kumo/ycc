@@ -329,7 +329,7 @@ def xref_for(text: str, dir: str, path: str, pack: str) -> Prepared? {
                 // this reads the whole pair. 0 is the read it had before.
                 let ln = 0;
                 let lv = tolong(pair[tab + 1:len(pair)]);
-                if (lv != none) { ln = lv!; };
+                if (lv != none) { ln = lv !; };
                 lines[nm] = ln;
                 files[nm] = file_of(nr.origin, ln);
                 names += nm;
@@ -365,6 +365,6 @@ def missing_import_here(text: str, dir: str) -> bool {
 }
 
 export {
-  Imp, Finding, SEV_ERROR, SEV_WARNING, check, imports_of,
-  missing_imports, externs_for, file_of, line_in_file, Prepared, xref_for
+    Imp, Finding, SEV_ERROR, SEV_WARNING, check, imports_of,
+    missing_imports, externs_for, file_of, line_in_file, Prepared, xref_for
 };

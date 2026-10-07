@@ -103,7 +103,7 @@ def nest_reset() { nest = 0; 0 };
 // in more than one way.
 def too_deep(what: str, line: long, col: long) -> void {
     puts(tostring(line) + ":" + tostring(col) + ": error: " + what +
-         " nests deeper than " + tostring(MAX_NEST) + ", the compiler's limit");
+        " nests deeper than " + tostring(MAX_NEST) + ", the compiler's limit");
     exit(1);
     0
 };

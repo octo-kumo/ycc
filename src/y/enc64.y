@@ -100,8 +100,8 @@ def modrm(mod: long, reg: long, rm: long) -> long {
 
 def sib(scale: long, index: long, base: long) -> long {
     let s = 0;
-    if (scale == 2) { s = 1; } 
-    else if (scale == 4) { s = 2; } 
+    if (scale == 2) { s = 1; }
+    else if (scale == 4) { s = 2; }
     else if (scale == 8) { s = 3; };
     s * 64 + (index % 8) * 8 + base % 8
 };
@@ -122,7 +122,7 @@ def le32(v: long) -> [byte] {
 
 def le64(v: long) -> [byte] {
     let out: [byte] = [byte_of(v, 0), byte_of(v, 1), byte_of(v, 2), byte_of(v, 3),
-                       byte_of(v, 4), byte_of(v, 5), byte_of(v, 6), byte_of(v, 7)];
+        byte_of(v, 4), byte_of(v, 5), byte_of(v, 6), byte_of(v, 7)];
     out
 };
 
@@ -339,7 +339,7 @@ def enc_br(at: long, fx: [Fixup], br: long) -> Encoded {
 // item's fixup carries the name).
 def lbl_op(name: str) -> Operand {
     { k: K.lbl, n: 0, size: 0, v: 0, a: "", b: "", name: name, base: -1, idx: -1,
-      scale: 1, disp: 0, rip: false, lbl: "" }
+        scale: 1, disp: 0, rip: false, lbl: "" }
 };
 
 // The long (rel32) form of a branch, for asm_relax's grower pass: `br` is what
@@ -1201,7 +1201,6 @@ def enc_insn(buf: [byte], at: long, mn: str, ops: [Operand], lng: bool) -> Encod
     }
 };
 
-
 // The same encoders, dispatched on the IR's form id (Part 4 stage 2c): an item
 // names a form, not a mnemonic, so the arm is an integer compare rather than a
 // string one. Every arm is what enc_insn does for that mnemonic and those
@@ -1217,7 +1216,7 @@ def enc_form(buf: [byte], at: long, f: long, mn: str, ops: [Operand], lng: bool)
     else if (f == 2) { enc_call(buf, at, ops[0]) }  // call O_LBL
     else if (f == 3) { enc_call(buf, at, ops[0]) }  // call O_IND
     else if (f == 4) { enc_jmp(buf, at, ops[0], lng) }  // jmp O_LBL
-    else if (f == 5) { enc_ok(put(buf, at, 195), []) }  // ret 
+    else if (f == 5) { enc_ok(put(buf, at, 195), []) }  // ret
     else if (f == 6) { enc_jcc(buf, at, 132, ops[0], lng) }  // je O_LBL
     else if (f == 7) { enc_jcc(buf, at, 133, ops[0], lng) }  // jne O_LBL
     else if (f == 8) { enc_jcc(buf, at, 132, ops[0], lng) }  // jz O_LBL
@@ -1306,8 +1305,8 @@ def enc_form(buf: [byte], at: long, f: long, mn: str, ops: [Operand], lng: bool)
     else if (f == 85) { enc_unary(buf, at, mn, ops[0]) }  // dec O_REG
     else if (f == 86) { enc_unary(buf, at, mn, ops[0]) }  // dec O_MEM
     else if (f == 87) { enc_xchg(buf, at, ops[0], ops[1]) }  // xchg O_REG O_MEM
-    else if (f == 88) { enc_ok(put2(buf, at, 15, 5), []) }  // syscall 
-    else if (f == 89) { enc_ok(put2(buf, at, 72, 153), []) }  // cqo 
+    else if (f == 88) { enc_ok(put2(buf, at, 15, 5), []) }  // syscall
+    else if (f == 89) { enc_ok(put2(buf, at, 72, 153), []) }  // cqo
     else if (f == 90) { enc_mov(buf, at, ops[1], ops[0]) }  // mov O_FS O_REG
     else if (f == 91) { enc_cvtsi2sd(buf, at, ops[1], ops[0]) }  // cvtsi2sd O_REG O_REG
     else if (f == 92) { enc_sse_arith(buf, at, mn, ops[1], ops[0]) }  // divsd O_REG O_REG
@@ -1322,4 +1321,4 @@ def enc_form(buf: [byte], at: long, f: long, mn: str, ops: [Operand], lng: bool)
 // The types are exported too: enc_insn and enc_form take [Operand] and return
 // Encoded, so a caller that wants to name either needs the name.
 export { Operand, Fixup, Encoded, MemTail, r64, reg_num, reg_size, enc_insn,
-         enc_form, enc_branch_long, fixup, byte_of, scratch, le16, le32, le64 };
+    enc_form, enc_branch_long, fixup, byte_of, scratch, le16, le32, le64 };

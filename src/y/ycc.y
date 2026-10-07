@@ -220,8 +220,8 @@ def self_pack() -> str {
                 // old tolong read that as 0 and the `n > 0` below rejected it,
                 // which worked by accident; with `!` it would TRAP instead.
                 let nopt = tolong(tail[:8]);
-                if (nopt != none && tail[8:] == pack_magic() && nopt! > 0 && nopt! <= size - 16) {
-                    let n = nopt!;
+                if (nopt != none && tail[8:] == pack_magic() && nopt ! > 0 && nopt ! <= size - 16) {
+                    let n = nopt !;
                     syscall(8, fd, size - 16 - n, 0);
                     let pieces: [str] = [];
                     let left = n;
@@ -927,8 +927,8 @@ def main(cmdline: [str]) -> long {
             let last_slash = last_index_of(file, "/");
             let base_dir = ".";
             if (last_slash >= 0) {
-            base_dir = file[0:last_slash];
-            0
+                base_dir = file[0:last_slash];
+                0
             }
 
             // splice imports, tokenize, parse, compile to assembly
@@ -943,9 +943,9 @@ def main(cmdline: [str]) -> long {
             let nrsrc = nr.src;
             let nrorigin = nr.origin;
             if (pargs.dump) {
-            dump_source(nrsrc, nrorigin);
-            exit(0);
-            0
+                dump_source(nrsrc, nrorigin);
+                exit(0);
+                0
             };
             let toks = lexer.tokenize(nrsrc);
             ph = nativelib.phase_end(dt, "tokenize", t0, h0);
@@ -967,125 +967,125 @@ def main(cmdline: [str]) -> long {
             // emit_program reports its own sub-phases (strip_ns, rename,
             // typecheck, lint, emit_fns, emit_start, asm_text); splice them in.
             r.times.foreach((se) => {
-            dt += se;
+                dt += se;
             });
             if (r.ok && !pargs.nowarn) {
-            print_native_warnings(r.warnings, nrorigin, true);
+                print_native_warnings(r.warnings, nrorigin, true);
             };
             // --fix: the linter named the shortenings; write each one's file
             // back with them applied, then stop (nothing downstream reads a
             // source file, and the caller wants the tree, not a binary).
             if (r.ok && pargs.fix) {
-            let fixes = lint.lint_fixes_get();
-            let fids = lint.lint_fix_ids(fixes, nrorigin.file);
-            for fi in 0..len(fids) {
-            let fid = fids[fi];
-            if (fid >= 0 && fid < len(nrorigin.files)) {
-            let rd = fs.read_file(nrorigin.files[fid]);
-            if (rd != none) {
-            fs.write_file(nrorigin.files[fid], lint.lint_fix_text(fid, fixes, nrorigin.file, nrorigin.line, unwrap(rd)));
-            };
-            };
-            };
-            exit(0);
-            0
+                let fixes = lint.lint_fixes_get();
+                let fids = lint.lint_fix_ids(fixes, nrorigin.file);
+                for fi in 0..len(fids) {
+                    let fid = fids[fi];
+                    if (fid >= 0 && fid < len(nrorigin.files)) {
+                        let rd = fs.read_file(nrorigin.files[fid]);
+                        if (rd != none) {
+                            fs.write_file(nrorigin.files[fid], lint.lint_fix_text(fid, fixes, nrorigin.file, nrorigin.line, unwrap(rd)));
+                        };
+                    };
+                };
+                exit(0);
+                0
             };
             t0 = clock_us();
             h0 = heap_used();
             if (!r.ok) {
-            print_native_errors(r.errors, nrorigin, true);
-            exit(1);
-            1
+                print_native_errors(r.errors, nrorigin, true);
+                exit(1);
+                1
             } else if (pargs.asm_only) {
-            let rasm = nativelib.link_text(r.asm);
-            let wrote = true;
-            if (len(out) == 0) {
-            puts(rasm);
-            0
+                let rasm = nativelib.link_text(r.asm);
+                let wrote = true;
+                if (len(out) == 0) {
+                    puts(rasm);
+                    0
+                } else {
+                    // Checked, like the executable path below: silently
+                    // exiting 0 after a failed write hid bad -o paths.
+                    wrote = fs.write_file(out, rasm);
+                    0
+                };
+                ph = nativelib.phase_end(dt, "write", t0, h0);
+                dt = ph.times;
+                if (pargs.timing) {
+                    eputs("ycc --time: " + file + "\n");
+                    print_phase_rows(dt);
+                    eputs("  " + padr("TOTAL", 12) + padl(fmt_ms(clock_us() - tstart), 12) + " ms" + padl(fmt_kb(heap_used() - hstart), 12) + " KB\n");
+                    print_counter("src_bytes", len(nrsrc));
+                    print_counter("tokens", len(toks));
+                    print_counter("asm_bytes", len(rasm));
+                    0
+                }
+                if (!(wrote)) {
+                    puts("error: writing '" + out + "' failed\n");
+                    exit(1);
+                    1
+                } else {
+                    0
+                }
             } else {
-            // Checked, like the executable path below: silently
-            // exiting 0 after a failed write hid bad -o paths.
-            wrote = fs.write_file(out, rasm);
-            0
-            };
-            ph = nativelib.phase_end(dt, "write", t0, h0);
-            dt = ph.times;
-            if (pargs.timing) {
-            eputs("ycc --time: " + file + "\n");
-            print_phase_rows(dt);
-            eputs("  " + padr("TOTAL", 12) + padl(fmt_ms(clock_us() - tstart), 12) + " ms" + padl(fmt_kb(heap_used() - hstart), 12) + " KB\n");
-            print_counter("src_bytes", len(nrsrc));
-            print_counter("tokens", len(toks));
-            print_counter("asm_bytes", len(rasm));
-            0
-            }
-            if (!(wrote)) {
-            puts("error: writing '" + out + "' failed\n");
-            exit(1);
-            1
-            } else {
-            0
-            }
-            } else {
-            // Assemble to a [byte] buffer in-process (no as/ld/cc) and write the
-            // executable DIRECTLY with fs.write_bytes
-            // (binary-safe open/write/chmod, tinycc-style — NULs pass
-            // through as array elements, no shell, no exec/printf).
-            let ab = nasm.ycc_assemble(r.asm, pargs.debug);
-            // The assembly text itself is not built on this path any more
-            // (the assembler reads the emitter's items), so the size
-            // counter here is the item count; -S still reports asm_bytes.
-            let abitems = ab.items;
-            ph = nativelib.phase_end(dt, "assemble", t0, h0);
-            dt = ph.times; t0 = ph.t; h0 = ph.h;
-            // ycc_assemble reports its own sub-phases: a:split,
-            // a:encode, a:link, then l:labmap, l:patch, l:elf.
-            ab.times.foreach((ae) => {
-            dt += ae;
-            });
-            if (!ab.ok) {
-            puts("error: assemble: " + ab.error + "\n");
-            exit(1);
-            1
-            } else {
-            if (pargs.run) {
-            let av: [str] = [file];
-            av += pargs.prog;
-            let rr = meta.run_image(ab.bytes, av, false);
-            if (!rr.ok) {
-            puts("error: " + rr.err + "\n");
-            exit(1);
-            1
-            } else {
-            if (rr.sig > 0) { exit(128 + rr.sig); } else { exit(rr.status); };
-            0
-            }
-            };
-            let out_path = out;
-            if (len(out_path) == 0) { out_path = "a.out"; 0; }
-            let abbytes = ab.bytes;
-            // 493 = 0755 executable (chmod applied by write_bytes).
-            let ok = fs.write_bytes(out_path, abbytes, 493);
-            ph = nativelib.phase_end(dt, "write", t0, h0);
-            dt = ph.times;
-            if (pargs.timing) {
-            eputs("ycc --time: " + file + "\n");
-            print_phase_rows(dt);
-            eputs("  " + padr("TOTAL", 12) + padl(fmt_ms(clock_us() - tstart), 12) + " ms" + padl(fmt_kb(heap_used() - hstart), 12) + " KB\n");
-            print_counter("src_bytes", len(nrsrc));
-            print_counter("tokens", len(toks));
-            print_counter("asm_items", abitems);
-            print_counter("out_bytes", len(abbytes));
-            0
-            }
-            if (!ok) {
-            puts("error: writing '" + out_path + "' failed\n");
-            exit(1);
-            1
-            } else {
-            0
-            }
-            }
+                // Assemble to a [byte] buffer in-process (no as/ld/cc) and write the
+                // executable DIRECTLY with fs.write_bytes
+                // (binary-safe open/write/chmod, tinycc-style — NULs pass
+                // through as array elements, no shell, no exec/printf).
+                let ab = nasm.ycc_assemble(r.asm, pargs.debug);
+                // The assembly text itself is not built on this path any more
+                // (the assembler reads the emitter's items), so the size
+                // counter here is the item count; -S still reports asm_bytes.
+                let abitems = ab.items;
+                ph = nativelib.phase_end(dt, "assemble", t0, h0);
+                dt = ph.times; t0 = ph.t; h0 = ph.h;
+                // ycc_assemble reports its own sub-phases: a:split,
+                // a:encode, a:link, then l:labmap, l:patch, l:elf.
+                ab.times.foreach((ae) => {
+                    dt += ae;
+                });
+                if (!ab.ok) {
+                    puts("error: assemble: " + ab.error + "\n");
+                    exit(1);
+                    1
+                } else {
+                    if (pargs.run) {
+                        let av: [str] = [file];
+                        av += pargs.prog;
+                        let rr = meta.run_image(ab.bytes, av, false);
+                        if (!rr.ok) {
+                            puts("error: " + rr.err + "\n");
+                            exit(1);
+                            1
+                        } else {
+                            if (rr.sig > 0) { exit(128 + rr.sig); } else { exit(rr.status); };
+                            0
+                        }
+                    };
+                    let out_path = out;
+                    if (len(out_path) == 0) { out_path = "a.out"; 0; }
+                    let abbytes = ab.bytes;
+                    // 493 = 0755 executable (chmod applied by write_bytes).
+                    let ok = fs.write_bytes(out_path, abbytes, 493);
+                    ph = nativelib.phase_end(dt, "write", t0, h0);
+                    dt = ph.times;
+                    if (pargs.timing) {
+                        eputs("ycc --time: " + file + "\n");
+                        print_phase_rows(dt);
+                        eputs("  " + padr("TOTAL", 12) + padl(fmt_ms(clock_us() - tstart), 12) + " ms" + padl(fmt_kb(heap_used() - hstart), 12) + " KB\n");
+                        print_counter("src_bytes", len(nrsrc));
+                        print_counter("tokens", len(toks));
+                        print_counter("asm_items", abitems);
+                        print_counter("out_bytes", len(abbytes));
+                        0
+                    }
+                    if (!ok) {
+                        puts("error: writing '" + out_path + "' failed\n");
+                        exit(1);
+                        1
+                    } else {
+                        0
+                    }
+                }
             }
 
         } else {

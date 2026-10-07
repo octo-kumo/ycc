@@ -510,7 +510,7 @@ def rn_reaches_go(st: RnSt, t: Type, id: long, seen: [long], bare: bool) -> bool
         let name: TName = t;
         let j = rn_alias_index(st, name.name);
         let walked = false;
-        foreach (s in seen) { if (s == j) { walked = true; }};
+        foreach (s in seen) { if (s == j) { walked = true; } };
         if (j < 0 || walked) { false }
         else if (j == id) { true }
         else {
@@ -1262,8 +1262,8 @@ def rn_decl_native_go(node: Decl, u: str, st: RnSt) -> RnRes {
     // `ppos` carried through unchanged: the renamer renames names, not positions,
     // and a native declaration's parameters are exactly where they were written.
     let nf: Func = { k: K.func, params: f.params, ptypes: rn_types(st, f.ptypes),
-      ret: rn_type(st, f.ret), body: f.body, defs: f.defs, label: f.label,
-      line: f.line, col: f.col, ppos: f.ppos };
+        ret: rn_type(st, f.ret), body: f.body, defs: f.defs, label: f.label,
+        line: f.line, col: f.col, ppos: f.ppos };
     { st: st, node: { k: K.decl, kind: "native", name: u, typ: rn_type(st, node.typ), v: nf, line: node.line, col: node.col, nline: node.nline, ncol: node.ncol } }
 };
 
@@ -1423,8 +1423,6 @@ def rn_func_finish(fptypes: [Type], fret: Type, fbody: Block, fline: long, fcol:
     // `fppos` below and not a literal [].
     { st: st, node: { k: K.func, params: params, ptypes: rn_types(st, fptypes), ret: rn_type(st, fret), body: { k: K.block, stmts: body, line: fline, col: fcol }, line: fline, col: fcol, defs: [], label: "", ppos: fppos } }
 };
-
-
 
 def rename_program(ast: Block) -> Block {
     let none: [Dfl] = [];

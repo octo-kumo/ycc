@@ -1,25 +1,30 @@
-// scan.y -- a tolerant span scanner: one byte-level pass over a buffer that
-// says what every region of it is.
+// scan.y -- the server's NAME for what the compiler's lexer found.
 //
-// WHY THIS EXISTS AND WHY IT IS NOT tokenize(). The lexer answers the parser's
-// question -- "what are my tokens" -- and throws away everything the parser
-// does not need: comments, the gap between tokens, and the distinction between
-// "this string is fine" and "this string runs off the end of the file". Two
-// other things rule it out as a highlighter's source:
+// This used to be a second byte-level scanner, written because the lexer's own
+// output was not usable here: it discards comments, it desugars f-strings into
+// `#fmt(...)` calls with no source extent, and it calls exit(1) on an
+// unterminated string or block comment -- which in a server is a process death
+// on the first `"` the user types.
 //
-//   - f-strings are desugared DURING lexing. `f"a{x}b"` comes out as
-//     `(" " + #fmt(x, "") + "b")`, with positions rebased onto the original
-//     text but no token of its own having any extent, so the stream cannot
-//     yield a source span for the literal.
-//   - it calls exit(1) on an unterminated string or block comment, which in a
-//     server kills the process on the first `"` the user types.
+// Those are all modes of ONE scanner rather than reasons for two. lexer.y now
+// has `tokenize_lsp`, the compiler's own loop with comments kept, an f-string
+// whole, byte spans on every token, and an error token where the compiler
+// would exit. So this file holds no lexing rules at all: it maps a token to a
+// span KIND (the numeric constants below, which the semantic-token legend and
+// the formatter index by) and hands the compiler's byte span through.
 //
-// So this is a second, deliberately independent classifier. It must agree with
-// tokenize() about where every token BEGINS -- that is a test, not a shared
-// dependency (see test-agree.sh) -- and it is tolerant where the lexer is not.
+// WHY THIS IS NOT JUST `lexer.tokenize`: the compiler's entry point stays
+// exactly what it was -- comments dropped, f-strings desugared, a malformed
+// literal fatal -- because the parser and the port gate are defined on that
+// stream. `tokenize_lsp` is the same code with those three things turned
+// around.
 //
-// The two agree by construction only if both are changed together; the agreement
-// test is what catches it when they are not.
+// There IS a second consumer of the compiler's tokenizer here (diag.y, for
+// diagnostics, and xref.y, for references); both run the real pipeline. This
+// file is what the token-level features read: highlighting, hover ranges,
+// the formatter.
+
+import lexer from "../../y/lexer.y";
 
 // ── span kinds ──────────────────────────────────────────────────────────
 // Numeric so the map to an LSP semantic-token type is one table. These are
@@ -30,7 +35,7 @@ const K_string = 2;       // "..."
 const K_bstring = 3;      // b"..." b'...'
 const K_char = 4;         // 'x'
 const K_fstring = 5;      // f"...{expr}..."
-const K_number = 6;       // 12, 1.5, 1e10, 0x1f, 0b1010, with _ grouping
+const K_number = 6;       // 12, 1.5, 1e10, 0x1f, 0b1010, 0o755, 12n, 129b
 const K_ident = 7;        // anything not in the keyword list
 const K_keyword = 8;      // the twelve reserved words
 const K_contextual = 9;   // match, type, spawn, ...: words, not keywords
@@ -46,43 +51,28 @@ def sp(off: long, end: long, kind: long, line: long, col: long) -> Span {
     { off: off, end: end, kind: kind, line: line, col: col }
 }
 
-// ── byte classes ────────────────────────────────────────────────────────
+// ── the adapter ─────────────────────────────────────────────────────────
+//
+// ONE classifier, and it is the compiler's: lexer.tokenize_lsp, the same
+// scanner that feeds the parser, in server mode -- comments kept, an f-string
+// whole, a malformed literal a token instead of an exit, and a byte span on
+// every token. This file only NAMES what the lexer found; it decides nothing.
+//
+// There is no second scanner here any more. There used to be, and it drifted:
+// it lexed `0o755` as `0` then `o755` (the compiler's lexer had learned octal
+// and this had not), which the formatter then wrote back to disk as `0 o755`.
+// A test (test-agree.sh) compared the two, and a comparison is a weaker
+// guarantee than not having two things to compare (LSP.md section 5.1).
 
-def is_dig(c: byte) -> bool { c >= '0' && c <= '9' }
-def is_hexd(c: byte) -> bool {
-    is_dig(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
-}
-def is_alpha(c: byte) -> bool {
-    (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'
-}
-def is_alphanum(c: byte) -> bool { is_alpha(c) || is_dig(c) }
-def is_space(c: byte) -> bool { c == ' ' || c == '\t' || c == '\n' || c == '\r' }
-
-// The nine punctuation characters, per the lexer's ispunct.
-def is_punct_byte(c: byte) -> bool {
-    c == '(' || c == ')' || c == '{' || c == '}' || c == '[' ||
-    c == ']' || c == ',' || c == ';' || c == ':'
-}
-
-// The lexer's issingleop.
-def is_single_op(c: byte) -> bool {
-    c == '+' || c == '-' || c == '*' || c == '/' || c == '%' ||
-    c == '<' || c == '>' || c == '=' || c == '.' || c == '!' ||
-    c == '&' || c == '?' || c == '|' || c == '^' || c == '~'
-}
-
-// ── the twelve reserved words (lexer.y's chain) ──────────────────────────
-// A fifteenth would have to be added here too, or it highlights as a name.
-// test_coverage.sh greps the lexer's own chain, which is the authority.
-
+// The twelve reserved words, and the words the parser gives a meaning to in
+// one shape. The lexer says which is which; these are the two tables the
+// server needs to name a span.
 def is_keyword(w: str) -> bool {
     w == "let" || w == "const" || w == "def" || w == "if" || w == "else" ||
     w == "while" || w == "for" || w == "foreach" || w == "in" || w == "return" ||
     w == "break" || w == "continue" || w == "ndef" || w == "true" || w == "false"
 }
 
-// Words the parser gives a meaning to in a particular shape. Not reserved: a
-// def or a variable with one of these names wins (09-builtins.tex).
 def is_contextual(w: str) -> bool {
     w == "match" || w == "type" || w == "spawn" || w == "fork" ||
     w == "lock" || w == "try_lock" || w == "join" || w == "post" ||
@@ -90,453 +80,43 @@ def is_contextual(w: str) -> bool {
     w == "none" || w == "import" || w == "export"
 }
 
-// ── operators, longest match first (the lexer's multicharop) ─────────────
-// Longest-first matters: `>>=` is one operator and `>>` then `=` is two, and
-// the formatter's spacing depends on which.
-
-def op2(src: str, i: long) -> bool {
-    let t = src[i:i + 2];
-    t == "==" || t == "!=" || t == "<=" || t == ">=" || t == "&&" || t == "||" ||
-    t == "::" || t == ".." || t == "->" || t == "=>" || t == "++" || t == "--" ||
-    t == "?." || t == "+=" || t == "-=" || t == "*=" || t == "/=" || t == "%=" ||
-    t == "&=" || t == "|=" || t == "^=" || t == "<<" || t == ">>"
-}
-
-// 4 or 3 characters, and only after `<` or `>`.
-def op_long(src: str, i: long) -> long {
-    let c = byte_at(src, i);
-    let n = 0;
-    if (c == '<' || c == '>') {
-        if (src[i:i + 4] == ">>>=") { n = 4; }
-        else if (src[i:i + 3] == ">>>" || src[i:i + 3] == ">>=" || src[i:i + 3] == "<<=") { n = 3; }
-    };
-    n
-}
-
-def op_len(src: str, i: long) -> long {
-    let n = op_long(src, i);
-    if (n > 0) { return n; }
-    if (op2(src, i)) { return 2; }
-    1
-}
-
-export { Span, scan, scan_full, repair, kind_name, line_starts, off_at,
-         is_keyword, is_contextual, is_punct_byte, is_single_op, op_len };
-// ── the pass ────────────────────────────────────────────────────────────
-//
-// The cursor is a record and records are references, so `c.i` advances in the
-// caller's copy. Every `take_*` leaves the cursor just past what it consumed
-// and returns the span; the caller appends it.
-
-type Cur = { s: str, i: long, line: long, col: long };
-
-// Advance over `n` bytes, counting lines.
-def bump(c: Cur, n: long) -> long {
-    let k = 0;
-    while (k < n) {
-        if (c.i < len(c.s)) {
-            if (byte_at(c.s, c.i) == '\n') {
-                c.line = c.line + 1;
-                c.col = 1;
-            } else { c.col = c.col + 1; }
-            c.i = c.i + 1;
-        };
-        k = k + 1;
-    };
-    c.i
-}
-
-// A quoted run starting at the opening quote (c.i is ON the quote). Tolerates
-// an unterminated one: the span then runs to the end of the buffer and is
-// marked K_error rather than dropped.
-def take_quoted(c: Cur, quote: long) -> Span {
-    let start = c.i;
-    let sline = c.line;
-    let scol = c.col;
-    let closed = false;
-    bump(c, 1);
-    while (!closed) {
-        if (c.i >= len(c.s)) {
-            closed = true;
-        } else {
-            let ch = byte_at(c.s, c.i);
-            if (ch == quote) {
-                bump(c, 1);
-                closed = true;
-            } else if (ch == 92) {
-                // a backslash escapes whatever follows, including a quote
-                if (c.i + 1 >= len(c.s)) { bump(c, 1); } else { bump(c, 2); }
-            } else {
-                bump(c, 1);
-            }
-        }
-    };
-    let kind = K_string;
-    if (c.i >= len(c.s) && byte_at(c.s, c.i - 1) != quote) { kind = K_error; }
-    sp(start, c.i, kind, sline, scol)
-}
-
-// f"..." -- find the closing quote, stepping over the {...} fields. A field may
-// hold a nested string with braces in it, as in f"{d["k"]}" and
-// f"{n == 1 ? "" : "s"}", so braces are counted and quoted runs inside a field
-// are skipped whole.
-// """...""" -- the same scan as take_quoted, but the terminator is three
-// quotes long, so a single `"` inside does not end it.
-def take_triple(c: Cur) -> Span {
-    let start = c.i;
-    let sline = c.line;
-    let scol = c.col;
-    let out = false;
-    let hit = false;
-    bump(c, 3);
-    while (!out) {
-        if (c.i + 3 > len(c.s)) {
-            out = true;
-        } else if (byte_at(c.s, c.i) == 92) {
-            if (c.i + 2 >= len(c.s)) { bump(c, 1); } else { bump(c, 2); }
-        } else if (byte_at(c.s, c.i) == '"' && byte_at(c.s, c.i + 1) == '"' && byte_at(c.s, c.i + 2) == '"') {
-            bump(c, 3);
-            out = true;
-            hit = true;
-        } else {
-            bump(c, 1);
-        }
-    };
-    let kind = K_string;
-    if (!hit) { kind = K_error; }
-    sp(start, c.i, kind, sline, scol)
-}
-
-def take_fstring(c: Cur) -> Span {
-    let start = c.i;
-    let sline = c.line;
-    let scol = c.col;
-    let closed = false;
-    // f""" opens with four bytes and closes with three: a single `"` inside is
-    // text, exactly as in the compiler's lexer
-    let qlen = 2;
-    if (byte_at(c.s, c.i + 1) == 34 && byte_at(c.s, c.i + 2) == 34) { qlen = 4; };
-    bump(c, qlen);                   // f" or f"""
-    while (!closed) {
-        if (c.i >= len(c.s)) {
-            closed = true;
-        } else {
-            let ch = byte_at(c.s, c.i);
-            if (ch == 34 && qlen == 4 && !(byte_at(c.s, c.i + 1) == 34 && byte_at(c.s, c.i + 2) == 34)) {
-                bump(c, 1);          // a lone " inside f""": text, not the end
-            } else if (ch == 34) {
-                bump(c, qlen - 1);   // the closing " (or """)
-                closed = true;
-            } else if (ch == 92) {
-                if (c.i + 1 >= len(c.s)) { bump(c, 1); } else { bump(c, 2); }
-            } else if (ch == 123) {
-                bump(c, 1);
-                let depth = 1;
-                let done = false;
-                while (!done && depth > 0) {
-                    if (c.i >= len(c.s)) {
-                        done = true;
-                    } else {
-                        let f = byte_at(c.s, c.i);
-                        if (f == 123) { depth = depth + 1; bump(c, 1); }
-                        else if (f == 125) { depth = depth - 1; bump(c, 1); }
-                        else if (f == 34 || f == 39) {
-                            // a nested quoted run: step over it whole
-                            let q = f;
-                            bump(c, 1);
-                            let inner = true;
-                            while (inner) {
-                                if (c.i >= len(c.s)) { inner = false; }
-                                else if (byte_at(c.s, c.i) == 92) { bump(c, 2); }
-                                else if (byte_at(c.s, c.i) == q) { bump(c, 1); inner = false; }
-                                else { bump(c, 1); }
-                            }
-                        } else { bump(c, 1); }
-                    }
-                }
-            } else {
-                bump(c, 1);
-            }
-        }
-    };
-    let kind = K_fstring;
-    if (c.i >= len(c.s) && byte_at(c.s, c.i - 1) != 34) { kind = K_error; }
-    sp(start, c.i, kind, sline, scol)
-}
-
-// Digits with `_` between them, never leading. Returns how many digits.
-// A `_` must have a digit after it, so `1_` and `1._5` split where the lexer
-// splits them rather than swallowing the separator.
-def take_digits(c: Cur) -> long {
-    let n = 0;
-    let more = true;
-    while (more) {
-        if (c.i >= len(c.s)) {
-            more = false;
-        } else {
-            let d = byte_at(c.s, c.i);
-            if (is_dig(d)) {
-                bump(c, 1);
-                n = n + 1;
-            } else if (d == '_' && n > 0 && c.i + 1 < len(c.s) && is_dig(byte_at(c.s, c.i + 1))) {
-                bump(c, 1);
-            } else {
-                more = false;
-            }
-        }
+// The span kind of one lexer token; K_none for one with no span (eof).
+def kind_of(src: str, tk: Tok) -> long {
+    let t = tk.t;
+    let k = K_none;
+    if (t == "comment") { k = K_comment; }
+    if (t == "str") { k = K_string; }
+    if (t == "fstr") { k = K_fstring; }
+    if (t == "bstr") { k = K_bstring; }
+    if (t == "char") {
+        // `'a'` is a char; `129b` is the SAME token type in the lexer (both
+        // build the byte node) and is a number to every reader
+        if (tk.off < len(src) && byte_at(src, tk.off) == '\'') { k = K_char; } else { k = K_number; }
     }
-    n
+    if (t == "num" || t == "bigint") { k = K_number; }
+    if (t == "id") { if (is_contextual(tk.v)) { k = K_contextual; } else { k = K_ident; } }
+    if (t == "kw") { k = K_keyword; }
+    if (t == "op") { k = K_operator; }
+    if (t == "punct") { k = K_punct; }
+    if (t == "ferr" || t == "stray") { k = K_error; }
+    k
 }
 
-// 12, 1.5, 1e10, 0x1f, 0b1010_1010.
-//
-// A `.` joins the number only when a digit follows it. That is the whole
-// reason `in 0..1000` is three tokens and not two: without it `0.` swallows the
-// first dot of `..` and the range operator loses its start. The exponent is the
-// same: `1e` is the number 1 then the name `e`.
-def take_number(c: Cur) -> Span {
-    let start = c.i;
-    let sline = c.line;
-    let scol = c.col;
-    let radix = 0;
-    if (byte_at(c.s, c.i) == '0' && c.i + 1 < len(c.s)) {
-        let n = byte_at(c.s, c.i + 1);
-        if (n == 'x' || n == 'X') { radix = 16; }
-        if (n == 'b' || n == 'B') { radix = 2; }
-    }
-    let bad = false;
-    if (radix > 0) {
-        bump(c, 2);
-        let got = 0;
-        let more = true;
-        while (more) {
-            if (c.i >= len(c.s)) {
-                more = false;
-            } else {
-                let d = byte_at(c.s, c.i);
-                let ok = is_hexd(d);
-                if (radix == 2) { ok = d == '0' || d == '1'; }
-                // `_` groups digits without being one: `0b1010_1010` is a
-                // single literal, while `0b_` has no digit and is an error.
-                if (ok) { bump(c, 1); got = got + 1; }
-                else if (d == '_') { bump(c, 1); }
-                else { more = false; }
-            }
-        }
-        if (got == 0) {
-            // `0x`, `0x_`, `0b2`: a prefix with no digit of its radix is not a
-            // number. The lexer takes the following word characters into the
-            // bad literal and reports it once, where it starts; so do the same,
-            // and mark the span K_error.
-            bad = true;
-            while (c.i < len(c.s) && is_alphanum(byte_at(c.s, c.i))) { bump(c, 1); }
-        }
-    } else {
-        take_digits(c);
-        if (c.i + 1 < len(c.s) && byte_at(c.s, c.i) == '.') {
-            if (is_dig(byte_at(c.s, c.i + 1))) {
-                bump(c, 1);
-                take_digits(c);
-            }
-        }
-        if (c.i < len(c.s)) {
-            let e = byte_at(c.s, c.i);
-            if (e == 'e' || e == 'E') {
-                let save = c.i;
-                bump(c, 1);
-                if (c.i < len(c.s)) {
-                    let sg = byte_at(c.s, c.i);
-                    if (sg == '+' || sg == '-') { bump(c, 1); }
-                }
-                if (c.i < len(c.s) && is_dig(byte_at(c.s, c.i))) {
-                    take_digits(c);
-                } else { c.i = save; }
-            }
-        }
-    }
-    // a `b` byte-literal suffix (129b, 0b10001b) belongs to the number: the
-    // formatter must not split it into a number and an identifier
-    if (c.i < len(c.s) && byte_at(c.s, c.i) == 'b' &&
-        !(c.i + 1 < len(c.s) && is_alphanum(byte_at(c.s, c.i + 1)))) {
-        bump(c, 1);
-    };
-    let kind = K_number;
-    if (bad) { kind = K_error; }
-    sp(start, c.i, kind, sline, scol)
-}
-
-def take_word(c: Cur) -> Span {
-    let start = c.i;
-    let sline = c.line;
-    let scol = c.col;
-    while (c.i < len(c.s) && is_alphanum(byte_at(c.s, c.i))) { bump(c, 1); }
-    let w = c.s[start:c.i];
-    let kind = K_ident;
-    if (is_keyword(w)) { kind = K_keyword; }
-    if (is_contextual(w)) { kind = K_contextual; }
-    sp(start, c.i, kind, sline, scol)
-}
-
-// `// ...` up to but not including the newline.
-def take_line_comment(c: Cur) -> Span {
-    let start = c.i;
-    let sline = c.line;
-    let scol = c.col;
-    bump(c, 2);
-    while (c.i < len(c.s) && byte_at(c.s, c.i) != '\n') { bump(c, 1); }
-    sp(start, c.i, K_comment, sline, scol)
-}
-
-// `/* ... */`. Block comments do NOT nest, matching the lexer. An unclosed one
-// runs to the end of the buffer and is K_error -- the case the lexer answers
-// with exit(1).
-def take_block_comment(c: Cur) -> Span {
-    let start = c.i;
-    let sline = c.line;
-    let scol = c.col;
-    let found = false;
-    let ran_out = false;
-    bump(c, 2);
-    while (!found && !ran_out) {
-        if (c.i + 1 >= len(c.s)) {
-            // The cursor is at the last byte at most, so `bump` would take it
-            // to the end and then take nothing: leaving this to a condition
-            // alone is an infinite loop, so running out is a state of its own.
-            bump(c, len(c.s) - c.i);
-            ran_out = true;
-        } else if (c.s[c.i:c.i + 2] == "*/") {
-            bump(c, 2);
-            found = true;
-        } else {
-            bump(c, 1);
-        }
-    };
-    let kind = K_comment;
-    if (!found) { kind = K_error; }
-    sp(start, c.i, kind, sline, scol)
-}
-
-// The whole buffer. `full` also returns the spans whose kind is K_error, in
-// order, so a caller can turn them into diagnostics.
 def scan_full(src: str) -> { spans: [Span], bad: [Span] } {
+    let toks = lexer.tokenize_lsp(src);
     let spans: [Span] = [];
     let bad: [Span] = [];
-    let c = { s: src, i: 0, line: 1, col: 1 };
-    let n = len(src);
-    let go = true;
-    while (go) {
-        if (c.i >= n) {
-            go = false;
-        } else {
-            let ch = byte_at(src, c.i);
-            let nx = 0;
-            if (c.i + 1 < n) { nx = byte_at(src, c.i + 1); }
-            let one = sp(c.i, c.i + 1, K_error, c.line, c.col);
-            let done = false;
-
-            if (is_space(ch)) {
-                // whitespace is not a span: a highlighter has nothing to paint
-                // and a formatter wants the gap, not a token
-                bump(c, 1);
-                one.kind = K_none;
-                done = true;
-            }
-            if (!done && ch == '/' && nx == '/') {
-                one = take_line_comment(c);
-                done = true;
-            }
-            if (!done && ch == '/' && nx == '*') {
-                one = take_block_comment(c);
-                done = true;
-            }
-            if (!done && ch == '"') {
-                // """...""" is one token; a one-line string ends at the next "
-                if (nx == '"' && c.i + 2 < len(c.s) && byte_at(c.s, c.i + 2) == '"') {
-                    one = take_triple(c);
-                } else {
-                    one = take_quoted(c, ch);
-                }
-                done = true;
-            }
-            if (!done && ch == '\'') {
-                // 'a' -- a character literal: one byte, typed byte
-                one = take_quoted(c, ch);
-                if (one.kind == K_string) { one.kind = K_char; }
-                done = true;
-            }
-            // b"..." / b'...' and 'a' and f"...": a letter followed by a quote
-            if (!done && is_alpha(ch)) {
-                if ((ch == 'b' || ch == 'f') && (nx == '"' || nx == '\'')) {
-                    let st = c.i;
-                    let sl = c.line;
-                    let sc = c.col;
-                    bump(c, 1);
-                    let q = take_quoted(c, nx);
-                    let kind = K_bstring;
-                    if (ch == 'f') {
-                        // an f-string's fields make take_quoted the wrong scan
-                        c.i = st; c.line = sl; c.col = sc;
-                        one = take_fstring(c);
-                    } else {
-                        one = sp(st, c.i, kind, sl, sc);
-                        if (q.kind == K_error) { one.kind = K_error; }
-                    }
-                    done = true;
-                }
-                if (!done && ch == 'c' && nx == '\'') {
-                    // c'a' is no longer a spelling: `c` is an identifier and
-                    // `'a'` the character literal that follows it. Taken as
-                    // one error span so the editor does not colour half of it.
-                    let st = c.i;
-                    let sl = c.line;
-                    let sc = c.col;
-                    bump(c, 1);
-                    let q = take_quoted(c, 39);
-                    one = sp(st, c.i, K_error, sl, sc);
-                    if (q.kind == K_error) { one.kind = K_error; }
-                    done = true;
-                }
-            }
-            if (!done && is_dig(ch)) {
-                one = take_number(c);
-                done = true;
-            }
-            if (!done && is_alpha(ch)) {
-                one = take_word(c);
-                done = true;
-            }
-            // Operators before punctuation, as the lexer does it: `::` and
-            // `..` are operators even though `:` and `.` are punctuation, so
-            // checking punct first would split `m::x` into three tokens.
-            if (!done && op_len(src, c.i) > 1) {
-                let w = op_len(src, c.i);
-                bump(c, w);
-                one.end = c.i;
-                one.kind = K_operator;
-                done = true;
-            }
-            if (!done && is_single_op(ch)) {
-                bump(c, 1);
-                one.kind = K_operator;
-                done = true;
-            }
-            if (!done && is_punct_byte(ch)) {
-                bump(c, 1);
-                one.kind = K_punct;
-                done = true;
-            }
-            if (!done) {
-                // A byte no token starts with: one byte, K_error, so the
-                // highlighter can show it and the formatter can refuse.
-                bump(c, 1);
-                one.kind = K_error;
-            }
-            if (one.kind != K_none) {
-                spans += one;
-                if (one.kind == K_error) { bad += one; }
-            }
-        }
-    }
+    let i = 0;
+    while (i < len(toks)) {
+        let tk = toks[i];
+        let k = kind_of(src, tk);
+        if (k != K_none) {
+            let one = sp(tk.off, tk.end, k, tk.line, tk.col);
+            spans += one;
+            if (k == K_error) { bad += one; };
+        };
+        i = i + 1;
+    };
     { spans: spans, bad: bad }
 }
 
@@ -625,9 +205,8 @@ def repair(src: str) -> { text: str, bad: [Span] } {
 }
 
 export {
-  Span, K_none, K_comment, K_string, K_bstring, K_char, K_fstring, K_number,
-  K_ident, K_keyword, K_contextual, K_operator, K_punct, K_error,
-  scan, scan_full, repair, kind_name, line_starts, off_at,
-  is_keyword, is_contextual, is_punct_byte, is_single_op, op_len, op2, op_long,
-  is_dig, is_hexd, is_alpha, is_alphanum, is_space
+    Span, K_none, K_comment, K_string, K_bstring, K_char, K_fstring, K_number,
+    K_ident, K_keyword, K_contextual, K_operator, K_punct, K_error,
+    scan, scan_full, repair, kind_name, line_starts, off_at,
+    is_keyword, is_contextual
 };

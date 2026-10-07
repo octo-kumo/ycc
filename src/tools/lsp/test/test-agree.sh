@@ -1,10 +1,10 @@
 #!/bin/sh
-# test-agree.sh -- scan.y must agree with the compiler's own lexer.
+# test-agree.sh -- scan.y's spans must be the compiler's own tokens.
 #
-# LSP.md §5.1: scan.y and lexer.tokenize are two independent classifiers, and
-# the only thing that keeps them honest is this check. Every .y file in the tree
-# goes through, because a scanner that agrees on hand-picked snippets agrees on
-# nothing.
+# LSP.md §5.1: scan.y is an adapter over lexer.tokenize_lsp, so there is one
+# scanner. What is left to check is the adapter's classification and spans, and
+# every .y file in the tree goes through, because an adapter that agrees on
+# hand-picked snippets agrees on nothing.
 #
 # Two properties, because they fail differently:
 #

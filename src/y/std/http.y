@@ -33,13 +33,13 @@ import net;
 import tls;
 
 type Response = {
-    status: long, reason: str, headers: {str => str}, size: long, url: str, err: str,
+    status: long, reason: str, headers: { str => str }, size: long, url: str, err: str,
     read: (long) -> [byte], text: () -> str
 };
 
 // A request's options; every field may be left out.
 type Opts = {
-    headers?: {str => str}, body?: str, timeout?: long, redirects?: long,
+    headers?: { str => str }, body?: str, timeout?: long, redirects?: long,
     insecure?: bool, anchors?: str
 };
 
@@ -92,7 +92,7 @@ def parse_url(u: str) -> Url {
         // A port that is not a number is a bad URL, not port 0.
         let pn = tolong(hostport[colon + 1:len(hostport)]);
         if (pn == none) { return bad; };
-        port = pn!;
+        port = pn !;
     };
     if (len(host) == 0 || port <= 0 || port > 65535) { return bad; };
     { ok: true, secure: secure, host: host.lower(), port: port, path: path }
@@ -129,7 +129,7 @@ def link_open(u: Url, o: Opts) -> Link {
     let none_tc: tls.Conn? = none;
     let l: Link = { key: origin(u), fd: -1, tc: none_tc, buf: [], err: "", eof: false, busy: false };
     let secs = 30;
-    if (o.timeout != none) { secs = o.timeout!; };
+    if (o.timeout != none) { secs = o.timeout !; };
     if (u.secure) {
         let c = tls.connect_with(u.host, u.port, { anchors: o.anchors, insecure: o.insecure, alpn: "http/1.1", timeout: secs });
         if (c.err != "") { l.err = c.err; } else { l.tc = some(c); };
@@ -146,7 +146,7 @@ def link_open(u: Url, o: Opts) -> Link {
 def link_send(l: Link, data: [byte]) -> bool {
     if (l.err != "") { return false; };
     if (l.tc != none) {
-        let c = l.tc!;
+        let c = l.tc !;
         if (!tls.send(c, data)) {
             l.err = c.err;
             return false;
@@ -169,13 +169,13 @@ def link_send(l: Link, data: [byte]) -> bool {
 def link_fill(l: Link) -> bool {
     if (l.eof || l.err != "") { return false; };
     if (l.tc != none) {
-        let c = l.tc!;
+        let c = l.tc !;
         let got = tls.recv(c);
         if (got == none) {
             if (c.err != "") { l.err = c.err; } else { l.eof = true; };
             return false;
         };
-        l.buf += got!;
+        l.buf += got !;
         return true;
     };
     let chunk: [byte; 16384] = [0; 16384];
@@ -224,7 +224,7 @@ def crlf_at(b: [byte]) -> long {
 };
 
 def link_close(l: Link) {
-    if (l.tc != none) { tls.close(l.tc!); };
+    if (l.tc != none) { tls.close(l.tc !); };
     if (l.fd >= 0) { net.close_fd(l.fd); };
     l.fd = -1;
     let none_tc: tls.Conn? = none;
@@ -266,11 +266,11 @@ def body_take(b: Body, want: long) -> [byte] {
                     b.done = true;
                     b.link.err = "the body ended early";
                 } else {
-                    let size = hex_size(line!);
+                    let size = hex_size(line !);
                     if (size <= 0) {
                         // trailers up to an empty line
                         let t = link_line(b.link);
-                        while (t != none && t! != "") { t = link_line(b.link); };
+                        while (t != none && t ! != "") { t = link_line(b.link); };
                         b.done = true;
                     } else { b.left = size; };
                 };
@@ -331,7 +331,7 @@ def hex_size(s: str) -> long {
 // ── requests ────────────────────────────────────────────────────────────
 
 def no_body() -> Response {
-    let h: {str => str} = {};
+    let h: { str => str } = {};
     let read = def (n: long) -> [byte] {
         let none_b: [byte] = [];
         none_b
@@ -349,8 +349,8 @@ def failed(url: str, why: str) -> Response {
 
 // The request's bytes: its line, the headers (ours, then the caller's,
 // which replace ours of the same name), the body.
-def request_bytes(method: str, u: Url, hdrs: {str => str}, body: str, keep: bool) -> [byte] {
-    let mine: {str => str} = {};
+def request_bytes(method: str, u: Url, hdrs: { str => str }, body: str, keep: bool) -> [byte] {
+    let mine: { str => str } = {};
     let hostv = u.host;
     if ((u.secure && u.port != 443) || (!u.secure && u.port != 80)) { hostv = hostv + ":" + tostring(u.port); };
     mine["host"] = hostv;
@@ -360,13 +360,13 @@ def request_bytes(method: str, u: Url, hdrs: {str => str}, body: str, keep: bool
     if (len(body) > 0 || method == "POST" || method == "PUT" || method == "PATCH") {
         mine["content-length"] = tostring(len(body));
     };
-    let names: {str => str} = {};
+    let names: { str => str } = {};
     foreach (k in keys(hdrs)) { names[k.lower()] = k; };
     let head = method + " " + u.path + " HTTP/1.1\r\n";
     foreach (k in keys(mine)) {
-        if (names[k] == none) { head = head + k + ": " + mine[k]! + "\r\n"; };
+        if (names[k] == none) { head = head + k + ": " + mine[k] ! +"\r\n"; };
     };
-    foreach (k in keys(hdrs)) { head = head + k + ": " + hdrs[k]! + "\r\n"; };
+    foreach (k in keys(hdrs)) { head = head + k + ": " + hdrs[k] ! +"\r\n"; };
     head = head + "\r\n";
     let out = bytes(head);
     out += bytes(body);
@@ -375,19 +375,19 @@ def request_bytes(method: str, u: Url, hdrs: {str => str}, body: str, keep: bool
 
 // A response's head: its status, reason and headers; ok false (err) when
 // none could be read.
-type Head = { ok: bool, err: str, status: long, reason: str, headers: {str => str} };
+type Head = { ok: bool, err: str, status: long, reason: str, headers: { str => str } };
 
 def read_head(l: Link) -> Head {
-    let headers: {str => str} = {};
+    let headers: { str => str } = {};
     let bad: Head = { ok: false, err: "", status: 0, reason: "", headers: headers };
     let status_line = link_line(l);
-    while (status_line != none && status_line! == "") { status_line = link_line(l); };
+    while (status_line != none && status_line ! == "") { status_line = link_line(l); };
     if (status_line == none) {
         bad.err = l.err;
         if (bad.err == "") { bad.err = "the server closed the connection without a response"; };
         return bad;
     };
-    let sl = status_line!;
+    let sl = status_line !;
     let parts = sl.split(" ");
     if (len(parts) < 2 || !parts[0].starts_with("HTTP/1.")) {
         bad.err = "not an HTTP response: " + sl;
@@ -396,15 +396,15 @@ def read_head(l: Link) -> Head {
     let reason = "";
     if (len(parts) > 2) { reason = join(parts[2:len(parts)], " "); };
     let line = link_line(l);
-    while (line != none && line! != "") {
-        let hl = line!;
+    while (line != none && line ! != "") {
+        let hl = line !;
         let colon = index_of(hl, ":");
         if (colon > 0) {
             let name = hl[0:colon].trim().lower();
             let value = hl[colon + 1:len(hl)].trim();
             if (headers[name] == none) { headers[name] = value; }
-            else if (name == "set-cookie") { headers[name] = headers[name]! + "\n" + value; }
-            else { headers[name] = headers[name]! + ", " + value; };
+            else if (name == "set-cookie") { headers[name] = headers[name] ! +"\n" + value; }
+            else { headers[name] = headers[name] ! +", " + value; };
         };
         line = link_line(l);
     };
@@ -414,12 +414,12 @@ def read_head(l: Link) -> Head {
     };
     let st = tolong(parts[1]);
     if (st == none) { return bad; };
-    { ok: true, err: "", status: st!, reason: reason, headers: headers }
+    { ok: true, err: "", status: st !, reason: reason, headers: headers }
 };
 
 // Send the request on l and read the response's head (past any interim
 // 1xx one); the body stays on the link for read() and text().
-def exchange(l: Link, method: str, url: str, u: Url, hdrs: {str => str}, body: str, keep: bool) -> Response {
+def exchange(l: Link, method: str, url: str, u: Url, hdrs: { str => str }, body: str, keep: bool) -> Response {
     if (!link_send(l, request_bytes(method, u, hdrs, body, keep))) { return failed(url, l.err); };
     let h = read_head(l);
     while (h.ok && h.status >= 100 && h.status < 200) { h = read_head(l); };
@@ -427,12 +427,12 @@ def exchange(l: Link, method: str, url: str, u: Url, hdrs: {str => str}, body: s
     let headers = h.headers;
     let size = -1;
     if (headers["content-length"] != none) {
-        let cl = tolong(headers["content-length"]!);
-        if (cl != none) { size = cl!; };
+        let cl = tolong(headers["content-length"] !);
+        if (cl != none) { size = cl !; };
     };
     let mode = "close";
     let te = "";
-    if (headers["transfer-encoding"] != none) { te = headers["transfer-encoding"]!.lower(); };
+    if (headers["transfer-encoding"] != none) { te = headers["transfer-encoding"] !.lower(); };
     if (method == "HEAD" || h.status == 204 || h.status == 304) { mode = "none"; }
     else if (index_of(te, "chunked") >= 0) { mode = "chunked"; }
     else if (size >= 0) { mode = "length"; };
@@ -440,7 +440,7 @@ def exchange(l: Link, method: str, url: str, u: Url, hdrs: {str => str}, body: s
     if (mode == "chunked") { b.left = 0; };
     // the server will close after this response: the link is not used again
     let ends = false;
-    if (headers["connection"] != none && index_of(headers["connection"]!.lower(), "close") >= 0) { ends = true; };
+    if (headers["connection"] != none && index_of(headers["connection"] !.lower(), "close") >= 0) { ends = true; };
     if (mode == "none") { b.done = true; } else { l.busy = true; };
     if (ends && mode == "none") { link_close(l); };
     // The body is buffered, not a stream: a read is answered from what has
@@ -467,24 +467,24 @@ def exchange(l: Link, method: str, url: str, u: Url, hdrs: {str => str}, body: s
 
 // One request, its redirects followed: on links from `pool` (a session's
 // open connections, by origin; none for a one-shot request).
-def fetch(method: str, url: str, o: Opts, extra: {str => str}, pool: [Link], keep: bool, jar: {str => str}) -> Response {
-    let base_hdrs: {str => str} = {};
-    foreach (k in keys(extra)) { base_hdrs[k] = extra[k]!; };
+def fetch(method: str, url: str, o: Opts, extra: { str => str }, pool: [Link], keep: bool, jar: { str => str }) -> Response {
+    let base_hdrs: { str => str } = {};
+    foreach (k in keys(extra)) { base_hdrs[k] = extra[k] !; };
     if (o.headers != none) {
-        let oh = o.headers!;
-        foreach (k in keys(oh)) { base_hdrs[k] = oh[k]!; };
+        let oh = o.headers !;
+        foreach (k in keys(oh)) { base_hdrs[k] = oh[k] !; };
     };
     let body = "";
-    if (o.body != none) { body = o.body!; };
+    if (o.body != none) { body = o.body !; };
     let hops = 5;
-    if (o.redirects != none) { hops = o.redirects!; };
+    if (o.redirects != none) { hops = o.redirects !; };
     let cur = url;
     let m = method;
     while (true) {
         let u = parse_url(cur);
         if (!u.ok) { return failed(cur, "not an http or https URL: " + cur); };
-        let hdrs: {str => str} = {};
-        foreach (k in keys(base_hdrs)) { hdrs[k] = base_hdrs[k]!; };
+        let hdrs: { str => str } = {};
+        foreach (k in keys(base_hdrs)) { hdrs[k] = base_hdrs[k] !; };
         let ck = cookie_header(jar, u.host);
         if (ck != "") { hdrs["Cookie"] = ck; };
         let l = pick_link(pool, u, o, keep);
@@ -497,7 +497,7 @@ def fetch(method: str, url: str, o: Opts, extra: {str => str}, pool: [Link], kee
             if (l.err != "") { return failed(cur, l.err); };
             r = exchange(l, m, cur, u, hdrs, body, keep);
         };
-        if (r.headers["set-cookie"] != none) { take_cookies(jar, u.host, r.headers["set-cookie"]!); };
+        if (r.headers["set-cookie"] != none) { take_cookies(jar, u.host, r.headers["set-cookie"] !); };
         let loc = r.headers["location"];
         let redirect = (r.status == 301 || r.status == 302 || r.status == 303 || r.status == 307 || r.status == 308) && loc != none;
         if (!redirect || hops <= 0) {
@@ -507,7 +507,7 @@ def fetch(method: str, url: str, o: Opts, extra: {str => str}, pool: [Link], kee
         r.read(0);
         if (!keep) { link_close(l); };
         hops = hops - 1;
-        cur = resolve_ref(cur, loc!);
+        cur = resolve_ref(cur, loc !);
         if (r.status == 303 || ((r.status == 301 || r.status == 302) && m == "POST")) {
             m = "GET";
             body = "";
@@ -548,16 +548,16 @@ def pick_link(pool: [Link], u: Url, o: Opts, keep: bool) -> Link {
 // expires it). Domain and Path are not looked at: a cookie goes back to
 // the host that set it.
 
-def cookie_header(jar: {str => str}, host: str) -> str {
+def cookie_header(jar: { str => str }, host: str) -> str {
     let parts: [str] = [];
     let pre = host + " ";
     foreach (k in keys(jar)) {
-        if (k.starts_with(pre) && jar[k]! != "") { parts += k[len(pre):len(k)] + "=" + jar[k]!; };
+        if (k.starts_with(pre) && jar[k] ! != "") { parts += k[len(pre):len(k)] + "=" + jar[k] !; };
     };
     join(parts, "; ")
 };
 
-def take_cookies(jar: {str => str}, host: str, lines: str) -> void {
+def take_cookies(jar: { str => str }, host: str, lines: str) -> void {
     foreach (line in lines.split("\n")) {
         let attrs = line.split(";");
         let nv = attrs[0];
@@ -587,7 +587,7 @@ type Session = {
 };
 
 type SessionOpts = {
-    base?: str, headers?: {str => str}, timeout?: long, redirects?: long,
+    base?: str, headers?: { str => str }, timeout?: long, redirects?: long,
     insecure?: bool, anchors?: str
 };
 
@@ -595,16 +595,16 @@ def session(o?: SessionOpts) -> Session { session_opt(o) };
 
 def session_opt(o: SessionOpts?) -> Session {
     let so: SessionOpts = {};
-    if (o != none) { so = o!; };
+    if (o != none) { so = o !; };
     let base = "";
-    if (so.base != none) { base = so.base!; };
-    let defaults: {str => str} = {};
+    if (so.base != none) { base = so.base !; };
+    let defaults: { str => str } = {};
     if (so.headers != none) {
-        let sh = so.headers!;
-        foreach (k in keys(sh)) { defaults[k] = sh[k]!; };
+        let sh = so.headers !;
+        foreach (k in keys(sh)) { defaults[k] = sh[k] !; };
     };
     let pool: [Link] = [];
-    let jar: {str => str} = {};
+    let jar: { str => str } = {};
     let run = def (method: str, path: str, more: Opts) -> Response {
         let url = path;
         if (base != "") { url = resolve_ref(base, path); };
@@ -641,10 +641,10 @@ def session_opt(o: SessionOpts?) -> Session {
 // as an option).
 def request_opt(method: str, url: str, o: Opts?) -> Response {
     let opts: Opts = {};
-    if (o != none) { opts = o!; };
-    let none_h: {str => str} = {};
+    if (o != none) { opts = o !; };
+    let none_h: { str => str } = {};
     let pool: [Link] = [];
-    let jar: {str => str} = {};
+    let jar: { str => str } = {};
     fetch(method.upper(), url, opts, none_h, pool, false, jar)
 };
 
@@ -659,7 +659,7 @@ def patch(url: str, body: str, o?: Opts) -> Response { request_opt("PATCH", url,
 
 def with_body(o: Opts?, body: str) -> Opts {
     let opts: Opts = {};
-    if (o != none) { opts = o!; };
+    if (o != none) { opts = o !; };
     {
         headers: opts.headers, body: some(body), timeout: opts.timeout, redirects: opts.redirects,
         insecure: opts.insecure, anchors: opts.anchors

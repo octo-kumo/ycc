@@ -2362,7 +2362,6 @@ def fx_if_line(rule: str, b: str, ln: long, lines: [str]) -> [str] {
     lines
 };
 
-
 // 3.6: drop the unused element parameter and put the element name on the
 // `arr[ix]` the body kept writing.
 def fx_foreach_elem(arr: str, idx: str, ln: long, col: long, lines: [str]) -> [str] {
@@ -2580,13 +2579,10 @@ def fx_void(ln: long, lines: [str]) -> [str] {
 
 // `name = <bool>;` -> `break;` (a flag's exit).
 
-
 // 2.5: `let f = <bool>; while (f) { B(f = <bool>) };` -> `while (true) {
 // B(break) };`.
 
-
 // Is this line still writing `name` (a `name =` that is not `==`)?
-
 
 // The end of the literal starting at `s` (its first char), or -1.
 def fx_lit_end(line: str, s: long) -> long {
@@ -3185,7 +3181,7 @@ def fx_file(fid: long, fixes: [LintFix], src: str, nmap: long, fmap: [long], lma
         };
         let before = len(lines);
         lines = fx_one(f.rule, f.a, f.b, at - shift, f.col, lines);
-        for q in 0..(before - len(lines)) {
+        for q in 0.. (before - len(lines)) {
             gone += at;
         };
         i++;
@@ -3223,9 +3219,6 @@ def lint_find_from(nodes: [Node], from: long, name: str, mask: long) -> bool {
     };
     false
 };
-
-
-
 
 // Whether evaluating a node can do more than compute its value.
 def lint_effect(node: Node) -> void {

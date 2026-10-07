@@ -2228,8 +2228,6 @@ def parse_stmt_idxassign_go(toks: [Tok], p: long, itgt: Index, epos: long) -> Pa
     res({ k: K.idxassign, arr: itgt.arr, idx: itgt.idx, v: rhs.node, line: tline(toks, p), col: tcol(toks, p) }, rhs.pos)
 };
 
-
-
 def parse_stmt_rest(toks: [Tok], p: long, tgt: Node, epos: long) -> Parsed {
     if (tgt.k == K.dot) {
         parse_stmt_dotassign(toks, p, tgt, epos)
@@ -2247,8 +2245,6 @@ def parse_stmt_dotassign_go(toks: [Tok], p: long, dtgt: Dot, epos: long) -> Pars
     let rhs = parse_expr(toks, epos + 1);
     res({ k: K.dotassign, obj: dtgt.obj, key: dtgt.key, v: rhs.node, line: tline(toks, p), col: tcol(toks, p), nline: dtgt.nline, ncol: dtgt.ncol }, rhs.pos)
 };
-
-
 
 def parse_stmt_simple(toks: [Tok], p: long, tgt: Node, epos: long) -> Parsed {
     // deref (*p = v) vs plain id (x = v): separate callees per shape, the
@@ -2479,8 +2475,8 @@ def parse_for_or_range(toks: [Tok], p: long) -> Parsed {
             // that does walk a sequence -- which is the whole of what the
             // reader needs (examples/SUGGESTIONS.md #6). Name both.
             return res({ k: K.err,
-                         msg: "'for ... in' walks an integer range (for x in lo..hi); to walk an array, a str or keys(m), use 'foreach (x in expr)'",
-                         line: tline(toks, lo.pos), col: tcol(toks, lo.pos) }, sync_stmt(toks, p + 1));
+                msg: "'for ... in' walks an integer range (for x in lo..hi); to walk an array, a str or keys(m), use 'foreach (x in expr)'",
+                line: tline(toks, lo.pos), col: tcol(toks, lo.pos) }, sync_stmt(toks, p + 1));
         };
         let hi = parse_expr(toks, lo.pos + 1);
         loop_push(name);

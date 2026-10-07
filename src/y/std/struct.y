@@ -332,9 +332,9 @@ def unpack(fmt: str, b: [byte]) -> [long] {
 };
 
 export { u8, u16le, u16be, u32le, u32be, u64le, u64be,
-         i8, i16le, i16be, i32le, i32be, i64le, i64be,
-         pad, fill,
-         get_u8, get_i8, get_u16le, get_u16be, get_i16le, get_i16be,
-         get_u32le, get_u32be, get_i32le, get_i32be,
-         get_u64le, get_u64be, get_i64le, get_i64be,
-         pack, unpack };
+    i8, i16le, i16be, i32le, i32be, i64le, i64be,
+    pad, fill,
+    get_u8, get_i8, get_u16le, get_u16be, get_i16le, get_i16be,
+    get_u32le, get_u32be, get_i32le, get_i32be,
+    get_u64le, get_u64be, get_i64le, get_i64be,
+    pack, unpack };

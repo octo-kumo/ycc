@@ -713,19 +713,19 @@ def tstr_go(t: Type) -> str {
             });
             "(" + join(tparts, ", ") + ")"
         } else {
-        let parts: [str] = [];
-        for i in 0..len(fs) {
-            // NOTE: bound once — `fields` is a bare param here, so an inline
-            // `fs[i]` would merge shapes across arms (see teq note).
-            let f = fs[i];
-            let fname: str = f.name;
-            let ft: Type = f.typ;
-            if (f.opt && ft.k == K.topt) {
-                let fo: TOf = ft;
-                parts += fname + "?: " + tstr_go(fo.of);
-            } else { parts += fname + ": " + tstr_go(ft); };
-        };
-        "{ " + join(parts, ", ") + " }"
+            let parts: [str] = [];
+            for i in 0..len(fs) {
+                // NOTE: bound once — `fields` is a bare param here, so an inline
+                // `fs[i]` would merge shapes across arms (see teq note).
+                let f = fs[i];
+                let fname: str = f.name;
+                let ft: Type = f.typ;
+                if (f.opt && ft.k == K.topt) {
+                    let fo: TOf = ft;
+                    parts += fname + "?: " + tstr_go(fo.of);
+                } else { parts += fname + ": " + tstr_go(ft); };
+            };
+            "{ " + join(parts, ", ") + " }"
         }
     }
     else if (t.k == K.tfunc) {
@@ -1970,23 +1970,23 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
                 if (got.kind == "") {
                     st = fail(st, "undefined variable '" + id.v + "'", addr.line, addr.col);
                     tc_res(t_unk(), st)
-            } else if (got.kind == "func" || got.kind == "intrinsic") {
-                st = fail(st, "cannot take the address of function '" + id.v + "'", addr.line, addr.col);
-                tc_res(t_unk(), st)
-            } else if (got.typ.k == K.tarr || got.typ.k == K.tarrfix) {
-                // One rule for BOTH array kinds: &a is not a data address.
-                // A slot holds the {len,cap,data} header (fixed arrays are
-                // heap blocks too), so `io.read(fd, &buf, n)` let the kernel
-                // write over the frame -- the array's own header was the
-                // first casualty and the next len(buf) died with SIGSEGV.
-                // Use &a[0] (or &a[i]): gen_elem_addr resolves that through
-                // header+16 to the data block.
-                st = fail(st, "cannot take the address of a whole array (use &" + disp(id.v) + "[i] for elements)", addr.line, addr.col);
-                tc_res(t_unk(), st)
-            } else {
-                st = check_visible(st, got, id.v, addr.line, addr.col);
-                tc_res(type_node({ k: K.tptr, to: got.typ }), st)
-            }
+                } else if (got.kind == "func" || got.kind == "intrinsic") {
+                    st = fail(st, "cannot take the address of function '" + id.v + "'", addr.line, addr.col);
+                    tc_res(t_unk(), st)
+                } else if (got.typ.k == K.tarr || got.typ.k == K.tarrfix) {
+                    // One rule for BOTH array kinds: &a is not a data address.
+                    // A slot holds the {len,cap,data} header (fixed arrays are
+                    // heap blocks too), so `io.read(fd, &buf, n)` let the kernel
+                    // write over the frame -- the array's own header was the
+                    // first casualty and the next len(buf) died with SIGSEGV.
+                    // Use &a[0] (or &a[i]): gen_elem_addr resolves that through
+                    // header+16 to the data block.
+                    st = fail(st, "cannot take the address of a whole array (use &" + disp(id.v) + "[i] for elements)", addr.line, addr.col);
+                    tc_res(t_unk(), st)
+                } else {
+                    st = check_visible(st, got, id.v, addr.line, addr.col);
+                    tc_res(type_node({ k: K.tptr, to: got.typ }), st)
+                }
             } else {
                 st = fail(st, "'&' needs a plain variable (only a local, a parameter or a global has an address)", addr.line, addr.col);
                 tc_res(t_unk(), st)
@@ -3422,7 +3422,7 @@ def typeof_fmt(st: TcSt, node: Call) -> TcRes {
     st = r.st;
     let t: Type = r.typ;
     let sp = leaf_of(fargs[1]);
-    let spec: str = if (sp == none) { "" } else { sp!.v };
+    let spec: str = if (sp == none) { "" } else { sp !.v };
     if (sp == none) {
         let e: Err = fargs[1];
         st = fail(st, e.msg, e.line, e.col);
@@ -3471,13 +3471,12 @@ def os_call_name(nm: str) -> bool {
 
 def os_call_names() -> [str] {
     ["y_os_write", "y_os_read", "y_os_lseek", "y_os_clock_gettime",
-     "y_os_nanosleep", "y_os_wait4", "y_os_fork", "y_os_execve",
-     "y_os_openat", "y_os_stat", "y_os_mkdir", "y_os_unlink",
-     "y_os_rename", "y_os_getcwd", "y_os_chdir", "y_os_list",
-     "y_os_set_mode", "y_os_close", "y_os_pipe", "y_os_dup2",
-     "y_os_random"]
+        "y_os_nanosleep", "y_os_wait4", "y_os_fork", "y_os_execve",
+        "y_os_openat", "y_os_stat", "y_os_mkdir", "y_os_unlink",
+        "y_os_rename", "y_os_getcwd", "y_os_chdir", "y_os_list",
+        "y_os_set_mode", "y_os_close", "y_os_pipe", "y_os_dup2",
+        "y_os_random"]
 };
-
 
 // The call's own type, recorded at the CALLEE's position when the index is on.
 //
@@ -3998,7 +3997,7 @@ def typeof_call_go(st: TcSt, node: Call) -> TcRes {
                 // one is what makes the name worth changing.
                 if (r.typ.k != K.tstr && r.typ.k != K.tfloat && r.typ.k != K.tbigint) {
                     st = fail(st, "tolong needs a str to parse, a float to truncate or a bigint to narrow, got "
-                           + tstr(r.typ), node.line, node.col);
+                        + tstr(r.typ), node.line, node.col);
                     tc_res(t_unk(), st)
                 } else {
                     tc_res(type_node({ k: K.topt, of: type_node({ k: K.tlong }) }), st)
@@ -4016,7 +4015,7 @@ def typeof_call_go(st: TcSt, node: Call) -> TcRes {
                 // tolong, not because it needs to.
                 if (r.typ.k != K.tstr && r.typ.k != K.tlong && r.typ.k != K.tbigint) {
                     st = fail(st, "tofloat needs a str to parse, a long to widen or a bigint to convert, got "
-                           + tstr(r.typ), node.line, node.col);
+                        + tstr(r.typ), node.line, node.col);
                     tc_res(t_unk(), st)
                 } else {
                     tc_res(type_node({ k: K.topt, of: type_node({ k: K.tfloat }) }), st)
@@ -4342,11 +4341,11 @@ def typeof_call_go(st: TcSt, node: Call) -> TcRes {
             // nothing, while --std-src (which recompiles) worked.
             if (len(cargs) < 1 || len(cargs) > 7) {
                 st = fail(st, "os_call takes a name and 0-6 arguments",
-                          node.line, node.col);
+                    node.line, node.col);
                 tc_res(type_node({ k: K.tlong }), st)
             } else if (cargs[0].k != K.str) {
                 st = fail(st, "os_call needs a literal call name",
-                          node.line, node.col);
+                    node.line, node.col);
                 tc_res(type_node({ k: K.tlong }), st)
             } else {
                 // The name is a str LITERAL, matched after a cast to the
@@ -4357,7 +4356,7 @@ def typeof_call_go(st: TcSt, node: Call) -> TcRes {
                 st = (typeof_expr(st, cargs[0])).st;
                 if (!os_call_name(nm.v)) {
                     st = fail(st, "os_call: '" + nm.v + "' is not a call name (see os_call_names)",
-                              node.line, node.col);
+                        node.line, node.col);
                 };
                 for i in 1..len(cargs) {
                     let r = typeof_expr(st, cargs[i]);
@@ -4369,7 +4368,7 @@ def typeof_call_go(st: TcSt, node: Call) -> TcRes {
                     if (r.typ.k != K.tlong && r.typ.k != K.tbool && r.typ.k != K.tstr
                         && r.typ.k != K.tptr && r.typ.k != K.tunk) {
                         st = fail(st, "os_call arg " + tostring(i) + " must be long/bool/str/*T, got " + tstr(r.typ),
-                                  node.line, node.col);
+                            node.line, node.col);
                     };
                 };
                 tc_res(type_node({ k: K.tlong }), st)
@@ -4665,7 +4664,6 @@ def typeof_lit(st: TcSt, node: RecLit, target: Type) -> TcRes {
     });
     tc_res(target, st)
 };
-
 
 def typeof_decl(st: TcSt, node: Decl) -> TcRes {
     if (node.kind == "def") {
@@ -5066,7 +5064,7 @@ def check_program(ast: Block, ext: [Sym]) -> [Diag] {
     let st: TcSt = { bindings: [], errors: [], ret: type_node({ k: K.tnone }), self: type_node({ k: K.tnone }), fdepth: 0, loops: 0, loop_fd: -1 };
     // top-level defs are visible at top level
     let print_type: Type = type_node({ k: K.tfunc, args: [type_node({ k: K.tlong })], ret: type_node({ k: K.tvoid }) });
-// The intrinsics and the externs below have no position: the first two are the
+    // The intrinsics and the externs below have no position: the first two are the
     // language's own, the rest are names the program links against from another
     // unit. -1 is the honest answer and no consumer may read it as line 1.
     st = st_bind(st, "print", print_type, "intrinsic", 0 - 1, 0 - 1);

@@ -262,8 +262,8 @@ def y_f2l(x: float) -> long? {
     if (x != x || x >= two63 || x < 0.0 - two63) {
         none
     } else {
-    // The cast is where the truncation happens: cvttsd2si rounds toward zero,
-    // which is what "truncate" means and what floor does not.
+        // The cast is where the truncation happens: cvttsd2si rounds toward zero,
+        // which is what "truncate" means and what floor does not.
         some(trunc_to_long(x))
     }
 };
@@ -348,7 +348,7 @@ def y_wait_pid(pid: long) -> long {
     let status: [long; 1] = [0; 1];
     let r = os_call("y_os_wait4", pid, &status[0]);
     let s = status[0] & 65535;
-    if (r < 0) { -1 } else if ((s & 127) == 0) { (s >> 8) & 255 } else { 128 + (s & 127) }
+    if (r < 0) { -1 } else if ((s & 127) == 0) {(s >> 8) & 255 } else { 128 + (s & 127) }
 };
 def y_sleep(ms: long) -> long {
     let m = ms;

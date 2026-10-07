@@ -37,6 +37,12 @@ def ends_expr(src: str, s: Span, was_unary: bool) -> bool {
     // An operator never ends a value, unary or not: in `a && !b` the `!` must
     // read as a sign, so the token before it cannot look like an operand.
     if (k == scan.K_operator) { r = false; }
+    // A keyword ends a value only when it IS one: `return -1` is a sign, not
+    // a subtraction, while `true` and `false` are operands.
+    if (k == scan.K_keyword) {
+        let t0 = txt(src, s);
+        if (t0 == "true" || t0 == "false") { r = true; } else { r = false; }
+    }
     if (k == scan.K_punct) {
         let t = txt(src, s);
         if (t == ")" || t == "]" || t == "}") { r = true; } else { r = false; }
@@ -59,19 +65,11 @@ def is_tight_op(t: str) -> bool {
 
 // Space before `cur`? `prev` is the previous span; `was_unary` says whether it
 // was a sign rather than an infix operator.
-def space_before(src: str, prev: Span, was_unary: bool, cur: Span) -> bool {
-    space_before_go(src, prev, was_unary, cur, false)
-}
-
-def space_before_go(src: str, prev: Span, was_unary: bool, cur: Span, in_bracket: bool) -> bool {
-    return space_before_full(src, prev, was_unary, cur, in_bracket, true)
-}
-
 // `tight` is true when the author put NO space between `prev` and `cur`. It is
 // what tells `= &x` (a tight sign) from `dl < -5` (a spaced one): no parser
 // distinguishes them, the difference is visible in the source, and the
 // formatter keeps what the author wrote rather than guessing.
-def space_before_full(src: str, prev: Span, was_unary: bool, cur: Span, in_bracket: bool, tight: bool) -> bool {
+def space_before_full(src: str, prev: Span, was_unary: bool, cur: Span, in_bracket: bool, tight: bool, prev_dot: bool, tern: bool) -> bool {
     let cc = txt(src, cur);
     let ck = cur.kind;
     if (ck == scan.K_comment) {
@@ -86,7 +84,8 @@ def space_before_full(src: str, prev: Span, was_unary: bool, cur: Span, in_brack
         return false;
     }
     if (cc == ":") {
-        return false;               // never a space before a colon
+        // `a ? b : c` spaces it; a record key or a slice bound does not
+        return tern;
     }
     if (cc == "}") {
         // `{ }` empty, `{ a: 1 }` padded: src/y/ puts a space before the brace
@@ -98,11 +97,15 @@ def space_before_full(src: str, prev: Span, was_unary: bool, cur: Span, in_brack
         // opened, which is parser knowledge this deliberately does not have
         // (R3.3). The spaced form is the safer error -- it never runs two
         // constructs together.
-        return txt(src, prev) != "{";
+        // `{ }` and `{}` are both written in src/y; keep the author's choice
+        return txt(src, prev) != "{" || !tight;
     }
     if (ck == scan.K_operator) {
         // `..` and `::` read as one word with their operands: `1..5`, `m::x`
         if (cc == ".." || cc == "::") { return false; }
+        // a TIGHT `?` is the option postfix (`Leaf?`); a spaced one is the
+        // ternary (`a ? b : c`), and the `:` that follows it is spaced too
+        if (cc == "?" && tight) { return false; }
         // after something that cannot end a value, an operator is a sign --
         // unless the author spaced it, which makes it an infix one
         if (tight && is_tight_op(cc)) {
@@ -116,7 +119,9 @@ def space_before_full(src: str, prev: Span, was_unary: bool, cur: Span, in_brack
         // A space unless the previous token could end a value: `len(x)` and
         // `a[0]` are one expression, while `if (`, `= [` and `+ (c - 1)` are
         // not.
-        if (prev.kind == scan.K_keyword) { return true; }
+        // `foreach` is a keyword, but `x.foreach(` is a method call: after a
+        // dot it binds like a name, so no space.
+        if (prev.kind == scan.K_keyword) { return !prev_dot; }
         if (prev.kind == scan.K_operator && was_unary) { return false; }
         let pt = txt(src, prev);
         if (pt == "(" || pt == "[" || pt == "{") { return false; }
@@ -130,9 +135,9 @@ def space_before_full(src: str, prev: Span, was_unary: bool, cur: Span, in_brack
         if (pt == "(" || pt == "[") { return false; }
         return true;
     }
-    // after an opener or a dot, nothing
+    // after an opener, a dot, or a range/scope operator, nothing
     let pc = txt(src, prev);
-    if (pc == "(" || pc == "[" || pc == ".") { return false; }
+    if (pc == "(" || pc == "[" || pc == "." || pc == ".." || pc == "::") { return false; }
     // a slice bound binds tight: `a[:n]`, `a[i:j]`. In a record, a parameter
     // list or an annotation the colon takes a space after it: `{ k: v }`.
     if (in_bracket && pc == ":") { return false; }
@@ -183,6 +188,16 @@ def fmt(src: str) -> str? {
     let have_prev = false;
     let was_unary = false;
     let pending_blanks = 0;
+    // Was the previous span preceded by a `.`? Then a keyword after it
+    // (`x.foreach`) is a method name, not a statement keyword.
+    let prev_dot = false;
+    // For each open brace (indexed by depth - 1): was it opened inside a
+    // paren? A closure body `f((s) => { ... })` is, and its own indent must
+    // not ALSO take the paren continuation.
+    let bparen: [bool] = [];
+    // The nesting level of each pending ternary `?`. A `:` at the same level
+    // is the ternary's, and takes a space before it.
+    let terns: [long] = [];
 
     let i = 0;
     while (i < len(sps)) {
@@ -190,6 +205,7 @@ def fmt(src: str) -> str? {
         let t = txt(src, s);
         let nl = 0;
         if (have_prev) { nl = gap_lines(src, prev.end, s.off); }
+        let spaced = false;
 
         // ── line breaks ──────────────────────────────────────────────
         // The author's breaks are kept. Two or more newlines become one blank
@@ -207,7 +223,13 @@ def fmt(src: str) -> str? {
                 if (t == "}") { if (d > 0) { d = d - 1; } }
                 if (t == ")" || t == "]") { if (k2 > 0) { k2 = k2 - 1; } }
             }
-            let ind = (d + (k2 > 0 ? 1 : 0)) * INDENT;
+            let blk = false;
+            if (t == "}" && depth > 0 && depth <= len(bparen)) {
+                blk = bparen[depth - 1];       // the brace this line closes
+            } else if (d > 0 && d <= len(bparen)) {
+                blk = bparen[d - 1];
+            };
+            let ind = (d + ((k2 > 0 && !blk) ? 1 : 0)) * INDENT;
             if (i == 0) {
                 // no leading blank lines at the top of the file
                 pending_blanks = 0;
@@ -245,8 +267,9 @@ def fmt(src: str) -> str? {
             let g = s.off - prev.end;
             let k2 = 0;
             while (k2 < g) { out += " "; k2 = k2 + 1; }
-        } else if (space_before_full(src, prev, was_unary, s, bracket > 0, !gap_space(src, prev.end, s.off))) {
+        } else if (space_before_full(src, prev, was_unary, s, bracket > 0, !gap_space(src, prev.end, s.off), prev_dot, len(terns) > 0 && terns[len(terns) - 1] == depth + cont)) {
             out += " ";
+            spaced = true;
         }
 
         // ── the token itself ─────────────────────────────────────────
@@ -254,9 +277,18 @@ def fmt(src: str) -> str? {
 
         // ── depth bookkeeping, on what was just emitted ──────────────
         if (s.kind == scan.K_punct) {
-            if (t == "{") { depth = depth + 1; }
+            if (t == "{") {
+                // Index by the depth this brace opens at, so a later brace at
+                // the same level overwrites the stale flag.
+                if (depth < len(bparen)) { bparen[depth] = (cont > 0); }
+                else { bparen += (cont > 0); };
+                depth = depth + 1;
+            }
             if (t == "(") { cont = cont + 1; }
             if (t == "[") { cont = cont + 1; bracket = bracket + 1; }
+            if (t == ":" && len(terns) > 0 && terns[len(terns) - 1] == depth + cont) {
+                terns = terns[:len(terns) - 1];
+            };
             if (t == "}") { if (depth > 0) { depth = depth - 1; } }
             if (t == ")") { if (cont > 0) { cont = cont - 1; } }
             if (t == "]") { if (cont > 0) { cont = cont - 1; } if (bracket > 0) { bracket = bracket - 1; } }
@@ -266,9 +298,12 @@ def fmt(src: str) -> str? {
             // cannot end a value. Testing the sign alone made every `+` unary
             // and turned `i + 1` into `i +1`.
             was_unary = is_unary_op(t) && !ends_expr(src, prev, was_unary);
+            // a spaced `?` is the ternary, not the postfix of `str?`
+            if (t == "?" && spaced) { terns += depth + cont; };
         } else {
             was_unary = false;
         }
+        prev_dot = txt(src, prev) == ".";
         prev = s;
         have_prev = true;
         i = i + 1;

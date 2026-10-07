@@ -32,9 +32,9 @@ const O_IMM = 3;   // 1: the immediate
 const O_LBL = 4;   // 1: a label id -- `call foo`, `jmp yL_1_2`
 const O_DIFF = 5;  // 2: two label ids -- `mov $A-B, %rax`
 const O_MEM = 6;   // 5: base, index, scale, disp, label. The label is a symbol
-                    // at (%rip) -- no base, no index -- and the assembler
-                    // resolves it; it is -1 in every other memory operand, and
-                    // disp is written only when it is not O_MEM0.
+// at (%rip) -- no base, no index -- and the assembler
+// resolves it; it is -1 in every other memory operand, and
+// disp is written only when it is not O_MEM0.
 const O_FS = 7;    // 1: the %fs:N offset (a thread's heap block)
 const O_MEM0 = 8;  // 5, like O_MEM, but `(%base)`: no displacement written
 
@@ -326,19 +326,19 @@ def ir_reg(n: long, size: long) -> str {
 
 def ir_reg64(n: long) -> str {
     let t: [str] = ["rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi",
-      "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"];
+        "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"];
     if (n >= 0 && n < 16) { "%" + t[n] } else { "%r?" }
 };
 
 def ir_reg32(n: long) -> str {
     let t: [str] = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi",
-      "r8d", "r9d", "r10d", "r11d", "r12d", "r13d", "r14d", "r15d"];
+        "r8d", "r9d", "r10d", "r11d", "r12d", "r13d", "r14d", "r15d"];
     if (n >= 0 && n < 16) { "%" + t[n] } else { "%e?" }
 };
 
 def ir_reg8(n: long) -> str {
     let t: [str] = ["al", "cl", "dl", "bl", "spl", "bpl", "sil", "dil",
-      "r8b", "r9b", "r10b", "r11b", "r12b", "r13b", "r14b", "r15b"];
+        "r8b", "r9b", "r10b", "r11b", "r12b", "r13b", "r14b", "r15b"];
     if (n >= 0 && n < 16) { "%" + t[n] } else { "%b?" }
 };
 
@@ -368,7 +368,7 @@ def ir_render_mem(ir: [long], at: long, nodisp: bool) -> str {
             head + "(" + ir_reg(ir[at], 64) + ")"
         } else {
             head + "(" + ir_reg(ir[at], 64) + "," + ir_reg(idx, 64) + "," +
-                tostring(ir[at + 2]) + ")"
+            tostring(ir[at + 2]) + ")"
         }
     }
 };

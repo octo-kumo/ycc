@@ -110,14 +110,14 @@ def server_state(root: str, pack: str, wlevel: long) -> State {
 // cache that is the work done twice for one keystroke.
 def xref_of(st: State, d: Doc) -> Prepared? {
     if (is_some(st.xc_ver[d.uri])) {
-        if (st.xc_ver[d.uri]! == d.version) {
+        if (st.xc_ver[d.uri] ! == d.version) {
             if (is_some(st.xc[d.uri])) { return st.xc[d.uri]; } else { return none; };
         };
     };
     let got = diag.xref_for(d.text, doc_dir(st, d.path), d.path, st.pack);
     st.xc_ver[d.uri] = d.version;
     if is_some(got) {
-        let pr: Prepared = got!;
+        let pr: Prepared = got !;
         st.xc[d.uri] = pr;
         st.xc_none = drop(st.xc_none, d.uri);
         return some(pr);
@@ -204,7 +204,7 @@ def doc_drop(st: State, uri: str) {
     let m: { str => Doc } = {};
     foreach (u in st.open) {
         let d = doc_get(st, u);
-        if is_some(d) { m[u] = d!; }
+        if is_some(d) { m[u] = d !; }
     };
     st.docs = m
 }
@@ -332,7 +332,7 @@ def publish_for(st: State, d: Doc) -> [str] {
         } else {
             let list = theirs[f.file];
             if (is_some(list)) {
-                let grown: [Finding] = list!;
+                let grown: [Finding] = list !;
                 grown += f;
                 theirs[f.file] = grown;
             } else {
@@ -354,7 +354,7 @@ def publish_for(st: State, d: Doc) -> [str] {
         if is_some(list) {
             let items: [json.Val] = [];
             let text = other_text(st, f);
-            foreach (x in list!) { items += diag_json(x, text); }
+            foreach (x in list !) { items += diag_json(x, text); }
             out += notify_msg("textDocument/publishDiagnostics", publish_params(path_uri(f), NO_VERSION, items));
         }
     }
@@ -370,10 +370,10 @@ def other_text(st: State, f: str) -> str {
     let u = path_uri(f);
     if (doc_has(st, u)) {
         let got = doc_get(st, u);
-        if is_some(got) { out = got!.text; }
+        if is_some(got) { out = got !.text; }
     } else {
         let read = fs.read_file(f);
-        if is_some(read) { out = read!; }
+        if is_some(read) { out = read !; }
     }
     out
 }
@@ -410,7 +410,7 @@ def path_uri(p: str) -> str {
 def refresh(st: State, uri: str) -> [str] {
     let out: [str] = [];
     let got = doc_get(st, uri);
-    if is_some(got) { out = publish_for(st, got!); }
+    if is_some(got) { out = publish_for(st, got !); }
     out
 }
 
@@ -657,10 +657,10 @@ def do_formatting(st: State, id: json.Val, p: { str => json.Val }) -> str {
     let edits: [json.Val] = [];
     let got = doc_get(st, uri);
     if is_some(got) {
-        let d: Doc = got!;
+        let d: Doc = got !;
         let body = fmt.fmt(d.text);
         if is_some(body) {
-            let text2 = body!;
+            let text2 = body !;
             // Already formatted? Then no edits at all: an editor may treat an
             // empty edit list as a reason to re-derive its undo history, and
             // losing undo for a no-op format is worse than doing nothing.
@@ -804,10 +804,10 @@ def class_of_span(text: str, sp: Span, idx: FileIdx, byname: { str => [IdxDecl] 
         // nothing, and the declaration an editor most wants painted as a parameter
         // is the one that came out blank.
         let mine = nav.decl_at(byname, w, ln, ch, s.end - s.off);
-        if (is_some(mine)) { out = decl_class(mine!, text, after); }
+        if (is_some(mine)) { out = decl_class(mine !, text, after); }
         else {
             let found = nav.resolve_decl(byname, idx, w, ln, ch);
-            if is_some(found) { out = decl_class(found!, text, after); };
+            if is_some(found) { out = decl_class(found !, text, after); };
         };
     };
     out
@@ -857,7 +857,6 @@ def text_from(text: str, start: long, n: long) -> str {
     out
 }
 
-
 // textDocument/semanticTokens/full: the whole buffer, delta encoded (M2, R2).
 //
 // `full: true` in the capabilities, so no `previousResultId` and no delta against
@@ -868,7 +867,7 @@ def do_semantic_tokens(st: State, id: json.Val, p: { str => json.Val }) -> str {
     let got = doc_get(st, uri);
     let data: [long] = [];
     if is_some(got) {
-        let d: Doc = got!;
+        let d: Doc = got !;
         // `semantic_classes_of` first: it is the expensive half and a buffer with no
         // identifiers in it must not pay for the pass that would have found none.
         let doc = pos.doc_of(d.text);
@@ -901,7 +900,7 @@ def do_document_symbols(st: State, id: json.Val, p: { str => json.Val }) -> str 
     let items: [json.Val] = [];
     let got = doc_get(st, uri);
     if is_some(got) {
-        let d: Doc = got!;
+        let d: Doc = got !;
         items = symbols_json(sym.symbols(pos.doc_of(d.text)));
     }
     let r = json.obj();
@@ -937,7 +936,7 @@ def request_position(p: { str => json.Val }) -> Pos {
     if is_some(gotl) {
         let ch = field_of(m, "character");
         let gotc = json.as_long(ch);
-        if is_some(gotc) { out = { line: gotl!, character: gotc! }; };
+        if is_some(gotc) { out = { line: gotl !, character: gotc ! }; };
     };
     out
 }
@@ -956,7 +955,7 @@ def word_under(st: State, p: { str => json.Val }) -> Under {
     let got = doc_get(st, uri);
     let nothing: Under = { hit: none, text: "" };
     if is_some(got) {
-        let d: Doc = got!;
+        let d: Doc = got !;
         let at = request_position(p);
         if (at.line >= 0) {
             let sps = scan.scan_full(d.text).spans;
@@ -990,19 +989,19 @@ def do_definition(st: State, id: json.Val, p: { str => json.Val }) -> str {
     let h: Hit? = u.hit;
     let answer = json.nul();
     if (h != none && u.text != "") {
-        let w: Hit = h!;
+        let w: Hit = h !;
         let got = doc_get(st, str_field(field_of(p, "textDocument"), "uri"));
         if is_some(got) {
-            let d: Doc = got!;
+            let d: Doc = got !;
             // Where it is DECLARED, which is the buffer's own index first and
             // then the spliced program's -- so an imported name answers, and the
             // answer can name a file the client does not have open (LSP.md 11.4).
             let at = request_position(p);
             let member = after_dot(u.text, w.off);
             let found = resolve_name(st, d, w.name, member, at.line, at.character,
-                                     member_object_name(d.text, scan.scan_full(d.text).spans, w.off));
+                member_object_name(d.text, scan.scan_full(d.text).spans, w.off));
             if (is_some(found)) {
-                let wh: Where = found!;
+                let wh: Where = found !;
                 let r = json.obj();
                 r["start"] = lsp_pos(wh.line, wh.ch);
                 r["end"] = lsp_pos(wh.line, wh.ch + len(w.name));
@@ -1042,7 +1041,7 @@ def type_at(st: State, d: Doc, line: long, ch: long) -> Type {
     let out: Type = expr_type(0, 0);
     let x = xref_of(st, d);
     if is_some(x) {
-        let pr: Prepared = x!;
+        let pr: Prepared = x !;
         // line + 1, and the "+ 1" is the whole bug this had for an hour: an LSP
         // position is 0-based and `mine` is indexed by the compiler's 1-based
         // lines. Every request was asking about the line ABOVE the one under the
@@ -1068,7 +1067,7 @@ def inferred_at(st: State, d: Doc, line: long, ch: long) -> str {
     let out = "";
     let x = xref_of(st, d);
     if is_some(x) {
-        let pr: Prepared = x!;
+        let pr: Prepared = x !;
         let sl = xref.indexed_line(pr.mine, line + 1);
         if (sl > 0) {
             // from_lsp ALREADY returns a 1-based byte column -- that is its
@@ -1166,12 +1165,12 @@ def resolve_name(st: State, d: Doc, name: str, member: bool, line: long, ch: lon
     let here: IdxDecl? = none;
     if (!member) { here = nav.find_decl(own, name, line, ch); };
     if (is_some(here)) {
-        let dc: IdxDecl = here!;
+        let dc: IdxDecl = here !;
         out = some({ path: d.path, line: dc.line, ch: dc.ch, dcl: dc, cross: false });
     } else {
         let x = xref_of(st, d);
         if is_some(x) {
-            let pr: Prepared = x!;
+            let pr: Prepared = x !;
             // The spliced index spells a member EITHER WAY, and which one exists is
             // what says which kind of import this was:
             //
@@ -1197,14 +1196,14 @@ def resolve_name(st: State, d: Doc, name: str, member: bool, line: long, ch: lon
             };
             if is_some(ln) {
                 let tg = pr.files[key];
-                let target = tg!;
+                let target = tg !;
                 let got = fs.read_file(target);
                 if is_some(got) {
-                    let ttext = got!;
+                    let ttext = got !;
                     let tidx = scope.index_src(ttext, target);
                     let hit = nav.find_decl_named(tidx, name);
                     if (is_some(hit)) {
-                        let hd: IdxDecl = hit!;
+                        let hd: IdxDecl = hit !;
                         out = some({ path: target, line: hd.line, ch: hd.ch, dcl: hd, cross: true });
                     };
                 };
@@ -1299,7 +1298,7 @@ def do_hover(st: State, id: json.Val, p: { str => json.Val }) -> str {
         let gd0 = doc_get(st, str_field(field_of(p, "textDocument"), "uri"));
         if is_some(gd0) {
             let at0 = request_position(p);
-            let ty0 = inferred_at(st, gd0!, at0.line, at0.character);
+            let ty0 = inferred_at(st, gd0 !, at0.line, at0.character);
             if (ty0 != "") {
                 let c0 = json.obj();
                 c0["kind"] = json.str("markdown");
@@ -1312,7 +1311,7 @@ def do_hover(st: State, id: json.Val, p: { str => json.Val }) -> str {
         return result_msg(id, json.nul());
     };
     if (u.text != "") {
-        let w: Hit = h!;
+        let w: Hit = h !;
         // A string method is answered FIRST, and returns: `"a,b".split` is
         // answered from the compiler's own table (strm.y), which knows the
         // signature, whereas the fallback below knows only what THIS file
@@ -1330,9 +1329,9 @@ def do_hover(st: State, id: json.Val, p: { str => json.Val }) -> str {
         let found: Where? = none;
         if (is_some(gd)) {
             let at2 = request_position(p);
-            found = resolve_name(st, gd!, w.name, after_dot(u.text, w.off), at2.line,
-                                 at2.character,
-                                 member_object_name(u.text, scan.scan_full(u.text).spans, w.off));
+            found = resolve_name(st, gd !, w.name, after_dot(u.text, w.off), at2.line,
+                at2.character,
+                member_object_name(u.text, scan.scan_full(u.text).spans, w.off));
         };
         // The TYPE first, because that is what R4.1 asks for and what a person
         // hovering an expression wants -- and because a type is an answer on its
@@ -1342,11 +1341,11 @@ def do_hover(st: State, id: json.Val, p: { str => json.Val }) -> str {
         // so hovering `p.a` showed nothing at all even though the checker had the
         // answer. The declaration, when there is one, goes underneath.
         let ty = "";
-        if (is_some(gd)) { ty = inferred_at(st, gd!, w.line, w.ch); };
+        if (is_some(gd)) { ty = inferred_at(st, gd !, w.line, w.ch); };
         if (ty != "" || is_some(found)) {
             let body = ty;
             if (is_some(found)) {
-                let wh: Where = found!;
+                let wh: Where = found !;
                 let sig = hover_text(wh.dcl);
                 // The type line is for what the declaration does NOT already say: a
                 // `let` has no annotation, a record field has no declaration at all,
@@ -1391,7 +1390,7 @@ def do_completion(st: State, id: json.Val, p: { str => json.Val }) -> str {
     let got = doc_get(st, uri);
     let items: [json.Val] = [];
     if is_some(got) {
-        let d: Doc = got!;
+        let d: Doc = got !;
         let at = request_position(p);
         let sps = scan.scan_full(d.text).spans;
         let col = pos.from_lsp(d.text, at.line, at.character);
@@ -1406,7 +1405,7 @@ def do_completion(st: State, id: json.Val, p: { str => json.Val }) -> str {
             // finished identifier is the thing to filter on.
             let w = nav.ident_at(sps, d.text, off);
             if (w != none) {
-                let h: Hit = w!;
+                let h: Hit = w !;
                 word_start = h.off;
                 if (off >= h.off) { prefix = d.text[h.off:off]; };
             };
@@ -1509,27 +1508,27 @@ def do_completion(st: State, id: json.Val, p: { str => json.Val }) -> str {
                 foreach (m in strm.matching(prefix)) { items += str_method_item(m); };
             };
         } else {
-        let idx = scope.index_src(d.text, "");
-        let here = nav.with_prefix(nav.visible(idx, at.line, at.character), prefix);
-        foreach (dcl in here) { items += completion_item(dcl); };
-        // The builtins come from the compiler's own list (native.intrinsic_names),
-        // not from a copy here, so a builtin added to the compiler appears here
-        // without anything being updated on this side.
-        let bnames = intrinsic_names();
-        foreach (b in bnames) {
-            // Three of the list's entries are the compiler's own halves rather
-            // than names a person writes: `opt$test`/`opt$val` back the option
-            // operators and `#fmt` backs the f-string builtin. A `$` cannot
-            // appear in an identifier and `#` starts a comment, so offering them
-            // would put three un-typable entries in a completion list, sorted
-            // among the real ones. They stay in native.intrinsic_names -- the
-            // compiler needs them to test a name -- and are dropped here, where
-            // the question is what a user can type.
-            let typable = index_of(b, "$") < 0 && b[:1] != "#";
-            if (typable && (prefix == "" || (len(b) >= len(prefix) && b[:len(prefix)] == prefix))) {
-                items += builtin_item(b);
+            let idx = scope.index_src(d.text, "");
+            let here = nav.with_prefix(nav.visible(idx, at.line, at.character), prefix);
+            foreach (dcl in here) { items += completion_item(dcl); };
+            // The builtins come from the compiler's own list (native.intrinsic_names),
+            // not from a copy here, so a builtin added to the compiler appears here
+            // without anything being updated on this side.
+            let bnames = intrinsic_names();
+            foreach (b in bnames) {
+                // Three of the list's entries are the compiler's own halves rather
+                // than names a person writes: `opt$test`/`opt$val` back the option
+                // operators and `#fmt` backs the f-string builtin. A `$` cannot
+                // appear in an identifier and `#` starts a comment, so offering them
+                // would put three un-typable entries in a completion list, sorted
+                // among the real ones. They stay in native.intrinsic_names -- the
+                // compiler needs them to test a name -- and are dropped here, where
+                // the question is what a user can type.
+                let typable = index_of(b, "$") < 0 && b[:1] != "#";
+                if (typable && (prefix == "" || (len(b) >= len(prefix) && b[:len(prefix)] == prefix))) {
+                    items += builtin_item(b);
+                };
             };
-        };
         };
     };
     let r = json.obj();
@@ -1568,13 +1567,13 @@ def type_at_decl(st: State, d: Doc, off: long) -> Type {
     let idx = scope.index_src(d.text, d.path);
     let w = object_hit(d.text, scan.scan_full(d.text).spans, off);
     if (is_some(w)) {
-        let hit: Hit = w!;
+        let hit: Hit = w !;
         let found = nav.resolve_decl(nav.by_name(idx), idx, hit.name, hit.line, hit.ch);
         if (is_some(found)) {
-            let dc: IdxDecl = found!;
+            let dc: IdxDecl = found !;
             let x = xref_of(st, d);
             if (is_some(x)) {
-                let pr: Prepared = x!;
+                let pr: Prepared = x !;
                 let sl = xref.indexed_line(pr.mine, dc.line + 1);
                 if (sl > 0) {
                     let t = expr_type(sl, pos.from_lsp(d.text, dc.line, dc.ch));
@@ -1596,7 +1595,7 @@ def module_members(st: State, d: Doc, off: long) -> [Sym] {
         let idx = scope.index_src(d.text, d.path);
         let w = object_hit(d.text, scan.scan_full(d.text).spans, off);
         if is_some(w) {
-            let hit: Hit = w!;
+            let hit: Hit = w !;
             // `resolve_decl`, not `decl_at`: the object of `helper.` is a USE of
             // the import binding, not the import statement itself, so asking "is
             // this token some declaration's own name" cannot match. Asking what the
@@ -1604,7 +1603,7 @@ def module_members(st: State, d: Doc, off: long) -> [Sym] {
             // the point of use.
             let found = nav.resolve_decl(nav.by_name(idx), idx, hit.name, hit.line, hit.ch);
             if (is_some(found)) {
-                let dc: IdxDecl = found!;
+                let dc: IdxDecl = found !;
                 if (dc.kind == scope.D_IMPORT) {
                     out = module_exports(st, d, hit.name, dc);
                 };
@@ -1642,7 +1641,7 @@ def module_exports(st: State, d: Doc, modname: str, dc: IdxDecl) -> [Sym] {
     let out: [Sym] = [];
     let x = xref_of(st, d);
     if is_some(x) {
-        let pr: Prepared = x!;
+        let pr: Prepared = x !;
         let us = pr.units;
         let ui = 0;
         while (ui < len(us) && len(out) == 0) {
@@ -1698,7 +1697,7 @@ def module_exports(st: State, d: Doc, modname: str, dc: IdxDecl) -> [Sym] {
                     let nm = pr.names[i];
                     let f = pr.files[nm];
                     if (is_some(f)) {
-                        let fp = f!;
+                        let fp = f !;
                         let mine = pr.self_path;
                         let take = false;
                         if (pass == 0) { take = want != "" && fp == want; }
@@ -1769,7 +1768,7 @@ def module_label(nm: str, modname: str) -> str {
 def member_object_name(text: str, sps: [Span], off: long) -> str {
     let out = "";
     let h = object_hit(text, sps, off);
-    if (is_some(h)) { let hit: Hit = h!; out = hit.name; };
+    if (is_some(h)) { let hit: Hit = h !; out = hit.name; };
     out
 }
 
@@ -1841,7 +1840,7 @@ def object_col(text: str, sps: [Span], off: long) -> long {
     let out = 0 - 1;
     let h = object_hit(text, sps, off);
     if (is_some(h)) {
-        let hit: Hit = h!;
+        let hit: Hit = h !;
         let ob = before_dot_col(text, hit.line, hit.ch);
         if (ob < 0) { out = hit.ch; };
     };
@@ -2044,7 +2043,7 @@ def count_lines(text: str) -> long {
 def field_of(m: { str => json.Val }, k: str) -> json.Val {
     let v = m[k];
     let out = json.nul();
-    if is_some(v) { out = v!; }
+    if is_some(v) { out = v !; }
     out
 }
 
@@ -2063,8 +2062,8 @@ def str_field(v: json.Val, k: str) -> str {
     let m = members_of(v);
     let f = m[k];
     if is_some(f) {
-        let t = json.as_str(f!);
-        if is_some(t) { s = t!; }
+        let t = json.as_str(f !);
+        if is_some(t) { s = t !; }
     };
     s
 }
@@ -2074,8 +2073,8 @@ def long_field(v: json.Val, k: str) -> long {
     let m = members_of(v);
     let f = m[k];
     if is_some(f) {
-        let t = json.as_long(f!);
-        if is_some(t) { n = t!; }
+        let t = json.as_long(f !);
+        if is_some(t) { n = t !; }
     };
     n
 }
@@ -2105,18 +2104,18 @@ def change_at(ch: json.Val, i: long) -> json.Val {
 }
 
 export {
-  Doc, State, server_state, NO_VERSION,
-  E_PARSE, E_INVALID_REQUEST, E_METHOD_NOT_FOUND, E_INVALID_PARAMS,
-  E_INTERNAL, E_NOT_INITIALIZED, E_REQUEST_CANCELLED,
-  result_msg, error_msg, notify_msg,
-  doc_get, doc_has, doc_put, doc_drop, uri_path, doc_dir,
-  diag_json, publish_params, publish_for, path_uri, refresh,
-  sort_text,
-  note_open, note_change, note_close,
-  on_did_open, on_did_change, on_did_save, on_did_close, on_exit,
-  do_initialize, read_check_on_change, read_timing, do_shutdown, do_formatting,
-  do_semantic_tokens, do_document_symbols, numbers, symbols_json,
-  end_position, count_lines,
-  field_of, members_of, str_field, long_field, params_of,
-  change_count, change_at, semantic_classes_of, semantic_overrides, class_of_span, decl_class, is_function_let, text_from, inferred_at, type_at, none_type, before_dot_col, object_col, record_fields, field_item, field_name, field_type, index_of_char
+    Doc, State, server_state, NO_VERSION,
+    E_PARSE, E_INVALID_REQUEST, E_METHOD_NOT_FOUND, E_INVALID_PARAMS,
+    E_INTERNAL, E_NOT_INITIALIZED, E_REQUEST_CANCELLED,
+    result_msg, error_msg, notify_msg,
+    doc_get, doc_has, doc_put, doc_drop, uri_path, doc_dir,
+    diag_json, publish_params, publish_for, path_uri, refresh,
+    sort_text,
+    note_open, note_change, note_close,
+    on_did_open, on_did_change, on_did_save, on_did_close, on_exit,
+    do_initialize, read_check_on_change, read_timing, do_shutdown, do_formatting,
+    do_semantic_tokens, do_document_symbols, numbers, symbols_json,
+    end_position, count_lines,
+    field_of, members_of, str_field, long_field, params_of,
+    change_count, change_at, semantic_classes_of, semantic_overrides, class_of_span, decl_class, is_function_let, text_from, inferred_at, type_at, none_type, before_dot_col, object_col, record_fields, field_item, field_name, field_type, index_of_char
 };

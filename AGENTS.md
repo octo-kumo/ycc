@@ -92,6 +92,12 @@ compiler, so a compiler change runs this loop (`BASE` defaults to
 
 1. Change `src/y`, port it to `src/c` (PORTING.md); fixtures, docs,
    `test/COVERAGE.md`.
+   `make fmt` formats `src/y`, `src/y/std` and `src/tools/lsp` IN PLACE with
+   the same formatter the editor runs (`src/tools/lsp/fmt.y`, LSP.md R3);
+   `make fmt-check` is the gate -- idempotence over every `.y` in the tree and
+   the `src/y` fixed point (38/38 byte-identical, 0 lines). A file scan.y
+   cannot lex is skipped, never mangled. `src/c` is not formatted: the
+   formatter is a Y formatter.
 2. `make check` — everything below in one command, ~2 minutes, a summary
    on screen and each step's full output in `_check/`:
    - **verify**: builds `./ynew` from `src/y` with the blessed compiler

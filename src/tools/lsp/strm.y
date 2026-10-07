@@ -108,7 +108,7 @@ def names() -> [str] {
 def sig(name: str) -> str {
     let got = method_of(name);
     if (!is_some(got)) { return name + "(?) -> ?"; };
-    let sm: StrMethod = got!;
+    let sm: StrMethod = got !;
     let out = name + "(";
     let i = 0;
     let req = sm.nreq;

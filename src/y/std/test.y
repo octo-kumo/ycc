@@ -72,7 +72,7 @@ def ck_near(name: str, got: long, want: long, tol: long) -> bool {
     let d = got - want;
     if (d < 0) { d = 0 - d };
     ck(name, d <= tol, "got " + tostring(got) + ", want " + tostring(want)
-       + " +/- " + tostring(tol) + " (off by " + tostring(d) + ")")
+        + " +/- " + tostring(tol) + " (off by " + tostring(d) + ")")
 };
 
 // ck_str(name, got, want) -> bool
@@ -106,14 +106,14 @@ def ck_bytes(name: str, got: [byte], want: [byte]) -> bool {
         while (i < got.length && i < want.length && got[i] == want[i]) { i = i + 1 };
         if (i >= got.length) {
             detail = detail + "; want is " + tostring(want.length - i)
-                     + " byte(s) longer";
+            + " byte(s) longer";
         } else {
             if (i >= want.length) {
                 detail = detail + "; got is " + tostring(got.length - i)
-                         + " byte(s) longer";
+                + " byte(s) longer";
             } else {
                 detail = detail + "; first difference at byte " + tostring(i)
-                         + ": got " + tostring(got[i]) + ", want " + tostring(want[i])
+                + ": got " + tostring(got[i]) + ", want " + tostring(want[i])
             }
         }
     };
@@ -128,9 +128,9 @@ def failures() -> long { n_failed };
 def report() -> long {
     print("");
     print(tostring(n_checks - n_failed) + " of " + tostring(n_checks)
-          + " checks passed");
+        + " checks passed");
     if (n_failed > 0) { 1 } else { 0 }
 };
 
 export { group, ck, ck_eq, ck_near, ck_str, ck_bytes,
-         checks, failures, report };
+    checks, failures, report };

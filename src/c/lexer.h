@@ -1,6 +1,8 @@
 /* lexer.h — tokenize a Y source string into a list of token maps.
  * 1:1 C copy of src/y/lexer.y (see PORTING.md).
- * Each token is { t: <type>, v: <lexeme/value>, line: <1-based>, col: <1-based> }.
+ * Each token is { t: <type>, v: <lexeme/value>, line: <1-based>, col: <1-based>,
+ * off: <byte offset>, end: <byte offset> }. The compiler reads t/v/line/col;
+ * the language server (src/tools/lsp/) reads the span.
  * Token types: id, num, str, op, punct, kw, ferr, eof. */
 #ifndef LEXER_H
 #define LEXER_H
@@ -57,8 +59,8 @@ Yv *lex_quoted(Yv *src, ylong i, ylong line, ylong col, Yv *what);
                                      /* -> { text: str, end: long, line: long, col: long, err: str } */
 ylong lit_end(Yv *src, ylong q, ylong *closed);
                                      /* (src: str, q: long, closed: [long]) -> long */
-Yv *mktok(Yv *t, Yv *v, ylong line, ylong col);
-                                     /* -> { t: str, v: str, line: long, col: long } */
+Yv *mktok(Yv *t, Yv *v, ylong line, ylong col, ylong off, ylong end);
+                                     /* -> { t, v, line, col, off, end } */
 ylong hexvalx(Yv *c);                 /* (c: str) -> long */
 Yv *multicharop(Yv *src, ylong i, Yv *c);
                                      /* (src: str, i: long, c: str) -> str */
@@ -67,7 +69,9 @@ int issingleop(ylong c);              /* (c: byte) -> bool */
 Yv *slash(void);                     /* () -> str */
 ylong slashb(void);                   /* () -> byte */
 int isdigitch(ylong c);               /* (c: byte) -> bool */
-Yv *tokenize(Yv *src);               /* (src: str) -> [{ t: str, v: str, line: long, col: long }] */
+Yv *tokenize(Yv *src);               /* (src: str) -> [Tok]  (compiler mode) */
+Yv *tokenize_lsp(Yv *src);           /* (src: str) -> [Tok]  (server mode) */
+Yv *tokenize_go(Yv *src, int lsp);   /* both: the one scanner */
 Yv *fstr_walk(Yv *src, ylong q);      /* (src: str, q: long) -> { end: long, err: str, at: long, fields: [long] } */
 
 #endif /* LEXER_H */

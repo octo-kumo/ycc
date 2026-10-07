@@ -11,6 +11,8 @@ ycc2
 ycc3
 /ycc
 /yserve
+/yfmt
+*.fmt
 /ytest
 /ytest-report.md
 _yserve0

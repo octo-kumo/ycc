@@ -207,7 +207,7 @@ def read_record(c: Conn) -> Rec {
             return none_r;
         };
         c.rseq = c.rseq + 1;
-        let p = plain!;
+        let p = plain !;
         let i = len(p) - 1;
         while (i >= 0 && p[i] == 0) { i = i - 1; };
         if (i < 0) {
@@ -425,10 +425,10 @@ def connect_with(host: str, port: long, o: Opts) -> Conn {
         return c;
     };
     let secs = 30;
-    if (o.timeout != none) { secs = o.timeout!; };
+    if (o.timeout != none) { secs = o.timeout !; };
     net.set_timeouts(fd, secs);
     let alpn = "";
-    if (o.alpn != none) { alpn = o.alpn!; };
+    if (o.alpn != none) { alpn = o.alpn !; };
     handshake(c, o, alpn);
     c
 };
@@ -470,11 +470,11 @@ def handshake(c: Conn, o: Opts, alpn: str) -> bool {
         } else if (m.typ == 11) {
             certs = cert_list(m.body);
             if (len(certs) == 0) { return fail(c, "the server sent no certificate"); };
-            let insecure = o.insecure != none && o.insecure!;
+            let insecure = o.insecure != none && o.insecure !;
             if (!insecure) {
                 let now = time_us() / 1000000;
                 let why = "";
-                if (o.anchors != none) { why = x509.verify_chain_with(certs, c.host, now, x509.anchors_pem(o.anchors!)); }
+                if (o.anchors != none) { why = x509.verify_chain_with(certs, c.host, now, x509.anchors_pem(o.anchors !)); }
                 else { why = x509.verify_chain(certs, c.host, now); };
                 if (why != "") { return fail(c, why); };
             };

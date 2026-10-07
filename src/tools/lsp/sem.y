@@ -487,9 +487,9 @@ def sem_range_in(d: SrcDoc, over: [long], from_line: long, to_line: long) -> { d
 }
 
 export {
-  SemTok, T_comment, T_string, T_number, T_keyword, T_selfnone,
-  T_operator, T_punct, T_variable, T_error,
-  T_parameter, T_function, T_property, T_type, T_builtin,
-  token_types, type_of, word, tokens, tokens_in, tokens_in_range, byte_of_line,
-  split_lines, encode, sem_full_of, sem_full_in, sem_range_in
+    SemTok, T_comment, T_string, T_number, T_keyword, T_selfnone,
+    T_operator, T_punct, T_variable, T_error,
+    T_parameter, T_function, T_property, T_type, T_builtin,
+    token_types, type_of, word, tokens, tokens_in, tokens_in_range, byte_of_line,
+    split_lines, encode, sem_full_of, sem_full_in, sem_range_in
 };

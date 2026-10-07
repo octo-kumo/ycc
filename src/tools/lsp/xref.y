@@ -116,7 +116,6 @@ def tops_of(ast: Block) -> XRef {
     { tops: tops, ambiguous: ambiguous }
 }
 
-
 // The top-level declaration of `name`, or none -- and none means BOTH "no such
 // name" and "two modules export it", which is the honest answer for both.
 def top_decl(x: XRef, name: str) -> Top? {
@@ -133,13 +132,12 @@ def tops_names(x: XRef) -> [str] {
     foreach (k in keys(x.tops)) {
         let got = x.tops[k];
         if (is_some(got)) {
-            let t: Top = got!;
+            let t: Top = got !;
             if (!in_list(x.ambiguous, t.orig) && !in_list(out, t.orig)) { out += t.orig; };
         };
     };
     out
 }
-
 
 // The spliced line a top-level name was declared on, or 0. 0 rather than none
 // because every use of this is `if (line > 0)`, and a name nobody declares has
@@ -148,7 +146,7 @@ def top_line(x: XRef, name: str) -> long {
     let out = 0;
     if (!is_ambiguous(x, name)) {
         let got = x.tops[name];
-        if is_some(got) { out = got!.line; };
+        if is_some(got) { out = got !.line; };
     };
     out
 }
@@ -161,7 +159,7 @@ def tops_pairs(x: XRef) -> [str] {
     foreach (k in keys(x.tops)) {
         let got = x.tops[k];
         if (is_some(got)) {
-            let t: Top = got!;
+            let t: Top = got !;
             if (!is_ambiguous(x, t.orig) && !in_list(out, t.orig)) {
                 out += t.orig + "\t" + tostring(t.line);
             };

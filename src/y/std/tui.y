@@ -40,8 +40,8 @@ let MAX_ROWS = 128;
 let MAX_COLS = 256;
 let MAX_CELLS = 32768;   // MAX_ROWS * MAX_COLS
 let OBUF_CAP = 4096;     // the flush output buffer; a spill mid-row is fine,
-                         // because a CUP is absolute and the SGR state is
-                         // tracked per frame, not per write
+// because a CUP is absolute and the SGR state is
+// tracked per frame, not per write
 let CAP_CAP = 262144;    // the self-test's capture buffer
 
 let DEFAULT = -1;        // "terminal default colour" (SGR 39 / 49)
@@ -508,8 +508,8 @@ def new(rows: long, cols: long) -> Surface {
         d[i] = -1; e[i] = -1; f[i] = -1;
     };
     let s: Surface = { rows: clamp_dim(rows, MAX_ROWS),
-                       cols: clamp_dim(cols, MAX_COLS),
-                       ch: a, fg: b, bg: c, sh: d, sf: e, sb: f };
+        cols: clamp_dim(cols, MAX_COLS),
+        ch: a, fg: b, bg: c, sh: d, sf: e, sb: f };
     s
 };
 
@@ -1978,33 +1978,33 @@ def cols(s: Surface) -> long { s.cols };
 def key_pending() -> long { buf_len() };
 
 export {
-  Size, Surface, Pacer, Fps,
-  // The twenty-seven below were NOT in the API the campaign agreed. They are
-  // here because twenty-six of them are called by an example that vendored
-  // term.y or fb.y, and the twenty-seventh (out_flush) is what term.flush()
-  // was: the surface form of flush() won the name and the output-buffer form
-  // needed one of its own. Measured by listing every term.* and fb.* call site
-  // in the corpus and checking each against this export block.
-  buf_reset, buf_len, buf_at, key_pending,
-  put_byte, put_num, put_str, put_csi,
-  esc_fg, esc_bg, esc_rg, esc_reset, esc_clear, esc_home, esc_cursor,
-  sgr_fg, sgr_bg, sgr_rg, sgr_reset,
-  rd16, rd32, restore_all_exit, out_flush,
-  put_at, braille_mask, frame_bytes, row_bytes, row_count, set_fd, fd, spill,
-  is_tty, raw_mode, cooked_mode, active, restore, restore_exit, arm_watchdog,
-  size, set_size, read_key, read_key_timeout, push_key, pop_key, key_pending,
-  enter_screen, leave_screen, enter_alt_screen, leave_alt_screen,
-  hide_cursor, show_cursor, clear_screen, home, cursor_to,
-  rgb, r_of, g_of, b_of, grey, lerp_rgb, clamp255,
-  new, resize, rows, cols, clear, fill, put, put_skip, get, key_at, text,
-  hline, vline, rect, fill_rect, blit,
-  utf8_len, utf8_byte, width_of,
-  ramp_index, shade, shade_ascii, shade_blocks, shade_half, shade_braille,
-  shade_len, braille, braille_cp, braille_put,
-  begin_frame, cell_same, cell_commit, flush, flush_diff, end_frame,
-  capture_on, capture_off, capture_reset, capture_len, capture_byte,
-  capture_str, capture_checksum, grid_digest, grid_text,
-  pacer_new, pacer_start, pacer_next, pacer_period_us, pacer_frames,
-  pacer_dropped, pacer_lag_us,
-  fps_new, fps_tick, fps_x100, fps_frames, fps_avg_x100, fps_line
+    Size, Surface, Pacer, Fps,
+    // The twenty-seven below were NOT in the API the campaign agreed. They are
+    // here because twenty-six of them are called by an example that vendored
+    // term.y or fb.y, and the twenty-seventh (out_flush) is what term.flush()
+    // was: the surface form of flush() won the name and the output-buffer form
+    // needed one of its own. Measured by listing every term.* and fb.* call site
+    // in the corpus and checking each against this export block.
+    buf_reset, buf_len, buf_at, key_pending,
+    put_byte, put_num, put_str, put_csi,
+    esc_fg, esc_bg, esc_rg, esc_reset, esc_clear, esc_home, esc_cursor,
+    sgr_fg, sgr_bg, sgr_rg, sgr_reset,
+    rd16, rd32, restore_all_exit, out_flush,
+    put_at, braille_mask, frame_bytes, row_bytes, row_count, set_fd, fd, spill,
+    is_tty, raw_mode, cooked_mode, active, restore, restore_exit, arm_watchdog,
+    size, set_size, read_key, read_key_timeout, push_key, pop_key, key_pending,
+    enter_screen, leave_screen, enter_alt_screen, leave_alt_screen,
+    hide_cursor, show_cursor, clear_screen, home, cursor_to,
+    rgb, r_of, g_of, b_of, grey, lerp_rgb, clamp255,
+    new, resize, rows, cols, clear, fill, put, put_skip, get, key_at, text,
+    hline, vline, rect, fill_rect, blit,
+    utf8_len, utf8_byte, width_of,
+    ramp_index, shade, shade_ascii, shade_blocks, shade_half, shade_braille,
+    shade_len, braille, braille_cp, braille_put,
+    begin_frame, cell_same, cell_commit, flush, flush_diff, end_frame,
+    capture_on, capture_off, capture_reset, capture_len, capture_byte,
+    capture_str, capture_checksum, grid_digest, grid_text,
+    pacer_new, pacer_start, pacer_next, pacer_period_us, pacer_frames,
+    pacer_dropped, pacer_lag_us,
+    fps_new, fps_tick, fps_x100, fps_frames, fps_avg_x100, fps_line
 };

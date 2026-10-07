@@ -174,8 +174,6 @@ def add_child(out: [SymEntry], open: [SymEntry], s: SymEntry) -> long {
     0
 }
 
-
-
 // Whether the `{` at span index `j` opens a loop or a conditional body.
 //
 // The whole statement head is scanned, not just the nearest word, because the
@@ -210,7 +208,7 @@ def opens_guard_block(sps: [Span], src: str, j: long) -> bool {
 
 def is_guard_word(w: str) -> bool {
     w == "for" || w == "foreach" || w == "while" || w == "if" || w == "else" ||
-        w == "match" || w == "lock" || w == "try_lock" || w == "in"
+    w == "match" || w == "lock" || w == "try_lock" || w == "in"
 }
 
 // The symbols of a document, outermost first.
@@ -279,7 +277,7 @@ def symbols(d: SrcDoc) -> [SymEntry] {
                     i = i + 2;
                 } else { i = i + 1; }
             } else if (w == "const" || w == "type" || w == "import" || w == "export"
-                       || (w == "let" && guard == 0)) {
+                || (w == "let" && guard == 0)) {
                 let name_i = i + 1;
                 let nm = "";
                 if (name_i < len(sps) && sps[name_i].kind == scan.K_ident) {
@@ -310,7 +308,7 @@ def symbols(d: SrcDoc) -> [SymEntry] {
 }
 
 export {
-  SymEntry, K_MODULE, K_FUNCTION, K_VARIABLE, K_CONSTANT, K_TYPE, K_KEY,
-  symbols, add_child, signature, body_open, trim, opens_guard_block, is_guard_word,
-  is_punct_ch, is_word_ch, sym_word
+    SymEntry, K_MODULE, K_FUNCTION, K_VARIABLE, K_CONSTANT, K_TYPE, K_KEY,
+    symbols, add_child, signature, body_open, trim, opens_guard_block, is_guard_word,
+    is_punct_ch, is_word_ch, sym_word
 };

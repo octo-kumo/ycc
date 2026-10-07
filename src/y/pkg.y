@@ -145,7 +145,7 @@ def pk_skip(cur: Cursor) -> void {
 
 def pk_keych(c: long) -> bool {
     (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
-        || (c >= '0' && c <= '9') || c == '_' || c == '-'
+    || (c >= '0' && c <= '9') || c == '_' || c == '-'
 };
 
 // A bare key: letters, digits, `_` and `-`.
@@ -173,7 +173,7 @@ def pk_is_ident(s: str) -> bool {
 // does not parse.
 def pk_is_kw(s: str) -> bool {
     s in ["let", "const", "def", "if", "else", "while"]
-        || s == "for" || s == "foreach" || s == "in" || s == "return" || s == "true" || s == "false"
+    || s == "for" || s == "foreach" || s == "in" || s == "return" || s == "true" || s == "false"
 };
 
 // The line up to its comment (a `#` outside a string).
@@ -642,14 +642,14 @@ def pk_env() -> str {
         let out: [str] = [];
         let start = 0;
         for i in 0..len(s) + 1 {
-        if (i == len(s) || s[i] == 0) {
-        let kv = s[start:i];
-        let eq = index_of(kv, "=");
-        if (eq > 0 && pk_is_ident(kv[:eq])) {
-        out += "export " + kv[:eq] + "=" + pk_q(kv[eq + 1:]) + "; ";
-        }
-        start = i + 1;
-        }
+            if (i == len(s) || s[i] == 0) {
+                let kv = s[start:i];
+                let eq = index_of(kv, "=");
+                if (eq > 0 && pk_is_ident(kv[:eq])) {
+                    out += "export " + kv[:eq] + "=" + pk_q(kv[eq + 1:]) + "; ";
+                }
+                start = i + 1;
+            }
         };
         join(out, "")
 

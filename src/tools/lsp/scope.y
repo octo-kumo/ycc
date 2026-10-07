@@ -112,7 +112,7 @@ def scope_end(ends: { long => long }, start: long) -> long {
     let out = 0 - 1;
     if (start >= 0) {
         let got = ends[start];
-        if is_some(got) { out = got!; };
+        if is_some(got) { out = got !; };
     };
     out
 }
@@ -343,7 +343,7 @@ def index_src(src: str, path: str) -> FileIdx {
                 pending_params = [];
                 let dd = decl_after(sps, src, i, path, D_DEF, depth, opens, d);
                 if (is_some(dd)) {
-                    let one = dd!;
+                    let one = dd !;
                     one.doc = doc_above(src, s.line - 1, d);
                     decls += one;
                     open_def += one;
@@ -354,7 +354,7 @@ def index_src(src: str, path: str) -> FileIdx {
                 if (w == "const") { k = D_CONST; }
                 let dd = decl_after(sps, src, i, path, k, depth, opens, d);
                 if is_some(dd) {
-                    let one = dd!;
+                    let one = dd !;
                     one.doc = doc_above(src, s.line - 1, d);
                     decls += one;
                     i = i + 2;
@@ -362,7 +362,7 @@ def index_src(src: str, path: str) -> FileIdx {
             } else if (w == "type") {
                 let dd = decl_after(sps, src, i, path, D_TYPE, depth, opens, d);
                 if is_some(dd) {
-                    let one = dd!;
+                    let one = dd !;
                     one.doc = doc_above(src, s.line - 1, d);
                     decls += one;
                     i = i + 2;
@@ -370,7 +370,7 @@ def index_src(src: str, path: str) -> FileIdx {
             } else if (w == "import") {
                 let dd = decl_after(sps, src, i, path, D_IMPORT, depth, opens, d);
                 if is_some(dd) {
-                    let one = dd!;
+                    let one = dd !;
                     one.detail = import_target(sps, src, i);
                     decls += one;
                     i = i + 2;
@@ -420,7 +420,7 @@ def index_src(src: str, path: str) -> FileIdx {
         if (dcl.scope_start >= 0) {
             let got = ends[dcl.scope_start];
             let e = 0 - 1;
-            if is_some(got) { e = got!; };
+            if is_some(got) { e = got !; };
             dcl.scope_end = e;
             decls[di] = dcl;
         };
@@ -656,8 +656,8 @@ def in_params(sps: [Span], src: str, i: long) -> bool {
 }
 
 export {
-  D_DEF, D_LET, D_CONST, D_PARAM, D_TYPE, D_IMPORT, D_SELF,
-  IdxDecl, FileIdx, index_src, doc_above, trim_both, is_nameish,
-  header_text, annotation_text, param_detail, colon_tail, import_target, scope_end, scope_end_map,
-  in_params, scan_word, pack
+    D_DEF, D_LET, D_CONST, D_PARAM, D_TYPE, D_IMPORT, D_SELF,
+    IdxDecl, FileIdx, index_src, doc_above, trim_both, is_nameish,
+    header_text, annotation_text, param_detail, colon_tail, import_target, scope_end, scope_end_map,
+    in_params, scan_word, pack
 };

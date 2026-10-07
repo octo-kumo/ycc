@@ -49,7 +49,6 @@ import lint from "./lint.y";
 import meta from "./meta.y";
 import fs;
 
-
 // The std units' sources (see std_units). `embed` (see embed_decl) makes
 // each file a str const when the compiler is BUILT: the shipped ycc is a
 // standalone static ELF and cannot read support files at run time. The C
@@ -260,7 +259,7 @@ def resolve_unit(src: str, base_dir: str, depth: long, allow_exec: bool, root: s
     let og: [bool] = [];
     if (meta.mg_n > 0) { og = r.ogen; };
     { src: rsrc, imports: rimports, origin: origin, std: std, pkgs: res_used,
-      ogen: og }
+        ogen: og }
 };
 
 // Which file line `ln` of the spliced program came from (0, the program
@@ -308,8 +307,8 @@ def exec_names() -> [str] {
 // so they are not here.
 def str_names() -> [str] {
     ["trim_start", "trim_end", "lstrip", "rstrip", "pad_left", "pad_right",
-     "center", "starts_with", "ends_with", "contains", "count", "replace",
-     "upper", "lower", "repeat", "lines"]
+        "center", "starts_with", "ends_with", "contains", "count", "replace",
+        "upper", "lower", "repeat", "lines"]
 };
 
 // An embedded std file, newline-terminated (as every source file the
@@ -580,7 +579,7 @@ def meta_prepare(src: str, base_dir: str, depth: long, allow_exec: bool, root: s
 // A round is a whole extra compile of the program-as-generator, which is the
 // reason MG_NEST is 8 rather than the parser's ~333 -- see the cap's diagnostic.
 def meta_resolve(src: str, base_dir: str, depth: long, allow_exec: bool,
-                 root: str, first: SrcLines, self_path: str) -> SrcLines {
+    root: str, first: SrcLines, self_path: str) -> SrcLines {
     if (meta.mg_nest > 0) {
         // A round in which a block cannot produce its text leaves a stand-in
         // where its call goes, so a statement naming something that block was
@@ -619,7 +618,7 @@ def meta_resolve(src: str, base_dir: str, depth: long, allow_exec: bool,
 
 // Compile and run G, with every global it disturbs saved and put back.
 def meta_run_generator(src: str, base_dir: str, allow_exec: bool, root: str,
-                       first: SrcLines) -> long {
+    first: SrcLines) -> long {
     let spk = res_pkgs;
     let sro = res_roots;
     let su = res_used;
@@ -656,7 +655,7 @@ def meta_compile_gen() -> [byte] {
     let go = meta_gorigin(meta.mg_glines());
     meta.mg_set(false);
     let nr = native_resolve_pk(gt, meta.mg_gbase, meta.mg_gexec,
-                               meta.mg_root + ".meta", meta.mg_pkgs, meta.mg_roots);
+        meta.mg_root + ".meta", meta.mg_pkgs, meta.mg_roots);
     if (meta.mg_probe(nr.src, meta.mg_gbase)) {
         meta.mg_report("a meta block cannot appear in a module imported into the meta generator: the generator's text is compiled with the pass off, so nothing in it is scanned");
     };
@@ -994,7 +993,7 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str], smods
             i++;
         };
         { lines: out_lines, imports: imports, seen: seen, smods: smods,
-          ofile: ofile, oline: oline, ogen: ogen }
+            ofile: ofile, oline: oline, ogen: ogen }
     }
 };
 
@@ -1271,7 +1270,6 @@ def refs_range(text: str, b: [byte], lo: long, hi: long, out: [str], want_jumps:
     }
     res
 };
-
 
 // A line that opens with `.` is a directive, and no directive this assembler
 // has names a label: `.text`/`.data`/`.bss`/`.section`/`.globl` take a section,
@@ -1841,9 +1839,9 @@ def check_os_call_names(lines: [str]) -> [str] {
         };
         if (!found) {
             puts("error: os_call_names lists '" + e
-                + "', which the arch lines do not define ("
-                + (if (target_is_windows()) { "src/y/arch/wsys.s" } else { "src/y/arch/prelude.s" })
-                + ")\n");
+            + "', which the arch lines do not define ("
+            + (if (target_is_windows()) { "src/y/arch/wsys.s" } else { "src/y/arch/prelude.s" })
+            + ")\n");
             exit(1);
         };
     });
@@ -2056,7 +2054,6 @@ def prune_bodies(labels: [str], refs: [[str]], extra_roots: [str]) -> { refs: [s
     { refs: outrefs, keep: keep }
 };
 
-
 // ── runtime helper labels ──────────────────────────────────────────────
 // Generated code calls the runtime by FIXED label (`call y_print_long`), so
 // a helper defined in std/rt.y must be emitted under its bare name even
@@ -2110,7 +2107,6 @@ def fn_label_of(uid: long, name: str) -> str {
         arch.arch_fn_label(uid, name)
     }
 };
-
 
 def is_ns(name: str, imports: [str]) -> bool {
     let i = 0;
@@ -2399,8 +2395,8 @@ type StLbl = { st: EmitSt, label: long };
 
 def st_new() -> EmitSt {
     { ir: [], txt: [], rodata: [], uid: 1, fuid: 0, loc: 1, env: [],
-      slots: 0, temp: 0, self_label: -1, end_label: -1, fns: fntab_of([], []), bodies: [], btext: [],
-      blabels: [] }
+        slots: 0, temp: 0, self_label: -1, end_label: -1, fns: fntab_of([], []), bodies: [], btext: [],
+        blabels: [] }
 };
 
 // The state with its IR buffer (and, where it changes, its raw lines)
@@ -2416,9 +2412,9 @@ let frame_max = 0;
 
 def st_with(st: EmitSt, b: [long], txt: [str]) -> EmitSt {
     { ir: b, txt: txt, rodata: st.rodata, uid: st.uid,
-      fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots, temp: st.temp,
-      self_label: st.self_label, end_label: st.end_label, fns: st.fns,
-      bodies: st.bodies, btext: st.btext, blabels: st.blabels }
+        fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots, temp: st.temp,
+        self_label: st.self_label, end_label: st.end_label, fns: st.fns,
+        bodies: st.bodies, btext: st.btext, blabels: st.blabels }
 };
 
 def st_ir(st: EmitSt, b: [long]) -> EmitSt {
@@ -2438,9 +2434,9 @@ def st_slots(st: EmitSt, n: long) -> EmitSt {
         let deep = st.slots + st.temp;
         if (deep > frame_max) { frame_max = deep; };
         { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
-          fuid: st.fuid, loc: st.loc, env: st.env, slots: n, temp: st.temp,
-          self_label: st.self_label, end_label: st.end_label, fns: st.fns,
-          bodies: st.bodies, btext: st.btext, blabels: st.blabels }
+            fuid: st.fuid, loc: st.loc, env: st.env, slots: n, temp: st.temp,
+            self_label: st.self_label, end_label: st.end_label, fns: st.fns,
+            bodies: st.bodies, btext: st.btext, blabels: st.blabels }
     }
 };
 
@@ -2456,9 +2452,9 @@ def st_temp(st: EmitSt, n: long) -> EmitSt {
         let deep = st.slots + st.temp;
         if (deep > frame_max) { frame_max = deep; };
         { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
-          fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots, temp: n,
-          self_label: st.self_label, end_label: st.end_label, fns: st.fns,
-          bodies: st.bodies, btext: st.btext, blabels: st.blabels }
+            fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots, temp: n,
+            self_label: st.self_label, end_label: st.end_label, fns: st.fns,
+            bodies: st.bodies, btext: st.btext, blabels: st.blabels }
     }
 };
 
@@ -2482,7 +2478,7 @@ def emit_label(st: EmitSt, id: long) -> EmitSt {
 // the variable: gen_sappend's variable and its companion cell are a local for
 // one program and a global for the next.
 def memop(lbl: long, disp: long) -> [long] {
-    if (lbl >= 0) { [-1, -1, 1, 0, lbl] } else { [insn.R_RBP, -1, 1, disp, -1] }
+    if (lbl >= 0) {[-1, -1, 1, 0, lbl] } else {[insn.R_RBP, -1, 1, disp, -1] }
 };
 
 // A line the emitter still spells as text: the three comment lines it writes
@@ -2498,18 +2494,18 @@ def emit(st: EmitSt, line: str) -> EmitSt {
 def next_uid(st: EmitSt) -> { st: EmitSt, uid: long } {
     let u = st.uid;
     st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid + 1,
-      fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots, temp: st.temp,
-      self_label: st.self_label, end_label: st.end_label, fns: st.fns,
-      bodies: st.bodies, btext: st.btext, blabels: st.blabels };
+        fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots, temp: st.temp,
+        self_label: st.self_label, end_label: st.end_label, fns: st.fns,
+        bodies: st.bodies, btext: st.btext, blabels: st.blabels };
     { st: st, uid: u }
 };
 
 def next_loc(st: EmitSt) -> StLbl {
     let id = lbl_fresh(arch.arch_loc_label(st.fuid, st.loc));
     st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
-      fuid: st.fuid, loc: st.loc + 1, env: st.env, slots: st.slots, temp: st.temp,
-      self_label: st.self_label, end_label: st.end_label, fns: st.fns,
-      bodies: st.bodies, btext: st.btext, blabels: st.blabels };
+        fuid: st.fuid, loc: st.loc + 1, env: st.env, slots: st.slots, temp: st.temp,
+        self_label: st.self_label, end_label: st.end_label, fns: st.fns,
+        bodies: st.bodies, btext: st.btext, blabels: st.blabels };
     { st: st, label: id }
 };
 
@@ -2701,9 +2697,9 @@ def env_define(st: EmitSt, name: str, kind: str, off: long, label: long, mark: s
     env_index_add(env);
     let env = st.env;
     { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
-      fuid: st.fuid, loc: st.loc, env: env, slots: st.slots, temp: st.temp,
-      self_label: st.self_label, end_label: st.end_label, fns: st.fns,
-      bodies: st.bodies, btext: st.btext, blabels: st.blabels }
+        fuid: st.fuid, loc: st.loc, env: env, slots: st.slots, temp: st.temp,
+        self_label: st.self_label, end_label: st.end_label, fns: st.fns,
+        bodies: st.bodies, btext: st.btext, blabels: st.blabels }
 };
 
 // ── mini type inference (for print dispatch) ───────────────────────────
@@ -3310,17 +3306,17 @@ def uses_math(refs: [str]) -> bool {
         // length-first names of the bulk kernels: y_dot/y_sum 5, y_exp/y_log/
         // y_pow/y_sin/y_cos 5, y_min_of/y_max_of/y_scale/y_axpy 8
         found = (n == 5 && (r == "y_exp" || r == "y_log" || r == "y_pow"
-                            || r == "y_sin" || r == "y_cos" || r == "y_dot"
-                            || r == "y_sum"))
-            || (n == 6 && r == "y_sqrt")
-            || (n == 7 && (r == "y_fbits" || r == "y_bitsf"))
-            || (n == 8 && (r == "y_to_int" || r == "y_min_of" || r == "y_max_of"
-                           || r == "y_scale" || r == "y_axpy"))
-            || (n == 10 && (r == "y_int_trap" || r == "y_len_stop"))
-            // the encoder's own form probes: y_sse_forms, y_sse_flags,
-            // y_test_imm
-            || (n == 11 && (r == "y_sse_forms" || r == "y_sse_flags"))
-            || (n == 10 && r == "y_test_imm");
+            || r == "y_sin" || r == "y_cos" || r == "y_dot"
+            || r == "y_sum"))
+        || (n == 6 && r == "y_sqrt")
+        || (n == 7 && (r == "y_fbits" || r == "y_bitsf"))
+        || (n == 8 && (r == "y_to_int" || r == "y_min_of" || r == "y_max_of"
+            || r == "y_scale" || r == "y_axpy"))
+        || (n == 10 && (r == "y_int_trap" || r == "y_len_stop"))
+        // the encoder's own form probes: y_sse_forms, y_sse_flags,
+        // y_test_imm
+        || (n == 11 && (r == "y_sse_forms" || r == "y_sse_flags"))
+        || (n == 10 && r == "y_test_imm");
         i++;
     };
     found
@@ -3347,14 +3343,14 @@ def name_in(xs: [str], n: str) -> bool {
 // option operators and the `#fmt` builtin -- internal, but they are what
 // is_intrinsic_name tests, so they are in the list.
 let INTRINSICS: [str] = ["print", "syscall", "len", "push", "some", "is_some", "unwrap",
-             "opt$test", "opt$val",
-             "trim", "ord", "byte_at", "chr", "tolong", "tofloat", "tostring", "index_of",
-             "mod",
-             "prepend",
-             "last_index_of", "join", "split", "puts", "eputs", "clock_us",
-             "time_us", "sleep", "heap_used", "keys", "spawn", "fork", "wait_pid",
-             "mutex", "sem", "lock", "try_lock", "post", "wait", "exit", "argv", "range", "typeof", "bytes",
-             "from_bytes", "ptr_addr", "os_call", "jmp_at", "self", "none", "#fmt"];
+    "opt$test", "opt$val",
+    "trim", "ord", "byte_at", "chr", "tolong", "tofloat", "tostring", "index_of",
+    "mod",
+    "prepend",
+    "last_index_of", "join", "split", "puts", "eputs", "clock_us",
+    "time_us", "sleep", "heap_used", "keys", "spawn", "fork", "wait_pid",
+    "mutex", "sem", "lock", "try_lock", "post", "wait", "exit", "argv", "range", "typeof", "bytes",
+    "from_bytes", "ptr_addr", "os_call", "jmp_at", "self", "none", "#fmt"];
 
 // Builtins are resolved by name at the call site, never captured.
 def is_intrinsic_name(n: str) -> bool {
@@ -3841,7 +3837,7 @@ def gen_go(st: EmitSt, node: Node) -> EmitSt {
             // The parser resolved the label to a loop depth (outermost is 0)
             // before rename.y could change the variable's name. A malformed
             // label only reaches here in a program the checker rejects.
-            let depth = tolong(label)!;
+            let depth = tolong(label) !;
             if (depth >= 0 && depth < len(loop_brks)) {
                 if (k == K.kw_break) { target = loop_brks[depth]; }
                 else { target = loop_conts[depth]; };
@@ -3889,9 +3885,9 @@ def gen_str_const(st: EmitSt, s: str) -> EmitSt {
     rod0 += esc_asm(s);
     st.rodata += [rod0];
     st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
-      fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots, temp: st.temp,
-      self_label: st.self_label, end_label: st.end_label, fns: st.fns,
-      bodies: st.bodies, btext: st.btext, blabels: st.blabels };
+        fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots, temp: st.temp,
+        self_label: st.self_label, end_label: st.end_label, fns: st.fns,
+        bodies: st.bodies, btext: st.btext, blabels: st.blabels };
     emit_insn(st, insn.F_LEA_P_R, -1, -1, 1, 0, id, insn.R_RAX, 64)
 };
 
@@ -4009,9 +4005,9 @@ def box_capture(st: EmitSt, name: str) -> EmitSt {
         let boff = (st.slots + 1) * -8;
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, boff, -1);
         let st2 = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
-          fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 1, temp: st.temp,
-          self_label: st.self_label, end_label: st.end_label, fns: st.fns,
-          bodies: st.bodies, btext: st.btext, blabels: st.blabels };
+            fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 1, temp: st.temp,
+            self_label: st.self_label, end_label: st.end_label, fns: st.fns,
+            bodies: st.bodies, btext: st.btext, blabels: st.blabels };
         env_define(st2, name, "box", boff, -1, "", e.typ)
     }
 };
@@ -4228,9 +4224,9 @@ def bind_own(st: EmitSt, name: str, t: Type) -> EmitSt {
     st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, off, -1);
     st = emit_insn(st, insn.F_MOV_I_D, 0, insn.R_RBP, -1, 1, off - 8, -1, 0);
     let st2 = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
-      fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 2, temp: st.temp,
-      self_label: st.self_label, end_label: st.end_label, fns: st.fns,
-      bodies: st.bodies, btext: st.btext, blabels: st.blabels };
+        fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 2, temp: st.temp,
+        self_label: st.self_label, end_label: st.end_label, fns: st.fns,
+        bodies: st.bodies, btext: st.btext, blabels: st.blabels };
     env_define(st2, name, "own", off, -1, "", t)
 };
 
@@ -4284,30 +4280,30 @@ def gen_stmt(st: EmitSt, node: Node) -> EmitSt {
 // stores its buffer there) leaves it != 1, and y_str_app copies. The
 // order is s = s + v's: the old value first, then v.
 def gen_sappend(st: EmitSt, v: Node, var_lbl: long, var_disp: long,
-                cell_lbl: long, cell_disp: long) -> EmitSt {
+    cell_lbl: long, cell_disp: long) -> EmitSt {
     let va = memop(var_lbl, var_disp);
     let ca = memop(cell_lbl, cell_disp);
     st = emit_insn(st, insn.F_MOV_P_R, va[0], va[1], va[2], va[3], va[4],
-                   insn.R_RAX, 64);
+        insn.R_RAX, 64);
     st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_MOV_P_R, ca[0], ca[1], ca[2], ca[3], ca[4],
-                   insn.R_RDX, 64);
+        insn.R_RDX, 64);
     st = emit_insn(st, insn.F_CMP_R_R, insn.R_RDX, 64, insn.R_RAX, 64, 0, 0, 0);
     st = emit_insn(st, insn.F_SETE_R, insn.R_RAX, 8, 0, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_MOVZBQ_R_R, insn.R_RAX, 8, insn.R_RAX, 64, 0, 0, 0);
     st = emit_insn(st, insn.F_MOV_R_P, insn.R_RAX, 64, ca[0], ca[1], ca[2],
-                   ca[3], ca[4]);
+        ca[3], ca[4]);
     st = gen(st, v);
     st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_MOV_P_R, ca[0], ca[1], ca[2], ca[3], ca[4],
-                   insn.R_RAX, 64);
+        insn.R_RAX, 64);
     st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_app"), 0, 0, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_ADD_I_R, 24, insn.R_RSP, 64, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_MOV_R_P, insn.R_RAX, 64, va[0], va[1], va[2],
-                   va[3], va[4]);
+        va[3], va[4]);
     emit_insn(st, insn.F_MOV_R_P, insn.R_RAX, 64, ca[0], ca[1], ca[2], ca[3],
-              ca[4])
+        ca[4])
 };
 
 // A loop body: its value is dropped, so a block body's last statement is
@@ -4436,7 +4432,7 @@ def gen_sliceassign(st: EmitSt, node: SliceAssign) -> EmitSt {
     st = gen(st, node.v);
     st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_CALL_L, lbl_new("y_arr_setslice" + tostring(esz)),
-                   0, 0, 0, 0, 0, 0);
+        0, 0, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_ADD_I_R, 32, insn.R_RSP, 64, 0, 0, 0, 0);
     emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0)
 };
@@ -4624,7 +4620,7 @@ def gen_elem_addr(st: EmitSt, node: Index) -> EmitSt {
     };
     st = emit_insn(st, insn.F_MOV_D_R, insn.R_RAX, -1, 1, 16, -1, insn.R_RAX, 64);
     emit_insn(st, insn.F_LEA_M_R, insn.R_RAX, insn.R_RCX, eascale, 0, -1,
-               insn.R_RAX, 64)
+        insn.R_RAX, 64)
 };
 
 def gen_bin(st: EmitSt, node: Bin) -> EmitSt {
@@ -5267,88 +5263,88 @@ def gen_bin_rest(st: EmitSt, node: Bin) -> EmitSt {
             st
         }
     } else {
-    st = gen(st, node.l);
-    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
-    st = gen(st, node.r);
-    st = emit_insn(st, insn.F_MOV_R_R, insn.R_RAX, 64, insn.R_RCX, 64, 0, 0, 0);
-    st = emit_insn(st, insn.F_POP_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
-    if (op == "+") {
-        emit_insn(st, insn.F_ADD_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0)
-    } else if (op == "-") {
-        emit_insn(st, insn.F_SUB_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0)
-    } else if (op == "*") {
-        emit_insn(st, insn.F_IMUL_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0)
-    } else if (op == "/") {
-        // idiv raises #DE on LONG_MIN / -1 (the quotient does not fit), so
-        // divisor -1 is handled as a negation instead: neg of LONG_MIN
-        // wraps back to LONG_MIN (the language's rule for the whole long
-        // range, NATIVE.md), and every other value negates exactly.
-        st = emit_insn(st, insn.F_TEST_R_R, insn.R_RCX, 64, insn.R_RCX, 64, 0, 0, 0);
-        st = emit_insn(st, insn.F_JZ_L, lbl_new("y_div_zero"), 0, 0, 0, 0, 0, 0);
-        let d1 = next_loc(st);
-        st = d1.st;
-        let d2 = next_loc(st);
-        st = d2.st;
-        st = emit_insn(st, insn.F_CMP_I_R, -1, insn.R_RCX, 64, 0, 0, 0, 0);
-        st = emit_insn(st, insn.F_JNE_L, d1.label, 0, 0, 0, 0, 0, 0);
-        st = emit_insn(st, insn.F_NEG_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
-        st = emit_insn(st, insn.F_JMP_L, d2.label, 0, 0, 0, 0, 0, 0);
-        st = emit_label(st, d1.label);
-        st = emit_insn(st, insn.F_CQO, 0, 0, 0, 0, 0, 0, 0);
-        st = emit_insn(st, insn.F_IDIV_R, insn.R_RCX, 64, 0, 0, 0, 0, 0);
-        emit_label(st, d2.label)
-    } else if (op == "%") {
-        // Same #DE: x % -1 is 0 for every x (see the `/` note).
-        st = emit_insn(st, insn.F_TEST_R_R, insn.R_RCX, 64, insn.R_RCX, 64, 0, 0, 0);
-        st = emit_insn(st, insn.F_JZ_L, lbl_new("y_div_zero"), 0, 0, 0, 0, 0, 0);
-        let m1 = next_loc(st);
-        st = m1.st;
-        let m2 = next_loc(st);
-        st = m2.st;
-        st = emit_insn(st, insn.F_CMP_I_R, -1, insn.R_RCX, 64, 0, 0, 0, 0);
-        st = emit_insn(st, insn.F_JNE_L, m1.label, 0, 0, 0, 0, 0, 0);
-        st = emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
-        st = emit_insn(st, insn.F_JMP_L, m2.label, 0, 0, 0, 0, 0, 0);
-        st = emit_label(st, m1.label);
-        st = emit_insn(st, insn.F_CQO, 0, 0, 0, 0, 0, 0, 0);
-        st = emit_insn(st, insn.F_IDIV_R, insn.R_RCX, 64, 0, 0, 0, 0, 0);
-        st = emit_insn(st, insn.F_MOV_R_R, insn.R_RDX, 64, insn.R_RAX, 64, 0, 0, 0);
-        emit_label(st, m2.label)
-    } else if (op == "<") {
-        st = emit_insn(st, insn.F_CMP_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0);
-        st = emit_insn(st, insn.F_SETL_R, insn.R_RAX, 8, 0, 0, 0, 0, 0);
-        emit_insn(st, insn.F_MOVZBQ_R_R, insn.R_RAX, 8, insn.R_RAX, 64, 0, 0, 0)
-    } else if (op == ">") {
-        st = emit_insn(st, insn.F_CMP_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0);
-        st = emit_insn(st, insn.F_SETG_R, insn.R_RAX, 8, 0, 0, 0, 0, 0);
-        emit_insn(st, insn.F_MOVZBQ_R_R, insn.R_RAX, 8, insn.R_RAX, 64, 0, 0, 0)
-    } else if (op == "<=") {
-        st = emit_insn(st, insn.F_CMP_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0);
-        st = emit_insn(st, insn.F_SETLE_R, insn.R_RAX, 8, 0, 0, 0, 0, 0);
-        emit_insn(st, insn.F_MOVZBQ_R_R, insn.R_RAX, 8, insn.R_RAX, 64, 0, 0, 0)
-    } else if (op == ">=") {
-        st = emit_insn(st, insn.F_CMP_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0);
-        st = emit_insn(st, insn.F_SETGE_R, insn.R_RAX, 8, 0, 0, 0, 0, 0);
-        emit_insn(st, insn.F_MOVZBQ_R_R, insn.R_RAX, 8, insn.R_RAX, 64, 0, 0, 0)
-    } else if (op == "==") {
-        st = emit_insn(st, insn.F_CMP_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0);
-        st = emit_insn(st, insn.F_SETE_R, insn.R_RAX, 8, 0, 0, 0, 0, 0);
-        emit_insn(st, insn.F_MOVZBQ_R_R, insn.R_RAX, 8, insn.R_RAX, 64, 0, 0, 0)
-    } else if (op == "!=") {
-        st = emit_insn(st, insn.F_CMP_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0);
-        st = emit_insn(st, insn.F_SETNE_R, insn.R_RAX, 8, 0, 0, 0, 0, 0);
-        emit_insn(st, insn.F_MOVZBQ_R_R, insn.R_RAX, 8, insn.R_RAX, 64, 0, 0, 0)
-    } else if (op == "&") {
-        emit_insn(st, insn.F_AND_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0)
-    } else if (op == "|") {
-        emit_insn(st, insn.F_OR_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0)
-    } else if (op == "^") {
-        emit_insn(st, insn.F_XOR_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0)
-    } else {
-        st
-    }
-    // No &&/|| arms here: gen_bin routes those to gen_logic (lazy jumps)
-    // BEFORE calling this, so an eager and/or would be dead code.
+        st = gen(st, node.l);
+        st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+        st = gen(st, node.r);
+        st = emit_insn(st, insn.F_MOV_R_R, insn.R_RAX, 64, insn.R_RCX, 64, 0, 0, 0);
+        st = emit_insn(st, insn.F_POP_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+        if (op == "+") {
+            emit_insn(st, insn.F_ADD_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0)
+        } else if (op == "-") {
+            emit_insn(st, insn.F_SUB_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0)
+        } else if (op == "*") {
+            emit_insn(st, insn.F_IMUL_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0)
+        } else if (op == "/") {
+            // idiv raises #DE on LONG_MIN / -1 (the quotient does not fit), so
+            // divisor -1 is handled as a negation instead: neg of LONG_MIN
+            // wraps back to LONG_MIN (the language's rule for the whole long
+            // range, NATIVE.md), and every other value negates exactly.
+            st = emit_insn(st, insn.F_TEST_R_R, insn.R_RCX, 64, insn.R_RCX, 64, 0, 0, 0);
+            st = emit_insn(st, insn.F_JZ_L, lbl_new("y_div_zero"), 0, 0, 0, 0, 0, 0);
+            let d1 = next_loc(st);
+            st = d1.st;
+            let d2 = next_loc(st);
+            st = d2.st;
+            st = emit_insn(st, insn.F_CMP_I_R, -1, insn.R_RCX, 64, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_JNE_L, d1.label, 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_NEG_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_JMP_L, d2.label, 0, 0, 0, 0, 0, 0);
+            st = emit_label(st, d1.label);
+            st = emit_insn(st, insn.F_CQO, 0, 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_IDIV_R, insn.R_RCX, 64, 0, 0, 0, 0, 0);
+            emit_label(st, d2.label)
+        } else if (op == "%") {
+            // Same #DE: x % -1 is 0 for every x (see the `/` note).
+            st = emit_insn(st, insn.F_TEST_R_R, insn.R_RCX, 64, insn.R_RCX, 64, 0, 0, 0);
+            st = emit_insn(st, insn.F_JZ_L, lbl_new("y_div_zero"), 0, 0, 0, 0, 0, 0);
+            let m1 = next_loc(st);
+            st = m1.st;
+            let m2 = next_loc(st);
+            st = m2.st;
+            st = emit_insn(st, insn.F_CMP_I_R, -1, insn.R_RCX, 64, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_JNE_L, m1.label, 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
+            st = emit_insn(st, insn.F_JMP_L, m2.label, 0, 0, 0, 0, 0, 0);
+            st = emit_label(st, m1.label);
+            st = emit_insn(st, insn.F_CQO, 0, 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_IDIV_R, insn.R_RCX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_MOV_R_R, insn.R_RDX, 64, insn.R_RAX, 64, 0, 0, 0);
+            emit_label(st, m2.label)
+        } else if (op == "<") {
+            st = emit_insn(st, insn.F_CMP_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0);
+            st = emit_insn(st, insn.F_SETL_R, insn.R_RAX, 8, 0, 0, 0, 0, 0);
+            emit_insn(st, insn.F_MOVZBQ_R_R, insn.R_RAX, 8, insn.R_RAX, 64, 0, 0, 0)
+        } else if (op == ">") {
+            st = emit_insn(st, insn.F_CMP_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0);
+            st = emit_insn(st, insn.F_SETG_R, insn.R_RAX, 8, 0, 0, 0, 0, 0);
+            emit_insn(st, insn.F_MOVZBQ_R_R, insn.R_RAX, 8, insn.R_RAX, 64, 0, 0, 0)
+        } else if (op == "<=") {
+            st = emit_insn(st, insn.F_CMP_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0);
+            st = emit_insn(st, insn.F_SETLE_R, insn.R_RAX, 8, 0, 0, 0, 0, 0);
+            emit_insn(st, insn.F_MOVZBQ_R_R, insn.R_RAX, 8, insn.R_RAX, 64, 0, 0, 0)
+        } else if (op == ">=") {
+            st = emit_insn(st, insn.F_CMP_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0);
+            st = emit_insn(st, insn.F_SETGE_R, insn.R_RAX, 8, 0, 0, 0, 0, 0);
+            emit_insn(st, insn.F_MOVZBQ_R_R, insn.R_RAX, 8, insn.R_RAX, 64, 0, 0, 0)
+        } else if (op == "==") {
+            st = emit_insn(st, insn.F_CMP_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0);
+            st = emit_insn(st, insn.F_SETE_R, insn.R_RAX, 8, 0, 0, 0, 0, 0);
+            emit_insn(st, insn.F_MOVZBQ_R_R, insn.R_RAX, 8, insn.R_RAX, 64, 0, 0, 0)
+        } else if (op == "!=") {
+            st = emit_insn(st, insn.F_CMP_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0);
+            st = emit_insn(st, insn.F_SETNE_R, insn.R_RAX, 8, 0, 0, 0, 0, 0);
+            emit_insn(st, insn.F_MOVZBQ_R_R, insn.R_RAX, 8, insn.R_RAX, 64, 0, 0, 0)
+        } else if (op == "&") {
+            emit_insn(st, insn.F_AND_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0)
+        } else if (op == "|") {
+            emit_insn(st, insn.F_OR_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0)
+        } else if (op == "^") {
+            emit_insn(st, insn.F_XOR_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0)
+        } else {
+            st
+        }
+        // No &&/|| arms here: gen_bin routes those to gen_logic (lazy jumps)
+        // BEFORE calling this, so an eager and/or would be dead code.
     }
 };
 
@@ -7110,9 +7106,9 @@ def gen_forrange(st: EmitSt, node: ForRange) -> EmitSt {
     let voff = (st.slots + 1) * -8;
     let loff = (st.slots + 2) * -8;
     st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
-      fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 2, temp: st.temp,
-      self_label: st.self_label, end_label: st.end_label, fns: st.fns,
-      bodies: st.bodies, btext: st.btext, blabels: st.blabels };
+        fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 2, temp: st.temp,
+        self_label: st.self_label, end_label: st.end_label, fns: st.fns,
+        bodies: st.bodies, btext: st.btext, blabels: st.blabels };
     st = gen(st, node.hi);
     st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, loff, -1);
     st = gen(st, node.lo);
@@ -7177,9 +7173,9 @@ def gen_foreach(st: EmitSt, node: Foreach) -> EmitSt {
     let aoff = (st.slots + 2) * -8;
     let ioff = (st.slots + 3) * -8;
     st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
-      fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 3, temp: st.temp,
-      self_label: st.self_label, end_label: st.end_label, fns: st.fns,
-      bodies: st.bodies, btext: st.btext, blabels: st.blabels };
+        fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 3, temp: st.temp,
+        self_label: st.self_label, end_label: st.end_label, fns: st.fns,
+        bodies: st.bodies, btext: st.btext, blabels: st.blabels };
     let elt: Type = infer(st, node.iter);
     let eltyp: Type = normtype({ k: K.tunk });
     if (elt.k == K.tarr) {
@@ -8168,9 +8164,9 @@ def gen_closure_binding(st: EmitSt, name: str, func: Func, caps: [str]) -> EmitS
     let coff = (st.slots + 1) * -8;
     st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, coff, -1);
     let st3 = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
-      fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 1,
-      temp: st.temp, self_label: st.self_label, end_label: st.end_label,
-      fns: st.fns, bodies: st.bodies, btext: st.btext, blabels: st.blabels };
+        fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 1,
+        temp: st.temp, self_label: st.self_label, end_label: st.end_label,
+        fns: st.fns, bodies: st.bodies, btext: st.btext, blabels: st.blabels };
     st3 = env_define(st3, name, "closure", coff, -1, "", func_type_in(st3, func));
     box_bound(st3, name)
 };
@@ -8296,9 +8292,9 @@ def bind_decl(st: EmitSt, name: str, t: Type) -> EmitSt {
         let off = (st.slots + 1) * -8;
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, off, -1);
         let st2 = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
-          fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 1, temp: st.temp,
-          self_label: st.self_label, end_label: st.end_label, fns: st.fns,
-          bodies: st.bodies, btext: st.btext, blabels: st.blabels };
+            fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 1, temp: st.temp,
+            self_label: st.self_label, end_label: st.end_label, fns: st.fns,
+            bodies: st.bodies, btext: st.btext, blabels: st.blabels };
         st2 = env_define(st2, name, "local", off, -1, "", t);
         box_bound(st2, name)
     }
@@ -9905,7 +9901,7 @@ def elem_store_rdx_const(st: EmitSt, esz: long, base: long, k: long) -> EmitSt {
         emit_insn(st, insn.F_MOVB_R_D, insn.R_RDX, 8, insn.R_R11, -1, 1, k, -1)
     } else {
         emit_insn(st, insn.F_MOV_R_D, insn.R_RDX, 64, insn.R_R11, -1, 1,
-                  k * 8, -1)
+            k * 8, -1)
     }
 };
 
@@ -10337,8 +10333,8 @@ def gen_tolong(st: EmitSt, node: Call) -> EmitSt {
     let targs: [Node] = node.args;
     let t = infer(st, targs[0]);
     let lbl = if (t.k == K.tfloat) { "y_f2l" }
-              else if (t.k == K.tbigint) { "y_bigint_to_long" }
-              else { "y_str_tolong" };
+    else if (t.k == K.tbigint) { "y_bigint_to_long" }
+    else { "y_str_tolong" };
     st = gen_push_args(st, node.args);
     st = emit_insn(st, insn.F_CALL_L, lbl_new(lbl), 0, 0, 0, 0, 0, 0);
     emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0)
@@ -10430,7 +10426,7 @@ def gen_fmt(st: EmitSt, node: Call) -> EmitSt {
     // no spec to read. The checker rejects the program before here, so this
     // only keeps the emitter from casting a member it does not hold.
     let sp = types.leaf_of(fargs[1]);
-    let spec: str = if (sp == none) { "" } else { sp!.v };
+    let spec: str = if (sp == none) { "" } else { sp !.v };
     let ts = n_call1("tostring", a0, node.line, node.col);
     if (spec == "") {
         gen_tostring(st, ts)
@@ -10754,7 +10750,6 @@ def gen_sleep(st: EmitSt, node: Call) -> EmitSt {
     gen_helper1(st, "y_sleep")
 };
 
-
 def gen_exit(st: EmitSt, node: Call) -> EmitSt {
     // exit(code): terminate the process with the exit-code syscall, THROUGH the
     // arch module's y_os_exit rather than inlined.
@@ -10838,9 +10833,9 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
     loop_brks = no_brks;
     loop_conts = no_conts;
     let f: EmitSt = { ir: [], txt: [], rodata: st.rodata, uid: st.uid,
-      fuid: fuid, loc: 1, env: [], slots: 0, temp: 0,
-      self_label: label, end_label: lbl_new(arch.arch_loc_label(fuid, 0)),
-      fns: st.fns, bodies: st.bodies, btext: st.btext, blabels: st.blabels };
+        fuid: fuid, loc: 1, env: [], slots: 0, temp: 0,
+        self_label: label, end_label: lbl_new(arch.arch_loc_label(fuid, 0)),
+        fns: st.fns, bodies: st.bodies, btext: st.btext, blabels: st.blabels };
     // The names nested functions capture (see box_names / box_bound).
     f = env_define(f, "", "frame", 0, -1, "", type_node({ k: K.tnone }));
     // This function's type, for the conversions at its returns and its
@@ -10998,9 +10993,9 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
     f.blabels += lname(label);
     let blabels = f.blabels;
     { ir: st.ir, txt: st.txt, rodata: f.rodata, uid: f.uid,
-      fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots, temp: st.temp,
-      self_label: st.self_label, end_label: st.end_label, fns: st.fns,
-      bodies: bodies, btext: btext, blabels: blabels }
+        fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots, temp: st.temp,
+        self_label: st.self_label, end_label: st.end_label, fns: st.fns,
+        bodies: bodies, btext: btext, blabels: blabels }
 };
 
 // Build a tfunc type from a func node (params have annotations — checked).
@@ -11011,9 +11006,9 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
 // because a call's result type decides e.g. whether `+` must stringify.
 def infer_fn_ret(st: EmitSt, func: Func) -> Type {
     let f: EmitSt = { ir: [], txt: [], rodata: st.rodata, uid: st.uid,
-      fuid: 0, loc: 1, env: [], slots: 0, temp: 0,
-      self_label: -1, end_label: -1, fns: st.fns, bodies: st.bodies,
-      btext: st.btext, blabels: st.blabels };
+        fuid: 0, loc: 1, env: [], slots: 0, temp: 0,
+        self_label: -1, end_label: -1, fns: st.fns, bodies: st.bodies,
+        btext: st.btext, blabels: st.blabels };
     let params: [str] = func.params;
     let ptypes: [Type] = func.ptypes;
     let n = len(params);
@@ -11181,9 +11176,9 @@ def decl_name(d: Decl) -> str {
 // so two units' globals never share one.
 def global_entries(st: EmitSt, gdecls: [Node], gbase: long) -> [Sym] {
     let f: EmitSt = { ir: [], txt: [], rodata: st.rodata, uid: st.uid,
-      fuid: 0, loc: 1, env: [], slots: 0, temp: 0,
-      self_label: -1, end_label: -1, fns: st.fns, bodies: st.bodies,
-      btext: st.btext, blabels: st.blabels };
+        fuid: 0, loc: 1, env: [], slots: 0, temp: 0,
+        self_label: -1, end_label: -1, fns: st.fns, bodies: st.bodies,
+        btext: st.btext, blabels: st.blabels };
     let out: [Sym] = [];
     gdecls.foreach((e, i) => {
         let d: Decl = e;
@@ -11279,7 +11274,7 @@ def fix_fn_types(st: EmitSt, hdefs: [FnDef], only: [str]) -> [Sym] {
         }
         if (redo) {
             out += { name: fe0.name, label: fe0.label,
-              typ: type_node({ k: K.tfunc, args: fn_ptypes(d.func), ret: infer_fn_ret(st, d.func) }) };
+                typ: type_node({ k: K.tfunc, args: fn_ptypes(d.func), ret: infer_fn_ret(st, d.func) }) };
         } else {
             out += fe0;
         };
@@ -11378,7 +11373,7 @@ def unit_empty(name: str) -> Unit {
     let gs: [str] = [];
     let ds: [DflCode] = [];
     { name: name, files: fs, exports: xs, init: "", bodies: bs, btext: bt,
-      blob: [], labels: ls, refs: fr, rodata: rs, globals: gs, dfl: ds }
+        blob: [], labels: ls, refs: fr, rodata: rs, globals: gs, dfl: ds }
 };
 
 // No externs at all (a std unit compiled on its own).
@@ -11608,9 +11603,9 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
         // unit's uids count from its base
         let st = st_new();
         st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: base + 1,
-          fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots, temp: st.temp,
-          self_label: st.self_label, end_label: st.end_label, fns: st.fns,
-          bodies: st.bodies, btext: st.btext, blabels: st.blabels };
+            fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots, temp: st.temp,
+            self_label: st.self_label, end_label: st.end_label, fns: st.fns,
+            bodies: st.bodies, btext: st.btext, blabels: st.blabels };
         st = next_uid(st).st;
         let hsyms: [Sym] = [];
         let hids: [long] = [];
@@ -11642,9 +11637,9 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
         ids0 += hids;
         ids0 += xids;
         st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
-          fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots, temp: st.temp,
-          self_label: st.self_label, end_label: st.end_label,
-          fns: fntab_of(fns0, ids0), bodies: st.bodies, btext: st.btext, blabels: st.blabels };
+            fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots, temp: st.temp,
+            self_label: st.self_label, end_label: st.end_label,
+            fns: fntab_of(fns0, ids0), bodies: st.bodies, btext: st.btext, blabels: st.blabels };
         // Fill in the return type of every unannotated def, so call sites
         // know what a call yields; then type the globals with those, and
         // redo the defs that read a global (they now know its type).
@@ -11653,9 +11648,9 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
         fns1 += fixed1;
         fns1 += xfns;
         st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
-          fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots, temp: st.temp,
-          self_label: st.self_label, end_label: st.end_label,
-          fns: fntab_of(fns1, ids0), bodies: st.bodies, btext: st.btext, blabels: st.blabels };
+            fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots, temp: st.temp,
+            self_label: st.self_label, end_label: st.end_label,
+            fns: fntab_of(fns1, ids0), bodies: st.bodies, btext: st.btext, blabels: st.blabels };
         let gl = app_cells(global_entries(st, gdecls, base), ast3.stmts);
         let fixedfns: [Sym] = [];
         fixedfns += fixed1;
@@ -11667,10 +11662,10 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
         idsA += gids;
         if (len(gl) > 0) {
             st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
-              fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots, temp: st.temp,
-              self_label: st.self_label, end_label: st.end_label,
-              fns: fntab_of(fixedfns, idsA), bodies: st.bodies,
-              btext: st.btext, blabels: st.blabels };
+                fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots, temp: st.temp,
+                self_label: st.self_label, end_label: st.end_label,
+                fns: fntab_of(fixedfns, idsA), bodies: st.bodies,
+                btext: st.btext, blabels: st.blabels };
             let fixed2 = fix_fn_types(st, hdefs, gnames);
             fixedfns = [];
             fixedfns += fixed2;
@@ -11678,10 +11673,10 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
             fixedfns += gl;
         }
         st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
-          fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots, temp: st.temp,
-          self_label: st.self_label, end_label: st.end_label,
-          fns: fntab_of(fixedfns, idsA), bodies: st.bodies,
-          btext: st.btext, blabels: st.blabels };
+            fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots, temp: st.temp,
+            self_label: st.self_label, end_label: st.end_label,
+            fns: fntab_of(fixedfns, idsA), bodies: st.bodies,
+            btext: st.btext, blabels: st.blabels };
         // emit each hoisted body. A ndef has none: its label names
         // assembly that is already in the output, so emitting anything under
         // that label would duplicate it.
@@ -11771,9 +11766,9 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
             brefs += [ir_refs(ub)];
         });
         let unit: Unit = { name: name, files: origin.files, exports: exports,
-          init: init, bodies: ubodies, btext: ubtext, blob: [],
-          labels: blabels, refs: brefs, rodata: st.rodata, globals: glabels,
-          dfl: udfl };
+            init: init, bodies: ubodies, btext: ubtext, blob: [],
+            labels: blabels, refs: brefs, rodata: st.rodata, globals: glabels,
+            dfl: udfl };
         { ok: true, errors: errors, warnings: warnings, times: times, unit: unit }
     }
 };
@@ -12919,8 +12914,8 @@ def unit_read(cur: Cursor, name: str, bound: bool) -> Unit {
     };
     let globals = pack_get_strs(cur);
     { name: name, files: files, exports: xs, init: init, bodies: [],
-      btext: btext, blob: blob, labels: labels, refs: refs, rodata: rodata,
-      globals: globals, dfl: dfl }
+        btext: btext, blob: blob, labels: labels, refs: refs, rodata: rodata,
+        globals: globals, dfl: dfl }
 };
 
 // The units `names` from a pack, in that order; [] for a pack of another
@@ -12990,7 +12985,7 @@ def unit_unobj(text: str, key: str) -> { ok: bool, unit: Unit } {
             let nm = pack_get(cur);  // checksum covers it and the fields
             let ul = pack_len(cur);
             let body_end = cur.p + ul;   // where unit_read starts, once the
-                                         // checksum has been checked
+            // checksum has been checked
             // the checksum field must be there (one byte at least), so an
             // object written before this one is rebuilt rather than read at a
             // byte past its end
@@ -13112,10 +13107,10 @@ def emit_program(ast: Block, nr: Resolved, debug: bool, wlevel: long, std: [Unit
         let parts = link_units(std, deps, r.unit);
         let pr = phase_end(times, "asm_parts", pt, ph);
         { ok: true, asm: parts, errors: r.errors, warnings: r.warnings,
-          times: pr.times }
+            times: pr.times }
     } else {
         { ok: false, asm: [], errors: r.errors, warnings: r.warnings,
-          times: times }
+            times: times }
     }
 };
 

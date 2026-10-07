@@ -56,7 +56,7 @@ def exec(cmd: str) -> long {
 // Decode wait(2) status: low 7 bits are the terminating signal
 // (0 for a normal exit), next 8 bits the exit code.
 def exit_status(raw: long) -> long {
-    if (raw % 128 == 0) { (raw / 256) % 256 } else { 0 - 1 }
+    if (raw % 128 == 0) {(raw / 256) % 256 } else { 0 - 1 }
 };
 
 // ── a child's stdio: popen, pwrite, pread, pclose ────────────────────────

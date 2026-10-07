@@ -1,10 +1,11 @@
 // scan.y against the compiler's own lexer, over every .y file in the tree.
 //
-// This is the property that makes scan.y usable as a highlighter's source: the
-// two are independent classifiers, and if they disagree about where a token
-// BEGINS then either the highlighting is wrong or the parse is, and both are
-// bugs. Comments are the one region where they must differ -- tokenize discards
-// them -- so they are filtered out before comparing.
+// scan.y is now an ADAPTER over lexer.tokenize_lsp -- one scanner, not two --
+// so this no longer checks that two implementations agree. It checks the part
+// that is still a decision: the adapter's KIND (a keyword, a contextual word,
+// a char, a byte literal, a comment) and the span it reports for each token.
+// Comments are the one region where the compiler's own stream has nothing --
+// tokenize discards them -- so they are filtered out before comparing.
 //
 // The file list is passed in argv by test-agree.sh, because std has no
 // recursive directory walk; the shell finds the files.

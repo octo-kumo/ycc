@@ -161,7 +161,7 @@ def by_name(idx: FileIdx) -> { str => [IdxDecl] } {
         // than quietly unwrapping.
         let got = out[d.name];
         let cur: [IdxDecl] = [];
-        if is_some(got) { cur = got!; };
+        if is_some(got) { cur = got !; };
         cur += d;
         out[d.name] = cur;
         i = i + 1;
@@ -178,7 +178,7 @@ def find_decl_in(idx: FileIdx, cands: [IdxDecl], name: str, line: long, ch: long
             if (best == none) {
                 best = some(d);
             } else {
-                let b: IdxDecl = best!;
+                let b: IdxDecl = best !;
                 if (better(d, b, line, ch)) { best = some(d); };
             }
         };
@@ -193,7 +193,7 @@ def find_decl_in(idx: FileIdx, cands: [IdxDecl], name: str, line: long, ch: long
 def resolve_decl(byname: { str => [IdxDecl] }, idx: FileIdx, name: str, line: long, ch: long) -> IdxDecl? {
     let got = byname[name];
     let cands: [IdxDecl] = [];
-    if is_some(got) { cands = got!; };
+    if is_some(got) { cands = got !; };
     find_decl_in(idx, cands, name, line, ch)
 }
 
@@ -209,7 +209,7 @@ def decl_at(byname: { str => [IdxDecl] }, name: str, line: long, ch: long, len2:
     let out: IdxDecl? = none;
     let got = byname[name];
     if is_some(got) {
-        let cands = got!;
+        let cands = got !;
         let i = 0;
         while (i < len(cands) && out == none) {
             let d = cands[i];
@@ -239,7 +239,7 @@ def find_decl_named(idx: FileIdx, name: str) -> IdxDecl? {
             if (best == none) {
                 best = some(d);
             } else {
-                let b: IdxDecl = best!;
+                let b: IdxDecl = best !;
                 if (d.depth < b.depth || (d.depth == b.depth && d.line < b.line)) { best = some(d); };
             };
         };
@@ -304,6 +304,6 @@ def with_prefix(ds: [IdxDecl], prefix: str) -> [IdxDecl] {
 }
 
 export {
-  Hit, ident_at, in_scope, better, find_decl, find_decl_in, find_decl_named,
-  by_name, candidates, resolve_decl, decl_at, visible, with_prefix
+    Hit, ident_at, in_scope, better, find_decl, find_decl_in, find_decl_named,
+    by_name, candidates, resolve_decl, decl_at, visible, with_prefix
 };

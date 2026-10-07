@@ -626,43 +626,43 @@ def ldexp(x: float, e: long) -> float {
         if (r == 0.0 || is_inf(r)) {
             r
         } else {
-        // What is left fits the exponent field as long as the answer stays
-        // NORMAL; otherwise the mantissa has to shift too, and one doubling at a
-        // time is how that is exact (this is also the subnormal-input case: a
-        // subnormal has field 0, so every step of it is a doubling).
-        let f = exp_field(r);
-        if (f == 0 || f + k < 1) {
-            let step = if (k < 0) { 0 - 1 } else { 1 };
-            let rest = k;
-            while (rest != 0) {
-                r = r * if (step < 0) { 0.5 } else { 2.0 };
-                rest = rest - step;
-            }
-        } else if (f + k >= 2047) {
-            // Field 2047 is inf/NaN, so the answer has left the range: an
-            // infinity carrying r's sign. This arm exists for the same reason as
-            // the check above, and for the case that one does not cover -- r can
-            // still be finite here while the answer is not, which is exactly
-            // ldexp(2.47, 1024): the big step leaves 1.11e308, the field is
-            // 2046, and adding k = 2 carries it to 2047. Shifted as bits that
-            // is a long overflow, which wraps and comes back as a NEGATIVE
-            // NaN. Only k > 0 reaches here, since f is at most 2046.
-            //
-            // Assigned rather than returned: this chain's arms all write `r` and
-            // the block's value is thrown away, which the compiler says so --
-            // "the result of '-' is not used" -- and it was right.
-            r = if (r < 0.0) { 0.0 - inf } else { inf };
-        } else if (k != 0) {
-            // k * 2^52 added to the bits is k added to the exponent FIELD, so
-            // the sign comes off first (a negative pattern would put a 1 at the
-            // top of the field and scale the wrong way) and goes back on after.
-            let b = fbits(r);
-            let neg = b < 0;
-            let u = without_sign(b);
-            let shifted = u + k * 4503599627370496;
-            r = bitsf(if (neg) { shifted + sign_bit() } else { shifted });
-        };
-        r
+            // What is left fits the exponent field as long as the answer stays
+            // NORMAL; otherwise the mantissa has to shift too, and one doubling at a
+            // time is how that is exact (this is also the subnormal-input case: a
+            // subnormal has field 0, so every step of it is a doubling).
+            let f = exp_field(r);
+            if (f == 0 || f + k < 1) {
+                let step = if (k < 0) { 0 - 1 } else { 1 };
+                let rest = k;
+                while (rest != 0) {
+                    r = r * if (step < 0) { 0.5 } else { 2.0 };
+                    rest = rest - step;
+                }
+            } else if (f + k >= 2047) {
+                // Field 2047 is inf/NaN, so the answer has left the range: an
+                // infinity carrying r's sign. This arm exists for the same reason as
+                // the check above, and for the case that one does not cover -- r can
+                // still be finite here while the answer is not, which is exactly
+                // ldexp(2.47, 1024): the big step leaves 1.11e308, the field is
+                // 2046, and adding k = 2 carries it to 2047. Shifted as bits that
+                // is a long overflow, which wraps and comes back as a NEGATIVE
+                // NaN. Only k > 0 reaches here, since f is at most 2046.
+                //
+                // Assigned rather than returned: this chain's arms all write `r` and
+                // the block's value is thrown away, which the compiler says so --
+                // "the result of '-' is not used" -- and it was right.
+                r = if (r < 0.0) { 0.0 - inf } else { inf };
+            } else if (k != 0) {
+                // k * 2^52 added to the bits is k added to the exponent FIELD, so
+                // the sign comes off first (a negative pattern would put a 1 at the
+                // top of the field and scale the wrong way) and goes back on after.
+                let b = fbits(r);
+                let neg = b < 0;
+                let u = without_sign(b);
+                let shifted = u + k * 4503599627370496;
+                r = bitsf(if (neg) { shifted + sign_bit() } else { shifted });
+            };
+            r
         }
     }
 };
@@ -1465,7 +1465,7 @@ def rem_pio2(x: float, n: long) -> float {
     let p1h = split_hi(pio2_1);
     let p1th = split_hi(pio2_1t);
     let err = prod_err_s(nh, nl, p1h, split_lo(pio2_1, p1h), p1)
-            + prod_err_s(nh, nl, p1th, split_lo(pio2_1t, p1th), p1t);
+    + prod_err_s(nh, nl, p1th, split_lo(pio2_1t, p1th), p1t);
     ((((x - p1) - p1t) - p2) - p2t) - err
 };
 
@@ -2022,9 +2022,9 @@ def tan(x: float) -> float {
         let sc = sin_cos_k(rem_pio2(x, n));
         let q = quadrant(n);
         let sn = if (q == 0) { sc[0] } else if (q == 1) { sc[1] }
-            else if (q == 2) { 0.0 - sc[0] } else { 0.0 - sc[1] };
+        else if (q == 2) { 0.0 - sc[0] } else { 0.0 - sc[1] };
         let cs = if (q == 0) { sc[1] } else if (q == 1) { 0.0 - sc[0] }
-            else if (q == 2) { 0.0 - sc[1] } else { sc[0] };
+        else if (q == 2) { 0.0 - sc[1] } else { sc[0] };
         if (cs == 0.0) { if (sn > 0.0) { inf } else { 0.0 - inf } } else { sn / cs }
     }
 };
@@ -2696,7 +2696,7 @@ def pow_pos(x: float, y: float) -> float {
     let u = y * inv_ln2;
     let p = u * l;
     let q = prod_err(u, l, p) + u * log2_lo
-        + l * (prod_err(y, inv_ln2, u) + y * inv_ln2_lo);
+    + l * (prod_err(y, inv_ln2, u) + y * inv_ln2_lo);
     exp2_corr(p, q)
 };
 
@@ -2763,7 +2763,6 @@ def pow(x: float, y: float) -> float {
     pow_asm(x, y)
 };
 
-
 // ── random numbers ──────────────────────────────────────────────────────────
 //
 // The state is a `[long]` the CALLER owns, so two streams cannot collide by
@@ -2821,7 +2820,7 @@ def splitmix64(state: [long]) -> long {
 // out there in this module merely zeroes; a rotate was the one that died.
 def rotl(x: long, k: long) -> long {
     let r = k & 63;
-    if (r == 0) { x } else { (x << r) | (x >>> (64 - r)) }
+    if (r == 0) { x } else {(x << r) | (x >>> (64 - r)) }
 };
 
 // Fill a four-element state from one seed with SplitMix64, the standard way: all

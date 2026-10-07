@@ -31,7 +31,13 @@
 
 import json;
 
+// native.y reads AND WRITES `res_target` (the one target global) and imports
+// nothing for it: it is the program's job, and `ycc.y` does it -- first, so
+// the binding is spliced before any reader. The server is a second program
+// that path-imports native.y, so it must do the same, in the same order.
+import wintgt from "../../y/target.y";
 import native from "../../y/native.y";
+import fmt from "./fmt.y";
 import rpc from "./rpc.y";
 import serve from "./serve.y";
 import dispatch from "./dispatch.y";
@@ -65,19 +71,21 @@ const FD_LOG = 2;
 // Options, from argv: the workspace root, the std pack, and the warning level.
 // These match `ycc`'s own flags where they overlap, so a user configures the
 // editor and the command line the same way.
-type YsOpts = { root: str, pack_out: str, use_pack: bool, wlevel: long };
+type YsOpts = { root: str, pack_out: str, use_pack: bool, wlevel: long, fmt_file: str };
 
 def parse_opts(av: [str]) -> YsOpts {
     let root = "";
     let pack_out = "";
     let use_pack = true;
     let wlevel = 0;
+    let fmt_file = "";
     let i = 1;
     while (i < len(av)) {
         let a = av[i];
         if (a == "--root" && i + 1 < len(av)) { root = av[i + 1]; i = i + 2; }
         else if (a == "--std-pack" && i + 1 < len(av)) { pack_out = av[i + 1]; i = i + 2; }
         else if (a == "--std-src") { use_pack = false; i = i + 1; }
+        else if (a == "--fmt" && i + 1 < len(av)) { fmt_file = av[i + 1]; i = i + 2; }
         else if (a == "-W" || a == "--wlevel") { wlevel = 1; i = i + 1; }
         else if (a == "--help" || a == "-h") { yserve_usage(); syscall(60, 0); }
         else { i = i + 1; }
@@ -86,7 +94,7 @@ def parse_opts(av: [str]) -> YsOpts {
     // a single-file editor wants and what a workspace client that omits
     // rootUri effectively asks for.
     if (root == "") { root = fs.cwd(); }
-    let o: YsOpts = { root: root, pack_out: pack_out, use_pack: use_pack, wlevel: wlevel };
+    let o: YsOpts = { root: root, pack_out: pack_out, use_pack: use_pack, wlevel: wlevel, fmt_file: fmt_file };
     o
 }
 
@@ -97,7 +105,8 @@ def yserve_usage() -> long {
         + "  --root DIR      the workspace root imports resolve against (default: cwd)\n"
         + "  --std-pack FILE compile the std units and write them to FILE, then exit\n"
         + "  --std-src       ignore an attached std pack and compile the units from source\n"
-        + "  -W              the optional level-1 warnings, as `ycc -W`\n");
+        + "  -W              the optional level-1 warnings, as `ycc -W`\n"
+        + "  --fmt FILE      format FILE and write it to stdout, then exit\n");
     0
 }
 
@@ -131,8 +140,8 @@ def ys_self_pack() -> str {
             // 16 bytes, so the size field is not a number. The old tolong read
             // that as 0 and the check below rejected it; with `!` it traps.
             let nopt = tolong(tail[:8]);
-            if (nopt != none && tail[8:] == ys_pack_magic() && nopt! > 0 && nopt! <= size - 16) {
-                let n = nopt!;
+            if (nopt != none && tail[8:] == ys_pack_magic() && nopt ! > 0 && nopt ! <= size - 16) {
+                let n = nopt !;
                 syscall(8, fd, size - 16 - n, 0);
                 let pieces: [str] = [];
                 let left = n;
@@ -191,14 +200,14 @@ def handle_one(st: State, raw: str) -> [str] {
         out += serve.error_msg(json.nul(), serve.E_PARSE, "the message body is not JSON");
         return out;
     }
-    let msg = json.jobj(parsed!);
+    let msg = json.jobj(parsed !);
     let id = dispatch.msg_id(msg);
     let method = dispatch.msg_method(msg);
     if (method == "") {
         // A response to a request this server never made, or garbage with no
         // method. If it carries an id, answer it, because an unanswered id is
         // what makes a client hang.
-        if is_some(id) { out += serve.error_msg(id!, serve.E_INVALID_REQUEST, "no method in the message"); }
+        if is_some(id) { out += serve.error_msg(id !, serve.E_INVALID_REQUEST, "no method in the message"); }
         return out;
     }
     let p = dispatch.msg_params(msg);
@@ -206,22 +215,21 @@ def handle_one(st: State, raw: str) -> [str] {
         // A notification: no reply, whatever happens inside.
         out += dispatch.doc_notification(st, method, p);
     } else {
-        let life = dispatch.lifecycle(st, id!, method);
+        let life = dispatch.lifecycle(st, id !, method);
         if is_some(life) {
-            out += life!;
+            out += life !;
         } else if (!st.initialized) {
             // The protocol requires this refusal: the client has not sent
             // rootUri, so imports cannot be resolved, and any answer would use
             // the wrong base directory. LSP makes it a specific code, and a
             // client retries after it.
-            out += dispatch.not_initialized(id!);
+            out += dispatch.not_initialized(id !);
         } else {
-            out += dispatch.doc_request(st, id!, method, p);
+            out += dispatch.doc_request(st, id !, method, p);
         }
     }
     out
 }
-
 
 // `HH:MM:SS.mmm`, wall clock. Without it the timing lines are unusable for the only
 // question they are asked: the numbers are small (a whole-file token request is tens
@@ -267,7 +275,7 @@ def log_line(msg: str) {
 let born_ms = -1;
 
 def since_born_ms() -> long {
-    if (born_ms < 0) { -1 } else { (clock_us() - born_ms) / 1000 }
+    if (born_ms < 0) { -1 } else {(clock_us() - born_ms) / 1000 }
 }
 
 def log_start(argv: [str], pack_bytes: long) {
@@ -429,7 +437,7 @@ def serve_loop(st: State, fd_in: long) -> long {
             go = false;
         } else {
             handled = handled + 1;
-            let raw = got!;
+            let raw = got !;
 
             // The parent's own work: record what this message changed. Done
             // BEFORE the fork so the child inherits an up-to-date view, and done
@@ -441,61 +449,83 @@ def serve_loop(st: State, fd_in: long) -> long {
                 log_stop("the client sent exit", handled, forked, errors);
                 go = false;
             } else {
-            let child = fork {
-                // Point this process's stdout at stderr FIRST, so anything the
-                // compiler prints -- an import it cannot open, a trap message --
-                // lands in the client's log instead of in the framed stream.
-                syscall(33, FD_LOG, FD_OUT, 0);
-                let timed = st.timing;
-                let t0 = clock_us();
-                let bodies = handle_one(st, raw);
-                let k = 0;
-                while (k < len(bodies)) {
-                    rpc.write_frame(reply, bodies[k]);
-                    k = k + 1;
+                let child = fork {
+                    // Point this process's stdout at stderr FIRST, so anything the
+                    // compiler prints -- an import it cannot open, a trap message --
+                    // lands in the client's log instead of in the framed stream.
+                    syscall(33, FD_LOG, FD_OUT, 0);
+                    let timed = st.timing;
+                    let t0 = clock_us();
+                    let bodies = handle_one(st, raw);
+                    let k = 0;
+                    while (k < len(bodies)) {
+                        rpc.write_frame(reply, bodies[k]);
+                        k = k + 1;
+                    };
+                    if (timed) { log_work(method_of_raw(raw), clock_us() - t0); };
+                    // exit_group(0): the child must not return into the runtime's
+                    // normal exit path, which would flush the parent's buffers and
+                    // run atexit handlers twice.
+                    syscall(60, 0);
+                    0
                 };
-                if (timed) { log_work(method_of_raw(raw), clock_us() - t0); };
-                // exit_group(0): the child must not return into the runtime's
-                // normal exit path, which would flush the parent's buffers and
-                // run atexit handlers twice.
-                syscall(60, 0);
-                0
-            };
-            forked = forked + 1;
-            if (child > 0) {
-                // The pid, or -errno. A negative result is a fork failure, not a
-                // child: there is nothing to wait for, and the loop must not
-                // spin forever on a resource limit.
-                let w0 = clock_us();
-                let status = wait_pid(child);
-                if (st.timing) { log_blocked(clock_us() - w0); };
-                if (status < 0) {
-                    // The child died on a signal, or wait4 itself failed. A
-                    // request that crashes the child must not take the server
-                    // with it, and the client needs SOME answer or it waits
-                    // forever -- so the failure is reported in the protocol's own
-                    // terms.
-                    rpc.write_frame(reply, serve.error_msg(json.nul(), serve.E_INTERNAL, "the request handler failed"));
+                forked = forked + 1;
+                if (child > 0) {
+                    // The pid, or -errno. A negative result is a fork failure, not a
+                    // child: there is nothing to wait for, and the loop must not
+                    // spin forever on a resource limit.
+                    let w0 = clock_us();
+                    let status = wait_pid(child);
+                    if (st.timing) { log_blocked(clock_us() - w0); };
+                    if (status < 0) {
+                        // The child died on a signal, or wait4 itself failed. A
+                        // request that crashes the child must not take the server
+                        // with it, and the client needs SOME answer or it waits
+                        // forever -- so the failure is reported in the protocol's own
+                        // terms.
+                        rpc.write_frame(reply, serve.error_msg(json.nul(), serve.E_INTERNAL, "the request handler failed"));
+                        go = false;
+                        code = 1;
+                    }
+                } else {
+                    // fork(2) failed outright: out of processes or memory. Retrying
+                    // would spin; reporting and stopping is the honest answer.
+                    errors = errors + 1;
+                    log_stop("fork failed", handled, forked, errors);
+                    rpc.write_frame(reply, serve.error_msg(json.nul(), serve.E_INTERNAL, "cannot fork a request handler"));
                     go = false;
                     code = 1;
                 }
-            } else {
-                // fork(2) failed outright: out of processes or memory. Retrying
-                // would spin; reporting and stopping is the honest answer.
-                errors = errors + 1;
-                log_stop("fork failed", handled, forked, errors);
-                rpc.write_frame(reply, serve.error_msg(json.nul(), serve.E_INTERNAL, "cannot fork a request handler"));
-                go = false;
-                code = 1;
-            }
             }
         }
     }
     code
 }
 
+// `yserve --fmt FILE`: format FILE and write it to stdout (LSP.md R3.8), so
+// the formatter is reachable from the shell -- and from make -- without a
+// client. A buffer scan.y cannot lex is refused (R3.4): nothing is written and
+// the exit code says so.
+def ys_fmt_file(path: str) -> long {
+    let got = fs.read_file(path);
+    if (got == none) {
+        fs.write_text(FD_LOG, "error: cannot read '" + path + "'\n");
+        return 1;
+    };
+    let out = fmt.fmt(got !);
+    if (out == none) {
+        fs.write_text(FD_LOG, "error: '" + path + "' does not lex; left alone\n");
+        return 1;
+    };
+    fs.write_text(FD_OUT, out !);
+    0
+}
+
 def serve_main() -> long {
     let o = parse_opts(argv());
+    if (o.fmt_file != "") {
+        return ys_fmt_file(o.fmt_file);
+    }
     if (o.pack_out != "") {
         // A build step, not a request: write the pack and stop. Nothing is
         // served, so no frame is written and stdout stays empty.

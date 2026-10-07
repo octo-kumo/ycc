@@ -55,10 +55,10 @@ def addr_set(a: [byte; 16], host: str, port: long) -> long {
         let o1 = tolong(d[1]);
         let o2 = tolong(d[2]);
         let o3 = tolong(d[3]);
-        if (o0 != none) { a[4] = o0!; };
-        if (o1 != none) { a[5] = o1!; };
-        if (o2 != none) { a[6] = o2!; };
-        if (o3 != none) { a[7] = o3!; };
+        if (o0 != none) { a[4] = o0 !; };
+        if (o1 != none) { a[5] = o1 !; };
+        if (o2 != none) { a[6] = o2 !; };
+        if (o3 != none) { a[7] = o3 !; };
         0
     }
     0
@@ -234,7 +234,7 @@ def resolv_conf() -> { servers: [str], search: [str] } {
     let search: [str] = [];
     let text = fs.read_file("/etc/resolv.conf");
     if (text != none) {
-        foreach (line in text!.lines()) {
+        foreach (line in text !.lines()) {
             let f = words(line);
             if (len(f) >= 2 && f[0] == "nameserver" && is_quad(f[1])) { servers += f[1]; };
             if (len(f) >= 2 && (f[0] == "search" || f[0] == "domain")) { search = f[1:len(f)]; };
@@ -251,7 +251,7 @@ def hosts_lookup(name: str) -> [str] {
     let want = name.lower();
     let text = fs.read_file("/etc/hosts");
     if (text != none) {
-        foreach (line in text!.lines()) {
+        foreach (line in text !.lines()) {
             let hash = index_of(line, "#");
             let body = line;
             if (hash >= 0) { body = line[0:hash]; };
@@ -308,7 +308,7 @@ def is_quad(s: str) -> bool {
         };
         if (ok) {
             let pn = tolong(p);
-            if (pn == none || pn! > 255) { ok = false; };
+            if (pn == none || pn ! > 255) { ok = false; };
         };
     };
     ok
@@ -503,7 +503,7 @@ def http_response(status: long, body: str) -> str {
         text = "Status";
     }
     "HTTP/1.1 " + code + " " + text + "\r\nContent-Length: " + tostring(len(body))
-        + "\r\nConnection: close\r\n\r\n" + body
+    + "\r\nConnection: close\r\n\r\n" + body
 };
 
 // http_read_head(fd) -> the request head: every chunk read until the blank

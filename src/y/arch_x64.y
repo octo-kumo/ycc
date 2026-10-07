@@ -111,7 +111,7 @@ def w_sysno(name: str) -> long {
 // y_w_self_test, both on the Windows target only: on Linux this returns no
 // lines and no call is emitted.
 def w_self_test_lines() -> [str] {
-    if (target_is_windows()) { arch_asm_lines(WSELFTEST_ASM) } else { [] }
+    if (target_is_windows()) { arch_asm_lines(WSELFTEST_ASM) } else {[] }
 };
 
 def arch_fn_label(uid: long, name: str) -> str {
@@ -471,7 +471,6 @@ def arch_math_lines() -> [str] {
     arch_asm_lines(MATH_ASM)
 };
 
-
 def arch_consts() -> str {
     // rodata literals emitted once at the end of the file (string headers,
     // error messages)
@@ -496,7 +495,7 @@ def arch_consts() -> str {
         "ystr_int_end:",
         "ystr_wselftest: .ascii \"runtime error: NT syscall self-test failed (a w_sysno number does not match this Windows build)\\n\"",
         "ystr_wselftest_end:",
-    ], "\n") + "\n"
+        ], "\n") + "\n"
 };
 
 export { WImport, w_imports, w_iat_label, w_iat_term_label, w_iat_bss_lines, w_iat_offset, arch_id, arch_word, arch_sysno, arch_fn_label, arch_global_label, arch_loc_label, arch_str_label, arch_header, arch_rodata, arch_text, arch_bss, arch_global_cell, arch_heap_cells, arch_prelude_lines, arch_prelude_threads_lines, arch_math_lines, w_self_test_lines, arch_consts, arch_frame, arch_exit };
