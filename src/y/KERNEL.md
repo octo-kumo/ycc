@@ -1114,3 +1114,36 @@ NOT in the trap-stub block above it; kernel.s's two 9-pop groups are the syscall
 stub's tail and y_enter_frame, and the six go above the nine in the pushes
 (before `push %rcx`, located by the unique `mov 56(%rsp), %rax`) and after each
 9-pop group; task_frame writes the six between RIP and the nine.
+
+### Round 73: the four parts of the frame change, and what is still unverified
+
+State of the recipe after four attempts (each reverted; the tree is green):
+
+1. `y_syscall_entry` (src/y/arch/kernel.s): the six pushes go before the rescue
+   pair `push %rcx / push %r11` -- uniquely located by the `mov 56(%rsp), %rax`
+   that follows it -- and the six pops go after each of the TWO nine-pop groups
+   (the syscall tail and y_enter_frame), later group first so line numbers hold.
+   Both applied cleanly and the emitted listing looked right.
+2. `task_frame` (src/y/std/kernel.y): the six are written AFTER the RIP write and
+   before the rcx/r11 slots, so from the lowest the frame reads
+   [r9 r8 r10 rdx rsi rdi rax r11 rcx][rbx rbp r12 r13 r14 r15][RIP CS RFLAGS
+   RSP SS] -- the same shape the stubs produce.
+3. The generated IRQ stubs (src/y/arch_x64.y AND src/c/arch_x64.c): the six go
+   immediately after the `y_irq_stub_N:` label line and BEFORE `push %rcx`, the
+   six pops after the `iretq` block's `pop %rcx`, and the CS check moves from
+   80(%rsp) to 128(%rsp).  Critically, this must be anchored to the label line
+   (or the iretq tail), because the TRAP stubs -- generated in the same region,
+   above res_irq_stubs.foreach -- also contain `push %rcx`, and editing those
+   shifts the trap handler's vector/error offsets (round 71 measured exactly
+   that: an impossible err=100663393).
+4. The switch points: both stubs store y_cur_task_rsp at the SAME place -- the
+   nine's lowest slot (r9) -- the syscall one before `call y_sys_dispatch`, the
+   IRQ one before `call y_sched_pick`, so the saved frame pointer does not move.
+
+With all four applied, the suite fell to 12/15/27 and the IPC case faulted with
+err=6 cr2=0x6000638 -- a user WRITE to its own stack, i.e. an iretq with a wrong
+RSP, which means the frame's TOP five words were read at the wrong offset by one
+of the two paths.  That is the specific thing to measure next, and it is a
+two-value print: the rsp at the moment each stub stores y_cur_task_rsp, and the
+rsp each path has at its iretq.  Everything else in the recipe is now verified by
+reading rather than by reasoning.
