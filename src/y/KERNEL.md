@@ -1147,3 +1147,32 @@ of the two paths.  That is the specific thing to measure next, and it is a
 two-value print: the rsp at the moment each stub stores y_cur_task_rsp, and the
 rsp each path has at its iretq.  Everything else in the recipe is now verified by
 reading rather than by reasoning.
+
+## Full `make test` after the shake fix (round 74)
+
+`JOBS=8 make test` on the merged line, with the shake fix committed and blessed:
+
+    [port]            151 passed, 0 failed / 151      <- the port gate
+    [pe-port]         151 passed, 0 failed / 151      <- the Windows half
+    [native]          229 passed, 0 failed / 229
+    [native-examples]  15 passed, 0 failed / 15
+    [examples]         15 passed, 0 failed / 15
+    [audit]            65 passed, 0 failed / 65
+    [ycc-units]        34 passed, 0 failed / 34
+    [debug]            27 passed, 0 failed / 27
+    [link]             23 passed, 0 failed / 23
+    [treeshake]        54 passed, 0 failed / 54
+    [std-suites]        5 passed, 0 failed / 5
+    [kernel]           33 passed, 0 failed / 33
+
+The three failures are the KNOWN pre-existing ones: `lsp` (the formatter and the
+node-driver environment) and `coverage` (three types.y diagnostics and three
+matrix rows untested) -- both documented as pre-existing in master's own commit
+message ("make check green except the pre-existing lsp/coverage environment
+failures").  The `ycc` suite produced no summary line in the log and is the one
+to confirm against the main tree before calling it pre-existing.
+
+So the shake fix -- the guarded `ir_drop_inits` for kernel targets -- is
+validated by the whole gate, not just by test/kernel: the port gate at 151/151
+(both halves) says the two engines still agree byte for byte on the entire
+corpus, and the ratchets say the tree shake's costs did not move.
