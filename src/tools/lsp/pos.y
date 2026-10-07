@@ -85,7 +85,7 @@ def doc_lines(d: SrcDoc) -> long {
 // the LAST newline in the text. That is correct for exactly one line of a file
 // (the last one with content), which is why t008 passed: every check it made
 // happened to land there. The bug surfaced as soon as something asked for line 1
-// of a multi-line document -- semantic tokens paint a block comment from its
+// of a multi-line document -- a hover range or outline span reaches from its
 // start to the end of the FILE when the first line's length is wrong.
 //
 // The lesson is in the test rather than the code: a fixture that only checks
@@ -99,9 +99,9 @@ def line_bytes(text: str, ln: long) -> str {
 //
 // This exists because line_bytes is O(n) -- it builds the whole start table --
 // and callers that walk a document line by line turn that into O(n^2). Asking
-// for semantic tokens on src/y/parser.y took 4.8 SECONDS per call that way: the
-// highlighter would have frozen the editor on every keystroke, which is worse
-// than no highlighting at all. Anything per-line must build the table once (doc_of)
+// for a per-line request on src/y/parser.y took 4.8 SECONDS per call that way:
+// it would have frozen the editor on every keystroke. Anything per-line must
+// build the table once (doc_of)
 // and pass it here.
 def line_bytes_from(text: str, starts: [long], ln: long) -> str {
     if (ln < 1 || ln > len(starts)) { return ""; }

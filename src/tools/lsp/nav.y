@@ -145,12 +145,12 @@ def candidates(idx: FileIdx, name: str) -> [IdxDecl] {
 // lookup costs the handful of declarations that share the name rather than every
 // declaration in the file.
 //
-// It was 34.5 SECONDS on `src/y/native.y` before, which is the highlighter hanging
-// on any real file: semantic tokens ask about EVERY identifier, and each ask was a
-// walk of all 3,621 declarations -- twice, once for "what does this resolve_decl to"
-// and once for "is this token some declaration's own name". `visible()` and
+// It was 34.5 SECONDS on `src/y/native.y` before, which would have hung any
+// request that asked about every identifier: each lookup was a walk of all
+// 3,621 declarations -- twice, once for "what does this resolve_decl to" and
+// once for "is this token some declaration's own name". `visible()` and
 // `find_decl` were fine because a completion asks once, which is why nothing
-// measured it until the highlighter started asking about everything.
+// measured it until the old highlighter started asking about everything.
 def by_name(idx: FileIdx) -> { str => [IdxDecl] } {
     let out: { str => [IdxDecl] } = {};
     let i = 0;
