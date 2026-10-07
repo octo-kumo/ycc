@@ -940,3 +940,33 @@ the plain build runs and the -g build only symbolises the same addresses).
 Correction recorded deliberately: two of the last three rounds' hypotheses were
 built on a measurement that printed an address where a value was wanted.  Read
 the instrumentation before reading the conclusion.
+
+### Round 60: the delivery write lands in the HEADER, not the data
+
+Faulting instruction, from the -g build (plain build run, -g only symbolised):
+
+    4015ea:  mov 0x10(%rax),%rax      # rax = header->data
+    4015ee:  mov (%rax,%rcx,8),%rax   # rax = data[0]   <-- FAULT
+    4015f3:  call y_long_tostr        # ... inside tostring(buf[0])
+
+From round 54/55's disassembly of the same code, `rax` before `mov 0x10(%rax)` is
+the array's HEADER, so `data` is at +16 -- and the program prints "p>0 true"
+BEFORE the call, which means data was NON-ZERO then: `&buf[0]` is header->data,
+so a zero data would have printed p>0 FALSE.  data becomes 0 during/after the
+receive, and `buf[0]` then dereferences it.
+
+So sys_ipc_recv/task_deliver writes five words somewhere other than the buffer
+the receiver registered -- and the shape says where: if the five words land
+64 bytes or so BEFORE the data pointer (e.g. at a PAGE BASE rather than at
+page_base + offset), they overwrite {len, cap, data, front} and set data to the
+5th word, which is what the fault reads.  task_write_word does
+
+    phys = vm_translate(cr3, va & -8); poke_va64(DIRECT_BASE + phys + (va & 7), v)
+
+which is correct ONLY if vm_translate returns page base PLUS the offset of the
+masked address.  If it returns the page base alone, every delivery write lands at
+the start of the page -- which is exactly this symptom.  That is the next thing
+to read, and it is a one-line fix in one of those two places.
+
+(Trying buf.ptr instead of ptr_addr(&buf[0]) changes nothing, so the pointer the
+program passes was already the element address.)
