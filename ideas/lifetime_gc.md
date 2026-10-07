@@ -165,15 +165,16 @@ or died).
    `max(live, 8 MiB)`) plus a chunk each, so four threads of 250k want ~96 MiB;
    tightening that is a tuning question, not a leak.
 
-2. **Performance.** The byte buffers are pointer-free now (`y_str_cat`,
-   `y_str_app`, the join buffer, `ylts_mk`, `ycs_mk`, `y_bytes_to_str`):
-   61.9M -> 49.3M instructions on 120 live ~108 KB strings at the same peak
-   RSS. Packed `[byte]` array data is pointer-free too (`esz == 1` in the five
-   data allocations a byte array grows through): 90.9M -> 36.7M instructions on
-   600 live 30 KB arrays, same peak RSS. What is left is the same for the
-   8-byte element types that cannot hold pointers (`[long]`/`[float]`): `esz`
-   alone cannot say, so the emitter has to pass it down (`ideas/OPTIMIZE.md`
-   A8).
+2. **Performance.** The byte buffers are pointer-free (`y_str_cat`,
+   `y_str_app`, the join buffer, `ylts_mk`, `ycs_mk`, `y_bytes_to_str`): 61.9M
+   -> 49.3M instructions on 120 live ~108 KB strings. Packed `[byte]` array data
+   is marked in the five allocations a byte array grows through (90.9M -> 36.7M
+   on 600 live 30 KB arrays), and for 8-byte elements the emitter marks the data
+   block at a literal, a slice, `array + element`, `array + array` and
+   `arr += other` when the element type is long/bool/float/byte (146.0M ->
+   100.7M on 200 arrays of 12288 longs). Unmarked still: `arr += x` for one
+   element, `map`/`filter` results and `range()` (`ideas/OPTIMIZE.md` A8).
+   
 3. Optional knobs: `--gc-stress` (collect on every slow path) and `--no-gc`,
    plus a `test/sh/test_gc.sh` suite that runs the corpus under a small cap.
 

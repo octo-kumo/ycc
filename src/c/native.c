@@ -341,6 +341,7 @@ Yv *gen_discard(Yv *st, Yv *node);
 Yv *gen_make_closure(Yv *st, Yv *label, Yv *caps);
 Yv *gen_range(Yv *st, Yv *node);
 Yv *gen_slice(Yv *st, Yv *node);
+static Yv *mark_pf_arr(Yv *st, Yv *t);   /* A8: pointer-free array data */
 Yv *gen_indirect(Yv *st, Yv *node, Yv *callee);
 Yv *gen_str_slice(Yv *st, Yv *node);
 Yv *gen_sliceassign(Yv *st, Yv *node);
@@ -5640,7 +5641,8 @@ Yv *gen_slice(Yv *st, Yv *node) {
     st = emit_insn(st, F_MOV_I_R, slesz, R_RAX, 64, 0, 0, 0, 0);
     st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
     st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_arr_slice"))), 0, 0, 0, 0, 0, 0);
-    return emit_insn(st, F_ADD_I_R, 32, R_RSP, 64, 0, 0, 0, 0);
+    st = emit_insn(st, F_ADD_I_R, 32, R_RSP, 64, 0, 0, 0, 0);
+    return mark_pf_arr(st, arr_elem_type(infer(st, yr_get(node, "arr"))));
 }
 
 // s[lo:hi] -- the substring, half-open and clamped like an array slice;
@@ -7547,6 +7549,28 @@ static Yv *gen_arr_new_empty(Yv *st) {
     return emit_insn(st, F_MOV_R_D, R_RCX, 64, R_RAX, -1, 1, 24, -1);
 }
 
+/* Whether an array of this element type can hold a reference. A long, bool,
+ * float or byte element cannot, and neither can a packed [byte], so the
+ * collector may skip the data block's payload (y_alloc_pf's bit 2). */
+static int elem_pf(Yv *t) {
+    ylong k = yv_l(yr_get(t, "k"));
+    return k == K_tlong || k == K_tbool || k == K_tfloat || k == K_tbyte;
+}
+
+/* The array header is in %rax: mark the block its data pointer names as
+ * pointer-free. The header keeps the data pointer in word 2, and that block's
+ * own header word (the one before its payload) carries the flags, so bit 2 is
+ * where y_gc_drain looks. Only for element types that cannot hold a
+ * reference. */
+static Yv *mark_pf_arr(Yv *st, Yv *t) {
+    if (!elem_pf(t)) { return st; }
+    st = emit_insn(st, F_MOV_D_R, R_RAX, -1, 1, 16, -1, R_RDX, 64);
+    st = emit_insn(st, F_MOV_D_R, R_RDX, -1, 1, -8, -1, R_RCX, 64);
+    st = emit_insn(st, F_MOV_I_R, 4, R_R8, 64, 0, 0, 0, 0);
+    st = emit_insn(st, F_OR_R_R, R_R8, 64, R_RCX, 64, 0, 0, 0);
+    return emit_insn(st, F_MOV_R_D, R_RCX, 64, R_RDX, -1, 1, -8, -1);
+}
+
 static Yv *gen_arr_push_slot(Yv *st, ylong roff, ylong esz) {
     st = emit_insn(st, F_MOV_R_R, R_RAX, 64, R_RDX, 64, 0, 0, 0);
     st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, roff, -1, R_RAX, 64);
@@ -8334,7 +8358,8 @@ Yv *gen_cons(Yv *st, Yv *node) {
     st = emit_insn(st, F_MOV_I_R, cesz, R_RAX, 64, 0, 0, 0, 0);
     st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
     st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_arr_cat"))), 0, 0, 0, 0, 0, 0);
-    return emit_insn(st, F_ADD_I_R, 24, R_RSP, 64, 0, 0, 0, 0);
+    st = emit_insn(st, F_ADD_I_R, 24, R_RSP, 64, 0, 0, 0, 0);
+    return mark_pf_arr(st, crt);
 }
 
 /* `l + r` on two arrays whose element types differ by an implicit numeric
@@ -8432,7 +8457,8 @@ Yv *gen_cat_arr(Yv *st, Yv *node, Yv *lt, Yv *rt) {
     st = emit_insn(st, F_MOV_I_R, esz, R_RAX, 64, 0, 0, 0, 0);
     st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
     st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_arr_cat"))), 0, 0, 0, 0, 0, 0);
-    return emit_insn(st, F_ADD_I_R, 24, R_RSP, 64, 0, 0, 0, 0);
+    st = emit_insn(st, F_ADD_I_R, 24, R_RSP, 64, 0, 0, 0, 0);
+    return mark_pf_arr(st, ety);
 }
 
 /* acc = acc + <constant>, with the layout above still in place. */
@@ -12318,7 +12344,8 @@ Yv *gen_array_esz(Yv *st, Yv *node, ylong esz, Yv *ety) {
         st = elem_store_rdx_const(st, esz, R_R10, k);
         k = k - 1;
     }
-    return emit_insn(st, F_MOV_R_R, R_R10, 64, R_RAX, 64, 0, 0, 0);
+    st = emit_insn(st, F_MOV_R_R, R_R10, 64, R_RAX, 64, 0, 0, 0);
+    return mark_pf_arr(st, ety);
 }
 
 Yv *gen_len(Yv *st, Yv *node) {
@@ -12367,7 +12394,8 @@ Yv *gen_push_all(Yv *st, Yv *node) {
     st = emit_insn(st, F_MOV_I_R, pesz, R_RAX, 64, 0, 0, 0, 0);
     st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
     st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_arr_extend"))), 0, 0, 0, 0, 0, 0);
-    return emit_insn(st, F_ADD_I_R, 24, R_RSP, 64, 0, 0, 0, 0);
+    st = emit_insn(st, F_ADD_I_R, 24, R_RSP, 64, 0, 0, 0, 0);
+    return mark_pf_arr(st, arr_elem_type(infer(st, ya_get(pargs, 0))));
 }
 
 /* The payload of a `?.` chain, back in an option box (parser.y). A payload

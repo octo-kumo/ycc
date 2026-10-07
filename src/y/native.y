@@ -4417,7 +4417,8 @@ def gen_slice(st: EmitSt, node: Slice) -> EmitSt {
     st = emit_insn(st, insn.F_MOV_I_R, slesz, insn.R_RAX, 64, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_CALL_L, lbl_new("y_arr_slice"), 0, 0, 0, 0, 0, 0);
-    emit_insn(st, insn.F_ADD_I_R, 32, insn.R_RSP, 64, 0, 0, 0, 0)
+    st = emit_insn(st, insn.F_ADD_I_R, 32, insn.R_RSP, 64, 0, 0, 0, 0);
+    mark_pf_arr(st, arr_elem_of(infer(st, node.arr)))
 };
 
 // s[lo:hi] -- the substring, half-open and clamped like an array slice;
@@ -6170,6 +6171,29 @@ def gen_arr_new_empty(st: EmitSt) -> EmitSt {
     emit_insn(st, insn.F_MOV_R_D, insn.R_RCX, 64, insn.R_RAX, -1, 1, 24, -1)
 };
 
+// Whether an array of this element type can hold a reference. A long, int,
+// bool or float element cannot, and neither can a packed [byte], so the
+// collector may skip the data block's payload (y_alloc_pf's bit 2).
+def elem_pf(t: Type) -> bool {
+    t.k == K.tlong || t.k == K.tbool || t.k == K.tfloat || t.k == K.tbyte
+};
+
+// The array header is in %rax: mark the block its data pointer names as
+// pointer-free. The header keeps the data pointer in word 2, and that block's
+// own header word (the one before its payload) carries the flags, so bit 2 is
+// where y_gc_drain looks. Only for element types that cannot hold a reference.
+def mark_pf_arr(st: EmitSt, t: Type) -> EmitSt {
+    if (elem_pf(t)) {
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RAX, -1, 1, 16, -1, insn.R_RDX, 64);
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RDX, -1, 1, -8, -1, insn.R_RCX, 64);
+        st = emit_insn(st, insn.F_MOV_I_R, 4, insn.R_R8, 64, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_OR_R_R, insn.R_R8, 64, insn.R_RCX, 64, 0, 0, 0);
+        emit_insn(st, insn.F_MOV_R_D, insn.R_RCX, 64, insn.R_RDX, -1, 1, -8, -1)
+    } else {
+        st
+    }
+};
+
 // Append the value in %rax to the array whose header is in slot `roff`.
 def gen_arr_push_slot(st: EmitSt, roff: long, esz: long) -> EmitSt {
     st = emit_insn(st, insn.F_MOV_R_R, insn.R_RAX, 64, insn.R_RDX, 64, 0, 0, 0);
@@ -6918,7 +6942,8 @@ def gen_cons(st: EmitSt, node: Bin) -> EmitSt {
     st = emit_insn(st, insn.F_MOV_I_R, cesz, insn.R_RAX, 64, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_CALL_L, lbl_new("y_arr_cat"), 0, 0, 0, 0, 0, 0);
-    emit_insn(st, insn.F_ADD_I_R, 24, insn.R_RSP, 64, 0, 0, 0, 0)
+    st = emit_insn(st, insn.F_ADD_I_R, 24, insn.R_RSP, 64, 0, 0, 0, 0);
+    mark_pf_arr(st, crt)
 };
 
 // `l + r` on two arrays whose element types differ by an implicit numeric
@@ -6992,7 +7017,8 @@ def gen_cat_arr(st: EmitSt, node: Bin, lt: Type, rt: Type) -> EmitSt {
     st = emit_insn(st, insn.F_MOV_I_R, esz, insn.R_RAX, 64, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_CALL_L, lbl_new("y_arr_cat"), 0, 0, 0, 0, 0, 0);
-    emit_insn(st, insn.F_ADD_I_R, 24, insn.R_RSP, 64, 0, 0, 0, 0)
+    st = emit_insn(st, insn.F_ADD_I_R, 24, insn.R_RSP, 64, 0, 0, 0, 0);
+    mark_pf_arr(st, ety)
 };
 
 // acc = acc + <constant>, with the layout above still in place.
@@ -10428,7 +10454,8 @@ def gen_array_esz(st: EmitSt, node: ArrLit, esz: long, ety: Type) -> EmitSt {
         st = elem_store_rdx_const(st, esz, insn.R_R10, k);
         k = k - 1;
     };
-    emit_insn(st, insn.F_MOV_R_R, insn.R_R10, 64, insn.R_RAX, 64, 0, 0, 0)
+    st = emit_insn(st, insn.F_MOV_R_R, insn.R_R10, 64, insn.R_RAX, 64, 0, 0, 0);
+    mark_pf_arr(st, ety)
 };
 
 def gen_len(st: EmitSt, node: Call) -> EmitSt {
@@ -10477,7 +10504,8 @@ def gen_push_all(st: EmitSt, node: Call) -> EmitSt {
     st = emit_insn(st, insn.F_MOV_I_R, pesz, insn.R_RAX, 64, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_CALL_L, lbl_new("y_arr_extend"), 0, 0, 0, 0, 0, 0);
-    emit_insn(st, insn.F_ADD_I_R, 24, insn.R_RSP, 64, 0, 0, 0, 0)
+    st = emit_insn(st, insn.F_ADD_I_R, 24, insn.R_RSP, 64, 0, 0, 0, 0);
+    mark_pf_arr(st, arr_elem_of(infer(st, pargs[0])))
 };
 
 // some(v): box v in 8 heap bytes; the box address (nonzero) is the value.

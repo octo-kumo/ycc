@@ -385,9 +385,17 @@ doubling, and the extend path) branch on `%r9 == 1` and allocate with
 `y_alloc_pf`. 600 live 30 KB byte arrays: **90.9M -> 36.7M** callgrind
 instructions, same peak RSS and output.
 
-**Left.** The same for 8-byte elements that cannot hold a pointer (`[long]`,
-`[float]`, and `[int]`/`[bool]` arrays if they are unpacked): `esz` alone cannot
-say, so the emitter has to pass pointer-freeness down per element type.
+**8-byte pointer-free elements (done for the building operations).** The
+emitter knows the element type at every array operation, so `mark_pf_arr` sets
+the flag on the block the header's data pointer names when the element type is
+`long`/`bool`/`float`/`byte`. Marked: a literal, `arr[lo:hi]`, `array + element`
+(`gen_cons`), `array + array` (`gen_cat_arr`) and `arr += other`
+(`gen_push_all`). 200 arrays of 12288 longs: **146.0M -> 100.7M** callgrind
+instructions, same output.
+
+**Left.** The paths not yet marked: `arr += x` (one element), `map`/`filter`
+result arrays, and `range()` (whose data is built inside std/rt.y). Each needs
+the same one-line `mark_pf_arr` at its site.
 
 ### A7. `--gc`: do not link the collector a program cannot grow into (done)
 
