@@ -185,6 +185,19 @@ or died).
    allocation shapes, and the cap test (two threads of 2,000,000 allocations
    in 64 MiB).
 
+   What the trap says, from the gdb recipe above: at `y_bad_trap` the walk's
+   chunk node (`%rbx`) reads correctly -- `{base, end, next}` for a 4 MiB chunk
+   -- but the node its `next` names is filled with `0x5555555555555555`, i.e.
+   live registry memory was overwritten (not a dangling pointer: both nodes are
+   40 bytes apart in one arena segment, and the arena is rooted through
+   `y_gc_meta_cur`). Nothing in the tree writes that pattern, so it is stale
+   data from a bump write into the collector's metadata. The suspicious half is
+   the arena's shared `cur`/`end` (`y_gc_meta_cur`/`y_gc_meta_end`) and the
+   per-cycle `y_gc_ms_*` stream: everything that touches them must hold
+   `y_gc_mlk`, and a path that does not would do exactly this under four
+   threads and a cycle per allocation. Removing the fork section from t160 does
+   not change the failure; removing the threads does.
+
 2. **Performance.** The byte buffers are pointer-free (`y_str_cat`,
    `y_str_app`, the join buffer, `ylts_mk`, `ycs_mk`, `y_bytes_to_str`): 61.9M
    -> 49.3M instructions on 120 live ~108 KB strings. Packed `[byte]` array data
