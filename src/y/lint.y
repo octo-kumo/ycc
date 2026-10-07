@@ -1528,6 +1528,11 @@ def fx_find(line: str, w: str, from: long) -> long {
     -1
 };
 
+def fx_endswith(s: str, suf: str) -> bool {
+    if (len(s) < len(suf)) { return false; };
+    s[len(s) - len(suf):] == suf
+};
+
 def fx_strip(s: str) -> str {
     let a = 0;
     while (a < len(s) && (s[a] == 32 || s[a] == 9)) { a++; };
@@ -1712,8 +1717,7 @@ def fx_drop(a: [str], k: long) -> [str] {
 
 def fx_join(a: [str]) -> str {
     let out = "";
-    let i = 0;
-    while (i < len(a)) { out = out + a[i] + "\n"; i++; };
+    a.foreach((e) => { out = out + e + "\n" });
     out
 };
 
@@ -1747,14 +1751,38 @@ def fx_loop(rule: str, arr: str, var: str, ln: long, lines: [str]) -> [str] {
     if (ln < 1 || ln >= len(lines)) { return lines; };
     let dline = lines[ln - 1];
     let wline = lines[ln];
-    // A one-line `while (c) { B; i++; };` has its body on the header line;
-    // the close scan below would run past it.
-    let wt = fx_strip(wline);
-    if (len(wt) == 0 || wt[len(wt) - 1:len(wt)] != "{") { return lines; };
     let lo = fx_let_lo(dline, var);
     if (lo == "") { return lines; };
     let hi = fx_while_hi(wline, var);
     if (hi == "") { return lines; };
+    // A one-line `while (c) { B; i++; };` has its body on the header line:
+    // strip the step and rewrite the two lines as one.
+    let wt = fx_strip(wline);
+    if (len(wt) == 0 || wt[len(wt) - 1:len(wt)] != "{") {
+        let ob = index_of(wline, "{");
+        let cb = last_index_of(wline, "}");
+        if (ob < 0 || cb < 0 || cb <= ob) { return lines; };
+        let body = fx_strip(wline[ob + 1:cb]);
+        // the block's own `;` sits after the step
+        if (fx_endswith(body, ";")) { body = fx_strip(body[:len(body) - 1]); };
+        let step = var + "++";
+        if (!fx_endswith(body, step)) { return lines; };
+        body = fx_strip(body[:len(body) - len(step)]);
+        if (fx_endswith(body, ";")) { body = fx_strip(body[:len(body) - 1]); };
+        let ix = fx_indent(dline);
+        if (rule == "3.1") {
+            let el = "e";
+            if (fx_find(body, "e", 0) >= 0) { el = "el"; };
+            let nb = fx_sub_index(body, arr, var, el);
+            let keep = fx_find(nb, var, 0) >= 0;
+            let params = "(" + el + ")";
+            if (keep) { params = "(" + el + ", " + var + ")"; };
+            lines = lines[:ln - 1] + [ix + arr + ".foreach(" + params + " => { " + nb + " });"] + lines[ln + 1:];
+        } else {
+            lines = lines[:ln - 1] + [ix + "for " + var + " in " + lo + ".." + hi + " { " + body + " };"] + lines[ln + 1:];
+        };
+        return lines;
+    };
     let indent = fx_indent(dline);
     let close = -1;
     let j = ln + 1;
@@ -1848,8 +1876,7 @@ def fx_is_name(s: str) -> bool {
     if (len(s) == 0) { return false; };
     let c0 = s[0];
     if (!((c0 >= 97 && c0 <= 122) || (c0 >= 65 && c0 <= 90) || c0 == 95)) { return false; };
-    let i = 1;
-    while (i < len(s)) { if (!fx_ident(s[i])) { return false; }; i++; };
+    for i in 1..len(s) { if (!fx_ident(s[i])) { return false; } };
     true
 };
 
@@ -2249,8 +2276,7 @@ def fx_sort(a: [LintFix], nmap: long, lmap: [long]) -> long {
 };
 
 def fx_has(a: [long], v: long) -> bool {
-    let i = 0;
-    while (i < len(a)) { if (a[i] == v) { return true; }; i++; };
+    for i in 0..len(a) { if (a[i] == v) { return true; } };
     false
 };
 
