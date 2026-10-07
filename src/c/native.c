@@ -293,6 +293,7 @@ Yv *fn_args_of(Yv *t);
 Yv *infer_block(Yv *st, Yv *node);
 Yv *infer_decl(Yv *st, Yv *node);
 int uses_argv(Yv *stmts);
+Yv *collect_from_list(Yv *nodes, Yv *out);
 Yv *collect_from_block(Yv *stmts, Yv *out);
 Yv *collect_from_node(Yv *node, Yv *out);
 int uses_threads(Yv *refs);
@@ -4346,63 +4347,128 @@ int uses_argv(Yv *stmts) {
 }
 
 /* ── def collection (incl. hoisting) ────────────────────────────────────
- * Walk blocks/ifs/whiles/func-bodies; every named def and every let-bound
- * anonymous def becomes a top-level function (they capture nothing — the
- * checker proved it). Returns [{name, func}]. */
+ * Every named def and every let-bound anonymous def becomes a top-level
+ * function (the capture-free ones — the checker proved the rest capture).
+ * Returns [{name, func}].
+ *
+ * The walk below covers EVERY node kind, in the same order and shape as
+ * fv_walk's (see "free variables" above), because a `def` is a statement and
+ * a statement can live in a block, and a block is an expression: the two
+ * walks disagreeing is what let `if ({ def g() -> bool { true }; g() })`
+ * and a def in a call argument, an array element, a record value, an
+ * operand, an index or a loop head reach the assembler unhoisted, which
+ * then failed with `undefined label 'y_missing_...'`. Keep the two in step:
+ * one is free variables, the other definitions, and both need every arm. */
 
-Yv *collect_from_block(Yv *stmts, Yv *out) {
-    ylong i = 0;
-    while (i < yv_len(stmts)) {
-        out = collect_from_node(ya_get(stmts, i), out);
+Yv *collect_from_list(Yv *nodes, Yv *out) {
+    long i = 0;
+    while (i < yv_len(nodes)) {
+        out = collect_from_node(ya_get(nodes, i), out);
         i = i + 1;
     }
     return out;
 }
 
+Yv *collect_from_block(Yv *stmts, Yv *out) {
+    return collect_from_list(stmts, out);
+}
+
+/* A `def` declaration, and a `let` bound to a function literal: both are a
+ * name a call can resolve, so both are collected here and both recurse into
+ * the function body (a def nested in it is hoisted the same way). */
+static Yv *collect_decl(Yv *decl, Yv *out) {
+    Yv *v = yr_get(decl, "v");
+    if (yv_l(yr_get(v, "k")) == K_func) {
+        out = ya_push(out, yr(2, "name", yr_get(decl, "name"), "func", v));
+    }
+    return collect_from_node(v, out);
+}
+
 Yv *collect_from_node(Yv *node, Yv *out) {
     Yv *k = yr_get(node, "k");
     if (yv_l(k) == K_decl) {
-        if (ys_eq_lit(yr_get(node, "kind"), "def")) {
-            out = ya_push(out, yr(2, "name", yr_get(node, "name"), "func",
-                                  yr_get(node, "v")));
-            out = collect_from_node(yr_get(node, "v"), out);
-            ;
-        } else {
-            if (yv_l(yr_get(yr_get(node, "v"), "k")) == K_func) {
-                out = ya_push(out, yr(2, "name", yr_get(node, "name"), "func",
-                                      yr_get(node, "v")));
-                ;
-            }
-            out = collect_from_node(yr_get(node, "v"), out);
-            ;
-        }
-    } else if (yv_l(k) == K_func) {
-        out = collect_from_block(yr_get(yr_get(node, "body"), "stmts"), out);
-        ;
+        out = collect_decl(node, out);
+    } else if (yv_l(k) == K_un) {
+        out = collect_from_node(yr_get(node, "e"), out);
+    } else if (yv_l(k) == K_addr) {
+        out = collect_from_node(yr_get(node, "e"), out);
+    } else if (yv_l(k) == K_deref) {
+        out = collect_from_node(yr_get(node, "e"), out);
+    } else if (yv_l(k) == K_ret) {
+        out = collect_from_node(yr_get(node, "e"), out);
+    } else if (yv_l(k) == K_bin) {
+        out = collect_from_node(yr_get(node, "l"), out);
+        out = collect_from_node(yr_get(node, "r"), out);
+    } else if (yv_l(k) == K_array) {
+        out = collect_from_list(yr_get(node, "elems"), out);
+    } else if (yv_l(k) == K_rec) {
+        out = collect_from_list(yr_get(node, "vals"), out);
+    } else if (yv_l(k) == K_map) {
+        out = collect_from_list(yr_get(node, "vals"), out);
+    } else if (yv_l(k) == K_arrrep) {
+        out = collect_from_node(yr_get(node, "v"), out);
+    } else if (yv_l(k) == K_call) {
+        out = collect_from_node(yr_get(node, "callee"), out);
+        out = collect_from_list(yr_get(node, "args"), out);
+    } else if (yv_l(k) == K_index) {
+        out = collect_from_node(yr_get(node, "arr"), out);
+        out = collect_from_node(yr_get(node, "idx"), out);
+    } else if (yv_l(k) == K_slice) {
+        out = collect_from_node(yr_get(node, "arr"), out);
+        out = collect_from_node(yr_get(node, "lo"), out);
+        out = collect_from_node(yr_get(node, "hi"), out);
+    } else if (yv_l(k) == K_idxassign) {
+        out = collect_from_node(yr_get(node, "arr"), out);
+        out = collect_from_node(yr_get(node, "idx"), out);
+        out = collect_from_node(yr_get(node, "v"), out);
+    } else if (yv_l(k) == K_dot) {
+        out = collect_from_node(yr_get(node, "obj"), out);
+    } else if (yv_l(k) == K_dotassign) {
+        out = collect_from_node(yr_get(node, "obj"), out);
+        out = collect_from_node(yr_get(node, "v"), out);
+    } else if (yv_l(k) == K_store) {
+        out = collect_from_node(yr_get(node, "p"), out);
+        out = collect_from_node(yr_get(node, "v"), out);
+    } else if (yv_l(k) == K_assign) {
+        out = collect_from_node(yr_get(node, "v"), out);
+    } else if (yv_l(k) == K_incdec) {
+        out = collect_from_node(yr_get(node, "tgt"), out);
+    } else if (yv_l(k) == K_opassign) {
+        out = collect_from_node(yr_get(node, "tgt"), out);
+        out = collect_from_node(yr_get(node, "v"), out);
     } else if (yv_l(k) == K_kw_if) {
+        out = collect_from_node(yr_get(node, "cond"), out);
         out = collect_from_node(yr_get(node, "then"), out);
         if (yv_b(yr_get(node, "has_else"))) {
             out = collect_from_node(yr_get(node, "els"), out);
-            ;
         }
-        ;
     } else if (yv_l(k) == K_kw_while) {
+        out = collect_from_node(yr_get(node, "cond"), out);
         out = collect_from_node(yr_get(node, "body"), out);
-        ;
     } else if (yv_l(k) == K_kw_for) {
         out = collect_from_node(yr_get(node, "init"), out);
-        out = collect_from_node(yr_get(node, "body"), out);
+        out = collect_from_node(yr_get(node, "cond"), out);
         out = collect_from_node(yr_get(node, "step"), out);
-        ;
+        out = collect_from_node(yr_get(node, "body"), out);
     } else if (yv_l(k) == K_kw_foreach) {
+        out = collect_from_node(yr_get(node, "iter"), out);
         out = collect_from_node(yr_get(node, "body"), out);
-        ;
     } else if (yv_l(k) == K_forrange) {
+        out = collect_from_node(yr_get(node, "lo"), out);
+        out = collect_from_node(yr_get(node, "hi"), out);
         out = collect_from_node(yr_get(node, "body"), out);
-        ;
     } else if (yv_l(k) == K_block) {
         out = collect_from_block(yr_get(node, "stmts"), out);
-        ;
+    } else if (yv_l(k) == K_func) {
+        out = collect_from_node(yr_get(node, "body"), out);
+    } else if (yv_l(k) == K_sliceassign) {
+        out = collect_from_node(yr_get(node, "arr"), out);
+        out = collect_from_node(yr_get(node, "lo"), out);
+        out = collect_from_node(yr_get(node, "hi"), out);
+        out = collect_from_node(yr_get(node, "v"), out);
+    } else if (yv_l(k) == K_rectest || yv_l(k) == K_narrow ||
+               yv_l(k) == K_matchend) {
+        out = collect_from_node(yr_get(node, "e"), out);
     }
     return out;
 }

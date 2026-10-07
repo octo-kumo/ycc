@@ -1,0 +1,51 @@
+a def inside a block is hoisted from every position an expression can sit in
+
+    $ ycc t211_nested_def_in_expr_block.y -o /tmp/t
+    error: assemble: undefined label 'y_missing_r1$5'
+
+A `def` is a statement, a statement can live in a block, and a block is an
+expression -- so a `def` can sit anywhere an expression can.
+`collect_from_node` (the walk that hoists capture-free defs to top level
+before the emitter pre-binds their labels) descended into statement
+positions only: blocks, `if` arms, loop bodies, a function body. A def that
+reached it from anywhere else was never collected, never emitted, and its
+call became `y_missing_<name>` -- which the assembler then rejected, as an
+internal error on a program the checker had accepted.
+
+Eight of the nine positions the new fixture covers failed that way, one after
+another: a call argument, an array element, a record value, an infix operand,
+an index, an `if` condition, a `while` condition and a `foreach` head. The
+ninth -- a `let`'s value -- already worked, because the declaration arm
+happened to descend into its value. The `if`/`while`/`for`/`foreach`/
+`for`-range arms also skipped the *heads*, so even a statement-position
+construct was affected.
+
+The walk now has an arm for every node kind, in the same order and shape as
+`fv_walk`'s -- the free-variable walk in the same file, which is the
+complete one. That is the fix: the two walks disagreeing is what let this
+through, so both are now in step and the comment above the walk says to keep
+them that way. I checked master's `fv_walk` before porting: its arm list
+already matches, and `json{...}` desugars to ordinary calls, so there was no
+node kind the branch had never seen.
+
+`collect_decl` factors the declaration arm, which had grown an `if`/`else`
+that did the same thing in both halves: a `def` and a `let` bound to a
+function literal are both a name a call can resolve, so both are collected
+and both recurse into the body.
+
+  instructions executed compiling: +0.00% on every benchmark, SCORE 101.63.
+                    The branch recorded +0.53% on ycc.y for this; that did
+                    not reproduce here, and every named function is exactly
+                    unchanged.
+  size            +4,705 bytes / +1,328 asm lines (1,598,113 / 382,436 ->
+                    1,602,818 / 383,764). The branch recorded +4,710 / +1,330
+                    from almost the same base.
+  behaviour     port 152/152 and pe-port 152/152, both twins. 457 native
+                    programs: 0 differ beyond the three /tmp failures noted
+                    in the previous commit.
+
+`refs/ycc.ref` is reblessed here (ce6b1a59). It had to be: it was stale on
+master, and every suite takes it as `$YREF`, so `native` compiled the new
+fixture with the old compiler and reported the old error back at me. The
+rebless is `make rebless`, which gates on both port halves -- 151/151 each --
+before installing.

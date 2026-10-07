@@ -3238,60 +3238,155 @@ def uses_argv(stmts: [Node]) -> bool {
 };
 
 // ── def collection (incl. hoisting) ────────────────────────────────────
-// Walk blocks/ifs/whiles/func-bodies; every named def and every let-bound
-// anonymous def becomes a top-level function (they capture nothing — the
-// checker proved it). Returns [FnDef].
+// Every named def and every let-bound anonymous def becomes a top-level
+// function (the capture-free ones — the checker proved the rest capture).
+// Returns [FnDef].
+//
+// The walk below covers EVERY node kind, in the same order and shape as
+// fv_walk's (see "free variables" below), because a `def` is a statement and
+// a statement can live in a block, and a block is an expression: the two
+// walks disagreeing is what let `if ({ def g() -> bool { true }; g() })`
+// and a def in a call argument, an array element, a record value, an
+// operand, an index or a loop head reach the assembler unhoisted, which
+// then failed with `undefined label 'y_missing_...'`. Keep the two in step:
+// one is free variables, the other definitions, and both need every arm.
 type FnDef = { name: str, func: Func };
 
-def collect_from_block(stmts: [Node], out: [FnDef]) -> [FnDef] {
-    stmts.foreach((e) => {
+def collect_from_list(nodes: [Node], out: [FnDef]) -> [FnDef] {
+    nodes.foreach((e) => {
         out = collect_from_node(e, out);
     });
     out
+};
+
+def collect_from_block(stmts: [Node], out: [FnDef]) -> [FnDef] {
+    collect_from_list(stmts, out)
+};
+
+// A `def` declaration, and a `let` bound to a function literal: both are a
+// name a call can resolve, so both are collected here and both recurse into
+// the function body (a def nested in it is hoisted the same way).
+def collect_decl(decl: Decl, out: [FnDef]) -> [FnDef] {
+    if (decl.v.k == K.func) {
+        let func: Func = decl.v;
+        out += { name: decl.name, func: func };
+    };
+    collect_from_node(decl.v, out)
 };
 
 def collect_from_node(node: Node, out: [FnDef]) -> [FnDef] {
     let k = node.k;
     if (k == K.decl) {
         let decl: Decl = node;
-        if (decl.kind == "def") {
-            let func: Func = decl.v;
-            out += { name: decl.name, func: func };
-            out = collect_from_node(decl.v, out);
-        } else {
-            if (decl.v.k == K.func) {
-                let func: Func = decl.v;
-                out += { name: decl.name, func: func };
-            }
-            out = collect_from_node(decl.v, out);
-        }
-    } else if (k == K.func) {
-        let func: Func = node;
-        let body: Block = func.body;
-        out = collect_from_block(body.stmts, out);
+        out = collect_decl(decl, out);
+    } else if (k == K.un) {
+        let child: NodeE = node;
+        out = collect_from_node(child.e, out);
+    } else if (k == K.addr) {
+        let child: NodeE = node;
+        out = collect_from_node(child.e, out);
+    } else if (k == K.deref) {
+        let child: NodeE = node;
+        out = collect_from_node(child.e, out);
+    } else if (k == K.ret) {
+        let child: NodeE = node;
+        out = collect_from_node(child.e, out);
+    } else if (k == K.bin) {
+        let bin: Bin = node;
+        out = collect_from_node(bin.l, out);
+        out = collect_from_node(bin.r, out);
+    } else if (k == K.array) {
+        let array: ArrLit = node;
+        out = collect_from_list(array.elems, out);
+    } else if (k == K.rec) {
+        let rec: RecLit = node;
+        out = collect_from_list(rec.vals, out);
+    } else if (k == K.map) {
+        let map: RecLit = node;
+        out = collect_from_list(map.vals, out);
+    } else if (k == K.arrrep) {
+        let rep: ArrRep = node;
+        out = collect_from_node(rep.v, out);
+    } else if (k == K.call) {
+        let call: Call = node;
+        out = collect_from_node(call.callee, out);
+        out = collect_from_list(call.args, out);
+    } else if (k == K.index) {
+        let index: Index = node;
+        out = collect_from_node(index.arr, out);
+        out = collect_from_node(index.idx, out);
+    } else if (k == K.slice) {
+        let slice: Slice = node;
+        out = collect_from_node(slice.arr, out);
+        out = collect_from_node(slice.lo, out);
+        out = collect_from_node(slice.hi, out);
+    } else if (k == K.idxassign) {
+        let assign: IdxAssign = node;
+        out = collect_from_node(assign.arr, out);
+        out = collect_from_node(assign.idx, out);
+        out = collect_from_node(assign.v, out);
+    } else if (k == K.dot) {
+        let dot: Dot = node;
+        out = collect_from_node(dot.obj, out);
+    } else if (k == K.dotassign) {
+        let assign: DotAssign = node;
+        out = collect_from_node(assign.obj, out);
+        out = collect_from_node(assign.v, out);
+    } else if (k == K.store) {
+        let store: Store = node;
+        out = collect_from_node(store.p, out);
+        out = collect_from_node(store.v, out);
+    } else if (k == K.assign) {
+        let assign: Assign = node;
+        out = collect_from_node(assign.v, out);
+    } else if (k == K.incdec) {
+        let incdec: IncDec = node;
+        out = collect_from_node(incdec.tgt, out);
+    } else if (k == K.opassign) {
+        let assign: OpAssign = node;
+        out = collect_from_node(assign.tgt, out);
+        out = collect_from_node(assign.v, out);
     } else if (k == K.kw_if) {
         let branch: If = node;
+        out = collect_from_node(branch.cond, out);
         out = collect_from_node(branch.then, out);
         if (branch.has_else) {
             out = collect_from_node(branch.els, out);
         }
     } else if (k == K.kw_while) {
         let loop: While = node;
+        out = collect_from_node(loop.cond, out);
         out = collect_from_node(loop.body, out);
     } else if (k == K.kw_for) {
         let loop: For = node;
         out = collect_from_node(loop.init, out);
-        out = collect_from_node(loop.body, out);
+        out = collect_from_node(loop.cond, out);
         out = collect_from_node(loop.step, out);
+        out = collect_from_node(loop.body, out);
     } else if (k == K.kw_foreach) {
         let loop: Foreach = node;
+        out = collect_from_node(loop.iter, out);
         out = collect_from_node(loop.body, out);
     } else if (k == K.forrange) {
         let loop: ForRange = node;
+        out = collect_from_node(loop.lo, out);
+        out = collect_from_node(loop.hi, out);
         out = collect_from_node(loop.body, out);
     } else if (k == K.block) {
         let block: Block = node;
         out = collect_from_block(block.stmts, out);
+    } else if (k == K.func) {
+        let func: Func = node;
+        out = collect_from_node(func.body, out);
+    } else if (k == K.sliceassign) {
+        let assign: SliceAssign = node;
+        out = collect_from_node(assign.arr, out);
+        out = collect_from_node(assign.lo, out);
+        out = collect_from_node(assign.hi, out);
+        out = collect_from_node(assign.v, out);
+    } else if (k == K.rectest || k == K.narrow || k == K.matchend) {
+        let child: NodeE = node;
+        out = collect_from_node(child.e, out);
     }
     out
 };
