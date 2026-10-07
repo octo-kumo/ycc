@@ -288,7 +288,11 @@ def arch_kernel_bss() -> str {
     // The syscall path's two words: where the user stack was when SYSCALL
     // arrived, and the kernel stack it switched to (M2 gives each task one).
     "y_user_rsp:\n.zero 8\n" +
-    "y_syscall_stack:\n.zero 8\n" +
+    // The running task: its kernel stack top (where SYSCALL lands and where the
+    // TSS RSP0 points) and the %rsp of its suspended frame (the scheduler's
+    // only view of a task's registers, because the frame IS the state).
+    "y_cur_kstack:\n.zero 8\n" +
+    "y_cur_task_rsp:\n.zero 8\n" +
     "y_heap_start:\n.zero 8\n" +
     "y_heap_bias:\n.zero 8\n" +
     "y_heap_next:\n.zero 8\n" +

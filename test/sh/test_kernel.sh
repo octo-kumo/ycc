@@ -142,7 +142,9 @@ for usrc in "$KDIR"/u*.user.y; do
     base=$(basename "$usrc" .user.y)
     kimg="$WORK/$base.elf"
     pimg="$WORK/$base.prog"
-    if ! ( cd "$ROOT" && timeout "$((60 * YTIMEOUT_SCALE))" "$YCC" --kernel "$KDIR/uland.y" -o "$kimg" ) >"$WORK/$base.k.log" 2>&1; then
+    driver="$KDIR/uland.y"
+    [ -f "$KDIR/$base.driver.y" ] && driver="$KDIR/$base.driver.y"
+    if ! ( cd "$ROOT" && timeout "$((60 * YTIMEOUT_SCALE))" "$YCC" --kernel "$driver" -o "$kimg" ) >"$WORK/$base.k.log" 2>&1; then
         kfail "$base: the driver failed to compile"
         sed 's/^/    /' "$WORK/$base.k.log"
         continue
@@ -155,7 +157,7 @@ for usrc in "$KDIR"/u*.user.y; do
     if [ "$C_OK" = 1 ]; then
         cimg="$WORK/$base.c.elf"
         cprog="$WORK/$base.c.prog"
-        ( cd "$ROOT" && timeout "$((60 * YTIMEOUT_SCALE))" "$CYCC" --kernel "$KDIR/uland.y" -o "$cimg" ) >/dev/null 2>&1
+        ( cd "$ROOT" && timeout "$((60 * YTIMEOUT_SCALE))" "$CYCC" --kernel "$driver" -o "$cimg" ) >/dev/null 2>&1
         ( cd "$ROOT" && timeout "$((60 * YTIMEOUT_SCALE))" "$CYCC" "$usrc" -o "$cprog" ) >/dev/null 2>&1
         if ! cmp -s "$kimg" "$cimg"; then
             kfail "$base: the driver's images differ between the compilers"

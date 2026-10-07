@@ -748,6 +748,27 @@ def gdt_init() -> void {
     tss_load();
 };
 
+// ── tasks and the scheduler ─────────────────────────────────────────────
+// One core, so a task is: an address space, a kernel stack, and the frame it
+// was suspended at.  That frame IS the register state -- the syscall entry
+// builds it whole -- so a switch is a stack switch and nothing else, and the
+// kernel needs no context-switch assembly.
+//
+// The kernel is NOT preemptible: the switch happens on the way out, at the one
+// point the entry stub publishes (y_cur_task_rsp), which is why the allocator,
+// the task table and every kernel structure need no locks.  The timer only
+// sets a flag; the exit path acts on it.
+const TASK_RUNNING = 1;
+const TASK_READY = 2;
+const TASK_DEAD = 3;
+
+type Task = { rsp: long, cr3: long, kstack: long, pid: long, state: long, name: str };
+
+let tasks: [Task] = [];
+let cur_task = 0;
+let need_resched = false;
+let next_pid = 1;
+
 // ── the syscall path ────────────────────────────────────────────────────
 // x86-64's fast system call: the number in %rax, the arguments in %rdi, %rsi,
 // %rdx, %r10, %r8, %r9, then `syscall`.  That is exactly what a ycc-compiled
@@ -761,7 +782,9 @@ const MSR_FMASK = 3221225604;
 ndef y_msr_read(reg: long) -> long = "y_msr_read";
 ndef y_msr_write(reg: long, value: long) -> long = "y_msr_write";
 ndef y_syscall_entry_addr() -> long = "y_syscall_entry_addr";
-ndef y_syscall_stack_set(top: long) -> long = "y_syscall_stack_set";
+ndef y_cur_kstack_set(top: long) -> long = "y_cur_kstack_set";
+ndef y_cur_task_rsp_get() -> long = "y_cur_task_rsp_get";
+ndef y_enter_frame(rsp: long) -> long = "y_enter_frame";
 ndef y_enter_user(rip: long, rsp: long, rflags: long) -> long = "y_enter_user";
 
 def enter_user(rip: long, rsp: long, rflags: long) -> void {
@@ -769,6 +792,8 @@ def enter_user(rip: long, rsp: long, rflags: long) -> void {
 };
 
 def syscall_entry_addr() -> long { y_syscall_entry_addr() };
+def enter_frame(rsp: long) -> void { y_enter_frame(rsp); };
+def cur_kstack_set(top: long) -> void { y_cur_kstack_set(top); };
 def msr_read(reg: long) -> long { y_msr_read(reg) };
 def msr_write(reg: long, v: long) -> void { y_msr_write(reg, v) };
 
@@ -779,7 +804,7 @@ def msr_write(reg: long, v: long) -> void { y_msr_write(reg, v) };
 // preempted mid-syscall and DF (0x400) so the return restores the program's
 // own direction flag with forward string operations in between.
 def syscall_init(stack_top: long) -> void {
-    y_syscall_stack_set(stack_top);
+    y_cur_kstack_set(stack_top);
     y_msr_write(MSR_EFER, y_msr_read(MSR_EFER) | 1);
     y_msr_write(MSR_STAR, (SEL_KCODE << 32) | (19 << 48));
     y_msr_write(MSR_LSTAR, y_syscall_entry_addr());
@@ -871,11 +896,15 @@ def sys_mmap(addr: long, len: long, prot: long, flags: long, fd: long, off: long
 
 def mmap_bytes() -> long { mmap_next - MMAP_BASE };
 
-// exit_group(status): M1 has one task, so the verdict goes to the test
-// harness; M2 turns this into a task teardown and a reschedule.
+// exit_group(status): the task is done.  With one task left the machine has
+// nothing to run, so the verdict goes to the test harness through kexit; with
+// others, the exit path switches away and this one never returns.
 def sys_exit_group(status: long) -> long {
-    y_kexit(status & 255);
-    0
+    if (len(tasks) <= 1) {
+        y_kexit(status & 255);
+    };
+    task_exit();
+    status
 };
 
 // The dispatcher the entry stub calls.  `y_`-prefixed because generated
@@ -887,4 +916,119 @@ def y_sys_dispatch(nr: long, a1: long, a2: long, a3: long, a4: long, a5: long, a
     if (nr == SYS_EXIT_GROUP) { return sys_exit_group(a1); };
     if (nr == SYS_READ) { return 0; };
     E_NOSYS
+};
+
+// ── tasks and the scheduler ─────────────────────────────────────────────
+def task_count() -> long { len(tasks) };
+def task_current() -> long { cur_task };
+def task_state(i: long) -> long { tasks[i].state };
+def task_pid(i: long) -> long { tasks[i].pid };
+def task_name(i: long) -> str { tasks[i].name };
+def task_rsp(i: long) -> long { tasks[i].rsp };
+def need_resched_now() -> bool { need_resched };
+def sched_tick() -> void { need_resched = true; };
+def sched_ready() -> void { need_resched = true; };
+
+// The kernel's own context.  The first task is whatever is running at boot and
+// needs no fabricated frame: the first switch saves it.
+def sched_init(cr3: long, kstack: long) -> void {
+    if (len(tasks) == 0) {
+        tasks += { rsp: 0, cr3: cr3, kstack: kstack, pid: 0, state: TASK_RUNNING, name: "kernel" };
+        y_cur_kstack_set(kstack);
+    };
+};
+
+def sched_add(cr3: long, kstack: long, frame: long, name: str) -> long {
+    let t: Task = { rsp: frame, cr3: cr3, kstack: kstack, pid: next_pid, state: TASK_READY, name: name };
+    next_pid = next_pid + 1;
+    tasks += t;
+    len(tasks) - 1
+};
+
+// OPEN (M2): a task entered through this frame runs, but the first allocation
+// its program makes reaches the kernel's mmap with a garbage length
+// (0x3007ff701000, and the check that rejects it is what reports "out of
+// memory"), while the SAME program entered through enter_user+iretq (M1's
+// u001, the boot address space) allocates normally.  So the frame's register
+// slots and the stub's pop order agree with each other and not yet with what
+// the program expects on the way in -- the next thing to bisect is %rsi as the
+// program's first syscall sees it.
+//
+// A kernel stack with the frame that enters `entry` at ring 3 on `ustack`.
+// The shape is the entry stub's: seven register slots (popped first, rax
+// highest) above an IRETQ frame whose lowest word is RIP -- the convention a
+// suspended task's %rsp follows.
+def task_frame(kstack_top: long, entry: long, ustack: long) -> long {
+    let p = kstack_top;
+    // Written from the top down, which is the order the entry stub pushes it:
+    // the IRETQ frame first (RIP ends up lowest), then the register slots.
+    p = p - 8; poke_va64(p, 27);         // SS (user data | 3)
+    p = p - 8; poke_va64(p, ustack);     // RSP
+    p = p - 8; poke_va64(p, 514);        // RFLAGS (IF and the reserved bit 1)
+    p = p - 8; poke_va64(p, 35);         // CS (user code | 3)
+    p = p - 8; poke_va64(p, entry);      // RIP
+    p = p - 8; poke_va64(p, 0);          // rax
+    p = p - 8; poke_va64(p, 0);          // rdi
+    p = p - 8; poke_va64(p, 0);          // rsi
+    p = p - 8; poke_va64(p, 0);          // rdx
+    p = p - 8; poke_va64(p, 0);          // r10
+    p = p - 8; poke_va64(p, 0);          // r8
+    p = p - 8; poke_va64(p, 0);          // r9
+    p
+};
+
+// The TSS's RSP0, so an interrupt taken while this task is in ring 3 lands on
+// its own kernel stack.  Same two 4-aligned halves gdt_build writes.
+def tss_set_rsp0(top: long) -> void {
+    let t = ptr_addr(&tss_cells[0]);
+    poke_va32(t + 4, top);
+    poke_va32(t + 8, top >>> 32);
+};
+
+// Start a task for the first time: its frame is already its state, so this is
+// the address-space switch plus the resume.
+def task_start(i: long) -> void {
+    cur_task = i;
+    tasks[i].state = TASK_RUNNING;
+    y_cr3_set(tasks[i].cr3);
+    y_cur_kstack_set(tasks[i].kstack);
+    tss_set_rsp0(tasks[i].kstack);
+    y_enter_frame(tasks[i].rsp);
+};
+
+// The one switch point.  Called from the entry stub with the outgoing task's
+// frame pointer in y_cur_task_rsp; answers the %rsp to resume, or 0 to mean
+// "stay".  A dead task is never picked, and nothing runnable means stay.
+def y_sched_pick() -> long {
+    if (!need_resched) { return 0; };
+    if (len(tasks) <= 1) { return 0; };
+    tasks[cur_task].rsp = y_cur_task_rsp_get();
+    let n = len(tasks);
+    let found = 0 - 1;
+    let i = 1;
+    while (i <= n) {
+        let k = (cur_task + i) % n;
+        if (found < 0 && (tasks[k].state == TASK_READY || tasks[k].state == TASK_RUNNING)) { found = k; };
+        i = i + 1;
+    };
+    if (found < 0) {
+        need_resched = false;
+        return 0;
+    };
+    need_resched = false;
+    if (tasks[cur_task].state == TASK_RUNNING) { tasks[cur_task].state = TASK_READY; };
+    cur_task = found;
+    tasks[cur_task].state = TASK_RUNNING;
+    y_cr3_set(tasks[cur_task].cr3);
+    y_cur_kstack_set(tasks[cur_task].kstack);
+    tss_set_rsp0(tasks[cur_task].kstack);
+    tasks[cur_task].rsp
+};
+
+// A task that is done: mark it, and let the exit path switch away.  M2's
+// teardown is the whole of it -- freeing the address space and waking a parent
+// is the next step.
+def task_exit() -> void {
+    tasks[cur_task].state = TASK_DEAD;
+    need_resched = true;
 };

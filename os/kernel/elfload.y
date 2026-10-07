@@ -73,11 +73,12 @@ def elf_stack(top: long, arg: str) -> long {
     sp
 };
 
-// Load the image at `phys` (`size` bytes) and leave for ring 3.  `name` is
-// what argv[0] becomes.  Returns the entry point, or 0 if the image is not
-// one this loader can run -- the caller decides what a failure means.
-def elf_load(phys: long, size: long, name: str) -> long {
-    if (!elf_ok(phys)) { return 0; };
+// Map the image into the CURRENT address space and answer its entry point.
+// The caller has already switched to the address space this program belongs
+// to: the kernel's own mappings are in every one of them, and the pages below
+// (mmap, the stack) are what make this one the program's.
+def elf_map(phys: long, size: long) -> long {
+    if (!elf_ok(phys) || size <= 0) { return 0; };
     let entry = kernel.peek64(phys + 24);
     let phoff = kernel.peek64(phys + 32);
     let phentsize = kernel.peek32(phys + 54);
@@ -85,8 +86,7 @@ def elf_load(phys: long, size: long, name: str) -> long {
     let i = 0;
     while (i < phnum) {
         let ph = phys + phoff + i * phentsize;
-        let ptype = kernel.peek32(ph);
-        if (ptype == PT_LOAD) {
+        if (kernel.peek32(ph) == PT_LOAD) {
             let off = kernel.peek64(ph + 8);
             let va = kernel.peek64(ph + 16);
             let filesz = kernel.peek64(ph + 32);
@@ -95,15 +95,31 @@ def elf_load(phys: long, size: long, name: str) -> long {
         };
         i = i + 1;
     };
-    // The stack, mapped and filled, then the program's own RSP.
-    let sp_page = 0;
-    while (sp_page < STACK_BYTES) {
+    entry
+};
+
+// The program's stack, mapped and given a first frame, and the %rsp to enter
+// with.  `name` is what argv[0] says -- which is how two processes of one
+// image tell each other apart.
+def elf_setup_stack(name: str) -> long {
+    let at = 0;
+    while (at < STACK_BYTES) {
         let got = kernel.page_alloc();
         if (got == 0) { return 0; };
-        if (!kernel.vm_map(kernel.vm_current(), STACK_BASE + sp_page, got, kernel.PTE_U | kernel.PTE_W)) { return 0; };
-        sp_page = sp_page + 4096;
+        if (!kernel.vm_map(kernel.vm_current(), STACK_BASE + at, got, kernel.PTE_U | kernel.PTE_W)) { return 0; };
+        at = at + 4096;
     };
-    let sp = elf_stack(STACK_BASE + STACK_BYTES - 16, name);
+    elf_stack(STACK_BASE + STACK_BYTES - 16, name)
+};
+
+// Load the image at `phys` (`size` bytes) into the current address space and
+// leave for ring 3.  Returns 0 if the image cannot be run, and never returns
+// when it can.
+def elf_load(phys: long, size: long, name: str) -> long {
+    let entry = elf_map(phys, size);
+    if (entry == 0) { return 0; };
+    let sp = elf_setup_stack(name);
+    if (sp == 0) { return 0; };
     kernel.enter_user(entry, sp, 514);
     0
 };

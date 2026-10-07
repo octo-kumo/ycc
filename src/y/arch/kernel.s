@@ -329,29 +329,49 @@ y_heap_limit_get:
     ret
 
 #=== add: y_syscall_entry ===
-# The SYSCALL entry, addressed by LSTAR.  The instruction has already: masked
+# The SYSCALL entry, addressed by LSTAR.  The instruction has already masked
 # the flags FMASK names, put the return rip in %rcx and the flags in %r11, and
-# left %rsp pointing at the USER stack -- which is the one thing it does not
-# change, so the first move here is to take a kernel one.
+# left %rsp on the USER stack -- which is the one thing it does not change, so
+# the first move here is to take a kernel one.
 #
-# The Y ABI is stack-passed -- the LAST argument is lowest, at 8(%rsp) at the
-# callee's entry -- so the seven words y_sys_dispatch takes go on in that
-# order, and nothing else may be pushed between them and the call: a padding
-# word put in front of them shifts every argument by one, which dispatched
-# exit_group as read and left the ring-3 program looping instead of leaving.
-# The nine pushes leave %rsp 16-aligned, which is what the call wants.  The
-# cleanup adds the seven argument words (56) -- %r11 and %rcx sit just above
-# them -- and not the whole frame: skipping past %rcx made the pops read the
-# kernel stack, which restored a garbage RFLAGS with TF set, and the program's
-# next instruction was a #DB.
-# %rcx and %r11 are caller-saved and the dispatcher may use them, so they go
-# on the stack before the arguments and come back before SYSRETQ, which is
-# what makes the return possible.
+# What is built is the whole state a task needs to be left and resumed:
+#
+#   [SS][RSP][RFLAGS][CS][RIP]      an IRETQ frame, RIP lowest
+#   [rax][rdi][rsi][rdx][r10][r8][r9]
+#                                   the user's caller-saved registers, which
+#                                   are also the dispatcher's arguments
+#
+# The frame goes on FIRST, and in that order, because IRETQ pops RIP first and
+# has to find it at the lowest address; the argument slots go below it, so the
+# pop that restores the user's registers is also what uncovers the frame.  The
+# dispatcher's answer is written into the saved rax slot -- 48(%rsp) after the
+# call, the seventh word up; 56 is RIP, and writing the answer there is a
+# return to address 6 -- so the last pop IS the return value.  IRETQ restores only
+# RIP/CS/RFLAGS/RSP/SS, which is why the registers are popped by hand.
+#
+# The syscall number is pushed above the frame first and read back into place
+# five words later (40(%rsp) from the RIP): %rax is the frame's scratch, and
+# the number belongs just ABOVE %rdi, where the seventh pop finds it.
+#
+# A task switch is a stack switch at the marked point: every task that is
+# switched out is suspended there with %rsp saved into one fixed word, and
+# resuming one loads its %rsp and pops ITS registers and frame.  Nothing else
+# is saved, which is why the kernel needs no context-switch assembly -- and why
+# the switch happens on the way OUT (the plan's non-preemptible kernel: no
+# locks anywhere, the timer only sets a flag).
 y_syscall_entry:
     mov %rsp, y_user_rsp(%rip)
-    mov y_syscall_stack(%rip), %rsp
-    push %rcx
+    mov y_cur_kstack(%rip), %rsp
+    push %rax
+    mov $27, %rax
+    push %rax
+    mov y_user_rsp(%rip), %rax
+    push %rax
     push %r11
+    mov $35, %rax
+    push %rax
+    push %rcx
+    mov 40(%rsp), %rax
     push %rax
     push %rdi
     push %rsi
@@ -360,12 +380,21 @@ y_syscall_entry:
     push %r8
     push %r9
     call y_sys_dispatch
-    add $56, %rsp
-    pop %r11
-    pop %rcx
-    mov y_user_rsp(%rip), %rsp
-    .ascii "\110\017\007"
-    ret
+    mov %rax, 48(%rsp)
+    mov %rsp, y_cur_task_rsp(%rip)
+    call y_sched_pick
+    test %rax, %rax
+    jz y_se_same
+    mov %rax, %rsp
+y_se_same:
+    pop %r9
+    pop %r8
+    pop %r10
+    pop %rdx
+    pop %rsi
+    pop %rdi
+    pop %rax
+    iretq
 
 #=== add: y_syscall_entry_addr ===
 # Where the syscall entry is, for LSTAR.
@@ -373,14 +402,37 @@ y_syscall_entry_addr:
     lea y_syscall_entry(%rip), %rax
     ret
 
-#=== add: y_syscall_stack_set ===
-# y_syscall_stack_set(top): the kernel stack SYSCALL switches to.  M2 makes it
-# per task; until then one is enough, and it must differ from the stack the
-# stub is entered on or the push of the user state would overwrite itself.
-y_syscall_stack_set:
+#=== add: y_cur_kstack_set ===
+# y_cur_kstack_set(top): the running task's kernel stack -- where SYSCALL lands
+# and where the TSS's RSP0 points, so it must be updated on every switch.
+y_cur_kstack_set:
     mov 8(%rsp), %rax
-    mov %rax, y_syscall_stack(%rip)
+    mov %rax, y_cur_kstack(%rip)
     ret
+
+#=== add: y_cur_task_rsp_get ===
+# The %rsp of the frame the running task was suspended at.  The entry stub
+# writes it just before calling the scheduler, which is what makes a task
+# switch a stack switch and nothing more.
+y_cur_task_rsp_get:
+    mov y_cur_task_rsp(%rip), %rax
+    ret
+
+#=== add: y_enter_frame ===
+# y_enter_frame(rsp): resume a suspended frame.  The syscall entry's tail, and
+# the way a task is started for the first time -- a switch *inside* the
+# scheduler needs no such thing, because every suspended task is suspended at
+# exactly this shape.
+y_enter_frame:
+    mov 8(%rsp), %rsp
+    pop %r9
+    pop %r8
+    pop %r10
+    pop %rdx
+    pop %rsi
+    pop %rdi
+    pop %rax
+    iretq
 
 #=== add: y_enter_user ===
 # y_enter_user(rip, rsp, rflags): leave for ring 3.  The iretq frame is

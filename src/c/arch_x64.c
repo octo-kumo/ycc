@@ -347,7 +347,10 @@ Yv *arch_kernel_bss(void) {
                  SYSCALL arrived, and the kernel stack it switched to (M2
                  gives each task one). */
               "y_user_rsp:\n.zero 8\n"
-              "y_syscall_stack:\n.zero 8\n"
+              /* The running task: its kernel stack top, and the %rsp of its
+                 suspended frame (the frame IS the state). */
+              "y_cur_kstack:\n.zero 8\n"
+              "y_cur_task_rsp:\n.zero 8\n"
               /* The Y heap's region: a physical address and direct-map
                  addresses, set once by y_heap_region_set. */
               "y_heap_start:\n.zero 8\n"
