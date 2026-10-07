@@ -395,3 +395,21 @@ whether the tail a joined thread leaves is still reachable by the collector
 (it is not freed -- the walk stops at its zero header -- so with the write gone
 the region is reserved forever), and whether a *fresh* thread's tcb words 14/15
 are read before y_spawn's zeroing on every path (the fork path copies a tcb).
+
+## Round 27: the pair fixes every normal fixture but not the stress case
+
+Applied both known fixes together -- the spare {start, end} in the joining
+thread's tcb (round 22) and the sweep clamp to the lowest registered thread
+`cur` inside a chunk (round 19) -- on top of the y_heap/128-byte-tcb work. That
+combination is the first that keeps every *normal* fixture green, including
+t343_threads_queue, which the spare change alone segfaulted: all six thread
+fixtures pass. But t160_threads under --gc-stress now *segfaults* instead of
+tripping the invariant trap, so the pair is reverted again rather than landed.
+
+Read together with round 26, this says the two hazards are indeed coupled
+(moving the spare makes a joined thread's tail walkable as soon as its owner
+allocates in it, which is exactly when the clamp has to hold), but there is a
+third thing: with both in place the failure is no longer a bad header read but
+a straight fault, i.e. something now dereferences memory that was freed or
+handed out twice. The next attempt should keep the pair and find that third
+piece with the reporting trap plus `--gc-stress`, which reproduces in seconds.
