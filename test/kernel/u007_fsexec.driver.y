@@ -5,7 +5,6 @@
 // block rather than a buffer.
 import kernel;
 import elf from "../../os/kernel/elfload.y";
-import yfs from "../../os/kernel/yfs.y";
 
 def p8(addr: long, v: long) -> void { kernel.poke_va8(addr, v & 255); };
 
@@ -64,9 +63,9 @@ p32(img + BS + 136, data_start + 1);
 let bsrc = (data_start + 1) * BS;
 let k = 0;
 while (k < msize) { p8(img + bsrc + k, kernel.peek8(mphys + k)); k = k + 1; };
-let ok = yfs.yfs_init(img);
-let ino = yfs.yfs_lookup_path("/prog");
-let size = yfs.yfs_size(ino);
+let ok = yfs_init(img);
+let ino = yfs_lookup_path("/prog");
+let size = yfs_size(ino);
 print("fs ok=" + tostring(ok) + " ino=" + tostring(ino) + " size=" + tostring(size) + "\n");
 let dir = kernel.vm_new_dir();
 kernel.vm_switch(dir);

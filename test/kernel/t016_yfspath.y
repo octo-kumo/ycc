@@ -2,7 +2,6 @@
 // subdirectory live in their own block, so this also pins that a directory
 // inode's direct[0] is followed like any other file's.
 import kernel;
-import yfs from "../../os/kernel/yfs.y";
 
 def p8(addr: long, v: long) -> void { kernel.poke_va8(addr, v & 255); };
 
@@ -52,9 +51,9 @@ p32(img + 452, 2);
 p32(img + 456, 4);
 p8(img + 1024, 111);
 p8(img + 1025, 107);
-let ok = yfs.yfs_init(img);
-let ino = yfs.yfs_lookup_path("/bin/sh");
-let n = yfs.yfs_read(ino, 0, out, 2);
-let bad = yfs.yfs_lookup_path("/bin/nope");
+let ok = yfs_init(img);
+let ino = yfs_lookup_path("/bin/sh");
+let n = yfs_read(ino, 0, out, 2);
+let bad = yfs_lookup_path("/bin/nope");
 print("path ok=" + tostring(ok) + " ino=" + tostring(ino) + " n=" + tostring(n) + " c=" + tostring(kernel.peek_va8(out)) + tostring(kernel.peek_va8(out + 1)) + " bad=" + tostring(bad) + "\n");
 kernel.kexit(9);

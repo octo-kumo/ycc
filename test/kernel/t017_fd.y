@@ -3,8 +3,6 @@
 // the first fd is 3, "ok" is 111 107, a seek to 1 leaves 107, and reading a
 // closed fd is -14.
 import kernel;
-import yfs from "../../os/kernel/yfs.y";
-import fd from "../../os/kernel/fd.y";
 
 def p8(addr: long, v: long) -> void { kernel.poke_va8(addr, v & 255); };
 
@@ -47,16 +45,16 @@ p32(img + 448, 1);
 p32(img + 452, 2);
 p32(img + 456, 4);
 p8(img + 1024, 111); p8(img + 1025, 107);
-let ok = yfs.yfs_init(img);
-fd.fd_reset();
-let f = fd.fd_open("/bin/sh");
-let n = fd.fd_read(f, out, 2);
+let ok = yfs_init(img);
+fd_reset();
+let f = fd_open("/bin/sh");
+let n = fd_read(f, out, 2);
 let a = kernel.peek_va8(out);
 let b = kernel.peek_va8(out + 1);
-let sk = fd.fd_lseek(f, 1);
-let n2 = fd.fd_read(f, out, 1);
+let sk = fd_lseek(f, 1);
+let n2 = fd_read(f, out, 1);
 let c2 = kernel.peek_va8(out);
-let cl = fd.fd_close(f);
-let bad = fd.fd_read(f, out, 1);
+let cl = fd_close(f);
+let bad = fd_read(f, out, 1);
 print("fd ok=" + tostring(ok) + " open=" + tostring(f) + " n=" + tostring(n) + " c=" + tostring(a) + tostring(b) + " seek=" + tostring(sk) + " n2=" + tostring(n2) + " c2=" + tostring(c2) + " close=" + tostring(cl) + " bad=" + tostring(bad) + "\n");
 kernel.kexit(9);

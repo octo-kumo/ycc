@@ -1,7 +1,6 @@
 // YFS1 directory reading: two entries with DIFFERENT name lengths, so the
 // 4-byte entry stride is exercised (entry 1 starts at 8+1 rounded up = 12).
 import kernel;
-import yfs from "../../os/kernel/yfs.y";
 
 def p8(addr: long, v: long) -> void { kernel.poke_va8(addr, v & 255); };
 
@@ -39,13 +38,13 @@ p16(img + 526, 1);
 p32(img + 528, 3);
 p8(img + 532, 98);
 p8(img + 533, 98);
-let ok = yfs.yfs_init(img);
-let n0 = yfs.yfs_readdir(1, 0, buf);
+let ok = yfs_init(img);
+let n0 = yfs_readdir(1, 0, buf);
 let a = kernel.peek_va8(buf);
-let i0 = yfs.yfs_dir_inode(1, 0);
-let n1 = yfs.yfs_readdir(1, 1, buf);
+let i0 = yfs_dir_inode(1, 0);
+let n1 = yfs_readdir(1, 1, buf);
 let b0 = kernel.peek_va8(buf);
 let b1 = kernel.peek_va8(buf + 1);
-let i1 = yfs.yfs_dir_inode(1, 1);
+let i1 = yfs_dir_inode(1, 1);
 print("dir ok=" + tostring(ok) + " n0=" + tostring(n0) + " a=" + tostring(a) + " i0=" + tostring(i0) + " n1=" + tostring(n1) + " b=" + tostring(b0) + tostring(b1) + " i1=" + tostring(i1) + "\n");
 kernel.kexit(9);

@@ -36,6 +36,8 @@ const IRQ_ATA1 = 14;
 const IRQ_ATA2 = 15;
 
 // ── the machine primitives (src/y/arch/kernel.s) ────────────────────────
+import fd from "./fd.y";
+
 ndef y_serial_init() -> long = "y_serial_init";
 ndef y_serial_irq_on() -> long = "y_serial_irq_on";
 ndef y_serial_putb(c: long) -> long = "y_serial_putb";
@@ -843,6 +845,9 @@ def syscall_init(stack_top: long) -> void {
 const SYS_READ = 0;
 const SYS_WRITE = 1;
 const SYS_MMAP = 9;
+const SYS_CLOSE = 3;
+const SYS_LSEEK = 8;
+const SYS_OPENAT = 257;
 const SYS_GETPID = 39;
 // The kernel's own calls, above the Linux numbers so they can never collide
 // with one that Linux adds later.
@@ -957,6 +962,9 @@ def y_sys_dispatch(nr: long, a1: long, a2: long, a3: long, a4: long, a5: long, a
     if (nr == SYS_WRITE) { return sys_write(a1, a2, a3); };
     if (nr == SYS_EXIT_GROUP) { return sys_exit_group(a1); };
     if (nr == SYS_READ) { return sys_read(a1, a2, a3); };
+    if (nr == SYS_CLOSE) { return sys_close(a1); };
+    if (nr == SYS_LSEEK) { return sys_lseek(a1, a2, a3); };
+    if (nr == SYS_OPENAT) { return sys_openat(a1, a2, a3); };
     E_NOSYS
 };
 
@@ -1243,7 +1251,7 @@ def vm_copy_user(src: long, dst: long) -> bool {
 // the scheduler only runs at kernel exit, and a read that blocked here would
 // hold the CPU until the interrupt arrived.
 def sys_read(fd: long, buf: long, len: long) -> long {
-    if (fd != 0) { return E_FAULT; };
+    if (fd != 0) { return fd.fd_read(fd, buf, len); };
     if (buf == 0 || len <= 0) { return 0; };
     let i = 0;
     while (i < len) {
@@ -1255,6 +1263,27 @@ def sys_read(fd: long, buf: long, len: long) -> long {
     };
     i
 };
+
+// A NUL-terminated string in the CALLER's address space, as a Y str: paths arrive
+// from userland as pointers and the kernel has to copy them in.
+def user_path(ptr: long) -> str {
+    let b: [byte] = [];
+    let i = 0;
+    while (i < 256) {
+        let c = peek_va8(ptr + i);
+        if (c == 0) { i = 256; } else { b += c; i = i + 1; };
+    };
+    from_bytes(b)
+};
+
+def sys_openat(dirfd: long, pathp: long, flags: long) -> long {
+    if (pathp == 0) { return E_FAULT; };
+    fd.fd_open(user_path(pathp))
+};
+
+def sys_close(fdno: long) -> long { fd.fd_close(fdno) };
+
+def sys_lseek(fdno: long, off: long, whence: long) -> long { fd.fd_lseek(fdno, off) };
 
 def sys_fork() -> long {
     let me = cur_task;
