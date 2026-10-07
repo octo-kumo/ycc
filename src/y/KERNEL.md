@@ -1094,3 +1094,23 @@ site, not from the saved frame, so they do not move.
 That is the whole change, written down so it can be done in one pass instead of
 two half-passes; the reverted version of the fix is in history at cb9be62, and
 test/kernel is green (33/33) without it.
+
+### Round 71: the IRQ edit must go INSIDE res_irq_stubs.foreach, not before it
+
+Attempted the whole frame recipe with line anchors.  All edits applied, and the
+result was a fault with an IMPOSSIBLE error code (err=100663393, cr2=0x6000638):
+the trap/IRQ section of arch_x64.y generates BOTH the exception stubs (vectors
+0..31, which push ten registers and never resume) and the IRQ stubs (inside
+res_irq_stubs.foreach), and the first `push %rcx` in that region belongs to the
+TRAP stubs.  Adding the six there shifted the handler's vector/error offsets, so
+the trap report itself printed garbage -- proof the edit landed in the wrong stub
+family, since the trap stubs must stay exactly as they are.
+
+Reverted; the committed state is green (33/33).
+
+Corrected recipe, so this is not repeated: the six pushes/pops and the CS check
+(80 -> 128) go inside the res_irq_stubs.foreach body (the `y_irq_stub_N` blocks),
+NOT in the trap-stub block above it; kernel.s's two 9-pop groups are the syscall
+stub's tail and y_enter_frame, and the six go above the nine in the pushes
+(before `push %rcx`, located by the unique `mov 56(%rsp), %rax`) and after each
+9-pop group; task_frame writes the six between RIP and the nine.
