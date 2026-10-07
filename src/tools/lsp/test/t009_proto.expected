@@ -2,12 +2,8 @@ initialize id 1
 textDocumentSync.change = 1
 openClose = true
 documentFormattingProvider = true
-advertised: documentFormattingProvider, documentSymbolProvider, semanticTokensProvider, textDocumentSync, definitionProvider, hoverProvider, completionProvider
-exactly the seven it implements: true
-legend types: 14
-legend matches sem.token_types() in length: true
-legend[0] is a comment: true
-legend[8] is an error: true
+advertised: documentFormattingProvider, documentSymbolProvider, textDocumentSync, definitionProvider, hoverProvider, completionProvider
+exactly the six it implements: true
 string id abc-1 is_json_string=true
 didOpen is a notification: true
 but it published: true
