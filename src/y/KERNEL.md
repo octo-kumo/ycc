@@ -275,3 +275,32 @@ The hand-written reference for the boot path is
 serial code assembled by GNU as, which is where the trampoline's bytes
 come from and how they were validated before any of this was in the
 compiler.
+
+## Un-merge, then move changes in one at a time (the plan taken up again)
+
+The branch is reset to `28285c4` -- the last state BEFORE the first upstream
+merge -- and the kernel works there: the minimal program prints "minimal".
+Everything after it is preserved in the tag `pre-unmerge`.
+
+The order of events, read off the first-parent chain rather than remembered:
+round 10's dedup (`28285c4`) -> merge #1 (`76ddb02`, the collector) -> MY M2
+work (fork/wait4, preemption, the collector handling, the entry patch) ->
+merge #2 (`14938e9`, --gc) -> the rest.  So the reset set my own kernel work
+aside too, and that is the point of the tag: it is all recoverable by
+cherry-pick.
+
+The plan, which is the one asked for:
+
+1. cherry-pick MY commits back one at a time (they were green before the merges
+   and are the kernel's own features), building and running test/kernel after
+   each -- that restores M2 on the clean base;
+2. then cherry-pick the UPSTREAM commits the two merges brought, one at a time,
+   building and running after each -- until the kernel image stops printing
+   "minimal".  That commit is the one that breaks it, named rather than
+   bisected by guesswork;
+3. then either fix that commit's effect (with its src/c twin) or leave it
+   unmerged with a note, and resume M3.
+
+This is strictly better than the file-level bisect: every step is a commit that
+compiles on its own, so the interdependency that defeated the hunk-level bisect
+does not arise.
