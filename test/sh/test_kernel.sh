@@ -143,6 +143,27 @@ check_reject() {
     [ "$bad" = 0 ] && pass "$base: rejected with its diagnostics"
 }
 
+# ── the driver's own refusals ───────────────────────────────────────────
+# Inline rather than fixtures: each is a flag combination, not a program, and
+# the expected text is quoted here because the coverage suite reads the
+# suites for the messages their tests assert.
+driver_reject() {
+    local what=$1 want=$2; shift 2
+    local out
+    out=$( cd "$ROOT" && timeout "$((30 * YTIMEOUT_SCALE))" "$YCC" "$@" 2>&1 )
+    case "$out" in
+        *"$want"*) pass "driver: $what" ;;
+        *) kfail "driver: $what" "wanted '$want', got: $out" ;;
+    esac
+}
+
+driver_reject "--kernel with -g" "-g is not supported with --kernel" \
+    --kernel -g "$KDIR/t001_hello.y" -o "$WORK/g.elf"
+driver_reject "--kernel run" "--kernel cannot run its image (boot it with 'qemu-system-x86_64 -kernel')" \
+    --kernel run "$KDIR/t001_hello.y"
+driver_reject "unknown target" "unknown target 'os2' (linux, windows, kernel)" \
+    --target=os2 "$KDIR/t001_hello.y" -o "$WORK/x.elf"
+
 for src in "$KDIR"/e*.y; do
     check_reject "$src" "$(basename "$src" .y)" kernel
 done

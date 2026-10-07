@@ -59,6 +59,10 @@ matrix_rows() {
 {
     grep -h -o '// expect-error: .*' "$ROOT"/test/y/native/e*.y | sed 's#// expect-error: ##'
     grep -h -o '// expect-warning: .*' "$ROOT"/test/y/native/t*.y | sed 's#// expect-warning: ##'
+    # The kernel suite's fixtures: its rejections (e*, compiled with --kernel)
+    # and h001 (compiled without) are the only tests some kernel-mode
+    # diagnostics have.
+    grep -h -o '// expect-error: .*' "$ROOT"/test/kernel/[eh]*.y | sed 's#// expect-error: ##'
     for s in "$ROOT"/test/sh/*.sh; do
         [ "$(basename "$s")" = test_coverage.sh ] || cat "$s"
     done
