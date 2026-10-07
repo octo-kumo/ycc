@@ -81,32 +81,51 @@ def yfs_read(ino: long, off: long, buf: long, len: long) -> long {
 // `addr` is an offset INTO THE IMAGE, like the offsets yfs_u16/yfs_u32 take:
 // the image address is added here.  (It was missed once, and the symptom was a
 // name compare that read physical 520 instead of image+520.)
-def yfs_name_at(addr: long, name: str) -> bool {
+// Does the entry at image offset `e` name path[a..b)?  Bounds rather than a
+// substring, so no string slicing is needed for a path walk.
+def yfs_name_is(e: long, path: str, a: long, b: long) -> bool {
+    if (yfs_u16(e) != b - a) { return false; };
     let i = 0;
-    while (i < len(name)) {
-        if (kernel.peek8(yfs_phys + addr + i) != name[i]) { return false; };
+    while (i < b - a) {
+        if (kernel.peek8(yfs_phys + e + 8 + i) != path[a + i]) { return false; };
         i = i + 1;
     };
     true
 };
 
-// One component, looked up in the root directory.  A path walk composes this.
-def yfs_lookup(name: str) -> long {
+def yfs_find_in(dir: long, path: str, a: long, b: long) -> long {
     if (yfs_ok == 0) { return 0 - 1; };
-    let base = yfs_inode_off(yfs_root);
-    let count = yfs_u32(base + 4);
-    let blk = yfs_u32(base + 8);
-    if (blk == 0) { return 0 - 1; };
-    let e = blk * yfs_block_size;
+    let count = yfs_dir_count(dir);
     let idx = 0;
     while (idx < count) {
-        let nl = yfs_u16(e);
-        if (nl == 0) { return 0 - 1; };
-        if (nl == len(name) && yfs_name_at(e + 8, name)) { return yfs_u32(e + 4); };
-        e = e + ((8 + nl + 3) & (0 - 4));
+        let e = yfs_entry_off(dir, idx);
+        if (e == 0) { return 0 - 1; };
+        if (yfs_name_is(e, path, a, b)) { return yfs_u32(e + 4); };
         idx = idx + 1;
     };
     0 - 1
+};
+
+// One component, in the root directory.
+def yfs_lookup(name: str) -> long {
+    yfs_find_in(yfs_root, name, 0, len(name))
+};
+
+// A '/'-separated path, absolute or relative to the root.  Empty components
+// (leading, trailing and doubled slashes) are skipped.
+def yfs_lookup_path(path: str) -> long {
+    let cur = yfs_root;
+    let i = 0;
+    while (i < len(path)) {
+        while (i < len(path) && path[i] == 47) { i = i + 1; };
+        if (i >= len(path)) { break; };
+        let j = i;
+        while (j < len(path) && path[j] != 47) { j = j + 1; };
+        cur = yfs_find_in(cur, path, i, j);
+        if (cur < 0) { return 0 - 1; };
+        i = j;
+    };
+    cur
 };
 
 // The entry at `index`: its name is copied into the caller's buffer and its
