@@ -1198,3 +1198,19 @@ against the MAIN tree's compiler.
 Everything else in the full gate is green (port 151/151, pe-port 151/151, native
 229/229, kernel 33/33, treeshake 54/54, std-suites 5/5), with lsp and coverage
 the documented pre-existing failures.
+
+### Round 76: exec works on both trees -- the ycc failure is fixture-specific
+
+The control that settles such questions, run in one command:
+
+    printf 'exec("echo exec-works");\n' > /tmp/e76.y
+    main tree : ./ycc /tmp/e76.y -o /tmp/e76a && /tmp/e76a   -> exec-works
+    this branch: ./ycc /tmp/e76.y -o /tmp/e76b && /tmp/e76b   -> exec-works
+
+So `exec` is NOT lost, on either tree, for a plain compile.  The ycc suite's one
+failure ("ysh eval compiles and runs through ycc" -> 1:5: error: undefined
+function 'exec', while its --no-exec sibling passes) is therefore specific to
+that fixture's program rather than a general builtin or a regression from this
+branch's work.  Next: read the fixture the case builds and see how it reaches
+`exec` -- the error is at line 1 column 5, and `exec` as a *value* or a method is
+not the same thing as the builtin call that just worked.
