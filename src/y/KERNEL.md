@@ -32,6 +32,13 @@ file offset 0     ELF32 EHDR (52) + two PHDR (32 each)
                   stack, the heap arena
 ```
 
+The trampoline sets CR4 to PAE | OSFXSR | OSXMMEXCPT.  The last two are
+not optional: without OSFXSR every SSE instruction is `#UD`, and the Y
+backend uses XMM for every float operation, so `print(1.0 * 2.0)` stopped
+the machine at its first `movq %rax,%xmm0` while `print(7.0)` (a literal,
+passed in a GPR) worked.  A hosted program never sees this because Linux
+sets both before entering user space.
+
 Two PT_LOAD segments, both mapped at 1 MB.  Multiboot loaders start an
 image in 32-bit protected mode, so the entry is 32-bit code that builds
 paging, sets PAE/LME/PG and far-jumps into long mode — the one thing that
@@ -109,8 +116,10 @@ The path runs through all four stages:
   stub that saves the caller-saved registers, aligns the stack, calls the
   handler, acknowledges the 8259 (slave first for IRQ8-15) and `iretq`s —
   plus `y_kernel_irq_init`, which fills all 256 IDT entries with a
-  stop-the-machine default, installs the declared vectors and loads the
-  IDT.
+  stop-the-machine default, installs the declared vectors, **unmasks the
+  declared lines** (one mask byte per 8259, computed from the program's
+  declarations -- `y_pic_remap` leaves them all masked, and a slave line
+  also opens the master's cascade) and loads the IDT.
 
 Known limits, all deliberate for a PoC: the SSE state is not saved (the Y
 backend only touches XMM in float code, and no handler here floats), only
