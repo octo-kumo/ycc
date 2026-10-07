@@ -1631,3 +1631,37 @@ driver's kexit(9).  It is the same shape as this branch's first bug (exit_group
 returning somewhere unexpected) and it is the next thing to chase; the fixture
 keeps its transcript check meanwhile, which is what makes the boot path itself
 safe from regressions.
+
+## The whole gate after the kernel work (round 98)
+
+`JOBS=8 make test`, with every kernel change of this run in place:
+
+    port 151/151 (both halves, all shards)      pe-port 151/151
+    native 229/229                              native-examples 15/15
+    examples 15/15   audit 65/65   ycc-units 34/34   debug 27/27   link 23/23
+    pkg 164/164      test_net 31/31             math / gc / kernel / treeshake / std-suites green
+
+The only failing suites are the three PRE-EXISTING ones, each established by
+measurement rather than assumed:
+
+  * lsp and coverage -- documented as pre-existing in master's own commit message
+    ("make check green except the pre-existing lsp/coverage environment
+    failures");
+  * ycc -- one case, "ysh eval compiles and runs through ycc", which the MAIN
+    TREE's compiler fails IDENTICALLY (round 79): ysh.y passes --no-exec for every
+    eval while the prelude it splices calls exec.
+
+So nothing in this branch's kernel work moved a hosted program's bytes or
+behaviour: the port gate recompiles the whole corpus with both engines and
+compares bytes, in all its shards, and it is 151/151.
+
+### The exit path after a user program, recorded honestly
+
+u007_fsexec (filesystem -> ELF -> ring 3) runs and prints, then ends with qemu
+status 1 instead of the 19 kexit(9) produces -- and u005_ipc has behaved the same
+way since it was written, which is why IT never had an .exit either.  So this is
+not filesystem-specific: after a user program exits, the machine does not return
+to the driver, and the shape matches this branch's first bug (exit_group returning
+somewhere unexpected).  Both fixtures keep transcript checks, which is what
+protects their paths meanwhile; the exit path is the next thing to fix, and it
+should be fixed for BOTH cases at once.
