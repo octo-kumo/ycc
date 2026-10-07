@@ -1781,3 +1781,36 @@ switched to a dead task's, or the frame the exit resumes on).  Next: trace the
 exit path with the same discipline that finally settled yfs_lookup -- print what
 it does, do not infer it.  The transcript still shows the program's output and
 nothing after, which puts the fault between the print and the driver's resume.
+
+### Round 102: the exit status is a DELIBERATE exit, and the boot frame's recipe
+
+Instrumented the pick's "current task is DEAD and nothing else can run" branch and
+ran u007_fsexec:
+
+    PICK-dead-nothing-else cur=1 tasks=2
+    qemu status 1
+
+So the run does NOT triple fault (round 101's correction was itself wrong): the
+user task is TASK_DEAD, task 0 -- the driver -- is not pickable because its rsp is
+0, and `y_kexit(0)` runs on purpose.  Exit code 0 through isa-debug-exit is qemu
+status 1, which is what both fixtures had shown all along.  u005_ipc and
+u007_fsexec therefore now carry `.exit` of 1, which is a real assertion: the
+kernel TERMINATES the machine when the last user task is done, rather than hanging
+(124) or faulting.  test/kernel is 47 passed, 0 failed / 47 total.
+
+What is still missing is the driver's OWN kexit: `task_start` switches away with
+`y_enter_frame` and never publishes a frame for the context it leaves, so task 0
+can never be resumed and a driver cannot run anything after starting a task.  The
+attempt this round added an asm helper `y_boot_frame` and was REVERTED for a
+reason worth keeping: it read its argument from %rdi, and Y passes arguments to
+these helpers ON THE STACK -- `y_enter_frame`'s own prologue is `mov 8(%rsp),
+%rsp` -- so the frame was written to a garbage address and u002/u003/u005 faulted
+(vector 14).  The corrected recipe, if this is picked up again:
+
+  * `y_boot_frame(top)`: top is at 8(%rsp), this function's own return address at
+    0(%rsp), the CALLER's (task_start's) return address at 16(%rsp) -- the RIP to
+    resume -- and the RSP after that caller returns is 24(%rsp);
+  * the frame is ring 0: CS 8, SS 16, RFLAGS 0x202, then fifteen zeroed register
+    slots below the five, so the nine stay lowest exactly as the stubs expect;
+  * allocate the stack with pages_alloc_va(4096) and set the task's kstack to the
+    same page top, so a later interrupt on the boot task has a stack.
