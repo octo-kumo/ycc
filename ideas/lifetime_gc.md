@@ -332,3 +332,27 @@ reasons are worth writing down before retrying:
 - the main thread's tcb is `y_heap`, a fixed bss block; if it is smaller than
   128 bytes, words 14/15 alias other globals, so the main thread needs either a
   larger `y_heap` or a separate side location for its spare.
+
+## Round 24: the map is a map, and the spare was not the cause
+
+Two corrections and one result, after the y_heap fix landed.
+
+The map is fine. The `0x5555555555555555` read at pass1's map pointer is not
+corruption: a chunk full of 16-byte blocks -- which is what the earlier dump of
+this chunk showed, `{header=0x11, value=<code>}` repeated -- has a block start
+every other bit, so 0x55 per byte is exactly the bitmap that walk builds. The
+round-21 note that "the map is not a map" was wrong.
+
+The spare is not (or not only) the cause. Re-applied the round-22 change (spare
+{start, end} in the joining tcb's words 14/15, nothing written into the chunk),
+with words 14/15 zeroed on a fresh tcb and y_heap now 128 bytes: t160_threads
+under --gc-stress still trips the invariant trap, at a *different* block address
+each run (base+32 this time, the chunk end before), and sometimes segfaults
+instead. So the stray tail header is real but is not what pass1 is hitting, or
+there is a second writer of the same shape.
+
+State left behind: the y_heap/is-128 fix from round 23 stays; the spare change
+is reverted again. The next attempt should make the trap print the *previous*
+block's header too (the word at block-8), which distinguishes "the walk is
+misaligned" from "one block's header was overwritten", and should run the trap
+under four threads only (no mutex, no fork) to shrink the search.
