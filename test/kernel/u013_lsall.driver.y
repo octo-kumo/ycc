@@ -3,7 +3,6 @@
 // made the first attempt at this fault was a program longer than one block whose
 // second block was never recorded, so the ELF was loaded truncated.
 import kernel;
-import elf from "../../os/kernel/elfload.y";
 
 def p8(addr: long, v: long) -> void { kernel.poke_va8(addr, v & 255); };
 
@@ -72,8 +71,8 @@ let ok = yfs_init(img);
 print("fs ok=" + tostring(ok) + " msg=" + tostring(yfs_lookup_path("/msg")) + "\n");
 let dir = kernel.vm_new_dir();
 kernel.vm_switch(dir);
-let entry = elf.elf_map(img + prog_at * BS, msize);
-let sp = elf.elf_setup_stack(["ls"]);
+let entry = elf_map(img + prog_at * BS, msize);
+let sp = elf_setup_stack(["ls"]);
 let kstack = kernel.pages_alloc_va(65536);
 let ktop = kstack + 65536;
 let frame = kernel.task_frame(ktop, entry, sp);

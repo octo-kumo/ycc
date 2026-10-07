@@ -4,7 +4,6 @@
 // The image's data block IS the ELF's physical home, so elf_map is handed the
 // block rather than a buffer.
 import kernel;
-import elf from "../../os/kernel/elfload.y";
 
 def p8(addr: long, v: long) -> void { kernel.poke_va8(addr, v & 255); };
 
@@ -73,8 +72,8 @@ let size = yfs_size(ino);
 print("fs ok=" + tostring(ok) + " ino=" + tostring(ino) + " size=" + tostring(size) + "\n");
 let dir = kernel.vm_new_dir();
 kernel.vm_switch(dir);
-let entry = elf.elf_map(img + bsrc, size);
-let sp = elf.elf_setup_stack(["wc", "/prog"]);
+let entry = elf_map(img + bsrc, size);
+let sp = elf_setup_stack(["wc", "/prog"]);
 let kstack = kernel.pages_alloc_va(65536);
 let ktop = kstack + 65536;
 let frame = kernel.task_frame(ktop, entry, sp);

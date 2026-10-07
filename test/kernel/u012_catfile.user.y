@@ -1,6 +1,6 @@
 // cat a TEXT file out of the kernel's filesystem: open the path from argv, read
 // it, and print the bytes as a string.  The file is "hi from yfs\n", so the
-// transcript shows the text itself.
+// transcript shows the text its
 let a = argv();
 let path = a[1];
 let p: [byte] = [];
