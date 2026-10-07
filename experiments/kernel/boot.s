@@ -55,9 +55,13 @@ _start:
     addl $8, %edi
     loop 1b
 
-    /* CR4.PAE, CR3 = PML4 */
+    /* CR4 = PAE | OSFXSR | OSXMMEXCPT, then CR3 = PML4.  The two SSE bits
+       are what the compiler's own trampoline learned it needed when a float
+       expression stopped the machine: without OSFXSR every SSE instruction
+       is #UD.  This file has no float code, but the payload it stands in for
+       does, so the two must agree. */
     mov %cr4, %eax
-    orl $0x20, %eax
+    orl $0x620, %eax
     mov %eax, %cr4
     movl $pt_pml4, %eax
     mov %eax, %cr3
