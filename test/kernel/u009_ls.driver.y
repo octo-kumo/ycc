@@ -59,7 +59,11 @@ p8(img + data_start * BS + 11, 103);
 // inode 2: the program, one block past the directory
 p32(img + BS + 128, 1);
 p32(img + BS + 132, msize);
-p32(img + BS + 136, data_start + 1);
+let dib = 0;
+while (dib < (msize + BS - 1) / BS) {
+    if (dib < 12) { p32(img + BS + 136 + dib * 4, data_start + 1 + dib); };
+    dib = dib + 1;
+};
 let bsrc = (data_start + 1) * BS;
 let k = 0;
 while (k < msize) { p8(img + bsrc + k, kernel.peek8(mphys + k)); k = k + 1; };
