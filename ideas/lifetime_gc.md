@@ -137,11 +137,13 @@ or died).
    for it, so the omission never applies to a program that spawned. The plan
    is unchanged: stop-the-world at the allocator's slow path (the one place a
    thread can be parked) and scan each thread's stack from its control block.
-2. **Performance.** Strings and primitive arrays are scanned word by word
-   even though they cannot hold a reference. `y_alloc_pf` exists for
-   this (`bit 2` = pointer-free, the drain skips such payloads) but no call
-   site uses it yet: `y_str_cat`/`y_str_app`/`y_str_repeat` buffers and
-   `[byte]`/`[long]`/`[float]` array data are the conversions that matter.
+2. **Performance.** The byte buffers are pointer-free now (`y_str_cat`,
+   `y_str_app`, the join buffer, `ylts_mk`, `ycs_mk`, `y_bytes_to_str`):
+   61.9M -> 49.3M instructions on 120 live ~108 KB strings at the same peak
+   RSS. What is left is the same for the *array* data blocks: `[byte]` is
+   provably bytes, and `[long]`/`[float]` cannot hold pointers either, but the
+   array helpers only know `esz`, so the emitter has to pass the element's
+   pointer-freeness down (`ideas/OPTIMIZE.md` A8).
 3. Optional knobs: `--gc-stress` (collect on every slow path) and `--no-gc`,
    plus a `test/sh/test_gc.sh` suite that runs the corpus under a small cap.
 

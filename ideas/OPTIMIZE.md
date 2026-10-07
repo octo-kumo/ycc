@@ -342,6 +342,28 @@ interleaving is unchanged). It is reached through the checker's named layer --
 `heap_used() > 0` is now `false` (printing no longer allocates) and the fixture says so.
 `test/y/native/t379_print_int_no_alloc.y` pins the heap delta across six prints at 0.
 
+### A8. Pointer-free payloads: do not scan bytes (partly done)
+
+**Problem.** The collector treats a marked block's payload as candidate pointers.
+A string buffer or a packed `[byte]` array cannot hold one, so every cycle walked
+its words for nothing -- and, worse, retained any garbage whose bytes happened to
+look like a pointer.
+
+**Fix.** `y_alloc_pf` sets `bit 2` of the header (pointer-free) and `y_gc_drain`
+skips such a payload entirely. The byte buffers now use it: `y_str_cat`,
+`y_str_app`'s new buffer, the join buffer (`ysj_alloc`), the long-to-string
+buffer (`ylts_mk`), the C-string conversion (`ycs_mk`) and `y_bytes_to_str`.
+
+**Result.** 120 live strings of ~108 KB (`"...".repeat(3000)`), under the normal
+cap: **61,934,562 -> 49,296,546** instructions (callgrind, -20.4%) at the same
+peak RSS (24.8 MB), same output. Short-string workloads are unchanged (the
+per-block drain overhead dominates there).
+
+**Left.** `[byte]`/`[long]`/`[float]` array *data* blocks: the array helpers
+(`yas_sz`, `yapd_room`, `yap_cap`, `yax_cap1`, `yai_sz`) do know `esz` (1 for
+packed `[byte]`), but an 8-byte element may or may not be a pointer, so the
+emitter would have to pass that down per element type.
+
 ### A7. `--gc`: do not link the collector a program cannot grow into (done)
 
 **Problem.** A program that allocates once -- `let a = [1, 2, 3]; print(a[0]);` --

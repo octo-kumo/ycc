@@ -113,7 +113,7 @@ y_str_cat:
     mov %rcx, %rdi
     add $16, %rdi
     mov %rcx, %r12
-    call y_alloc
+    call y_alloc_pf
     mov %rax, %r14
     mov %rbx, %rsi
     add $8, %rsi
@@ -180,7 +180,7 @@ ysa_new:
 ysa_alloc:
     push %rdi
     add $16, %rdi
-    call y_alloc
+    call y_alloc_pf
     pop %rdi
     mov %rdi, (%rax)
     lea 8(%rax), %r14
@@ -254,7 +254,7 @@ ysj_alloc:
     push %rcx
     mov %rcx, %rdi
     add $16, %rdi
-    call y_alloc
+    call y_alloc_pf
     pop %rcx
     mov %rcx, (%rax)
     mov %rax, %r14
@@ -1572,7 +1572,7 @@ ylts_mk:
     mov %rsi, %r12
     mov %rbx, %rdi
     add $16, %rdi
-    call y_alloc
+    call y_alloc_pf
     mov %rbx, (%rax)
     xor %ecx, %ecx
 ylts_cp:
@@ -2710,7 +2710,7 @@ ycs_mk:
     push %rbx
     push %r13
     push %r14
-    call y_alloc
+    call y_alloc_pf
     pop %r14
     pop %r13
     pop %rbx
@@ -2791,7 +2791,7 @@ y_bytes_to_str:
     mov 16(%rbx), %rbx
     mov %r13, %rdi
     add $16, %rdi
-    call y_alloc
+    call y_alloc_pf
     mov %rax, %r14
     mov %r13, (%r14)
     mov %rbx, %rsi
