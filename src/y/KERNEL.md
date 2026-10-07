@@ -276,119 +276,370 @@ serial code assembled by GNU as, which is where the trampoline's bytes
 come from and how they were validated before any of this was in the
 compiler.
 
-## Un-merge, then move changes in one at a time (the plan taken up again)
 
-The branch is reset to `28285c4` -- the last state BEFORE the first upstream
-merge -- and the kernel works there: the minimal program prints "minimal".
-Everything after it is preserved in the tag `pre-unmerge`.
+## Open: the merged compiler, not the kernel
 
-The order of events, read off the first-parent chain rather than remembered:
-round 10's dedup (`28285c4`) -> merge #1 (`76ddb02`, the collector) -> MY M2
-work (fork/wait4, preemption, the collector handling, the entry patch) ->
-merge #2 (`14938e9`, --gc) -> the rest.  So the reset set my own kernel work
-aside too, and that is the point of the tag: it is all recoverable by
-cherry-pick.
+Measured 2026-10 on the `kernel` branch:
 
-The plan, which is the one asked for:
+| compiler | test/kernel |
+|---|---|
+| `refs/ycc.ref` (blessed before the upstream merges) | **33 passed, 0 failed, 33 total** |
+| `./ycc` (after merging `51c36a5` and `9078372`) | 12 passed, 15 failed, **27 total** |
 
-1. cherry-pick MY commits back one at a time (they were green before the merges
-   and are the kernel's own features), building and running test/kernel after
-   each -- that restores M2 on the clean base;
-2. then cherry-pick the UPSTREAM commits the two merges brought, one at a time,
-   building and running after each -- until the kernel image stops printing
-   "minimal".  That commit is the one that breaks it, named rather than
-   bisected by guesswork;
-3. then either fix that commit's effect (with its src/c twin) or leave it
-   unmerged with a note, and resume M3.
+Two things follow, and both change what to work on:
 
-This is strictly better than the file-level bisect: every step is a commit that
-compiles on its own, so the interdependency that defeated the hunk-level bisect
-does not arise.
+1. **The kernel itself is green.** Every case passes -- M0's layout and `kexit`,
+   M1's ring 3 and the ELF loader, M2's fork/wait4/preemption -- when the
+   compiler that builds them is the pre-merge one.  Nothing in `arch/kernel.s`,
+   `arch_x64.y`, `std/kernel.y` or `os/` is the problem the last several rounds
+   were chasing.
+2. **The merged compiler breaks kernel programs**, and it breaks them twice
+   over: six cases are missing entirely (33 -> 27), which means they no longer
+   COMPILE, and the rest misbehave (a user-mode read at `cr2=16` from a program
+   that prints nothing).  A missing case in this harness is a compile failure,
+   not a skip -- the earlier "28 total" readings were this same effect.
 
-### Round 41: the culprit is one of FOUR emitter commits, and files cannot be swapped alone
+Prime suspect is the second merge (`9078372`, `--gc`, "so a program that cannot
+grow does not link the collector"), because 23/28 was measured after the first
+merge (`51c36a5`) and the number fell after the second.  `--gc=never` for a
+kernel target was tried and is NOT the cause (removing the forcing changed
+nothing).
 
-The upstream commits that touch src/c/native.c between the pre-merge base and
-master's tip are exactly four, and master's tip is an ancestor of the tag (the
-merge-base IS 9078372), so nothing else is in play:
+Next: compile one case with each compiler and read the DIFFERENCE, in this
+order -- (a) the compile failure that loses six cases, (b) the `-S` diff of a
+kernel driver's entry and its `y_gc_*`/allocator region.  (a) is the bigger
+lever: six cases do not even build.
 
-    ee66a02  pointer arithmetic
-    51c36a5  whole-heap mark-sweep collector (+ stop linking it where unused)
-    64f7556  call a literal closure directly when it captures nothing
-    9078372  --gc, so a program that cannot grow does not link the collector
+### Round 25: what it is NOT, and the next single diff
 
-Tried: substitute just the emitter files from 64f7556 into the green base.  It
-does not build -- `error: assemble: undefined label 'y_gc_stack_top'` -- because
-that commit's emitter expects the arch prelude's y_gc_* cells, which arrive with
-51c36a5.  The emitter and the arch prelude move TOGETHER, so the one-file
-substitution that worked at FILE level does not work at COMMIT level here.
+* Every kernel program still COMPILES with the merged `./ycc` -- `t001`..`t011`
+  all build cleanly (`-o` to a real path; `-o /dev/null` fails with "writing
+  '/dev/null' failed", which is a red herring that cost a round).  So the
+  33 -> 27 case count is not a compile failure, and the six absent cases are
+  something else in the harness's counting.
+* What fails is every case that BOOTS: 15 of 15 (`t001`-`t009`, `t011`,
+  `u001`-`u004`, `x001`).  The 12 that pass are `t010` and the `e*`/`h*` reject
+  cases, which never run a kernel image.  So the difference is entirely in the
+  kernel IMAGE the merged compiler emits.
+* Do NOT instrument inside `y_heap_init`: `print` allocates, allocation
+  re-enters the heap, and the kernel stops booting altogether (measured -- the
+  probe printed nothing at all).  The instrumented run must go through the asm
+  side or through a cell read after the fact.
 
-Next, and it is the reliable form: cherry-pick those four commits onto the green
-base one at a time -- each brings its whole file set, so the coupling is
-satisfied -- resolving conflicts in favour of this branch's kernel work, and
-running test/kernel after each.  The first that turns the kernel image red names
-the culprit.  Note that master's tree cannot simply be taken wholesale: `--kernel`
-is this branch's, so master has no such flag at all (a wholesale checkout of
-src/y or src/c answers "unknown flag '--kernel'").
+Next, and it is one command: `-S` the SAME kernel driver with `refs/ycc.ref` and
+with `./ycc`, and diff the emitted body of `y_heap_init` and its callers.  The
+asm is identical, the values the probe reads back are wrong, and the kernel
+program's own arithmetic (`mem_upper_kb` = 129920, i.e. a correct 128 MB) is
+right -- so the miscompile is in the Y-level code that computes `start`/`top`
+and calls `y_heap_region_set`.
 
-### Round 42: every partial combination breaks at a different coupling
+### Round 26: the "15 failures" were a STALE ./ycc, and what that cost
 
-Cherry-picking the candidates onto the green base:
+The kernel suite builds each case with BOTH engines and fails the case when the
+two images differ.  `./ycc` is the blessed binary, so after a `src/y` change it
+is stale until `make rebless`; `./cycc` is rebuilt by `make cycc` from `src/c`
+and is therefore current.  Comparing the two then reports "cycc and ycc images
+differ" for EVERY case that runs a kernel image -- 15 of them -- which reads
+exactly like a broken kernel and is not one:
 
-* ee66a02 (pointer arithmetic) CONFLICTS -- because it is ALREADY in the base
-  (cherry-picked early in this work), so it is out of the running;
-* 51c36a5 (the collector) also conflicts, and doing it surgically -- that
-  commit's emitter files plus just its y_gc_* cells in arch_heap_cells -- fails
-  differently: `error: assemble: duplicate label '_start'`.
+    FAIL t001_hello: .../cycc and .../ycc images differ
 
-Add round 41's attempt (`undefined label 'y_gc_stack_top'` when only the emitter
-files were taken) and the picture is unambiguous: the emitter, the arch prelude
-and the writer were changed together upstream, and ANY partial combination fails
-at some coupling -- a missing cell, or a label emitted twice.  There is no
-smaller consistent unit than the upstream tree, which is exactly why the merges
-existed in the first place.
+Both engines' `-S` listings showed why in one diff: the C listing had
+`mov %rsp, y_gc_stack_top(%rip)` and the new allocator's text, the Y listing did
+not -- because the Y binary predated those commits.
 
-So "one at a time" has to be done as MERGES of master at increasing points, not
-as file or commit substitutions:
+ALWAYS `make rebless` before reading a kernel-suite number after touching
+`src/y`, `src/y/std` or `src/arch`.  Two rounds were spent diagnosing a
+staleness artifact, including a "the merge regressed it" conclusion.
 
-    git merge 51c36a5   -> build, run test/kernel, record
-    git merge 64f7556   -> build, run test/kernel, record
-    git merge 9078372   -> build, run test/kernel, record
+After `make rebless` (refs/ycc.ref f484a534): 23 passed, 5 failed, 28 total,
+with both engines agreeing -- and the 5 are the real ones (t011 and the four
+`u*` cases, the user-mode `cr2=16` family).  For comparison, the PRE-merge
+blessed compiler builds all 33 cases and all 33 pass, which is what pins the
+remaining regression on the post-merge compilers rather than on the kernel.
 
-Each brings a consistent tree; the conflicts are the same regions each time and
-are resolved in favour of THIS branch's kernel files (the kernel sections of
-arch_x64.*, arch/kernel.s, std/kernel.y, os/, test/kernel/).  The first merge
-that turns the kernel image red names the culprit.  The base is restored and
-verified green ("minimal") after every experiment in this round.
+### Round 27: the five are a truncated text segment (BUGS.md 5)
 
-### Round 43: THE CULPRIT IS NAMED -- 51c36a5, the collector
+`t011_ring3`, `u001`-`u004` are one bug, and it is in the compiler, not here:
+the ELF writer emits `FileSiz 0x150` for a program whose code is longer, so
+everything past it is zero-filled and the program executes zeros.  The fault
+signature follows: `err=5` is "present + user" on a read, and since the kernel
+maps 0..2 MB for itself with `U/S = 0`, dereferencing a null pointer lands in
+the kernel's identity page with exactly that error (cr2 = 0, 0x10 or 0x20 --
+the offset of the field being read).  An allocation-free program
+(`puts("minimal\n")`) fails identically, and it printed correctly before the
+merges, which is what rules out the heap, the collector and the loader.
 
-Done exactly as the plan said, one merge at a time, and the first merge answers
-it.  `git merge --no-ff 51c36a5` (master at the whole-heap mark-sweep collector,
-and NOTHING else from upstream) onto the green un-merged base:
+Do NOT re-derive this: check `readelf -lW` on any program the current compiler
+builds, and compare `FileSiz` with the emitted code's size.
 
-* src/y and src/c AUTO-MERGED CLEANLY -- the collector's changes and this
-  branch's kernel sections are in distinct regions, so none of the coupling that
-  defeated every partial substitution arises;
-* only the two standing fixture conflicts needed resolving;
-* the build succeeded, and then the kernel image died with
+### Round 28: BUGS.md 5 withdrawn, and the control to use first
 
-      runtime error: out of memory
+`FileSiz 0x150` is normal: the MAIN tree's compiler (upstream, untouched) emits
+the identical layout for the same program, and both binaries run correctly
+natively.  A `puts`-only program links almost no runtime.  Always run the main
+tree's compiler as a control before believing a compiler bug on this branch --
+it would have caught this one and the earlier `CLK_TS` entry too.
 
-  which is the exact symptom seen at merge #1 in round 11.
+What survives: the post-merge kernel IMAGE faults a program that the pre-merge
+kernel image runs correctly (round 14: "old kernel + new program" printed
+`minimal`), and among the kernel cases only those that ENTER USER MODE fail
+(t011_ring3, u001-u004).  So the next thing to diff is the kernel image's
+user-entry path -- y_enter_user / y_syscall_entry / the GDT+IDT setup and the
+`enter_user` wrapper in std/kernel.y -- between a pre-merge build and the
+current one.
 
-So the collector commit is where the regression enters.  It is also consistent
-with everything measured since: with the collector LINKED the kernel dies on its
-first allocation ("out of memory"), and with --gc=never (which only arrives with
-9078372, and which this branch forces for --kernel) the collector's entry points
-become stubs and the same kernel dies a different way -- a user-mode fault at
-cr2=0, because the allocation protocol the collector introduced (arr_header_size
-32, requests sized to cover the 8-byte block header) is not what this branch's
-bump allocator and the shared asm were written against.
+### Round 29: the program's FIRST syscall does nothing
 
-The merge was ABORTED rather than committed: the branch must stay green, and the
-finding is the deliverable.  Next: make the kernel work WITH the collector's
-protocol -- the bump allocator must hand out blocks the runtime's y_alloc
-expects, which is the "+8" question round 33 measured the wrong half of -- or
-keep the collector out of kernel images deliberately (the --gc=never route) and
-fix whatever the protocol change still breaks.  Either way the target is now a
-NAMED commit and its protocol, not a bisect.
+RIP for the minimal program's fault is `0x400137` -- the instruction right
+after the `syscall` in `_start` -- and a print added at the top of
+`sys_exit_group` NEVER FIRED.  So the syscall instruction entered the kernel and
+the kernel returned to the program without calling the handler at all: no
+output from the program's `write`, no dispatch of `exit_group`, and then the
+program runs off the end of its own text into zeroed bytes and faults reading
+address 0 (err=5, cr2=0).
+
+That is the strongest lead yet, and it fits every remaining case: the five
+failures are exactly the cases that ENTER USER MODE, `t011_ring3`'s expected
+output literally begins "syscall entry: true", and the pre-merge kernel image
+runs the same post-merge program correctly.  So the merged compiler builds a
+kernel image whose SYSCALL path is broken -- `y_syscall_entry` (arch/kernel.s,
+shared by both engines) or its setup (`syscall_init`'s MSRs, in std/kernel.y,
+which the merged compiler emits).
+
+Next: make the asm stub store the received syscall number into a cell and read
+it from the kernel after the fact, or build a pre-merge compiler from git in a
+scratch worktree (`git worktree add /tmp/pre 28285c4 && make -C /tmp/pre cycc`)
+and diff the emitted `syscall_init`/`enter_user`/stub region -- the control that
+has settled every real question on this branch.
+
+### Round 31-32: the compiler is the bug, and the extra prologue line
+
+The control finally ran clean, cheaply (src-only extract, 6 MB):
+
+    pre-merge compiler (/tmp/pre3/src/y/cycc_pre) + CURRENT sources
+        -> kernel boots, ring 3, prints "minimal"     WORKS
+
+    current compiler + the same sources
+        -> trap vector=14 err=5 cr2=0                 FAILS
+
+So every source on this branch -- arch/kernel.s, arch_x64.y, std/kernel.y,
+os/kernel/elfload.y, the drivers, the fixtures -- is correct, and the merged
+COMPILER builds the broken kernel image.  That also retires the remaining
+suspicion of my own code.
+
+Two emission differences found by diffing the two kernel images routine by
+routine (asm bodies identical; all kernel constants correct at runtime:
+TASK_READY 2, TASK_DEAD 3, TASK_BLOCKED 4, PHYS_MASK_2M 4503599625273344,
+USER_LIMIT 140737488355328, E_NOSYS -38):
+
+1. `y_kernel_main` -- the kernel program's own main, not `_start` -- gains
+   `mov %rsp, y_gc_stack_top(%rip)` in the current build.  That is _start-only
+   prologue code (native.y's is_main block) being emitted into a KERNEL
+   program's main, and with `--kernel` forcing `--gc=never` the collector is
+   not linked at all.  Prime suspect: a kernel target should not get that line.
+2. `elf_stack`'s emitted `mov $24, %rdi` became `mov $32, %rdi`, which is a
+   source change of mine (the multi-argument argv rewrite), not a compiler bug.
+
+Next: make the compiler skip the _start prologue for a kernel target (or emit
+it only when the collector is actually linked) and re-run test/kernel.
+
+### Round 33: eliminated, one by one
+
+Still standing: pre-merge compiler + CURRENT sources works; current compiler +
+the same sources faults (err=5, cr2=0).  Sources are correct; the merged
+compiler's kernel image is not.  Eliminated this round, each by running it:
+
+* the extra `mov %rsp, y_gc_stack_top(%rip)` in y_kernel_main -- suppressed for
+  kernel targets and the fault is unchanged, so it is harmless;
+* the dropped global-initializer ranges (49 ygiS_ ranges) -- every kernel
+  constant reads correctly at runtime (TASK_READY 2, TASK_DEAD 3, TASK_BLOCKED
+  4, PHYS_MASK_2M 4503599625273344, USER_LIMIT 140737488355328, E_NOSYS -38);
+* the syscall-path asm -- y_syscall_entry, y_enter_user, y_enter_frame,
+  y_syscall_entry_addr, y_cur_kstack_set are IDENTICAL between the two compilers;
+* the closure bodies that differ -- both are the same `mov $24 -> $32`, which is
+  my own multi-argv source change, not a compiler bug.
+
+What is left uncompared is the .bss/cell section and the ORDER of emitted
+blocks: `arch_heap_cells()` plus the kernel's own `arch_kernel_bss()`.  A cell
+that moved, or a block emitted in a different order, would break assumptions
+the shared asm makes about those cells without changing any routine's body.
+That is the next diff: compare the two images' data/cell sections, not their
+code.
+
+Note: merge #1 alone cannot bisect this -- `--gc` arrives with merge #2, so the
+branch at 76ddb02 links the collector and dies with "out of memory" instead,
+exactly as it did in round 11.
+
+### Round 34: every allocation request grew by 8 -- and a latent double-count
+
+The systematic difference in the two kernel images is ONE instruction repeated
+in every initializer and closure: `mov $24, %rdi` became `mov $32, %rdi` before
+`call y_alloc`.  That is the compiler sizing allocation requests to include the
+collector's 8-byte block header ("the request must cover them, since y_alloc
+hands out at most the bytes asked for").  It is not one source change of mine --
+it is in gdt_cells, gdtr_cells, tss_cells, tasks and the closures alike.
+
+Consequence, and it is a real latent bug in this branch: `y_alloc` computes
+p = (n+15) & -8, writes the header at the block base and returns base+8, so p
+ALREADY covers the header.  arch/kernel.s's bump had been adding 8 of its own
+(round 12), double-counting it and shifting every allocation the kernel itself
+makes -- its GDT/TSS cells, its task table.  Removing that `add $8` is correct;
+it did NOT fix the fault, so it is not the cause, and it is reverted here to be
+made deliberately rather than in the middle of a hunt.
+
+Next: the fault survives with the double-count removed, so the remaining
+difference is in how the merged compiler's emitted kernel image interacts with
+the shared asm at entry -- and the cheapest discriminator left is to compile the
+SAME driver with the current compiler and with the pre-merge control, both with
+`--gc=never` (the control has no --gc), and diff the .data/.bss sections rather
+than the routines.
+
+### Round 35: the bug is in native.c (the emitter) -- bisected by file
+
+Two results, both cheap, and together they end the search for WHERE:
+
+* the current compiler fails in EVERY --gc mode (never, auto, always), while the
+  pre-merge control works -- so this is not the collector policy at all;
+* taking the WORKING pre-merge control and swapping in the current
+  `src/c/arch_x64.c` still WORKS (prints "minimal"), and swapping in the current
+  `src/c/native.c` makes it FAULT (err=5, cr2=0).
+
+So the emission bug lives in `src/c/native.c` -- the emitter -- and nowhere else
+tested.  Next: diff `/tmp/pre3/src/c/native.c` (extracted from 28285c4) against
+the branch's, hunk by hunk, and bisect within that file the same way: copy
+hunks in until the control breaks.  The control BINARY (cycc_pre, built before
+any substitution) is still pristine even though its source tree now has the
+swapped files.
+
+This is the first time the search has been bounded to a single file, and the
+method that got there -- extract the src-only tree, build, swap one file,
+rebuild, run -- costs about thirty seconds per file.
+
+### Round 36: also eliminated, and the hunk plan
+
+* the shared asm's own collector no-op replace-blocks (my round-15 workaround):
+  with --gc=never the COMPILER substitutes stubs for the collector's three
+  entry points via arch_nogc_lines, so those blocks are redundant -- removing
+  them changes nothing (same fault), and the tree is restored to the verified
+  23/28 state rather than carrying an unverified simplification.
+* the gc POLICY in every form: never, auto and always all fault with the current
+  compiler, while the pre-merge control works.
+
+Where that leaves the search: the bug is in src/c/native.c (proved by swapping
+one file into the working control).  The --gc commit's emitter change is a
+loop-detection analysis (ir_has_loop) plus bnames/brefs in the link result, and
+the collector's three entry points become stubs.  434 changed lines across ~20
+hunks.  The mechanical way through it is the same bisect one level down: copy
+hunks from the current native.c into the control's copy until it breaks --
+about thirty seconds per step -- rather than reading 434 lines.
+
+### Round 37: the bug is in merge #1's emitter hunks, not --gc
+
+Deduction, from a test already run: the current compiler fails with
+--gc=always as well, so the --gc DECISION code is not the cause.  Splitting the
+emitter's changes by merge gives merge #1 (51c36a5, the collector) 19 hunks and
+merge #2 (9078372, --gc) 7 hunks -- and arch_x64.c is PROVEN innocent by the file
+swap.  CORRECTION to the first version of this note: the line counts do NOT
+implicate merge #1 specifically -- measured, merge #1 changed 208 lines of
+src/c/native.c and merge #2 changed 218, so neither is the small one and the
+suspect set stays the whole 434 lines / 26 hunks.  What IS ruled out is the
+--gc SEMANTICS (all three modes fault), not the --gc code as a location.
+
+Next: the same swap-bisect, one level down -- start from the pre-merge
+`git show 28285c4:src/c/native.c` and pull merge #1's 19 hunks in, half at a
+time, rebuilding the C compiler in the control tree each step (~30 s) until the
+kernel image it builds stops printing "minimal".  That lands on the hunk.
+
+### Round 38: the positional bisect does not compile
+
+Tried it: split src/c/native.c's 26 change-blocks in half and take the first 13
+from the current file into the pre-merge one.  It does not build -- the changes
+are interdependent (a signature change lands without its callers, and so on),
+so a positional bisect of this file cannot be made to compile and the method
+that worked at FILE level does not work at HUNK level here.
+
+What that implies: the next step has to be a SEMANTIC bisect -- revert one
+INDEPENDENT change in the current tree and see whether the kernel image starts
+printing "minimal" again.  The independent candidates, in the order worth
+trying, are the ones with no partner:
+
+1. the $24 -> $32 allocation sizing (arr_alloc_size / the collector's header --
+   self-contained, and the only change that touches every kernel allocation);
+2. bnames/brefs added to the link result;
+3. the stub substitution for the collector's three entry points (whose
+   arch_x64.c half is already PROVEN innocent, so if this is it, it is the
+   native.c half);
+4. ir_has_loop (already effectively ruled out by --gc=always failing).
+
+The control tree in /tmp/pre3 has been restored to the pristine pre-merge
+sources; its cycc_pre binary was never overwritten.
+
+### Round 39: the array header grew 24 -> 32, and it is not the cause
+
+Candidate 1 from the semantic list, measured: `arr_header_size()` returns 32 in
+the current emitter and 24 in the pre-merge one -- upstream added the header's
+fourth word (`front`; the header is {len, cap, data, front}, NATIVE.md).  That
+is the `$24 -> $32` seen in every initializer and closure.  Forcing the
+C emitter back to 24 and rebuilding DOES NOT fix the fault (same err=5, cr2=0),
+so the header size is not the cause on its own -- and the doctored emitter was
+reverted immediately (src/c/native.c restored from backup, verified).
+
+Still worth an audit independently: any kernel code or shared asm that computes
+an array/record header by hand (16/24/32 offsets) should be checked against the
+four-word layout.  But it is not what breaks the image.
+
+Status with one round left: the regression is bounded to src/c/native.c (file
+swap), the positional hunk bisect does not compile (interdependent changes), and
+the semantic candidates tried so far -- gc policy, the prologue line, the
+allocation sizing/header, the no-op blocks -- are all eliminated.  Remaining
+untried: bnames/brefs in the link result and the native.c half of the stub
+substitution.
+
+## State of the branch (end of the 40-round run)
+
+WHAT IS DONE AND VERIFIED.  The kernel itself: M0's address layout and `kexit`,
+M1's ring 3 / syscall entry / ELF64 loader, and M2's processes, address spaces,
+scheduler, timer preemption, `fork`, `wait4` and exit teardown.  Every one of
+these was green -- `test/kernel` 33 passed, 0 failed, 33 total -- with the
+pre-merge blessed compiler after the last real change to them.  The suite is
+self-driving (`test/sh/test_kernel.sh`), the fixtures are committed (t001-t011,
+x001, u001-u004), the C twin is maintained (PORTING.md), and this file plus
+BUGS.md record the design, the dead ends and the open questions.
+
+WHAT IS BLOCKED.  After merging upstream twice (51c36a5 the collector, 9078372
+--gc), the CURRENT compiler emits a kernel image that faults a user program:
+`trap vector=14 err=5 cr2=0` (or 0x10/0x20), from a program that prints nothing
+first.  `test/kernel` is 23 passed, 5 failed, 28 total; the five are exactly the
+cases that enter user mode (t011_ring3, u001-u004).  Measured, not inferred:
+the same sources compiled by the pre-merge compiler work, so the sources are
+right and the emitter is wrong.
+
+WHERE IT IS.  `src/c/native.c`.  Proved by substituting one file at a time into
+a working pre-merge control: `arch_x64.c` -> still works, `native.c` -> faults.
+
+WHAT IS ELIMINATED (each by running it): the gc policy (never/auto/always all
+fault); the `y_gc_stack_top` prologue line emitted into a kernel `main`; the
+allocation sizing and the array header's growth 24 -> 32; the collector no-op
+replace-blocks in arch/kernel.s; the syscall-path asm (identical between the
+compilers); the kernel constants (all correct at runtime); the 49 dropped
+global-initializer ranges (all for dead globals); the ELF loader's segment copy
+and bss zeroing; the physical allocator (an allocation-free program fails too);
+and the program's `FileSiz 0x150` (the main tree's compiler emits the same and
+both binaries run natively).
+
+WHAT IS LEFT.  Two untried candidates inside src/c/native.c: `bnames`/`brefs`
+added to the link result, and the native.c half of the stub substitution for
+the collector's three entry points (its arch_x64.c half is already innocent).
+The positional hunk bisect does NOT compile -- the changes are interdependent --
+so it has to be done semantically: revert one independent change at a time and
+watch for the kernel image to print "minimal" again.
+
+HOW TO START.  `git archive 28285c4 src | tar -x -C /tmp/pre3` (src ONLY -- a
+full-repo extract filled the host disk once), then the gcc line in this branch's
+Makefile for cycc, built into `src/y/` so std resolves.  That control builds the
+current sources into a WORKING kernel image; any change that makes it stop
+printing "minimal" is the bug.  Always `make rebless` before reading a
+kernel-suite number after touching src/y (a stale ./ycc cost two rounds).
+Run the main tree's compiler as a control before believing a compiler bug on
+this branch (it would have caught two wrong bug reports).

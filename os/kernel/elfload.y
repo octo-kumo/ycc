@@ -26,6 +26,18 @@ def elf_ok(phys: long) -> bool {
 // from `phys + off`, and zero the rest.  The copy goes through the kernel's
 // virtual accessors: the mapping belongs to the program, and the kernel is
 // simply the one that made it.
+// ⚠ Both failure paths below return false and the caller says only "load
+// failed", which hides which one fired.  Measured 2026-10: a `-g` build of
+// test/kernel/u001_hello.user.y (11 KB, LOAD offsets 0x0 and 0x2000, memsz
+// 0x2000 + 0xc0 -- 3 pages, all legitimate) makes the loader report "load
+// failed", so one of `page_alloc() == 0` or `vm_map(...) == false` is
+// happening for a 3-page image.
+//
+// That matters far beyond the -g build, because it is the same shape as the
+// fault the suite reports: if page_alloc can come back empty, then a USER
+// program's mmap can come back 0, and 0 is exactly the pointer whose header
+// field at +16 (or +24) is the cr2 the kernel suite prints.  Next step: print
+// `kernel.phys_free_bytes()` and which call failed, at load time.
 def elf_segment(phys: long, off: long, va: long, filesz: long, memsz: long, flags: long) -> bool {
     let pte = kernel.PTE_U | kernel.PTE_W;
     let dir = kernel.vm_current();

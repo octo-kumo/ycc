@@ -969,6 +969,13 @@ def sched_ready() -> void { need_resched = true; };
 // The kernel's own context.  The first task is whatever is running at boot and
 // needs no fabricated frame: the first switch saves it.
 def sched_init(cr3: long, kstack: long) -> void {
+    // Idempotent: init() calls this so that every kernel program has a task 0,
+    // and a driver that also calls it must not end up with TWO task 0s.  That
+    // is not cosmetic -- len(tasks) is what decides whether a program's last
+    // exit_group can leave the machine, so a duplicate task 0 makes exit_group
+    // return, the program runs off the end of its own text and page-faults
+    // reading address 0.
+    if (len(tasks) > 0) { return; };
     if (len(tasks) == 0) {
         tasks += { rsp: 0, cr3: cr3, kstack: kstack, pid: 0, parent: 0 - 1, exit_status: 0, wait_pid: 0, wait_statusp: 0, inbox: [], reply_to: 0 - 1, recv_buf: 0, state: TASK_RUNNING, name: "kernel" };
         y_cur_kstack_set(kstack);
@@ -1035,7 +1042,14 @@ def task_start(i: long) -> void {
 // "stay".  A dead task is never picked, and nothing runnable means stay.
 def y_sched_pick() -> long {
     if (!need_resched) { return 0; };
-    if (len(tasks) <= 1) { return 0; };
+    if (len(tasks) <= 1) {
+        // One task and it is done: nothing can run again, so leave the machine
+        // now.  Returning 0 here would iretq the dead task back into ring 3 --
+        // which is a page fault a few instructions later, past the end of its
+        // own text.
+        if (tasks[cur_task].state == TASK_DEAD) { y_kexit(tasks[cur_task].exit_status & 255); };
+        return 0;
+    };
     tasks[cur_task].rsp = y_cur_task_rsp_get();
     let n = len(tasks);
     let found = 0 - 1;

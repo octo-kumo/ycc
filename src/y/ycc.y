@@ -71,6 +71,13 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
             // reads res_target sees it (target.y), so the emitter, the arch
             // prelude, the writer and the std set all follow from here.
             res_target = "kernel";
+            // A kernel has no collector to link: the allocator there is a bump
+            // allocator (arch/kernel.s), the collector's chunk path ends in a
+            // munmap syscall, and its stack base comes from a hosted _start a
+            // kernel image does not have.  Forcing the mode here rather than
+            // relying on --gc=auto keeps the kernel image free of it whatever
+            // the program looks like.
+            nativelib.set_gc_mode(2);
         } else if (a[0:9] == "--target=") {
             parse_target(a[9:]);
         } else if (a == "--target") {

@@ -271,6 +271,43 @@ y_cr2_get:
 #
 # Called with %rsi = the size to hand over; answers its base in %rax, and
 # every size y_alloc_more asks for is page-aligned, so the bases are too.
+# ── the collector, switched off ─────────────────────────────────────────
+# A kernel image must not have the collector: the allocator here is the bump
+# allocator, the collector's chunk path ends in y_gc_unmap (a munmap SYSCALL),
+# and its stack base comes from a hosted _start a kernel does not have.
+#
+# These are `replace:` blocks rather than plain labels, and that is the whole
+# point: label resolution is LAST-WINS, master's collector lives later in
+# arch/prelude.s than y_alloc_map does, and a plain label here therefore loses
+# to it (measured: a kernel -S listing showed y_gc_maybe with the PRELUDE's
+# body, and a kernel then faulted reading address 0 before its first byte of
+# output, reproducible with a program that never allocates).  Replacing the
+# block drops the prelude's copy, the same way `replace: y_alloc_map` drops
+# the hosted mmap version a few lines down.
+#
+# They are internal asm-to-asm calls, so arguments arrive in %rdi/%rsi and not
+# on the stack: y_gc_chunk_add(base, size) -> base, y_gc_maybe() -> 0 (nothing
+# collected), y_gc_alloc_free(...) -> 0 (no free run), y_gc_unmap(addr, len) ->
+# nothing to unmap, since the bump never frees.
+#=== replace: y_gc_maybe ===
+y_gc_maybe:
+    xor %eax, %eax
+    ret
+
+#=== replace: y_gc_alloc_free ===
+y_gc_alloc_free:
+    xor %eax, %eax
+    ret
+
+#=== replace: y_gc_chunk_add ===
+y_gc_chunk_add:
+    mov %rdi, %rax
+    ret
+
+#=== replace: y_gc_unmap ===
+y_gc_unmap:
+    ret
+
 y_alloc_map:
     mov y_heap_limit(%rip), %rdx
     test %rdx, %rdx
@@ -283,8 +320,15 @@ y_alloc_map:
     je y_alloc_fail
 y_am_ram:
     mov y_heap_next(%rip), %rax
+    test %rax, %rax
+    jne y_am_have
+    mov y_heap_bias(%rip), %rax
+    test %rax, %rax
+    je y_alloc_fail
+y_am_have:
     mov %rax, %r8
     add %rsi, %r8
+    add $8, %r8
     cmp %rdx, %r8
     jg y_alloc_fail
     mov %r8, y_heap_next(%rip)

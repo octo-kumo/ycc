@@ -1034,6 +1034,10 @@ static Yv *kernel_head_text(void) {
     text = ys_cat(text, ys_cat(ys_cat(ys("y_kernel_gdtr:\n.ascii \""), kascii(gd)), ys("\"\n")));
     text = ys_cat(text, ys("y_kernel_entry64:\n"));
     text = ys_cat(text, ys("    lea y_kernel_stack_top(%rip), %rsp\n"));
+    /* A hosted program's _start records where the stack began, because the
+     * collector scans the stack for roots; a kernel image has no _start, so
+     * the kernel's own entry does it -- before anything can allocate. */
+    text = ys_cat(text, ys("    mov %rsp, y_gc_stack_top(%rip)\n"));
     text = ys_cat(text, ys("    xor %rbp, %rbp\n"));
     /* The Multiboot loader left the info structure's physical address in
      * %ebx; nothing in the 32-bit half touches it, and the upper half of a

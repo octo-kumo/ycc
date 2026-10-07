@@ -21,6 +21,28 @@ embed MATH_ASM from "./arch/math.s";
 // from _start before anything else on that target. Its own file so GNU as
 // reads it (make asm-check) like the other arch assembly.
 embed WSELFTEST_ASM from "./arch/wselftest.s";
+// ⚠ OPEN (kernel): master's collector (arch/prelude.s, a block of its own) is
+// emitted AFTER the kernel's own prelude blocks, and label resolution is
+// last-wins -- so its y_gc_maybe/y_gc_chunk_add override arch/kernel.s's
+// no-ops and the collector runs in a kernel image again.  Measured: in a
+// kernel -S listing built by refs/ycc.ref (pre-merge) `y_gc_maybe:` does not
+// appear at all; built by the merged compiler it appears once, with the
+// prelude's body.  The result is a kernel whose allocations go through a
+// collector that has no valid heap: a user-mode read at 0 (err=5) before the
+// first byte of output, reproducible with a program that never allocates.
+// (Old kernel + program built by the NEW compiler works, which is what
+// isolates this to the kernel image.)
+//
+// FIXED the second way: arch/kernel.s now declares the four no-ops as
+// `#=== replace: NAME ===` blocks, and the listing confirms the kernel's body
+// (`xor %eax, %eax; ret`) is the one emitted.  That closed THIS gap but not
+// the failure: a kernel built by the merged compiler still faults with a
+// user-mode read at 0 (err=5) on a program that never allocates -- and the
+// same program runs on a pre-merge kernel image, so the remaining difference
+// is elsewhere in the merged kernel image (the new allocator text is in it, and
+// its fast path uses the runtime's y_heap cell pair, which the kernel's
+// y_heap_region_set does not write -- worth checking next).
+//
 // The kernel half of the prelude (`ycc --kernel`): the blocks of prelude.s
 // that touch the kernel, replaced whole -- mmap, serial, exit, the traps --
 // plus the pieces a freestanding payload needs and a hosted program does not
@@ -943,6 +965,12 @@ def kernel_head_text() -> str {
     text += "y_kernel_gdtr:\n.ascii \"" + kascii(gd) + "\"\n";
     text += "y_kernel_entry64:\n";
     text += "    lea y_kernel_stack_top(%rip), %rsp\n";
+    // A hosted program's _start records where the stack began, because the
+    // collector scans the stack for roots; a kernel image has no _start, so
+    // the kernel's own entry does it -- before anything can allocate.  Without
+    // this the collector's stack base is 0 and the first allocation fails with
+    // "out of memory".
+    text += "    mov %rsp, y_gc_stack_top(%rip)\n";
     text += "    xor %rbp, %rbp\n";
     // The Multiboot loader left the info structure's physical address in
     // %ebx (multiboot spec: %eax = 0x2BADB002, %ebx = the info pointer).

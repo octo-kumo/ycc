@@ -86,6 +86,12 @@ Yv *parse_cli_args(Yv *argv) {
              * res_target sees it (target.c), so the emitter, the arch
              * prelude, the writer and the std set all follow from here. */
             res_target = ys("kernel");
+            /* A kernel has no collector to link: the allocator there is a bump
+             * allocator (arch/kernel.s), the collector's chunk path ends in a
+             * munmap syscall, and its stack base comes from a hosted _start a
+             * kernel image does not have.  Mirrors src/y/ycc.y -- the two
+             * engines must emit identical kernel images. */
+            set_gc_mode(2);
             ;
         } else if (ys_eq_lit(a, "-E")) {
             /* dump the source the lexer would see, with origin markers, and
