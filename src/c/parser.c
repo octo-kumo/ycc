@@ -1099,6 +1099,8 @@ Yv *parse_binary(Yv *toks, ylong p, ylong min_prec) {
         if (ys_eq_lit(tt(toks, pos), "op")) {
             prec = op_prec(op);
             ;
+        } else if (is_kw(toks, pos, ys("in"))) {
+            prec = 3;
         }
         // NOTE: nested ifs, not `||` — the operands mix long (prec flags)
         // with bools and the checker rejects the joint gate (tcompat law:

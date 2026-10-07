@@ -363,6 +363,7 @@ Yv *gen_un(Yv *st, Yv *node);
 Yv *gen_addr(Yv *st, Yv *node);
 Yv *gen_elem_addr(Yv *st, Yv *node);
 Yv *gen_bin(Yv *st, Yv *node);
+Yv *gen_in(Yv *st, Yv *node);
 Yv *gen_logic(Yv *st, Yv *node, int is_or);
 Yv *gen_cat(Yv *st, Yv *node, Yv *lt, Yv *rt);
 int leaf_expr(Yv *n);
@@ -5850,6 +5851,8 @@ Yv *gen_bin(Yv *st, Yv *node) {
         return gen_logic(st, node, 0);
     } else if (ys_eq_lit(op, "||")) {
         return gen_logic(st, node, 1);
+    } else if (ys_eq_lit(op, "in")) {
+        return gen_in(st, node);
     } else if ((ys_eq_lit(op, "==") || ys_eq_lit(op, "!=")) && is_none_id(yr_get(node, "r")) && is_map_read(st, yr_get(node, "l"))) {
         /* m[k] == none, m[k] != none: the key scan decides, nothing is
          * boxed (gen_map_get) */
@@ -5865,6 +5868,28 @@ Yv *gen_bin(Yv *st, Yv *node) {
  * the left operand does not already decide the result.
  *   a && b : test a -> jz F; test b -> jz F; 1; jmp E; F: 0; E:
  *   a || b : test a -> jnz T; test b -> jnz T; 0; jmp E; T: 1; E: */
+/* `x in s` / `e in a` (LINT_RULES.md 5.1): one pass, no short-circuit. */
+Yv *gen_in(Yv *st, Yv *node) {
+    ylong ln = yv_l(yr_get(node, "line"));
+    ylong cl = yv_l(yr_get(node, "col"));
+    Yv *zero = n_num(ys("0"), ln, cl);
+    Yv *r = unfold(infer(st, yr_get(node, "r")));
+    if (yv_l(yr_get(r, "k")) == K_tstr) {
+        Yv *needle = yr_get(node, "l");
+        if (yv_l(yr_get(unfold(infer(st, yr_get(node, "l"))), "k")) == K_tbyte) {
+            needle = n_call1(ys("chr"), yr_get(node, "l"), ln, cl);
+        }
+        return gen_bin(st, n_bin(ys(">="),
+                                 n_call2(ys("index_of"), yr_get(node, "r"), needle, ln, cl),
+                                 zero, ln, cl));
+    }
+    Yv *call = yr(5, "k", yv_long(K_call),
+                  "callee", n_dot(yr_get(node, "r"), ys("index"), ln, cl),
+                  "args", args1(yr_get(node, "l")),
+                  "line", yv_long(ln), "col", yv_long(cl));
+    return gen_bin(st, n_bin(ys(">="), call, zero, ln, cl));
+}
+
 Yv *gen_logic(Yv *st, Yv *node, int is_or) {
     Yv *rT = next_loc(st);
     st = yr_get(rT, "st");

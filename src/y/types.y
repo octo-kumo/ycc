@@ -1577,6 +1577,36 @@ def typeof_eq(st: TcSt, op: str, lt: Type, rt: Type, line: long, col: long) -> T
     }
 };
 
+// `x in s` / `e in a`: a byte or one-char str in a str, or an element in an
+// array. Bool. The emitter desugars it to `index_of(s, x) >= 0` /
+// `a.index(e) >= 0`, so this is only the type rule (LINT_RULES.md 5.1).
+def typeof_in(st: TcSt, lt: Type, rt: Type, line: long, col: long) -> TcRes {
+    let r = unfold(rt);
+    if (r.k == K.tstr) {
+        if (lt.k == K.tbyte || lt.k == K.tstr || lt.k == K.tunk) {
+            tc_res(type_node({ k: K.tbool }), st)
+        } else {
+            tc_res(t_unk(), fail(st, "'in' on a str needs a byte or a str on the left, got " + tstr(lt), line, col))
+        }
+    } else if (r.k == K.tarr) {
+        let a: TOf = r;
+        if (lt.k == K.tunk || teq(unfold(lt), unfold(a.of))) {
+            tc_res(type_node({ k: K.tbool }), st)
+        } else {
+            tc_res(t_unk(), fail(st, "'in' on an array needs one of its elements on the left, got " + tstr(lt), line, col))
+        }
+    } else if (r.k == K.tarrfix) {
+        let a: TFix = r;
+        if (lt.k == K.tunk || teq(unfold(lt), unfold(a.of))) {
+            tc_res(type_node({ k: K.tbool }), st)
+        } else {
+            tc_res(t_unk(), fail(st, "'in' on an array needs one of its elements on the left, got " + tstr(lt), line, col))
+        }
+    } else {
+        tc_res(t_unk(), fail(st, "'in' needs a str or an array on the right, got " + tstr(rt), line, col))
+    }
+};
+
 def typeof_logic(st: TcSt, op: str, lt: Type, rt: Type, line: long, col: long) -> TcRes {
     // Truthiness: any 8-byte value decides (nonzero = true), like the C
     // runtime. The result is always a bool; operands keep their own types.
@@ -2051,6 +2081,7 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
         else if (op == ">") { typeof_cmp(st, op, l.typ, r.typ, bin.line, bin.col) }
         else if (op == "<=") { typeof_cmp(st, op, l.typ, r.typ, bin.line, bin.col) }
         else if (op == ">=") { typeof_cmp(st, op, l.typ, r.typ, bin.line, bin.col) }
+        else if (op == "in") { typeof_in(st, l.typ, r.typ, bin.line, bin.col) }
         else if (op == "==") { typeof_eq(st, op, l.typ, r.typ, bin.line, bin.col) }
         else if (op == "!=") { typeof_eq(st, op, l.typ, r.typ, bin.line, bin.col) }
         else if (op == "&&") { typeof_logic(st, op, l.typ, r.typ, bin.line, bin.col) }

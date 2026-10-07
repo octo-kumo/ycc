@@ -14,14 +14,14 @@ Each rule is written as:
   rule must stay quiet. A rule with no `Skip` line is unconditional.
 
 Rules marked **(needs `in`)** depend on the `in` operator of section 5,
-which does not exist yet.
+which exists now (`x in s`, `e in a`).
 
 The shortening rules are off by default and reported by `ycc -W 2`
 (level 1 is the dropped-value checks). The correctness rules of section 6
 are the default level 0.
 
 Implemented so far (level 2): 1.1-1.7, 1.9 (2.7 is its condition form),
-2.1-2.6, 2.8, 2.11, 3.1, 3.5, 3.6, plus level 1's dropped-value
+2.1-2.6, 2.8, 2.11, 3.1, 3.5, 3.6, 5.1, plus level 1's dropped-value
 checks as a `-> void` fix. The rest is the plan.
 
 ## 1. Expressions

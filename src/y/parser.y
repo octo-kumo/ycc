@@ -1097,7 +1097,8 @@ def parse_binary(toks: [Tok], p: long, min_prec: long) -> Parsed {
     while (go) {
         let op = tv(toks, pos);
         let prec = 0;
-        if (tt(toks, pos) == "op") { prec = op_prec(op); };
+        if (tt(toks, pos) == "op") { prec = op_prec(op); }
+        else if (is_kw(toks, pos, "in")) { prec = 3; };
         // Nested ifs, not one `prec != 0 || prec < min_prec` gate: a mixed
         // long/bool gate reads worse, and `||` would type fine anyway
         // (typeof_logic takes any operand) — this is shape, not a rule.

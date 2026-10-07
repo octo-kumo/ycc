@@ -4693,10 +4693,31 @@ def gen_bin(st: EmitSt, node: Bin) -> EmitSt {
         // m[k] == none, m[k] != none: the key scan decides, nothing is
         // boxed (gen_map_get)
         if (op == "==") { gen_map_get(st, node.l, "none") } else { gen_map_get(st, node.l, "has") }
+    } else if (op == "in") {
+        gen_in(st, node)
     } else if ((op == "==" || op == "!=") && is_none_id(node.l) && is_map_read(st, node.r)) {
         if (op == "==") { gen_map_get(st, node.r, "none") } else { gen_map_get(st, node.r, "has") }
     } else {
         gen_bin_rest(st, node)
+    }
+};
+
+// `x in s` / `e in a` (LINT_RULES.md 5.1): one pass, no short-circuit.
+def gen_in(st: EmitSt, node: Bin) -> EmitSt {
+    let ln = node.line;
+    let cl = node.col;
+    let zero = n_num("0", ln, cl);
+    let rt = unfold(infer(st, node.r));
+    if (rt.k == K.tstr) {
+        let needle = node.l;
+        if (unfold(infer(st, node.l)).k == K.tbyte) {
+            needle = { k: K.call, callee: n_id("chr", ln, cl), args: [node.l], line: ln, col: cl };
+        };
+        let call: Bin = { k: K.bin, op: ">=", l: n_call2("index_of", node.r, needle, ln, cl), r: zero, line: ln, col: cl };
+        gen_bin(st, call)
+    } else {
+        let call: Bin = { k: K.bin, op: ">=", l: { k: K.call, callee: n_dot(node.r, "index", ln, cl), args: [node.l], line: ln, col: cl }, r: zero, line: ln, col: cl };
+        gen_bin(st, call)
     }
 };
 

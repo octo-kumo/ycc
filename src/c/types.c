@@ -119,6 +119,7 @@ static Yv *typeof_cmp(Yv *st, Yv *op, Yv *lt, Yv *rt, ylong line, ylong col);
 static int is_num_kind(Yv *t);
 static int num_eq_ok(Yv *lt, Yv *rt);
 static Yv *typeof_eq(Yv *st, Yv *op, Yv *lt, Yv *rt, ylong line, ylong col);
+static Yv *typeof_in(Yv *st, Yv *lt, Yv *rt, ylong line, ylong col);
 static Yv *typeof_logic(Yv *st, Yv *op, Yv *lt, Yv *rt, ylong line, ylong col);
 static int tcompat(Yv *got, Yv *want);
 static int arr_lit_adopts(Yv *got, Yv *want, Yv *n);
@@ -2058,6 +2059,33 @@ static Yv *typeof_eq(Yv *st, Yv *op, Yv *lt, Yv *rt, ylong line, ylong col) {
     }
 }
 
+/* `x in s` / `e in a` (LINT_RULES.md 5.1): a byte or one-char str in a
+ * str, or an element in an array. Bool; the emitter desugars. */
+static Yv *typeof_in(Yv *st, Yv *lt, Yv *rt, ylong line, ylong col) {
+    Yv *r = unfold(rt);
+    ylong rk = yv_l(yr_get(r, "k"));
+    if (rk == K_tstr) {
+        ylong lk = yv_l(yr_get(lt, "k"));
+        if (lk == K_tbyte || lk == K_tstr || lk == K_tunk) {
+            return tc_res(type_node(yr(1, "k", yv_long(K_tbool))), st);
+        }
+        return tc_res(t_unk(),
+                      fail(st, ys_cat(ys("'in' on a str needs a byte or a str on the left, got "),
+                                      tstr(lt)), line, col));
+    } else if (rk == K_tarr || rk == K_tarrfix) {
+        if (yv_l(yr_get(lt, "k")) == K_tunk ||
+            teq(unfold(lt), unfold(yr_get(r, "of")))) {
+            return tc_res(type_node(yr(1, "k", yv_long(K_tbool))), st);
+        }
+        return tc_res(t_unk(),
+                      fail(st, ys_cat(ys("'in' on an array needs one of its elements on the left, got "),
+                                      tstr(lt)), line, col));
+    }
+    return tc_res(t_unk(),
+                  fail(st, ys_cat(ys("'in' needs a str or an array on the right, got "),
+                                  tstr(rt)), line, col));
+}
+
 static Yv *typeof_logic(Yv *st, Yv *op __attribute__((unused)),
                         Yv *lt __attribute__((unused)),
                         Yv *rt __attribute__((unused)),
@@ -2661,6 +2689,10 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
             return typeof_cmp(st, op, yr_get(l, "typ"), yr_get(r, "typ"),
                               yv_l(yr_get(node, "line")),
                               yv_l(yr_get(node, "col")));
+        } else if (ys_eq_lit(op, "in")) {
+            return typeof_in(st, yr_get(l, "typ"), yr_get(r, "typ"),
+                             yv_l(yr_get(node, "line")),
+                             yv_l(yr_get(node, "col")));
         } else if (ys_eq_lit(op, "==")) {
             return typeof_eq(st, op, yr_get(l, "typ"), yr_get(r, "typ"),
                              yv_l(yr_get(node, "line")),
