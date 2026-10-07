@@ -328,7 +328,6 @@ y_am_ram:
 y_am_have:
     mov %rax, %r8
     add %rsi, %r8
-    add $8, %r8
     cmp %rdx, %r8
     jg y_alloc_fail
     mov %r8, y_heap_next(%rip)
