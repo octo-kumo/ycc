@@ -3804,7 +3804,34 @@ Yv *infer_go(Yv *st, Yv *node) {
             ys_eq_lit(op, "/") || ys_eq_lit(op, "%") || ys_eq_lit(op, "::")) {
             Yv *bl = infer(st, yr_get(node, "l"));
             Yv *br = infer(st, yr_get(node, "r"));
-            if (ys_eq_lit(op, "+") &&
+            Yv *blu = unfold(bl);
+            Yv *bru = unfold(br);
+            if ((ys_eq_lit(op, "+") || ys_eq_lit(op, "-")) &&
+                (yv_l(yr_get(blu, "k")) == K_tptr ||
+                 yv_l(yr_get(bru, "k")) == K_tptr)) {
+                /* Pointer arithmetic: p +/- long keeps the pointer type,
+                 * p - q is an element count (long). Invalid combinations
+                 * are already checker errors; infer_go still has to pick
+                 * some type for the emitter's width decisions. */
+                if (ys_eq_lit(op, "+") &&
+                    yv_l(yr_get(blu, "k")) == K_tptr &&
+                    (yv_l(yr_get(bru, "k")) == K_tlong ||
+                     yv_l(yr_get(bru, "k")) == K_tbyte)) {
+                    return blu;
+                } else if (ys_eq_lit(op, "+") &&
+                           yv_l(yr_get(bru, "k")) == K_tptr &&
+                           (yv_l(yr_get(blu, "k")) == K_tlong ||
+                            yv_l(yr_get(blu, "k")) == K_tbyte)) {
+                    return bru;
+                } else if (ys_eq_lit(op, "-") &&
+                           yv_l(yr_get(blu, "k")) == K_tptr &&
+                           (yv_l(yr_get(bru, "k")) == K_tlong ||
+                            yv_l(yr_get(bru, "k")) == K_tbyte)) {
+                    return blu;
+                } else {
+                    return yr(1, "k", yv_long(K_tlong));
+                }
+            } else if (ys_eq_lit(op, "+") &&
                 (yv_l(yr_get(bl, "k")) == K_tarr ||
                  yv_l(yr_get(bl, "k")) == K_tarrfix)) {
                 /* array `+` builds a NEW heap array (types.y
@@ -6419,6 +6446,95 @@ Yv *gen_eq_arr_deep(Yv *st, Yv *et) {
     return emit_label(st, yv_l(yr_get(ldone, "label")));
 }
 
+/* Pointer arithmetic emission (types.y is the law). A pointer moves by
+ * whole elements: `p + n` scales n by the pointee width, and `p - q`
+ * subtracts the addresses and divides by that width. byte pointers scale by
+ * one; every other pointee is an 8-byte slot, which is elem_bytes' rule. */
+static Yv *ptr_math_kind(Yv *op, Yv *lt, Yv *rt) {
+    Yv *lu = unfold(lt);
+    Yv *ru = unfold(rt);
+    if (ys_eq_lit(op, "+")) {
+        if (yv_l(yr_get(lu, "k")) == K_tptr &&
+            (yv_l(yr_get(ru, "k")) == K_tlong ||
+             yv_l(yr_get(ru, "k")) == K_tbyte)) {
+            return ys("ptr_int");
+        } else if (yv_l(yr_get(ru, "k")) == K_tptr &&
+                   (yv_l(yr_get(lu, "k")) == K_tlong ||
+                    yv_l(yr_get(lu, "k")) == K_tbyte)) {
+            return ys("int_ptr");
+        } else {
+            return ys("");
+        }
+    } else if (ys_eq_lit(op, "-")) {
+        if (yv_l(yr_get(lu, "k")) == K_tptr &&
+            (yv_l(yr_get(ru, "k")) == K_tlong ||
+             yv_l(yr_get(ru, "k")) == K_tbyte)) {
+            return ys("ptr_int");
+        } else if (yv_l(yr_get(lu, "k")) == K_tptr &&
+                   yv_l(yr_get(ru, "k")) == K_tptr) {
+            return ys("ptr_ptr");
+        } else {
+            return ys("");
+        }
+    } else {
+        return ys("");
+    }
+}
+
+static ylong ptr_elem_width(Yv *t) {
+    Yv *p = unfold(t);
+    return elem_bytes(yr_get(p, "to"));
+}
+
+static Yv *ptr_scale_rax(Yv *st, ylong esz) {
+    if (esz == 8) {
+        return emit_insn(st, F_SHL_I_R, 3, R_RAX, 64, 0, 0, 0, 0);
+    } else {
+        return st;
+    }
+}
+
+static Yv *gen_ptr_arith(Yv *st, Yv *node, Yv *lt, Yv *rt) {
+    Yv *op = yr_get(node, "op");
+    Yv *kind = ptr_math_kind(op, lt, rt);
+    if (ys_eq_lit(kind, "ptr_int")) {
+        ylong esz = ptr_elem_width(lt);
+        st = gen(st, yr_get(node, "l"));
+        st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+        st = gen(st, yr_get(node, "r"));
+        st = ptr_scale_rax(st, esz);
+        st = emit_insn(st, F_MOV_R_R, R_RAX, 64, R_RCX, 64, 0, 0, 0);
+        st = emit_insn(st, F_POP_R, R_RAX, 64, 0, 0, 0, 0, 0);
+        if (ys_eq_lit(op, "+")) {
+            return emit_insn(st, F_ADD_R_R, R_RCX, 64, R_RAX, 64, 0, 0, 0);
+        } else {
+            return emit_insn(st, F_SUB_R_R, R_RCX, 64, R_RAX, 64, 0, 0, 0);
+        }
+    } else if (ys_eq_lit(kind, "int_ptr")) {
+        ylong esz = ptr_elem_width(rt);
+        st = gen(st, yr_get(node, "l"));
+        st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+        st = gen(st, yr_get(node, "r"));
+        st = emit_insn(st, F_MOV_R_R, R_RAX, 64, R_RCX, 64, 0, 0, 0);
+        st = emit_insn(st, F_POP_R, R_RAX, 64, 0, 0, 0, 0, 0);
+        st = ptr_scale_rax(st, esz);
+        return emit_insn(st, F_ADD_R_R, R_RCX, 64, R_RAX, 64, 0, 0, 0);
+    } else {
+        ylong esz = ptr_elem_width(lt);
+        st = gen(st, yr_get(node, "l"));
+        st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+        st = gen(st, yr_get(node, "r"));
+        st = emit_insn(st, F_MOV_R_R, R_RAX, 64, R_RCX, 64, 0, 0, 0);
+        st = emit_insn(st, F_POP_R, R_RAX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, F_SUB_R_R, R_RCX, 64, R_RAX, 64, 0, 0, 0);
+        if (esz == 8) {
+            return emit_insn(st, F_SAR_I_R, 3, R_RAX, 64, 0, 0, 0, 0);
+        } else {
+            return st;
+        }
+    }
+}
+
 Yv *gen_bin_rest(Yv *st, Yv *node) {
     Yv *op = yr_get(node, "op");
     Yv *lt = infer(st, yr_get(node, "l"));
@@ -6435,6 +6551,9 @@ Yv *gen_bin_rest(Yv *st, Yv *node) {
         /* array `+` is the copy-concat form (gen_cat splits off the array
          * case first), not numeric add on the header pointers. */
         return gen_cat(st, node, lt, rt);
+    } else if ((ys_eq_lit(op, "+") || ys_eq_lit(op, "-")) &&
+               !ys_eq_lit(ptr_math_kind(op, lt, rt), "")) {
+        return gen_ptr_arith(st, node, lt, rt);
     } else if (ys_eq_lit(op, "::")) {
         return gen_cons(st, node);
     } else if (ys_eq_lit(op, "<<") || ys_eq_lit(op, ">>") ||
@@ -11033,8 +11152,13 @@ Yv *gen_incdec_end(Yv *st, Yv *bind, Yv *d2, Yv *asg, int dropped, ylong ln,
 
 Yv *gen_opassign(Yv *st, Yv *node, int dropped) {
     Yv *t = infer(st, yr_get(node, "tgt"));
-    if (yv_l(yr_get(t, "k")) == K_tarr ||
-        yv_l(yr_get(t, "k")) == K_tarrfix) {
+    if (yv_l(yr_get(unfold(t), "k")) == K_tptr) {
+        /* The arithmetic fast path adds a slot immediate directly; a pointer
+         * offset must be scaled by the element width, which the desugar's
+         * `p = p + n` gets from gen_bin. */
+        return gen_opassign_desugar(st, node, dropped);
+    } else if (yv_l(yr_get(t, "k")) == K_tarr ||
+               yv_l(yr_get(t, "k")) == K_tarrfix) {
         return gen_opassign_arr(st, node, dropped);
     } else {
         return gen_opassign_arith(st, node, dropped);

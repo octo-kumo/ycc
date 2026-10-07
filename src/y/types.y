@@ -1318,10 +1318,54 @@ def is_some_call(n: Node) -> bool {
     }
 };
 
+// Pointer arithmetic (types.y). A pointer travels by whole elements, so
+// the result keeps the pointer type; pointer-minus-pointer counts elements
+// and is a long. Only long/byte counts are accepted, and both sides must be
+// the same pointer type for a difference (the emitter divides by the
+// element width).
+def is_ptr_math_int(t: Type) -> bool {
+    t.k == K.tlong || t.k == K.tbyte
+};
+
+def typeof_ptr_arith(st: TcSt, op: str, lt: Type, rt: Type, line: long, col: long) -> TcRes {
+    let lu = unfold(lt);
+    let ru = unfold(rt);
+    if (op == "+") {
+        if (lu.k == K.tptr && is_ptr_math_int(ru)) { tc_res(lu, st) }
+        else if (ru.k == K.tptr && is_ptr_math_int(lu)) { tc_res(ru, st) }
+        else {
+            st = fail(st, "cannot add " + tstr(lt) + " and " + tstr(rt) + " (pointer arithmetic needs a pointer and a long/byte offset)", line, col);
+            tc_res(t_unk(), st)
+        }
+    } else if (op == "-") {
+        if (lu.k == K.tptr && is_ptr_math_int(ru)) { tc_res(lu, st) }
+        else if (lu.k == K.tptr && ru.k == K.tptr) {
+            if (teq(lu, ru)) { tc_res(type_node({ k: K.tlong }), st) }
+            else {
+                st = fail(st, "pointer subtraction needs identical pointer types, got " + tstr(lu) + " and " + tstr(ru), line, col);
+                tc_res(t_unk(), st)
+            }
+        } else {
+            st = fail(st, "cannot subtract " + tstr(rt) + " from " + tstr(lt) + " (pointer arithmetic needs a pointer and a long/byte offset)", line, col);
+            tc_res(t_unk(), st)
+        }
+    } else {
+        st = fail(st, "operator '" + op + "' is not defined on pointers", line, col);
+        tc_res(t_unk(), st)
+    }
+};
+
 // Binary-operator result typing. Split out of the `bin` arm so the operator
 // table there stays a flat `op == "..."` dispatch and each operator's rule
 // lives in one named place.
 def typeof_arith(st: TcSt, op: str, lt: Type, rt: Type, line: long, col: long) -> TcRes {
+    // Pointer arithmetic is its own family: a pointer +/- a long moves by
+    // whole elements, and a pointer - pointer counts elements.
+    let lu0 = unfold(lt);
+    let ru0 = unfold(rt);
+    if ((op == "+" || op == "-") && (lu0.k == K.tptr || ru0.k == K.tptr)) {
+        return typeof_ptr_arith(st, op, lt, rt, line, col);
+    };
     // "+" on strings concatenates (either side may be poison tunk, but at
     // least one side must be a real str — hence the per-kind arms below).
     // AUTO-STRINGIFY: str + long/bool/float (and the mirror) stringify the
@@ -1488,7 +1532,16 @@ def typeof_bits(st: TcSt, op: str, lt: Type, rt: Type, line: long, col: long) ->
 };
 
 def typeof_cmp(st: TcSt, op: str, lt: Type, rt: Type, line: long, col: long) -> TcRes {
-    if (lt.k == K.tstr) {
+    let lu = unfold(lt);
+    let ru = unfold(rt);
+    if (lu.k == K.tptr || ru.k == K.tptr) {
+        if (lu.k == K.tptr && ru.k == K.tptr && teq(lu, ru)) {
+            tc_res(type_node({ k: K.tbool }), st)
+        } else {
+            st = fail(st, "'" + op + "' compares " + tstr(lt) + " with " + tstr(rt) + " (pointer ordering needs identical pointer types)", line, col);
+            tc_res(t_unk(), st)
+        }
+    } else if (lt.k == K.tstr) {
         // str < str is lexicographic ordering (byte by byte), matching the
         // y_str_cmp helper native.y emits.
         st = expect_type(st, rt, { k: K.tstr }, "'" + op + "' right operand", line, col);
@@ -3184,7 +3237,7 @@ def base_type(st: TcSt, e: Node) -> Type {
 // ++/-- target rule: numbers (long/byte/float) only.
 def incdec_check(st: TcSt, node: IncDec, tt: Type) -> TcRes {
     let op = node.op;
-    if (tt.k == K.tlong || tt.k == K.tbyte || tt.k == K.tfloat || tt.k == K.tbigint) {
+    if (tt.k == K.tlong || tt.k == K.tbyte || tt.k == K.tfloat || tt.k == K.tbigint || tt.k == K.tptr) {
         tc_res(tt, st)
     } else if (tt.k == K.tunk || tt.k == K.tnone) {
         tc_res(t_unk(), st)
@@ -3207,7 +3260,15 @@ def incdec_check(st: TcSt, node: IncDec, tt: Type) -> TcRes {
 // The result is always the target's type (the new value).
 def opassign_check(st: TcSt, node: OpAssign, tt: Type, vt: Type) -> TcRes {
     let op = node.op;
-    if (is_bits_op(op) && tt.k != K.tbigint) {
+    if (tt.k == K.tptr) {
+        if (op == "+" || op == "-") {
+            st = expect_type(st, vt, type_node({ k: K.tlong }), "'" + op + "=' offset", node.line, node.col);
+            tc_res(tt, st)
+        } else {
+            st = fail(st, "pointers support only '+=' and '-=' offsets, not '" + op + "='", node.line, node.col);
+            tc_res(t_unk(), st)
+        }
+    } else if (is_bits_op(op) && tt.k != K.tbigint) {
         if (tt.k == K.tlong || tt.k == K.tbyte) {
             st = expect_type(st, vt, type_node({ k: K.tlong }), "'" + op + "=' value", node.line, node.col);
             tc_res(tt, st)
