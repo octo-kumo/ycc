@@ -24,10 +24,12 @@ semantics. **Every change to `src/y/*.y` gets the same change in `src/c/*.c`.**
 - Never commit artifacts: `*.o`, `cycc`, `cycc.exe`, `cycc-asan`, `ycc`, `_ycc*`,
   `ynew`, `ytest*`, `*.pack`, `a.out`, `_check/`, `_ktmp/`. `refs/` is gitignored
   and is **not** disposable: it is the port's ground truth.
-- `src/y/std/{rt,prelude,exec,str}.y` are embedded into the compiler when it is
-  built (`embed` in native.y, `Y_EMBED` in native.c) — edit them directly; there
-  is no generator, and `str.y` holds no string literals. Every other std unit is
-  read from `src/y/std/` at compile time.
+- Every `src/y/std/*.y` is embedded into the compiler when it is built (`embed`
+  in native.y, `Y_EMBED` in native.c; `STD_EMBEDS` in the Makefile lists them so
+  an edit forces a rebuild) — edit them directly; there is no generator, and
+  `str.y` holds no string literals. A compile reads the source from disk when one
+  is reachable (the checkout, a package root, `std/`) and falls back to the
+  embedded copy otherwise, which is what makes a lone `ycc` self-contained.
 - `src/y/arch/*.s` is embedded the same way, through `arch_x64.y`/`arch_x64.c`
   (PORTING.md rules 11–12). Whole-line `#` comments are dropped before the
   in-tree assembler sees them; `make asm-check` checks the files with GNU `as`.
@@ -207,7 +209,7 @@ under its bare name because generated code calls it by label, and a program's ow
   `native.y` (emitter), `meta.y`, `arch_x64.y`, `enc64.y`, `asm.y`, `elf.y`,
   `pe.y`, `dwarf.y`, `target.y`, `tags.y`; `std/` (the four embedded units, plus
   `fs`, `net`, `struct`, `math`, `crypto`, `x509`, `tls`, `regex`, `json`,
-  `args`, `tui`, `utf8`, …); `arch/*.s`.
+  `args`, `tui`, `utf8`, … — all of them embedded, see Build); `arch/*.s`.
 - `src/c/` — the 1:1 copy, plus `yv.c`/`yv.h` (the value model; no Y twin).
   `PORTING.md` is the contract.
 - `src/tools/lsp/` — `yserve` and its modules (`LSP.md` is the design; the VS Code
