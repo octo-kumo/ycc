@@ -63,7 +63,21 @@ y_spawn:
     call y_alloc
     mov %rax, %r12
     mov %r12, 24(%r12)
-# Register before clone: the child starts out a registered, running thread.
+# y_alloc does not zero a payload, and a recycled tcb is full of whatever the
+# previous block held. Every field the collector reads must be defined BEFORE
+# the tcb is linked into y_gc_threads: the state word (word 12) or the walk
+# below would read a stale 1 ("parked") or 3 ("blocked") and sweep while this
+# thread runs -- --gc-stress with four mutex threads hit exactly that -- and
+# the bump ends (words 0/8) would start the child's allocator at a random
+# address.
+    xor %eax, %eax
+    mov %rax, 0(%r12)
+    mov %rax, 8(%r12)
+    mov %rax, 88(%r12)
+    mov %rax, 96(%r12)
+    mov %rax, 104(%r12)
+# Register before clone: the child starts out a registered, running thread
+# (state 0), so a cycle either waits for it or scans it -- never skips it.
     mov y_gc_threads(%rip), %rdx
     mov %rdx, 80(%r12)
     mov %r12, y_gc_threads(%rip)

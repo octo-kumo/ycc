@@ -206,6 +206,22 @@ or died).
    the mapping it describes. Removing t160's fork section does not change the
    failure; removing the threads does.
 
+   The registers at the trap point at the second half of that. The chunk being
+   walked is a normal one full of 16-byte closure records (`{header=0x11,
+   value=<code address>}` repeated), and the word the walk mistook for a header
+   is `0x7ffff7600000` -- the chunk's own `end`, the value a bump allocator
+   stores in a heap block's word 1. So the walk crossed from allocated blocks
+   into a region where a *pointer* sits at a header offset. The one region that
+   can look like that is a thread's bump tail: `y_alloc_more` sets a thread's
+   `cur`/`end` (words 0/8 of its tcb) to `[base+size, base+4MiB)` but writes no
+   header for that space, so pass1 and the sweep see free space there and
+   coalesce it into the free lists while the thread still bumps into it. The
+   main thread's tail is `y_heap` itself, which is why single-threaded
+   collection never shows it. The candidate fix is to make the tail a real
+   allocated block (header `size|1` at `cur`) when a chunk is taken, so the
+   sweep keeps it while the tcb's `cur` points into it and frees it once the
+   thread has moved on.
+
 2. **Performance.** The byte buffers are pointer-free (`y_str_cat`,
    `y_str_app`, the join buffer, `ylts_mk`, `ycs_mk`, `y_bytes_to_str`): 61.9M
    -> 49.3M instructions on 120 live ~108 KB strings. Packed `[byte]` array data
