@@ -1062,3 +1062,35 @@ rbx, rbp, r12-r15 -- pushed by y_syscall_entry and the IRQ stub, popped by both
 tails and by y_enter_frame, and initialised by task_frame.  The frame layout is
 this branch's own documented contract, so the change is self-contained; the C
 twin of the IRQ stub (src/c/arch_x64.c) needs the same six pushes.
+
+### Round 66: why the six slots must go BELOW the nine (the IRQ constraint)
+
+My IRQ attempt pushed the six (r15..rbx) FIRST, so they landed above the nine
+register slots -- and that is on the wrong side of the frame, because in an
+interrupt the CPU has ALREADY pushed [RIP][CS][RFLAGS][RSP][SS] before the stub
+runs.  The layout came out as
+
+    [r9..rcx (nine)] [RIP CS RFLAGS RSP SS (CPU)] [r15..rbx (six)]
+
+while the syscall path produced
+
+    [r9..rcx (nine)] [r15..rbx (six)] [RIP CS RFLAGS RSP SS]
+
+so the two suspension points still did not agree, and the suite went from 29/2/31
+to 26/5/31.  No stub can push between the nine and the CPU frame -- the CPU
+pushed that part.
+
+Therefore the six must go BELOW the nine in BOTH paths (pushed last, lowest):
+
+    [r15 r14 r13 r12 rbp rbx] [r9 r8 r10 rdx rsi rdi rax r11 rcx] [RIP ... ]
+
+which means the saved switch point moves down by 48, and the coordinated edits
+are: y_syscall_entry pushes the six BEFORE the nine (it can, it builds the whole
+frame), the IRQ stub pushes them AFTER its nine, y_enter_frame and task_frame
+follow, and task_complete's answer slot for the saved frame moves from rsp+48 to
+rsp+96.  The dispatcher's own argument offsets are read from the rsp at its call
+site, not from the saved frame, so they do not move.
+
+That is the whole change, written down so it can be done in one pass instead of
+two half-passes; the reverted version of the fix is in history at cb9be62, and
+test/kernel is green (33/33) without it.
