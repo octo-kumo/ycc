@@ -778,7 +778,12 @@ const TASK_DEAD = 3;
 const TASK_BLOCKED = 4;
 const TASK_FREE = 5;
 
-type Task = { rsp: long, cr3: long, kstack: long, pid: long, parent: long, exit_status: long, wait_pid: long, wait_statusp: long, state: long, name: str };
+// A message: what a client asks a server, and what a server answers.  Five
+// words is a design decision, not a limit of anything: a message that needs to
+// carry bytes names a buffer in the shared window instead.
+type Msg = { tag: long, a1: long, a2: long, a3: long, from: long };
+
+type Task = { rsp: long, cr3: long, kstack: long, pid: long, parent: long, exit_status: long, wait_pid: long, wait_statusp: long, inbox: [Msg], reply_to: long, recv_buf: long, state: long, name: str };
 
 let tasks: [Task] = [];
 let cur_task = 0;
@@ -833,6 +838,11 @@ const SYS_READ = 0;
 const SYS_WRITE = 1;
 const SYS_MMAP = 9;
 const SYS_GETPID = 39;
+// The kernel's own calls, above the Linux numbers so they can never collide
+// with one that Linux adds later.
+const IPC_CALL = 1024;
+const IPC_RECV = 1025;
+const IPC_REPLY = 1026;
 const SYS_FORK = 57;
 const SYS_WAIT4 = 61;
 const SYS_EXIT_GROUP = 231;
@@ -935,6 +945,9 @@ def y_sys_dispatch(nr: long, a1: long, a2: long, a3: long, a4: long, a5: long, a
     if (nr == SYS_FORK) { return sys_fork(); };
     if (nr == SYS_WAIT4) { return sys_wait4(a1, a2, a3, a4); };
     if (nr == SYS_GETPID) { return tasks[cur_task].pid; };
+    if (nr == IPC_CALL) { return sys_ipc_call(a1, a2, a3, a4, a5); };
+    if (nr == IPC_RECV) { return sys_ipc_recv(a1); };
+    if (nr == IPC_REPLY) { return sys_ipc_reply(a1); };
     if (nr == SYS_WRITE) { return sys_write(a1, a2, a3); };
     if (nr == SYS_EXIT_GROUP) { return sys_exit_group(a1); };
     if (nr == SYS_READ) { return 0; };
@@ -956,13 +969,13 @@ def sched_ready() -> void { need_resched = true; };
 // needs no fabricated frame: the first switch saves it.
 def sched_init(cr3: long, kstack: long) -> void {
     if (len(tasks) == 0) {
-        tasks += { rsp: 0, cr3: cr3, kstack: kstack, pid: 0, parent: 0 - 1, exit_status: 0, wait_pid: 0, wait_statusp: 0, state: TASK_RUNNING, name: "kernel" };
+        tasks += { rsp: 0, cr3: cr3, kstack: kstack, pid: 0, parent: 0 - 1, exit_status: 0, wait_pid: 0, wait_statusp: 0, inbox: [], reply_to: 0 - 1, recv_buf: 0, state: TASK_RUNNING, name: "kernel" };
         y_cur_kstack_set(kstack);
     };
 };
 
 def sched_add(cr3: long, kstack: long, frame: long, name: str) -> long {
-    let t: Task = { rsp: frame, cr3: cr3, kstack: kstack, pid: next_pid, parent: 0 - 1, exit_status: 0, wait_pid: 0, wait_statusp: 0, state: TASK_READY, name: name };
+    let t: Task = { rsp: frame, cr3: cr3, kstack: kstack, pid: next_pid, parent: 0 - 1, exit_status: 0, wait_pid: 0, wait_statusp: 0, inbox: [], reply_to: 0 - 1, recv_buf: 0, state: TASK_READY, name: name };
     next_pid = next_pid + 1;
     tasks += t;
     len(tasks) - 1
@@ -1178,10 +1191,94 @@ def sys_fork() -> long {
         i = i + 1;
     };
     poke_va64(dst + 48, 0);
-    let t: Task = { rsp: dst, cr3: dir, kstack: ktop, pid: next_pid, parent: me, exit_status: 0, wait_pid: 0, wait_statusp: 0, state: TASK_READY, name: "fork" };
+    let t: Task = { rsp: dst, cr3: dir, kstack: ktop, pid: next_pid, parent: me, exit_status: 0, wait_pid: 0, wait_statusp: 0, inbox: [], reply_to: 0 - 1, recv_buf: 0, state: TASK_READY, name: "fork" };
     next_pid = next_pid + 1;
     tasks += t;
     t.pid
+};
+
+// ── message passing ─────────────────────────────────────────────────────
+// A port is a task's pid, and the model is a synchronous request/reply:
+// `ipc_call` queues a message and suspends the caller, the server's
+// `ipc_recv` takes the message and remembers who asked, and `ipc_reply`
+// answers whoever did.  Suspending needs no kernel continuation for the same
+// reason wait4 does not: the caller's frame is saved at the syscall entry, so
+// the answer is one poke into its %rax slot.
+// Write one word into a TASK's address space.  A sender completing a blocked
+// receiver runs on its own CR3, so the receiver's buffer has to be reached
+// through the receiver's page tables and the direct map.
+def task_write_word(who: long, va: long, v: long) -> void {
+    if (va == 0) { return; };
+    let phys = vm_translate(tasks[who].cr3, va & (0 - 8));
+    if (phys == 0) { return; };
+    poke_va64(DIRECT_BASE + phys + (va & 7), v);
+};
+
+def task_push(who: long, m: Msg) -> void {
+    tasks[who].inbox += m;
+};
+
+// Hand a blocked receiver the message it was waiting for, then wake it: the
+// message goes into the buffer it registered, and the tag becomes the
+// syscall's answer.
+def task_deliver(who: long, m: Msg) -> void {
+    let buf = tasks[who].recv_buf;
+    task_write_word(who, buf + 0, m.tag);
+    task_write_word(who, buf + 8, m.a1);
+    task_write_word(who, buf + 16, m.a2);
+    task_write_word(who, buf + 24, m.a3);
+    task_write_word(who, buf + 32, m.from);
+    tasks[who].recv_buf = 0;
+    tasks[who].reply_to = m.from;
+    task_complete(who, m.tag);
+};
+
+// ipc_call(port, tag, a1, a2, a3) -> the server's answer, or 0 for a bad port.
+def sys_ipc_call(port: long, tag: long, a1: long, a2: long, a3: long) -> long {
+    if (port <= 0 || port >= len(tasks)) { return 0; };
+    let m: Msg = { tag: tag, a1: a1, a2: a2, a3: a3, from: tasks[cur_task].pid };
+    if (tasks[port].state == TASK_BLOCKED && tasks[port].recv_buf != 0) {
+        task_deliver(port, m);
+    } else {
+        task_push(port, m);
+        if (tasks[port].state == TASK_BLOCKED) { tasks[port].state = TASK_READY; };
+    };
+    // Suspend the caller.  The answer is written into its frame by whichever
+    // task replies, so this return value is overwritten before it is read.
+    tasks[cur_task].state = TASK_BLOCKED;
+    need_resched = true;
+    0
+};
+
+// ipc_recv(buf): take the next message, or wait for one.  `buf` gets five
+// words -- tag, a1, a2, a3, sender -- and the tag is the return value.
+def sys_ipc_recv(buf: long) -> long {
+    if (!user_ok(buf, 40)) { return E_FAULT; };
+    if (len(tasks[cur_task].inbox) > 0) {
+        let m: Msg = tasks[cur_task].inbox[0];
+        tasks[cur_task].inbox = tasks[cur_task].inbox[1:];
+        task_write_word(cur_task, buf + 0, m.tag);
+        task_write_word(cur_task, buf + 8, m.a1);
+        task_write_word(cur_task, buf + 16, m.a2);
+        task_write_word(cur_task, buf + 24, m.a3);
+        task_write_word(cur_task, buf + 32, m.from);
+        tasks[cur_task].reply_to = m.from;
+        return m.tag;
+    };
+    tasks[cur_task].recv_buf = buf;
+    tasks[cur_task].state = TASK_BLOCKED;
+    need_resched = true;
+    0
+};
+
+// ipc_reply(value): answer the task whose message this one is serving.
+def sys_ipc_reply(value: long) -> long {
+    let to = tasks[cur_task].reply_to;
+    tasks[cur_task].reply_to = 0 - 1;
+    if (to < 0 || to >= len(tasks)) { return 0; };
+    task_complete(to, value);
+    need_resched = true;
+    value
 };
 
 // wait4(pid, status, options, rusage): reap a dead child, or suspend this task

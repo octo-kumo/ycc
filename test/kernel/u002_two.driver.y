@@ -16,7 +16,7 @@ def spawn(name: str) -> long {
     let dir = kernel.vm_new_dir();
     kernel.vm_switch(dir);
     let entry = elf.elf_map(phys, size);
-    let sp = elf.elf_setup_stack(name);
+    let sp = elf.elf_setup_stack([name]);
     let kstack = kernel.pages_alloc(65536);
     let ktop = kstack + 65536;
     let frame = kernel.task_frame(ktop, entry, sp);

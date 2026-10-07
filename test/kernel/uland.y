@@ -12,6 +12,6 @@ let size = kernel.mb_mod_end(0) - phys;
 print("module bytes: " + tostring(size > 0));
 print("it is an elf: " + tostring(elf.elf_ok(phys)));
 puts("entering ring 3\n");
-elf.elf_load(phys, size, "prog");
+elf.elf_load(phys, size, ["prog"]);
 puts("load failed\n");
 kernel.kexit(5);
