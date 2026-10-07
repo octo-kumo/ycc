@@ -1444,3 +1444,48 @@ program that reads one byte with kernel.getc() and reports it:
 test/kernel is 36 passed, 0 failed / 36 total.  M3's console work is now pinned
 in BOTH directions -- SYS_WRITE for output, serial input here -- with u005_ipc
 covering the IPC path end to end, and the callee-saved frame contract fixed.
+
+## YFS1 -- the on-disk format (the contract mkfs and the fs server implement)
+
+Nothing in os/kernel/ touches files yet, so this is greenfield.  The filesystem
+image is the multiboot module the kernel already receives: today module 0 is the
+raw program, and with YFS1 module 0 is the DISK, so the kernel stops loading a
+loose binary and starts loading /init, /bin/* and /bin/ycc from the filesystem.
+Little-endian, 4096-byte blocks:
+
+    block 0                    superblock
+      +0   char magic[4] = "YFS1"
+      +4   u32 version = 1
+      +8   u32 block_size = 4096
+      +12  u32 total_blocks
+      +16  u32 inode_count
+      +20  u32 root_inode = 1
+      +24  u32 data_start      (first block of the data area)
+    blocks 1..A                inode table, inode_count entries of 64 bytes
+      +0   u32 mode            (0 free, 1 file, 2 dir)
+      +4   u32 size            (bytes for a file, entries for a dir)
+      +8   u32 direct[12]      (block numbers, 0 = none)
+      +56  u32 indirect        (single indirect block, 0 = none)
+    block A..                  data: file contents, or for a directory an array
+                               of entries, each: u16 name_len, u16 type,
+                               u32 inode, then the name bytes NUL-padded to a
+                               4-byte boundary.  An entry with name_len 0 ends
+                               the block.
+
+Kernel side (os/kernel/yfs.y, to be written): yfs_init(phys, size) validates the
+superblock and remembers the parameters; yfs_lookup(path) walks from root_inode
+and returns an inode or -1; yfs_read(inode, off, buf, len) copies through the
+direct and indirect blocks; yfs_readdir(inode, index, name_buf) feeds ls.  The fd
+broker then maps an fd to {inode, offset, flags}, which is what makes openat,
+read, write, getdents64 and lseek real rather than per-syscall special cases.
+
+Host side: os/tools/mkfs.y packs a directory tree into that image, run during the
+build (`./ycc os/tools/mkfs.y -o mkfs && ./mkfs root/ > yfs.img`), so the root
+directory is version-controlled as ordinary files and the image is generated.
+The first files to carry are /init (a program that spawns the tty and fs servers)
+and /bin/sh, so the boot path stops depending on a single raw module.
+
+Order of work, smallest verifiable step first: the format + mkfs on the host, then
+yfs_init/yfs_lookup/yfs_read in the kernel with a t* fixture that reads a known
+file out of a generated image and prints its contents, then the fd broker, then
+the fs server, then /init and /bin/sh.
