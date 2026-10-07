@@ -1005,6 +1005,12 @@ def task_frame(kstack_top: long, entry: long, ustack: long) -> long {
     p = p - 8; poke_va64(p, 514);        // RFLAGS (IF and the reserved bit 1)
     p = p - 8; poke_va64(p, 35);         // CS (user code | 3)
     p = p - 8; poke_va64(p, entry);      // RIP
+    p = p - 8; poke_va64(p, 0);          // r15
+    p = p - 8; poke_va64(p, 0);          // r14
+    p = p - 8; poke_va64(p, 0);          // r13
+    p = p - 8; poke_va64(p, 0);          // r12
+    p = p - 8; poke_va64(p, 0);          // rbp
+    p = p - 8; poke_va64(p, 0);          // rbx
     p = p - 8; poke_va64(p, 0);          // rcx (a rescue slot)
     p = p - 8; poke_va64(p, 0);          // r11 (ditto)
     p = p - 8; poke_va64(p, 0);          // rax
@@ -1199,9 +1205,9 @@ def sys_fork() -> long {
     let ktop = kstack + 65536;
     let src = y_cur_task_rsp_get();
     if (src == 0) { return E_FAULT; };
-    let dst = ktop - 14 * 8;
+    let dst = ktop - 20 * 8;
     let i = 0;
-    while (i < 14) {
+    while (i < 20) {
         poke_va64(dst + i * 8, peek_va64(src + i * 8));
         i = i + 1;
     };

@@ -807,6 +807,12 @@ Yv *kernel_irq_text(int has_trap) {
          * possible from here (a suspended task's %rsp always points at the
          * lowest of those nine, from either path).  The switch itself only
          * happens for a USER frame: a ring-0 one has no RSP/SS words. */
+        out = ys_cat(out, ys("    push %r15\n"));
+        out = ys_cat(out, ys("    push %r14\n"));
+        out = ys_cat(out, ys("    push %r13\n"));
+        out = ys_cat(out, ys("    push %r12\n"));
+        out = ys_cat(out, ys("    push %rbp\n"));
+        out = ys_cat(out, ys("    push %rbx\n"));
         out = ys_cat(out, ys("    push %rcx\n"));
         out = ys_cat(out, ys("    push %r11\n"));
         out = ys_cat(out, ys("    push %rax\n"));
@@ -832,7 +838,7 @@ Yv *kernel_irq_text(int has_trap) {
         out = ys_cat(out, ys("    mov $32, %eax\n"));
         out = ys_cat(out, ys("    outb %al, %dx\n"));
         /* The switch point: CS is nine words above the frame's RIP. */
-        out = ys_cat(out, ys("    mov 80(%rsp), %rax\n"));
+        out = ys_cat(out, ys("    mov 128(%rsp), %rax\n"));
         out = ys_cat(out, ys("    and $3, %rax\n"));
         out = ys_cat(out, ys_cat(ys("    jz y_irq_same_"), ys_long(yv_l(yr_get(e, "line")))));
         out = ys_cat(out, ys("\n"));
@@ -863,6 +869,12 @@ Yv *kernel_irq_text(int has_trap) {
         out = ys_cat(out, ys("    pop %rax\n"));
         out = ys_cat(out, ys("    pop %r11\n"));
         out = ys_cat(out, ys("    pop %rcx\n"));
+        out = ys_cat(out, ys("    pop %rbx\n"));
+        out = ys_cat(out, ys("    pop %rbp\n"));
+        out = ys_cat(out, ys("    pop %r12\n"));
+        out = ys_cat(out, ys("    pop %r13\n"));
+        out = ys_cat(out, ys("    pop %r14\n"));
+        out = ys_cat(out, ys("    pop %r15\n"));
         out = ys_cat(out, ys("    iretq\n"));
         i = i + 1;
     };

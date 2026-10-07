@@ -745,6 +745,12 @@ def kernel_irq_text(has_trap: bool) -> str {
     // preemptible -- the plan's design -- so a ring-0 interrupt just returns.
     res_irq_stubs.foreach((e) => {
         out += "y_irq_stub_" + tostring(e.line) + ":\n";
+        out += "    push %r15\n";
+        out += "    push %r14\n";
+        out += "    push %r13\n";
+        out += "    push %r12\n";
+        out += "    push %rbp\n";
+        out += "    push %rbx\n";
         out += "    push %rcx\n";
         out += "    push %r11\n";
         out += "    push %rax\n";
@@ -774,7 +780,7 @@ def kernel_irq_text(has_trap: bool) -> str {
         out += "    outb %al, %dx\n";
         // The switch point.  CS sits nine words above the frame's RIP: the
         // nine saved registers, then RIP, then CS.
-        out += "    mov 80(%rsp), %rax\n";
+        out += "    mov 128(%rsp), %rax\n";
         out += "    and $3, %rax\n";
         out += "    jz y_irq_same_" + tostring(e.line) + "\n";
         out += "    mov %rsp, y_cur_task_rsp(%rip)\n";
@@ -802,6 +808,12 @@ def kernel_irq_text(has_trap: bool) -> str {
         out += "    pop %rax\n";
         out += "    pop %r11\n";
         out += "    pop %rcx\n";
+        out += "    pop %rbx\n";
+        out += "    pop %rbp\n";
+        out += "    pop %r12\n";
+        out += "    pop %r13\n";
+        out += "    pop %r14\n";
+        out += "    pop %r15\n";
         out += "    iretq\n";
     });
     // %rax = a handler's address -> %rax = the first 8 bytes of its IDT
