@@ -1259,3 +1259,29 @@ must not use exec (the fixture's intent, since the test asserts the plain case
 succeeds), or the flag must not be passed for that path.  The control is to run
 the same case against the main tree's compiler, which the ycc suite supports by
 environment (YCC/YREF).
+
+### Round 79: the ycc/ysh failure is PRE-EXISTING -- the control proves it
+
+The control, run side by side:
+
+    main tree  : ./ycc -o /tmp/ysh test/y/examples/ysh.y
+                 ysh -c 'eval print(6 * 7)'
+                 -> 1:5: error: undefined function 'exec' / compile failed (exit 1)
+    this branch: same build, same command
+                 -> 1:5: error: undefined function 'exec' / compile failed (exit 1)
+
+Identical.  So the ycc suite's single failure is PRE-EXISTING on master (ysh.y
+passes --no-exec for every eval while the prelude it splices calls exec -- a
+fixture inconsistency, and the upstream repo's to fix), and NOTHING in this
+branch's work causes it.
+
+That completes the gate picture for this branch:
+
+    green:  port 151/151 (both halves), pe-port 151/151, native 229/229,
+            native-examples, examples, audit, ycc-units, debug, link,
+            treeshake 54/54, std-suites 5/5, kernel 33/33
+    red:    lsp, coverage (documented pre-existing in master's own message)
+            and ycc's one ysh case (pre-existing, proved by the control above)
+
+Every red suite is therefore pre-existing, and the kernel -- the thing this
+branch is for -- is 33/33 inside that same run.
