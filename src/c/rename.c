@@ -623,6 +623,12 @@ int rn_reaches_go(Yv *st, Yv *t, ylong id, Yv *seen, int bare) {
                                  id, seen, bare);
         }
     } else if (yv_l(k) == K_tptr) {
+        /* A pointer is an indirection too: the value it holds is somewhere
+           else, so it can be smaller than the alias. It guards on `bare` for
+           the same reason the array arms below do, which is what lets
+           `type Cell = *Cell` be written without a one-field wrapper
+           record. See rename.y for the full note. */
+        if (bare) { return 0; }
         return rn_reaches_go(st, yr_get(t, "to"), id, seen, bare);
     } else if (yv_l(k) == K_tarr || yv_l(k) == K_tarrfix ||
                yv_l(k) == K_topt) {
@@ -729,7 +735,7 @@ Yv *rn_typedef_err(Yv *s, Yv *st) {
                               yv_l(yr_get(s, "col")));
     } else if (id >= 0 && rn_reaches(st, id, 1)) {
         Yv *msg = ys_cat(ys_cat(ys("type '"), name),
-                         ys("' refers to itself outside any record field, array, option, map or function type"));
+                         ys("' refers to itself outside any record field, function type, array, option, map or pointer"));
         return yr(4, "k", yv_long(K_err), "msg", msg, "line", yr_get(s, "line"),
                   "col", yr_get(s, "col"));
     } else {

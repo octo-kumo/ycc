@@ -168,6 +168,18 @@ binds the one member with them, or the union of those members. Without
 \ic{\_}, every member needs a type arm. A union prints as the member it
 holds.
 
+A pattern's type may also be one of the language's own names, which
+narrows by type the same way: \ic{if let long n = v} asks whether
+\ic{v} is one of these, so on an option it is the payload --- \ic{if let str s = maybe}
+binds the string inside it, or takes the \ic{else}. \ic{int} is \ic{long}
+here as everywhere else, and the spelling works in a \ic{match} arm as well.
+A subject that already has that type always matches, so \ic{if let long n = 5}
+is simply true. One it cannot be is the error \ic{pattern type long can never
+match str} --- naming the payload of an option, not the option --- and one that
+is no value at all (\ic{void}, \ic{sem}) is the error \ic{match pattern type
+void is not a record or primitive type}, the one every pattern type that is
+not a record or a primitive has always got.
+
 A union value also goes where one of its members is declared --- an
 annotated \ic{let}, an argument or a \ic{return} --- or a union of some of
 its members: that is a \emph{cast}, checked when the program runs. A value

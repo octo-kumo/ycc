@@ -2965,11 +2965,12 @@ def infer_go(st: EmitSt, node: Node) -> Type {
             if (uft.k == K.tnone) { normtype({ k: K.tunk }) } else { uft }
         } else if (unfold(dt).k == K.tmap) {
             let map: TMap = dt;
-            // the map lowering reads its {keys, vals, boxes} shape directly
-            if (dot.key == "keys") { normtype({ k: K.tarr, of: map.key }) }
-            else if (dot.key == "vals") { normtype({ k: K.tarr, of: map.of }) }
-            else if (dot.key == "boxes") { normtype({ k: K.tarr, of: normtype({ k: K.topt, of: map.of }) }) }
-            else { normtype({ k: K.tunk }) }
+            // `m.k` is the entry (types.y typeof_dot, TODO.md item 10);
+            // `m.length` is the count, as for an array or a string. The map's
+            // own three fields are NOT reachable by dot -- `map$field` reads
+            // those (see map_field).
+            if (dot.key == "length") { normtype({ k: K.tlong }) }
+            else { normtype(map.of) }
         } else if (dt.k == K.tarr || dt.k == K.tarrfix) {
             // built-in properties (types.y typeof_prop; gen_prop)
             if (dot.key == "length") { normtype({ k: K.tlong }) }
@@ -3141,6 +3142,23 @@ def infer_call(st: EmitSt, node: Call) -> Type {
                 let km: TMap = kt;
                 normtype({ k: K.tarr, of: km.key })
             } else { normtype({ k: K.tarr, of: normtype({ k: K.tunk }) }) }
+        } else if (name == "map$keys" || name == "map$vals" || name == "map$boxes") {
+            // the emitter's own three fields (see map_field): [K], [V], [V?]
+            let margs: [Node] = node.args;
+            let mt2 = infer(st, margs[0]);
+            if (mt2.k == K.tmap) {
+                let map: TMap = mt2;
+                if (name == "map$keys") { normtype({ k: K.tarr, of: map.key }) }
+                else if (name == "map$vals") { normtype({ k: K.tarr, of: map.of }) }
+                else { normtype({ k: K.tarr, of: normtype({ k: K.topt, of: map.of }) }) }
+            } else { normtype({ k: K.tunk }) }
+        } else if (name == "values") {
+            let vargs: [Node] = node.args;
+            let kt = infer(st, vargs[0]);
+            if (kt.k == K.tmap) {
+                let map: TMap = kt;
+                normtype({ k: K.tarr, of: map.of })
+            } else { normtype({ k: K.tunk }) }
         } else if (name == "sleep") {
             normtype({ k: K.tvoid })
         } else if (name == "split" || name == "argv") {
@@ -3238,60 +3256,155 @@ def uses_argv(stmts: [Node]) -> bool {
 };
 
 // ── def collection (incl. hoisting) ────────────────────────────────────
-// Walk blocks/ifs/whiles/func-bodies; every named def and every let-bound
-// anonymous def becomes a top-level function (they capture nothing — the
-// checker proved it). Returns [FnDef].
+// Every named def and every let-bound anonymous def becomes a top-level
+// function (the capture-free ones — the checker proved the rest capture).
+// Returns [FnDef].
+//
+// The walk below covers EVERY node kind, in the same order and shape as
+// fv_walk's (see "free variables" below), because a `def` is a statement and
+// a statement can live in a block, and a block is an expression: the two
+// walks disagreeing is what let `if ({ def g() -> bool { true }; g() })`
+// and a def in a call argument, an array element, a record value, an
+// operand, an index or a loop head reach the assembler unhoisted, which
+// then failed with `undefined label 'y_missing_...'`. Keep the two in step:
+// one is free variables, the other definitions, and both need every arm.
 type FnDef = { name: str, func: Func };
 
-def collect_from_block(stmts: [Node], out: [FnDef]) -> [FnDef] {
-    stmts.foreach((e) => {
+def collect_from_list(nodes: [Node], out: [FnDef]) -> [FnDef] {
+    nodes.foreach((e) => {
         out = collect_from_node(e, out);
     });
     out
+};
+
+def collect_from_block(stmts: [Node], out: [FnDef]) -> [FnDef] {
+    collect_from_list(stmts, out)
+};
+
+// A `def` declaration, and a `let` bound to a function literal: both are a
+// name a call can resolve, so both are collected here and both recurse into
+// the function body (a def nested in it is hoisted the same way).
+def collect_decl(decl: Decl, out: [FnDef]) -> [FnDef] {
+    if (decl.v.k == K.func) {
+        let func: Func = decl.v;
+        out += { name: decl.name, func: func };
+    };
+    collect_from_node(decl.v, out)
 };
 
 def collect_from_node(node: Node, out: [FnDef]) -> [FnDef] {
     let k = node.k;
     if (k == K.decl) {
         let decl: Decl = node;
-        if (decl.kind == "def") {
-            let func: Func = decl.v;
-            out += { name: decl.name, func: func };
-            out = collect_from_node(decl.v, out);
-        } else {
-            if (decl.v.k == K.func) {
-                let func: Func = decl.v;
-                out += { name: decl.name, func: func };
-            }
-            out = collect_from_node(decl.v, out);
-        }
-    } else if (k == K.func) {
-        let func: Func = node;
-        let body: Block = func.body;
-        out = collect_from_block(body.stmts, out);
+        out = collect_decl(decl, out);
+    } else if (k == K.un) {
+        let child: NodeE = node;
+        out = collect_from_node(child.e, out);
+    } else if (k == K.addr) {
+        let child: NodeE = node;
+        out = collect_from_node(child.e, out);
+    } else if (k == K.deref) {
+        let child: NodeE = node;
+        out = collect_from_node(child.e, out);
+    } else if (k == K.ret) {
+        let child: NodeE = node;
+        out = collect_from_node(child.e, out);
+    } else if (k == K.bin) {
+        let bin: Bin = node;
+        out = collect_from_node(bin.l, out);
+        out = collect_from_node(bin.r, out);
+    } else if (k == K.array) {
+        let array: ArrLit = node;
+        out = collect_from_list(array.elems, out);
+    } else if (k == K.rec) {
+        let rec: RecLit = node;
+        out = collect_from_list(rec.vals, out);
+    } else if (k == K.map) {
+        let map: RecLit = node;
+        out = collect_from_list(map.vals, out);
+    } else if (k == K.arrrep) {
+        let rep: ArrRep = node;
+        out = collect_from_node(rep.v, out);
+    } else if (k == K.call) {
+        let call: Call = node;
+        out = collect_from_node(call.callee, out);
+        out = collect_from_list(call.args, out);
+    } else if (k == K.index) {
+        let index: Index = node;
+        out = collect_from_node(index.arr, out);
+        out = collect_from_node(index.idx, out);
+    } else if (k == K.slice) {
+        let slice: Slice = node;
+        out = collect_from_node(slice.arr, out);
+        out = collect_from_node(slice.lo, out);
+        out = collect_from_node(slice.hi, out);
+    } else if (k == K.idxassign) {
+        let assign: IdxAssign = node;
+        out = collect_from_node(assign.arr, out);
+        out = collect_from_node(assign.idx, out);
+        out = collect_from_node(assign.v, out);
+    } else if (k == K.dot) {
+        let dot: Dot = node;
+        out = collect_from_node(dot.obj, out);
+    } else if (k == K.dotassign) {
+        let assign: DotAssign = node;
+        out = collect_from_node(assign.obj, out);
+        out = collect_from_node(assign.v, out);
+    } else if (k == K.store) {
+        let store: Store = node;
+        out = collect_from_node(store.p, out);
+        out = collect_from_node(store.v, out);
+    } else if (k == K.assign) {
+        let assign: Assign = node;
+        out = collect_from_node(assign.v, out);
+    } else if (k == K.incdec) {
+        let incdec: IncDec = node;
+        out = collect_from_node(incdec.tgt, out);
+    } else if (k == K.opassign) {
+        let assign: OpAssign = node;
+        out = collect_from_node(assign.tgt, out);
+        out = collect_from_node(assign.v, out);
     } else if (k == K.kw_if) {
         let branch: If = node;
+        out = collect_from_node(branch.cond, out);
         out = collect_from_node(branch.then, out);
         if (branch.has_else) {
             out = collect_from_node(branch.els, out);
         }
     } else if (k == K.kw_while) {
         let loop: While = node;
+        out = collect_from_node(loop.cond, out);
         out = collect_from_node(loop.body, out);
     } else if (k == K.kw_for) {
         let loop: For = node;
         out = collect_from_node(loop.init, out);
-        out = collect_from_node(loop.body, out);
+        out = collect_from_node(loop.cond, out);
         out = collect_from_node(loop.step, out);
+        out = collect_from_node(loop.body, out);
     } else if (k == K.kw_foreach) {
         let loop: Foreach = node;
+        out = collect_from_node(loop.iter, out);
         out = collect_from_node(loop.body, out);
     } else if (k == K.forrange) {
         let loop: ForRange = node;
+        out = collect_from_node(loop.lo, out);
+        out = collect_from_node(loop.hi, out);
         out = collect_from_node(loop.body, out);
     } else if (k == K.block) {
         let block: Block = node;
         out = collect_from_block(block.stmts, out);
+    } else if (k == K.func) {
+        let func: Func = node;
+        out = collect_from_node(func.body, out);
+    } else if (k == K.sliceassign) {
+        let assign: SliceAssign = node;
+        out = collect_from_node(assign.arr, out);
+        out = collect_from_node(assign.lo, out);
+        out = collect_from_node(assign.hi, out);
+        out = collect_from_node(assign.v, out);
+    } else if (k == K.rectest || k == K.narrow || k == K.matchend) {
+        let child: NodeE = node;
+        out = collect_from_node(child.e, out);
     }
     out
 };
@@ -3371,7 +3484,8 @@ def name_in(xs: [str], n: str) -> bool {
 // option operators and the `#fmt` builtin -- internal, but they are what
 // is_intrinsic_name tests, so they are in the list.
 let INTRINSICS: [str] = ["print", "syscall", "len", "push", "some", "is_some", "unwrap",
-    "opt$test", "opt$val",
+    "opt$test", "opt$val", "values",
+    "map$keys", "map$vals", "map$boxes",
     "trim", "ord", "byte_at", "chr", "tolong", "tofloat", "tostring", "index_of",
     "mod",
     "prepend",
@@ -3815,7 +3929,17 @@ def gen_go(st: EmitSt, node: Node) -> EmitSt {
         let narrow: Narrow = node;
         let src = infer(st, narrow.e);
         st = gen(st, narrow.e);
-        gen_convert(st, src, types.narrow_type(src, narrow.typ), false)
+        let dst = types.narrow_type(src, narrow.typ);
+        if (src.k == K.topt && dst.k != K.topt) {
+            // `if let long n = v`: the binding is the option's payload -- the
+            // deref `unwrap` does, trap and all (rectest proved it is there).
+            // The box holds the payload in the destination type's own layout,
+            // so there is no conversion to do afterwards.
+            st = emit_insn(st, insn.F_JZ_L, lbl_new("y_opt_unwrap"), 0, 0, 0, 0, 0, 0);
+            emit_insn(st, insn.F_MOV_0_R, insn.R_RAX, -1, 1, -1, -1, insn.R_RAX, 64)
+        } else {
+            gen_convert(st, src, dst, false)
+        }
     } else if (k == K.matchend) {
         // unreachable when the checker accepted the match
         st = emit_insn(st, insn.F_CALL_L, lbl_new("y_match_fail"), 0, 0, 0, 0, 0, 0);
@@ -4481,8 +4605,16 @@ def gen_rectest(st: EmitSt, node: Narrow) -> EmitSt {
     st = gen(st, node.e);
     if (sk == K.tunion) {
         gen_tag_in(st, rectest_members(s, node.typ), s)
+    } else if (sk == K.topt) {
+        // `if let long n = v` where v is an option (TODO.md item 13; `some(m)`
+        // lowers to exactly this). The checker only lets a scalar pattern
+        // reach here, so the test is the option's own: %rax is 0 for none.
+        st = emit_insn(st, insn.F_TEST_R_R, insn.R_RAX, 64, insn.R_RAX, 64, 0, 0, 0);
+        st = emit_insn(st, insn.F_SETNE_R, insn.R_RAX, 8, 0, 0, 0, 0, 0);
+        emit_insn(st, insn.F_MOVZBQ_R_R, insn.R_RAX, 8, insn.R_RAX, 64, 0, 0, 0)
     } else {
-        // a record: the checker took the pattern as its own type
+        // a record, or the scalar itself: the checker took the pattern as its
+        // own type, so it always matches
         emit_insn(st, insn.F_MOV_I_R, 1, insn.R_RAX, 64, 0, 0, 0, 0)
     }
 };
@@ -4682,7 +4814,14 @@ def gen_in(st: EmitSt, node: Bin) -> EmitSt {
     let ln = node.line;
     let cl = node.col;
     let zero = n_num("0", ln, cl);
-    if ((unfold(infer(st, node.r))).k == K.tstr) {
+    let rt = unfold(infer(st, node.r));
+    if (rt.k == K.tmap) {
+        // `"k" in m` is the map read's own scan, in its "has" mode (TODO.md
+        // item 14): the key is on the left, so the Index node carries them
+        // swapped from what gen_map_get expects.
+        let ix: Index = { k: K.index, arr: node.r, idx: node.l, line: ln, col: cl };
+        gen_map_get(st, ix, "has")
+    } else if (rt.k == K.tstr) {
         let needle = node.l;
         if (unfold(infer(st, node.l)).k == K.tbyte) {
             needle = { k: K.call, callee: n_id("chr", ln, cl), args: [node.l], line: ln, col: cl };
@@ -5912,8 +6051,17 @@ def gen_call(st: EmitSt, node: Call) -> EmitSt {
             let kargs: [Node] = node.args;
             let ln = node.line;
             let cl = node.col;
-            let whole: Slice = { k: K.slice, arr: n_dot(kargs[0], "keys", ln, cl), lo: { k: K.void, line: ln, col: cl }, hi: { k: K.void, line: ln, col: cl }, line: ln, col: cl };
+            let whole: Slice = { k: K.slice, arr: map_field(kargs[0], "keys", ln, cl), lo: { k: K.void, line: ln, col: cl }, hi: { k: K.void, line: ln, col: cl }, line: ln, col: cl };
             gen_slice(st, whole)
+        } else if (name == "values") {
+            // a copy of the map's values array, in the same order as keys(m)
+            let vargs: [Node] = node.args;
+            let ln = node.line;
+            let cl = node.col;
+            let whole: Slice = { k: K.slice, arr: map_field(vargs[0], "vals", ln, cl), lo: { k: K.void, line: ln, col: cl }, hi: { k: K.void, line: ln, col: cl }, line: ln, col: cl };
+            gen_slice(st, whole)
+        } else if (name == "map$keys" || name == "map$vals" || name == "map$boxes") {
+            gen_map_field(st, node, name)
         } else if (name == "sleep") {
             gen_sleep(st, node)
         } else if (name == "heap_used") {
@@ -7528,6 +7676,13 @@ def gen_foreach(st: EmitSt, node: Foreach) -> EmitSt {
         let arr: TFix = elt;
         eltyp = arr.of;
     }
+    if (elt.k == K.tmap) {
+        // keys: the map record is {boxes@0, keys@8, vals@16} (gen_maplit),
+        // and a key is a str -- one word, like every other unboxed value.
+        let mp: TMap = elt;
+        eltyp = mp.key;
+    }
+    if (elt.k == K.tstr) { eltyp = normtype({ k: K.tbyte }); }
     st = gen(st, node.iter);
     st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, aoff, -1);
     st = emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
@@ -7538,17 +7693,43 @@ def gen_foreach(st: EmitSt, node: Foreach) -> EmitSt {
     let r2 = next_loc(st);
     st = r2.st;
     st = emit_label(st, r1.label);
-    // i < len(arr) — the heap header keeps the length in slot 0. The length
-    // is re-read on every iteration, not hoisted into a fourth slot: a body
-    // that appends to the array it walks goes on seeing what it appended
+    // i < len(it) — a heap array and a string both keep their length in the
+    // first word of the header, and a map keeps it in its keys array. The
+    // length is re-read on every iteration, not hoisted into a fourth slot: a
+    // body that appends to the array it walks goes on seeing what it appended
     // (`foreach (x in a) { a += x }` never ends), which hoisting would change.
+    // The same goes for a map: `foreach (k in m) { m["k2"] = 1 }` reaches the
+    // key it added, exactly as the array form reaches its element.
+    let is_map = (elt.k == K.tmap);
+    let is_str = (elt.k == K.tstr);
     st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, aoff, -1, insn.R_RDX, 64);
-    st = emit_insn(st, insn.F_MOV_0_R, insn.R_RDX, -1, 1, -1, -1, insn.R_RCX, 64);
+    if (is_map) {
+        // A map keeps no length of its own: %rdx is the record, and its keys
+        // array (at +8) is the thing with the length in its first word.
+        st = emit_insn(st, insn.F_MOV_M_R, insn.R_RDX, -1, 1, 8, -1, insn.R_R11, 64);
+        st = emit_insn(st, insn.F_MOV_0_R, insn.R_R11, -1, 1, -1, -1, insn.R_RCX, 64);
+    } else {
+        // an array header and a string header both start with the length
+        st = emit_insn(st, insn.F_MOV_0_R, insn.R_RDX, -1, 1, -1, -1, insn.R_RCX, 64);
+    };
     st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, ioff, -1, insn.R_RAX, 64);
     st = emit_insn(st, insn.F_CMP_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0);
     st = emit_insn(st, insn.F_JGE_L, r2.label, 0, 0, 0, 0, 0, 0);
-    // x = arr[i]
-    st = elem_load(st, arr_elem_bytes(elt), insn.R_RDX, insn.R_RAX, insn.R_RCX);
+    // x = it[i]
+    if (is_map) {
+        // The key out of the keys array: %r11 is its header (still there from
+        // the length's load -- %rax holds the counter by now), and its data
+        // pointer is 16 bytes into it.
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_R11, -1, 1, 16, -1, insn.R_R11, 64);
+        st = emit_insn(st, insn.F_MOV_M_R, insn.R_R11, insn.R_RAX, 8, 0, -1, insn.R_RCX, 64);
+    } else if (is_str) {
+        // A string's bytes follow its length, in place: 8(%rdx,%rax,1), with
+        // no data pointer to load first (a heap array has one, a string does
+        // not -- which is why an owned string can append into its own buffer).
+        st = emit_insn(st, insn.F_MOVZBQ_M_R, insn.R_RDX, insn.R_RAX, 1, 8, -1, insn.R_RCX, 64);
+    } else {
+        st = elem_load(st, arr_elem_bytes(elt), insn.R_RDX, insn.R_RAX, insn.R_RCX);
+    };
     st = emit_insn(st, insn.F_MOV_R_D, insn.R_RCX, 64, insn.R_RBP, -1, 1, voff, -1);
     // continue -> just before the increment, for the reason in gen_forrange
     let r3 = next_loc(st);
@@ -9376,6 +9557,19 @@ def gen_dotassign(st: EmitSt, node: DotAssign) -> EmitSt {
     let dobj = node.obj;
     let dkey = node.key;
     let dt = infer(st, dobj);
+    if (dt.k == K.tmap) {
+        // `m.k = v` is the entry, exactly as `m["k"] = v` (types.y
+        // dotassign_map, TODO.md item 10) -- the store creates or replaces it
+        // and never traps.
+        if (dkey == "length" || dkey == "ptr") {
+            // the checker has already said this is not a place; trap rather
+            // than emit a store somewhere wrong
+            st = emit_insn(st, insn.F_CALL_L, lbl_new("y_match_fail"), 0, 0, 0, 0, 0, 0);
+            return emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0)
+        };
+        let asg: IdxAssign = { k: K.idxassign, arr: dobj, idx: n_str(dkey, node.line, node.col), v: node.v, line: node.line, col: node.col };
+        return gen_map_set(st, asg)
+    };
     let idx = rec_field_idx(dt, dkey);
     st = gen(st, dobj);
     st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
@@ -10289,9 +10483,27 @@ def gen_dot(st: EmitSt, node: Dot) -> EmitSt {
     } else if (tk == K.tunion) {
         st = gen(st, dobj);
         gen_union_slot(st, t, dkey, false)
+    } else if (tk == K.tmap) {
+        // `m.k` is the entry (types.y typeof_dot, TODO.md item 10): `m.length`
+        // is the property, any other name is the entry, the program stops
+        // when it is not there. The emitter's own three fields come through
+        // map$keys/map$vals/map$boxes (map_field), never by dot.
+        if (dkey == "length") {
+            gen_prop(st, dobj, dkey, node.line, node.col)
+        } else {
+            st = gen_dot_map(st, dobj, dkey, node.line, node.col)
+        }
     } else {
         gen_dot_rec(st, dobj, dkey, t)
     }
+};
+
+// `m.k`: the entry named "k", or the program stops with the key in the
+// message (a typo must not read as a missing entry). The checker typed the
+// value; the scan code is gen_map_get's.
+def gen_dot_map(st: EmitSt, obj: Node, dkey: str, ln: long, cl: long) -> EmitSt {
+    let idx: Node = { k: K.index, arr: obj, idx: n_str(dkey, ln, cl), line: ln, col: cl };
+    gen_map_get(st, idx, "dot")
 };
 
 // Field `dkey` of a union value (types.y union_field: every member has
@@ -10401,6 +10613,17 @@ def rec_field_idx(t: Type, key: str) -> long {
     idx
 };
 
+// map$keys / map$vals / map$boxes: the slot read `m.keys` used to be, now
+// that a dot on a map is an entry (see map_field). The map is a record of
+// boxes, keys, vals in that order.
+def gen_map_field(st: EmitSt, node: Call, name: str) -> EmitSt {
+    let args: [Node] = node.args;
+    st = gen(st, args[0]);
+    let slot = 0;
+    if (name == "map$keys") { slot = 1 } else if (name == "map$vals") { slot = 2 };
+    gen_slot_move(st, slot, false)
+};
+
 // Static type of field `key` in trec type t (tnone when there is none);
 // in a union, the type the field has in every member (types.y
 // union_field).
@@ -10472,7 +10695,7 @@ def gen_len(st: EmitSt, node: Call) -> EmitSt {
     let at = infer(st, args[0]);
     if (at.k == K.tmap) {
         // len(m) = len(m.keys): the entry count
-        gen(st, n_call1("len", n_dot(args[0], "keys", node.line, node.col), node.line, node.col))
+        gen(st, n_call1("len", map_field(args[0], "keys", node.line, node.col), node.line, node.col))
     } else if (at.k == K.tstr) {
         st = gen(st, args[0]);
         emit_insn(st, insn.F_MOV_0_R, insn.R_RAX, -1, 1, -1, -1, insn.R_RAX, 64)
@@ -13855,7 +14078,7 @@ def gen_map_get(st: EmitSt, node: Index, mode: str) -> EmitSt {
     let sts: [Node] = [];
     sts += n_decl(t + "m", node.arr, ln, cl);
     sts += n_decl(t + "k", node.idx, ln, cl);
-    sts += n_decl(t + "ks", n_dot(m, "keys", ln, cl), ln, cl);
+    sts += n_decl(t + "ks", map_field(m, "keys", ln, cl), ln, cl);
     sts += n_decl(t + "i", n_num("0", ln, cl), ln, cl);
     sts += n_decl(t + "n", n_call1("len", n_id(t + "ks", ln, cl), ln, cl), ln, cl);
     sts += n_decl(t + "j", n, ln, cl);
@@ -13870,17 +14093,28 @@ def gen_map_get(st: EmitSt, node: Index, mode: str) -> EmitSt {
         let hit: [Node] = [];
         hit += n_num("0", ln, cl);
         sts += n_if(n_bin("==", i, n, ln, cl), block_of(miss, ln, cl), block_of(hit, ln, cl), ln, cl);
-        sts += n_idx(n_dot(m, "vals", ln, cl), i, ln, cl);
+        sts += n_idx(map_field(m, "vals", ln, cl), i, ln, cl);
+    } else if (mode == "dot") {
+        // `m.k` (TODO.md item 10): the entry, or stop with the key in the
+        // message -- the checker has already said this read is V, not V?.
+        let msg: Node = n_bin("+", n_bin("+", n_str("runtime error: no entry '", ln, cl), n_id(t + "k", ln, cl), ln, cl), n_str("' in this map\n", ln, cl), ln, cl);
+        let miss: [Node] = [];
+        miss += n_call1("eputs", msg, ln, cl);
+        miss += n_call1("exit", n_num("1", ln, cl), ln, cl);
+        let hit: [Node] = [];
+        hit += n_num("0", ln, cl);
+        sts += n_if(n_bin("==", i, n, ln, cl), block_of(miss, ln, cl), block_of(hit, ln, cl), ln, cl);
+        sts += n_idx(map_field(m, "vals", ln, cl), i, ln, cl);
     } else {
         let b: Node = n_id(t + "b", ln, cl);
         let fill: [Node] = [];
-        fill += n_assign(t + "b", n_call1("some", n_idx(n_dot(m, "vals", ln, cl), i, ln, cl), ln, cl), ln, cl);
-        fill += { k: K.idxassign, arr: n_dot(m, "boxes", ln, cl), idx: i, v: b, line: ln, col: cl };
+        fill += n_assign(t + "b", n_call1("some", n_idx(map_field(m, "vals", ln, cl), i, ln, cl), ln, cl), ln, cl);
+        fill += { k: K.idxassign, arr: map_field(m, "boxes", ln, cl), idx: i, v: b, line: ln, col: cl };
         fill += n_num("0", ln, cl);
         let kept: [Node] = [];
         kept += n_num("0", ln, cl);
         let hit: [Node] = [];
-        hit += n_decl(t + "b", n_idx(n_dot(m, "boxes", ln, cl), i, ln, cl), ln, cl);
+        hit += n_decl(t + "b", n_idx(map_field(m, "boxes", ln, cl), i, ln, cl), ln, cl);
         hit += n_if(n_call1("is_some", b, ln, cl), block_of(kept, ln, cl), block_of(fill, ln, cl), ln, cl);
         hit += b;
         let miss: [Node] = [];
@@ -13896,6 +14130,17 @@ def gen_map_get(st: EmitSt, node: Index, mode: str) -> EmitSt {
 // elements of an array value whose type unifies with [V], such as []).
 // The value runs before the scan counts the entries, so a value that
 // itself adds keys is seen.
+// The map's own three fields, as the generated map code reads them. A dot on a
+// map is an ENTRY now (TODO.md item 10), so the emitter's own code cannot spell
+// it `m.keys` -- that is an entry like any other, and reading it has to go
+// through the scan. These three names no program can write (`$` is not an
+// identifier character, as `opt$test` and `push$all` are), and each is exactly
+// the slot read the dot used to be.
+def map_field(m: Node, field: str, ln: long, cl: long) -> Node {
+    let name = "map$" + field;
+    n_call1(name, m, ln, cl)
+};
+
 def gen_map_set(st: EmitSt, node: IdxAssign) -> EmitSt {
     let ln = node.line;
     let cl = node.col;
@@ -13919,19 +14164,19 @@ def gen_map_set(st: EmitSt, node: IdxAssign) -> EmitSt {
     sts += n_decl(t + "m", node.arr, ln, cl);
     sts += n_decl(t + "k", node.idx, ln, cl);
     sts += n_decl_typ(t + "v", node.v, vt, ln, cl);
-    sts += n_decl(t + "ks", n_dot(m, "keys", ln, cl), ln, cl);
+    sts += n_decl(t + "ks", map_field(m, "keys", ln, cl), ln, cl);
     sts += n_decl(t + "i", n_num("0", ln, cl), ln, cl);
     sts += n_decl(t + "n", n_call1("len", n_id(t + "ks", ln, cl), ln, cl), ln, cl);
     sts += n_decl(t + "j", n, ln, cl);
     sts += map_scan(t, ln, cl);
     let hit: [Node] = [];
-    hit += { k: K.idxassign, arr: n_dot(m, "vals", ln, cl), idx: i, v: v, line: ln, col: cl };
-    hit += { k: K.idxassign, arr: n_dot(m, "boxes", ln, cl), idx: i, v: n_id("none", ln, cl), line: ln, col: cl };
+    hit += { k: K.idxassign, arr: map_field(m, "vals", ln, cl), idx: i, v: v, line: ln, col: cl };
+    hit += { k: K.idxassign, arr: map_field(m, "boxes", ln, cl), idx: i, v: n_id("none", ln, cl), line: ln, col: cl };
     hit += n_num("0", ln, cl);
     let grow: [Node] = [];
-    grow += n_call2("push", n_dot(m, "keys", ln, cl), k, ln, cl);
-    grow += n_call2("push", n_dot(m, "vals", ln, cl), v, ln, cl);
-    grow += n_call2("push", n_dot(m, "boxes", ln, cl), n_id("none", ln, cl), ln, cl);
+    grow += n_call2("push", map_field(m, "keys", ln, cl), k, ln, cl);
+    grow += n_call2("push", map_field(m, "vals", ln, cl), v, ln, cl);
+    grow += n_call2("push", map_field(m, "boxes", ln, cl), n_id("none", ln, cl), ln, cl);
     grow += n_num("0", ln, cl);
     sts += n_if(n_bin("<", i, n, ln, cl), block_of(hit, ln, cl), block_of(grow, ln, cl), ln, cl);
     sts += v;
@@ -13966,15 +14211,15 @@ def gen_map_repr(st: EmitSt, arg: Node, t: Type) -> EmitSt {
     sts += n_decl(g + "m", arg, ln, cl);
     sts += n_decl(g + "s", n_str("{", ln, cl), ln, cl);
     sts += n_decl(g + "i", n_num("0", ln, cl), ln, cl);
-    sts += n_decl(g + "n", n_call1("len", n_dot(m, "keys", ln, cl), ln, cl), ln, cl);
+    sts += n_decl(g + "n", n_call1("len", map_field(m, "keys", ln, cl), ln, cl), ln, cl);
     let sep: [Node] = [];
     sep += n_assign(g + "s", n_bin("+", s, n_str(", ", ln, cl), ln, cl), ln, cl);
     sep += n_num("0", ln, cl);
     let nosep: [Node] = [];
     nosep += n_num("0", ln, cl);
     let map: TMap = t;
-    let kpart: Node = map_key_repr(n_idx(n_dot(m, "keys", ln, cl), i, ln, cl), map.key, ln, cl);
-    let vpart: Node = n_call1("tostring", n_idx(n_dot(m, "vals", ln, cl), i, ln, cl), ln, cl);
+    let kpart: Node = map_key_repr(n_idx(map_field(m, "keys", ln, cl), i, ln, cl), map.key, ln, cl);
+    let vpart: Node = n_call1("tostring", n_idx(map_field(m, "vals", ln, cl), i, ln, cl), ln, cl);
     let put: Node = n_assign(g + "s", n_bin("+", n_bin("+", n_bin("+", s, kpart, ln, cl), n_str(": ", ln, cl), ln, cl), vpart, ln, cl), ln, cl);
     let step: Node = n_assign(g + "i", n_bin("+", i, n_num("1", ln, cl), ln, cl), ln, cl);
     let body: [Node] = [];

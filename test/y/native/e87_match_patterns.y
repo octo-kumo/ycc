@@ -1,4 +1,4 @@
-// expect-error: 7:1: error: type 'Loop' refers to itself outside any record field, array, option, map or function type
+// expect-error: 7:1: error: type 'Loop' refers to itself outside any record field, function type, array, option, map or pointer
 // expect-error: 11:16: error: match pattern type long is not a record type
 // expect-error: 14:15: error: no record in { a: long } | { b: long } has the fields of pattern { z }
 // expect-error: 15:11: error: cannot match a record pattern against long

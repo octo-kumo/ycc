@@ -187,6 +187,17 @@ requires byte-identical binaries).
    mode)`); the C copy calls yv.c's `read_file`/`write_bytes` (three
    arguments) of the same behavior instead of porting the module.
 
+   "Of the same behavior" is a promise, not a summary: stdio buffers, so a
+   write that fails at the *flush* (`/dev/full`, a full filesystem, a quota)
+   has already "succeeded" by the time `fwrite` returns. The Y twin writes
+   with `write(2)` and sees the error at once; the C copy has to read
+   `fclose`'s return, and did not — `cycc -o /dev/full` exited 0 having
+   written nothing. Where the Y side's answer comes from a syscall return,
+   the C side's must come from the call that flushes (`yv.c`'s
+   `close_written`), and the port gate's twin cases (`test_ycc.sh`'s
+   `expect_cli_error`) run against both compilers so a divergence like this
+   fails there rather than in a user's build.
+
    `foreach (x in xs) { ... }` ports as an index loop over the array,
    with the body unchanged: `long i = 0; while (i < yv_len(xs)) { Yv *x
    = ya_get(xs, i); ...; i = i + 1; }` (as in `asm.c` and `elf.c`).

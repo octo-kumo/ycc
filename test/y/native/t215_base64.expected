@@ -1,0 +1,17 @@
+|Zg==|Zm8=
+Zm9v|Zm9vYg==|Zm9vYmE=
+Zm9vYmFy|Zg==|Zm8=
+0 -> [] -> true (0 chars, 0 mod 4)
+1 -> [Cw==] -> true (4 chars, 0 mod 4)
+2 -> [CzA=] -> true (4 chars, 0 mod 4)
+3 -> [CzBV] -> true (4 chars, 0 mod 4)
+4 -> [CzBVeg==] -> true (8 chars, 0 mod 4)
+5 -> [CzBVep8=] -> true (8 chars, 0 mod 4)
+6 -> [CzBVep/E] -> true (8 chars, 0 mod 4)
+7 -> [CzBVep/E6Q==] -> true (12 chars, 0 mod 4)
+8 -> [CzBVep/E6Q4=] -> true (12 chars, 0 mod 4)
+//79|AAAA
+b'\xff\xff'|b'\xfb\xef\xbe'|b'\x00\x00\x01'
+b'foobar'|b'foobar'|b'foobar'
+b''|b''|b''
+[b'foobar']|b'foobar'

@@ -403,25 +403,20 @@ ylong print_native_errors(Yv *errors, Yv *origin, int bare) {
     Yv *all = errors;
     /* One error per position: a malformed token can trip two checks (the
      * construct it broke, then the statement it ended), and the second
-     * message only repeats the first. */
-    Yv *seen = yav(0);
+     * message only repeats the first. The positions go in a name index, not
+     * an array: a linear scan of what has been printed makes printing n
+     * errors O(n^2), and a file with a mistake on every line is exactly when
+     * the messages matter most (measured: 2000 errors 10 ms, 4000 20, 8000
+     * 80, 16000 250 -- a name index makes each one a hash probe). */
+    Yv *seen = nameix_new(64);
     ylong i = 0;
     while (i < yv_len(all)) {
         Yv *e = ya_get(all, i);
         Yv *at = ys_cat(ys_cat(origin_at(origin, yv_l(yr_get(e, "line")), bare),
                                ys(":")),
                         ys_long(yv_l(yr_get(e, "col"))));
-        int dup = 0;
-        ylong j = 0;
-        while (j < yv_len(seen)) {
-            if (ys_eq(ya_get(seen, j), at)) {
-                dup = 1;
-                ;
-            }
-            j = j + 1;
-        }
-        if (!dup) {
-            seen = ya_push(seen, at);
+        if (nameix_get(seen, at) < 0) {
+            nameix_put(seen, at, 1);
             puts_(ys_cat(
                 ys_cat(ys_cat(at, ys(": error: ")),
                        yr_get(e, "msg")),

@@ -518,7 +518,11 @@ def rn_reaches_go(st: RnSt, t: Type, id: long, seen: [long], bare: bool) -> bool
             rn_reaches_go(st, st.tys[j].typ, id, seen, bare)
         }
     }
-    else if (k == K.tptr) { let ptr: TPtr = t; rn_reaches_go(st, ptr.to, id, seen, bare) }
+    // A pointer is an indirection too: the value it holds is somewhere else,
+    // so it can be smaller than the alias. It guards on `bare` for the same
+    // reason the array arms below do, which is what lets `type Cell = *Cell`
+    // be written without a one-field wrapper record.
+    else if (k == K.tptr) { let ptr: TPtr = t; if (!bare) { rn_reaches_go(st, ptr.to, id, seen, bare) } else { false } }
     // An array, a fixed array, an option and a map are heap objects with a
     // header, so recursing through one is as sound as recursing through a
     // record field -- at runtime both are a pointer -- and they stop the BARE
@@ -624,7 +628,7 @@ def rn_typedef_err(s: TypeDef, st: RnSt) -> Node {
     let id = rn_alias_index(st, name);
     if (un != "") { rn_unknown_err(un, s.line, s.col) }
     else if (id >= 0 && rn_reaches(st, id, true)) {
-        let err: Err = { k: K.err, msg: "type '" + name + "' refers to itself outside any record field, array, option, map or function type", line: s.line, col: s.col };
+        let err: Err = { k: K.err, msg: "type '" + name + "' refers to itself outside any record field, function type, array, option, map or pointer", line: s.line, col: s.col };
         let node: Node = err;
         node
     } else {

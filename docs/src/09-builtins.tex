@@ -10,8 +10,10 @@ a runtime error (Section~\ref{sec:errors}).
 \item[\ic{len(x)}] Length of a string (bytes), array (elements) or map
   (entries) as \ic{long}. Records are rejected (a record's field count
   is part of its type).
-\item[\ic{keys(m)}] The keys of map \ic{m} in insertion order, as an
-  array \ic{[K]} of its own (growing it leaves the map alone):
+\item[\ic{keys(m)}, \ic{values(m)}] The keys and the values of map \ic{m}
+  in the same insertion order, each an array of its own (\ic{[K]} and
+  \ic{[V]}; growing one leaves the map alone), so
+  \ic{keys(m)[i]} and \ic{values(m)[i]} are the same entry:
   \ic{foreach (k in keys(m)) \{ print(k, m[k]!); \};}.
 \item[\ic{range(n)}] \ic{[0, 1, ..., n-1]}.
 \item[\ic{trim(s)}] Strip leading/trailing space, tab, CR, LF.
@@ -301,6 +303,47 @@ print(struct.unpack("u32be,i16le", hdr));      // [16909060, -2]
 print(struct.get_u8(hdr, 9));                  // 65 -- the fill's byte, by offset
 \end{lstlisting}
 \end{description}
+
+\noindent base64 is here too, both directions (RFC 4648, standard alphabet,
+padded):
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{struct.b64\_encode(b)}] The base64 text of \ty{b}. Three bytes
+  become four characters; a tail of one byte is padded \ic{==} and of two
+  \ic{=} (\ic{struct.b64\_encode(b"foob")} is \ic{"Zm9vYg=="}).
+\item[\ic{struct.b64\_decode(s)}] The bytes \ty{s} encodes, skipping every
+  character outside the alphabet and stopping at \ic{=} --- so a PEM block's
+  line breaks cost nothing. \ic{std/x509}'s \ic{b64\_decode} is the same
+  function under the name PEM users reach it through.
+\end{description}
+
+\subsection{Ordering (the sort module)}
+\label{sec:builtin-sort}
+
+\ic{import sort;} sorts arrays. Y has no generics, so each element type has
+its own pair: \ty{long}, \ty{str} and \ty{float}, each with a plain
+\ic{sort} and a \ic{sort\_by} that takes your own comparison. Every one is a
+merge sort --- stable (equal elements keep their order) and O($n \log n$).
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{sort.sort(a)}, \ic{sort.sort\_desc(a)}] The elements of a
+  \ic{[long]} in order, and the other way round.
+\item[\ic{sort.sort\_str(a)}, \ic{sort.sort\_str\_desc(a)}] The same for a
+  \ic{[str]}, compared by bytes.
+\item[\ic{sort.sort\_f(a)}] The same for a \ic{[float]}. A NaN compares
+  false both ways, so it keeps its place among its equals rather than sinking
+  to an end --- stable is observable there.
+\item[\ic{sort.sort\_by(a, less)}, \ic{sort.sort\_str\_by(a, less)},
+  \ic{sort.sort\_f\_by(a, less)}] Sorted by \ty{less}, a function of two
+  elements answering whether the first comes before the second. It must be a
+  strict order --- never true of equal elements --- or the merge's choice
+  between two equal runs stops meaning anything:
+  \ic{sort.sort\_by([5, -1, 9], def (a, b) -> bool \{ abs(a) < abs(b) \})}.
+\end{description}
+
+\noindent A sort returns a new array; the one you passed is not touched.
+\ic{fs.list\_dir} and \ic{json}'s sorted printer use this module, so their
+output is the order it gives.
 
 \subsection{Mathematics (the math module)}
 \label{sec:builtin-math}
@@ -1104,6 +1147,21 @@ octal permission number, written as one (\ic{0o644}, \ic{0o755});
 \item[\ic{fs.seek(fd, off, whence)}] Move: from the start (0), the current
   position (1) or the end (2); the new position, or \ic{-1}.
 \item[\ic{fs.close\_file(fd)}] \ic{bool}.
+\item[\ic{fs.path\_dirname(path)}] The directory part: \ic{"/a/b/c"} is
+  \ic{"/a/b"}, a name with no \ic{/} is \ic{"."}, the root is \ic{"/"}, and
+  a trailing \ic{/} does not count. Pure string work --- no file is
+  touched, and \ic{.} and \ic{..} are left as they are.
+\item[\ic{fs.path\_basename(path)}] The last piece: \ic{"/a/b/c"} is
+  \ic{"c"}, the root is \ic{"/"}, the empty path is \ic{""}.
+\item[\ic{fs.path\_extension(path)}] The base name's last
+  \ic{.name} without the dot, or \ic{""}: \ic{"c.txt"} is \ic{"txt"}, and a
+  leading dot is part of the name, so \ic{".bashrc"} has none.
+\item[\ic{fs.path\_stem(path)}] The base name without that extension:
+  \ic{"a.tar.gz"} is \ic{"a.tar"}.
+\item[\ic{fs.path\_join(a, b)}] Two paths as one: an empty side is the
+  other, an absolute \ty{b} replaces \ty{a} outright, and otherwise exactly
+  one \ic{/} goes between. Joining is not resolving --- what you write is
+  what you get.
 \end{description}
 
 \subsection{Text and Unicode (the utf8 module)}
@@ -1153,8 +1211,15 @@ the URL; each then the options: \ic{headers} (a map; they replace the
 client's own of the same name), \ic{body}, \ic{timeout} (seconds a read
 or a connect may wait, 30), \ic{redirects} (how many to follow, 5),
 \ic{insecure} (do not check an \ic{https} server's chain) and
-\ic{anchors} (PEM certificates to trust instead of the system's). The
-response is an \ic{http.Response}: \ic{status} (0 when none came, and then \ic{err}
+\ic{anchors} (PEM certificates to trust instead of the system's).
+A redirect that leaves the origin --- a different scheme, host or port ---
+drops the caller's \ic{Authorization} and \ic{Cookie} headers, as
+RFC~9110 \S11.6.2 has them conditional on the target being the origin
+they were minted for; every other header rides along, and so do the
+cookies the jar holds for the new host. Once dropped they stay dropped,
+even if a later hop returns to where the request started: the header has
+already been offered to a host it was not for. The response is an
+\ic{http.Response}: \ic{status} (0 when none came, and then \ic{err}
 says why), \ic{reason}, \ic{headers} (names in lower case; a repeated
 header's values joined by \ic{", "}, \ic{set-cookie}'s by newlines),
 \ic{size} (the Content-Length, or $-1$), \ic{url} (after redirects), and
@@ -1189,7 +1254,10 @@ s.close();
 \ic{tls.recv(c)} (the next data, \ic{none} at the end) and
 \ic{tls.close(c)} work on it. \ic{tls.connect\_with(host, port,
 opts)} is the same, with an \ic{tls.Opts} of \ic{anchors}, \ic{alpn}, \ic{insecure} and
-\ic{timeout} to choose instead. The server's chain must reach a
+\ic{timeout} to choose instead. \ic{c.alpn} is what the server chose by
+ALPN (\ic{""} when it chose none) and \ic{c.alpn\_matched} whether that is
+the protocol \ic{alpn} asked for --- RFC~7301 \S3.2 has the client check it,
+so a program that offered one and needs it tests that flag. The server's chain must reach a
 trust anchor and name the host; X25519 and three suites are offered;
 there is no TLS 1.2.
 

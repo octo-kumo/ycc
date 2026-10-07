@@ -21,5 +21,8 @@ if (c.err != "") {
         chunk = tls.recv(c);
     };
     tls.close(c);
-    print("suite ", c.suite, " alpn [", c.alpn, "] ", first, " ", total > 100, " err [", c.err, "]");
+    // alpn_matched is the RFC 7301 3.2 check: did the server choose the
+    // protocol this client offered? The suite only sends -alpn http/1.1 in
+    // one of its three cases, so all three answers have to be right.
+    print("suite ", c.suite, " alpn [", c.alpn, "] matched ", c.alpn_matched, " ", first, " ", total > 100, " err [", c.err, "]");
 };

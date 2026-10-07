@@ -321,7 +321,8 @@ def area(s: Shape) -> float { ... };
   |~& \ic{while}~\ic{(}~\ty{expr}~\ic{)}~\ty{block} \\
   |~& \ic{for}~\ic{(}~[\ty{stmt}]~\ic{;}~[\ty{expr}]~\ic{;}~[\ty{stmt}]~\ic{)}~\ty{block} \\
   |~& \ic{for}~\ty{name}~\ic{in}~\ty{expr}~\ic{..}~\ty{expr}~\ty{block} \\
-  |~& \ic{foreach}~\ic{(}~\ty{name}~\ic{in}~\ty{expr}~\ic{)}~\ty{block} \\
+  |~& \ic{foreach}~\ic{(}~\ty{name}~\ic{in}~\ic{expr}~\ic{)}~\ty{block}
+       && \text{(array, map, string)} \\
   |~& \ty{block}
 \end{align*}
 
@@ -345,7 +346,9 @@ left out only after a statement that ends in \ic{\}} (an \ic{if},
 loop, \ic{def} or block) or before the \ic{\}} closing the block:
 \ic{f() g()} is an error, and so is any token the grammar does not
 expect --- nothing is skipped silently. \ic{foreach} iterates
-the elements of an array; the \ic{for} range form iterates \ic{lo..hi}
+the elements of an array, the \emph{keys} of a map and the \emph{bytes}
+of a string --- so \ic{foreach (c in s) \{ print(c); \}} walks \ty{s}
+without copying it; the \ic{for} range form iterates \ic{lo..hi}
 with the low bound inclusive and the high bound exclusive. A C-style
 \ic{for} without a condition loops until a \ic{return} leaves it, as in
 C. A C-style \ic{for} binds its head like a \ic{let}, so the names it
@@ -373,7 +376,9 @@ reached only where the keyword is written; the pattern is whatever a
 \ic{match} arm takes --- \ic{some(x)} for an option, \ic{T x},
 \ic{T \{f: y\}} for a record type, \ic{\{f: v\}} for equal fields,
 \ic{\_} for anything (binding nothing), or a value --- and \ic{some()} binds
-nothing. The subject is read once. The
+nothing. \ty{T} is a record type or one of the language's own names, so
+\ic{long n} narrows an option of longs
+(Section~\ref{sec:type-unions}); The subject is read once. The
 \ic{else} may be left out (a statement, no value), and a pattern that can
 fail needs none of its own here: the \ic{else} is the arm that does not
 match. The binding is in scope in the block only.
@@ -472,7 +477,7 @@ level & operators & notes \\
 1 & \ic{||} & short-circuit \\
 2 & \ic{\&\&} & short-circuit \\
 3 & \ic{==} \ic{!=} & structural equality \\
-4 & \ic{<} \ic{>} \ic{<=} \ic{>=} & numeric, or lexicographic \ty{str} \\
+4 & \ic{<} \ic{>} \ic{<=} \ic{>=} \ic{in} & numeric, or lexicographic \ty{str}; \ic{in} is a key/element test \\
 5 & \ic{::} & one-element cons (Section~\ref{sec:arrays}) \\
 6 & \ic{|} & bitwise or (Section~\ref{sec:bitwise}) \\
 7 & \ic{\textasciicircum{}} & bitwise exclusive or \\

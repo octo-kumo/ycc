@@ -412,6 +412,7 @@ def op_prec(op: str) -> long {
     else if (op == ">") { 4 }
     else if (op == "<=") { 4 }
     else if (op == ">=") { 4 }
+    else if (op == "in") { 4 }
     else if (op == "::") { 5 }
     else if (op == "|") { 6 }
     else if (op == "^") { 7 }
@@ -1077,7 +1078,11 @@ def parse_binary(toks: [Tok], p: long, min_prec: long) -> Parsed {
         let op = tv(toks, pos);
         let prec = 0;
         if (tt(toks, pos) == "op") { prec = op_prec(op); }
-        else if (is_kw(toks, pos, "in")) { prec = 3; };
+        // `in` is a KEYWORD -- `for x in xs`, `foreach (k in keys(m))` -- and
+        // here it is an operator: `"k" in m` asks a map for a key (TODO.md
+        // item 14). Both heads find their `in` before parsing an expression
+        // that starts after it, so nothing there can see this.
+        if (prec == 0 && is_kw(toks, pos, "in")) { prec = op_prec("in"); };
         // Nested ifs, not one `prec != 0 || prec < min_prec` gate: a mixed
         // long/bool gate reads worse, and `||` would type fine anyway
         // (typeof_logic takes any operand) — this is shape, not a rule.
@@ -2725,28 +2730,20 @@ def parse_some_pattern(toks: [Tok], p: long, tmp: str) -> PatRes {
 // A type name in a pattern: the builtin primitive names map to their type
 // kinds (as in an annotation), anything else is an alias tname resolved by
 // rename.y.
-def pattern_type(nm: str) -> Type {
-    if (nm == "long" || nm == "int") { let t: Type = { k: K.tlong }; t }
-    else if (nm == "byte") { let t: Type = { k: K.tbyte }; t }
-    else if (nm == "bool") { let t: Type = { k: K.tbool }; t }
-    else if (nm == "str") { let t: Type = { k: K.tstr }; t }
-    else if (nm == "float") { let t: Type = { k: K.tfloat }; t }
-    else if (nm == "bigint") { let t: Type = { k: K.tbigint }; t }
-    else { let t: Type = { k: K.tname, name: nm }; t }
-};
-
-// T / T x / T {f, g: y}: T names a record/primitive type (an alias; `m.T`
-// one of module m's).
+// T / T x / T {f, g: y}: T is a type in the annotation sense -- an alias (an
+// `m.T` one of module m's), or one of the language's own names, which is what
+// makes `if let long n = v`, `if let mutex held = m` and
+// `match v { str s => ... }` parse at all (TODO.md item 13: they were
+// `unknown type 'long'` and `unknown type 'mutex'`, because the pattern's type
+// position built a raw tname where the annotation path builds its own kinds).
+// parse_type_atom2 IS that path, so a pattern and an annotation of the same
+// type can no longer disagree about what the name means.
 def parse_type_pattern(toks: [Tok], p: long, tmp: str) -> PatRes {
     let ln = tline(toks, p);
     let cl = tcol(toks, p);
-    let tname = tv(toks, p);
-    let pos = p + 1;
-    if (is_op(toks, pos, ".") && tt(toks, pos + 1) == "id") {
-        tname = tname + "." + tv(toks, pos + 1);
-        pos = pos + 2;
-    };
-    let ty = pattern_type(tname);
+    let atom = parse_type_atom2(toks, p);
+    let ty: Type = atom.node;
+    let pos = atom.pos;
     let subj = { k: K.id, v: tmp, line: ln, col: cl };
     let binds: [Node] = [];
     if (is_punct(toks, pos, "{")) {
