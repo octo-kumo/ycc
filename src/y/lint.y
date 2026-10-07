@@ -1604,6 +1604,7 @@ def lint_short_none(st: LintSt, stmts: [Node], i: long) -> long {
     if (lint_find(none_arm, x, 0)) { return 0; };
     if (lint_find_from(stmts, i + 2, x, 0)) { return 0; };
     lint_warn_at(st, "'" + lint_disp(x) + "' is tested for 'none' and unwrapped; write 'if let some(" + lint_disp(x) + ") = <expr> { ... } else { ... }'", d);
+    lint_fix(st, "2.11", d.line, d.col, lint_disp(x), "");
     0
 };
 
@@ -1806,7 +1807,8 @@ def fx_indent(s: str) -> str {
 
 // The index of the `cc` matching the `oc` at `i`, skipping quoted text, or
 // -1. Comments do not nest brackets that matter in the lines this reads.
-def fx_match(line: str, i: long, oc: long, cc: long) -> long {
+def fx_match(raw: str, i: long, oc: long, cc: long) -> long {
+    let line = fx_nocomment(raw);
     let d = 0;
     let q = 0;
     let j = i;
@@ -2163,7 +2165,8 @@ def fx_scan(lines: [str], ln: long, col: long, oc: long, cc: long) -> bool {
     let l = ln;
     let j = col;
     while (l <= len(lines)) {
-        let line = lines[l - 1];
+        // comments off: `compiler's` would open a quote and swallow braces
+        let line = fx_nocomment(lines[l - 1]);
         while (j < len(line)) {
             let c = line[j];
             if (q != 0) {
@@ -2650,6 +2653,132 @@ def fx_flag(name: str, ln: long, col: long, lines: [str]) -> [str] {
     lines
 };
 
+// The interior lines of the block whose `{` is at (ln, col) (1-based).
+def fx_block_lines(lines: [str], ln: long, col: long) -> [str] {
+    if (!fx_scan(lines, ln, col, 123, 125)) { return []; };
+    let l2 = fx_sline;
+    let c2 = fx_scol;
+    let out: [str] = [];
+    if (l2 == ln) {
+        out += fx_strip(lines[ln - 1][col + 1:c2]);
+    } else {
+        out += fx_strip(lines[ln - 1][col + 1:]);
+        for k in ln + 1..l2 { out += lines[k - 1]; };
+        out += fx_strip(lines[l2 - 1][:c2]);
+    };
+    out
+};
+
+// `x!` -> `x` (the if-let binding IS the unwrapped value).
+def fx_drop_bang(line: str, name: str) -> str {
+    let i = fx_find(line, name, 0);
+    while (i >= 0) {
+        let b = i + len(name);
+        let w = fx_ws(line, b);
+        if (w < len(line) && line[w] == 33) {
+            line = line[:b] + line[w + 1:];
+        };
+        i = fx_find(line, name, b);
+    };
+    // `unwrap(name)` is the long form of the same
+    let u = fx_find(line, "unwrap", 0);
+    while (u >= 0) {
+        let o = fx_ws(line, u + 6);
+        if (o < len(line) && line[o] == 40) {
+            let c = fx_match(line, o, 40, 41);
+            if (c > 0 && fx_strip(line[o + 1:c]) == name) {
+                line = line[:u] + name + line[c + 1:];
+                u = fx_find(line, "unwrap", u + len(name));
+                continue;
+            };
+        };
+        u = fx_find(line, "unwrap", u + 6);
+    };
+    line
+};
+
+def fx_indent_lines(a: [str], ind: str) -> [str] {
+    let out: [str] = [];
+    foreach (l in a) {
+        if (fx_strip(l) == "") { out += l; } else { out += ind + fx_strip(l); };
+    };
+    out
+};
+
+// 2.11: `let x = E; if (x == none) { A } else { B }` -> `if let some(x) = E
+// { B } else { A };` (arms swapped when the test is `!= none`).
+def fx_none(name: str, ln: long, lines: [str]) -> [str] {
+    if (ln < 1 || ln >= len(lines)) { return lines; };
+    let dline = lines[ln - 1];
+    let dq = fx_find(dline, "let", 0);
+    if (dq < 0) { return lines; };
+    let dn = fx_find(dline, name, dq);
+    if (dn < 0) { return lines; };
+    let de = fx_ws(dline, dn + len(name));
+    if (de >= len(dline) || dline[de] != 61) { return lines; };
+    let init = dline[de + 1:];
+    let sc = index_of(init, ";");
+    if (sc < 0) { return lines; };
+    let expr = fx_strip(init[:sc]);
+    if (expr == "") { return lines; };
+    let indent = dline[:dq];
+    let il = ln + 1;
+    while (il <= len(lines) && fx_strip(lines[il - 1]) == "") { il = il + 1; };
+    if (il > len(lines)) { return lines; };
+    let ifline = lines[il - 1];
+    let ii = fx_find(ifline, "if", 0);
+    if (ii < 0) { return lines; };
+    let o = fx_ws(ifline, ii + 2);
+    if (o >= len(ifline) || ifline[o] != 40) { return lines; };
+    let c = fx_match(ifline, o, 40, 41);
+    if (c < 0) { return lines; };
+    let cond = fx_strip(ifline[o + 1:c]);
+    let b1 = fx_ws(ifline, c + 1);
+    if (b1 >= len(ifline) || ifline[b1] != 123) { return lines; };
+    let thenb = fx_block_lines(lines, il, b1);
+    if (!fx_scan(lines, il, b1, 123, 125)) { return lines; };
+    let l1 = fx_sline;
+    let c1 = fx_scol;
+    // the `else`, on this line or the next non-empty one
+    let eline = l1;
+    let eidx = -1;
+    let tail = fx_strip(fx_nocomment(lines[l1 - 1][c1 + 1:]));
+    if (fx_word(tail, 0, "else")) {
+        eidx = index_of(lines[l1 - 1], "else");
+    } else if (tail == "" || tail == ";") {
+        let m = l1 + 1;
+        while (m <= len(lines) && fx_strip(lines[m - 1]) == "") { m = m + 1; };
+        if (m <= len(lines) && fx_word(fx_strip(lines[m - 1]), 0, "else")) {
+            eline = m;
+            eidx = index_of(lines[m - 1], "else");
+        };
+    } else {
+        return lines;
+    };
+    if (eidx < 0) { return lines; };
+    let b2 = fx_ws(lines[eline - 1], eidx + 4);
+    if (b2 >= len(lines[eline - 1]) || lines[eline - 1][b2] != 123) { return lines; };
+    let elseb = fx_block_lines(lines, eline, b2);
+    if (!fx_scan(lines, eline, b2, 123, 125)) { return lines; };
+    let endline = fx_sline;
+    let endcol = fx_scol + 1;
+    let semi = index_of(lines[endline - 1][endcol:], ";") >= 0;
+    let swap = index_of(cond, "==") >= 0;
+    let someb = thenb;
+    let noneb = elseb;
+    if (swap) { someb = elseb; noneb = thenb; };
+    let si: [str] = [];
+    foreach (l in someb) { si += fx_drop_bang(l, name); };
+    let out: [str] = [];
+    out += indent + "if let some(" + name + ") = " + expr + " {";
+    out += fx_indent_lines(si, indent + "    ");
+    out += indent + "} else {";
+    out += fx_indent_lines(noneb, indent + "    ");
+    if (semi) { out += indent + "};"; } else { out += indent + "}"; };
+    lines = lines[:ln - 1] + out + lines[endline:];
+    lines
+};
+
 // Are all of these 1-char string literals?
 def fx_all_short(lits: [str]) -> bool {
     for k in 0..len(lits) {
@@ -2802,6 +2931,7 @@ def fx_one(rule: str, a: str, b: str, ln: long, col: long, lines: [str]) -> [str
     else if (rule == "2.1") { lines = fx_if_line(rule, b, ln, lines); }
     else if (rule == "2.3") { lines = fx_if_line(rule, b, ln, lines); }
     else if (rule == "2.2") { lines = fx_let_cond(ln, lines); }
+    else if (rule == "2.11") { lines = fx_none(a, ln, lines); }
     else if (rule == "2.5") { lines = fx_flag(a, ln, col, lines); }
     else if (rule == "3.6") { lines = fx_foreach_elem(a, b, ln, col, lines); }
     else if (rule == "void") { lines = fx_void(ln, lines); }
@@ -3408,7 +3538,7 @@ def lint_tw_func(t: LintTy, node: Func) -> void {
     lint_tw(t, node.body)
 };
 
-def lint_root(t: LintTy, typ: Type, line: long, col: long, alias: str) -> long {
+def lint_root(t: LintTy, typ: Type, line: long, col: long, alias: str) -> void {
     if (typ.k != K.tnone) {
         // a module's alias is its own: `m.T` (rename.y rn_prepass_one)
         let m = lint_mod_of(line);

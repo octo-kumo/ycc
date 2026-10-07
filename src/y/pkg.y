@@ -638,24 +638,27 @@ def pk_q(s: str) -> str {
 // exec() runs sh with no environment at all: git wants this one's (HOME,
 // proxies, credentials), so a command starts by exporting it.
 def pk_env() -> str {
-    let t = fs.read_file("/proc/self/environ");
-    if (t == none) {
-        ""
-    } else {
-        let s = unwrap(t);
+    if let some(t) = fs.read_file("/proc/self/environ") {
+
+        let s = t;
         let out: [str] = [];
         let start = 0;
         for i in 0..len(s) + 1 {
-            if (i == len(s) || s[i] == 0) {
-                let kv = s[start:i];
-                let eq = index_of(kv, "=");
-                if (eq > 0 && pk_is_ident(kv[:eq])) {
-                    out += "export " + kv[:eq] + "=" + pk_q(kv[eq + 1:]) + "; ";
-                }
-                start = i + 1;
-            }
+        if (i == len(s) || s[i] == 0) {
+        let kv = s[start:i];
+        let eq = index_of(kv, "=");
+        if (eq > 0 && pk_is_ident(kv[:eq])) {
+        out += "export " + kv[:eq] + "=" + pk_q(kv[eq + 1:]) + "; ";
+        }
+        start = i + 1;
+        }
         };
         join(out, "")
+
+    } else {
+
+        ""
+
     }
 };
 

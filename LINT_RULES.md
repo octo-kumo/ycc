@@ -24,6 +24,10 @@ Implemented so far (level 2): 1.1-1.7, 1.9 (2.7 is its condition form),
 1.8, 2.1-2.6, 2.8, 2.11, 3.1, 3.5, 3.6, 5.1, plus level 1's
 dropped-value checks as a `-> void` fix. The rest is the plan.
 
+1.4's fix is deliberately not offered: `s[i:i+1]` is `""` past the end
+where `s[i]` traps, and the compiler crashed on `e91_format_specs.y`
+when the fixer rewrote the lexer's own bounds checks (round 9).
+
 ## 1. Expressions
 
 ### 1.1 Compound assignment

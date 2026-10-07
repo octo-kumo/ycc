@@ -134,14 +134,20 @@ def read_bytes(path: str) -> [byte]? {
 };
 
 def read_file(path: str) -> str? {
-    let b = read_bytes(path);
-    if (b == none) { none } else { some(from_bytes(b!)) }
+    if let some(b) = read_bytes(path) {
+        some(from_bytes(b))
+    } else {
+        none
+    }
 };
 
 // The lines of a text file, without their newlines.
 def read_lines(path: str) -> [str]? {
-    let s = read_file(path);
-    if (s == none) { none } else { some(s!.lines()) }
+    if let some(s) = read_file(path) {
+        some(s.lines())
+    } else {
+        none
+    }
 };
 
 // Set the permissions of path (mode -1: leave them).
@@ -179,8 +185,11 @@ def append_bytes(path: str, b: [byte]) -> bool {
 };
 
 def copy_file(from: str, to: str) -> bool {
-    let b = read_bytes(from);
-    if (b == none) { false } else { write_bytes(to, b!) }
+    if let some(b) = read_bytes(from) {
+        write_bytes(to, b)
+    } else {
+        false
+    }
 };
 
 // ── paths ────────────────────────────────────────────────────────────────
