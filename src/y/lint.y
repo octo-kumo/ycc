@@ -1765,10 +1765,10 @@ def fx_loop(rule: str, arr: str, var: str, ln: long, lines: [str]) -> [str] {
         let body = fx_strip(wline[ob + 1:cb]);
         // the block's own `;` sits after the step
         if (fx_endswith(body, ";")) { body = fx_strip(body[:len(body) - 1]); };
-        let step = var + "++";
-        if (!fx_endswith(body, step)) { return lines; };
-        body = fx_strip(body[:len(body) - len(step)]);
-        if (fx_endswith(body, ";")) { body = fx_strip(body[:len(body) - 1]); };
+        let sc = last_index_of(body, ";");
+        let last = body[sc + 1:];
+        if (!fx_is_step(fx_strip(last) + ";", var)) { return lines; };
+        body = sc < 0 ? "" : fx_strip(body[:sc]);
         let ix = fx_indent(dline);
         if (rule == "3.1") {
             let el = "e";
@@ -1956,8 +1956,7 @@ def fx_nocomment(s: str) -> str {
 def fx_text(lines: [str], l1: long, c1: long, l2: long, c2: long) -> str {
     if (l1 == l2) { return fx_strip(fx_nocomment(lines[l1 - 1][c1 + 1:c2])); };
     let out = fx_strip(fx_nocomment(lines[l1 - 1][c1 + 1:]));
-    let k = l1 + 1;
-    while (k < l2) { out = out + " " + fx_strip(fx_nocomment(lines[k - 1])); k = k + 1; };
+    for k in l1 + 1..l2 { out = out + " " + fx_strip(fx_nocomment(lines[k - 1])) };
     fx_strip(out + " " + fx_strip(fx_nocomment(lines[l2 - 1][:c2])))
 };
 
