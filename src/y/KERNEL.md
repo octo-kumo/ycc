@@ -970,3 +970,32 @@ to read, and it is a one-line fix in one of those two places.
 
 (Trying buf.ptr instead of ptr_addr(&buf[0]) changes nothing, so the pointer the
 program passes was already the element address.)
+
+### Round 61: the pointer transfer is CORRECT -- both sides agree
+
+Instrumented both ends of the same call: the program prints the address it
+passes, the kernel prints the buf it receives.
+
+    srv: p=272638088 len 5          <- 0x10402088, a user heap address
+    R0000000010402088 ffff888000142f88   <- the kernel received 0x10402088
+
+They are the SAME value.  So the registration is right, the syscall carries it
+intact, and round 60's suspicion is dead as well: vm_translate DOES add the page
+offset (read in full this round: `(e1 & PHYS_MASK) + v % 4096`, and the 2 MB and
+1 GB cases likewise), and task_write_word's arithmetic is therefore right.
+
+What that leaves is a genuine contradiction worth stating plainly: the program
+passes the address of its array's ELEMENTS, the kernel receives and writes to
+that same address, the array's header is 16 bytes before it and cannot be touched
+by a 40-byte write at the element address -- and yet the expression after the
+call (`tostring(buf[0])`) dereferences a header whose data field is 0.  Something
+between the call and that expression changes which header `buf` reads, and the
+one candidate now on the table is the local's own storage: for a fixed [long; 5]
+the header may live on the stack while its elements live on the heap, so the
+thing to print next is `ptr_addr(buf)` (not buf.ptr, not &buf[0]) before and
+after the call -- if the local's header address changes, the frame is being
+restored to the wrong place, which would tie this back to the resume path after
+all, but with the pointer evidence pointing the other way.
+
+Also measured and worth keeping: the -g disassembly, the received pointer, and
+the published rsp all agree, so the instrumentation itself is now trustworthy.
