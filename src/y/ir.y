@@ -176,7 +176,7 @@ type IrForm = { id: long, mn: str, kinds: [long] };
 let ir_tab: [IrForm] = [];
 let ir_ready = false;
 
-def ir_init() {
+def ir_init() -> void {
     let t: [IrForm] = [];
     t += { id: F_PUSH_R, mn: "push", kinds: [O_REG] };
     t += { id: F_POP_R, mn: "pop", kinds: [O_REG] };

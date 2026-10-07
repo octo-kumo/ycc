@@ -44,7 +44,7 @@ type PkGraph = { dir: str, name: str, lib: str, roots: [str], bins: [PkBin], dep
 type PkGit = { dir: str, commit: str };
 type PkHash = { a: long, b: long };
 
-def pk_die(msg: str) -> long {
+def pk_die(msg: str) -> void {
     puts("error: " + msg + "\n");
     exit(1);
     1
@@ -113,7 +113,7 @@ def pk_is_file(path: str) -> bool {
     if (fd >= 0) { syscall(3, fd); !pk_is_dir(path) } else { false }
 };
 
-def pk_mkdir(path: str) -> long {
+def pk_mkdir(path: str) -> void {
     syscall(83, path, 493);
     if (!pk_is_dir(path)) { pk_die("cannot create directory '" + path + "'"); }
     0
@@ -133,7 +133,7 @@ def pk_peek(cur: Cursor) -> str {
     s[p:p + 1]
 };
 
-def pk_skip(cur: Cursor) -> long {
+def pk_skip(cur: Cursor) -> void {
     let s = cur.s;
     let p = cur.p;
     while (p < len(s) && (s[p] == 32 || s[p] == 9)) {
@@ -439,7 +439,7 @@ def pk_manifest(dir: str) -> PkMan {
     m
 };
 
-def pk_man_package(m: PkMan, e: PkEnt, at: str) -> long {
+def pk_man_package(m: PkMan, e: PkEnt, at: str) -> void {
     let key = e.key;
     if (key == "name") {
         let nm = pk_want_str(e, at);
@@ -559,7 +559,7 @@ def pk_load(dir: str) -> PkGraph {
 
 // Dependency `d0` of package `by` (whose manifest is in `fdir0`), and
 // then the packages it depends on.
-def pk_visit(st: PkSt, d0: PkDep, by: str, fdir0: str) -> long {
+def pk_visit(st: PkSt, d0: PkDep, by: str, fdir0: str) -> void {
     let d = d0;
     let fdir = fdir0;
     let src = pk_src(d, fdir);
@@ -724,7 +724,7 @@ def pk_lock_find(locks: [PkLock], d: PkDep) -> str {
 
 // y.lock for the git packages among `nodes` (written only when that
 // changes it; never for a project without any).
-def pk_lock_write(dir: str, nodes: [PkNode]) -> long {
+def pk_lock_write(dir: str, nodes: [PkNode]) -> void {
     let out: [str] = [];
     out += "# y.lock -- written by `ycc build`: the commit each git dependency\n";
     out += "# resolved to. Delete an entry to move it to its rev again.\n";
@@ -749,7 +749,7 @@ def pk_lock_write(dir: str, nodes: [PkNode]) -> long {
 
 // ── ycc vendor ──────────────────────────────────────────────────────────
 
-def pk_vendor(dir: str) -> long {
+def pk_vendor(dir: str) -> void {
     let g = pk_load(dir);
     let ps = g.pkgs;
     let n = 0;
@@ -777,13 +777,13 @@ def pk_hash_new() -> PkHash {
     { a: 1, b: 7 }
 };
 
-def pk_mix(h: PkHash, x: long) -> long {
+def pk_mix(h: PkHash, x: long) -> void {
     h.a = (h.a * 4294967296 + x) % 2147483647;
     h.b = (h.b * 4294967296 + x) % 2147483629;
     0
 };
 
-def pk_hash_str(h: PkHash, s: str) -> long {
+def pk_hash_str(h: PkHash, s: str) -> void {
     let n = len(s);
     pk_mix(h, n);
     let i = 0;

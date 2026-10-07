@@ -177,7 +177,7 @@ def rn_def_col(st: long) -> long { st % 65536 }
 // Only ever called when rn_want_defs is set: the flag is tested at rn_bind's
 // call site, for the same reason as tci_note -- a call on the path of every
 // binding in every compile is the cost, not the work inside it.
-def rn_note_def(uniq: str, line: long, col: long) {
+def rn_note_def(uniq: str, line: long, col: long) -> void {
     if (line > 0 && col >= 0) {
         parser.nameix_put(rn_defs, uniq, line * 65536 + col);
     };

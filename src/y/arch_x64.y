@@ -315,7 +315,7 @@ def arch_windows_lines() -> [str] {
 // code in a Windows binary -- the failure mode with no symptom until the
 // program calls the wrong syscall. It cost one whole debugging session to
 // earn, which is why it is a hard error rather than a comment.
-def arch_win_check(lines: [str], blocks: [[str]]) -> long {
+def arch_win_check(lines: [str], blocks: [[str]]) -> void {
     blocks.foreach((e) => {
         if (e[1] == "0") {
             if (!(arch_win_labeled(lines, e[0]))) {
@@ -454,7 +454,7 @@ def arch_win_find(blocks: [[str]], nm: str) -> long {
     at
 };
 
-def arch_win_push(out: [str], l: str) -> [str] {
+def arch_win_push(out: [str], l: str) -> void {
     if (len(l) > 0) { out += l; };
     out
 };

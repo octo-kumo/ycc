@@ -322,7 +322,7 @@ def union_parts(t: Type) -> [Type] {
     out
 };
 
-def union_parts_go(out: [Type], t: Type, depth: long) -> long {
+def union_parts_go(out: [Type], t: Type, depth: long) -> void {
     let union: TList = t;
     let ms: [Type] = union.ts;
     ms.foreach((e) => {
@@ -1718,7 +1718,7 @@ let tci_keys: [long] = [];
 let tci_typs: [Type] = [];
 let tci_bkts: [[long]] = [];
 
-def tci_reset() {
+def tci_reset() -> void {
     let keys: [long] = [];
     let typs: [Type] = [];
     let bkts: [[long]] = [];
@@ -1741,7 +1741,7 @@ def type_index_on() -> void {
 def type_index_off() -> void { tc_index = false };
 
 // One entry, unless the key is already there -- the FIRST type wins, as above.
-def tci_note_key(key: long, t: Type) {
+def tci_note_key(key: long, t: Type) -> void {
     let bkt: [long] = tci_bkts[key % 1024];
     let seen = false;
     let i = 0;
@@ -1760,7 +1760,7 @@ def tci_note_key(key: long, t: Type) {
 // typeof_expr rather than here, so the off path costs a load and a branch and
 // not a call. Measured: testing it inside made the call itself the cost, and
 // the call is per EXPRESSION, which is the checker's hottest path.
-def tci_note(node: Node, t: Type) {
+def tci_note(node: Node, t: Type) -> void {
     if (len(tci_bkts) > 0) {
         if (node.line > 0 && node.col >= 0) {
             let key = node.line * 65536 + node.col;
@@ -4780,7 +4780,7 @@ def typeof_decl(st: TcSt, node: Decl) -> TcRes {
 // A `return` in a def whose return type is still being inferred: its type
 // and position go into the marker typeof_def put in st.ret (`rl`, a record
 // shared by reference), to be checked once the body's type is known.
-def ret_note(rl: TInfer, typ: Type, line: long, col: long) -> long {
+def ret_note(rl: TInfer, typ: Type, line: long, col: long) -> void {
     let rets: [RetNote] = rl.rets;
     rets += { typ: typ, line: line, col: col };
     0
@@ -4798,7 +4798,7 @@ let inf_keys: [long] = [];
 let inf_typs: [Type] = [];
 let inf_bkts: [[long]] = [];
 
-def inf_reset() {
+def inf_reset() -> void {
     let keys: [long] = [];
     let typs: [Type] = [];
     let bkts: [[long]] = [];
@@ -4811,7 +4811,7 @@ def inf_reset() {
     inf_bkts = bkts;
 };
 
-def set_inferred_ret(func: Func, ret: Type) -> long {
+def set_inferred_ret(func: Func, ret: Type) -> void {
     if (len(inf_bkts) == 0) { inf_reset(); };
     let key = func.line * 65536 + func.col;
     let bkt: [long] = inf_bkts[key % 1024];

@@ -180,7 +180,7 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
 // place reads (src/y/target.y).  A bad name is a driver failure with the
 // accepted spellings, not a silently-defaulted build: a program compiled for
 // the wrong OS is worse than one that did not compile.
-def parse_target(name: str) -> long {
+def parse_target(name: str) -> void {
     if (name == "linux") {
         res_target = "linux";
     } else if (name == "windows") {
@@ -249,7 +249,7 @@ def self_pack() -> str {
 
 // --std-pack FILE: every std unit, compiled from source, framed for
 // attaching (see self_pack).
-def write_std_pack(path: str) -> long {
+def write_std_pack(path: str) -> void {
     let pack = nativelib.std_pack(nativelib.std_units(nativelib.std_unit_names(), ""));
     let nd = tostring(len(pack));
     while (len(nd) < 8) { nd = "0" + nd; };
@@ -294,7 +294,7 @@ def fmt_kb(b: long) -> str {
     tostring(b / 1024)
 };
 
-def print_phase_rows(times: [Timing]) -> long {
+def print_phase_rows(times: [Timing]) -> void {
     // NOTE: vestigial alias — `times[i]` parses and typechecks in both
     // copies today; the binding stays only because the compiled compiler
     // is byte-gated against refs/ycc.ref.
@@ -306,14 +306,14 @@ def print_phase_rows(times: [Timing]) -> long {
     0
 };
 
-def print_counter(name: str, v: long) -> long {
+def print_counter(name: str, v: long) -> void {
     eputs("  " + padr(name, 12) + padl(tostring(v), 12) + "\n");
     0
 };
 
 // ── main ─────────────────────────────────────────────────────────────────
 
-def print_native_errors(errors: [Diag], origin: Origin, bare: bool) -> long {
+def print_native_errors(errors: [Diag], origin: Origin, bare: bool) -> void {
     // NOTE: vestigial alias (see print_phase_rows) — `errors[i]` works.
     // Positions are lines of the spliced program (std chunks and imported
     // modules included); the origin map turns each back into the file it
@@ -355,7 +355,7 @@ def warning_text(warnings: [Diag], origin: Origin, bare: bool) -> str {
     out
 };
 
-def print_native_warnings(warnings: [Diag], origin: Origin, bare: bool) -> long {
+def print_native_warnings(warnings: [Diag], origin: Origin, bare: bool) -> void {
     eputs(warning_text(warnings, origin, bare));
     0
 };
@@ -613,7 +613,7 @@ def pkg_index(pkgs: [PkNode], name: str) -> long {
 // so those units are the ones the loop would have compiled. The unit order is
 // the topological one, so each dependency's own key hashes the same
 // interfaces the loop gave it.
-def build_one(dir: str, one: str, debug: bool, nowarn: bool, wlevel: long, allow_exec: bool, std_src: bool) -> long {
+def build_one(dir: str, one: str, debug: bool, nowarn: bool, wlevel: long, allow_exec: bool, std_src: bool) -> void {
     let g = pkg.pk_load(dir);
     let pkgs = g.pkgs;
     let odir = pkg.pk_join(pkg.pk_join(dir, "build"), "obj");
@@ -674,7 +674,7 @@ def build_one(dir: str, one: str, debug: bool, nowarn: bool, wlevel: long, allow
 // more than the count).
 // A package whose object file is already there is left to the loop, so a
 // rebuild that compiles nothing spawns nothing either.
-def build_dispatch_level(dir: str, pkgs: [PkNode], odir: str, lo: long, hi: long, debug: bool, nowarn: bool, wlevel: long, allow_exec: bool, std_src: bool) -> long {
+def build_dispatch_level(dir: str, pkgs: [PkNode], odir: str, lo: long, hi: long, debug: bool, nowarn: bool, wlevel: long, allow_exec: bool, std_src: bool) -> void {
     let n = 0;
     // --std-src has no pack, so a child would compile the std units from
     // source before its own package: far more than the package costs.
@@ -714,7 +714,7 @@ def build_dispatch_level(dir: str, pkgs: [PkNode], odir: str, lo: long, hi: long
 // compiled and its object written; then each [bin], linked with the
 // packages it reaches, to DIR/build/NAME. A unit's warnings show when it
 // is compiled (unless `nowarn`), not when its object is reused.
-def build_project(dir: str, debug: bool, nowarn: bool, wlevel: long, allow_exec: bool, std_src: bool) -> long {
+def build_project(dir: str, debug: bool, nowarn: bool, wlevel: long, allow_exec: bool, std_src: bool) -> void {
     let g = pkg.pk_load(dir);
     let bins = g.bins;
     let pkgs = g.pkgs;
@@ -870,7 +870,7 @@ def build_project(dir: str, debug: bool, nowarn: bool, wlevel: long, allow_exec:
 // from one file, so line numbers survive the round trip and the markers do not
 // move anything: comments never reach the lexer, so compiling a dump gives the
 // same bytes as compiling the file it came from.
-def dump_source(src: str, origin: Origin) -> long {
+def dump_source(src: str, origin: Origin) -> void {
     let lines = split(src, "\n");
     let prev = "\x01none";
     lines.foreach((e, i) => {

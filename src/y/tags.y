@@ -101,7 +101,7 @@ def nest_reset() { nest = 0; 0 };
 // Past the limit: say what was too deep and stop. `what` names the walk
 // ("an expression", "a type", "a statement"), since a program can be too deep
 // in more than one way.
-def too_deep(what: str, line: long, col: long) -> long {
+def too_deep(what: str, line: long, col: long) -> void {
     puts(tostring(line) + ":" + tostring(col) + ": error: " + what +
          " nests deeper than " + tostring(MAX_NEST) + ", the compiler's limit");
     exit(1);

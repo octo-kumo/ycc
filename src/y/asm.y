@@ -1339,7 +1339,7 @@ def asm_ir_st(sec: long, offs: [long], items: [AsmItem], labels: [AsmLabel], err
 // before — so the bound costs size, never correctness.
 let RELAX_ROUNDS = 8;
 
-def asm_relax(items: [AsmItem], labels: [AsmLabel], debug: bool) -> long {
+def asm_relax(items: [AsmItem], labels: [AsmLabel], debug: bool) -> void {
     // The rounds walk two compact arrays of the items' lengths and sections
     // rather than the records: an AsmItem is seven words, and streaming 13 MB
     // of them four times over was most of this pass (measured 47 ms for ycc.y
@@ -1449,7 +1449,7 @@ def relax_target(rlmap: [AsmLabel], lbl: str) -> long {
 
 // Re-encode item `i` in the long form, from what it recorded (`br`) and what
 // its fixup names. Returns the new length.
-def relax_grow(items: [AsmItem], i: long, lens: [long], lbl: str) -> long {
+def relax_grow(items: [AsmItem], i: long, lens: [long], lbl: str) -> void {
     let it = items[i];
     let buf = enc.scratch();
     let r = enc.enc_branch_long(buf, 0, it.br, lbl);
@@ -1459,7 +1459,7 @@ def relax_grow(items: [AsmItem], i: long, lens: [long], lbl: str) -> long {
 };
 
 // The bound case: every branch long, which is the pre-relaxation encoding.
-def relax_all_long(items: [AsmItem], labels: [AsmLabel], lens: [long]) -> long {
+def relax_all_long(items: [AsmItem], labels: [AsmLabel], lens: [long]) -> void {
     let n = 0;
     lens.foreach((e, i) => {
         let it = items[i];
@@ -1475,7 +1475,7 @@ def relax_all_long(items: [AsmItem], labels: [AsmLabel], lens: [long]) -> long {
 // measures every fixup against them), and the item offsets too, but only for
 // -g: they are one record rebuild per item, and the line table is their only
 // reader.
-def relax_place(items: [AsmItem], labels: [AsmLabel], lens: [long], secs: [long], debug: bool) -> long {
+def relax_place(items: [AsmItem], labels: [AsmLabel], lens: [long], secs: [long], debug: bool) -> void {
     let offs: [long] = [0, 0, 0];
     let i = 0;
     let j = 0;

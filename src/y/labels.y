@@ -35,7 +35,7 @@ let lbl_next = 0;
 // builds one record per slot, so a table sized for ycc.y costs every small
 // compile 1,024 of them (measured: +1.5% of a hello.y compile, half the cost
 // of stage 1).
-def lbl_reindex(cap: long) {
+def lbl_reindex(cap: long) -> void {
     let m = asm.labmap_new(cap);
     lbl_names.foreach((e, i) => {
         let r = asm.labmap_put(m, e, 1, i);

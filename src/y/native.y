@@ -355,7 +355,7 @@ def words_seen(code: str, names: [str]) -> [long] {
 // words_seen's pass over code[lo:n], marking seen in place. The fields of
 // an f-string are code: lexer.y fstr_walk finds them as the lexer does,
 // and each is scanned on its own.
-def words_scan(code: str, lo: long, n: long, names: [str], seen: [long]) -> long {
+def words_scan(code: str, lo: long, n: long, names: [str], seen: [long]) -> void {
     let i = lo;
     // the first byte of the last token of code (blanks and comments skip),
     // and a name just seen after a `.`, waiting for its `(`
@@ -2629,7 +2629,7 @@ def env_open(env: [Slot]) -> [Slot] {
 // A re-bound name rebuilds without growing -- those come in bursts (every
 // boxed local of a closure-heavy function), and a doubling cap per rebuild
 // reaches a million slots and out of memory on t89.
-def env_index_all(env: [Slot], grow: bool) -> long {
+def env_index_all(env: [Slot], grow: bool) -> void {
     let cap = len(env) * 2 + 16;
     // twice the old table, but only while it is this env's: a fresh env sizes
     // its own (or a unit with two wide units would inherit the first's)
@@ -2658,7 +2658,7 @@ def env_index_all(env: [Slot], grow: bool) -> long {
 // -- the env outgrowing half its table, and a re-bound name (the table keeps
 // the first insert for a name, so the newest slot has to be put by a rebuild
 // that walks backwards).
-def env_index_add(env: [Slot]) -> long {
+def env_index_add(env: [Slot]) -> void {
     if (env[0].off != env_ix_id || len(env) == ENV_SCAN_MAX + 1 || len(env) * 2 > len(env_ix)) {
         env_index_all(env, true);
     } else if (len(env) > ENV_SCAN_MAX) {
@@ -7618,7 +7618,7 @@ def tyset_add(lbl: str, form: str) -> long {
     out
 };
 
-def tyset_grow() -> long {
+def tyset_grow() -> void {
     let old = ty_seen;
     let oldf = ty_forms;
     let cap = 2 * len(old);
@@ -7639,7 +7639,7 @@ def tyset_grow() -> long {
     0
 };
 
-def tyset_reset() {
+def tyset_reset() -> void {
     let none: [str] = [];
     let nonef: [str] = [];
     ty_seen = none;
@@ -7654,7 +7654,7 @@ def tyset_reset() {
     ush_vals = novals;
 };
 
-def ty_sig_init() {
+def ty_sig_init() -> void {
     let nokeys: [str] = [];
     let noids: [long] = [];
     let bkts: [[long]] = [];
@@ -7745,7 +7745,7 @@ def alias_of(t: Type) -> Type {
 
 // Two types with one descriptor label: stop (a 64-bit hash collision;
 // the program cannot be linked with this compiler).
-def ty_collision(lbl: str, form: str) {
+def ty_collision(lbl: str, form: str) -> void {
     puts("ycc: two record types hash to " + lbl + " (" + form + "); cannot link this program\n");
     exit(1);
 };
@@ -8581,7 +8581,7 @@ def flit_dmul_limb(a: [long], n: long) -> bool {
 
 // acc /= 10^9: the lowest limb drops out whole. What was in it is below the
 // significand, so the caller looks at it for sticky first.
-def flit_ddiv_limb(a: [long], n: long) {
+def flit_ddiv_limb(a: [long], n: long) -> void {
     for i in 0..n - 1 {
         a[i] = a[i + 1];
     };
@@ -12125,7 +12125,7 @@ def relabel_dups(body: str, m: [AsmLabel], dup_new: [str]) -> str {
 // program's (or a package's) replaces std's, and link_units drops std's. So
 // only the packages and the program are compared here, and a bin with no
 // package pays nothing for the check.
-def dup_y_label(deps: [Unit], prog: Unit) -> long {
+def dup_y_label(deps: [Unit], prog: Unit) -> void {
     let nu = len(deps);
     if (nu > 0) {
         let m = asm.labmap_new((nu + 1) * 2 + 16);

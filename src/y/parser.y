@@ -26,12 +26,12 @@ import lexer from "./lexer.y";
 // selects that loop.
 let ploop_names: [str] = [];
 
-def loop_push(nm: str) -> long {
+def loop_push(nm: str) -> void {
     ploop_names += nm;
     0
 };
 
-def loop_pop() -> long {
+def loop_pop() -> void {
     ploop_names = ploop_names[0:len(ploop_names) - 1];
     0
 };
@@ -64,7 +64,7 @@ let pcall_typs: [Type] = [];
 let pfunc_names: [str] = [];
 let pfunc_nodes: [Func] = [];
 
-def p_infer_reset() -> long {
+def p_infer_reset() -> void {
     pbody_names = [];
     pbody_typs = [];
     pcall_names = [];
@@ -92,7 +92,7 @@ def p_body_get(name: str) -> Type {
     { k: K.tnone }
 };
 
-def p_body_apply(names: [str], ptypes: [Type]) -> long {
+def p_body_apply(names: [str], ptypes: [Type]) -> void {
     let i = 0;
     while (i < len(names) && i < len(ptypes)) {
         if (ptypes[i].k == K.tnone) {
@@ -159,7 +159,7 @@ def p_call_note(callee: Node, args: [Node]) -> long {
     0
 };
 
-def p_infer_finish() -> long {
+def p_infer_finish() -> void {
     pcall_names.foreach((el, c) => {
         pfunc_names.foreach((e, fi) => {
             if (e == el) {

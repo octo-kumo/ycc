@@ -41,7 +41,7 @@ type LintVar = { name: str, kind: str, num: long, line: long, col: long, scal: b
 // self-compile -- and a list of the top-level names in order is quadratic in
 // them (+1.4%). The line says which file too (lint_file_of), so a module's
 // name and the program's do not shadow each other's warning.
-type LintRet = { name: str, ret: Type, line: long, col: long };
+type LintRet = { name: str, ret: Type, line: long, col: long, called: bool, used: bool, retval: bool };
 // Three fields say, in the emitter's terms, whether the statement being
 // walked is generated through `gen` (a value is produced) or through
 // `gen_stmt` (nothing reads one). `dropnext`: the statement list about to be
@@ -78,7 +78,7 @@ def lint_fixes_get() -> [LintFix] { lint_fixes };
 // Record a fixable shortening beside the warning it names. `a`/`b` are the
 // rule's operands; fix.y reads them, so adding a fix is a call here and a
 // case there, never a second search of the tree.
-def lint_fix(st: LintSt, rule: str, line: long, col: long, a: str, b: str) {
+def lint_fix(st: LintSt, rule: str, line: long, col: long, a: str, b: str) -> void {
     if (st.wlevel >= 2) {
         lint_fixes += { rule: rule, line: line, col: col, a: a, b: b };
     };
@@ -104,6 +104,15 @@ def lint_unit(ast: Block, ast3: Block, ofile: [long], fmods: [str], wlevel: long
     if (len(ogen) > 0) { lint_meta_top(st, ast3.stmts, ogen) };
     lint_vars(st);
     lint_types(st, ast.stmts);
+    // Level 1, as a fix: a def whose value is never read can return void.
+    if (wlevel >= 2) {
+        for vi in 0..len(st.rets) {
+            let r = st.rets[vi];
+            if (r.called && !r.used && !r.retval && r.ret.k != K.tvoid) {
+                lint_fixes += { rule: "void", line: r.line, col: r.col, a: r.name, b: "" };
+            };
+        };
+    };
     lint_sorted(st.warns)
 };
 
@@ -114,7 +123,7 @@ def lint_unit(ast: Block, ast3: Block, ofile: [long], fmods: [str], wlevel: long
 // which the program runs once and the generator never ran at all: `ogen`
 // (indexed by the statement's line) says which lines those are. Anything else
 // is a statement with side effects the reader cannot see running twice.
-def lint_meta_top(st: LintSt, stmts: [Node], ogen: [bool]) -> long {
+def lint_meta_top(st: LintSt, stmts: [Node], ogen: [bool]) -> void {
     stmts.foreach((e) => {
         let s = e;
         if (s.k != K.decl && s.k != K.void && !meta_gen(s, ogen)) {
@@ -163,7 +172,7 @@ def lint_rets_node(st: LintSt, node: Node) -> long {
             let n = lint_num(decl.name);
             if (n > 0 && parser.nameix_get(st.ridx, decl.name) < 0) {
                 parser.nameix_put(st.ridx, decl.name, len(st.rets));
-                st.rets += { name: decl.name, ret: func.ret, line: node.line, col: node.col };
+                st.rets += { name: decl.name, ret: func.ret, line: node.line, col: node.col, called: false, used: false, retval: lint_find(func.body, "", 256) };
             };
             lint_rets(st, func.defs)
         } else {
@@ -277,7 +286,7 @@ def lint_num(name: str) -> long {
 
 // What happened to a binding, by its N: 1 read, 2 assigned, 4 grown
 // (`+=`/`*=`, which on an array is visible through every alias).
-def lint_mark(st: LintSt, name: str, bit: long) -> long {
+def lint_mark(st: LintSt, name: str, bit: long) -> void {
     let n = lint_num(name);
     if (n > 0) {
         let fl = st.flags;
@@ -292,7 +301,7 @@ def lint_mark(st: LintSt, name: str, bit: long) -> long {
 // A local binding (let, const, nested def), checked for use at the end.
 // `scal`: it holds a number, string or bool, whose `+=` makes a new value
 // only it sees. `fresh`: it starts as an array literal no one else holds.
-def lint_note(st: LintSt, name: str, kind: str, line: long, col: long, scal: bool, fresh: bool, strf: bool, vec: bool) -> long {
+def lint_note(st: LintSt, name: str, kind: str, line: long, col: long, scal: bool, fresh: bool, strf: bool, vec: bool) -> void {
     let d = lint_disp(name);
     if (d != "" && d[0] != 95 && index_of(name, "$shadow") < 0) {
         st.vars += { name: d, kind: kind, num: lint_num(name), line: line, col: col, scal: scal, fresh: fresh, strf: strf, top: false, vec: vec };
@@ -304,7 +313,7 @@ def lint_note(st: LintSt, name: str, kind: str, line: long, col: long, scal: boo
 // check needs to know whether the name holds a string, and marked `top` so
 // lint_vars leaves it alone -- a global that nothing in this unit reads is
 // not an unused variable (another unit of the program may read it).
-def lint_note_top(st: LintSt, node: Decl) -> long {
+def lint_note_top(st: LintSt, node: Decl) -> void {
     let name = node.name;
     let d = lint_disp(name);
     if (d != "" && d[0] != 95) {
@@ -429,7 +438,7 @@ def lint_var_vec(st: LintSt, name: str) -> bool {
 // Note a parameter, so the shortening rules can tell a `str` or a number
 // from an array. `top` keeps lint_vars from calling it unused -- a
 // parameter is never that.
-def lint_note_param(st: LintSt, name: str, typ: Type, line: long, col: long) -> long {
+def lint_note_param(st: LintSt, name: str, typ: Type, line: long, col: long) -> void {
     let d = lint_disp(name);
     if (d != "" && d[0] != 95) {
         st.vars += { name: d, kind: "param", num: lint_num(name), line: line, col: col, scal: lint_tscal(typ), fresh: false, strf: typ.k == K.tstr, top: true, vec: typ.k == K.tarr || typ.k == K.tarrfix };
@@ -500,7 +509,7 @@ def lint_warn_start(st: LintSt, msg: str, node: Node) -> long {
 };
 
 // A top-level binding is a global: not checked for use.
-def lint_stmt(st: LintSt, s: Node, used: bool, top: bool) -> long {
+def lint_stmt(st: LintSt, s: Node, used: bool, top: bool) -> void {
     if (top && s.k == K.decl) {
         let decl: Decl = s;
         // a top-level binding is a global: its value is walked, not its
@@ -692,9 +701,18 @@ def lint_one(st: LintSt, node: Node, used: bool) -> long {
 // Level 1: a call whose result nobody reads, when the callee hands one
 // back. The message names the function the way the source spells it.
 def lint_unused_call(st: LintSt, node: Node, used: bool, call: Call) -> long {
+    // named for the def it calls: a recursive `self` is `f()`
+    let nm = lint_binding(st, call.callee);
+    // Record what the callee's value is used for: a def whose value is
+    // never read anywhere (level 1) can say `-> void` and stop warning.
+    if (nm != "") {
+        let ri = parser.nameix_get(st.ridx, nm);
+        if (ri >= 0) {
+            st.rets[ri].called = true;
+            if (used) { st.rets[ri].used = true; };
+        };
+    };
     if (st.wlevel >= 1 && !used && lint_returns(st, call.callee)) {
-        // named for the def it calls: a recursive `self` is `f()`
-        let nm = lint_binding(st, call.callee);
         lint_warn_at(st, "the value of '" + lint_disp(nm) + "()' is not used", node);
     };
     0
@@ -711,7 +729,7 @@ def lint_unused_expr(st: LintSt, node: Node, used: bool) -> long {
     0
 };
 
-def lint_list(st: LintSt, nodes: [Node]) -> long {
+def lint_list(st: LintSt, nodes: [Node]) -> void {
     nodes.foreach((e) => {
         lint_node(st, e, true);
     });
@@ -1017,7 +1035,7 @@ def lint_short_ord(st: LintSt, call: Call) -> bool {
 };
 
 // Rule 1.4: a one-character slice of a str is `s[E]`.
-def lint_short_slice(st: LintSt, slice: Slice) -> long {
+def lint_short_slice(st: LintSt, slice: Slice) -> void {
     if (lint_slice_one(slice.lo, slice.hi) && lint_str_expr(st, slice.arr)) {
         lint_warn_at(st, "a one-character slice can be written as an index (a byte)", slice);
         // Not offered as a fix: the byte is not the 1-char string, and the
@@ -1164,7 +1182,7 @@ def lint_short_if_ternary(st: LintSt, node: If) -> long {
     0
 };
 
-def lint_short_if(st: LintSt, node: If) -> long {
+def lint_short_if(st: LintSt, node: If) -> void {
     lint_short_empty_if(st, node);
     lint_short_if_ternary(st, node);
     0
@@ -1242,6 +1260,7 @@ def lint_first_stmt(block: Node) -> Node {
 def lint_find(node: Node, name: str, mask: long) -> bool {
     let k: long = node.k;
     if (k == K.ret && mask & 1 != 0) { return true; };
+    if (k == K.ret && mask & 256 != 0) { let wv: Wrap = node; if (wv.e.k != K.void) { return true; }; };
     if (k == K.kw_break && mask & 2 != 0) { return true; };
     if (k == K.kw_continue && mask & 4 != 0) { return true; };
     if (mask & 8 != 0 && lint_resizes(node, name)) { return true; };
@@ -2210,6 +2229,28 @@ def fx_ord_index(line: str, col: long) -> str {
     line[:i] + inner[:br] + "[" + lo + "]" + line[c + 1:]
 };
 
+// Level 1: `def f(...) -> T {` -> `def f(...) -> void {`, for a def whose
+// value no call reads. A void function may still `return x;` (the value is
+// dropped), so the body is left alone.
+def fx_void(line: str) -> str {
+    let i = fx_find(line, "def", 0);
+    if (i < 0) { return line; };
+    let po = index_of(line[i:], "(");
+    if (po < 0) { return line; };
+    po = i + po;
+    let pc = fx_match(line, po, 40, 41);
+    if (pc < 0) { return line; };
+    let after = line[pc + 1:];
+    let j = fx_ws(after, 0);
+    if (j + 1 < len(after) && after[j] == 45 && after[j + 1] == 62) {
+        j = fx_ws(after, j + 2);
+        while (j < len(after) && after[j] != 123 && after[j] != 59) { j = j + 1; };
+    };
+    j = fx_ws(after, j);
+    if (j >= len(after) || after[j] != 123) { return line; };
+    line[:pc + 1] + " -> void " + after[j:]
+};
+
 // The fixers, by rule. A rule with no case here stays a warning.
 def fx_one(rule: str, a: str, b: str, ln: long, col: long, lines: [str]) -> [str] {
     if (ln < 1 || ln > len(lines)) { return lines; };
@@ -2225,7 +2266,8 @@ def fx_one(rule: str, a: str, b: str, ln: long, col: long, lines: [str]) -> [str
     else if (rule == "2.1") { lines = fx_if_line(rule, b, ln, lines); }
     else if (rule == "2.3") { lines = fx_if_line(rule, b, ln, lines); }
     else if (rule == "2.2") { lines = fx_let_cond(ln, lines); }
-    else if (rule == "3.6") { lines = fx_foreach_elem(a, b, ln, col, lines); };
+    else if (rule == "3.6") { lines = fx_foreach_elem(a, b, ln, col, lines); }
+    else if (rule == "void") { lines[ln - 1] = fx_void(lines[ln - 1]); };
     lines
 };
 
@@ -2249,7 +2291,7 @@ def fx_local(line: long, nmap: long, lmap: [long]) -> long {
 // first), and later positions before earlier ones so an edit never moves
 // the text a later fix anchors on.
 def fx_prio(rule: str) -> long {
-    if (rule == "2.1" || rule == "2.2" || rule == "2.3" || rule == "2.8" || rule == "3.1" || rule == "3.5" || rule == "3.6") { 0 } else { 1 }
+    if (rule == "void" || rule == "2.1" || rule == "2.2" || rule == "2.3" || rule == "2.8" || rule == "3.1" || rule == "3.5" || rule == "3.6") { 0 } else { 1 }
 };
 
 def fx_before(x: LintFix, y: LintFix, nmap: long, lmap: [long]) -> bool {
@@ -2264,7 +2306,7 @@ def fx_before(x: LintFix, y: LintFix, nmap: long, lmap: [long]) -> bool {
 
 // Sort descending by (line, col): a fix never moves the text a later one
 // anchors on.
-def fx_sort(a: [LintFix], nmap: long, lmap: [long]) -> long {
+def fx_sort(a: [LintFix], nmap: long, lmap: [long]) -> void {
     for i in 1..len(a) {
         let cur = a[i];
         let j = i - 1;
@@ -2435,7 +2477,7 @@ def lint_loop_body(st: LintSt, body: Node) -> long {
     0
 };
 
-def lint_func(st: LintSt, node: Func) -> long {
+def lint_func(st: LintSt, node: Func) -> void {
     // Note the parameters first: the shortening rules ask whether a name is
     // a str or an array, and one of those names is usually a parameter.
     let i = 0;
@@ -2552,7 +2594,7 @@ def lint_opassign(st: LintSt, node: OpAssign, used: bool) -> long {
 
 // A record or map literal giving a key twice keeps the last value; the
 // earlier one is computed for nothing.
-def lint_lit(st: LintSt, node: RecLit, what: str, kind: str) -> long {
+def lint_lit(st: LintSt, node: RecLit, what: str, kind: str) -> void {
     let keys: [str] = node.keys;
     lint_list(st, node.vals);
     keys.foreach((e, i) => {
@@ -2577,7 +2619,7 @@ def lint_seen(keys: [str], i: long) -> bool {
 
 // Every noted binding: read is fine; grown is fine unless the growth is
 // only its own (a number's, or a fresh array's never reassigned).
-def lint_vars(st: LintSt) -> long {
+def lint_vars(st: LintSt) -> void {
     let flags = st.flags;
     foreach (v in st.vars) {
         if (!(v.top)) {
@@ -2615,7 +2657,7 @@ def lint_word(kind: str) -> str {
 // and the unions in a root are its occurrences, outer before inner, each
 // at its root's position.
 
-def lint_types(st: LintSt, stmts: [Node]) -> long {
+def lint_types(st: LintSt, stmts: [Node]) -> void {
     let roots: [LintRoot] = [];
     let atyps: [Type] = [];
     let amemo: [str] = [];
@@ -2943,7 +2985,7 @@ def lint_tk_union(t: LintTy, ty: TList, rec: bool, parent: long) -> str {
     key
 };
 
-def lint_tk_members(t: LintTy, u: TList, rec: bool, me: long, parts: [str]) -> long {
+def lint_tk_members(t: LintTy, u: TList, rec: bool, me: long, parts: [str]) -> void {
     let ts = u.ts;
     ts.foreach((e) => {
         let m = e;
@@ -2989,7 +3031,7 @@ def lint_occ(t: LintTy, ty: Type, parent: long) -> long {
     len(t.occs) - 1
 };
 
-def lint_occ_key(t: LintTy, i: long, key: str) -> long {
+def lint_occ_key(t: LintTy, i: long, key: str) -> void {
     let o = t.occs[i];
     o.key = key;
     0

@@ -352,7 +352,7 @@ def putb(buf: [byte], at: long, v: long) -> long {
 };
 
 // One 64-bit word, little endian, into a byte array.
-def put64(buf: [byte], at: long, v: long) -> long {
+def put64(buf: [byte], at: long, v: long) -> void {
     let i = 0;
     let x = v;
     while (i < 8) {
@@ -726,7 +726,7 @@ def run_image_read(stk: [byte], m: Mapd, pid: long) -> RunRes {
 
 // Put fd 3 back and unmap everything the run needed. ycc never frees, so this
 // is not about the heap: the mappings are outside it, and R8 counts them.
-def map_release(m: Mapd) -> long {
+def map_release(m: Mapd) -> void {
     if (m.keep >= 0) {
         syscall(SYS_DUP2, m.keep, GUEST_FD, 0, 0, 0);
         syscall(SYS_CLOSE, m.keep, 0, 0, 0, 0);
@@ -893,7 +893,7 @@ let sg_err = "";
 let sg_eline = 0;
 let sg_ecol = 0;
 
-def sg_reset(src: str, fid: long, dir: str) -> long {
+def sg_reset(src: str, fid: long, dir: str) -> void {
     sg_src = src;
     sg_fid = fid;
     sg_dir = dir;
@@ -947,7 +947,7 @@ def sg_reset(src: str, fid: long, dir: str) -> long {
 // Append text to whichever G buffer is live: the file's own, or a held block's
 // (its call is written there and hoisted afterwards, so it does not sit where
 // the block stood). Blocks nest, so `mid` is the innermost block's.
-def sg_gadd(t: str, mid: bool) -> long {
+def sg_gadd(t: str, mid: bool) -> void {
     if (mid) { sg_mbuf += t } else { sg_gbuf += t };
     0
 };
@@ -956,7 +956,7 @@ def sg_gadd(t: str, mid: bool) -> long {
 // and nowhere else. sg_restore puts it back where it came from; sg_drop throws
 // it away. Nothing is written to the live buffer meanwhile, which is what makes
 // both safe.
-def sg_hold() -> long {
+def sg_hold() -> void {
     sg_midsave += sg_mbuf;
     sg_molsave += sg_mol;
     sg_mlastsave += sg_molast;
@@ -1023,7 +1023,7 @@ def sg_restore(pre: str, post: str) -> long {
 // The held text, thrown away: the block's lines are not in G and not in P, so
 // the line counter goes back to where the buffer began -- the text that follows
 // the block continues the line the block started on, not one of its own.
-def sg_drop() -> long {
+def sg_drop() -> void {
     sg_gline = sg_glsaved;
     sg_m_pop()
 };
@@ -1037,7 +1037,7 @@ def sg_drop() -> long {
 //
 // The block around it is always held, so the text goes to sg_mbuf; called
 // BEFORE sg_hold, because the text belongs to the enclosing block.
-def sg_splice(slot: long, at: long) -> long {
+def sg_splice(slot: long, at: long) -> void {
     let lines = mg_lines(mg_piece[slot]);
     let last = len(lines) - 1;
     lines.foreach((e, i) => {
@@ -1056,7 +1056,7 @@ def sg_splice(slot: long, at: long) -> long {
 // P has to drop the block whole. Blanks do not count towards the enclosing
 // block's "nothing but blanks yet" flag, which is what decides whether an
 // `import` there is at the block's top level.
-def sg_put(t: str) -> long {
+def sg_put(t: str) -> void {
     if (len(t) > 0) {
         let mid = sg_mmid;
         if (!mid) { sg_ts_go(t) } else { sg_molast = sg_ml_go(t) };
@@ -1072,7 +1072,7 @@ def sg_put(t: str) -> long {
 };
 
 // One byte that is never a blank: a delimiter, or a word's first byte.
-def sg_put1(c: str) -> long {
+def sg_put1(c: str) -> void {
     if (sg_mmid) { if (!sg_molast) { sg_molast = true } }
     else { sg_ts_go(c) };
     sg_gadd(c, sg_mmid);
@@ -1092,7 +1092,7 @@ def sg_put1(c: str) -> long {
 // has started and nothing moves it. Blanks and comments therefore never become
 // the anchor, which is what puts a `// note` before a statement above it
 // rather than inside it.
-def sg_ts_go(t: str) -> long {
+def sg_ts_go(t: str) -> void {
     if (!sg_tsp) {
         let i = 0;
         let go = true;
@@ -1127,7 +1127,7 @@ def sg_ml_go(t: str) -> bool {
 };
 
 // A top-level statement ends here, so the next one starts after what follows.
-def sg_ts_end() -> long {
+def sg_ts_end() -> void {
     sg_tsp = false;
     0
 };
@@ -1141,7 +1141,7 @@ def sg_ts_end() -> long {
 // A mid-token block's call breaks into ITS buffer, and its origin goes with
 // the line: the call is hoisted to another statement afterwards, so the two
 // have to travel together or a diagnostic in G would name the wrong line.
-def sg_break() -> long {
+def sg_break() -> void {
     if (sg_mmid) {
         sg_mol += sg_gline;
         sg_mbuf += "\n";
@@ -1168,7 +1168,7 @@ def sg_break() -> long {
 // sg_src[a:b] into both buffers, breaking lines on the newlines it holds. So
 // a literal or a comment that spans lines costs the lines it really has, and
 // the two texts stay in step with the source without either counting.
-def sg_out(a: long, b: long) -> long {
+def sg_out(a: long, b: long) -> void {
     let i = a;
     while (i < b) {
         let nl = 0 - 1;
@@ -1195,7 +1195,7 @@ def sg_out(a: long, b: long) -> long {
 // own pass would refuse) instead of stopping at the first one.
 let sg_quiet = false;
 
-def sg_fail(msg: str, line: long, col: long) -> long {
+def sg_fail(msg: str, line: long, col: long) -> void {
     if (sg_err == "" && !sg_quiet) {
         sg_err = msg;
         sg_eline = line;
@@ -1318,7 +1318,7 @@ def sg_word_go(w: str, after: long, n: long) -> long {
 // A name the pass has an opinion about, in a block: one of the injected
 // helpers, or a thread/process primitive being CALLED or DEFINED (a variable or
 // a field of that name is fine, and so is the bare word).
-def sg_check_name(w: str, called: bool) -> long {
+def sg_check_name(w: str, called: bool) -> void {
     if (mg_reserved(w)) {
         sg_fail("'" + w + "' is reserved: the meta pass injects it into the generator", sg_line, sg_col);
     } else if (sg_depth > 0 && mg_thread(w) && called) {
@@ -1396,7 +1396,7 @@ def mg_bkids_had(slot: long) -> bool {
 };
 
 // Record the nesting shape: a block that opens inside another one.
-def mg_kid_note(par: long) -> long {
+def mg_kid_note(par: long) -> void {
     while (len(mg_bkids) <= par) { mg_bkids += false };
     mg_bkids[par] = true;
     0
@@ -1444,7 +1444,7 @@ def sg_region_open() -> long {
 // a splicer directive is kept, anything else is the statement the reduction is
 // about. A region whose first token is not a word (`#{`, a digit, `(`) leaves
 // sg_rpend set, which costs nothing -- the region is over at the next `;`.
-def sg_region_word(w: str) -> long {
+def sg_region_word(w: str) -> void {
     if (sg_rpend) {
         sg_rpend = false;
         if (mg_directive(w)) { sg_rkeep = true };
@@ -1465,7 +1465,7 @@ def mg_directive(w: str) -> bool {
 // what it held then. No hoisted call can point into a dropped region -- a hoist
 // belongs to a mid-token block, and a mid-token block makes its region one that
 // holds a block.
-def sg_region_close() -> long {
+def sg_region_close() -> void {
     if (!sg_rkeep && !sg_rblk) {
         sg_g = sg_g[0:sg_rfrom];
         sg_gf = sg_gf[0:sg_rfrom];
@@ -1644,7 +1644,7 @@ def sg_open(i: long, n: long) -> long {
 // block is one that could not be an operand where it stands, and a nested block
 // is one whose enclosing block cannot compile this round -- so neither is an
 // expression by construction, whatever the text around it looks like.
-def sg_m_open(slot: long) -> long {
+def sg_m_open(slot: long) -> void {
     sg_hold();
     sg_mbuf += "ycc_meta_stmt(" + tostring(slot) + ", tostring({";
     sg_col += 2;
@@ -1666,7 +1666,7 @@ def sg_m_open(slot: long) -> long {
 // whether its text was in the table. A block with nothing inside is never held
 // and never comes through here, which is what keeps a program with no nesting on
 // the path the pass has always taken.
-def sg_top_close(k: long) -> long {
+def sg_top_close(k: long) -> void {
     let slot = sg_bslot[k];
     let stmt = sg_bstmt[k];
     if (sg_bok[k]) {
@@ -1689,7 +1689,7 @@ def sg_top_close(k: long) -> long {
 // one: close the call, record it with the statement to hoist it to, and give the
 // enclosing block its buffer back. Recorded in CLOSE order, which is the order
 // the calls have to run in.
-def sg_m_close(k: long) -> long {
+def sg_m_close(k: long) -> void {
     // A block that is hoisted is not compiled where it stands, so nothing about
     // its source is checked until the round that has its text -- and if one of
     // the blocks inside it has no text this round, its own source cannot compile
@@ -1722,7 +1722,7 @@ def sg_m_close(k: long) -> long {
 // Which G buffer is live now that the block has closed and the per-block
 // stacks have been popped: a held block's own if one is still open, and
 // sg_mdepth says at what depth (0 = the file's own buffer).
-def sg_m_live() -> long {
+def sg_m_live() -> void {
     sg_mmid = false;
     sg_mdepth = 0;
     let k = sg_depth - 1;
@@ -1739,7 +1739,7 @@ def sg_m_live() -> long {
 // before the one already there, which leaves them in the list's order. And the
 // statements are done from the last to the first, so an insertion never moves a
 // position a later pass still has to read.
-def sg_mids_move() -> long {
+def sg_mids_move() -> void {
     let n = len(sg_mids);
     let done: [bool] = [];
     for i in 0..n { done += false; };
@@ -1773,7 +1773,7 @@ def mg_after(a: long, b: long) -> bool {
 
 // One call, into sg_g at its statement: the statement's line is split at the
 // anchor, the call's lines go between the halves, and its origins go with them.
-def sg_mids_one(k: long) -> long {
+def sg_mids_one(k: long) -> void {
     let m = sg_mids[k];
     let ln = m.line - 1;
     if (ln < 0) { ln = 0 };
@@ -1807,7 +1807,7 @@ def sg_mids_one(k: long) -> long {
 };
 
 // `}#` with sg_depth == 0: nothing opened it.
-def sg_stray(i: long) -> long {
+def sg_stray(i: long) -> void {
     sg_fail("'}#' in code position with no open meta block", sg_line, sg_col);
     i
 };
@@ -2166,7 +2166,7 @@ let mg_gexec = true;
 let mg_pkgs: [str] = [];
 let mg_roots: [str] = [];
 
-def meta_begin() -> long {
+def meta_begin() -> void {
     mg_on = true;
     mg_ready = false;
     mg_root = "";
@@ -2191,7 +2191,7 @@ def meta_begin() -> long {
 // The reduction, turned on once a pass has found nesting. The collecting pass
 // never turns it on: it does not know yet, and a program with no nesting must
 // compile to exactly what it always did.
-def mg_reduce_on() -> long {
+def mg_reduce_on() -> void {
     mg_reduce = true;
     0
 };
@@ -2207,7 +2207,7 @@ def mg_reduce_on() -> long {
 // every block inside this one known when it closed), mg_live (did this block's
 // call go into this round's G) and mg_nest. Everything a pass produces is about
 // this round, and mg_reset_rounds is what separates the two lifetimes.
-def mg_pass() -> long {
+def mg_pass() -> void {
     sg_quiet = false;
     mg_next = 0;
     mg_g = [];
@@ -2249,7 +2249,7 @@ def mg_pending() -> bool {
 // `meta.<field> = v` is a namespaced field ASSIGNMENT and strip_ns rewrites
 // only namespaced dot READS (it handles K.dot, not K.dotassign -- see
 // strip_ns), so a module cannot set another module's global by name.
-def mg_setup(root: str, files: [str], base: str, exec: bool, pkgs: [str], roots: [str]) -> long {
+def mg_setup(root: str, files: [str], base: str, exec: bool, pkgs: [str], roots: [str]) -> void {
     mg_root = root;
     mg_files = files;
     mg_gbase = base;
@@ -2263,7 +2263,7 @@ def mg_setup(root: str, files: [str], base: str, exec: bool, pkgs: [str], roots:
 // anything a generator emits is never re-scanned, so nothing in it can open a
 // block. This is what makes "a block's output may not contain a block" true by
 // construction rather than by checking.
-def mg_set(on: bool) -> long {
+def mg_set(on: bool) -> void {
     mg_on = on;
     0
 };
@@ -2279,7 +2279,7 @@ def mg_in(xs: [str], s: str) -> bool {
 // A fatal pass-level diagnostic. Every leak path out of the pass is one of
 // these, never a hand-off to the lexer (see the spec's invariant 1): whatever
 // `#{` the scanner was meant to catch is caught here, with its line.
-def mg_report(msg: str) -> long {
+def mg_report(msg: str) -> void {
     puts("error: " + msg + "\n");
     exit(1);
     0
@@ -2375,7 +2375,7 @@ def mg_where(s: long) -> str {
 // Split the pipe's bytes into pieces. A framing error means the generator did
 // not run our helpers, which cannot happen unless the pass is broken.
 
-def mg_unframe(data: str) -> long {
+def mg_unframe(data: str) -> void {
     let n = len(data);
     let i = 0;
     let bad = false;
@@ -2436,7 +2436,7 @@ def mg_first_missing() -> long {
 // Read back what a run produced: check the child's fate, unframe, check every
 // piece, and report the first thing that is wrong. Returns false if the
 // generator died, having said as much as can be said.
-def mg_take_pieces(status: long, sig: long, out: [byte]) -> bool {
+def mg_take_pieces(status: long, sig: long, out: [byte]) -> void {
     let r = true;
     // sized FIRST: mg_blame asks which slots have no piece, so a generator
     // that died before writing anything must still leave the tables the right
@@ -2480,7 +2480,7 @@ def mg_take_pieces(status: long, sig: long, out: [byte]) -> bool {
 // The rest is already true of the table mg_unframe writes: a piece is marked
 // present only when it is framed, so a slot holding its piece from an earlier
 // round is not disturbed by a round that stubbed the block.
-def mg_commit() -> long {
+def mg_commit() -> void {
     for i in 0..mg_next {
         if (i < len(mg_have) && mg_have[i] && !mg_bok[i]) {
             mg_have[i] = false;
@@ -2510,7 +2510,7 @@ def mg_blame() -> str {
 // The checks a piece must pass before it is spliced into the program's
 // source. Each names the block, because "the generator emitted something bad"
 // is not a message a reader can act on.
-def mg_check(s: long) -> long {
+def mg_check(s: long) -> void {
     let p = "";
     if (s < len(mg_piece)) { p = mg_piece[s] };
     if (index_of(p, "#{") >= 0) {
@@ -2645,7 +2645,7 @@ def mg_emit(segs: [str], sego: [long], segp: [bool], fid: long, nl: [str],
 
 // Splice blocks [lo, hi) -- this file's -- into the scanned P. A no-op when the
 // pieces are not known yet (the collecting pass).
-def mg_splice(lo: long, hi: long) -> long {
+def mg_splice(lo: long, hi: long) -> void {
     if (!mg_ready) { 0 }
     else {
         let lines = sg_p;
