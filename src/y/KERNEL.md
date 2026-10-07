@@ -811,3 +811,29 @@ Also worth a fixture of its own: a -g USER program produces NO serial output in
 this kernel (round 21 saw "load failed" for the sibling case), so the -g build
 cannot be booted for a RIP measurement -- the plain build is used to run and the
 -g build only to symbolise the same addresses.
+
+### Round 55: the guest side is innocent -- it is the IPC path
+
+Smallest possible repro, run in the kernel with no IPC at all:
+
+    let buf: [long; 5] = [0, 0, 0, 0, 0];
+    print("len " + tostring(len(buf)) + " b0 " + tostring(buf[0]));
+    buf[1] = 7;
+    print(" b1 " + tostring(buf[1]));
+
+prints `len 5 b0 0 / b1 7` -- correct.  So the guest side is fine end to end: the
+array header, its element block, y_alloc, y_alloc_map, the mmap syscall into
+sys_mmap, and both reads and writes of elements.
+
+That leaves the IPC path itself as the thing that leaves that array's data
+pointer at 0, and the two kernel-side suspects are the delivery write
+(task_deliver -> task_write_word, which translates through the RECEIVER's page
+tables and skips silently when the translation fails) and sys_ipc_recv's own
+copy into the buffer.  A failed translation there would leave the buffer as it
+was -- and if what the program passed was the array HEADER rather than its data,
+five message words would overwrite {len, cap, data, front} and set data to 0,
+which is exactly the value the fault reads.
+
+Next measurement, and it is the same one that localized this case before: print,
+from the kernel, the buffer address the receiver registered and what
+vm_translate returns for it.
