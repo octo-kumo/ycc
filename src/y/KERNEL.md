@@ -914,3 +914,29 @@ distinguish:
   3. the receiver's kernel stack is not the one its rsp points into.
 Next: print, at syscall entry for the receiver and again at completion, the
 published rsp AND the stack top, so 1/2/3 separate in one run.
+
+### Round 59: the frame is RIGHT -- round 57's reading was my instrumentation bug
+
+Instrumented both sides (published rsp at ipc_recv, and rsp/kstack/value-at-+72
+at completion) and ran the case:
+
+    R  ffff888000142f88 ffff888000143000
+    C1 ffff888000142f88 ffff888000143000 000000000040158d
+
+* the PUBLISHED rsp and the SAVED rsp agree (0x...142f88) -- so candidate 1 from
+  round 58 is out;
+* the kstack agrees (0x...143000) -- candidate 3 is out;
+* the word at +72 is 0x40158d, a CODE address -- so the frame is correct, and
+  round 57's "its RIP slot is a stack address" was MY BUG: it printed
+  tasks[i].rsp + 72 (the address) instead of peek_va64 of it (the value).
+
+So the save is right, the frame is right, the stack is right -- and the server
+still never reaches the line after its syscall.  The fault is therefore AFTER a
+correct resume, in the resumed code path itself, and the next measurement is the
+one that has worked every time: the faulting user RIP plus a disassembly of a -g
+build (remembering that a -g USER program cannot be booted in this kernel, so
+the plain build runs and the -g build only symbolises the same addresses).
+
+Correction recorded deliberately: two of the last three rounds' hypotheses were
+built on a measurement that printed an address where a value was wanted.  Read
+the instrumentation before reading the conclusion.
