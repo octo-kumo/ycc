@@ -273,7 +273,7 @@ def lint_self(st: LintSt, name: str) -> str {
 
 // A def's value, walked with `self` bound to its name: a call to `self` is
 // a call to the def it is written in, so it is named for it.
-def lint_def_body(st: LintSt, name: str, v: Node) -> long {
+def lint_def_body(st: LintSt, name: str, v: Node) -> void {
     let was = lint_self(st, name);
     let wv = st.voidfn;
     if (v.k == K.func) {
@@ -486,7 +486,7 @@ def lint_note_param(st: LintSt, name: str, typ: Type, line: long, col: long) -> 
 // last statement's value is used, and only when the list's is. The first
 // statement after one that always returns never runs (a def there still
 // does: defs hoist).
-def lint_stmts(st: LintSt, stmts: [Node], used: bool, top: bool) -> long {
+def lint_stmts(st: LintSt, stmts: [Node], used: bool, top: bool) -> void {
     let n = len(stmts);
     // a flag for this list, if lint_loop_body marked it a dropped one
     let drop = st.dropnext;
@@ -606,7 +606,7 @@ def lint_any_diverges(stmts: [Node]) -> bool {
 
 // One node; `used`: its value is consumed. The kinds most nodes have
 // come first.
-def lint_node(st: LintSt, node: Node, used: bool) -> long {
+def lint_node(st: LintSt, node: Node, used: bool) -> void {
     let k: long = node.k;
     if (k == K.id) {
         let leaf: Leaf = node;
@@ -716,7 +716,7 @@ def lint_node(st: LintSt, node: Node, used: bool) -> long {
 
 // The kinds with one operand, `e`; a unary operator's dropped result is
 // a mistake.
-def lint_one(st: LintSt, node: Node, used: bool) -> long {
+def lint_one(st: LintSt, node: Node, used: bool) -> void {
     if (node.k == K.un) {
         let un: Un = node;
         lint_un(st, un, used)
@@ -783,7 +783,7 @@ def lint_list(st: LintSt, nodes: [Node]) -> void {
     0
 };
 
-def lint_two(st: LintSt, a: Node, b: Node) -> long {
+def lint_two(st: LintSt, a: Node, b: Node) -> void {
     lint_node(st, a, true);
     lint_node(st, b, true)
 };
@@ -811,7 +811,7 @@ def lint_un(st: LintSt, node: Un, used: bool) -> long {
 
 // `ok && f()` dropping its value is control flow: f runs only when ok.
 // Any other operator's dropped value is a mistake.
-def lint_bin(st: LintSt, node: Bin, used: bool) -> long {
+def lint_bin(st: LintSt, node: Bin, used: bool) -> void {
     let op: str = node.op;
     // The chain check runs once, at the top of the `||` tree, and the flag
     // stays set while the operands are walked so a nested `||` does not
@@ -825,9 +825,9 @@ def lint_bin(st: LintSt, node: Bin, used: bool) -> long {
     let r = node.r;
     if ((op == "&&" || op == "||") && !used && lint_effect(r)) {
         lint_node(st, l, true);
-        let res = lint_node(st, r, false);
+        lint_node(st, r, false);
         st.logic = was;
-        res
+        0
     } else {
         lint_two(st, l, r);
         if (!used && !(st.voidfn && st.tailflow)) {
@@ -2801,7 +2801,7 @@ def lint_find_from(nodes: [Node], from: long, name: str, mask: long) -> bool {
 
 
 // Whether evaluating a node can do more than compute its value.
-def lint_effect(node: Node) -> bool {
+def lint_effect(node: Node) -> void {
     let k: long = node.k;
     if (k == K.call || k == K.assign || k == K.opassign || k == K.incdec || k == K.idxassign || k == K.dotassign || k == K.sliceassign || k == K.store) {
         true
@@ -2815,7 +2815,7 @@ def lint_effect(node: Node) -> bool {
     }
 };
 
-def lint_effect_logic(node: Bin) -> bool {
+def lint_effect_logic(node: Bin) -> void {
     let op: str = node.op;
     (op == "&&" || op == "||") && lint_effect(node.r)
 };
@@ -2849,7 +2849,7 @@ def lint_zero_text(s: str) -> bool {
 };
 
 // An `if` gives its arms' values only when it has both arms.
-def lint_if(st: LintSt, node: If, used: bool) -> long {
+def lint_if(st: LintSt, node: If, used: bool) -> void {
     lint_node(st, node.cond, true);
     let arms = used && node.has_else;
     lint_node(st, node.then, arms);
@@ -2876,7 +2876,7 @@ def lint_empty_arm(n: Node) -> bool {
     } else { false }
 };
 
-def lint_for(st: LintSt, node: For) -> long {
+def lint_for(st: LintSt, node: For) -> void {
     lint_node(st, node.init, false);
     lint_node(st, node.cond, true);
     lint_node(st, node.step, false);
@@ -2888,7 +2888,7 @@ def lint_for(st: LintSt, node: For) -> long {
 // bare statement through gen_stmt anyway -- and only that block's own list:
 // a block nested inside it (an if arm, say) is generated through `gen`, so
 // its last statement does produce a value.
-def lint_loop_body(st: LintSt, body: Node) -> long {
+def lint_loop_body(st: LintSt, body: Node) -> void {
     let was = st.dropnext;
     let wv = st.vused;
     let wl = st.loops;
@@ -2920,7 +2920,7 @@ def lint_func(st: LintSt, node: Func) -> void {
     0
 };
 
-def lint_decl(st: LintSt, node: Decl) -> long {
+def lint_decl(st: LintSt, node: Decl) -> void {
     let v = node.v;
     if (node.kind == "def") {
         lint_note(st, node.name, "def", node.line, node.col, false, false, false, false);
@@ -2946,7 +2946,7 @@ def lint_fresh(v: Node) -> bool {
     vk == K.array || vk == K.arrrep
 };
 
-def lint_assign(st: LintSt, node: Assign) -> long {
+def lint_assign(st: LintSt, node: Assign) -> void {
     let name: str = node.name;
     let v = node.v;
     lint_mark(st, name, 2);
@@ -2961,7 +2961,7 @@ def lint_assign(st: LintSt, node: Assign) -> long {
     0
 };
 
-def lint_incdec(st: LintSt, node: IncDec, used: bool) -> long {
+def lint_incdec(st: LintSt, node: IncDec, used: bool) -> void {
     let t = node.tgt;
     if (t.k == K.id) {
         let id: Leaf = t;
@@ -2975,7 +2975,7 @@ def lint_incdec(st: LintSt, node: IncDec, used: bool) -> long {
     }
 };
 
-def lint_opassign(st: LintSt, node: OpAssign, used: bool) -> long {
+def lint_opassign(st: LintSt, node: OpAssign, used: bool) -> void {
     let t = node.tgt;
     let op: str = node.op;
     let v = node.v;
