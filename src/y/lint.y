@@ -53,7 +53,7 @@ type LintRet = { name: str, ret: Type, line: long, col: long, called: bool, used
 // on a single copy, which costs what any `+` costs. Which of the first two
 // an expression sees decides whether a `+=` on a string appends in place or
 // copies; see lint_opassign.
-type LintSt = { warns: [Diag], vars: [LintVar], tops: NameIx, flags: [long], rets: [LintRet], ridx: NameIx, self: str, wlevel: long, dropnext: bool, vused: bool, loops: long, logic: long, chain: long };
+type LintSt = { warns: [Diag], vars: [LintVar], tops: NameIx, flags: [long], rets: [LintRet], ridx: NameIx, self: str, wlevel: long, dropnext: bool, vused: bool, loops: long, logic: long, chain: long, voidfn: bool, tailflow: bool };
 // A shortening the compiler can apply itself (`ycc -W 2 --fix`): `rule` is
 // the section of LINT_RULES.md, `line`/`col` anchor it in the spliced
 // program, and `a`/`b` are that rule's own operands (a name, an operator, a
@@ -72,6 +72,12 @@ let lint_fmods: [str] = [];
 // The shortenings found in the unit being linted, for `--fix` (see lint_fix,
 // fix.y). Cleared at the top of every lint_unit.
 let lint_fixes: [LintFix] = [];
+
+// A read of a def's value: which def, the def whose body holds the read (-1
+// for the top level), and whether the read is in that body's tail (a value
+// the enclosing def drops once it is void).
+type LintUse = { callee: long, encl: long, tail: bool };
+let lint_uses: [LintUse] = [];
 
 def lint_fixes_get() -> [LintFix] { lint_fixes };
 
@@ -96,7 +102,8 @@ def lint_unit(ast: Block, ast3: Block, ofile: [long], fmods: [str], wlevel: long
     let flags: [long] = [];
     let rets: [LintRet] = [];
     lint_fixes = [];
-    let st = { warns: warns, vars: vars, tops: parser.nameix_new(256), flags: flags, rets: rets, ridx: parser.nameix_new(64), self: "", wlevel: wlevel, dropnext: false, vused: false, loops: 0, logic: 0, chain: 0 };
+    lint_uses = [];
+    let st = { warns: warns, vars: vars, tops: parser.nameix_new(256), flags: flags, rets: rets, ridx: parser.nameix_new(64), self: "", wlevel: wlevel, dropnext: false, vused: false, loops: 0, logic: 0, chain: 0, voidfn: false, tailflow: false };
     if (wlevel >= 1) {
         lint_rets(st, ast3.stmts)
     };
@@ -104,11 +111,34 @@ def lint_unit(ast: Block, ast3: Block, ofile: [long], fmods: [str], wlevel: long
     if (len(ogen) > 0) { lint_meta_top(st, ast3.stmts, ogen) };
     lint_vars(st);
     lint_types(st, ast.stmts);
+    // Which defs could be void? A read at the top level, or in a def that
+    // cannot be void itself, or in a def's body but not its tail, keeps the
+    // def alive. Everything else is the greatest fixpoint, so recursion
+    // through tail calls does not block it.
+    // A def will be void if the fixer can do it at all and nothing keeps a
+    // read of its value alive. A read in a def that will NOT be void (an
+    // uncalled one included) keeps the callee alive too: its body still has
+    // to typecheck.
+    let wv: [bool] = [];
+    for vi in 0..len(st.rets) {
+        let r = st.rets[vi];
+        wv += r.called && r.ret.k != K.tvoid && (!r.retval || !r.nested);
+    };
+    let chg = true;
+    while (chg) {
+        chg = false;
+        foreach (u in lint_uses) {
+            if (wv[u.callee] && (u.encl < 0 || !u.tail || !wv[u.encl])) {
+                wv[u.callee] = false;
+                chg = true;
+            };
+        };
+    };
     // Level 1, as a fix: a def whose value is never read can return void.
     if (wlevel >= 2) {
         for vi in 0..len(st.rets) {
             let r = st.rets[vi];
-            if (r.called && !r.used && r.ret.k != K.tvoid && (!r.retval || !r.nested)) {
+            if (wv[vi]) {
                 lint_fixes += { rule: "void", line: r.line, col: r.col, a: r.name, b: "" };
             };
         };
@@ -156,14 +186,14 @@ def meta_gen(s: Node, ogen: [bool]) -> bool {
 // does not say which def that is.
 
 // Every `def` in the tree, by its renamed name.
-def lint_rets(st: LintSt, stmts: [Node]) -> long {
+def lint_rets(st: LintSt, stmts: [Node]) -> void {
     stmts.foreach((e) => {
         lint_rets_node(st, e);
     });
     0
 };
 
-def lint_rets_node(st: LintSt, node: Node) -> long {
+def lint_rets_node(st: LintSt, node: Node) -> void {
     let k: long = node.k;
     if (k == K.decl) {
         let decl: Decl = node;
@@ -245,12 +275,18 @@ def lint_self(st: LintSt, name: str) -> str {
 // a call to the def it is written in, so it is named for it.
 def lint_def_body(st: LintSt, name: str, v: Node) -> long {
     let was = lint_self(st, name);
+    let wv = st.voidfn;
+    if (v.k == K.func) {
+        let f: Func = v;
+        if (f.ret.k == K.tvoid) { st.voidfn = true; };
+    };
     lint_node(st, v, true);
+    st.voidfn = wv;
     st.self = was;
     0
 };
 
-def lint_warn(st: LintSt, msg: str, line: long, col: long) -> long {
+def lint_warn(st: LintSt, msg: str, line: long, col: long) -> void {
     st.warns += { msg: msg, line: line, col: col };
     0
 };
@@ -457,6 +493,7 @@ def lint_stmts(st: LintSt, stmts: [Node], used: bool, top: bool) -> long {
     st.dropnext = false;
     let dead = false;
     let told = false;
+    let wt = st.tailflow;
     for i in 0..n {
         let s = stmts[i];
         if (dead && !told && lint_code(s)) {
@@ -464,22 +501,24 @@ def lint_stmts(st: LintSt, stmts: [Node], used: bool, top: bool) -> long {
             told = true;
         };
         st.vused = !drop && i == n - 1;
+        st.tailflow = wt && i == n - 1;
         if (st.wlevel >= 2) { lint_short_pair(st, stmts, i); };
         lint_stmt(st, s, used && i == n - 1, top);
         if (!dead && lint_diverges(s)) {
             dead = true;
         };
     };
+    st.tailflow = wt;
     0
 };
 
-def lint_warn_at(st: LintSt, msg: str, node: Node) -> long {
+def lint_warn_at(st: LintSt, msg: str, node: Node) -> void {
     lint_warn(st, msg, node.line, node.col)
 };
 
 // At the first token of `node`: an operator's node sits at the operator,
 // a call's at its `(`.
-def lint_warn_start(st: LintSt, msg: str, node: Node) -> long {
+def lint_warn_start(st: LintSt, msg: str, node: Node) -> void {
     let k: long = node.k;
     if (k == K.call) {
         let call: Call = node;
@@ -701,6 +740,8 @@ def lint_one(st: LintSt, node: Node, used: bool) -> long {
 // Level 1: a call whose result nobody reads, when the callee hands one
 // back. The message names the function the way the source spells it.
 def lint_unused_call(st: LintSt, node: Node, used: bool, call: Call) -> long {
+    // a void def's tail is meant to be dropped
+    if (st.voidfn && st.tailflow) { return 0; };
     // named for the def it calls: a recursive `self` is `f()`
     let nm = lint_binding(st, call.callee);
     // Record what the callee's value is used for: a def whose value is
@@ -709,7 +750,12 @@ def lint_unused_call(st: LintSt, node: Node, used: bool, call: Call) -> long {
         let ri = parser.nameix_get(st.ridx, nm);
         if (ri >= 0) {
             st.rets[ri].called = true;
-            if (used) { st.rets[ri].used = true; };
+            if (used) {
+                st.rets[ri].used = true;
+                let ei = -1;
+                if (st.self != "") { ei = parser.nameix_get(st.ridx, st.self); };
+                lint_uses += { callee: ri, encl: ei, tail: st.tailflow };
+            };
         };
     };
     if (st.wlevel >= 1 && !used && lint_returns(st, call.callee)) {
@@ -723,6 +769,7 @@ def lint_unused_call(st: LintSt, node: Node, used: bool, call: Call) -> long {
 // else can be meant by it, and the statement is easy to miss. The
 // position says which expression it is.
 def lint_unused_expr(st: LintSt, node: Node, used: bool) -> long {
+    if (st.voidfn && st.tailflow) { return 0; };
     if (st.wlevel >= 1 && !used) {
         lint_warn_at(st, "the value computed here is not used", node);
     };
@@ -744,6 +791,7 @@ def lint_two(st: LintSt, a: Node, b: Node) -> long {
 def lint_id(st: LintSt, node: Leaf, used: bool) -> long {
     let name: str = node.v;
     lint_mark(st, name, 1);
+    if (st.voidfn && st.tailflow) { return 0; };
     let d = lint_disp(name);
     if (!used && d != "" && d != "none") {
         lint_warn_at(st, "the value of '" + d + "' is not used", node);
@@ -754,6 +802,7 @@ def lint_id(st: LintSt, node: Leaf, used: bool) -> long {
 def lint_un(st: LintSt, node: Un, used: bool) -> long {
     let e = node.e;
     lint_node(st, e, true);
+    if (st.voidfn && st.tailflow) { return 0; };
     if (!used && e.k != K.num) {
         lint_warn_at(st, "the result of '" + node.op + "' is not used", node);
     };
@@ -781,7 +830,7 @@ def lint_bin(st: LintSt, node: Bin, used: bool) -> long {
         res
     } else {
         lint_two(st, l, r);
-        if (!used) {
+        if (!used && !(st.voidfn && st.tailflow)) {
             let msg = "the result of '" + op + "' is not used";
             if (op == "==") {
                 msg = msg + "; did you mean '='?";
@@ -846,7 +895,7 @@ def lint_int_val(node: Node) -> long {
 };
 
 // The operator set that has a compound assignment.
-def lint_compound_op(op: str) -> bool {
+def lint_compound_op(op: str) -> void {
     op == "+" || op == "-" || op == "*" || op == "/" || op == "%" ||
     op == "&" || op == "|" || op == "^" || op == "<<" || op == ">>" || op == ">>>"
 };
@@ -2862,7 +2911,13 @@ def lint_func(st: LintSt, node: Func) -> void {
         i++;
     };
     let body: Block = node.body;
-    lint_stmts(st, body.stmts, true, false)
+    // A `-> void` def's body value is dropped, so its tail's calls are
+    // statements there: this is what a second --fix pass voids.
+    let wt = st.tailflow;
+    st.tailflow = true;
+    lint_stmts(st, body.stmts, !st.voidfn, false);
+    st.tailflow = wt;
+    0
 };
 
 def lint_decl(st: LintSt, node: Decl) -> long {
@@ -3078,14 +3133,14 @@ def lint_types(st: LintSt, stmts: [Node]) -> void {
     lint_report(st, t)
 };
 
-def lint_tw_list(t: LintTy, nodes: [Node]) -> long {
+def lint_tw_list(t: LintTy, nodes: [Node]) -> void {
     nodes.foreach((e) => {
         lint_tw(t, e);
     });
     0
 };
 
-def lint_tw(t: LintTy, node: Node) -> long {
+def lint_tw(t: LintTy, node: Node) -> void {
     let k: long = node.k;
     if (k == K.id || k == K.str || k == K.num) {
         0
@@ -3190,7 +3245,7 @@ def lint_tw(t: LintTy, node: Node) -> long {
     }
 };
 
-def lint_tw_one(t: LintTy, node: Node) -> long {
+def lint_tw_one(t: LintTy, node: Node) -> void {
     if (node.k == K.un) {
         let un: Un = node;
         lint_tw(t, un.e)
@@ -3206,14 +3261,14 @@ def lint_tw_one(t: LintTy, node: Node) -> long {
     }
 };
 
-def lint_tw_decl(t: LintTy, node: Decl) -> long {
+def lint_tw_decl(t: LintTy, node: Decl) -> void {
     if (node.kind != "def") {
         lint_root(t, node.typ, node.line, node.col, "");
     };
     lint_tw(t, node.v)
 };
 
-def lint_tw_func(t: LintTy, node: Func) -> long {
+def lint_tw_func(t: LintTy, node: Func) -> void {
     let line: long = node.line;
     let col: long = node.col;
     let ps = node.ptypes;
