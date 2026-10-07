@@ -690,3 +690,31 @@ two compilers (round 31 diffed y_syscall_entry, y_enter_user, y_enter_frame,
 y_syscall_entry_addr and y_cur_kstack_set), so what is miscompiled is the
 dispatcher or its setup on the Y side: y_sys_dispatch or syscall_init, both in
 std/kernel.y, as emitted by that commit's native.c.
+
+### Round 48: the pure emitter diff is only THREE semantic items
+
+Built the apples-to-apples comparison the earlier diffs were not: two C
+compilers that differ ONLY in src/c/native.c (the pristine pre-merge cycc_pre,
+and cycc_n = control + the merged native.c), both reading the SAME
+src/y/std/kernel.y and the same driver.  Their -S listings:
+
+* no routine is missing from the bad one -- the only labels it adds are the 16
+  y_gc_* cells (harmless .bss words);
+* y_sys_dispatch is present and BYTE-IDENTICAL (23 lines), as is y_enter_user;
+* the semantic differences are exactly three:
+    1. `mov %rsp, y_gc_stack_top(%rip)` added at the kernel program's main
+       (tested in round 33: suppressing it changes nothing);
+    2. the `ygiS_...CLK_TS` global-initializer range is DROPPED (the merged
+       emitter's link step deletes a dead cell's range -- CLK_TS's only reader
+       is clock_us, itself dead here);
+    3. `y_alloc(24)` became `y_alloc(32)` (the array header grew to its fourth
+       word; forcing 24 back in round 39 changed nothing).
+
+So no single one of them is the cause, and the bad configuration is still
+reproducible (control + merged native.c fails; control + old native.c works).
+The next step is therefore a bisect of exactly these three IN THAT
+configuration -- patch them out of the control's native.c copy one at a time
+(they are independent: a prologue push, a shake predicate, and a size constant)
+-- rather than any further source or commit hunting.  Note the size constant and
+the shake are the two that can interact with round 45's bump fix, which is why
+neither was a fix on its own.
