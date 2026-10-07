@@ -1517,3 +1517,31 @@ image has to arrive one of two ways:
 The second is the better fixture because it tests the FORMAT CONTRACT between
 mkfs and the kernel in one file; the first is the better harness feature.  Both
 are small.
+
+### Round 90: yfs_init verified at runtime, yfs_lookup NOT
+
+Built the format-contract fixture (a t* program that lays a YFS1 image into one
+page with 256-byte blocks and reads it back).  Result at runtime:
+
+    yfs true ino -1 n 0 c 00
+       ^init OK   ^lookup FAILED
+
+so the superblock path is exercised and correct -- "YFS1", version 1, block size
+and root inode are all read from the image, which is why yfs_init answers true
+and the block size is taken from the superblock rather than hard-wired -- while
+yfs_lookup returns -1 on an image whose root inode, entry count, entry block and
+entry bytes this program wrote itself, immediately before the call.
+
+The fixture was REMOVED rather than committed, and that is the round's real
+lesson: its .expected was captured from the failing run, so it "passed" while
+asserting `ino -1`.  Generating an expectation from a run proves nothing unless
+the run's OUTPUT is read first; that is the second time this run has bitten (the
+u006 fixture with `read -14`), and it is the reason the expectation is now checked
+by eye before it is committed.
+
+Next: debug yfs_lookup against this hand-built image.  The candidates, in order:
+the entry stride/offset (8 + name_len rounded to 4 vs the 8-byte header), whether
+kernel.peek8 inside os/kernel/yfs.y sees the same bytes the fixture wrote with
+kernel.poke_va8 (physical peek plus DIRECT_BASE versus a virtual poke -- at boot
+low memory is identity-mapped, so they agree, but that is worth confirming rather
+than assuming), and string indexing in a kernel program (name[i]).
