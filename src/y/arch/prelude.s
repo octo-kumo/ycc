@@ -1236,8 +1236,25 @@ ygc_sweep_chunk:
     mov 0(%rbx), %r13
     test %r13, %r13
     jz ygc_sweep_next
-ygc_sweep_block:
     mov 8(%rbx), %r10
+    mov %r10, (%rsp)
+    mov y_gc_threads(%rip), %rdx
+ygc_clamp_loop:
+    test %rdx, %rdx
+    jz ygc_clamp_done
+    mov 0(%rdx), %rax
+    cmp %r13, %rax
+    jb ygc_clamp_next
+    mov (%rsp), %rcx
+    cmp %rcx, %rax
+    jae ygc_clamp_next
+    mov %rax, (%rsp)
+ygc_clamp_next:
+    mov 80(%rdx), %rdx
+    jmp ygc_clamp_loop
+ygc_clamp_done:
+ygc_sweep_block:
+    mov (%rsp), %r10
     cmp %r10, %r13
     jae ygc_sweep_runend
     mov (%r13), %rax

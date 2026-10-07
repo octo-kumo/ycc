@@ -16,9 +16,9 @@
 # which a single-threaded collector still takes).
 hello.y 381
 minimal.y 440
-forloop.y 4069
-foreach.y 3905
+forloop.y 4110
+foreach.y 3946
 dead.y 1639
 alloc_once.y 1400
-foreach_local.y 3891
-foreach_capture.y 4573
+foreach_local.y 3932
+foreach_capture.y 4614

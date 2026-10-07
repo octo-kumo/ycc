@@ -7,7 +7,7 @@ y_threads_on:
     mov 24(%rcx), %rdx
     test %rdx, %rdx
     jne y_threads_on_done
-    mov $112, %rdi
+    mov $128, %rdi
     call y_alloc
     lea y_heap(%rip), %rcx
     mov (%rcx), %rdx
@@ -90,15 +90,14 @@ y_spawn:
 # at a ZERO header -- then read that pointer as a block header whose size runs
 # past the chunk (--gc-stress on t160_threads).
     mov %fs:24, %rcx
-    mov 40(%rcx), %rax
+    mov 112(%rcx), %rax
     test %rax, %rax
     je y_spawn_stack
-    mov 8(%rax), %rdx
-    mov %rdx, 40(%rcx)
-    mov 0(%rax), %rdx
+    mov 120(%rcx), %rdx
+    mov %rcx, %r9
     xor %ecx, %ecx
-    mov %rcx, 0(%rax)
-    mov %rcx, 8(%rax)
+    mov %rcx, 112(%r9)
+    mov %rcx, 120(%r9)
     mov %rax, 0(%r12)
     mov %rdx, 8(%r12)
 y_spawn_stack:
@@ -264,10 +263,8 @@ y_join_done:
 # nothing into the chunk: the collector still finds the zero header its walk
 # stops at.
     mov %fs:24, %rcx
-    mov %rax, 0(%rdi)
-    mov 40(%rcx), %rdx
-    mov %rdx, 8(%rdi)
-    mov %rdi, 40(%rcx)
+    mov %rdi, 112(%rcx)
+    mov %rax, 120(%rcx)
 y_join_value:
     mov 56(%rbx), %rax
     pop %rbx

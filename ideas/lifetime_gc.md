@@ -472,3 +472,27 @@ is the header write at `(%rdx)`, and `%rdx` came from `mov (%rcx),%rdx` -- the
 heap block's word 0, its `cur`. So the question stays exactly where round 29 put
 it: which writer leaves a registered thread's `cur` pointing at memory that is
 no longer its own, when the first `y_spawn` allocates a 128-byte tcb.
+
+## FIXED (round 32): the main thread's tcb is 128 bytes, not 112
+
+The bug behind every --gc-stress symptom was the main thread's own tcb being
+allocated 112 bytes by y_threads_on (`mov $112,%rdi; call y_alloc`) while the
+thread code needs word 14/15 (the spare {start, end} the spare-in-tcb change
+puts there) and the collector writes word 13 at 104. The 112-byte block is
+exactly 14 words, so the spare stores landed in whatever followed it, and the
+spare *reads* took garbage for a new thread's [cur, end). Round 23's "y_heap is
+32 bytes, so words 88/96/104 land on y_gc_meta_cur/end" was a misreading: after
+y_threads_on the main thread's tcb is a block of its own and y_heap is only the
+empty global block, which nothing writes past word 3. The real fix is one
+instruction -- y_threads_on allocates 128 -- together with the two changes that
+were already known to be needed:
+
+- the spare {start, end} lives in the joining thread's tcb (words 14/15), and
+  nothing is written into a joined thread's tail;
+- the sweep clamps each chunk's walk to the lowest registered thread `cur`
+  inside it, so a live bump tail is never free-listed.
+
+With all three, t160_threads passes under --gc-stress (and its normal run, and
+t341/t342/t343/t385/t389), which is the case that has resisted since round 15.
+Cost: the clamp is 41 bytes of collector code (forloop.y 4069 -> 4110), recorded
+in test/treeshake/shapes.txt.
