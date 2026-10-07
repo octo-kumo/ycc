@@ -379,3 +379,19 @@ bookkeeping (round 22), both of which write [start, end) or `end` at a block
 boundary. The round-24 attempt removed the join's write and still trapped (a
 different address), so either a second writer of the same shape exists or the
 live bump tail (round 19) is the second one -- both fixes are needed.
+
+## Round 26: the spare change breaks the queue fixture
+
+Re-applied the spare-in-tcb change on top of round 23's y_heap fix (128-byte
+tcb, words 14/15 zeroed, {tail start, tail end} kept in the joining thread's
+tcb, nothing written into the chunk). The allocation-thread fixtures pass
+(t385, t389) and t160's normal run is correct, but
+test/y/native/t343_threads_queue.y now *segfaults*, so the change is reverted
+again rather than landed. The spare handoff is load-bearing in a way still not
+understood: it decides which region a new thread bumps in, and the queue
+fixture's threads allocate after spawn, so a wrong [cur, end) there is fatal
+even though the tail write it removes was real. Two things to check next time:
+whether the tail a joined thread leaves is still reachable by the collector
+(it is not freed -- the walk stops at its zero header -- so with the write gone
+the region is reserved forever), and whether a *fresh* thread's tcb words 14/15
+are read before y_spawn's zeroing on every path (the fork path copies a tcb).
