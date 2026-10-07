@@ -1072,6 +1072,8 @@ def lint_short_chain(st: LintSt, node: Bin) -> long {
             allstr = false;
         };
     };
+    let fid = "";
+    if (l0.k == K.id) { let lid: Leaf = l0; fid = lint_disp(lid.v); };
     if (allint) {
         let lo = vals[0];
         let hi = vals[0];
@@ -1081,11 +1083,20 @@ def lint_short_chain(st: LintSt, node: Bin) -> long {
         });
         if (hi - lo + 1 == len(vals)) {
             lint_warn_at(st, "these equalities are a consecutive range; write a range comparison", node);
+            // the range form reads the first and last literals, so the
+            // chain has to be written in order
+            let ordered = true;
+            for i in 1..len(vals) {
+                if (vals[i] != vals[0] + i) { ordered = false; };
+            };
+            if (fid != "" && ordered) { lint_fix(st, "1.7", fb.l.line, fb.l.col, fid, ""); };
         } else {
             lint_warn_at(st, "these equalities test one value against a set; write one membership test", node);
+            if (fid != "") { lint_fix(st, "1.6", fb.l.line, fb.l.col, fid, "set"); };
         };
     } else if (allstr) {
         lint_warn_at(st, "these equalities test one value against a set of strings; write one membership test", node);
+        if (fid != "") { lint_fix(st, "1.6", fb.l.line, fb.l.col, fid, "str"); };
     };
     0
 };
@@ -1599,8 +1610,8 @@ def fx_split_comma(s: str) -> [str] {
     let cur = "";
     for i in 0..len(s) {
         let c = s[i];
-        if (c == 40 || c == 91 || c == 123) { d++; };
-        if (c == 41 || c == 93 || c == 125) { d--; };
+        if ([40, 91, 123].index(c) >= 0) { d++; };
+        if ([41, 93, 125].index(c) >= 0) { d--; };
         if (c == 44 && d == 0) { out += cur; cur = ""; } else { cur += s[i:i + 1]; };
     };
     out += cur;
@@ -2270,6 +2281,82 @@ def fx_void(ln: long, lines: [str]) -> [str] {
     lines
 };
 
+// The end of the literal starting at `s` (its first char), or -1.
+def fx_lit_end(line: str, s: long) -> long {
+    if (s >= len(line)) { return -1; };
+    let c = line[s];
+    if (c == 39 || c == 34) {
+        let j = s + 1;
+        while (j < len(line)) {
+            if (line[j] == 92) { j = j + 2; continue; };
+            if (line[j] == c) { return j + 1; };
+            j = j + 1;
+        };
+        return -1;
+    };
+    let j = s;
+    while (j < len(line) && (fx_ident(line[j]) || line[j] == 46)) { j = j + 1; };
+    if (j == s) { return -1; };
+    j
+};
+
+def fx_commas(a: [str]) -> str {
+    let out = "";
+    a.foreach((e, i) => {
+        if (i > 0) { out += ", "; };
+        out += e;
+    });
+    out
+};
+
+// 1.6/1.7: `x == A || x == B || x == C` (3+) is one range or one membership
+// test. `kind` is "set" (numbers or char literals) or "str" (1-char str
+// literals); 1.7 reads the first and last literals as written.
+def fx_chain(rule: str, name: str, kind: str, ln: long, col: long, lines: [str]) -> [str] {
+    if (ln < 1 || ln > len(lines)) { return lines; };
+    let line = lines[ln - 1];
+    let i = fx_find(line, name, col - 1);
+    if (i < 0) { return lines; };
+    let lits: [str] = [];
+    let j = i + len(name);
+    let end = j;
+    let go = true;
+    while (go) {
+        let eq = fx_ws(line, j);
+        if (eq + 1 >= len(line) || line[eq] != 61 || line[eq + 1] != 61) { return lines; };
+        let st = fx_ws(line, eq + 2);
+        let e = fx_lit_end(line, st);
+        if (e < 0) { return lines; };
+        lits += line[st:e];
+        end = e;
+        j = fx_ws(line, e);
+        if (j + 1 < len(line) && line[j] == 124 && line[j + 1] == 124) {
+            let nx = fx_ws(line, j + 2);
+            if (!fx_word(line, nx, name)) { return lines; };
+            j = nx + len(name);
+        } else {
+            go = false;
+        };
+    };
+    if (len(lits) < 3) { return lines; };
+    let rep = "";
+    if (rule == "1.7") {
+        rep = name + " >= " + lits[0] + " && " + name + " <= " + lits[len(lits) - 1];
+    } else if (kind == "set") {
+        rep = "[" + fx_commas(lits) + "].index(" + name + ") >= 0";
+    } else {
+        let chars = "";
+        for k in 0..len(lits) {
+            let t = lits[k];
+            if (len(t) != 3 || t[0] != 34 || t[2] != 34) { return lines; };
+            chars += t[1:2];
+        };
+        rep = "index_of(\"" + chars + "\", " + name + ") >= 0";
+    };
+    lines[ln - 1] = line[:i] + rep + line[end:];
+    lines
+};
+
 // The fixers, by rule. A rule with no case here stays a warning.
 def fx_one(rule: str, a: str, b: str, ln: long, col: long, lines: [str]) -> [str] {
     if (ln < 1 || ln > len(lines)) { return lines; };
@@ -2286,7 +2373,9 @@ def fx_one(rule: str, a: str, b: str, ln: long, col: long, lines: [str]) -> [str
     else if (rule == "2.3") { lines = fx_if_line(rule, b, ln, lines); }
     else if (rule == "2.2") { lines = fx_let_cond(ln, lines); }
     else if (rule == "3.6") { lines = fx_foreach_elem(a, b, ln, col, lines); }
-    else if (rule == "void") { lines = fx_void(ln, lines); };
+    else if (rule == "void") { lines = fx_void(ln, lines); }
+    else if (rule == "1.6") { lines = fx_chain(rule, a, b, ln, col, lines); }
+    else if (rule == "1.7") { lines = fx_chain(rule, a, b, ln, col, lines); };
     lines
 };
 

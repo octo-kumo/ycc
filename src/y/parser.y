@@ -111,7 +111,7 @@ def p_bin_hint(op: str, other: Node) -> Type {
     let ht = lit_type(other);
     if (ht.k != K.tnone) {
         if (op == "+" && ht.k == K.tstr) { out = { k: K.tstr }; }
-        else if (op == "+" || op == "-" || op == "*" || op == "/" || op == "%") {
+        else if (index_of("+-*/%", op) >= 0) {
             if (ht.k == K.tlong || ht.k == K.tbyte || ht.k == K.tfloat || ht.k == K.tbigint) {
                 if (ht.k == K.tfloat) { out = { k: K.tfloat }; }
                 else { out = { k: K.tlong }; };
@@ -2367,9 +2367,9 @@ def sync_stmt(toks: [Tok], p: long) -> long {
             if (depth == 0 && (v == ";" || v == "}")) {
                 go = false;
             } else {
-                if (v == "(" || v == "[" || v == "{") {
+                if (index_of("([{", v) >= 0) {
                     depth++;
-                } else if (v == ")" || v == "]" || v == "}") {
+                } else if (index_of(")]}", v) >= 0) {
                     if (depth > 0) { depth--; }
                 }
                 pos = pos + 1;

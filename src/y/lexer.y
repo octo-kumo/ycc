@@ -106,7 +106,7 @@ def lex_int_value(txt: str, radix: long) -> long {
 
 // A space, tab, newline or carriage return.
 def isspace(c: byte) -> bool {
-    c == ' ' || c == '\t' || c == '\n' || c == '\r'
+    [' ', '\t', '\n', '\r'].index(c) >= 0
 };
 
 // NOTE: these predicates keep the flat C spellings isdigit/isupper/islower/
@@ -303,11 +303,11 @@ def fstr_expr_end(src: str, lo: long) -> long {
         let c = src[i];
         if (c == '"' || c == '\'') {
             i = c == '"' && i > lo && src[i - 1] == 102 && (i - 1 == lo || !wordbyte(src[i - 2])) ? fstr_walk(src, i).end : lit_end(src, i, [0]);
-        } else if (c == '(' || c == '[' || c == '{') {
+        } else if (['(', '[', '{'].index(c) >= 0) {
             depth++;
             i = i + 1;
         } else if (depth > 0) {
-            if (c == ')' || c == ']' || c == '}') { depth--; }
+            if ([')', ']', '}'].index(c) >= 0) { depth--; }
             i = i + 1;
         } else if (c == '?' && i + 1 < n && src[i + 1] == 46) {
             // `?.` (option propagation) is one token and opens no ternary,
@@ -320,7 +320,7 @@ def fstr_expr_end(src: str, lo: long) -> long {
         } else if (c == ':' && tern > 0) {
             tern--;
             i = i + 1;
-        } else if (c == '}' || c == ':' || c == ',' || c == ';' || c == ')' || c == ']') {
+        } else if (['}', ':', ',', ';', ')', ']'].index(c) >= 0) {
             stop = i;
             go = false;
         } else {

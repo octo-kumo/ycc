@@ -3254,7 +3254,7 @@ def opassign_check(st: TcSt, node: OpAssign, tt: Type, vt: Type) -> TcRes {
             tc_res(tt, st)
         }
     } else if (tt.k == K.tbigint) {
-        if (op == "+" || op == "-" || op == "*" || op == "/" || op == "%") {
+        if (index_of("+-*/%", op) >= 0) {
             st = expect_type(st, vt, tt, "'" + op + "=' value", node.line, node.col);
             tc_res(tt, st)
         } else {
@@ -3333,7 +3333,7 @@ def fmt_spec(spec: str) -> FmtSpec {
 };
 
 def fmt_align(c: long) -> bool {
-    c == '<' || c == '>' || c == '^' || c == '='
+    ['<', '>', '^', '='].index(c) >= 0
 };
 
 def fmt_digit(c: long) -> bool {
@@ -3342,7 +3342,7 @@ def fmt_digit(c: long) -> bool {
 
 // s d x X o b c f F e E %
 def fmt_type(c: long) -> bool {
-    c == 's' || c == 'd' || c == 'x' || c == 'X' || c == 'o' || c == 'b'
+    ['s', 'd', 'x', 'X', 'o', 'b'].index(c) >= 0
     || c == 'c' || c == 'f' || c == 'F' || c == 'e' || c == 'E' || c == '%'
 };
 
@@ -3373,7 +3373,7 @@ def fmt_kind(t: Type) -> long {
 // sign, `#` or grouping, and `,` groups decimals only.
 def fmt_check(f: FmtSpec, kind: long, tname: str) -> str {
     let ty = f.ty;
-    let ints = ty == 'd' || ty == 'x' || ty == 'X' || ty == 'o' || ty == 'b' || ty == 'c';
+    let ints = ['d', 'x', 'X', 'o', 'b', 'c'].index(ty) >= 0;
     if (f.err != "") {
         f.err
     } else if (kind == 0) {
@@ -3391,7 +3391,7 @@ def fmt_check(f: FmtSpec, kind: long, tname: str) -> str {
         "a precision needs a float type (f, e or %), not an integer one"
     } else if (ty == 'c' && (f.sign != 0 || f.alt || f.grp != 0)) {
         "type 'c' takes no sign, '#' or grouping"
-    } else if (f.grp == ',' && (ty == 'x' || ty == 'X' || ty == 'o' || ty == 'b')) {
+    } else if (f.grp == ',' && (['x', 'X', 'o', 'b'].index(ty) >= 0)) {
         "',' does not group type '" + chr(ty) + "' (use '_')"
     } else {
         ""

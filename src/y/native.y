@@ -10516,7 +10516,7 @@ def gen_fmt(st: EmitSt, node: Call) -> EmitSt {
             st = fmt_push(st, f.prec);
             st = emit_insn(st, insn.F_CALL_L, lbl_new("y_fmt_s"), 0, 0, 0, 0, 0, 0);
             emit_insn(st, insn.F_ADD_I_R, 32, insn.R_RSP, 64, 0, 0, 0, 0)
-        } else if (ty == 'd' || ty == 'x' || ty == 'X' || ty == 'o' || ty == 'b' || ty == 'c') {
+        } else if (['d', 'x', 'X', 'o', 'b', 'c'].index(ty) >= 0) {
             st = gen(st, a0);
             st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
             st = fmt_push(st, code);

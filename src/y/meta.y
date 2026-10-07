@@ -289,7 +289,7 @@ def m_word(c: long) -> bool {
 };
 
 def m_blank(c: long) -> bool {
-    c == ' ' || c == '\t' || c == '\n' || c == '\r'
+    [' ', '\t', '\n', '\r'].index(c) >= 0
 };
 
 // The word at src[i], i known to be a word byte.
@@ -327,7 +327,7 @@ def m_prev(src: str, i: long) -> long {
 // bytes are dropped from G and its call hoisted (see sg_open and sg_mids_move).
 def m_token_end(c: long) -> bool {
     if (c == 0) { false }
-    else if (c == ')' || c == ']' || c == '}' || c == '.' || c == '\'' || c == '\"') { true }
+    else if ([')', ']', '}', '.', '\'', '\"'].index(c) >= 0) { true }
     else { m_word(c) }
 };
 
@@ -1251,7 +1251,7 @@ def sg_next(i: long, n: long) -> long {
     let found = false;
     while (j < n && !found) {
         let c = sg_src[j];
-        if (c == 35 || c == 34 || c == 39 || c == 47 || c == 123 || c == 125 || c == 59 || c == 10) {
+        if ([35, 34, 39, 47, 123, 125, 59, 10].index(c) >= 0) {
             found = true;
         } else if (sg_depth > 0 && m_word(c)) {
             found = true;
