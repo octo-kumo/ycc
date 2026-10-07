@@ -340,9 +340,7 @@ def rd32(b: [byte], at: long) -> long {
 };
 
 def rd64(b: [byte], at: long) -> long {
-    let lo = rd32(b, at);
-    let hi = rd32(b, at + 4);
-    lo + hi * 4294967296
+    (rd32(b, at)) + (rd32(b, at + 4)) * 4294967296
 };
 
 // One byte written into a byte array.
@@ -1266,8 +1264,7 @@ def sg_next(i: long, n: long) -> long {
 // `import` the caller must then not emit again.
 def sg_word(i: long, n: long) -> long {
     let k = i;
-    let go = true;
-    while (go && k < n && (sg_src[k] == 32 || sg_src[k] == 9 || sg_src[k] == 13)) {
+    while (true && k < n && (sg_src[k] == 32 || sg_src[k] == 9 || sg_src[k] == 13)) {
         k = k + 1;
     };
     if (k < n && m_word(sg_src[k])) {
@@ -1291,8 +1288,7 @@ def sg_word_go(w: str, after: long, n: long) -> long {
     // the first word of the statement in progress is what the reduction reads
     if (mg_reduce && sg_depth == 0) { sg_region_word(w) };
     let j = after;
-    let go = true;
-    while (go && j < n && (sg_src[j] == 32 || sg_src[j] == 9)) {
+    while (true && j < n && (sg_src[j] == 32 || sg_src[j] == 9)) {
         j = j + 1;
     };
     let called = j < n && (sg_src[j] == 40 || sg_src[j] == 123);
@@ -1372,8 +1368,7 @@ def mg_import_line(rest: str, dir: str) -> str {
         "import " + rest
     } else {
         let name = rest[:k];
-        let tail = rest[k + 6:];
-        let path = tail;
+        let path = (rest[k + 6:]);
         if (len(path) >= 2 && path[0:1] == "\"" && path[len(path) - 1:] == "\"") {
             let p = path[1:len(path) - 1];
             let full = p;
@@ -1621,8 +1616,7 @@ def sg_open(i: long, n: long) -> long {
             // its output is a stand-in to be thrown away (sg_bok), because the
             // enclosing block cannot produce its real text until the nested one
             // has. The round after, the nested block splices.
-            let helper = stmt ? "ycc_meta_stmt" : "ycc_meta_expr";
-            sg_gadd(helper + "(" + tostring(slot) + ", tostring({", sg_mmid);
+            sg_gadd((stmt ? "ycc_meta_stmt" : "ycc_meta_expr") + "(" + tostring(slot) + ", tostring({", sg_mmid);
             sg_col += 2;
         };
         let k = sg_word(i + 2, n);
@@ -1667,9 +1661,7 @@ def sg_top_close(k: long) -> void {
     let slot = sg_bslot[k];
     let stmt = sg_bstmt[k];
     if (sg_bok[k]) {
-        let helper = stmt ? "ycc_meta_stmt" : "ycc_meta_expr";
-        let post = stmt ? "}));" : "}))";
-        sg_restore(helper + "(" + tostring(slot) + ", tostring({", post)
+        sg_restore((stmt ? "ycc_meta_stmt" : "ycc_meta_expr") + "(" + tostring(slot) + ", tostring({", (stmt ? "}));" : "}))"))
     } else {
         // the stand-in: the held text is what cannot be compiled, so it goes
         // nowhere at all. The line counter goes back with it (sg_drop), and the
@@ -2332,8 +2324,7 @@ def mg_helpers() -> [str] {
 // body, so a hoisted module's own statements see the helpers.
 def meta_gtext() -> str {
     let out: [str] = [];
-    let hs = mg_helpers();
-    hs.foreach((e) => {
+    mg_helpers().foreach((e) => {
         out += e;
     });
     mg_imp.foreach((e) => {
@@ -2378,8 +2369,7 @@ def mg_unframe(data: str) -> void {
     let bad = false;
     while (i < n && !bad) {
         let j = i;
-        let go = true;
-        while (go && j < n && data[j] != 10) { j = j + 1; };
+        while (true && j < n && data[j] != 10) { j = j + 1; };
         if (j >= n) {
             bad = true;
         } else {
@@ -2492,8 +2482,7 @@ def mg_commit() -> void {
 // around it still compiles and still type-checks exactly as it did. Its piece is
 // "0", and mg_commit throws that away with everything else.
 def mg_stub(slot: long, stmt: bool) -> str {
-    let helper = stmt ? "ycc_meta_stmt" : "ycc_meta_expr";
-    let s = helper + "(" + tostring(slot) + ", tostring({ 0 }))";
+    let s = (stmt ? "ycc_meta_stmt" : "ycc_meta_expr") + "(" + tostring(slot) + ", tostring({ 0 }))";
     if (stmt) { s += ";" };
     s
 };
@@ -2613,8 +2602,7 @@ def mg_emit(segs: [str], sego: [long], segp: [bool], fid: long, nl: [str],
         let o = sego[s];
         let p = false;
         if (s < len(segp)) { p = segp[s] };
-        let parts = mg_lines(text);
-        parts.foreach((e, k) => {
+        mg_lines(text).foreach((e, k) => {
             if (k == 0) {
                 // this part joins the line being built: it is that line's
                 // first text if it is empty, and joins the rest otherwise
@@ -2680,8 +2668,7 @@ def mg_splice_line(line: str, ol: long, at: long, lo: long, hi: long,
             segs += line[prev:o];
             sego += ol;
             segp += false;
-            let s = mg_bslot[k];
-            segs += mg_piece[s];
+            segs += mg_piece[mg_bslot[k]];
             sego += mg_bline[k];
             segp += true;
             prev = o;

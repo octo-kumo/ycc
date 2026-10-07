@@ -214,8 +214,7 @@ def unescape(raw: str, braces: bool) -> str {
     // a chunk list + join (O(n))
     let chunks: [str] = [];
     let k = 0;
-    let rn = len(raw);
-    while (k < rn) {
+    while (k < len(raw)) {
         let rc = raw[k:k + 1];
         if (rc == "\\") {
             let esc = raw[k + 1:k + 2];
@@ -334,8 +333,7 @@ def fstr_blank(src: str, lo: long, hi: long) -> bool {
     let i = lo;
     let blank = true;
     while (blank && i < hi) {
-        let c = src[i];
-        blank = isspace(c);
+        blank = isspace(src[i]);
         i = i + 1;
     };
     blank
@@ -870,8 +868,7 @@ def tokenize(src: str) -> [Tok] {
                             open = false;
                             closed = true;
                         } else {
-                            let ch = src[i:i + 1];
-                            if (ch == "\n") { line++; col = 1; }
+                            if ((src[i:i + 1]) == "\n") { line++; col = 1; }
                             else { col++; };
                             i++;
                         };

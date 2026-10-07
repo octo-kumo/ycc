@@ -21,8 +21,14 @@ The shortening rules are off by default and reported by `ycc -W 2`
 are the default level 0.
 
 Implemented so far (level 2): 1.1-1.7, 1.9 (2.7 is its condition form),
-1.8, 2.1-2.6, 2.8, 2.11, 3.1, 3.5, 3.6, 5.1, plus level 1's
+1.8, 2.1-2.6, 2.8, 2.10-2.12, 3.1, 3.5, 3.6, 5.1, plus level 1's
 dropped-value checks as a `-> void` fix. The rest is the plan.
+
+Level 1's dropped-value check is deliberately RELAXED: it fires only when
+NO call reads the def's value. A def read at one call site and ignored at
+another is a value-returning def used for effect, and dropping a value is
+then a choice, not a mistake -- the code is what it should be, so the
+rule gives way rather than the code.
 
 1.4's fix is deliberately not offered: `s[i:i+1]` is `""` past the end
 where `s[i]` traps, and the compiler crashed on `e91_format_specs.y`
@@ -208,6 +214,17 @@ when the fixer rewrote the lexer's own bounds checks (round 9).
   captured by a closure; the declaration is `const` and its name documents
   the value; the read is inside a loop and `E` is not loop-invariant.
 - The tail case is worth its own line: `let x = E; return x;` → `return E;`.
+
+### 2.10 A variable read once
+- **Instead** `let x = E;` then the next statement reads `x` once.
+- **Write** `(E)` there and drop the binding.
+- **Detect** an UNWRITTEN `let` whose read count is 1, whose single read
+  is the next (non-blank) line, and which is never assigned.
+- **Skip** the `let` has a written type (`let n: Node = dot;` is a cast,
+  and inlining would lose it); the read is on the same line; the binding
+  is an `if let` pattern.
+- **Fix** replace the read with `(E)` (parenthesized unless `E` is a
+  primary), then delete the `let`.
 
 ### 2.11 `none` test into `if let`
 - **Instead** `let x = E; if (x == none) { A } else { B }` where `B` reads

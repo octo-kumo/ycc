@@ -17,6 +17,7 @@ def main() -> long {
     if (flag != true) { print(0); }; // expect-warning: 'flag != true' can be written '!flag'
     let buf = s;
     if ((buf == s) == true) { print(1); }; // expect-warning: a comparison against true or false is the value itself, or its negation
+    print(len(buf));
     0
 };
 exit(main());

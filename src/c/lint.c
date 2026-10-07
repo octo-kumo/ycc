@@ -175,6 +175,9 @@ static Yv *lint_cat(size_t n, ...) {
 /* Which lines are a module's (rename.c rename_program_x): line i + 1 is
  * in file lint_ofile[i], module lint_fmods of it ("" for none). */
 static Yv *lint_ofile;
+/* A call whose value is dropped; emitted after the walk (a def whose value
+ * is read somewhere is a value-returning def, and ignoring it is a choice). */
+static Yv *lint_drops;
 static Yv *lint_fmods;
 
 /* The warnings for one unit: `ast` as parsed, `ast3` renamed (and
@@ -187,6 +190,7 @@ static Yv *lint_fmods;
 Yv *lint_unit(Yv *ast, Yv *ast3, Yv *ofile, Yv *fmods, ylong wlevel, Yv *ogen) {
     lint_ofile = ofile;
     lint_fmods = fmods;
+    lint_drops = yav(0);
     Yv *warns = yav(0);
     Yv *vars = yav(0);
     Yv *flags = yav(0);
@@ -205,6 +209,19 @@ Yv *lint_unit(Yv *ast, Yv *ast3, Yv *ofile, Yv *fmods, ylong wlevel, Yv *ogen) {
     };
     (void)lint_vars(st);
     (void)lint_types(st, yr_get(ast, "stmts"));
+    /* Level 1: a dropped call, but only for a def no call reads. */
+    for (ylong i = 0; i < yv_len(lint_drops); i++) {
+        Yv *dr = ya_get(lint_drops, i);
+        ylong ci = yv_l(yr_get(dr, "callee"));
+        if (yv_l(yr_get(ya_get(rets, ci), "used")) == 0) {
+            (void)lint_warn(st,
+                            lint_cat(3, ys("the value of '"),
+                                     yr_get(dr, "name"),
+                                     ys("()' is not used")),
+                            yv_l(yr_get(dr, "line")),
+                            yv_l(yr_get(dr, "col")));
+        }
+    }
     return lint_sorted(yr_get(st, "warns"));
 }
 
@@ -731,9 +748,9 @@ static ylong lint_rets_node(LintSt st, Yv *node) {
                 (void)nameix_put(yr_get(st, "ridx"), name,
                                  yv_len(yr_get(st, "rets")));
                 (void)ya_push(yr_get(st, "rets"),
-                              yr(4, "name", name, "ret", yr_get(v, "ret"),
+                              yr(5, "name", name, "ret", yr_get(v, "ret"),
                                  "line", yr_get(node, "line"), "col",
-                                 yr_get(node, "col")));
+                                 yr_get(node, "col"), "used", yv_long(0)));
             }
             return lint_rets(st, yr_get(v, "defs"));
         } else {
@@ -809,15 +826,24 @@ static ylong lint_def_body(LintSt st, Yv *name, Yv *v) {
 /* Level 1: a call whose result nobody reads, when the callee hands one
  * back. The message names the function the way the source spells it. */
 static ylong lint_unused_call(LintSt st, Yv *node, int used, Yv *call) {
-    if (yv_l(yr_get(st, "wlevel")) >= 1 && !used &&
-        lint_returns(st, yr_get(call, "callee"))) {
-        /* named for the def it calls: a recursive `self` is `f()` */
-        (void)lint_warn_at(
-            st,
-            lint_cat(3, ys("the value of '"),
-                     lint_disp(lint_binding(st, yr_get(call, "callee"))),
-                     ys("()' is not used")),
-            node);
+    Yv *nm = lint_binding(st, yr_get(call, "callee"));
+    if (!ys_eq_lit(nm, "")) {
+        ylong ri = nameix_get(yr_get(st, "ridx"), nm);
+        if (ri >= 0) {
+            Yv *r = ya_get(yr_get(st, "rets"), ri);
+            if (used) {
+                (void)yr_set(r, "used", yv_long(1));
+            } else if (yv_l(yr_get(st, "wlevel")) >= 1 &&
+                       lint_returns(st, yr_get(call, "callee"))) {
+                if (lint_drops == NULL) {
+                    lint_drops = yav(0);
+                }
+                (void)ya_push(lint_drops,
+                              yr(4, "callee", yv_long(ri), "line",
+                                 yr_get(node, "line"), "col",
+                                 yr_get(node, "col"), "name", lint_disp(nm)));
+            }
+        }
     }
     return 0;
 }

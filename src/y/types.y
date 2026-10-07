@@ -135,8 +135,7 @@ def has_free(t: Type) -> bool {
         let found = false;
         let i = 0;
         while (!found && i < len(fs)) {
-            let f = fs[i];
-            if (self(f.typ)) { found = true; };
+            if (self(fs[i].typ)) { found = true; };
             i++;
         };
         found
@@ -181,8 +180,7 @@ def ret_pending(t: Type) -> bool {
 def ret_unknown(t: Type) -> bool {
     if (t.k != K.tfunc) { false } else {
         let ftype: TFunc = t;
-        let r = ftype.ret;
-        r.k == K.tpend
+        ftype.ret.k == K.tpend
     }
 };
 
@@ -410,8 +408,7 @@ def str_sorted(xs: [str]) -> [str] {
 def rec_names(fs: [Field]) -> [str] {
     let names: [str] = [];
     for i in 0..len(fs) {
-        let f = fs[i];
-        names += f.name;
+        names += fs[i].name;
     };
     str_sorted(names)
 };
@@ -561,8 +558,7 @@ def teq_fields(af: [Field], bf: [Field], i: long) -> bool {
         let j = field_pos(bf, an, i);
         if (j < 0) { false }
         else {
-            let fb = bf[j];
-            if (teq(fa.typ, fb.typ)) { teq_fields(af, bf, i + 1) } else { false }
+            if (teq(fa.typ, bf[j].typ)) { teq_fields(af, bf, i + 1) } else { false }
         }
     }
 };
@@ -573,14 +569,12 @@ def teq_fields(af: [Field], bf: [Field], i: long) -> bool {
 def field_pos(fs: [Field], name: str, hint: long) -> long {
     let found = -1;
     if (hint < len(fs)) {
-        let fh = fs[hint];
-        let hn: str = fh.name;
+        let hn: str = fs[hint].name;
         if (hn == name) { found = hint; }
     }
     let i = 0;
     while (found < 0 && i < len(fs)) {
-        let f = fs[i];
-        let fnm: str = f.name;
+        let fnm: str = fs[i].name;
         if (fnm == name) { found = i; }
         i++;
     };
@@ -676,8 +670,7 @@ def tuple_typs(fs: [Field]) -> [Type] {
             out += { k: K.tunk };
         };
         foreach (f in fs) {
-            let ix = tuple_field_no(f.name);
-            out[ix] = f.typ;
+            out[tuple_field_no(f.name)] = f.typ;
         };
     };
     out
@@ -712,8 +705,7 @@ def tstr_go(t: Type) -> str {
     else if (t.k == K.trec) {
         let rec: TRec = t;
         let fs: [Field] = rec.fields;
-        let tn = tuple_n(fs);
-        if (tn >= 0) {
+        if (tuple_n(fs) >= 0) {
             let tys = tuple_typs(fs);
             let tparts: [str] = [];
             tys.foreach((e) => {
@@ -833,8 +825,7 @@ def type_names(t: Type) -> [str] {
     if (tk == K.trec || is_boxable_type(unfold(t))) {
         let fs: [Field] = member_fields(t);
         for i in 0..len(fs) {
-            let f = fs[i];
-            out += f.name;
+            out += fs[i].name;
         };
     } else if (tk == K.tpat) {
         let pat: TPat = t;
@@ -1187,8 +1178,7 @@ def lookup(bindings: [Binding], name: str) -> Lookup {
     if (tc_ixn == 0) { stop = -1; };
     let at = -1;
     while (i >= 0 && i > stop) {
-        let e = bindings[i];
-        if (e.name == name) { at = i; i = -1; };
+        if (bindings[i].name == name) { at = i; i = -1; };
         i = i - 1;
     };
     if (at < 0 && i >= 0) {
@@ -1196,8 +1186,7 @@ def lookup(bindings: [Binding], name: str) -> Lookup {
             at = parser.nameix_get(tc_ix, name);
         } else {
             while (i >= 0) {
-                let e = bindings[i];
-                if (e.name == name) { at = i; i = -1; };
+                if (bindings[i].name == name) { at = i; i = -1; };
                 i = i - 1;
             };
         };
@@ -2028,8 +2017,7 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
             } else {
                 // general base (`&grid[0][i]`, `&rec.v[i]`): an element
                 // address of any array expression.
-                let barr = arr;
-                let br = typeof_expr(st, barr);
+                let br = typeof_expr(st, arr);
                 st = br.st;
                 if (br.typ.k == K.tarrfix || br.typ.k == K.tarr) {
                     let r = typeof_expr(st, ix);
@@ -2139,24 +2127,20 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
         let saved_loops = st.loops;
         let saved_fd = st.loop_fd;
         st = st_loop(st, saved_loops + 1, st.fdepth);
-        let b = typeof_block(st, loop.body);
-        st = st_unloop(b.st, saved_loops, saved_fd);
+        st = st_unloop((typeof_block(st, loop.body)).st, saved_loops, saved_fd);
         tc_res(type_node({ k: K.tvoid }), st)
     } else if (k == K.kw_for) {
         let loop: For = node;
         // for (init; cond; step) body — init/step are statements, and the
         // loop variable stays visible afterwards (same scope rule as `let`).
-        let fi = typeof_expr(st, loop.init);
-        st = fi.st;
+        st = (typeof_expr(st, loop.init)).st;
         let fc = typeof_expr(st, loop.cond);
         st = expect_type(fc.st, fc.typ, type_node({ k: K.tbool }), "'for' condition", loop.line, loop.col);
         let saved_loops = st.loops;
         let saved_fd = st.loop_fd;
         st = st_loop(st, saved_loops + 1, st.fdepth);
-        let fb = typeof_block(st, loop.body);
-        st = st_unloop(fb.st, saved_loops, saved_fd);
-        let fs = typeof_expr(st, loop.step);
-        tc_res(type_node({ k: K.tvoid }), fs.st)
+        st = st_unloop((typeof_block(st, loop.body)).st, saved_loops, saved_fd);
+        tc_res(type_node({ k: K.tvoid }), (typeof_expr(st, loop.step)).st)
     } else if (k == K.kw_foreach) {
         let loop: Foreach = node;
         // foreach (x in arr) body — x takes the array's element type.
@@ -2173,8 +2157,7 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
         let saved_loops = st.loops;
         let saved_fd = st.loop_fd;
         st = st_loop(st, saved_loops + 1, st.fdepth);
-        let fbb = typeof_block(st, loop.body);
-        st = st_unloop(fbb.st, saved_loops, saved_fd);
+        st = st_unloop((typeof_block(st, loop.body)).st, saved_loops, saved_fd);
         tc_res(type_node({ k: K.tvoid }), st)
     } else if (k == K.forrange) {
         let loop: ForRange = node;
@@ -2187,8 +2170,7 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
         let saved_loops = st.loops;
         let saved_fd = st.loop_fd;
         st = st_loop(st, saved_loops + 1, st.fdepth);
-        let rb = typeof_block(st, loop.body);
-        st = st_unloop(rb.st, saved_loops, saved_fd);
+        st = st_unloop((typeof_block(st, loop.body)).st, saved_loops, saved_fd);
         tc_res(type_node({ k: K.tvoid }), st)
     } else if (k == K.block) {
         let block: Block = node;
@@ -2461,8 +2443,7 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
                 st = expect_type(st, r.typ, type_node({ k: K.tlong }), "string index", index.line, index.col);
                 tc_res(type_node({ k: K.tbyte }), st)
             } else if (unfold(got.typ).k == K.tunk || unfold(got.typ).k == K.tnone || unfold(got.typ).k == K.tname) {
-                let r = typeof_expr(st, index.idx);
-                st = r.st;
+                st = (typeof_expr(st, index.idx)).st;
                 tc_res(t_unk(), st)
             } else {
                 st = fail(st, "cannot index " + tstr(got.typ) + " (only arrays and maps)", index.line, index.col);
@@ -2497,8 +2478,7 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
             } else if (unfold(br.typ).k == K.tunk || unfold(br.typ).k == K.tnone || unfold(br.typ).k == K.tname) {
                 // poison quietly (tcompat law) — the missing annotation
                 // reports at its own site.
-                let ri = typeof_expr(st, index.idx);
-                st = ri.st;
+                st = (typeof_expr(st, index.idx)).st;
                 tc_res(t_unk(), st)
             } else if (unfold(br.typ).k == K.tvoid && (barr.k == K.kw_if || barr.k == K.block)) {
                 // An `if` or a block in expression position, with no value:
@@ -2580,8 +2560,7 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
         } else {
             // General object (`a[0].f = v`, `x.y.f = v`): the object
             // expression's static type must be a record with the field.
-            let dobj2 = assign.obj;
-            let obr = typeof_expr(st, dobj2);
+            let obr = typeof_expr(st, assign.obj);
             st = obr.st;
             if (obr.typ.k == K.trec) {
                 let ft = trec_field_type(obr.typ, assign.key);
@@ -2641,8 +2620,7 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
         } else {
             // General base (`grid[0][1] = v`, `rec.v[i] = v`): the base
             // expression's static type must be an array of the value type.
-            let barr = assign.arr;
-            let br = typeof_expr(st, barr);
+            let br = typeof_expr(st, assign.arr);
             st = br.st;
             if (unfold(br.typ).k == K.tarrfix || unfold(br.typ).k == K.tarr) {
                 let ix = typeof_expr(st, assign.idx);
@@ -2667,10 +2645,8 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
             } else if (unfold(br.typ).k == K.tunk || unfold(br.typ).k == K.tnone || unfold(br.typ).k == K.tname) {
                 // poison quietly (tcompat law) — the missing annotation
                 // reports at its own site.
-                let ix = typeof_expr(st, assign.idx);
-                st = ix.st;
-                let v = typeof_expr(st, assign.v);
-                st = v.st;
+                st = (typeof_expr(st, assign.idx)).st;
+                st = (typeof_expr(st, assign.v)).st;
                 tc_res(t_unk(), st)
             } else {
                 st = fail(st, "cannot index " + tstr(br.typ) + " (only arrays and maps)", assign.line, assign.col);
@@ -2688,8 +2664,7 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
         if (len(elems) == 0) {
             tc_res(type_node({ k: K.tarr, of: t_free() }), st)
         } else {
-            let e0 = elems[0];
-            let r0 = typeof_expr(st, e0);
+            let r0 = typeof_expr(st, elems[0]);
             st = r0.st;
             if (r0.typ.k == K.tnone) {
                 tc_res(type_node({ k: K.tarr, of: t_unk() }), st)
@@ -2783,8 +2758,7 @@ def typeof_rectest(st: TcSt, node: Narrow) -> TcRes {
     } else if (sk == K.tunk) {
     } else if (sk == K.trec || sk == K.tunion) {
         if (tk == K.tpat) {
-            let nt = narrow_type(s, t);
-            if (nt.k == K.tunk) {
+            if ((narrow_type(s, t)).k == K.tunk) {
                 st = fail(st, "no record in " + tstr(s) + " has the fields of pattern " + tstr(t), node.line, node.col);
             }
         } else if (!pattern_fits(s, t)) {
@@ -2801,8 +2775,7 @@ def typeof_rectest(st: TcSt, node: Narrow) -> TcRes {
 def pattern_fits(s: Type, t: Type) -> bool {
     let sk: long = s.k;
     if (sk == K.tunion) {
-        let m = union_member(s, t);
-        m.k != K.tnone
+        (union_member(s, t)).k != K.tnone
     } else {
         teq(s, t)
     }
@@ -3060,8 +3033,7 @@ def typeof_method(st: TcSt, node: Call, m: str) -> TcRes {
         if (m == "length") { hint = " ('.length' is a property: no parentheses)"; };
         st = fail(st, "str has no method '" + m + "'" + hint, node.line, node.col);
         for i in 0..na {
-            let r = typeof_expr(st, margs[i]);
-            st = r.st;
+            st = (typeof_expr(st, margs[i])).st;
         };
         tc_res(t_unk(), st)
     } else if (na < sm.nreq || na > np) {
@@ -3069,8 +3041,7 @@ def typeof_method(st: TcSt, node: Call, m: str) -> TcRes {
         if (sm.nreq < np) { want = tostring(sm.nreq) + " or " + tostring(np); };
         st = fail(st, what + " takes " + want + " args, got " + tostring(na), node.line, node.col);
         for i in 0..na {
-            let r = typeof_expr(st, margs[i]);
-            st = r.st;
+            st = (typeof_expr(st, margs[i])).st;
         };
         tc_res(sm.ret, st)
     } else {
@@ -3119,8 +3090,7 @@ def const_root(st: TcSt, tgt: Node) -> str {
     let k: long = tgt.k;
     if (k == K.id) {
         let id: Leaf = tgt;
-        let got = lookup(st.bindings, id.v);
-        if (got.kind == "const") { id.v } else { "" }
+        if ((lookup(st.bindings, id.v)).kind == "const") { id.v } else { "" }
     } else if (k == K.index) {
         let index: Index = tgt;
         const_root(st, index.arr)
@@ -3725,8 +3695,7 @@ def typeof_arr_method(st: TcSt, node: Call, key: str, at: Type) -> TcRes {
     } else {
         st = fail(st, "array has no method '" + key + "'", node.line, node.col);
         for i in 0..na {
-            let r = typeof_expr(st, args[i]);
-            st = r.st;
+            st = (typeof_expr(st, args[i])).st;
         };
         tc_res(t_unk(), st)
     }
@@ -3808,8 +3777,7 @@ def typeof_call_go(st: TcSt, node: Call) -> TcRes {
         } else {
             st = fail(st, "cannot call " + tstr(cf.typ) + " (not a function)", node.line, node.col);
             for i in 0..len(node.args) {
-                let r = typeof_expr(st, cargs[i]);
-                st = r.st;
+                st = (typeof_expr(st, cargs[i])).st;
             };
             tc_res(t_unk(), st)
         }
@@ -4073,8 +4041,7 @@ def typeof_call_go(st: TcSt, node: Call) -> TcRes {
                 st = fail(st, "typeof takes exactly 1 argument", node.line, node.col);
                 tc_res(t_unk(), st)
             } else {
-                let r = typeof_expr(st, cargs[0]);
-                st = r.st;
+                st = (typeof_expr(st, cargs[0])).st;
                 tc_res(type_node({ k: K.tstr }), st)
             }
         } else if (name == "index_of" || name == "last_index_of") {
@@ -4387,8 +4354,7 @@ def typeof_call_go(st: TcSt, node: Call) -> TcRes {
                 // `.v` is not a field every Node has, and reading it through
                 // one is what the union layout rules forbid.
                 let nm: Leaf = cargs[0];
-                let r0 = typeof_expr(st, cargs[0]);
-                st = r0.st;
+                st = (typeof_expr(st, cargs[0])).st;
                 if (!os_call_name(nm.v)) {
                     st = fail(st, "os_call: '" + nm.v + "' is not a call name (see os_call_names)",
                               node.line, node.col);
@@ -4421,8 +4387,7 @@ def typeof_call_go(st: TcSt, node: Call) -> TcRes {
             let maxargs = 7;
             if (target_is_windows()) { maxargs = 10; };
             if (len(cargs) < 1 || len(cargs) > maxargs) {
-                let m = tostring(maxargs - 1);
-                st = fail(st, "syscall needs 1-" + tostring(maxargs) + " arguments (number + up to " + m + " args)", node.line, node.col);
+                st = fail(st, "syscall needs 1-" + tostring(maxargs) + " arguments (number + up to " + (tostring(maxargs - 1)) + " args)", node.line, node.col);
                 tc_res(type_node({ k: K.tlong }), st)
             } else {
                 cargs.foreach((e, i) => {
@@ -4490,8 +4455,7 @@ def typeof_call_go(st: TcSt, node: Call) -> TcRes {
             } else if (ret_pending(ft)) {
                 st = fail(st, "'" + disp(name) + "' is used before its return type is known (annotate it)", node.line, node.col);
                 cargs.foreach((e) => {
-                    let r = typeof_expr(st, e);
-                    st = r.st;
+                    st = (typeof_expr(st, e)).st;
                 });
                 tc_res(t_unk(), st)
             } else if (ft.k != K.tfunc) {
@@ -4499,8 +4463,7 @@ def typeof_call_go(st: TcSt, node: Call) -> TcRes {
                 // cascade new errors, but still check the arguments for
                 // their own errors.
                 cargs.foreach((e) => {
-                    let r = typeof_expr(st, e);
-                    st = r.st;
+                    st = (typeof_expr(st, e)).st;
                 });
                 tc_res(t_unk(), st)
             } else {
@@ -4996,8 +4959,7 @@ def typeof_def(st: TcSt, name: str, func: Func, line: long, col: long, nline: lo
             let rsrc = "the end of the body";
             let ri = 0;
             while (ri < len(rets)) {
-                let rn = rets[ri];
-                let rt = rn.typ;
+                let rt = rets[ri].typ;
                 if (br.k == K.tunk && rt.k != K.tunk && rt.k != K.tnone) {
                     br = rt;
                     rsrc = "the first 'return'";
@@ -5128,8 +5090,7 @@ def check_program(ast: Block, ext: [Sym]) -> [Diag] {
     defs.foreach((e) => {
         st = st_bind(st, e.name, e.typ, "func", 0 - 1, 0 - 1);
     });
-    let r = typeof_block(st, ast);
-    r.st.errors
+    (typeof_block(st, ast)).st.errors
 };
 
 def def_sig(name: str, func: Func) -> Field {

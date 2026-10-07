@@ -41,8 +41,7 @@ embed WSELFTEST_ASM from "./arch/wselftest.s";
 //     the same test for the price of one.
 def arch_asm_lines(text: str) -> [str] {
     let out: [str] = [];
-    let all = text.split("\n");
-    all.foreach((l) => {
+    (text.split("\n")).foreach((l) => {
         if (len(l) > 0 && l[0] != 35) { out += l; };
     });
     out
@@ -182,8 +181,7 @@ def w_iat_term_label(dll: str) -> str { "y_iatz_" + dll };
 // over whatever does live there.
 def w_iat_bss_lines() -> [str] {
     let out: [str] = [];
-    let imps = w_imports();
-    imps.foreach((e) => {
+    w_imports().foreach((e) => {
         for f in 0..len(e.funcs) {
             out += w_iat_label(e.funcs[f]) + ":\n.zero 8\n";
         };
@@ -435,8 +433,7 @@ def arch_win_sub(lines: [str], blocks: [[str]]) -> [str] {
 def arch_win_split(out: [str]) -> [str] {
     let res: [str] = [];
     out.foreach((el) => {
-        let parts = split(el, "\n");
-        parts.foreach((e) => {
+        (split(el, "\n")).foreach((e) => {
             if (len(e) > 0) { res += e; };
         });
     });

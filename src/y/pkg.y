@@ -686,8 +686,7 @@ def pk_lock_read(dir: str) -> [PkLock] {
     let file = pk_join(dir, "y.lock");
     let txt = fs.read_file(file);
     if (txt != none) {
-        let ents = pk_toml(unwrap(txt), file);
-        ents.foreach((e) => {
+        (pk_toml(unwrap(txt), file)).foreach((e) => {
             if (e.tab == "package" && e.n >= 0) {
                 while (len(out) <= e.n) {
                     out += { name: "", git: "", rev: "", commit: "" };
@@ -747,15 +746,13 @@ def pk_lock_write(dir: str, nodes: [PkNode]) -> void {
 // ── ycc vendor ──────────────────────────────────────────────────────────
 
 def pk_vendor(dir: str) -> void {
-    let g = pk_load(dir);
-    let ps = g.pkgs;
+    let ps = pk_load(dir).pkgs;
     let n = 0;
     ps.foreach((p) => {
         if (len(p.git) > 0) {
             let vd = pk_join(dir, "vendor/" + p.name);
             if (p.dir != vd) {
-                let cmd = pk_env() + "mkdir -p " + pk_q(pk_join(dir, "vendor")) + " && rm -rf " + pk_q(vd) + " && cp -R " + pk_q(p.dir) + " " + pk_q(vd) + " && rm -rf " + pk_q(vd + "/.git");
-                if (exec(cmd) != 0) { pk_die("vendoring '" + p.name + "' failed"); }
+                if (exec((pk_env() + "mkdir -p " + pk_q(pk_join(dir, "vendor")) + " && rm -rf " + pk_q(vd) + " && cp -R " + pk_q(p.dir) + " " + pk_q(vd) + " && rm -rf " + pk_q(vd + "/.git"))) != 0) { pk_die("vendoring '" + p.name + "' failed"); }
             }
             eputs("vendored " + p.name + " (" + vd + ")\n");
             n++;

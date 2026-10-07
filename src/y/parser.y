@@ -277,23 +277,19 @@ def tt(toks: [Tok], p: long) -> str {
     // `toks[p].t` parses fine today (index-then-dot is an ordinary postfix
     // chain — see parse_postfix), but it is a one-read-per-peek either way,
     // so every helper below keeps this shape.
-    let tok = toks[tclamp(toks, p)];
-    tok.t
+    (toks[tclamp(toks, p)]).t
 };
 def tv(toks: [Tok], p: long) -> str {
     // NOTE: bound once (see tt note).
-    let tok = toks[tclamp(toks, p)];
-    tok.v
+    (toks[tclamp(toks, p)]).v
 };
 def tline(toks: [Tok], p: long) -> long {
     // NOTE: bound once (see tt note).
-    let tok = toks[tclamp(toks, p)];
-    tok.line
+    (toks[tclamp(toks, p)]).line
 };
 def tcol(toks: [Tok], p: long) -> long {
     // NOTE: bound once (see tt note).
-    let tok = toks[tclamp(toks, p)];
-    tok.col
+    (toks[tclamp(toks, p)]).col
 };
 
 def is_kw(toks: [Tok], p: long, w: str) -> bool {
@@ -623,8 +619,7 @@ def parse_json_primary(toks: [Tok], p: long, top: bool) -> Parsed {
         let a = parse_json_array(toks, p + 1);
         res(json_call1("jarr", a.node, ln, cl), a.pos)
     } else {
-        let ce = json_err("expected '{' or '[' after 'json'", ln, cl);
-        res(ce, p)
+        res((json_err("expected '{' or '[' after 'json'", ln, cl)), p)
     }
 };
 
@@ -948,15 +943,13 @@ def parse_postfix(toks: [Tok], p: long) -> Parsed {
             if (node.k == K.err) { go = false; }
         } else if (is_op(toks, pos, ".")) {
             if (is_name_tok(toks, pos + 1)) {
-                let name = tv(toks, pos + 1);
-                node = { k: K.dot, obj: node, key: name, line: tline(toks, pos), col: tcol(toks, pos), nline: tline(toks, pos + 1), ncol: tcol(toks, pos + 1) };
+                node = { k: K.dot, obj: node, key: (tv(toks, pos + 1)), line: tline(toks, pos), col: tcol(toks, pos), nline: tline(toks, pos + 1), ncol: tcol(toks, pos + 1) };
                 pos = pos + 2;
             } else if (tt(toks, pos + 1) == "num") {
                 // `t.0` / `t.1`: tuple element access. The key is the tuple's
                 // hidden positional field name; a non-tuple record simply has
                 // no such field and the checker reports it.
-                let name = tuple_key(size_lit(tv(toks, pos + 1)));
-                node = { k: K.dot, obj: node, key: name, line: tline(toks, pos), col: tcol(toks, pos), nline: tline(toks, pos + 1), ncol: tcol(toks, pos + 1) };
+                node = { k: K.dot, obj: node, key: (tuple_key(size_lit(tv(toks, pos + 1)))), line: tline(toks, pos), col: tcol(toks, pos), nline: tline(toks, pos + 1), ncol: tcol(toks, pos + 1) };
                 pos = pos + 2;
             } else {
                 node = expect_err(toks, pos + 1, "a field name after '.'");
@@ -1245,8 +1238,7 @@ def parse_array(toks: [Tok], p: long) -> Parsed {
             if (n >= 0) {
                 close_res(toks, at + 1, "]", { k: K.arrrep, v: first.node, n: n, line: ln, col: cl })
             } else {
-                let cnt = parse_expr(toks, at);
-                close_res(toks, cnt.pos, "]", expect_err(toks, at, "an array size (an integer literal from 0 to 2147483647)"))
+                close_res(toks, (parse_expr(toks, at)).pos, "]", expect_err(toks, at, "an array size (an integer literal from 0 to 2147483647)"))
             }
         } else {
             // literal, with trailing-comma tolerance
@@ -1406,8 +1398,7 @@ def parse_type_node_go(toks: [Tok], p: long) -> PType {
     if (is_op(toks, p, "*")) {
         // pointer type: *T
         let inner = parse_type_node(toks, p + 1);
-        let pin = { k: K.tptr, to: inner.node };
-        parse_type_tail(toks, inner.pos, pin)
+        parse_type_tail(toks, inner.pos, ({ k: K.tptr, to: inner.node }))
     } else if (is_punct(toks, p, "[")) {
         // array type: [T] (heap, later) or [T; N] (stack repeat, native now).
         // N must be a num literal (else -1 sentinel, rejected by checker).
@@ -1522,8 +1513,7 @@ def type_err_list(ts: [Type]) -> Node {
 def type_err_fields(fs: [Field]) -> Node {
     let out: Node = { k: K.void, line: 1, col: 1 };
     for i in 0..len(fs) {
-        let f = fs[i];
-        if (out.k == K.void) { out = type_err(f.typ); }
+        if (out.k == K.void) { out = type_err(fs[i].typ); }
     };
     out
 };
@@ -1724,8 +1714,7 @@ def parse_type_atom(toks: [Tok], p: long) -> long {
     // NOTE: no callers left — parse_type below is the only one, and nothing
     // calls that (annotations go through parse_type_full). Dead code: the
     // defs are not tree-shaken, so removing them changes the golden binary.
-    let r = parse_type_node(toks, p);
-    r.pos
+    (parse_type_node(toks, p)).pos
 };
 
 def parse_type(toks: [Tok], p: long) -> long {
@@ -2210,8 +2199,7 @@ def parse_stmt_opassign(toks: [Tok], p: long, tgt: Node, epos: long) -> Parsed {
     let rhs = parse_expr(toks, epos + 1);
     // Every compound op is `X=`, so the binary op is all but its last
     // character (`>>>=` is `>>>`).
-    let binop = op[0:len(op) - 1];
-    res({ k: K.opassign, op: binop, tgt: tgt, v: rhs.node, line: tline(toks, epos), col: tcol(toks, epos) }, rhs.pos)
+    res({ k: K.opassign, op: (op[0:len(op) - 1]), tgt: tgt, v: rhs.node, line: tline(toks, epos), col: tcol(toks, epos) }, rhs.pos)
 };
 
 // Assignment dispatch: one def per target shape (see parse_stmt note).

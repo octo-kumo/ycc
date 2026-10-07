@@ -374,8 +374,7 @@ def pe_build(code: [byte], rodata: [byte], entry_off: long, bss_len: long, pdata
     i = 0;
     while (i < len(dsecs2)) {
         let d = pe_find(secs, dsecs2[i].name);
-        let dd = ddata2[i];
-        out = pe_payload(out, d, dd);
+        out = pe_payload(out, d, ddata2[i]);
         out = pe_pad(out, d.rawptr + d.rawsz);
         i++;
     };

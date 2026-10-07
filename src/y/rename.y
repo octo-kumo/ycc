@@ -49,9 +49,7 @@ let rn_mod_types: [str] = [];
 let rn_mod = "";
 
 def rn_fresh(st: RnSt, orig: str) -> { st: RnSt, name: str } {
-    let u = orig + "$" + tostring(st.n);
-    let nst = { scopes: st.scopes, n: st.n + 1, tys: st.tys, dfl: st.dfl };
-    { st: nst, name: u }
+    { st: ({ scopes: st.scopes, n: st.n + 1, tys: st.tys, dfl: st.dfl }), name: (orig + "$" + tostring(st.n)) }
 };
 
 def rn_push(st: RnSt) -> RnSt {
@@ -119,8 +117,7 @@ def rn_lookup_to(st: RnSt, name: str, lo: long) -> str {
             };
             let at = parser.nameix_get(rn_ix, name);
             if (at >= 0) {
-                let e = frame[at];
-                found = e.uniq;
+                found = frame[at].uniq;
                 i = -1;
             };
         } else {
@@ -266,8 +263,7 @@ def rn_note_defaults(st: RnSt, uniq: str, func: Func) -> RnSt {
     let i = 0;
     let any = false;
     while (i < len(dv)) {
-        let d = dv[i];
-        let dk: long = d.k;
+        let dk: long = dv[i].k;
         if (dk != K.void) { any = true; };
         i++;
     };
@@ -280,8 +276,7 @@ def rn_note_defaults(st: RnSt, uniq: str, func: Func) -> RnSt {
 // The defaults of the def a call names ([] for anything else).
 def rn_find_defaults(st: RnSt, name: str) -> [Node] {
     let out: [Node] = [];
-    let ds = st.dfl;
-    ds.foreach((d) => {
+    st.dfl.foreach((d) => {
         if (d.name == name) { out = d.vals; };
     });
     out
@@ -298,8 +293,7 @@ def rn_fill_defaults(vals: [Node], args: [Node], line: long, col: long) -> [Node
     } else {
         let ok = true;
         for i in n..len(vals) {
-            let d = vals[i];
-            let dk: long = d.k;
+            let dk: long = vals[i].k;
             if (dk == K.void) { ok = false; };
         };
         let out: [Node] = [];
@@ -472,8 +466,7 @@ def rn_alias_index_go(st: RnSt, name: str) -> long {
     let i = len(tys) - 1;
     let found = -1;
     while (i >= 0) {
-        let e = tys[i];
-        if (e.name == name) { found = i; i = -1; };
+        if (tys[i].name == name) { found = i; i = -1; };
         i = i - 1;
     };
     found
@@ -508,8 +501,7 @@ def rn_tref(st: RnSt, id: long, name: str) -> Type {
 // in it, or (`bare`) outside every record field and function type.
 def rn_reaches(st: RnSt, id: long, bare: bool) -> bool {
     let seen: [long] = [];
-    let e = st.tys[id];
-    rn_reaches_go(st, e.typ, id, seen, bare)
+    rn_reaches_go(st, st.tys[id].typ, id, seen, bare)
 };
 
 def rn_reaches_go(st: RnSt, t: Type, id: long, seen: [long], bare: bool) -> bool {
@@ -523,8 +515,7 @@ def rn_reaches_go(st: RnSt, t: Type, id: long, seen: [long], bare: bool) -> bool
         else if (j == id) { true }
         else {
             seen += j;
-            let e = st.tys[j];
-            rn_reaches_go(st, e.typ, id, seen, bare)
+            rn_reaches_go(st, st.tys[j].typ, id, seen, bare)
         }
     }
     else if (k == K.tptr) { let ptr: TPtr = t; rn_reaches_go(st, ptr.to, id, seen, bare) }
@@ -1020,8 +1011,7 @@ def rn_assign(node: Assign, st: RnSt) -> RnRes {
 };
 
 def rn_assign_lookup(node: Assign, v: Node, st: RnSt) -> RnRes {
-    let u = rn_lookup(st, node.name);
-    rn_assign_finish(node, v, u, st)
+    rn_assign_finish(node, v, (rn_lookup(st, node.name)), st)
 };
 
 def rn_assign_finish(node: Assign, v: Node, u: str, st: RnSt) -> RnRes {
@@ -1191,8 +1181,7 @@ def rn_foreach_body(node: Foreach, iter: Node, st: RnSt) -> RnRes {
 def rn_foreach_block(node: Foreach, iter: Node, uniq: str, st: RnSt) -> RnRes {
     let body: Block = node.body;
     let b = rn_block(body.stmts, st);
-    let st2 = rn_pop(b.st);
-    { st: st2, node: { k: K.kw_foreach, name: uniq, iter: iter, body: { k: K.block, stmts: b.stmts, line: body.line, col: body.col }, line: node.line, col: node.col } }
+    { st: rn_pop(b.st), node: { k: K.kw_foreach, name: uniq, iter: iter, body: { k: K.block, stmts: b.stmts, line: body.line, col: body.col }, line: node.line, col: node.col } }
 };
 
 def rn_forrange(node: ForRange, st: RnSt) -> RnRes {
@@ -1215,8 +1204,7 @@ def rn_forrange_body(node: ForRange, lo: Node, hi: Node, st: RnSt) -> RnRes {
 def rn_forrange_block(node: ForRange, lo: Node, hi: Node, uniq: str, st: RnSt) -> RnRes {
     let body: Block = node.body;
     let b = rn_block(body.stmts, st);
-    let st2 = rn_pop(b.st);
-    { st: st2, node: { k: K.forrange, name: uniq, lo: lo, hi: hi, body: { k: K.block, stmts: b.stmts, line: body.line, col: body.col }, line: node.line, col: node.col } }
+    { st: rn_pop(b.st), node: { k: K.forrange, name: uniq, lo: lo, hi: hi, body: { k: K.block, stmts: b.stmts, line: body.line, col: body.col }, line: node.line, col: node.col } }
 };
 
 def rn_for(node: For, st: RnSt) -> RnRes {
@@ -1543,8 +1531,7 @@ def rename_program_go(stmts: [Node], line: long, col: long, dfl: [Dfl]) -> Block
     d0 += dfl;
     let st: RnSt = { scopes: [[]], n: 1, tys: [], dfl: d0 };
     rn_ixn = 0;
-    let b = rn_top(stmts, st);
-    { k: K.block, stmts: b.stmts, line: line, col: col }
+    { k: K.block, stmts: (rn_top(stmts, st)).stmts, line: line, col: col }
 };
 
 // rename, AND the def sites of everything it renamed.

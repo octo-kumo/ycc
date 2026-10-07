@@ -211,8 +211,7 @@ def self_pack() -> str {
         if (size >= 16) {
             let buf: [byte; 65536] = [0; 65536];
             syscall(8, fd, size - 16, 0);
-            let k = syscall(0, fd, &buf[0], 16);
-            if (k == 16) {
+            if ((syscall(0, fd, &buf[0], 16)) == 16) {
                 let tail = from_bytes(buf[0:16]);
                 // tolong answers an OPTION now, and this is the site that
                 // shows why that is the right shape: a binary with no pack has
@@ -284,8 +283,7 @@ def padl(s: str, w: long) -> str {
 // twin formats the same way, so both copies print the same string.
 def fmt_ms(us: long) -> str {
     let ms = us / 1000;
-    let fr = us % 1000;
-    let fs = tostring(fr);
+    let fs = tostring((us % 1000));
     while (len(fs) < 3) { fs = "0" + fs; };
     tostring(ms) + "." + fs
 };
@@ -480,11 +478,9 @@ def build_reach(direct: [str], pkgs: [PkNode], nrs: [Resolved]) -> [bool] {
     };
     k = len(pkgs) - 1;
     while (k >= 0) {
-        let p = pkgs[k];
-        if (pkg.pk_has(want, p.name)) {
+        if (pkg.pk_has(want, pkgs[k].name)) {
             reach[k] = true;
-            let nr = nrs[k];
-            want += nr.pkgs;
+            want += nrs[k].pkgs;
         }
         k--;
     };
@@ -608,8 +604,7 @@ def pkg_index(pkgs: [PkNode], name: str) -> long {
 // the topological one, so each dependency's own key hashes the same
 // interfaces the loop gave it.
 def build_one(dir: str, one: str, debug: bool, nowarn: bool, wlevel: long, allow_exec: bool, std_src: bool) -> void {
-    let g = pkg.pk_load(dir);
-    let pkgs = g.pkgs;
+    let pkgs = pkg.pk_load(dir).pkgs;
     let odir = pkg.pk_join(pkg.pk_join(dir, "build"), "obj");
     let target = pkg_index(pkgs, one);
     if (target < 0) {
@@ -625,9 +620,7 @@ def build_one(dir: str, one: str, debug: bool, nowarn: bool, wlevel: long, allow
     for k in 0..target {
         let p = pkgs[k];
         if (pkg.pk_has(want, p.name)) {
-            let nr = build_resolve(p.lib, allow_exec, p.deps, p.roots);
-            let base = 5000000000 + k * 1000000000;
-            let key = build_key(cid, p.name, base, allow_exec, nr, units);
+            let key = build_key(cid, p.name, (5000000000 + k * 1000000000), allow_exec, (build_resolve(p.lib, allow_exec, p.deps, p.roots)), units);
             let ot = fs.read_file(odir + "/" + p.name + ".yo");
             if (ot == none) {
                 puts("error: package '" + p.name + "' was not compiled first\n");
@@ -646,15 +639,12 @@ def build_one(dir: str, one: str, debug: bool, nowarn: bool, wlevel: long, allow
     let nr = build_resolve(p.lib, allow_exec, p.deps, p.roots);
     let base = 5000000000 + target * 1000000000;
     let key = build_key(cid, p.name, base, allow_exec, nr, units);
-    let su = nativelib.std_units(std_order(nr.std), pack);
-    let ast = parser.parse_program(lexer.tokenize(nr.src));
-    let r = nativelib.compile_package(ast, nr, p.name, base, wlevel, su, units);
+    let r = nativelib.compile_package(parser.parse_program(lexer.tokenize(nr.src)), nr, p.name, base, wlevel, (nativelib.std_units(std_order(nr.std), pack)), units);
     if (!r.ok) {
         print_native_errors(r.errors, nr.origin, false);
         exit(1);
     };
-    let wp = warn_path(odir, p.name, key);
-    if (!fs.write_file(wp, warning_text(r.warnings, nr.origin, false))) { exit(1); };
+    if (!fs.write_file((warn_path(odir, p.name, key)), warning_text(r.warnings, nr.origin, false))) { exit(1); };
     let op = odir + "/" + p.name + ".yo";
     if (!fs.write_file(op, nativelib.unit_obj(r.unit, key))) {
         puts("error: writing '" + op + "' failed\n");
@@ -734,15 +724,13 @@ def build_project(dir: str, debug: bool, nowarn: bool, wlevel: long, allow_exec:
     if (len(g.lib) > 0) { bdeps += g.name; }
     let b = 0;
     while (b < len(bins)) {
-        let bn = bins[b];
-        nrs += build_resolve(bn.path, allow_exec, bdeps, g.roots);
+        nrs += build_resolve(bins[b].path, allow_exec, bdeps, g.roots);
         b++;
     };
     let needs: [str] = [];
     k = 0;
     while (k < len(nrs)) {
-        let nr = nrs[k];
-        needs += nr.std;
+        needs += nrs[k].std;
         k++;
     };
     let pack = "";
@@ -791,8 +779,7 @@ def build_project(dir: str, debug: bool, nowarn: bool, wlevel: long, allow_exec:
                 };
             } else {
                 eputs("compiling " + p.name + "\n");
-                let ast = parser.parse_program(lexer.tokenize(nr.src));
-                let r = nativelib.compile_package(ast, nr, p.name, base, wlevel, su, units);
+                let r = nativelib.compile_package(parser.parse_program(lexer.tokenize(nr.src)), nr, p.name, base, wlevel, su, units);
                 if (!r.ok) {
                     print_native_errors(r.errors, nr.origin, false);
                     exit(1);
@@ -821,8 +808,7 @@ def build_project(dir: str, debug: bool, nowarn: bool, wlevel: long, allow_exec:
         while (k < len(pkgs)) {
             if (reach[k]) {
                 linked += units[k];
-                let pn = nrs[k];
-                lneeds += pn.std;
+                lneeds += nrs[k].std;
             }
             k++;
         };
@@ -834,8 +820,7 @@ def build_project(dir: str, debug: bool, nowarn: bool, wlevel: long, allow_exec:
             if (pkg.pk_has(lstd, su1.name)) { bstd += su1; }
             k++;
         };
-        let ast = parser.parse_program(lexer.tokenize(nr.src));
-        let r = nativelib.emit_program(ast, nr, debug, wlevel, bstd, linked);
+        let r = nativelib.emit_program(parser.parse_program(lexer.tokenize(nr.src)), nr, debug, wlevel, bstd, linked);
         if (!r.ok) {
             print_native_errors(r.errors, nr.origin, false);
             exit(1);
@@ -981,8 +966,7 @@ def main(cmdline: [str]) -> long {
             let r = nativelib.emit_program(ast, nr, pargs.debug, pargs.wlevel, su, []);
             // emit_program reports its own sub-phases (strip_ns, rename,
             // typecheck, lint, emit_fns, emit_start, asm_text); splice them in.
-            let sub = r.times;
-            sub.foreach((se) => {
+            r.times.foreach((se) => {
             dt += se;
             });
             if (r.ok && !pargs.nowarn) {
@@ -1008,8 +992,7 @@ def main(cmdline: [str]) -> long {
             };
             t0 = clock_us();
             h0 = heap_used();
-            let rok = r.ok;
-            if (!rok) {
+            if (!r.ok) {
             print_native_errors(r.errors, nrorigin, true);
             exit(1);
             1
@@ -1057,12 +1040,10 @@ def main(cmdline: [str]) -> long {
             dt = ph.times; t0 = ph.t; h0 = ph.h;
             // ycc_assemble reports its own sub-phases: a:split,
             // a:encode, a:link, then l:labmap, l:patch, l:elf.
-            let asub = ab.times;
-            asub.foreach((ae) => {
+            ab.times.foreach((ae) => {
             dt += ae;
             });
-            let abok = ab.ok;
-            if (!abok) {
+            if (!ab.ok) {
             puts("error: assemble: " + ab.error + "\n");
             exit(1);
             1

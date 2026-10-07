@@ -38,8 +38,7 @@ let lbl_next = 0;
 def lbl_reindex(cap: long) -> void {
     let m = asm.labmap_new(cap);
     lbl_names.foreach((e, i) => {
-        let r = asm.labmap_put(m, e, 1, i);
-        m = r.map;
+        m = (asm.labmap_put(m, e, 1, i)).map;
     });
     lbl_ix = m
 };
@@ -51,8 +50,7 @@ def lbl_new(name: str) -> long {
     if (g.sec >= 0) {
         g.off
     } else {
-        let r = asm.labmap_put(lbl_ix, name, 1, lbl_next);
-        lbl_ix = r.map;
+        lbl_ix = (asm.labmap_put(lbl_ix, name, 1, lbl_next)).map;
         let id = lbl_next;
         lbl_names += name;
         lbl_next++;

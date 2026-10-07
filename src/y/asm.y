@@ -270,9 +270,7 @@ def parse_imm_alpha(s: str, dash: long) -> OpRes {
 def parse_imm_diff(s: str, dash: long) -> OpRes {
     // (split: alpha-gate above narrows; diff-shape built ONLY here.)
     if (dash >= 0) {
-        let a = s[0:dash + 1];
-        let b = s[dash + 2:];
-        { ok: true, op: { k: K.diff, n: 0, size: 0, v: 0, a: a, b: b, name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "" }
+        { ok: true, op: { k: K.diff, n: 0, size: 0, v: 0, a: (s[0:dash + 1]), b: (s[dash + 2:]), name: "", base: 0, idx: 0, scale: 0, disp: 0, rip: false, lbl: "" }, error: "" }
     } else {
         parse_imm_num(s)
     }
@@ -294,8 +292,7 @@ def parse_mem(t: str) -> OpRes {
     // `(%rbx,%rcx,1)` does not.
     let open = index_of(t, "(");
     let head = trim(t[0:open]);
-    let inside = t[open + 1:len(t) - 1];
-    let parts = split_ops(inside);
+    let parts = split_ops((t[open + 1:len(t) - 1]));
     if (head != "") {
         parse_mem_head(t, head, parts)
     } else {
@@ -354,8 +351,7 @@ def parse_mem_ripdisp(t: str, lbl: str, disp: long, parts: [str]) -> OpRes {
 
 def parse_mem_disp(t: str, head: str, parts: [str]) -> OpRes {
     // numeric displacement head: parse_num cannot fail (is_num_text held).
-    let r = parse_num(head);
-    parse_mem_regs(t, parts, r.v)
+    parse_mem_regs(t, parts, parse_num(head).v)
 };
 
 def parse_mem_regs(t: str, parts: [str], disp: long) -> OpRes {
@@ -481,8 +477,7 @@ def decode_oct(s: str, k: long, n: long) -> {v: long, k: long, err: str} {
     // Returns {v, k (pos after digits), err}. Split from decode_str: the
     // `{ok,bytes,error}` shape is built ONLY in decode_str.
     // NOTE: `0;` tails (see parser.y parse_binary note).
-    let e = s[k - 1];
-    let v = e - '0';
+    let v = (s[k - 1]) - '0';
     let kk = k;
     let nd = 1;
     while (nd < 3) {
@@ -529,11 +524,8 @@ def hash_str(s: str) -> long {
     // overflowing (it cannot exceed 2^37), and the final shift-xor spreads
     // the high bits down into the low ones the modulo keeps.
     let h = 0;
-    let i = 0;
-    let n = len(s);
-    while (i < n) {
+    for i in 0..len(s) {
         h = (h * 31 + s[i]) & 4294967295;
-        i++;
     };
     h ^ (h >> 13)
 };
@@ -599,8 +591,7 @@ def labmap_get(m: [AsmLabel], name: str) -> { sec: long, off: long } {
 // ("" when clean). Replaces the old O(L^2) definition-site scans — our
 // emitter only feeds unique labels, and no test pins dup positions.
 def labmap_build(labels: [AsmLabel]) -> { map: [AsmLabel], dup: str } {
-    let cap = len(labels) * 2 + 16;
-    let m = labmap_new(cap);
+    let m = labmap_new((len(labels) * 2 + 16));
     let dup = "";
     for i in 0..len(labels) {
         let e = labels[i];
@@ -717,8 +708,7 @@ def asm_assemble(parts: [LinkPart], debug: bool) -> AsmOutI {
               { name: "a:encode", us: tr0 - t1, heap: hr0 - h1 },
               { name: "a:relax", us: tr1 - tr0, heap: hr1 - hr0 },
               { name: "a:link", us: t3 - tr1, heap: h3 - hr1 } ];
-        let lsub = lk.times;
-        lsub.foreach((le) => {
+        lk.times.foreach((le) => {
             tl += le;
         });
         { ok: lk.ok, bytes: lk.bytes, error: lk.error, items: len(items),
@@ -986,8 +976,7 @@ def asm_file(lno: long, sec: long, offs: [long], rest: str) -> AsmContent {
     if (!is_num_text(ns) || tolong(ns)! < 1 || asm_strdata_bad(q) || !d.ok) {
         { err: "L" + tostring(lno) + ": bad .file '" + rest + "'", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [], br: -1 } }
     } else {
-        let fx = [{ off: 0, kind: "file", lbl: from_bytes(d.bytes), lbl2: "" }];
-        { err: "", sec: sec, offs: offs, item: { sec: -1, off: tolong(ns)!, len: 0, kind: "file", bytes: [], fix: fx, br: -1 } }
+        { err: "", sec: sec, offs: offs, item: { sec: -1, off: tolong(ns)!, len: 0, kind: "file", bytes: [], fix: ([{ off: 0, kind: "file", lbl: from_bytes(d.bytes), lbl2: "" }]), br: -1 } }
     }
 };
 
@@ -1375,11 +1364,9 @@ def asm_relax(items: [AsmItem], labels: [AsmLabel], debug: bool) -> void {
 // address: an address moves every round (that is the whole point) while an
 // index does not, so one build serves every round instead of one per round.
 def relax_map(labels: [AsmLabel]) -> [AsmLabel] {
-    let cap = len(labels) * 2 + 16;
-    let m = labmap_new(cap);
+    let m = labmap_new((len(labels) * 2 + 16));
     for i in 0..len(labels) {
-        let r = labmap_put(m, labels[i].name, 0, i);
-        m = r.map;
+        m = (labmap_put(m, labels[i].name, 0, i)).map;
     };
     m
 };
@@ -1740,8 +1727,7 @@ def patch_item_rel(lmap: [AsmLabel], code_len: long, pad: long, fx: Fixup, bytes
     } else {
         // label_addr has already added `tab+8(%rip)`'s 8, so this is the
         // target less the address past the instruction.
-        let v = t.addr - (base + it.len);
-        { bytes: patch32(bytes, at, v), err: "" }
+        { bytes: patch32(bytes, at, (t.addr - (base + it.len))), err: "" }
     }
 };
 
@@ -1755,8 +1741,7 @@ def patch_item_rel8(lmap: [AsmLabel], code_len: long, pad: long, fx: Fixup, byte
     if (!t.ok) {
         { bytes: bytes, err: "undefined label '" + fx.lbl + "'" }
     } else {
-        let v = t.addr - (base + it.len);
-        { bytes: patch8(bytes, at, v), err: "" }
+        { bytes: patch8(bytes, at, (t.addr - (base + it.len))), err: "" }
     }
 };
 
@@ -2157,8 +2142,7 @@ def debug_syms_sec(out: [ElfSym], labels: [AsmLabel], sec: long, end: long) -> [
         let e = out[i];
         let nxt = end;
         if (i + 1 < len(out)) {
-            let n = out[i + 1];
-            nxt = n.off;
+            nxt = (out[i + 1]).off;
         };
         e.size = nxt - e.off;
     };

@@ -224,8 +224,7 @@ def elf_debug(code_off: long, codesz: long, ro_len: long, filesz: long, bss_vadd
             doffs += filesz + len(blob);
             blob += ds.data;
         };
-        let pad = (8 - len(blob) % 8) % 8;
-        blob = push_zeros(blob, pad);
+        blob = push_zeros(blob, ((8 - len(blob) % 8) % 8));
         let shoff = filesz + len(blob);
         // section headers
         blob = push_zeros(blob, 64);
@@ -238,8 +237,7 @@ def elf_debug(code_off: long, codesz: long, ro_len: long, filesz: long, bss_vadd
         blob = push_shdr(blob, n_str, 3, 0, 0, strtab_off, len(strtab), 0, 0, 1, 0);
         blob = push_shdr(blob, n_shs, 3, 0, 0, shstr_off, len(shstr), 0, 0, 1, 0);
         dsecs.foreach((ds, di) => {
-            let dd = ds.data;
-            blob = push_shdr(blob, dnames[di], 1, 0, 0, doffs[di], len(dd), 0, 0, 1, 0);
+            blob = push_shdr(blob, dnames[di], 1, 0, 0, doffs[di], len(ds.data), 0, 0, 1, 0);
         });
         { bytes: blob, shoff: shoff, shnum: symtab_idx + 3 + len(dsecs), shstrndx: symtab_idx + 2, bss_foff: bss_foff, bss_fsz: bss_fsz }
     }
