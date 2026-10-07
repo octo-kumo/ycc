@@ -1198,6 +1198,20 @@ def sys_fork() -> long {
 };
 
 // ── message passing ─────────────────────────────────────────────────────
+//
+// OPEN (M3): the two-process test does not run yet.  The server process faults
+// with a USER-mode read at 0x10 -- which is a `str`'s or an array's `data`
+// field, so a header that should be valid is null -- before its first output.
+// Ruled out by measurement, not by reading: a three-element argv is correct
+// inside the kernel (u002/u003 only ever had one, so that path was unproven
+// until it was tried), the same program's argv/branch/string logic is correct
+// natively, and a five-element fixed array with ptr_addr(&buf[0]) is correct
+// both ways.  That leaves DELIVERY: task_deliver writes into a task that is
+// already blocked, through the receiver's page tables, and a bad translation
+// there scribbles on the receiver's userland -- after which the receiver's own
+// header reads fault far away from the cause.  Start by printing the value
+// vm_translate returns for the blocked receiver's buffer.
+
 // A port is a task's pid, and the model is a synchronous request/reply:
 // `ipc_call` queues a message and suspends the caller, the server's
 // `ipc_recv` takes the message and remembers who asked, and `ipc_reply`
