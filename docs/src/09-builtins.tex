@@ -1252,7 +1252,10 @@ s.close();
 \ic{tls.recv(c)} (the next data, \ic{none} at the end) and
 \ic{tls.close(c)} work on it. \ic{tls.connect\_with(host, port,
 opts)} is the same, with an \ic{tls.Opts} of \ic{anchors}, \ic{alpn}, \ic{insecure} and
-\ic{timeout} to choose instead. The server's chain must reach a
+\ic{timeout} to choose instead. \ic{c.alpn} is what the server chose by
+ALPN (\ic{""} when it chose none) and \ic{c.alpn\_matched} whether that is
+the protocol \ic{alpn} asked for --- RFC~7301 \S3.2 has the client check it,
+so a program that offered one and needs it tests that flag. The server's chain must reach a
 trust anchor and name the host; X25519 and three suites are offered;
 there is no TLS 1.2.
 
