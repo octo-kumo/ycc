@@ -219,6 +219,20 @@ when the fixer rewrote the lexer's own bounds checks (round 9).
 - **Skip** either arm reads `x` without `!`; the `Decl` has a written type;
   `x` is read after the `if`.
 
+### 2.12 A closure that renames its own parameter
+- **Instead**
+  `a.foreach((e) => { let l = e; if (len(l) > 0) { out += l; }; });`
+- **Write** `a.foreach((l) => { if (len(l) > 0) { out += l; }; });`
+  — the parameter carries the name, so the binding is one rename too many.
+- **Detect** the body's FIRST statement is an unwritten `let x = p;` where
+  `p` is one of the function's parameters; nothing after it mentions `p`;
+  `x` is read and never written; `x` is not another parameter's name.
+- **Skip** the `let` has a written type (that is a cast, not an alias:
+  `let f: TFunc = t;`); `p` is used again under its own name; the alias is
+  reassigned (2.3's business).
+- **Fix** rename the parameter (in the signature, found upward) to `x`
+  and delete the `let`.
+
 ## 3. Loops that are array methods
 
 ### 3.1 Index `while` to `foreach`

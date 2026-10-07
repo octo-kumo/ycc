@@ -1272,7 +1272,7 @@ def lint_short_if_chain(st: LintSt, node: If) -> long {
         if (lint_bool_lit(lint_single_stmt(cur.els)) == v0) { return 0; };
     };
     lint_warn_at(st, "this 'if' chain tests one value against a set; write one membership test", node);
-    lint_fix(st, "1.8", node.line, node.col, lint_disp(x), "");
+    lint_fix(st, "1.8", node.line, node.col, lint_disp(x), tostring(v0));
     0
 };
 
@@ -2667,6 +2667,34 @@ def fx_block_lines(lines: [str], ln: long, col: long) -> [str] {
     out
 };
 
+// 2.12: rename the parameter in the signature above and drop the alias.
+def fx_alias(p: str, x: str, ln: long, lines: [str]) -> [str] {
+    if (ln < 2 || ln > len(lines)) { return lines; };
+    let k = ln - 1;
+    let low = ln - 6;
+    let done = false;
+    while (k >= 1 && k >= low && !done) {
+        let L = fx_nocomment(lines[k - 1]);
+        let i = fx_find(L, p, 0);
+        while (i >= 0) {
+            // a parameter slot: after `(`, `,` or a space, before `)`, `,` or `:`
+            let okb = i == 0 || L[i - 1] == 40 || L[i - 1] == 44 || L[i - 1] == 32;
+            let after = fx_ws(L, i + len(p));
+            let oka = after < len(L) && (L[after] == 41 || L[after] == 44 || L[after] == 58);
+            if (okb && oka) {
+                lines[k - 1] = lines[k - 1][:i] + x + lines[k - 1][i + len(p):];
+                done = true;
+                break;
+            };
+            i = fx_find(L, p, i + len(p));
+        };
+        k = k - 1;
+    };
+    if (!done) { return lines; };
+    lines = lines[:ln - 1] + lines[ln:];
+    lines
+};
+
 // `x!` -> `x` (the if-let binding IS the unwrapped value).
 def fx_drop_bang(line: str, name: str) -> str {
     let i = fx_find(line, name, 0);
@@ -2800,7 +2828,7 @@ def fx_eq_lit(cond: str, name: str) -> str {
 
 // 1.8: the whole `if`/`else if` chain becomes one `x in [A, B, C]`. A set of
 // strings is left alone: `[...].index(s)` would compare string pointers.
-def fx_if_chain(name: str, ln: long, col: long, lines: [str]) -> [str] {
+def fx_if_chain(name: str, b: str, ln: long, col: long, lines: [str]) -> [str] {
     if (ln < 1 || ln > len(lines)) { return lines; };
     let line = lines[ln - 1];
     let i = fx_find(line, "if", col - 1);
@@ -2859,10 +2887,10 @@ def fx_if_chain(name: str, ln: long, col: long, lines: [str]) -> [str] {
         };
     };
     if (len(lits) < 2) { return lines; };
-    for li in 0..len(lits) {
-        if (lits[li][0:1] == "\"") { return lines; };
-    };
+    // a set of strings is fine: `in` on a [str] array compares by content
     let rep = name + " in [" + fx_commas(lits) + "]";
+    // the arms yield `false` for a member: the test inverts
+    if (b == "0") { rep = "!(" + rep + ")"; };
     lines[ln - 1] = lines[ln - 1][:i] + rep + lines[endline - 1][endcol:];
     lines = lines[:ln] + lines[endline:];
     lines
@@ -2953,10 +2981,11 @@ def fx_one(rule: str, a: str, b: str, ln: long, col: long, lines: [str]) -> [str
     else if (rule == "2.3") { lines = fx_if_line(rule, b, ln, lines); }
     else if (rule == "2.2") { lines = fx_let_cond(ln, lines); }
     else if (rule == "2.11") { lines = fx_none(a, ln, lines); }
+    else if (rule == "2.12") { lines = fx_alias(a, b, ln, lines); }
     else if (rule == "2.5") { lines = fx_flag(a, ln, col, lines); }
     else if (rule == "3.6") { lines = fx_foreach_elem(a, b, ln, col, lines); }
     else if (rule == "void") { lines = fx_void(ln, lines); }
-    else if (rule == "1.8") { lines = fx_if_chain(a, ln, col, lines); }
+    else if (rule == "1.8") { lines = fx_if_chain(a, b, ln, col, lines); }
     else if (rule == "1.6") { lines = fx_chain(rule, a, b, ln, col, lines); }
     else if (rule == "1.7") { lines = fx_chain(rule, a, b, ln, col, lines); };
     lines
@@ -3182,6 +3211,63 @@ def lint_loop_body(st: LintSt, body: Node) -> void {
     0
 };
 
+// Rule 2.12: a closure that opens by renaming its own parameter.
+//   `a.foreach((e) => { let l = e; BODY(l) });`
+// is `a.foreach((l) => { BODY(l) });` -- the parameter carries the name.
+// The statement list of a function body. An arrow closure's body is
+// `block1(parse_expr(...))`, so `{ ... }` lands as a block holding the
+// block: unwrap those.
+def lint_flat_body(body: Node) -> [Node] {
+    let b: Block = body;
+    let sts = b.stmts;
+    while (len(sts) == 1 && sts[0].k == K.block) {
+        let bb: Block = sts[0];
+        sts = bb.stmts;
+    };
+    sts
+};
+
+// Rule 2.12: a closure that opens by renaming its own parameter.
+//   `a.foreach((e) => { let l = e; BODY(l) });`
+// is `a.foreach((l) => { BODY(l) });` -- the parameter carries the name.
+def lint_alias_param(st: LintSt, node: Func) -> long {
+    if (len(node.params) == 0) { return 0; };
+    let b = lint_flat_body(node.body);
+    let di = -1;
+    for i in 0..len(b) {
+        if (b[i].k != K.void) { di = i; break; };
+    };
+    if (di < 0) { return 0; };
+    let d = b[di];
+    if (d.k != K.decl) { return 0; };
+    let decl: Decl = d;
+    // an unwritten `let` only: `let f: TFunc = t;` is a cast, not an alias
+    if (decl.kind != "let" || decl.v.k != K.id || decl.typ.k != K.tnone) { return 0; };
+    let src: Leaf = decl.v;
+    let p = "";
+    foreach (nm in node.params) {
+        if (nm == src.v) { p = nm; };
+    };
+    if (p == "" || decl.name == p) { return 0; };
+    // the new name must not be another parameter (it would collide)
+    foreach (nm2 in node.params) {
+        if (nm2 == decl.name) { return 0; };
+    };
+    // the parameter must not be mentioned after the alias, and the alias
+    // must never be written (that is a real copy, and 2.3's business)
+    for i in di + 1..len(b) {
+        if (lint_find(b[i], p, 0)) { return 0; };
+        if (lint_find(b[i], decl.name, 8)) { return 0; };
+    };
+    // and the alias must be read, or this is the unused-local rule's job
+    if (!lint_find_list(b[di + 1:], decl.name, 0)) { return 0; };
+    let dn = lint_disp(decl.name);
+    let pn = lint_disp(p);
+    lint_warn_at(st, "'" + dn + "' is only another name for the parameter '" + pn + "'; rename the parameter", d);
+    lint_fix(st, "2.12", d.line, d.col, pn, dn);
+    0
+};
+
 def lint_func(st: LintSt, node: Func) -> void {
     // Note the parameters first: the shortening rules ask whether a name is
     // a str or an array, and one of those names is usually a parameter.
@@ -3190,6 +3276,7 @@ def lint_func(st: LintSt, node: Func) -> void {
         lint_note_param(st, node.params[i], node.ptypes[i], node.line, node.col);
         i++;
     };
+    if (st.wlevel >= 2) { lint_alias_param(st, node); };
     let body: Block = node.body;
     // A `-> void` def's body value is dropped, so its tail's calls are
     // statements there: this is what a second --fix pass voids.

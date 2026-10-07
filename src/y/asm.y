@@ -1003,10 +1003,7 @@ def asm_section(line: str, lno: long, sec: long, offs: [long], rest: str) -> Asm
 };
 
 def asm_section_bad(rest: str) -> bool {
-    if (rest == ".rodata") { false }
-    else if (rest == ".text") { false }
-    else if (rest == ".bss") { false }
-    else { true }
+    !(rest in [".rodata", ".text", ".bss"])
 };
 
 def asm_section_err(line: str, lno: long, sec: long, offs: [long], rest: str) -> AsmContent {
