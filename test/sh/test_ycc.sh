@@ -198,14 +198,14 @@ expect_cli_error() {
 expect_cli_error "unknown flag" "ycc: unknown flag '--bad' (see ycc -h)" --bad
 expect_cli_error "-o with an empty path" "ycc: -o needs a path, got ''" \
     -o "" "$ROOT/test/y/native/t01_arith.y"
-expect_cli_error "-W without a level" "ycc: -W needs a warning level (0, or 1)" \
+expect_cli_error "-W without a level" "ycc: -W needs a warning level (0, 1 or 2)" \
     -o /tmp/ycc_wlevel.out "$ROOT/test/y/native/t01_arith.y" -W
-expect_cli_error "-W with a bad level" "ycc: -W needs a warning level (0, or 1), got 'x'" \
+expect_cli_error "-W with a bad level" "ycc: -W needs a warning level (0, 1 or 2), got 'x'" \
     -W x -o /tmp/ycc_wlevel.out "$ROOT/test/y/native/t01_arith.y"
-expect_cli_error "-W above 1" "ycc: -W needs a warning level (0, or 1), got '2'" \
-    -W 2 -o /tmp/ycc_wlevel.out "$ROOT/test/y/native/t01_arith.y"
+expect_cli_error "-W above 2" "ycc: -W needs a warning level (0, 1 or 2), got '3'" \
+    -W 3 -o /tmp/ycc_wlevel.out "$ROOT/test/y/native/t01_arith.y"
 expect_cli_error "-W that would wrap the scan" \
-    "ycc: -W needs a warning level (0, or 1), got '99999999999999999999'" \
+    "ycc: -W needs a warning level (0, 1 or 2), got '99999999999999999999'" \
     -W 99999999999999999999 -o /tmp/ycc_wlevel.out "$ROOT/test/y/native/t01_arith.y"
 # --target: the one global the whole compiler branches on (target.y), written
 # before anything reads it. Both spellings are accepted and both are checked,

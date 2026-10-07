@@ -131,7 +131,8 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
             puts("               set, 1 adds the optional checks for a value\n");
             puts("               computed and dropped -- a call result nobody\n");
             puts("               reads, a bare a[i] or x.f as a statement,\n");
-            puts("               an else branch that does nothing\n");
+            puts("               an else branch that does nothing; 2 adds the\n");
+            puts("               shortening suggestions of LINT_RULES.md\n");
             puts("  --no-exec    omit exec() -- the binary cannot reach a shell\n");
             puts("  --std-src    compile the std units (the runtime and std library)\n");
             puts("               from source instead of using the precompiled ones\n");
@@ -501,12 +502,12 @@ def build_reach(direct: [str], pkgs: [PkNode], nrs: [Resolved]) -> [bool] {
 };
 
 // The decimal level after `-W`, or the flag's own complaint. `i` points at
-// "-W". Only 0 and 1 exist, so anything else is rejected -- and the scan
+// "-W". Only 0, 1 and 2 exist, so anything else is rejected -- and the scan
 // saturates, because a long enough digit run wraps the accumulator and
 // "-W 99999999999999999999" would come back as an accepted level.
 def wlevel_arg(argv: [str], i: long, n: long) -> long {
     if (i + 1 >= n) {
-        puts("ycc: -W needs a warning level (0, or 1)\n");
+        puts("ycc: -W needs a warning level (0, 1 or 2)\n");
         exit(1);
         0
     } else {
@@ -517,11 +518,11 @@ def wlevel_arg(argv: [str], i: long, n: long) -> long {
         while (ok && d < len(a)) {
             let c = byte_at(a, d);
             ok = c >= '0' && c <= '9';
-            if (ok && v <= 1) { v = v * 10 + (c - '0'); 0; };
+            if (ok && v <= 2) { v = v * 10 + (c - '0'); 0; };
             d = d + 1;
         };
-        if (!ok || v > 1) {
-            puts("ycc: -W needs a warning level (0, or 1), got '" + a + "'\n");
+        if (!ok || v > 2) {
+            puts("ycc: -W needs a warning level (0, 1 or 2), got '" + a + "'\n");
             exit(1);
             0
         } else {

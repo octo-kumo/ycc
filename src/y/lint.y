@@ -21,7 +21,10 @@
 // forms (`x.f`, `a[i]`, `&x`, `*p`, a literal) used as a statement. They
 // are off by default because a getter call or a bare `a[i]` is a habit,
 // not a mistake, and turning them on for every build would drown the
-// warnings that are. Nothing extra runs at level 0.
+// warnings that are. Nothing extra runs at level 0. Level 2 adds the
+// shortening suggestions collected in LINT_RULES.md (the `lint_short_*`
+// checks); they are advice about form, so they stay above the level that
+// is about mistakes.
 //
 // Parameters, loop variables, top-level bindings and any name starting
 // with `_` are exempt from the unused-binding rules. The C copy in src/c
@@ -365,6 +368,41 @@ def lint_var_str(st: LintSt, name: str) -> bool {
     false
 };
 
+// Whether the binding holds a scalar (a number, string or bool). The
+// compound-assignment rule needs it: `x = x + e` is `x += e` only where
+// `+=` cannot be seen through an alias, and for an array it can.
+def lint_var_scal(st: LintSt, name: str) -> bool {
+    let n = lint_num(name);
+    let d = lint_disp(name);
+    let i = 0;
+    while (i < len(st.vars)) {
+        let v: LintVar = st.vars[i];
+        if (v.scal && ((n > 0 && v.num == n) || (n == 0 && v.num == 0 && v.name == d))) {
+            return true;
+        };
+        i = i + 1;
+    };
+    false
+};
+
+// Whether a type is a scalar, for a binding whose value the checker has
+// not been asked about (a parameter).
+def lint_tscal(typ: Type) -> bool {
+    let k: long = typ.k;
+    k == K.tlong || k == K.tfloat || k == K.tbyte || k == K.tstr || k == K.tbool
+};
+
+// Note a parameter, so the shortening rules can tell a `str` or a number
+// from an array. `top` keeps lint_vars from calling it unused -- a
+// parameter is never that.
+def lint_note_param(st: LintSt, name: str, typ: Type, line: long, col: long) -> long {
+    let d = lint_disp(name);
+    if (d != "" && byte_at(d, 0) != 95) {
+        st.vars += { name: d, kind: "param", num: lint_num(name), line: line, col: col, scal: lint_tscal(typ), fresh: false, strf: typ.k == K.tstr, top: true };
+    };
+    0
+};
+
 // A statement list: a block's, a function body's, the unit's. Only the
 // last statement's value is used, and only when the list's is. The first
 // statement after one that always returns never runs (a def there still
@@ -495,7 +533,10 @@ def lint_node(st: LintSt, node: Node, used: bool) -> long {
     } else if (k == K.call) {
         let call: Call = node;
         lint_node(st, call.callee, true);
-        lint_list(st, call.args);
+        if (st.wlevel < 2 || !lint_short_ord(st, call)) {
+            lint_list(st, call.args);
+        };
+        if (st.wlevel >= 2) { lint_short_call(st, call); };
         lint_unused_call(st, node, used, call)
     } else if (k == K.dot) {
         let dot: Dot = node;
@@ -557,6 +598,7 @@ def lint_node(st: LintSt, node: Node, used: bool) -> long {
         let slice: Slice = node;
         lint_two(st, slice.arr, slice.lo);
         lint_node(st, slice.hi, true);
+        if (st.wlevel >= 2) { lint_short_slice(st, slice); };
         lint_unused_expr(st, node, used)
     } else if (k == K.kw_for) {
         let loop: For = node;
@@ -693,6 +735,7 @@ def lint_bin(st: LintSt, node: Bin, used: bool) -> long {
         if ((op == "/" || op == "%") && lint_zero(r)) {
             lint_warn_at(st, "division by zero", node);
         };
+        if (st.wlevel >= 2) { lint_short_bin(st, node); };
         0
     }
 };
@@ -708,6 +751,190 @@ def lint_same_id(l: Node, r: Node) -> bool {
         false
     }
 };
+
+// ── shortening suggestions (level 2, LINT_RULES.md) ──────────────────────
+// Advice about form, never about meaning: every check here fires only when
+// the rewrite it names is exactly the same program. They run above level 1
+// because a dropped value can be a bug while a longer spelling is a habit.
+
+// The value of an integer literal, or -1 when the node is not one.
+def lint_int_val(node: Node) -> long {
+    if (node.k != K.num) { return -1; };
+    let num: Leaf = node;
+    let s = num.v;
+    if (len(s) > 0 && s[len(s) - 1:len(s)] == "n") { s = s[:len(s) - 1]; };
+    let base = 10;
+    let r = radix_of(s);
+    if (r != 0) { base = r; s = s[2:]; };
+    if (base == 10 && (index_of(s, ".") >= 0 || index_of(s, "e") >= 0 || index_of(s, "E") >= 0)) { return -1; };
+    let v = 0;
+    let ok = len(s) > 0;
+    let i = 0;
+    while (ok && i < len(s)) {
+        let c = byte_at(s, i);
+        if (c == '_') {
+        } else if (c >= '0' && c <= '9') { v = v * base + (c - '0'); }
+        else if (base == 16 && c >= 'a' && c <= 'f') { v = v * 16 + (c - 'a' + 10); }
+        else if (base == 16 && c >= 'A' && c <= 'F') { v = v * 16 + (c - 'A' + 10); }
+        else { ok = false; };
+        i = i + 1;
+    };
+    if (ok) { v } else { -1 }
+};
+
+// The operator set that has a compound assignment.
+def lint_compound_op(op: str) -> bool {
+    op == "+" || op == "-" || op == "*" || op == "/" || op == "%" ||
+    op == "&" || op == "|" || op == "^" || op == "<<" || op == ">>" || op == ">>>"
+};
+
+// Whether two written expressions are the same one. Only the shapes a
+// slice bound is written with: a name, a literal, a unary and a binary.
+// Commutativity is the caller's business.
+def lint_same_node(a: Node, b: Node) -> bool {
+    if (a.k != b.k) {
+        false
+    } else if (a.k == K.id || a.k == K.num || a.k == K.str || a.k == K.bool) {
+        let x: Leaf = a;
+        let y: Leaf = b;
+        x.v == y.v
+    } else if (a.k == K.un) {
+        let x: Un = a;
+        let y: Un = b;
+        x.op == y.op && lint_same_node(x.e, y.e)
+    } else if (a.k == K.bin) {
+        let x: Bin = a;
+        let y: Bin = b;
+        x.op == y.op && lint_same_node(x.l, y.l) && lint_same_node(x.r, y.r)
+    } else {
+        false
+    }
+};
+
+// `lo` and `hi` are `E` and `E + 1` (either operand order).
+def lint_slice_one(lo: Node, hi: Node) -> bool {
+    if (hi.k != K.bin) {
+        false
+    } else {
+        let b: Bin = hi;
+        if (b.op != "+") {
+            false
+        } else if (lint_int_val(b.r) == 1 && lint_same_node(lo, b.l)) {
+            true
+        } else {
+            lint_int_val(b.l) == 1 && lint_same_node(lo, b.r)
+        }
+    }
+};
+
+// Whether a written expression is a str (a literal, or a binding noted as
+// holding one). An unknown receiver is not a str: a warning that would
+// change a string into a byte had better be sure.
+def lint_str_expr(st: LintSt, node: Node) -> bool {
+    if (node.k == K.str) {
+        true
+    } else if (node.k == K.id) {
+        let l: Leaf = node;
+        lint_var_str(st, l.v)
+    } else {
+        false
+    }
+};
+
+// The name to put in a message, when the expression has one.
+def lint_operand(node: Node) -> str {
+    if (node.k == K.id) { let l: Leaf = node; lint_disp(l.v) } else { "" }
+};
+
+// Rule 1.1/1.2: `x = x + e` is `x += e`.
+def lint_short_assign(st: LintSt, node: Assign, name: str, v: Node) -> long {
+    if (v.k != K.bin) { return 0; };
+    let b: Bin = v;
+    let op: str = b.op;
+    if (b.l.k != K.id) { return 0; };
+    let lid: Leaf = b.l;
+    if (lid.v != name) { return 0; };
+    let d = lint_disp(name);
+    if (op == "+" && lint_int_val(b.r) == 1) {
+        lint_warn_at(st, "'" + d + " = " + d + " + 1' can be written '" + d + "++'", node);
+        0
+    } else if (op == "-" && lint_int_val(b.r) == 1) {
+        lint_warn_at(st, "'" + d + " = " + d + " - 1' can be written '" + d + "--'", node);
+        0
+    } else if (lint_compound_op(op) && lint_var_scal(st, name)) {
+        lint_warn_at(st, "'" + d + " = " + d + " " + op + " <expr>' can be written '" + d + " " + op + "= <expr>'", node);
+        0
+    } else {
+        0
+    }
+};
+
+// Rule 1.9: a comparison against a bool literal is the value or its not.
+def lint_short_bin(st: LintSt, node: Bin) -> long {
+    let op: str = node.op;
+    if (op != "==" && op != "!=") { return 0; };
+    let lit = node.r;
+    let other = node.l;
+    if (node.l.k == K.bool) {
+        lit = node.l;
+        other = node.r;
+    } else if (node.r.k != K.bool) {
+        return 0;
+    };
+    let lb: Leaf = lit;
+    let neg = (op == "!=") == (lb.v == "true");
+    let d = lint_operand(other);
+    if (d == "") {
+        lint_warn_at(st, "a comparison against true or false is the value itself, or its negation", node);
+    } else if (neg) {
+        lint_warn_at(st, "'" + d + " " + op + " " + lb.v + "' can be written '!" + d + "'", node);
+    } else {
+        lint_warn_at(st, "'" + d + " " + op + " " + lb.v + "' can be written '" + d + "'", node);
+    };
+    0
+};
+
+// Rule 1.3: `byte_at(s, i)` is `s[i]`.
+def lint_short_call(st: LintSt, call: Call) -> long {
+    let callee = call.callee;
+    if (callee.k != K.id) { return 0; };
+    let id: Leaf = callee;
+    if (id.v == "byte_at" && len(call.args) == 2 && parser.nameix_get(st.ridx, "byte_at") < 0) {
+        lint_warn_at(st, "'byte_at(s, i)' can be written 's[i]'", call);
+    };
+    0
+};
+
+// Rule 1.5: `ord(s[E:E + 1])` is `s[E]`. Handled here, before the slice
+// node is walked, so the slice does not also get rule 1.4's warning.
+def lint_short_ord(st: LintSt, call: Call) -> bool {
+    let callee = call.callee;
+    if (callee.k != K.id) { return false; };
+    let id: Leaf = callee;
+    let args = call.args;
+    if (id.v != "ord" || len(args) != 1 || args[0].k != K.slice || parser.nameix_get(st.ridx, "ord") >= 0) {
+        false
+    } else {
+        let sl: Slice = args[0];
+        if (!lint_slice_one(sl.lo, sl.hi)) {
+            false
+        } else {
+            lint_two(st, sl.arr, sl.lo);
+            lint_node(st, sl.hi, true);
+            lint_warn_at(st, "'ord' of a one-character slice can be written as an index (a byte)", call);
+            true
+        }
+    }
+};
+
+// Rule 1.4: a one-character slice of a str is `s[E]`.
+def lint_short_slice(st: LintSt, slice: Slice) -> long {
+    if (lint_slice_one(slice.lo, slice.hi) && lint_str_expr(st, slice.arr)) {
+        lint_warn_at(st, "a one-character slice can be written as an index (a byte)", slice);
+    };
+    0
+};
+
 
 // Whether evaluating a node can do more than compute its value.
 def lint_effect(node: Node) -> bool {
@@ -805,6 +1032,13 @@ def lint_loop_body(st: LintSt, body: Node) -> long {
 };
 
 def lint_func(st: LintSt, node: Func) -> long {
+    // Note the parameters first: the shortening rules ask whether a name is
+    // a str or an array, and one of those names is usually a parameter.
+    let i = 0;
+    while (i < len(node.params) && i < len(node.ptypes)) {
+        lint_note_param(st, node.params[i], node.ptypes[i], node.line, node.col);
+        i = i + 1;
+    };
     let body: Block = node.body;
     lint_stmts(st, body.stmts, true, false)
 };
@@ -846,6 +1080,7 @@ def lint_assign(st: LintSt, node: Assign) -> long {
             lint_warn_at(st, "'" + lint_disp(name) + "' is assigned to itself", node);
         };
     };
+    if (st.wlevel >= 2) { lint_short_assign(st, node, name, v); };
     0
 };
 
@@ -898,6 +1133,13 @@ def lint_opassign(st: LintSt, node: OpAssign, used: bool) -> long {
         if (lint_var_str(st, tid.v)) {
             lint_warn_at(st, "this `+=` on a string copies the whole string, so a loop of them is quadratic -- add a `;` if nothing reads the value", node);
         };
+    };
+    if (st.wlevel >= 2 && t.k == K.id && (op == "+" || op == "-") && lint_int_val(v) == 1) {
+        let tid: Leaf = t;
+        let d = lint_disp(tid.v);
+        let rs = "++";
+        if (op == "-") { rs = "--"; };
+        lint_warn_at(st, "'" + d + " " + op + "= 1' can be written '" + d + rs + "'", node);
     };
     0
 };

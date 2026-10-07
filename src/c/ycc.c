@@ -161,7 +161,8 @@ puts_(ys("               status; everything after `--` is the program's argv\n")
             puts_(ys("               set, 1 adds the optional checks for a value\n"));
             puts_(ys("               computed and dropped -- a call result nobody\n"));
             puts_(ys("               reads, a bare a[i] or x.f as a statement,\n"));
-            puts_(ys("               an else branch that does nothing\n"));
+            puts_(ys("               an else branch that does nothing; 2 adds the\n"));
+            puts_(ys("               shortening suggestions of LINT_RULES.md\n"));
             puts_(ys("  --no-exec    omit exec() -- the binary cannot reach a shell\n"));
             puts_(ys("  --std-src    compile the std units (the runtime and std library)\n"));
             puts_(ys("               from source instead of using the precompiled ones\n"));
@@ -429,15 +430,13 @@ ylong print_native_warnings(Yv *warnings, Yv *origin, int bare) {
     return 0;
 }
 
-/* The decimal level after `-W`, or the flag's own complaint. `i` points at
- * "-W". Levels past 1 are the same as 1: the optional checks are a set. */
-/* The decimal level after -W, or the flag's own complaint. Only 0 and 1 exist,
- * so anything else is rejected -- and the scan saturates, because a long enough
- * digit run wraps the accumulator and "-W 99999999999999999999" would come back
- * as an accepted level (ycc.y). */
+/* The decimal level after -W, or the flag's own complaint. Only 0, 1 and 2
+ * exist, so anything else is rejected -- and the scan saturates, because a long
+ * enough digit run wraps the accumulator and "-W 99999999999999999999" would
+ * come back as an accepted level (ycc.y). */
 static ylong wlevel_arg(Yv *argv, ylong i, ylong n) {
     if (i + 1 >= n) {
-        puts_(ys("ycc: -W needs a warning level (0, or 1)\n"));
+        puts_(ys("ycc: -W needs a warning level (0, 1 or 2)\n"));
         exit_(1);
         return 0;
     } else {
@@ -448,11 +447,11 @@ static ylong wlevel_arg(Yv *argv, ylong i, ylong n) {
         while (ok && d < yv_len(a)) {
             ylong c = ys_byte_at(a, d);
             ok = c >= '0' && c <= '9';
-            if (ok && v <= 1) { v = v * 10 + (c - '0'); }
+            if (ok && v <= 2) { v = v * 10 + (c - '0'); }
             d = d + 1;
         }
-        if (!ok || v > 1) {
-            puts_(ys_cat(ys_cat(ys_cat(ys("ycc: -W needs a warning level (0, or 1), got '"),
+        if (!ok || v > 2) {
+            puts_(ys_cat(ys_cat(ys_cat(ys("ycc: -W needs a warning level (0, 1 or 2), got '"),
                                    a), ys("'")), ys("\n")));
             exit_(1);
             return 0;

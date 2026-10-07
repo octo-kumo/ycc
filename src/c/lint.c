@@ -50,6 +50,20 @@ static ylong lint_top_first(LintSt st, Yv *d, ylong fid);
 static ylong lint_file_of(ylong ln);
 static int lint_strheld(Yv *typ, Yv *v);
 static int lint_var_str(LintSt st, Yv *name);
+static int lint_var_scal(LintSt st, Yv *name);
+static int lint_tscal(Yv *typ);
+static ylong lint_note_param(LintSt st, Yv *name, Yv *typ, ylong line, ylong col);
+static ylong lint_int_val(Yv *node);
+static int lint_compound_op(Yv *op);
+static int lint_same_node(Yv *a, Yv *b);
+static int lint_slice_one(Yv *lo, Yv *hi);
+static int lint_str_expr(LintSt st, Yv *node);
+static Yv *lint_operand(Yv *node);
+static ylong lint_short_assign(LintSt st, Yv *node, Yv *name, Yv *v);
+static ylong lint_short_bin(LintSt st, Yv *node);
+static ylong lint_short_call(LintSt st, Yv *call);
+static int lint_short_ord(LintSt st, Yv *call);
+static ylong lint_short_slice(LintSt st, Yv *node);
 static ylong lint_loop_body(LintSt st, Yv *body);
 static ylong lint_stmts(LintSt st, Yv *stmts, int used, int top);
 static ylong lint_warn_at(LintSt st, Yv *msg, Yv *node);
@@ -390,6 +404,51 @@ static int lint_var_str(LintSt st, Yv *name) {
     return 0;
 }
 
+/* Whether the binding holds a scalar (a number, string or bool). The
+ * compound-assignment rule needs it: `x = x + e` is `x += e` only where
+ * `+=` cannot be seen through an alias, and for an array it can. */
+static int lint_var_scal(LintSt st, Yv *name) {
+    ylong n = lint_num(name);
+    Yv *d = lint_disp(name);
+    Yv *vars = yr_get(st, "vars");
+    ylong i = 0;
+    while (i < yv_len(vars)) {
+        Yv *v = ya_get(vars, i);
+        if (yv_b(yr_get(v, "scal")) &&
+            ((n > 0 && yv_l(yr_get(v, "num")) == n) ||
+             (n == 0 && yv_l(yr_get(v, "num")) == 0 && ys_eq(yr_get(v, "name"), d)))) {
+            return 1;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+/* Whether a type is a scalar, for a binding whose value the checker has
+ * not been asked about (a parameter). */
+static int lint_tscal(Yv *typ) {
+    ylong k = yv_l(yr_get(typ, "k"));
+    return k == K_tlong || k == K_tfloat || k == K_tbyte ||
+           k == K_tstr || k == K_tbool;
+}
+
+/* Note a parameter, so the shortening rules can tell a `str` or a number
+ * from an array. `top` keeps lint_vars from calling it unused -- a
+ * parameter is never that. */
+static ylong lint_note_param(LintSt st, Yv *name, Yv *typ, ylong line, ylong col) {
+    Yv *d = lint_disp(name);
+    if (!ys_eq_lit(d, "") && ys_byte_at(d, 0) != 95) {
+        (void)ya_push(yr_get(st, "vars"),
+                      yr(9, "name", d, "kind", ys("param"), "num",
+                         yv_long(lint_num(name)), "line", yv_long(line),
+                         "col", yv_long(col), "scal", yv_bool(lint_tscal(typ)),
+                         "fresh", yv_bool(0),
+                         "strf", yv_bool(yv_l(yr_get(typ, "k")) == K_tstr),
+                         "top", yv_bool(1)));
+    }
+    return 0;
+}
+
 /* A statement list: a block's, a function body's, the unit's. Only the
  * last statement's value is used, and only when the list's is. The first
  * statement after one that always returns never runs (a def there still
@@ -506,7 +565,12 @@ static ylong lint_node(LintSt st, Yv *node, int used) {
         return lint_id(st, node, used);
     } else if (yv_l(k) == K_call) {
         (void)lint_node(st, yr_get(node, "callee"), 1);
-        (void)lint_list(st, yr_get(node, "args"));
+        if (yv_l(yr_get(st, "wlevel")) < 2 || !lint_short_ord(st, node)) {
+            (void)lint_list(st, yr_get(node, "args"));
+        }
+        if (yv_l(yr_get(st, "wlevel")) >= 2) {
+            (void)lint_short_call(st, node);
+        }
         return lint_unused_call(st, node, used, node);
     } else if (yv_l(k) == K_dot) {
         (void)lint_node(st, yr_get(node, "obj"), 1);
@@ -555,6 +619,9 @@ static ylong lint_node(LintSt st, Yv *node, int used) {
     } else if (yv_l(k) == K_slice) {
         (void)lint_two(st, yr_get(node, "arr"), yr_get(node, "lo"));
         (void)lint_node(st, yr_get(node, "hi"), 1);
+        if (yv_l(yr_get(st, "wlevel")) >= 2) {
+            (void)lint_short_slice(st, node);
+        }
         return lint_unused_expr(st, node, used);
     } else if (yv_l(k) == K_kw_for) {
         return lint_for(st, node);
@@ -803,6 +870,9 @@ static ylong lint_bin(LintSt st, Yv *node, int used) {
         if ((ys_eq_lit(op, "/") || ys_eq_lit(op, "%")) && lint_zero(r)) {
             (void)lint_warn_at(st, ys("division by zero"), node);
         }
+        if (yv_l(yr_get(st, "wlevel")) >= 2) {
+            (void)lint_short_bin(st, node);
+        }
         return 0;
     }
 }
@@ -817,6 +887,211 @@ static int lint_same_id(Yv *l, Yv *r) {
     } else {
         return 0;
     }
+}
+
+/* ── shortening suggestions (level 2, LINT_RULES.md) ────────────────────
+ * Advice about form, never about meaning: every check here fires only when
+ * the rewrite it names is exactly the same program. */
+
+/* The value of an integer literal, or -1 when the node is not one. */
+static ylong lint_int_val(Yv *node) {
+    if (yv_l(yr_get(node, "k")) != K_num) { return -1; }
+    Yv *s = yr_get(node, "v");
+    if (yv_len(s) > 0 && ys_byte_at(s, yv_len(s) - 1) == 'n') {
+        s = ys_slice(s, 0, yv_len(s) - 1);
+    }
+    ylong base = 10;
+    ylong r = radix_of(s);
+    if (r != 0) {
+        base = r;
+        s = ys_slice_from(s, 2);
+    }
+    if (base == 10 && (ys_index_of(s, ys(".")) >= 0 ||
+                       ys_index_of(s, ys("e")) >= 0 ||
+                       ys_index_of(s, ys("E")) >= 0)) {
+        return -1;
+    }
+    ylong v = 0;
+    int ok = yv_len(s) > 0;
+    ylong i = 0;
+    while (ok && i < yv_len(s)) {
+        ylong c = ys_byte_at(s, i);
+        if (c == '_') {
+        } else if (c >= '0' && c <= '9') {
+            v = v * base + (c - '0');
+        } else if (base == 16 && c >= 'a' && c <= 'f') {
+            v = v * 16 + (c - 'a' + 10);
+        } else if (base == 16 && c >= 'A' && c <= 'F') {
+            v = v * 16 + (c - 'A' + 10);
+        } else {
+            ok = 0;
+        }
+        i = i + 1;
+    }
+    return ok ? v : -1;
+}
+
+/* The operator set that has a compound assignment. */
+static int lint_compound_op(Yv *op) {
+    return ys_eq_lit(op, "+") || ys_eq_lit(op, "-") || ys_eq_lit(op, "*") ||
+           ys_eq_lit(op, "/") || ys_eq_lit(op, "%") || ys_eq_lit(op, "&") ||
+           ys_eq_lit(op, "|") || ys_eq_lit(op, "^") || ys_eq_lit(op, "<<") ||
+           ys_eq_lit(op, ">>") || ys_eq_lit(op, ">>>");
+}
+
+/* Whether two written expressions are the same one. Only the shapes a
+ * slice bound is written with: a name, a literal, a unary and a binary.
+ * Commutativity is the caller's business. */
+static int lint_same_node(Yv *a, Yv *b) {
+    ylong ka = yv_l(yr_get(a, "k"));
+    if (ka != yv_l(yr_get(b, "k"))) { return 0; }
+    if (ka == K_id || ka == K_num || ka == K_str || ka == K_bool) {
+        return ys_eq(yr_get(a, "v"), yr_get(b, "v"));
+    } else if (ka == K_un) {
+        return ys_eq(yr_get(a, "op"), yr_get(b, "op")) &&
+               lint_same_node(yr_get(a, "e"), yr_get(b, "e"));
+    } else if (ka == K_bin) {
+        return ys_eq(yr_get(a, "op"), yr_get(b, "op")) &&
+               lint_same_node(yr_get(a, "l"), yr_get(b, "l")) &&
+               lint_same_node(yr_get(a, "r"), yr_get(b, "r"));
+    }
+    return 0;
+}
+
+/* `lo` and `hi` are `E` and `E + 1` (either operand order). */
+static int lint_slice_one(Yv *lo, Yv *hi) {
+    if (yv_l(yr_get(hi, "k")) != K_bin) { return 0; }
+    if (!ys_eq_lit(yr_get(hi, "op"), "+")) { return 0; }
+    if (lint_int_val(yr_get(hi, "r")) == 1 &&
+        lint_same_node(lo, yr_get(hi, "l"))) {
+        return 1;
+    }
+    return lint_int_val(yr_get(hi, "l")) == 1 &&
+           lint_same_node(lo, yr_get(hi, "r"));
+}
+
+/* Whether a written expression is a str (a literal, or a binding noted as
+ * holding one). An unknown receiver is not a str: a warning that would
+ * change a string into a byte had better be sure. */
+static int lint_str_expr(LintSt st, Yv *node) {
+    if (yv_l(yr_get(node, "k")) == K_str) { return 1; }
+    if (yv_l(yr_get(node, "k")) == K_id) {
+        return lint_var_str(st, yr_get(node, "v"));
+    }
+    return 0;
+}
+
+/* The name to put in a message, when the expression has one. */
+static Yv *lint_operand(Yv *node) {
+    if (yv_l(yr_get(node, "k")) == K_id) { return lint_disp(yr_get(node, "v")); }
+    return ys("");
+}
+
+/* Rule 1.1/1.2: `x = x + e` is `x += e`. */
+static ylong lint_short_assign(LintSt st, Yv *node, Yv *name, Yv *v) {
+    if (yv_l(yr_get(v, "k")) != K_bin) { return 0; }
+    Yv *op = yr_get(v, "op");
+    Yv *l = yr_get(v, "l");
+    if (yv_l(yr_get(l, "k")) != K_id) { return 0; }
+    if (!ys_eq(yr_get(l, "v"), name)) { return 0; }
+    Yv *d = lint_disp(name);
+    if (ys_eq_lit(op, "+") && lint_int_val(yr_get(v, "r")) == 1) {
+        (void)lint_warn_at(st,
+                           lint_cat(7, ys("'"), d, ys(" = "), d,
+                                    ys(" + 1' can be written '"), d, ys("++'")),
+                           node);
+    } else if (ys_eq_lit(op, "-") && lint_int_val(yr_get(v, "r")) == 1) {
+        (void)lint_warn_at(st,
+                           lint_cat(7, ys("'"), d, ys(" = "), d,
+                                    ys(" - 1' can be written '"), d, ys("--'")),
+                           node);
+    } else if (lint_compound_op(op) && lint_var_scal(st, name)) {
+        (void)lint_warn_at(st,
+                           lint_cat(11, ys("'"), d, ys(" = "), d, ys(" "), op,
+                                    ys(" <expr>' can be written '"), d, ys(" "),
+                                    op, ys("= <expr>'")),
+                           node);
+    }
+    return 0;
+}
+
+/* Rule 1.9: a comparison against a bool literal is the value or its not. */
+static ylong lint_short_bin(LintSt st, Yv *node) {
+    Yv *op = yr_get(node, "op");
+    if (!ys_eq_lit(op, "==") && !ys_eq_lit(op, "!=")) { return 0; }
+    Yv *lit = yr_get(node, "r");
+    Yv *other = yr_get(node, "l");
+    if (yv_l(yr_get(yr_get(node, "l"), "k")) == K_bool) {
+        lit = yr_get(node, "l");
+        other = yr_get(node, "r");
+    } else if (yv_l(yr_get(yr_get(node, "r"), "k")) != K_bool) {
+        return 0;
+    }
+    Yv *lb = yr_get(lit, "v");
+    int neg = (ys_eq_lit(op, "!=") == ys_eq_lit(lb, "true"));
+    Yv *d = lint_operand(other);
+    if (ys_eq_lit(d, "")) {
+        (void)lint_warn_at(st,
+                           ys("a comparison against true or false is the value "
+                              "itself, or its negation"),
+                           node);
+    } else if (neg) {
+        (void)lint_warn_at(st,
+                           lint_cat(9, ys("'"), d, ys(" "), op, ys(" "), lb,
+                                    ys("' can be written '!"), d, ys("'")),
+                           node);
+    } else {
+        (void)lint_warn_at(st,
+                           lint_cat(9, ys("'"), d, ys(" "), op, ys(" "), lb,
+                                    ys("' can be written '"), d, ys("'")),
+                           node);
+    }
+    return 0;
+}
+
+/* Rule 1.3: `byte_at(s, i)` is `s[i]`. */
+static ylong lint_short_call(LintSt st, Yv *call) {
+    Yv *callee = yr_get(call, "callee");
+    if (yv_l(yr_get(callee, "k")) != K_id) { return 0; }
+    Yv *args = yr_get(call, "args");
+    if (ys_eq_lit(yr_get(callee, "v"), "byte_at") && yv_len(args) == 2 &&
+        nameix_get(yr_get(st, "ridx"), ys("byte_at")) < 0) {
+        (void)lint_warn_at(st, ys("'byte_at(s, i)' can be written 's[i]'"),
+                           call);
+    }
+    return 0;
+}
+
+/* Rule 1.5: `ord(s[E:E + 1])` is `s[E]`. Handled here, before the slice
+ * node is walked, so the slice does not also get rule 1.4's warning. */
+static int lint_short_ord(LintSt st, Yv *call) {
+    Yv *callee = yr_get(call, "callee");
+    if (yv_l(yr_get(callee, "k")) != K_id) { return 0; }
+    Yv *args = yr_get(call, "args");
+    if (!ys_eq_lit(yr_get(callee, "v"), "ord") || yv_len(args) != 1 ||
+        yv_l(yr_get(ya_get(args, 0), "k")) != K_slice ||
+        nameix_get(yr_get(st, "ridx"), ys("ord")) >= 0) {
+        return 0;
+    }
+    Yv *sl = ya_get(args, 0);
+    if (!lint_slice_one(yr_get(sl, "lo"), yr_get(sl, "hi"))) { return 0; }
+    (void)lint_two(st, yr_get(sl, "arr"), yr_get(sl, "lo"));
+    (void)lint_node(st, yr_get(sl, "hi"), 1);
+    (void)lint_warn_at(
+        st, ys("'ord' of a one-character slice can be written as an index (a byte)"),
+        call);
+    return 1;
+}
+
+/* Rule 1.4: a one-character slice of a str is `s[E]`. */
+static ylong lint_short_slice(LintSt st, Yv *node) {
+    if (lint_slice_one(yr_get(node, "lo"), yr_get(node, "hi")) &&
+        lint_str_expr(st, yr_get(node, "arr"))) {
+        (void)lint_warn_at(
+            st, ys("a one-character slice can be written as an index (a byte)"),
+            node);
+    }
+    return 0;
 }
 
 /* Whether evaluating a node can do more than compute its value. */
@@ -925,6 +1200,17 @@ static ylong lint_loop_body(LintSt st, Yv *body) {
 }
 
 static ylong lint_func(LintSt st, Yv *node) {
+    /* Note the parameters first: the shortening rules ask whether a name is
+     * a str or an array, and one of those names is usually a parameter. */
+    Yv *params = yr_get(node, "params");
+    Yv *ptypes = yr_get(node, "ptypes");
+    ylong line = yv_l(yr_get(node, "line"));
+    ylong col = yv_l(yr_get(node, "col"));
+    ylong i = 0;
+    while (i < yv_len(params) && i < yv_len(ptypes)) {
+        (void)lint_note_param(st, ya_get(params, i), ya_get(ptypes, i), line, col);
+        i = i + 1;
+    }
     Yv *body = yr_get(node, "body");
     return lint_stmts(st, yr_get(body, "stmts"), 1, 0);
 }
@@ -974,6 +1260,9 @@ static ylong lint_assign(LintSt st, Yv *node) {
                            lint_cat(3, ys("'"), lint_disp(name),
                                     ys("' is assigned to itself")),
                            node);
+    }
+    if (yv_l(yr_get(st, "wlevel")) >= 2) {
+        (void)lint_short_assign(st, node, name, v);
     }
     return 0;
 }
@@ -1028,6 +1317,15 @@ static ylong lint_opassign(LintSt st, Yv *node, int used) {
             ys("this `+=` on a string copies the whole string, so a loop of "
                "them is quadratic -- add a `;` if nothing reads the value"),
             node);
+    }
+    if (yv_l(yr_get(st, "wlevel")) >= 2 && yv_l(yr_get(t, "k")) == K_id &&
+        (ys_eq_lit(op, "+") || ys_eq_lit(op, "-")) && lint_int_val(v) == 1) {
+        Yv *d = lint_disp(yr_get(t, "v"));
+        Yv *rs = ys_eq_lit(op, "+") ? ys("++") : ys("--");
+        (void)lint_warn_at(st,
+                           lint_cat(8, ys("'"), d, ys(" "), op,
+                                    ys("= 1' can be written '"), d, rs, ys("'")),
+                           node);
     }
     return 0;
 }
