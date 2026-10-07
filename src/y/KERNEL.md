@@ -1236,3 +1236,26 @@ So `exec` works in every configuration tried, and the failing case is
 expression (its prelude / builtins), not from the expression.  Next: read
 test/y/examples/ysh.y's eval path -- what it passes ycc (flags, --no-exec, the
 prelude it splices) -- and reproduce that exact command line by hand.
+
+### Round 78: the mechanism, named -- ysh compiles every eval with --no-exec
+
+Read test/y/examples/ysh.y's eval path (lines 44-58):
+
+    // --no-exec strips exec() from the evaluated program.
+    let rc = exec(YCC + " --no-exec -o " + OUT_PATH + " " + SRC_PATH + " 2>&1");
+    ...
+    exec(OUT_PATH)
+
+So ysh passes --no-exec for EVERY eval, and the test's two cases differ only in
+the expression text: `eval print(6 * 7)` must succeed (its program has no exec)
+and `eval exec("true")` must fail with "undefined function 'exec'".  On this
+branch the FIRST fails with that message at "1:5", so the program ysh actually
+compiles around `print(6 * 7)` reaches exec -- the prelude it splices and the
+--no-exec flag it passes are inconsistent for this build.
+
+That is a fixture/pack interaction, not kernel work and not the shake fix, and
+the pair (spliced prelude, --no-exec) is the thing to look at: either the prelude
+must not use exec (the fixture's intent, since the test asserts the plain case
+succeeds), or the flag must not be passed for that path.  The control is to run
+the same case against the main tree's compiler, which the ycc suite supports by
+environment (YCC/YREF).
