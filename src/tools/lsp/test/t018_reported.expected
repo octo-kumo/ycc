@@ -13,9 +13,35 @@ clock_us: long
 clock_us, in the subtraction: long
 len: long
 print: void
--- 5. the TextMate grammar orders strings before comments
+clock_us, painted as a builtin: builtin
+len, painted as a builtin: builtin
+-- 3. an f-string is sub-tokenized, not one blob
+line 15: 5 spans, 26 tokens
+name inside the interpolation: variable
+its format spec `:`, `<`: punctuation/NO-SUCH-COLUMN
+its width `14`: number
+us, the second interpolation: variable
+the literal ` ns/call` stays a string: string
+the opening f": string
+a brace: punctuation/NO-SUCH-COLUMN
+print, outside the string: builtin
+line 20, a plain string: 10 spans, 10 tokens
+line 18, a comment: 1 spans, 1 tokens
+-- 4. the language's TYPE NAMES are painted as types
+long, a return type: type
+str, a parameter type: type
+float, a parameter type: type
+P, an alias: type
+a `long` that is a variable: variable
+a field of a record type: variable
+-- 5. a comment is ONE token, so nothing inside it is highlighted
+the comment's span: comment
+a bracket inside it: comment
+its closing bracket agrees: comment
+a paren inside it agrees too: comment/comment
 #strings comes before #comments: true
 at 178 and 219
+the `//` in line 19's string scans as a string: string
 -- 6. an IMPORTED name answers
 exp of math.exp, at the call: ```y|exp(x: float) -> float|```||── exp ────────────────────────────────────────────────────────────────────|exp(x): e^x. The argument is split as k*ln2 + r, the kernel computes e^r in|[0.707, 1.414), and 2^k goes back on by adding to the exponent field -- which|is exact, so the whole answer is as accurate as the kernel and the reduction.
 e, bound from an import: ```y|float|```||```y|e|```
@@ -33,4 +59,5 @@ and a str offers 27 items: split,join,trim,strip,trim_start,lstrip, all of them 
 hovering inside a string literal: ""
 hovering a line that is not there: true
 hovering an import's own name: ""
+tokens outside the legend: 0 of 215
 done
