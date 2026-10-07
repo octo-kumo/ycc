@@ -461,3 +461,14 @@ free, because the failure is a `cur` that pointed into memory someone else now
 owns. The pair, the reproducer and the reporting trap are all in this tree; the
 trap prints chunk base/end, the block, its header, both neighbours and the map
 register, and the fault reproduces on the first spawn in a single run.
+
+### One thing ruled out (round 31)
+
+`y_alloc` takes its size in `%rdi` (`y_alloc: lea 15(%rdi),%rax; and $-8,%rax`),
+so `y_spawn`'s `mov $128,%rdi; call y_alloc` is correct and the `%rax` the slow
+path carries is the *rounded* size, not the argument. The round-29 fault in
+`y_alloc_go` is therefore not a bad size argument: the instruction that faults
+is the header write at `(%rdx)`, and `%rdx` came from `mov (%rcx),%rdx` -- the
+heap block's word 0, its `cur`. So the question stays exactly where round 29 put
+it: which writer leaves a registered thread's `cur` pointing at memory that is
+no longer its own, when the first `y_spawn` allocates a 128-byte tcb.
