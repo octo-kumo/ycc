@@ -39,7 +39,7 @@ YCC_SRCS=src/y/ycc.y src/y/tags.y src/y/target.y src/y/pkg.y src/y/lexer.y src/y
 # it is built: native.y says `embed RT_SRC from "./std/rt.y";`, the C copy
 # Y_EMBED(...) — an .incbin, so the C build reads them too (from the repo
 # root, where these rules run gcc).
-STD_EMBEDS=src/y/std/rt.y src/y/std/prelude.y src/y/std/exec.y src/y/std/str.y
+STD_EMBEDS=src/y/std/rt.y src/y/std/prelude.y src/y/std/exec.y src/y/std/str.y src/y/std/args.y src/y/std/crypto.y src/y/std/fs.y src/y/std/http.y src/y/std/json.y src/y/std/math.y src/y/std/net.y src/y/std/random.y src/y/std/regex.y src/y/std/sort.y src/y/std/struct.y src/y/std/test.y src/y/std/tls.y src/y/std/tui.y src/y/std/utf8.y src/y/std/x509.y
 
 # The assembly the compiler hands to asm.y for every program, in src/y/arch/,
 # embedded the same way: arch_x64.y says `embed PRELUDE_ASM from

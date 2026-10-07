@@ -57,6 +57,22 @@ embed RT_SRC from "./std/rt.y";
 embed PRELUDE_SRC from "./std/prelude.y";
 embed EXEC_SRC from "./std/exec.y";
 embed STR_SRC from "./std/str.y";
+embed ARGS_SRC from "./std/args.y";
+embed CRYPTO_SRC from "./std/crypto.y";
+embed FS_SRC from "./std/fs.y";
+embed HTTP_SRC from "./std/http.y";
+embed JSON_SRC from "./std/json.y";
+embed MATH_SRC from "./std/math.y";
+embed NET_SRC from "./std/net.y";
+embed RANDOM_SRC from "./std/random.y";
+embed REGEX_SRC from "./std/regex.y";
+embed SORT_SRC from "./std/sort.y";
+embed STRUCT_SRC from "./std/struct.y";
+embed TEST_SRC from "./std/test.y";
+embed TLS_SRC from "./std/tls.y";
+embed TUI_SRC from "./std/tui.y";
+embed UTF8_SRC from "./std/utf8.y";
+embed X509_SRC from "./std/x509.y";
 
 // `ycc -g` line markers, set by compile_unit for each unit. With
 // dbg_lines on, the text opens with a `.file N "path"` per origin file
@@ -863,6 +879,7 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str], smods
                 let from_idx = index_of(rest, " from ");
                 let name = "";
                 let full = "";
+                let mod_emb: str = "";
                 let path = "";
                 let is_pkg = false;
                 if (from_idx >= 0) {
@@ -892,6 +909,17 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str], smods
                         if (!name_in(res_used, name)) { res_used += name; }
                     } else {
                         full = std_resolve(name, base_dir);
+                        // A std library module (args, net, math, ...) is spliced
+                        // from source, and a ycc that is not in its checkout has
+                        // none on disk. Its source is embedded in this binary
+                        // (std_mod_src), so name it here and take it from memory.
+                        if (len(full) == 0) {
+                            let emb = std_mod_src(name);
+                            if (len(emb) > 0) {
+                                mod_emb = emb;
+                                full = "std/" + name + ".y";
+                            };
+                        };
                     };
                 };
                 if (is_pkg) {
@@ -906,7 +934,9 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str], smods
                     puts("error: cannot find module '" + name + "' (import name; looks next to the importer and in std/)\n");
                     exit(1);
                 } else {
-                    let mod_src = fs.read_file(full);
+                    // the embedded copy, when std_resolve fell back to it
+                    let mod_src: str? = none;
+                    if (len(mod_emb) > 0) { mod_src = some(mod_emb); } else { mod_src = fs.read_file(full); };
                     if (mod_src == none) {
                         puts("error: cannot open import '" + path + "' (resolved to '" + full + "')\n");
                         exit(1);
@@ -11973,6 +12003,49 @@ def std_unit_src(name: str) -> str {
         STR_SRC
     } else {
         RT_SRC
+    }
+};
+
+// The source of a std LIBRARY module (args, net, math, ...) as embedded in this
+// binary, or "" when it is not one. The four core units travel compiled (in the
+// std pack attached to ycc); every other std module is spliced into the program
+// from source, and a lone ycc has no src/y/std/ beside it -- so the sources are
+// embedded too and std_resolve falls back to this (see resolve_unit).
+def std_mod_src(name: str) -> str {
+    if (name == "args") {
+        std_text(ARGS_SRC)
+    } else if (name == "crypto") {
+        std_text(CRYPTO_SRC)
+    } else if (name == "fs") {
+        std_text(FS_SRC)
+    } else if (name == "http") {
+        std_text(HTTP_SRC)
+    } else if (name == "json") {
+        std_text(JSON_SRC)
+    } else if (name == "math") {
+        std_text(MATH_SRC)
+    } else if (name == "net") {
+        std_text(NET_SRC)
+    } else if (name == "random") {
+        std_text(RANDOM_SRC)
+    } else if (name == "regex") {
+        std_text(REGEX_SRC)
+    } else if (name == "sort") {
+        std_text(SORT_SRC)
+    } else if (name == "struct") {
+        std_text(STRUCT_SRC)
+    } else if (name == "test") {
+        std_text(TEST_SRC)
+    } else if (name == "tls") {
+        std_text(TLS_SRC)
+    } else if (name == "tui") {
+        std_text(TUI_SRC)
+    } else if (name == "utf8") {
+        std_text(UTF8_SRC)
+    } else if (name == "x509") {
+        std_text(X509_SRC)
+    } else {
+        ""
     }
 };
 

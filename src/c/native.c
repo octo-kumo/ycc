@@ -110,6 +110,22 @@ Y_EMBED(RT_SRC, "src/y/std/rt.y")
 Y_EMBED(PRELUDE_SRC, "src/y/std/prelude.y")
 Y_EMBED(EXEC_SRC, "src/y/std/exec.y")
 Y_EMBED(STR_SRC, "src/y/std/str.y")
+Y_EMBED(ARGS_SRC, "src/y/std/args.y")
+Y_EMBED(CRYPTO_SRC, "src/y/std/crypto.y")
+Y_EMBED(FS_SRC, "src/y/std/fs.y")
+Y_EMBED(HTTP_SRC, "src/y/std/http.y")
+Y_EMBED(JSON_SRC, "src/y/std/json.y")
+Y_EMBED(MATH_SRC, "src/y/std/math.y")
+Y_EMBED(NET_SRC, "src/y/std/net.y")
+Y_EMBED(RANDOM_SRC, "src/y/std/random.y")
+Y_EMBED(REGEX_SRC, "src/y/std/regex.y")
+Y_EMBED(SORT_SRC, "src/y/std/sort.y")
+Y_EMBED(STRUCT_SRC, "src/y/std/struct.y")
+Y_EMBED(TEST_SRC, "src/y/std/test.y")
+Y_EMBED(TLS_SRC, "src/y/std/tls.y")
+Y_EMBED(TUI_SRC, "src/y/std/tui.y")
+Y_EMBED(UTF8_SRC, "src/y/std/utf8.y")
+Y_EMBED(X509_SRC, "src/y/std/x509.y")
 
 /* `ycc -g` line markers, set by compile_unit for each unit. With
  * dbg_lines on, the text opens with a `.file N "path"` per origin file
@@ -603,6 +619,7 @@ Yv *phase_end(Yv *times, Yv *name, ylong t0, ylong h0);
 Yv *unit_empty(Yv *name);
 Yv *externs_none(void);
 Yv *std_unit_src(Yv *name);
+Yv *std_mod_src(Yv *name);
 ylong std_unit_base(Yv *name);
 int std_unit_bound(Yv *name);
 Yv *std_unit_names(void);
@@ -1590,6 +1607,7 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, ylong depth, Yv *seen,
                 ylong from_idx = ys_index_of(rest, ys(" from "));
                 Yv *name = ys("");
                 Yv *full = ys("");
+                Yv *mod_emb = ys("");
                 Yv *path = ys("");
                 int is_pkg = 0;
                 if (from_idx >= 0) {
@@ -1628,6 +1646,15 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, ylong depth, Yv *seen,
                         ;
                     } else {
                         full = std_resolve(name, base_dir);
+                        /* a std library module with no source on disk: its
+                           source is embedded (std_mod_src). */
+                        if (yv_len(full) == 0) {
+                            Yv *emb = std_mod_src(name);
+                            if (yv_len(emb) > 0) {
+                                mod_emb = emb;
+                                full = ys_cat(ys_cat(ys("std/"), name), ys(".y"));
+                            }
+                        }
                         ;
                     }
                     ;
@@ -1647,7 +1674,8 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, ylong depth, Yv *seen,
                     exit_(1);
                     ;
                 } else {
-                    Yv *mod_src = read_file(full);
+                    /* the embedded copy, when std_resolve fell back to it */
+                    Yv *mod_src = yv_len(mod_emb) > 0 ? mod_emb : read_file(full);
                     if (yv_is_none(mod_src)) {
                         puts_(ys_cat(
                             ys_cat(ys_cat(ys_cat(ys("error: cannot open import '"),
@@ -14006,6 +14034,47 @@ Yv *unit_empty(Yv *name) {
 Yv *externs_none(void) {
     return yr(5, "ext", yav(0), "dfl", yav(0), "pkgs", yav(0), "inits",
               yav(0), "argv", yv_bool(0));
+}
+
+/* The source of a std LIBRARY module (native.y std_mod_src): the four core
+ * units travel compiled in ycc's std pack, every other std module is
+ * spliced from source, and a lone ycc has no src/y/std/ beside it. */
+Yv *std_mod_src(Yv *name) {
+    if (ys_eq_lit(name, "args")) {
+        return std_text(ARGS_SRC());
+    } else if (ys_eq_lit(name, "crypto")) {
+        return std_text(CRYPTO_SRC());
+    } else if (ys_eq_lit(name, "fs")) {
+        return std_text(FS_SRC());
+    } else if (ys_eq_lit(name, "http")) {
+        return std_text(HTTP_SRC());
+    } else if (ys_eq_lit(name, "json")) {
+        return std_text(JSON_SRC());
+    } else if (ys_eq_lit(name, "math")) {
+        return std_text(MATH_SRC());
+    } else if (ys_eq_lit(name, "net")) {
+        return std_text(NET_SRC());
+    } else if (ys_eq_lit(name, "random")) {
+        return std_text(RANDOM_SRC());
+    } else if (ys_eq_lit(name, "regex")) {
+        return std_text(REGEX_SRC());
+    } else if (ys_eq_lit(name, "sort")) {
+        return std_text(SORT_SRC());
+    } else if (ys_eq_lit(name, "struct")) {
+        return std_text(STRUCT_SRC());
+    } else if (ys_eq_lit(name, "test")) {
+        return std_text(TEST_SRC());
+    } else if (ys_eq_lit(name, "tls")) {
+        return std_text(TLS_SRC());
+    } else if (ys_eq_lit(name, "tui")) {
+        return std_text(TUI_SRC());
+    } else if (ys_eq_lit(name, "utf8")) {
+        return std_text(UTF8_SRC());
+    } else if (ys_eq_lit(name, "x509")) {
+        return std_text(X509_SRC());
+    } else {
+        return ys("");
+    }
 }
 
 Yv *std_unit_src(Yv *name) {

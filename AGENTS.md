@@ -87,9 +87,14 @@ moved with the callgrind table, `perf`, or `ycc --time`.
   `valgrind --tool=callgrind`, `gdb` (`break file.y:N`, no variables), `nm` and
   `addr2line` name things.
 - Always feed `</dev/null` in scripts.
-- **Run a compiler from the tree it was built in.** Std units resolve against the
-  compiler's own directory, so a binary copied to `/tmp` has no `std/` beside it
-  and every `import fs`-style program fails to resolve.
+- **A built `ycc` is self-contained.** Every std source is embedded in the
+  compiler (native.y `embed`, the C copy's `Y_EMBED`) and the four core runtime
+  units travel precompiled in the std pack attached to the binary, so a copy in
+  an empty directory compiles `import fs`/`net`/`args`-style programs. Resolution
+  still prefers `src/y/std/` when it is there (that is how a std unit is edited
+  and tested); the embedded text is the fallback when no source is on disk.
+  The embedding costs ~540 KB of compiler binary and `STD_EMBEDS` in the
+  Makefile lists every std source so a rebuild picks up an edit.
 - Branches and worktrees: `master`, plus `mem-lifetime` (`.worktrees/mem`),
   `kernel` (`.worktrees/kernel`) and `bigint-math` (`../compiler-bigint`). Merge
   forward into `master`; never rewrite a branch another worktree has checked out.
