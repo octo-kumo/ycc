@@ -1695,3 +1695,65 @@ switch can resume it, or have task_start save a resumable kernel context and
 switch through the scheduler like everything else.  Until then, no fixture whose
 driver calls task_start can assert an .exit -- which is why u005_ipc and
 u007_fsexec have none, and that is a property of the design, not an oversight.
+
+## End of run (round 100) -- state, invariants, and the next steps
+
+VERIFIED AT THE END OF THIS RUN: `make rebless` leaves refs/ycc.ref at
+3a0f6208805aa880 (std/kernel.y is read from disk, not embedded, so the shipped
+compiler did not need to move); `test/kernel` is 45 passed, 0 failed / 45 total
+with the SHIPPED ./ycc and ./cycc; and `make test` is green except the three
+pre-existing failures (lsp and coverage, documented in master's own message, and
+ycc's one ysh case, which the MAIN TREE's compiler fails identically).
+
+DONE.  M0 (address layout, heap out of .bss, PD[0] + direct map, kexit, one
+physical allocator), M1 (ring 3, syscall entry, ELF64 loader) and M2 (tasks, VM,
+scheduler, preemption, fork/wait4/exit teardown) are complete and pinned by
+fixtures.  M3's subsystems that exist: IPC over ports (u005_ipc -- a full
+multi-round request/reply exchange between two processes), the callee-saved frame
+contract (twenty words: nine syscall-ABI slots, the six the Y ABI promises, and
+the CPU's five), console output and INPUT (t012_serialin proves a real byte from
+the host through the UART), the YFS1 format with a host-side builder (os/tools/
+mkfs.y, byte-verified) and a kernel reader pinned from five directions
+(t013_yfsread, t014_yfsblocks, t015_yfsdir, t016_yfspath), and the
+filesystem-to-ring-3 boot path (u007_fsexec: a YFS1 image built in memory, the
+program's ELF copied in as /prog, then loaded and run out of the filesystem).
+
+NEXT, in order of what unblocks the most:
+ 1. The task-start/exit design decision (see the previous section).  Until the
+    boot context is resumable, no driver that calls task_start can assert an
+    .exit, and the last user program's exit hands the switch a NULL stack.
+ 2. The fd broker: an fd maps to {inode, offset, flags}, with openat, read,
+    write, lseek, close and getdents64 built on it -- the syscalls the M4
+    programs need, with YFS1 underneath and a server in front of it later.
+ 3. Blocking console input: a PIC unmask helper plus an `irq 4 def` handler that
+    buffers the byte and completes the blocked reader.
+ 4. The fs and tty servers, then /init, /bin/sh and the M4 command set, then M5
+    (/bin/ycc, /bin/std, /proc/self/exe, /proc/self/environ), then M6's docs and
+    ratchets.
+
+INVARIANTS a change must not break, all of them learned the hard way here:
+ * the canonical frame is TWENTY words, six of them -- rbx, rbp, r12-r15 --
+   between the nine and the CPU's five, in BOTH suspension paths (syscall entry
+   and the generated IRQ stubs), with the dispatcher's temporary syscall number
+   at 104(%rsp) and the IRQ stub's CS check at 128(%rsp);
+ * sys_fork copies that frame, so its size (20 words) moves with it, while the
+   rax slot at +48 does not;
+ * YFS1: superblock, 64-byte inodes (twelve direct slots then one indirect), data
+   blocks, and the entry stride (8 + name_len rounded to 4);
+ * yfs_* readers take offsets INTO THE IMAGE and add the image address -- the one
+   place that forgot it cost several rounds;
+ * IRQ stubs are generated in the same region as the trap stubs and are told
+   apart by the `y_irq_stub_N:` label: editing the trap stubs by pattern shifts
+   the handler's vector/error offsets.
+
+RULES that each cost rounds in this run:
+ * after an embedded arch/*.s change, rebuild BOTH engines (make cycc as well as
+   the Y one) before reading any suite number;
+ * run the MAIN TREE's compiler as a control before believing this branch broke
+   something;
+ * READ A RUN'S OUTPUT before committing an .expected -- twice an expectation
+   captured from a failing run "passed" while asserting the bug (u006's
+   "read -14", t013's "ino -1");
+ * verify every hard-coded frame size when the frame changes (sys_fork was the
+   last one found);
+ * strip ANSI colour before grep-matching harness output, or FAIL goes unseen.
