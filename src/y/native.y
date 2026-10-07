@@ -345,10 +345,8 @@ def std_text(s: str) -> str {
 // field with a format spec (words_scan).
 def words_seen(code: str, names: [str]) -> [long] {
     let seen: [long] = [];
-    let k = 0;
-    while (k <= len(names)) {
+    for k in 0..len(names) + 1 {
         seen += 0;
-        k++;
     };
     words_scan(code, 0, len(code), names, seen);
     seen
@@ -411,15 +409,13 @@ def words_scan(code: str, lo: long, n: long, names: [str], seen: [long]) -> long
                     };
                     i = w.end;
                 } else {
-                    let m = 0;
-                    while (m < len(names)) {
+                    names.foreach((_el, m) => {
                         let nm: str = names[m];
                         if (len(nm) == j - i && word_at(code, i, nm)) {
                             if (seen[m] == 0) { seen[m] = 1; }
                             if (prev == '.') { pend = m; }
                         }
-                        m++;
-                    };
+                    });
                     i = j;
                 };
             } else {
@@ -456,10 +452,8 @@ def word_at(code: str, i: long, nm: str) -> bool {
 // Whether any of seen[lo..hi) reaches `level` (see words_seen).
 def seen_any(seen: [long], lo: long, hi: long, level: long) -> bool {
     let r = false;
-    let i = lo;
-    while (i < hi) {
+    for i in lo..hi {
         if (seen[i] >= level) { r = true; }
-        i = i + 1;
     };
     r
 };
@@ -478,8 +472,7 @@ def seen_any(seen: [long], lo: long, hi: long, level: long) -> bool {
 def norm_path(p: str) -> str {
     let parts = split(p, "/");
     let out: [str] = [];
-    let i = 0;
-    while (i < len(parts)) {
+    parts.foreach((_el, i) => {
         let seg = parts[i];
         let n = len(out);
         if (seg == ".") {
@@ -488,8 +481,7 @@ def norm_path(p: str) -> str {
         } else {
             out += seg;
         };
-        i++;
-    };
+    });
     join(out, "/")
 };
 
@@ -693,15 +685,13 @@ def meta_compile_gen() -> [byte] {
     let r = emit_program(ast, nr, false, 0, su, []);
     if (!r.ok) {
         let seen: [str] = [];
-        let i = 0;
-        while (i < len(r.errors)) {
+        for i in 0..len(r.errors) {
             let e = r.errors[i];
             let at = origin_at(go, e.line, false) + ":" + tostring(e.col);
             if (!dup_at(seen, at)) {
                 seen += at;
                 puts(at + ": error: " + e.msg + "\n");
             };
-            i++;
         };
         meta.mg_set(true);
         meta.mg_report("the meta generator did not compile");
@@ -718,11 +708,9 @@ def meta_compile_gen() -> [byte] {
 
 def dup_at(seen: [str], at: str) -> bool {
     let hit = false;
-    let i = 0;
-    while (i < len(seen)) {
+    seen.foreach((_el, i) => {
         if (seen[i] == at) { hit = true; };
-        i++;
-    };
+    });
     hit
 };
 
@@ -736,20 +724,16 @@ def meta_gorigin(nbody: long) -> Origin {
     let f: [long] = [];
     let l: [long] = [];
     let m: [str] = [];
-    let i = 0;
-    while (i < n) {
+    for i in 0..n {
         f += 0;
         l += 1;
         m += "";
-        i++;
     };
     let gol = meta.mg_gol;
-    let k = 0;
-    while (k < nbody) {
+    for k in 0..nbody {
         let ln = 1;
         if (k < len(gol)) { ln = gol[k]; };
         l[hs + k] = ln;
-        k++;
     };
     { files: [meta.mg_root + ".meta"], nuser: 1, file: f, line: l, mods: m }
 };
@@ -794,12 +778,10 @@ def std_resolve(name: str, base_dir: str) -> str {
     cands += base_dir + "/" + name + ".y";
     cands += base_dir + "/std/" + name + ".y";
     // a package's source roots (native_resolve_pk)
-    let ri = 0;
-    while (ri < len(res_roots)) {
+    res_roots.foreach((_el, ri) => {
         let rr: str = res_roots[ri];
         cands += rr + "/" + name + ".y";
-        ri++;
-    };
+    });
     cands += "std/" + name + ".y";
     cands += "src/y/std/" + name + ".y";
     let d = self_dir();
@@ -809,8 +791,7 @@ def std_resolve(name: str, base_dir: str) -> str {
         cands += d + "/../src/y/std/" + name + ".y";
     }
     let found = "";
-    let i = 0;
-    while (i < len(cands)) {
+    cands.foreach((_el, i) => {
         if (len(found) == 0) {
             let c: str = cands[i];
             if (fs.read_file(c) == none) {
@@ -818,8 +799,7 @@ def std_resolve(name: str, base_dir: str) -> str {
                 found = norm_path(c);
             };
         }
-        i++;
-    };
+    });
     found
 };
 
@@ -986,11 +966,9 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str], smods
                         ofile += sub.ofile;
                         oline += sub.oline;
                         ogen += sub.ogen;
-                        let m = 0;
-                        while (m < len(subns)) {
+                        subns.foreach((_el, m) => {
                             imports += subns[m];
-                            m++;
-                        };
+                        });
                         // a module imported by name keeps its namespace
                         // (rename.y), one imported by path is flattened
                         if (from_idx >= 0) { imports += name; }
@@ -1073,8 +1051,7 @@ def quote_text(s: str) -> str {
     let hex = "0123456789abcdef";
     let out: [str] = ["\""];
     let run = 0;
-    let i = 0;
-    while (i < n) {
+    for i in 0..n {
         let c: long = b[i];
         let esc = "";
         if (c == '\\') {
@@ -1093,7 +1070,6 @@ def quote_text(s: str) -> str {
             out += esc;
             run = i + 1;
         }
-        i++;
     };
     out += s[run:];
     out += "\"";
@@ -1356,8 +1332,7 @@ def ir_refs_item(ir: [long], at: long, out: [str]) -> [str] {
     let f = ir[at];
     let kinds = insn.ir_form(f).kinds;
     let wp = at + 1;
-    let i = 0;
-    while (i < len(kinds)) {
+    kinds.foreach((_el, i) => {
         let k = kinds[i];
         if (k == insn.O_LBL) {
             out = ir_refs_push(out, lname(ir[wp]));
@@ -1370,8 +1345,7 @@ def ir_refs_item(ir: [long], at: long, out: [str]) -> [str] {
             };
         };
         wp = wp + insn.ir_kind_words(k);
-        i++;
-    };
+    });
     out
 };
 
@@ -1398,8 +1372,7 @@ def cell_reads(ir: [long], out: [str]) -> [str] {
             let form = insn.ir_form(f);
             let kinds = form.kinds;
             let wp = at + 1;
-            let i = 0;
-            while (i < len(kinds)) {
+            kinds.foreach((_el, i) => {
                 let k = kinds[i];
                 if (k == insn.O_MEM || k == insn.O_MEM0) {
                     let last = i == len(kinds) - 1;
@@ -1420,8 +1393,7 @@ def cell_reads(ir: [long], out: [str]) -> [str] {
                     };
                 };
                 wp = wp + insn.ir_kind_words(k);
-                i++;
-            };
+            });
         };
         at += insn.IR_W;
     };
@@ -1546,8 +1518,7 @@ def ir_relabel(ir: [long], m: [AsmLabel], dup_new: [str]) -> [long] {
         if (f < insn.IR_LABEL) {
             let kinds = insn.ir_form(f).kinds;
             let wp = at + 1;
-            let i = 0;
-            while (i < len(kinds)) {
+            kinds.foreach((_el, i) => {
                 let k = kinds[i];
                 if (k == insn.O_LBL) {
                     ir[wp] = ir_relabel_one(ir[wp], m, dup_new);
@@ -1560,8 +1531,7 @@ def ir_relabel(ir: [long], m: [AsmLabel], dup_new: [str]) -> [long] {
                     };
                 };
                 wp = wp + insn.ir_kind_words(k);
-                i++;
-            };
+            });
         };
         at += insn.IR_W;
     };
@@ -1579,10 +1549,8 @@ def ir_relabel_one(id: long, m: [AsmLabel], dup_new: [str]) -> long {
 // blob each.
 def pack_bodies(u: Unit) -> [str] {
     let out: [str] = [];
-    let b = 0;
-    while (b < len(u.bodies)) {
+    for b in 0..len(u.bodies) {
         out += pack_body(u, b);
-        b++;
     };
     out
 };
@@ -1629,12 +1597,10 @@ def block_falls_b(text: str, b: [byte], lo: long, hi: long) -> bool {
     while (go) {
         // start of the last line in [lo, end)
         let p = lo;
-        let i = lo;
-        while (i < end) {
+        for i in lo..end {
             if (b[i] == '\n') {
                 p = i + 1;
             }
-            i = i + 1;
         };
         let s = skip_sp(b, p, end);
         if (s >= end) {
@@ -1672,16 +1638,14 @@ def block_falls_b(text: str, b: [byte], lo: long, hi: long) -> bool {
 
 def namemap_build(names: [str]) -> [AsmLabel] {
     let m = asm.labmap_new(len(names) * 2 + 16);
-    let i = 0;
-    while (i < len(names)) {
+    names.foreach((_el, i) => {
         let nm: str = names[i];
         if (len(nm) > 0) {
             // First insert wins, as a scan for the first match did.
             let r = asm.labmap_put(m, nm, i, 0);
             m = r.map;
         }
-        i++;
-    };
+    });
     m
 };
 
@@ -1724,12 +1688,10 @@ def fntab_of(syms: [Sym], ids: [long]) -> FnTab {
 // `ids` for a Sym list: intern each label, in order.
 def fntab_ids(syms: [Sym]) -> [long] {
     let ids: [long] = [];
-    let i = 0;
-    while (i < len(syms)) {
+    syms.foreach((_el, i) => {
         let e = syms[i];
         ids += lbl_new(e.label);
-        i++;
-    };
+    });
     ids
 };
 
@@ -1739,23 +1701,18 @@ def fntab_ids(syms: [Sym]) -> [long] {
 def shake_keep(names: [str], refs: [[str]], falls: [bool], keep: [bool], roots: [str]) -> [bool] {
     let n = len(names);
     let map = namemap_build(names);
-    let r = 0;
-    while (r < len(roots)) {
+    roots.foreach((_el, r) => {
         let idx = namemap_get(map, roots[r]);
         if (idx >= 0) { keep[idx] = true; }
-        r++;
-    };
+    });
     let scanned: [bool] = [];
-    let i = 0;
-    while (i < n) {
+    for i in 0..n {
         scanned += false;
-        i++;
     };
     let more = true;
     while (more) {
         more = false;
-        let b = 0;
-        while (b < n) {
+        for b in 0..n {
             if (keep[b]) {
                 if (!(scanned[b])) {
                     scanned[b] = true;
@@ -1766,17 +1723,14 @@ def shake_keep(names: [str], refs: [[str]], falls: [bool], keep: [bool], roots: 
                         }
                     }
                     let rs = refs[b];
-                    let j = 0;
-                    while (j < len(rs)) {
+                    rs.foreach((_el, j) => {
                         let idx = namemap_get(map, rs[j]);
                         if (idx >= 0) {
                             if (!(keep[idx])) { keep[idx] = true; }
                         }
-                        j++;
-                    };
+                    });
                 }
             }
-            b++;
         };
     };
     keep
@@ -1903,20 +1857,15 @@ type PShake = { text: str, refs: [str] };
 // says it must, so it is here twice now.
 def check_os_call_names(lines: [str]) -> [str] {
     let labels: [str] = [];
-    let j = 0;
-    while (j < len(lines)) {
+    lines.foreach((_el, j) => {
         let nm = arch_label_name(lines[j]);
         if (nm != "") { labels += nm; };
-        j++;
-    };
+    });
     let names = types.os_call_names();
-    let i = 0;
-    while (i < len(names)) {
+    names.foreach((_el, i) => {
         let found = false;
-        let k = 0;
-        while (k < len(labels)) {
+        for k in 0..len(labels) {
             if (labels[k] == names[i]) { found = true; };
-            k++;
         };
         if (!found) {
             puts("error: os_call_names lists '" + names[i]
@@ -1925,8 +1874,7 @@ def check_os_call_names(lines: [str]) -> [str] {
                 + ")\n");
             exit(1);
         };
-        i++;
-    };
+    });
     lines
 };
 
@@ -1942,11 +1890,9 @@ def arch_label_name(l: str) -> str {
     else {
         let nm = l[0:len(l) - 1];
         let ok = true;
-        let i = 0;
-        while (i < len(nm)) {
+        for i in 0..len(nm) {
             let c = nm[i];
             if (c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) { } else { ok = false; };
-            i++;
         };
         if (ok) { nm } else { "" }
     }
@@ -1955,8 +1901,7 @@ def arch_label_name(l: str) -> str {
 def prelude_blocks(lines: [str]) -> PBlocks {
     let starts: [long] = [];
     let names: [str] = [];
-    let i = 0;
-    while (i < len(lines)) {
+    lines.foreach((_el, i) => {
         let l: str = lines[i];
         let lab = "";
         if (len(l) > 0 && l[0] != 32) {
@@ -1970,20 +1915,17 @@ def prelude_blocks(lines: [str]) -> PBlocks {
             names += "";
             starts += 0;
         };
-        i++;
-    };
+    });
     { lines: lines, starts: starts, names: names, ix: namemap_build(names) }
 };
 
 // Every reference the lines [lo, hi) make.
 def lines_refs(lines: [str], lo: long, hi: long) -> [str] {
     let out: [str] = [];
-    let i = lo;
-    while (i < hi) {
+    for i in lo..hi {
         let l: str = lines[i];
         let lb = bytes(l);
         out = line_refs_b(l, lb, 0, len(lb), out, true);
-        i = i + 1;
     };
     out
 };
@@ -2037,17 +1979,14 @@ def shake_prelude(pb: PBlocks, roots: [str]) -> PShake {
         brefs += [none];
         k++;
     };
-    let r = 0;
-    while (r < len(roots)) {
+    roots.foreach((_el, r) => {
         let idx = namemap_get(pb.ix, roots[r]);
         if (idx >= 0) { keep[idx] = true; };
-        r++;
-    };
+    });
     let more = true;
     while (more) {
         more = false;
-        let b = 0;
-        while (b < nb) {
+        for b in 0..nb {
             if (keep[b] && !(scanned[b])) {
                 scanned[b] = true;
                 more = true;
@@ -2057,14 +1996,11 @@ def shake_prelude(pb: PBlocks, roots: [str]) -> PShake {
                 let rs = lines_refs(lines, lo, hi);
                 brefs[b] = rs;
                 if (b + 1 < nb && lines_fall(lines, lo, hi)) { keep[b + 1] = true; };
-                let j = 0;
-                while (j < len(rs)) {
+                rs.foreach((_el, j) => {
                     let idx = namemap_get(pb.ix, rs[j]);
                     if (idx >= 0) { keep[idx] = true; };
-                    j++;
-                };
+                });
             };
-            b++;
         };
     };
     let pieces: [str] = [];
@@ -2075,11 +2011,9 @@ def shake_prelude(pb: PBlocks, roots: [str]) -> PShake {
             let lo = starts[k];
             let hi = len(lines);
             if (k + 1 < nb) { hi = starts[k + 1]; };
-            let i = lo;
-            while (i < hi) {
+            for i in lo..hi {
                 pieces += lines[i];
                 pieces += "\n";
-                i = i + 1;
             };
             out += brefs[k];
         };
@@ -2105,14 +2039,12 @@ def prelude_with(core: [str], threads: bool, mathasm: bool) -> [str] {
 // The references (a kept prelude's) that name a body not kept.
 def unkept_refs(refs: [str], bmap: [AsmLabel], keep: [bool]) -> [str] {
     let out: [str] = [];
-    let i = 0;
-    while (i < len(refs)) {
+    refs.foreach((_el, i) => {
         let idx = namemap_get(bmap, refs[i]);
         if (idx >= 0) {
             if (!(keep[idx])) { out += refs[i]; };
         };
-        i++;
-    };
+    });
     out
 };
 
@@ -2146,11 +2078,9 @@ def prune_bodies(labels: [str], refs: [[str]], extra_roots: [str]) -> { refs: [s
     while (i < nb) {
         if (keep[i]) {
             let rs = refs[i];
-            let j = 0;
-            while (j < len(rs)) {
+            rs.foreach((_el, j) => {
                 outrefs += rs[j];
-                j++;
-            };
+            });
         }
         i++;
     };
@@ -2327,21 +2257,17 @@ def strip_type(t: Type, imports: [str]) -> Type {
 
 def strip_type_list(ts: [Type], imports: [str]) -> [Type] {
     let out: [Type] = [];
-    let i = 0;
-    while (i < len(ts)) {
+    ts.foreach((_el, i) => {
         out += strip_type(ts[i], imports);
-        i++;
-    };
+    });
     out
 }
 
 def strip_list(nodes: [Node], imports: [str]) -> [Node] {
     let out: [Node] = [];
-    let i = 0;
-    while (i < len(nodes)) {
+    nodes.foreach((_el, i) => {
         out += strip_ns(nodes[i], imports);
-        i++;
-    };
+    });
     out
 };
 
@@ -2631,8 +2557,7 @@ def esc_asm(s: str) -> str {
     let n = len(b);
     let out: [str] = [];
     let run = 0;
-    let i = 0;
-    while (i < n) {
+    for i in 0..n {
         let o: long = b[i];
         let esc = "";
         if (o == '\\') {
@@ -2651,7 +2576,6 @@ def esc_asm(s: str) -> str {
             out += esc;
             run = i + 1;
         }
-        i++;
     };
     out += s[run:];
     join(out, "")
@@ -3004,8 +2928,7 @@ def infer_go(st: EmitSt, node: Node) -> Type {
             // union: first appearance keeps the position, later wins the
             // value) -- the same rule as types.y's rec arm.
             let mfields: [Field] = [];
-            let mi = 0;
-            while (mi < len(melems)) {
+            melems.foreach((_el, mi) => {
                 let mf = infer(st, melems[mi]);
                 // mk is read twice: the `...` test, then the merge.
                 let mk = mkeys[mi];
@@ -3013,18 +2936,15 @@ def infer_go(st: EmitSt, node: Node) -> Type {
                     if (mf.k == K.trec) {
                         let rec: TRec = mf;
                         let msfs: [Field] = rec.fields;
-                        let msi = 0;
-                        while (msi < len(msfs)) {
+                        msfs.foreach((_el, msi) => {
                             let msf = msfs[msi];
                             mfields = types.field_merge(mfields, msf.name, msf.typ);
-                            msi++;
-                        };
+                        });
                     }
                 } else {
                     mfields = types.field_merge(mfields, mk, mf);
                 };
-                mi++;
-            };
+            });
             normtype({ k: K.trec, fields: mfields })
         }
     } else if (k == K.map) {
@@ -3047,8 +2967,7 @@ def infer_go(st: EmitSt, node: Node) -> Type {
             let ftyp: Type = normtype({ k: K.tunk });
             let rec: TRec = dt;
             let dfs: [Field] = rec.fields;
-            let di = 0;
-            while (di < len(dfs)) {
+            dfs.foreach((_el, di) => {
                 let df = dfs[di];
                 // NOTE: :str binding (see teq note in types.y): df flows
                 // from bare values (tunk), so a direct `==` would compare
@@ -3058,8 +2977,7 @@ def infer_go(st: EmitSt, node: Node) -> Type {
                     found = true;
                     ftyp = df.typ;
                 }
-                di++;
-            };
+            });
             if (found) { ftyp } else { normtype({ k: K.tunk }) }
         } else if (dt.k == K.tunion) {
             // types.y union_field: the type the field has in every member
@@ -3291,8 +3209,7 @@ def infer_block(st: EmitSt, node: Block) -> Type {
         // (print then reads a str option as a raw number, and a match arm's
         // `v.f` as one). Only these: every other name is in scope after its
         // own statement, which gen has run by the time anything asks.
-        let i = 0;
-        while (i < len(stmts)) {
+        stmts.foreach((_el, i) => {
             let s = stmts[i];
             if (s.k == K.decl) {
                 let d: Decl = s;
@@ -3302,8 +3219,7 @@ def infer_block(st: EmitSt, node: Block) -> Type {
                     env_index_add(st.env);
                 };
             };
-            i++;
-        };
+        });
         infer(st, stmts[len(stmts) - 1])
     }
 };
@@ -3337,11 +3253,9 @@ def infer_decl(st: EmitSt, node: Decl) -> Type {
 // positive costs the prologue (a few hundred bytes), a false negative crashes.
 def uses_argv(stmts: [Node]) -> bool {
     let reads: [str] = [];
-    let i = 0;
-    while (i < len(stmts)) {
+    stmts.foreach((_el, i) => {
         reads = fv_walk(stmts[i], reads, true);
-        i++;
-    };
+    });
     name_in(reads, "argv")
 };
 
@@ -3352,11 +3266,9 @@ def uses_argv(stmts: [Node]) -> bool {
 type FnDef = { name: str, func: Func };
 
 def collect_from_block(stmts: [Node], out: [FnDef]) -> [FnDef] {
-    let i = 0;
-    while (i < len(stmts)) {
+    stmts.foreach((_el, i) => {
         out = collect_from_node(stmts[i], out);
-        i++;
-    };
+    });
     out
 };
 
@@ -3627,11 +3539,9 @@ def fv_walk(node: Node, out: [str], collect: bool) -> [str] {
 };
 
 def fv_walk_list(nodes: [Node], out: [str], collect: bool) -> [str] {
-    let i = 0;
-    while (i < len(nodes)) {
+    nodes.foreach((_el, i) => {
         out = fv_walk(nodes[i], out, collect);
-        i++;
-    };
+    });
     out
 };
 
@@ -3763,11 +3673,9 @@ def fv_binds(node: Node, out: [str]) -> [str] {
 };
 
 def fv_binds_list(nodes: [Node], out: [str]) -> [str] {
-    let i = 0;
-    while (i < len(nodes)) {
+    nodes.foreach((_el, i) => {
         out = fv_binds(nodes[i], out);
-        i++;
-    };
+    });
     out
 };
 
@@ -3782,8 +3690,7 @@ def fn_captures(func: EmitFunc, ex: [AsmLabel], extra: str) -> [str] {
     let bound = fv_bind_params(func.params, fv_binds(func.body, []));
     let reads = fv_ids(func.body, []);
     let caps: [str] = [];
-    let i = 0;
-    while (i < len(reads)) {
+    reads.foreach((_el, i) => {
         let n: str = reads[i];
         if (name_in(bound, n)) { }
         else if (n == extra || namemap_get(ex, n) >= 0) { }
@@ -3792,29 +3699,24 @@ def fn_captures(func: EmitFunc, ex: [AsmLabel], extra: str) -> [str] {
         else {
             caps += n;
         };
-        i++;
-    };
+    });
     caps
 };
 
 def fv_bind_params(ps: [str], out: [str]) -> [str] {
-    let i = 0;
-    while (i < len(ps)) {
+    ps.foreach((_el, i) => {
         let p: str = ps[i];
         out += p;
-        i++;
-    };
+    });
     out
 };
 
 def fn_names_of(fns: [Sym]) -> [str] {
     let out: [str] = [];
-    let i = 0;
-    while (i < len(fns)) {
+    fns.foreach((_el, i) => {
         let e = fns[i];
         out += e.name;
-        i++;
-    };
+    });
     out
 };
 
@@ -4175,14 +4077,12 @@ def box_capture(st: EmitSt, name: str) -> EmitSt {
 def box_names(func: EmitFunc) -> [str] {
     let reads = fv_walk(func.body, [], false);
     let out: [str] = [];
-    let i = 0;
-    while (i < len(reads)) {
+    reads.foreach((_el, i) => {
         let n: str = reads[i];
         if (name_in(out, n)) { } else {
             out += n;
         };
-        i++;
-    };
+    });
     out
 };
 
@@ -4333,11 +4233,9 @@ def app_walk(node: Node, out: [str], deep: bool) -> [str] {
 };
 
 def app_walk_list(nodes: [Node], out: [str], deep: bool) -> [str] {
-    let i = 0;
-    while (i < len(nodes)) {
+    nodes.foreach((_el, i) => {
         out = app_walk(nodes[i], out, deep);
-        i++;
-    };
+    });
     out
 };
 
@@ -4347,14 +4245,12 @@ def app_walk_list(nodes: [Node], out: [str], deep: bool) -> [str] {
 def app_names(node: Node, deep: bool, skip: [str]) -> [str] {
     let seen = app_walk(node, [], deep);
     let out: [str] = [];
-    let i = 0;
-    while (i < len(seen)) {
+    seen.foreach((_el, i) => {
         let n: str = seen[i];
         if (n[:1] == "&" || name_in(out, n) || name_in(skip, n) || name_in(seen, "&" + n)) { } else {
             out += n;
         };
-        i++;
-    };
+    });
     out
 };
 
@@ -4485,24 +4381,20 @@ def gen_discard(st: EmitSt, node: Node) -> EmitSt {
 // only when it has a str global at all.
 def app_cells(gl: [Sym], stmts: [Node]) -> [Sym] {
     let anystr = false;
-    let i = 0;
-    while (i < len(gl)) {
+    gl.foreach((_el, i) => {
         let ge = gl[i];
         if (ge.typ.k == K.tstr) { anystr = true; }
-        i++;
-    };
+    });
     if (anystr) {
         let names = app_names({ k: K.block, stmts: stmts, line: 1, col: 1 }, true, []);
         let out: [Sym] = [];
         out += gl;
-        let j = 0;
-        while (j < len(gl)) {
+        gl.foreach((_el, j) => {
             let g2 = gl[j];
             if (g2.typ.k == K.tstr && name_in(names, g2.name)) {
                 out += { name: g2.name + "#o", label: "ygo_" + g2.label[3:], typ: normtype({ k: K.tnone }) };
             }
-            j++;
-        };
+        });
         out
     } else {
         gl
@@ -4516,15 +4408,13 @@ def gen_make_closure(st: EmitSt, label: long, caps: [str]) -> EmitSt {
     st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_LEA_P_R, -1, -1, 1, 0, label, insn.R_RCX, 64);
     st = emit_insn(st, insn.F_MOV_R_0, insn.R_RCX, 64, insn.R_RAX, -1, 1, -1, -1);
-    let i = 0;
-    while (i < n) {
+    for i in 0..n {
         let cn: str = caps[i];
         // Captured as a shared cell pointer (see box_capture).
         st = gen_cap_ptr(st, cn);
         st = emit_insn(st, insn.F_POP_R, insn.R_RCX, 64, 0, 0, 0, 0, 0);
         st = emit_insn(st, insn.F_PUSH_R, insn.R_RCX, 64, 0, 0, 0, 0, 0);
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RCX, -1, 1, 8 * (i + 1), -1);
-        i++;
     };
     emit_insn(st, insn.F_POP_R, insn.R_RAX, 64, 0, 0, 0, 0, 0)
 };
@@ -4664,15 +4554,13 @@ def gen_tag_in(st: EmitSt, ts: [Type], inu: Type) -> EmitSt {
     st = emit_insn(st, insn.F_MOV_D_R, insn.R_RAX, -1, 1, -8, -1, insn.R_RCX, 64);
     let yes = next_loc(st);
     st = yes.st;
-    let i = 0;
-    while (i < len(ts)) {
+    ts.foreach((_el, i) => {
         let dr = ty_desc_in(st, ts[i], inu);
         st = dr.st;
         st = emit_insn(st, insn.F_LEA_P_R, -1, -1, 1, 0, dr.label, insn.R_RDX, 64);
         st = emit_insn(st, insn.F_CMP_R_R, insn.R_RDX, 64, insn.R_RCX, 64, 0, 0, 0);
         st = emit_insn(st, insn.F_JE_L, yes.label, 0, 0, 0, 0, 0, 0);
-        i++;
-    };
+    });
     st = emit_label(st, rno.label);
     st = emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
     st = emit_insn(st, insn.F_JMP_L, rdone.label, 0, 0, 0, 0, 0, 0);
@@ -4688,8 +4576,7 @@ def gen_union_str_rax(st: EmitSt, t: Type, path: [Type]) -> EmitSt {
     let rdone = next_loc(st);
     st = rdone.st;
     st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
-    let m = 0;
-    while (m < len(ms)) {
+    ms.foreach((_el, m) => {
         let rnext = next_loc(st);
         st = rnext.st;
         let mt = ms[m];
@@ -4711,8 +4598,7 @@ def gen_union_str_rax(st: EmitSt, t: Type, path: [Type]) -> EmitSt {
         };
         st = emit_insn(st, insn.F_JMP_L, rdone.label, 0, 0, 0, 0, 0, 0);
         st = emit_label(st, rnext.label);
-        m++;
-    };
+    });
     st = emit_insn(st, insn.F_POP_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     st = gen_str_const(st, "<union>");
     emit_label(st, rdone.label)
@@ -5658,11 +5544,9 @@ def ir_terminate(body: [long]) -> [long] {
 // caller: an earlier draft of this file carried one and it was never reachable.
 
 def gen_push_args(st: EmitSt, args: [Node]) -> EmitSt {
-    let i = 0;
-    while (i < len(args)) {
+    for i in 0..len(args) {
         st = gen(st, args[i]);
         st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
-        i++;
     };
     st
 };
@@ -5670,15 +5554,13 @@ def gen_push_args(st: EmitSt, args: [Node]) -> EmitSt {
 // gen_push_args, with argument i converted (gen_as) to ptypes[i], the
 // type of the parameter it binds; arguments past ptypes are pushed as is.
 def gen_push_args_as(st: EmitSt, args: [Node], ptypes: [Type]) -> EmitSt {
-    let i = 0;
-    while (i < len(args)) {
+    for i in 0..len(args) {
         if (i < len(ptypes)) {
             st = gen_as(st, args[i], ptypes[i]);
         } else {
             st = gen(st, args[i]);
         };
         st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
-        i++;
     };
     st
 };
@@ -5788,12 +5670,10 @@ def cast_members(s: Type, t: Type) -> [Type] {
     } else {
         ts += t;
     };
-    let i = 0;
-    while (i < len(ts)) {
+    ts.foreach((_el, i) => {
         let m = types.union_member(su, ts[i]);
         if (m.k != K.tnone) { out += m; };
-        i++;
-    };
+    });
     out
 };
 
@@ -5803,15 +5683,13 @@ def gen_cast_check(st: EmitSt, ts: [Type], u: Type) -> EmitSt {
     let ok = next_loc(st);
     st = ok.st;
     st = emit_insn(st, insn.F_MOV_D_R, insn.R_RAX, -1, 1, -8, -1, insn.R_RCX, 64);
-    let i = 0;
-    while (i < len(ts)) {
+    ts.foreach((_el, i) => {
         let dr = ty_desc_in(st, ts[i], u);
         st = dr.st;
         st = emit_insn(st, insn.F_LEA_P_R, -1, -1, 1, 0, dr.label, insn.R_RDX, 64);
         st = emit_insn(st, insn.F_CMP_R_R, insn.R_RDX, 64, insn.R_RCX, 64, 0, 0, 0);
         st = emit_insn(st, insn.F_JE_L, ok.label, 0, 0, 0, 0, 0, 0);
-        i++;
-    };
+    });
     st = emit_insn(st, insn.F_JMP_L, lbl_new("y_cast_trap"), 0, 0, 0, 0, 0, 0);
     emit_label(st, ok.label)
 };
@@ -6045,15 +5923,13 @@ def gen_call(st: EmitSt, node: Call) -> EmitSt {
             // arguments get.
             let oa: [Node] = node.args;
             let n = len(oa) - 1;
-            let k = 1;
-            while (k <= n) {
+            for k in 1..n + 1 {
                 st = gen(st, oa[k]);
                 let ot = infer(st, oa[k]);
                 if (ot.k == K.tstr) {
                     st = emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RAX, 64, 0, 0, 0, 0);
                 };
                 st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
-                k++;
             };
             // The name is a str literal: the checker required one (a variable
             // holding a name would put the choice back in the program's hands,
@@ -6079,11 +5955,9 @@ def gen_call(st: EmitSt, node: Call) -> EmitSt {
 def gen_closure_call(st: EmitSt, foff: long, arg_regs: [long]) -> EmitSt {
     st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, foff, -1, insn.R_R10, 64);
     st = emit_insn(st, insn.F_PUSH_R, insn.R_R10, 64, 0, 0, 0, 0, 0);
-    let i = 0;
-    while (i < len(arg_regs)) {
+    arg_regs.foreach((_el, i) => {
         st = emit_insn(st, insn.F_PUSH_R, arg_regs[i], 64, 0, 0, 0, 0, 0);
-        i++;
-    };
+    });
     st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, foff, -1, insn.R_R10, 64);
     st = emit_insn(st, insn.F_MOV_0_R, insn.R_R10, -1, 1, -1, -1, insn.R_R10, 64);
     st = emit_insn(st, insn.F_CALL_IND, insn.R_R10, 64, 0, 0, 0, 0, 0);
@@ -6660,11 +6534,9 @@ def gen_method(st: EmitSt, node: Call) -> EmitSt {
     let margs: [Node] = node.args;
     let args: [Node] = [];
     if (!sm.last) { args += mobj; };
-    let i = 0;
-    while (i < len(margs)) {
+    margs.foreach((_el, i) => {
         args += margs[i];
-        i++;
-    };
+    });
     if (len(margs) < len(sm.params)) {
         // The left-out optional argument's default: the table carries its
         // TEXT, and the parameter's type says what kind of literal to make.
@@ -6803,15 +6675,13 @@ def gen_rec_str_rax(st: EmitSt, t: Type, lay: [str], path: [Type]) -> EmitSt {
     st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     let rec: TRec = t;
     let fs: [Field] = rec.fields;
-    let i = 0;
-    while (i < len(fs)) {
+    for i in 0..len(fs) {
         let f = fs[i];
         let fname: str = f.name;
         let sep = "";
         if (i > 0) { sep = ", "; }
         st = gen_acc_cat_const(st, sep + fname + ": ");
         st = gen_rec_field_str(st, mfield_idx(lay, fname), f.typ, path);
-        i++;
     };
     st = gen_acc_cat_const(st, "}");
     st = emit_insn(st, insn.F_MOV_0_R, insn.R_RSP, -1, 1, -1, -1, insn.R_RAX, 64);
@@ -7032,11 +6902,9 @@ def gen_syscall(st: EmitSt, node: Call) -> EmitSt {
     // top in reverse.
     st = gen(st, args[0]);
     st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
-    let k = 1;
-    while (k <= nreg) {
+    for k in 1..nreg + 1 {
         st = gen(st, args[k]);
         st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
-        k++;
     };
     let j = nreg;
     while (j >= 1) {
@@ -7506,8 +7374,7 @@ def gen_tail_call(st: EmitSt, node: Call) -> EmitSt {
     let tptypes = fn_args_of(cur_fn_type(st));
     // evaluate each argument into a fresh local
     let offs: [long] = [];
-    let i = 0;
-    while (i < n) {
+    for i in 0..n {
         if (i < len(tptypes)) {
             st = gen_as(st, targs[i], tptypes[i]);
         } else {
@@ -7517,15 +7384,12 @@ def gen_tail_call(st: EmitSt, node: Call) -> EmitSt {
         st = st_temp(st, st.temp + 1);
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, off, -1);
         offs += off;
-        i++;
     };
     // copy the locals over the parameter slots (param k: 16 + 8*(n-1-k))
-    let j = 0;
-    while (j < n) {
+    for j in 0..n {
         let po = 16 + 8 * (n - 1 - j);
         st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, offs[j], -1, insn.R_RAX, 64);
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, po, -1);
-        j++;
     };
     // tear down this frame and re-enter the prologue; the return address
     // of the original call stays where it is, so the caller sees a normal
@@ -7567,12 +7431,10 @@ def gen_tail(st: EmitSt, node: Node) -> EmitSt {
         // position: the block's value is void either way
         if (m > 1 && is_void_node(tl[m - 1])) { m = m - 1; }
         let tdepth = st.temp;
-        let ti = 0;
-        while (ti < m - 1) {
+        for ti in 0..m - 1 {
             st = gen_loc_stmt(st, tl[ti]);
             st = gen_stmt(st, tl[ti]);
             st = st_temp(st, tdepth);
-            ti++;
         };
         if (m > 0) {
             let lastn = tl[m - 1];
@@ -7634,8 +7496,7 @@ def gen_block_as(st: EmitSt, node: Block, dropped: bool) -> EmitSt {    // No sc
         let tdepth = st.temp;
         let m = len(stmts);
         if (m > 1 && is_void_node(stmts[m - 1])) { m = m - 1; }
-        let i = 0;
-        while (i < m) {
+        for i in 0..m {
             st = gen_loc_stmt(st, stmts[i]);
             if (dropped || i < len(stmts) - 1) {
                 st = gen_stmt(st, stmts[i]);
@@ -7645,7 +7506,6 @@ def gen_block_as(st: EmitSt, node: Block, dropped: bool) -> EmitSt {    // No sc
             // this statement's own temporaries are dead; the ones of the
             // statement this block sits in are not, hence the depth and not 0.
             st = st_temp(st, tdepth);
-            i++;
         };
         st_slots(st, depth)
     }
@@ -7720,12 +7580,10 @@ def gen_loc_loop(st: EmitSt, node: Node) -> EmitSt {
 // file, N = its index + 1.
 def file_dirs(files: [str]) -> str {
     let pieces: [str] = [];
-    let i = 0;
-    while (i < len(files)) {
+    files.foreach((_el, i) => {
         let fname: str = files[i];
         pieces += ".file " + tostring(i + 1) + " \"" + esc_asm(fname) + "\"\n";
-        i++;
-    };
+    });
     join(pieces, "")
 };
 
@@ -7760,10 +7618,8 @@ def mfield_idx(names: [str], name: str) -> long {
 def fnv64(s: str) -> long {
     let h = -3750763034362895579;
     let n = len(s);
-    let i = 0;
-    while (i < n) {
+    for i in 0..n {
         h = (h ^ s[i]) * 1099511628211;
-        i++;
     };
     h
 };
@@ -7786,14 +7642,12 @@ def hex16(h: long) -> str {
 def rec_slot(fs: [Field], key: str) -> long {
     let found = false;
     let below = 0;
-    let i = 0;
-    while (i < len(fs)) {
+    for i in 0..len(fs) {
         let f = fs[i];
         let fname: str = f.name;
         if (fname == key) { found = true; }
         else if (fname < key) { below++; }
 
-        i++;
     };
     if (found) { below } else { -1 }
 };
@@ -7832,21 +7686,17 @@ def tyset_grow() -> long {
     if (cap < 64) { cap = 64; };
     let fresh: [str] = [];
     let freshf: [str] = [];
-    let i = 0;
-    while (i < cap) {
+    for i in 0..cap {
         fresh += "";
         freshf += "";
-        i++;
     };
     ty_seen = fresh;
     ty_forms = freshf;
     ty_count = 0;
-    let j = 0;
-    while (j < len(old)) {
+    old.foreach((_el, j) => {
         let lb: str = old[j];
         if (len(lb) > 0) { tyset_add(lb, oldf[j]); };
-        j++;
-    };
+    });
     0
 };
 
@@ -7869,11 +7719,9 @@ def ty_sig_init() {
     let nokeys: [str] = [];
     let noids: [long] = [];
     let bkts: [[long]] = [];
-    let i = 0;
-    while (i < 512) {
+    for i in 0..512 {
         let b: [long] = [];
         bkts += b;
-        i++;
     };
     ty_sig_keys = nokeys;
     ty_sig_ids = noids;
@@ -8094,13 +7942,11 @@ def gen_copy_rec(st: EmitSt, from: [str], to: [str], tag: long) -> EmitSt {
     st = emit_insn(st, insn.F_LEA_P_R, -1, -1, 1, 0, tag, insn.R_RCX, 64);
     st = emit_insn(st, insn.F_MOV_R_D, insn.R_RCX, 64, insn.R_RAX, -1, 1, 0, -1);
     st = emit_insn(st, insn.F_POP_R, insn.R_RSI, 64, 0, 0, 0, 0, 0);
-    let i = 0;
-    while (i < len(to)) {
+    to.foreach((_el, i) => {
         let s = mfield_idx(from, to[i]);
         st = emit_insn(st, insn.F_MOV_D_R, insn.R_RSI, -1, 1, 8 * s, -1, insn.R_RCX, 64);
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RCX, 64, insn.R_RAX, -1, 1, 8 + 8 * i, -1);
-        i++;
-    };
+    });
     emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RAX, 64, 0, 0, 0, 0)
 };
 
@@ -8280,29 +8126,25 @@ def gen_reclit(st: EmitSt, node: RecLit, want: Type) -> EmitSt {
     // into the fields' slots in entry order, so a later store simply
     // overwrites -- no dynamic shape.
     let names: [str] = [];
-    let ni = 0;
-    while (ni < nent) {
+    for ni in 0..nent {
         let nk = mkeys[ni];
         if (nk == "...") {
             let srec = infer(st, mvals[ni]);
             if (srec.k == K.trec) {
                 let spread: TRec = srec;
                 let sfs: [Field] = spread.fields;
-                let si = 0;
-                while (si < len(sfs)) {
+                sfs.foreach((_el, si) => {
                     let sf = sfs[si];
                     if (mfield_idx(names, sf.name) < 0) {
                         names += sf.name;
                     }
-                    si++;
-                };
+                });
             }
         } else {
             if (mfield_idx(names, nk) < 0) {
                 names += nk;
             }
         };
-        ni++;
     };
     let rt: Type = types.lit_target(node, want);
     if (rt.k == K.tnone) { rt = rec_lit_type(infer(st, node), want); }
@@ -8330,8 +8172,7 @@ def gen_reclit(st: EmitSt, node: RecLit, want: Type) -> EmitSt {
     st = emit_insn(st, insn.F_POP_R, insn.R_RCX, 64, 0, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RCX, -1, 1, 0, -1);
     st = emit_insn(st, insn.F_PUSH_R, insn.R_RCX, 64, 0, 0, 0, 0, 0);
-    let i = 0;
-    while (i < nent) {
+    for i in 0..nent {
         // mv is walked twice (gen, then infer), so bind it once.
         let mv = mvals[i];
         let mk = mkeys[i];
@@ -8345,16 +8186,14 @@ def gen_reclit(st: EmitSt, node: RecLit, want: Type) -> EmitSt {
             if (srec2.k == K.trec) {
                 let spread: TRec = srec2;
                 let sfs2: [Field] = spread.fields;
-                let sj = 0;
-                while (sj < len(sfs2)) {
+                sfs2.foreach((_el, sj) => {
                     let sf2 = sfs2[sj];
                     let mi2 = mfield_idx(slots, sf2.name);
                     // %rdx is the source's record VALUE (slot 0 at +0);
                     // %rcx is the fresh record's ALLOC base (slots at +8).
                     st = emit_insn(st, insn.F_MOV_D_R, insn.R_RDX, -1, 1, 8 * rec_slot(sfs2, sf2.name), -1, insn.R_RSI, 64);
                     st = emit_insn(st, insn.F_MOV_R_D, insn.R_RSI, 64, insn.R_RCX, -1, 1, 8 + mi2 * 8, -1);
-                    sj++;
-                };
+                });
             }
         } else {
             let ft = rec_field_type(rtu, mk);
@@ -8371,7 +8210,6 @@ def gen_reclit(st: EmitSt, node: RecLit, want: Type) -> EmitSt {
             st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RCX, -1, 1, 8 + mi * 8, -1);
         };
         st = emit_insn(st, insn.F_PUSH_R, insn.R_RCX, 64, 0, 0, 0, 0, 0);
-        i++;
     };
     st = emit_insn(st, insn.F_POP_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RAX, 64, 0, 0, 0, 0)
@@ -8404,25 +8242,21 @@ def lit_wraps(st: EmitSt, mv: Node, rtu: Type, mk: str, ft: Type) -> bool {
 def gen_func_literal(st: EmitSt, node: Func) -> EmitSt {
     let caps = fn_captures(node, st.fns.ix, "");
     let captypes: [Type] = [];
-    let ci = 0;
-    while (ci < len(caps)) {
+    caps.foreach((_el, ci) => {
         let cn: str = caps[ci];
         let ce = env_find(st, cn);
         captypes += ce.typ;
-        ci++;
-    };
+    });
     let rl = next_uid(st);
     st = rl.st;
     let lbl = lbl_new(arch.arch_fn_label(rl.uid, "anon"));
     let ru = next_uid(st);
     st = ru.st;
     st = emit_one_fn(st, lbl, ru.uid, node, false, false, captypes, "");
-    let bci = 0;
-    while (bci < len(caps)) {
+    caps.foreach((_el, bci) => {
         let bcn: str = caps[bci];
         st = box_capture(st, bcn);
-        bci++;
-    };
+    });
     gen_make_closure(st, lbl, caps)
 };
 
@@ -8433,25 +8267,21 @@ def gen_func_literal(st: EmitSt, node: Func) -> EmitSt {
 // gets its label here; its body knows its own name (emit_one_fn).
 def gen_closure_binding(st: EmitSt, name: str, func: Func, caps: [str]) -> EmitSt {
     let captypes: [Type] = [];
-    let ci = 0;
-    while (ci < len(caps)) {
+    caps.foreach((_el, ci) => {
         let cn2: str = caps[ci];
         let ce = env_find(st, cn2);
         captypes += ce.typ;
-        ci++;
-    };
+    });
     let rl = next_uid(st);
     st = rl.st;
     let lbl = lbl_new(fn_label_of(rl.uid, name));
     let ru = next_uid(st);
     st = ru.st;
     st = emit_one_fn(st, lbl, ru.uid, func, false, false, captypes, name);
-    let bci = 0;
-    while (bci < len(caps)) {
+    caps.foreach((_el, bci) => {
         let bcn: str = caps[bci];
         st = box_capture(st, bcn);
-        bci++;
-    };
+    });
     st = gen_make_closure(st, lbl, caps);
     // a NAME (let f = ...), so its slot lives to the end of the block
     let coff = (st.slots + 1) * -8;
@@ -8723,13 +8553,11 @@ def norm_num(s: str) -> str {
         s
     } else {
         let v = 0;
-        let i = 2;
-        while (i < len(s)) {
+        for i in 2..len(s) {
             let c = s[i:i + 1];
             if (c == "_") { } else {
                 v = v * radix + hexval_ch(c);
             };
-            i++;
         };
         tostring(v)
     }
@@ -8783,12 +8611,10 @@ def flit_size(ndig: long, dp: long, t: long) -> long {
 // acc *= m (m = 10 or 4294967296). false when it outgrows the limbs.
 def flit_dmul(a: [long], m: long, n: long) -> bool {
     let carry = 0;
-    let i = 0;
-    while (i < n) {
+    for i in 0..n {
         let p = a[i] * m + carry;
         a[i] = p % FLIT_BASE;
         carry = p / FLIT_BASE;
-        i++;
     };
     carry == 0
 };
@@ -8811,12 +8637,10 @@ def flit_ddiv(a: [long], m: long, n: long) -> long {
 // literal is spent on exactly these steps.
 def flit_dmul_limb(a: [long], n: long) -> bool {
     let carry = 0;
-    let i = 0;
-    while (i < n) {
+    for i in 0..n {
         let v = a[i];
         a[i] = carry;
         carry = v;
-        i++;
     };
     carry == 0
 };
@@ -8824,10 +8648,8 @@ def flit_dmul_limb(a: [long], n: long) -> bool {
 // acc /= 10^9: the lowest limb drops out whole. What was in it is below the
 // significand, so the caller looks at it for sticky first.
 def flit_ddiv_limb(a: [long], n: long) {
-    let i = 0;
-    while (i < n - 1) {
+    for i in 0..n - 1 {
         a[i] = a[i + 1];
-        i++;
     };
     a[n - 1] = 0;
 };
@@ -8895,10 +8717,8 @@ def flit_dpush(a: [long], dg: long, n: long) -> bool {
 // each attempt whole.
 def flit_copy(a: [long], n: long) -> [long] {
     let out: [long] = [];
-    let i = 0;
-    while (i < n) {
+    for i in 0..n {
         if (i < len(a)) { out += a[i]; } else { out += 0; };
-        i++;
     };
     out
 };
@@ -8907,11 +8727,9 @@ def flit_copy(a: [long], n: long) -> [long] {
 def flit_dfrom(d: long, n: long) -> [long] {
     let a: [long] = [];
     let rest = d;
-    let i = 0;
-    while (i < n) {
+    for i in 0..n {
         a += rest % FLIT_BASE;
         rest = rest / FLIT_BASE;
-        i++;
     };
     a
 };
@@ -9208,15 +9026,13 @@ def flit_bits(s: str) -> long {
 def num_i64(s: str) -> long {
     let v = 0;
     let neg = false;
-    let i = 0;
-    while (i < len(s)) {
+    for i in 0..len(s) {
         let c = ord(s[i:i + 1]);
         if (c >= '0' && c <= '9') {
             v = v * 10 + c - '0';
         } else {
             if (c == '-' && i == 0) { neg = true; };
         };
-        i++;
     };
     if (neg) { 0 - v } else { v }
 };
@@ -9438,19 +9254,15 @@ def block_bind(first: Node, rest: [Node], ln: long, cl: long) -> Block {
     if (first.k == K.block) {
         let fb: Block = first;
         let fs = fb.stmts;
-        let i = 0;
-        while (i < len(fs)) {
+        for i in 0..len(fs) {
             st += [fs[i]];
-            i++;
         };
     } else {
         st += [first];
     };
-    let j = 0;
-    while (j < len(rest)) {
+    rest.foreach((_el, j) => {
         st += [rest[j]];
-        j++;
-    };
+    });
     { k: K.block, stmts: st, line: ln, col: cl }
 };
 
@@ -10306,13 +10118,11 @@ def gen_narrow_field(st: EmitSt, nar: Narrow, s: Type, dkey: str) -> EmitSt {
         st = done.st;
         st = emit_insn(st, insn.F_MOV_D_R, insn.R_RAX, -1, 1, -8, -1, insn.R_RCX, 64);
         let lbls: [long] = [];
-        let d = 0;
-        while (d < len(ds) - 1) {
+        for d in 0..len(ds) - 1 {
             let l = next_loc(st);
             st = l.st;
             lbls += l.label;
-            let j = 0;
-            while (j < len(ms)) {
+            ms.foreach((_el, j) => {
                 if (slots[j] == ds[d]) {
                     let dr = ty_desc_in(st, ms[j], s);
                     st = dr.st;
@@ -10320,20 +10130,16 @@ def gen_narrow_field(st: EmitSt, nar: Narrow, s: Type, dkey: str) -> EmitSt {
                     st = emit_insn(st, insn.F_CMP_R_R, insn.R_RSI, 64, insn.R_RCX, 64, 0, 0, 0);
                     st = emit_insn(st, insn.F_JE_L, l.label, 0, 0, 0, 0, 0, 0);
                 };
-                j++;
-            };
-            d++;
+            });
         };
         st = gen_slot_move(st, ds[len(ds) - 1], false);
         st = emit_insn(st, insn.F_JMP_L, done.label, 0, 0, 0, 0, 0, 0);
-        let e = 0;
-        while (e < len(lbls)) {
+        lbls.foreach((_el, e) => {
             st = emit_label(st, lbls[e]);
             st = gen_slot_move(st, ds[e], false);
             // not on the last arm: that one falls through into `done:`
             if (e < len(lbls) - 1) { st = emit_insn(st, insn.F_JMP_L, done.label, 0, 0, 0, 0, 0, 0); };
-            e++;
-        };
+        });
         emit_label(st, done.label)
     }
 };
@@ -10394,13 +10200,11 @@ def rec_field_type(t: Type, key: str) -> Type {
     } else if (t.k == K.trec) {
         let rec: TRec = t;
         let fs: [Field] = rec.fields;
-        let i = 0;
-        while (i < len(fs)) {
+        for i in 0..len(fs) {
             let f = fs[i];
             if (f.name == key) {
                 ft = f.typ;
             }
-            i++;
         };
     }
     ft
@@ -10421,12 +10225,10 @@ def gen_array(st: EmitSt, node: ArrLit) -> EmitSt {
 // `ety` the element type each value converts to (store_elem_type).
 def gen_array_esz(st: EmitSt, node: ArrLit, esz: long, ety: Type) -> EmitSt {
     let elems: [Node] = node.elems;
-    let gi = 0;
-    while (gi < len(elems)) {
+    elems.foreach((_el, gi) => {
         st = gen_as(st, elems[gi], ety);
         st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
-        gi++;
-    };
+    });
     let n = len(elems);
     st = emit_insn(st, insn.F_MOV_I_R, arr_alloc_size(esz, n), insn.R_RDI, 64, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_CALL_L, lbl_new("y_alloc"), 0, 0, 0, 0, 0, 0);
@@ -11188,20 +10990,16 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
     let ftype: Type = type_node({ k: K.tfunc, args: func.ptypes, ret: fn_ret(func) });
     f = env_define(f, "", "fnty", 0, -1, "", ftype);
     let bnames = box_names(func);
-    let bi = 0;
-    while (bi < len(bnames)) {
+    bnames.foreach((_el, bi) => {
         let bnm: str = bnames[bi];
         f = env_define(f, "", "boxmark", 0, -1, bnm, type_node({ k: K.tnone }));
-        bi++;
-    };
+    });
     // The names this body appends to (see own_wanted), the same way.
     let anames = app_names(func.body, false, bnames);
-    let ai = 0;
-    while (ai < len(anames)) {
+    anames.foreach((_el, ai) => {
         let anm: str = anames[ai];
         f = env_define(f, "", "appmark", 0, -1, anm, type_node({ k: K.tnone }));
-        ai++;
-    };
+    });
     // A capturing named function is not in that table (see
     // capturing_defs): bind its own name to this body, so a call by name
     // passes the record along (gen_direct) and a value is the record.
@@ -11214,10 +11012,8 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
     let params: [str] = func.params;
     let ptypes: [Type] = func.ptypes;
     let nargs = len(params);
-    let i = 0;
-    while (i < nargs) {
+    for i in 0..nargs {
         f = env_define(f, params[i], "param", 16 + (nargs - 1 - i) * 8, -1, "", ptypes[i]);
-        i++;
     };
     // Captures: the caller pushed the closure record BEFORE the args, so it
     // lives just past them at rbp+16+8*nargs. Each capture reads slot idx+1
@@ -11228,8 +11024,7 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
     if (is_main) { } else {
         let mycaps = fn_captures(func, st.fns.ix, selfname);
         let cloff = 16 + nargs * 8;
-        let c = 0;
-        while (c < len(mycaps)) {
+        mycaps.foreach((_el, c) => {
             let cn: str = mycaps[c];
             // Capture types come from the creation site (the enclosing env
             // knows them); without one the emitter would pick long for a
@@ -11239,8 +11034,7 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
                 ct = captypes[c];
             }
             f = env_define(f, cn, "capture", cloff, -1, tostring(c), ct);
-            c++;
-        };
+        });
     };
     // Captured parameters (and the own name) move into their cells
     // before the body; a tail call re-enters above this, so every
@@ -11248,15 +11042,12 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
     if (selfname != "") {
         f = box_bound(f, selfname);
     }
-    let pbi = 0;
-    while (pbi < nargs) {
+    for pbi in 0..nargs {
         let pbn: str = params[pbi];
         f = box_bound(f, pbn);
-        pbi++;
     };
     // An appended-to str parameter moves into an own pair (bind_own).
-    let opi = 0;
-    while (opi < nargs) {
+    for opi in 0..nargs {
         let opn: str = params[opi];
         let opt = ptypes[opi];
         if (opt.k == K.tstr && own_wanted(f, opn)) {
@@ -11264,7 +11055,6 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
             f = emit_insn(f, insn.F_MOV_D_R, insn.R_RBP, -1, 1, ope.off, -1, insn.R_RAX, 64);
             f = bind_own(f, opn, opt);
         }
-        opi++;
     };
     f = gen_tail(f, func.body);
     if (f.slots + f.temp > frame_max) { frame_max = f.slots + f.temp; };
@@ -11371,10 +11161,8 @@ def infer_fn_ret(st: EmitSt, func: Func) -> Type {
     let params: [str] = func.params;
     let ptypes: [Type] = func.ptypes;
     let n = len(params);
-    let i = 0;
-    while (i < n) {
+    for i in 0..n {
         f = env_define(f, params[i], "param", 16 + (n - 1 - i) * 8, -1, "", ptypes[i]);
-        i++;
     };
     infer(f, func.body)
 };
@@ -11416,8 +11204,7 @@ def find_dup(stmts: [Node], origin: Origin) -> [Diag] {
     let fids: [long] = [];
     let lines: [long] = [];
     let cols: [long] = [];
-    let i = 0;
-    while (i < len(stmts)) {
+    stmts.foreach((_el, i) => {
         let s: Node = stmts[i];
         let nm = top_name_in(s, origin);
         if (len(nm) > 0) {
@@ -11427,8 +11214,7 @@ def find_dup(stmts: [Node], origin: Origin) -> [Diag] {
             lines += ln;
             cols += s.col;
         }
-        i++;
-    };
+    });
     // A name's earlier definitions, not every statement's: with 20 000
     // top-level defs the scan of all earlier names was 75% of the compile
     // (10 billion instructions), and nothing in it but the name's own
@@ -11443,8 +11229,7 @@ def find_dup(stmts: [Node], origin: Origin) -> [Diag] {
     let ppos: [long] = [];
     let pnext: [long] = [];
     let errs: [Diag] = [];
-    let j = 0;
-    while (j < len(names)) {
+    names.foreach((_el, j) => {
         let nj = names[j];
         let fj = fids[j];
         let slot = -1;
@@ -11469,8 +11254,7 @@ def find_dup(stmts: [Node], origin: Origin) -> [Diag] {
         ppos += j;
         pnext += top[slot];
         top[slot] = len(pfile) - 1;
-        j++;
-    };
+    });
     errs
 };
 
@@ -11520,8 +11304,7 @@ def top_def_name_go(s: Decl) -> str {
 // bindings are defs, not variables).
 def global_decls(stmts: [Node]) -> [Node] {
     let out: [Node] = [];
-    let i = 0;
-    while (i < len(stmts)) {
+    stmts.foreach((_el, i) => {
         let s: Node = stmts[i];
         if (s.k == K.decl) {
             let decl: Decl = s;
@@ -11529,8 +11312,7 @@ def global_decls(stmts: [Node]) -> [Node] {
             else if (decl.v.k == K.func) { }
             else { out += decl; };
         }
-        i++;
-    };
+    });
     out
 };
 
@@ -11549,8 +11331,7 @@ def global_entries(st: EmitSt, gdecls: [Node], gbase: long) -> [Sym] {
       self_label: -1, end_label: -1, fns: st.fns, bodies: st.bodies,
       btext: st.btext, blabels: st.blabels };
     let out: [Sym] = [];
-    let i = 0;
-    while (i < len(gdecls)) {
+    gdecls.foreach((_el, i) => {
         let d: Decl = gdecls[i];
         let gn = decl_name(d);
         let t: Type = decl_type(d);
@@ -11560,8 +11341,7 @@ def global_entries(st: EmitSt, gdecls: [Node], gbase: long) -> [Sym] {
         let lbl = arch.arch_global_label(gbase + i, gn);
         out += { name: gn, label: lbl, typ: t };
         f = env_define(f, gn, "global", 0, lbl_new(lbl), "", t);
-        i++;
-    };
+    });
     out
 };
 
@@ -11638,8 +11418,7 @@ def capturing_defs(defs: [FnDef], gnames: [str]) -> [str] {
 def fix_fn_types(st: EmitSt, hdefs: [FnDef], only: [str]) -> [Sym] {
     let out: [Sym] = [];
     let ftab = st.fns.syms;
-    let fx = 0;
-    while (fx < len(hdefs)) {
+    hdefs.foreach((_el, fx) => {
         let d = hdefs[fx];
         let fe0 = ftab[fx];
         let redo = ret_omitted(d.func);
@@ -11652,8 +11431,7 @@ def fix_fn_types(st: EmitSt, hdefs: [FnDef], only: [str]) -> [Sym] {
         } else {
             out += fe0;
         };
-        fx++;
-    };
+    });
     out
 };
 
@@ -11808,21 +11586,17 @@ def std_units(names: [str], pack: str) -> [Unit] {
         out = std_unpack(pack, names);
     }
     if (len(out) == 0) {
-        let i = 0;
-        while (i < len(names)) {
+        names.foreach((_el, i) => {
             let nm: str = names[i];
             let ext: [Sym] = [];
             if (nm == "exec") {
-                let j = 0;
-                while (j < len(out)) {
+                out.foreach((_el, j) => {
                     let u = out[j];
                     if (u.name == "prelude") { ext += u.exports; }
-                    j++;
-                };
+                });
             }
             out += std_compile(nm, ext);
-            i++;
-        };
+        });
     }
     out
 };
@@ -11852,12 +11626,10 @@ def std_compile(name: str, ext: [Sym]) -> Unit {
     let r = compile_unit(ast, noimports, { files: [path], nuser: 1, file: nolines, line: nolines, mods: [""] }, true, 0, name, std_unit_base(name), xt, []);
     if (!r.ok) {
         let errs = r.errors;
-        let k = 0;
-        while (k < len(errs)) {
+        errs.foreach((_el, k) => {
             let e = errs[k];
             puts("ycc: internal error: " + path + ":" + tostring(e.line) + ":" + tostring(e.col) + ": " + e.msg + "\n");
-            k++;
-        };
+        });
         exit(1);
     }
     r.unit
@@ -11886,8 +11658,7 @@ def export_name(n: str) -> str {
 def unit_exports(stmts: [Node], hdefs: [FnDef], fns: [Sym]) -> [Sym] {
     let out: [Sym] = [];
     let h = 0;
-    let i = 0;
-    while (i < len(stmts)) {
+    stmts.foreach((_el, i) => {
         let nm = top_def_name(stmts[i]);
         if (len(nm) > 0) {
             let h0 = h;
@@ -11907,8 +11678,7 @@ def unit_exports(stmts: [Node], hdefs: [FnDef], fns: [Sym]) -> [Sym] {
                 h = h0;
             };
         }
-        i++;
-    };
+    });
     out
 };
 
@@ -11965,25 +11735,21 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
         };
         let gdecls = global_decls(ast3.stmts);
         let gnames: [str] = [];
-        let gi = 0;
-        while (gi < len(gdecls)) {
+        gdecls.foreach((_el, gi) => {
             let gdecl: Decl = gdecls[gi];
             gnames += decl_name(gdecl);
-            gi++;
-        };
+        });
         // The externs, and the init functions `_start` calls (by their
         // labels: no Y name has that shape, and the checker never sees
         // these).
         let xfns: [Sym] = [];
         xfns += ext;
         let xids = fntab_ids(ext);
-        let ii = 0;
-        while (ii < len(inits)) {
+        inits.foreach((_el, ii) => {
             let il: str = inits[ii];
             xfns += { name: il, label: il, typ: { k: K.tfunc, args: [], ret: { k: K.tvoid } } };
             xids += lbl_new(il);
-            ii++;
-        };
+        });
         // A def needing a closure record is emitted where it is created
         // (gen_decl); every other one is hoisted: a label in st.fns. A
         // call to an extern is no capture either.
@@ -12099,16 +11865,13 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
         // read globals and functions, so none does.
         let main_stmts: [Node] = [];
         let noargs: [Node] = [];
-        let ci = 0;
-        while (ci < len(inits)) {
+        inits.foreach((_el, ci) => {
             let cl: str = inits[ci];
             let call: Call = { k: K.call, callee: { k: K.id, v: cl, line: 0, col: 0 }, args: noargs, line: 0, col: 0 };
             main_stmts += call;
-            ci++;
-        };
+        });
         let pstmts: [Node] = ast3.stmts;
-        let i = 0;
-        while (i < len(pstmts)) {
+        pstmts.foreach((_el, i) => {
             let s: Node = pstmts[i];
             if (s.k == K.decl) {
                 let decl: Decl = s;
@@ -12126,8 +11889,7 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
             } else {
                 main_stmts += s;
             };
-            i++;
-        };
+        });
         let rm = next_uid(st);
         st = rm.st;
         let init = "";
@@ -12147,12 +11909,10 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
         pr = phase_end(times, "emit_start", pt, ph);
         times = pr.times; pt = pr.t; ph = pr.h;
         let glabels: [str] = [];
-        let gk = 0;
-        while (gk < len(gl)) {
+        gl.foreach((_el, gk) => {
             let ge = gl[gk];
             glabels += ge.label;
-            gk++;
-        };
+        });
         // Each body's label and the labels it references: what linking
         // shakes by (prune_bodies). The label the emitter recorded beside
         // the body (emit_one_fn); the references are read out of the ITEMS
@@ -12162,12 +11922,10 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
         let ubtext: [[str]] = st.btext;
         let blabels: [str] = st.blabels;
         let brefs: [[str]] = [];
-        let bk = 0;
-        while (bk < len(ubodies)) {
+        ubodies.foreach((_el, bk) => {
             let ub: [long] = ubodies[bk];
             brefs += [ir_refs(ub)];
-            bk++;
-        };
+        });
         let unit: Unit = { name: name, files: origin.files, exports: exports,
           init: init, bodies: ubodies, btext: ubtext, blob: [],
           labels: blabels, refs: brefs, rodata: st.rodata, globals: glabels,
@@ -12188,8 +11946,7 @@ def pkg_base(base: long) -> bool {
 def pkg_exports(xs: [Sym], gl: [Sym]) -> [Sym] {
     let all: [Sym] = [];
     all += xs;
-    let i = 0;
-    while (i < len(gl)) {
+    gl.foreach((_el, i) => {
         let ge = gl[i];
         let gn: str = ge.name;
         let xn = "";
@@ -12200,11 +11957,9 @@ def pkg_exports(xs: [Sym], gl: [Sym]) -> [Sym] {
             xn = export_name(gn);
         };
         if (len(xn) > 0) { all += { name: xn, label: ge.label, typ: ge.typ }; }
-        i++;
-    };
+    });
     let out: [Sym] = [];
-    let j = 0;
-    while (j < len(all)) {
+    all.foreach((_el, j) => {
         let e = all[j];
         let later = false;
         let m = j + 1;
@@ -12214,8 +11969,7 @@ def pkg_exports(xs: [Sym], gl: [Sym]) -> [Sym] {
             m = m + 1;
         };
         if (!later) { out += e; }
-        j++;
-    };
+    });
     out
 };
 
@@ -12224,27 +11978,23 @@ def pkg_exports(xs: [Sym], gl: [Sym]) -> [Sym] {
 // earlier one's.
 def unit_dfl(stmts: [Node], origin: Origin) -> [DflCode] {
     let out: [DflCode] = [];
-    let i = 0;
-    while (i < len(stmts)) {
+    stmts.foreach((_el, i) => {
         let s: Node = stmts[i];
         let nm = top_name_in(s, origin);
         // (not an imported module's: see export_name)
         if (len(nm) > 0 && index_of(nm, ".") < 0) {
             let keep: [DflCode] = [];
-            let j = 0;
-            while (j < len(out)) {
+            out.foreach((_el, j) => {
                 let d = out[j];
                 if (d.name != nm) { keep += d; }
-                j++;
-            };
+            });
             let decl: Decl = s;
             let func: Func = decl.v;
             let vals = dfl_codes(func);
             if (len(vals) > 0) { keep += { name: nm, vals: vals }; }
             out = keep;
         }
-        i++;
-    };
+    });
     out
 };
 
@@ -12254,14 +12004,12 @@ def dfl_codes(func: Func) -> [str] {
     let dv: [Node] = func.defs;
     let out: [str] = [];
     let any = false;
-    let i = 0;
-    while (i < len(dv)) {
+    dv.foreach((_el, i) => {
         let d = dv[i];
         let dk: long = d.k;
         if (dk != K.void) { any = true; }
         out += lit_code(d);
-        i++;
-    };
+    });
     if (any) { out } else { let nd: [str] = []; nd }
 };
 
@@ -12310,8 +12058,7 @@ def link_locs(b: str, off: long) -> str {
     } else {
         let out: [str] = [];
         out += parts[0];
-        let i = 1;
-        while (i < len(parts)) {
+        for i in 1..len(parts) {
             let p: str = parts[i];
             if (dbg_lines) {
                 let sp = index_of(p, " ");
@@ -12320,7 +12067,6 @@ def link_locs(b: str, off: long) -> str {
                 let nl = index_of(p, "\n");
                 if (nl >= 0) { out += p[nl:]; }
             };
-            i++;
         };
         join(out, "")
     }
@@ -12357,20 +12103,17 @@ def link_locs(b: str, off: long) -> str {
 // builds of a 40,000-entry set at load factor 1 cost 4% of a self-compile.
 def rodata_intern(pieces: [str], allrod: [[str]], refs: [str]) -> { pieces: [str], dup_old: [str], dup_new: [str] } {
     let m = asm.labmap_new(len(refs) * 2 + 64);
-    let ri = 0;
-    while (ri < len(refs)) {
+    refs.foreach((_el, ri) => {
         let r = asm.labmap_put(m, refs[ri], 1, 0);
         m = r.map;
-        ri++;
-    };
+    });
     let nall = len(allrod);
     // text -> the index of the winner in `win`, plus loser pairs
     let texts = asm.labmap_new(nall * 2 + 64);
     let win: [str] = [];
     let dup_old: [str] = [];
     let dup_new: [str] = [];
-    let s2 = 0;
-    while (s2 < nall) {
+    for s2 in 0..nall {
         let pair = allrod[s2];
         let lbl: str = pair[0];
         if (len(pair) == 3) {
@@ -12400,7 +12143,6 @@ def rodata_intern(pieces: [str], allrod: [[str]], refs: [str]) -> { pieces: [str
                 pieces += lbl + ":\n.zero 1\n";
             }
         };
-        s2++;
     };
     { pieces: pieces, dup_old: dup_old, dup_new: dup_new }
 };
@@ -12418,8 +12160,7 @@ def rodata_intern(pieces: [str], allrod: [[str]], refs: [str]) -> { pieces: [str
 // remainder of the body each time allocated 600 MB for the same work.
 def relabel_dups(body: str, m: [AsmLabel], dup_new: [str]) -> str {
     let lines = split(body, "\n");
-    let i = 0;
-    while (i < len(lines)) {
+    lines.foreach((_el, i) => {
         let ln: str = lines[i];
         let at = index_of(ln, "lea ");
         if (at >= 0) {
@@ -12435,8 +12176,7 @@ def relabel_dups(body: str, m: [AsmLabel], dup_new: [str]) -> str {
                 };
             };
         };
-        i++;
-    };
+    });
     join(lines, "\n")
 };
 
@@ -12518,17 +12258,13 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
     // The runtime labels the program and the packages define (every
     // runtime label starts `y_`): they replace the std units' own.
     let plabels: [str] = [];
-    let ou = len(std);
-    while (ou <= nu) {
+    for ou in len(std)..nu + 1 {
         let olab: [str] = [];
         if (ou < nu) { let du = units[ou]; olab = du.labels; } else { olab = prog.labels; };
-        let pi = 0;
-        while (pi < len(olab)) {
+        olab.foreach((_el, pi) => {
             let pl: str = olab[pi];
             if (pl[:2] == "y_") { plabels += pl; }
-            pi++;
-        };
-        ou = ou + 1;
+        });
     };
     // Every body, with its label, its references, and the `.loc` offset
     // of its unit (-1: the program's own, numbered as they are). A body's
@@ -12542,16 +12278,14 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
     let labels: [str] = [];
     let refs: [[str]] = [];
     let fno: [long] = [];
-    let j = 0;
-    while (j < nu) {
+    for j in 0..nu {
         let u = units[j];
         let f = offs[j];
         let ub = u.bodies;
         let ubl = u.blob;
         let ul = u.labels;
         let ur = u.refs;
-        let b = 0;
-        while (b < len(ul)) {
+        ul.foreach((_el, b) => {
             let lb: str = ul[b];
             let drop = false;
             if (j < len(std) && len(plabels) > 0) {
@@ -12570,23 +12304,19 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
                 refs += [ur[b]];
                 fno += f;
             }
-            b++;
-        };
-        j++;
+        });
     };
     let plab = prog.labels;
     let pbodies = prog.bodies;
     let prefs = prog.refs;
-    let pb2 = 0;
-    while (pb2 < len(pbodies)) {
+    pbodies.foreach((_el, pb2) => {
         all += [pbodies[pb2]];
         allblob += "";
         alltxt += [prog.btext[pb2]];
         labels += plab[pb2];
         refs += [prefs[pb2]];
         fno += -1;
-        pb2++;
-    };
+    });
     // Body-level tree shaking comes first: its output is also the root
     // set for shaking the arch prelude, and the kept prelude's references
     // shake the rodata constants.
@@ -12625,22 +12355,18 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
     // its reachability set.
     let const_refs: [str] = [];
     const_refs += ps.refs;
-    let ci = 0;
-    while (ci < len(body_refs)) {
+    body_refs.foreach((_el, ci) => {
         const_refs += [body_refs[ci]];
-        ci++;
-    };
+    });
     // The rodata first, because it decides the labels the bodies use: one
     // block per distinct literal text, the losers recorded.
     tyset_reset();
     let allrod: [[str]] = [];
     let gls: [str] = [];
-    let ju = 0;
-    while (ju < nu) {
+    for ju in 0..nu {
         let u = units[ju];
         allrod += u.rodata;
         gls += u.globals;
-        ju++;
     };
     // Which of the PROGRAM's globals the kept code reads. Only these: a unit
     // from the std pack carries packed bodies, whose references are not IR
@@ -12650,8 +12376,7 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
     // before the program existed -- and the spliced units this is for
     // (std/math.y and friends) are the program's own.
     let reads: [str] = [];
-    let ri = 0;
-    while (ri < len(all)) {
+    all.foreach((_el, ri) => {
         if (keep[ri]) {
             if (len(all[ri]) > 0) {
                 reads = cell_reads(all[ri], reads)
@@ -12664,17 +12389,13 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
                 reads += refs[ri]
             };
         };
-        ri++;
-    };
+    });
     let dead_cells: [str] = [];
-    let di = 0;
-    while (di < len(prog.globals)) {
+    for di in 0..len(prog.globals) {
         if (!name_in(reads, prog.globals[di])) { dead_cells += prog.globals[di]; };
-        di++;
     };
     if (len(dead_cells) > 0) {
-        let dj = 0;
-        while (dj < len(all)) {
+        all.foreach((_el, dj) => {
             if (keep[dj] && len(all[dj]) > 0) {
                 let ni = ir_drop_inits(all[dj], dead_cells);
                 if (len(ni) != len(all[dj])) {
@@ -12682,19 +12403,16 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
                     refs[dj] = ir_refs(ni);
                 };
             };
-            dj++;
-        };
+        });
         // The CELLS stay: a dead cell's storage is .bss, which costs no file
         // bytes, and the read scan above is the one thing here that has to be
         // exactly right (a cell dropped while something reads it is an
         // undefined label at assembly, or worse). What this pass is for is the
         // INSTRUCTIONS, and those are gone.
         let live: [str] = [];
-        let lv = 0;
-        while (lv < len(gls)) {
+        gls.foreach((_el, lv) => {
             live += gls[lv];
-            lv++;
-        };
+        });
         gls = live;
     };
     allrod += prog.rodata;
@@ -12705,12 +12423,10 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
     // loser label -> index into dup_new, so a body's refs can be relabelled
     // in one probe each.
     let dupmap = asm.labmap_new(len(dup_old) * 2 + 64);
-    let di = 0;
-    while (di < len(dup_old)) {
+    dup_old.foreach((_el, di) => {
         let dr = asm.labmap_put(dupmap, dup_old[di], 1, di);
         dupmap = dr.map;
-        di++;
-    };
+    });
     // Piece-list + single join: `asm = asm + piece` per iteration is
     // quadratic (each concat re-copies the whole 1.4MB+ accumulator —
     // the arena never frees), which OOMs on self-compilation.
@@ -12726,8 +12442,7 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
     // The bodies, kept, as parts: their items, with the `.loc` markers moved
     // to the unit's place in the program's file table. Every body is items
     // now -- a unit read from a pack came with them (pack_body).
-    let ab = 0;
-    while (ab < len(all)) {
+    all.foreach((_el, ab) => {
         if (keep[ab]) {
             let kb: [long] = all[ab];
             if (len(kb) == 0) { kb = unpack_body(allblob[ab]); };
@@ -12739,8 +12454,7 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
             if (kf >= 0) { off = kf; };
             parts += [part_ir(kb, alltxt[ab], off, dbg_lines)];
         }
-        ab++;
-    };
+    });
     // The rodata, then the .bss cells: text.
     let consts_text = shake_refs(arch.arch_consts(), const_refs);
     parts += [part_text(arch.arch_rodata() + consts_text)];
@@ -12763,11 +12477,9 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
             while (wj < len(wl)) { gpieces += wl[wj]; wj++; };
         };
         gpieces += heap_text;
-        let gk = 0;
-        while (gk < len(gls)) {
+        gls.foreach((_el, gk) => {
             gpieces += arch.arch_global_cell(gls[gk]);
-            gk++;
-        };
+        });
         parts += [part_text(join(gpieces, ""))];
     }
     parts
@@ -12777,8 +12489,7 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
 // text they replace (ir_render_all), the text parts as they are.
 def link_text(parts: [LinkPart]) -> str {
     let pieces: [str] = [];
-    let i = 0;
-    while (i < len(parts)) {
+    parts.foreach((_el, i) => {
         let p = parts[i];
         if (len(p.ir) > 0) {
             // the render has no newline of its own, so the line is closed here
@@ -12794,8 +12505,7 @@ def link_text(parts: [LinkPart]) -> str {
                 pieces += t;
             };
         };
-        i++;
-    };
+    });
     join(pieces, "")
 };
 
@@ -12826,11 +12536,9 @@ def pack_put(out: [str], s: str) -> [str] {
 
 def pack_strs(out: [str], xs: [str]) -> [str] {
     out = pack_put(out, tostring(len(xs)));
-    let i = 0;
-    while (i < len(xs)) {
+    xs.foreach((_el, i) => {
         out = pack_put(out, xs[i]);
-        i++;
-    };
+    });
     out
 };
 
@@ -12838,11 +12546,9 @@ def pack_strs(out: [str], xs: [str]) -> [str] {
 // own items, so a reader walks one body's lines without another's.
 def pack_strss(out: [str], xss: [[str]]) -> [str] {
     out = pack_put(out, tostring(len(xss)));
-    let i = 0;
-    while (i < len(xss)) {
+    xss.foreach((_el, i) => {
         out = pack_strs(out, xss[i]);
-        i++;
-    };
+    });
     out
 };
 
@@ -12886,11 +12592,9 @@ def pack_word(out: [str], v: long) -> [str] {
     } else {
         out += chr(255);
         let sh = 0;
-        let i = 0;
-        while (i < 8) {
+        for i in 0..8 {
             out += chr((v >> sh) & 255);
             sh += 8;
-            i++;
         };
     };
     out
@@ -13041,11 +12745,9 @@ def unpack_word(b: [byte], at: long) -> long {
         v = t;
     } else if (t == 255) {
         let sh = 0;
-        let i = 0;
-        while (i < 8) {
+        for i in 0..8 {
             v += b[at + 1 + i] * (1 << sh);
             sh += 8;
-            i++;
         };
     } else {
         v = b[at + 1] + b[at + 2] * 256;
@@ -13139,8 +12841,7 @@ def tcode_go(out: [str], t: Type) -> [str] {
         out += "R";
         let fs: [Field] = rec.fields;
         out = pack_put(out, tostring(len(fs)));
-        let i = 0;
-        while (i < len(fs)) {
+        for i in 0..len(fs) {
             // NOTE: bound once (see types.y tstr_go).
             let f = fs[i];
             // an optional field is `name?` (tdecode_go)
@@ -13148,7 +12849,6 @@ def tcode_go(out: [str], t: Type) -> [str] {
             if (f.opt) { fname += "?"; };
             out = pack_put(out, fname);
             out = tcode_go(out, f.typ);
-            i++;
         };
         out
     }
@@ -13161,11 +12861,9 @@ def tcode_go(out: [str], t: Type) -> [str] {
 
 def tcode_list(out: [str], ts: [Type]) -> [str] {
     out = pack_put(out, tostring(len(ts)));
-    let i = 0;
-    while (i < len(ts)) {
+    ts.foreach((_el, i) => {
         out = tcode_go(out, ts[i]);
-        i++;
-    };
+    });
     out
 };
 
@@ -13229,14 +12927,12 @@ def tdecode_go(cur: Cursor) -> Type {
     else {
         let fields: [Field] = [];
         let n = pack_num(cur);
-        let i = 0;
-        while (i < n) {
+        for i in 0..n {
             let fname = pack_get(cur);
             // `name?`: an optional field (tcode_go)
             let fopt = len(fname) > 0 && fname[len(fname) - 1] == '?';
             if (fopt) { fname = fname[0:len(fname) - 1]; };
             fields += { name: fname, opt: fopt, typ: tdecode_go(cur) };
-            i++;
         };
         normtype({ k: K.trec, fields: fields })
     }
@@ -13245,10 +12941,8 @@ def tdecode_go(cur: Cursor) -> Type {
 def tdecode_list(cur: Cursor) -> [Type] {
     let out: [Type] = [];
     let n = pack_num(cur);
-    let i = 0;
-    while (i < n) {
+    for i in 0..n {
         out += tdecode_go(cur);
-        i++;
     };
     out
 };
@@ -13310,13 +13004,11 @@ def std_pack(units: [Unit]) -> str {
     let out: [str] = [];
     out += pack_version();
     out = pack_put(out, tostring(len(units)));
-    let i = 0;
-    while (i < len(units)) {
+    units.foreach((_el, i) => {
         let u = units[i];
         out = pack_put(out, u.name);
         out = pack_put(out, pack_unit_fields(u));
-        i++;
-    };
+    });
     join(out, "")
 };
 
@@ -13351,10 +13043,8 @@ def pack_num(cur: Cursor) -> long {
 def pack_get_strs(cur: Cursor) -> [str] {
     let n = pack_num(cur);
     let out: [str] = [];
-    let i = 0;
-    while (i < n) {
+    for i in 0..n {
         out += pack_get(cur);
-        i++;
     };
     out
 };
@@ -13390,10 +13080,8 @@ def unit_read(cur: Cursor, name: str, bound: bool) -> Unit {
     let blob = pack_get_strs(cur);
     let nb = pack_num(cur);
     let btext: [[str]] = [];
-    let bi = 0;
-    while (bi < nb) {
+    for bi in 0..nb {
         btext += [pack_get_strs(cur)];
-        bi++;
     };
     let labels = pack_get_strs(cur);
     let refs: [[str]] = [];
@@ -13425,26 +13113,20 @@ def std_unpack(pack: str, names: [str]) -> [Unit] {
         let cur = { s: pack, p: len(ver) };
         let n = pack_num(cur);
         let got: [Unit] = [];
-        let i = 0;
-        while (i < n) {
+        for i in 0..n {
             let nm = pack_get(cur);
             let ul = pack_len(cur);
             let at = cur.p;
             if (name_in(names, nm)) { got += unit_read(cur, nm, std_unit_bound(nm)); }
             cur.p = at + ul;
-            i++;
         };
-        let k = 0;
-        while (k < len(names)) {
+        names.foreach((_el, k) => {
             let want: str = names[k];
-            let a = 0;
-            while (a < len(got)) {
+            got.foreach((_el, a) => {
                 let u = got[a];
                 if (u.name == want) { out += u; }
-                a++;
-            };
-            k++;
-        };
+            });
+        });
         if (len(out) != len(names)) { out = []; }
     }
     out
@@ -13550,11 +13232,9 @@ def unit_externs(std: [Unit], snames: [str], deps: [Unit], pkgs: [str]) -> Exter
                 let d = ds[j];
                 let dv = d.vals;
                 let vals: [Node] = [];
-                let m = 0;
-                while (m < len(dv)) {
+                dv.foreach((_el, m) => {
                     vals += lit_decode(dv[m]);
-                    m++;
-                };
+                });
                 dfl += { name: u.name + "." + d.name, vals: vals };
                 j++;
             };
@@ -13702,36 +13382,30 @@ def gen_maplit(st: EmitSt, node: RecLit) -> EmitSt {
     let mvals: [Node] = node.vals;
     let keys: [str] = [];
     let vals: [Node] = [];
-    let mi = 0;
-    while (mi < len(mkeys)) {
+    mkeys.foreach((_el, mi) => {
         let mk: str = mkeys[mi];
         let mv = mvals[mi];
         let found = false;
-        let fi = 0;
-        while (fi < len(keys)) {
+        keys.foreach((_el, fi) => {
             let kk: str = keys[fi];
             if (kk == mk) {
                 vals[fi] = mv;
                 found = true;
             }
-            fi++;
-        };
+        });
         if (found) {
         } else {
             keys += mk;
             vals += mv;
         };
-        mi++;
-    };
+    });
     let knodes: [Node] = [];
     let bnodes: [Node] = [];
-    let ki = 0;
-    while (ki < len(keys)) {
+    keys.foreach((_el, ki) => {
         let ks: str = keys[ki];
         knodes += n_str(ks, ln, cl);
         bnodes += n_id("none", ln, cl);
-        ki++;
-    };
+    });
     let keysarr: ArrLit = { k: K.array, elems: knodes, line: ln, col: cl };
     let valsarr: ArrLit = { k: K.array, elems: vals, line: ln, col: cl };
     let boxesarr: ArrLit = { k: K.array, elems: bnodes, line: ln, col: cl };

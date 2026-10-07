@@ -37,12 +37,10 @@ let lbl_next = 0;
 // of stage 1).
 def lbl_reindex(cap: long) {
     let m = asm.labmap_new(cap);
-    let i = 0;
-    while (i < len(lbl_names)) {
+    lbl_names.foreach((_el, i) => {
         let r = asm.labmap_put(m, lbl_names[i], 1, i);
         m = r.map;
-        i++;
-    };
+    });
     lbl_ix = m
 };
 

@@ -449,10 +449,8 @@ def fstr_walk(src: str, q: long) -> { end: long, err: str, at: long, fields: [lo
 def fstr_adv(src: str, a: long, b: long, line: long, col: long) -> { line: long, col: long } {
     let ln = line;
     let cl = col;
-    let i = a;
-    while (i < b) {
+    for i in a..b {
         if (src[i] == 10) { ln = ln + 1; cl = 1; } else { cl = cl + 1; };
-        i = i + 1;
     };
     { line: ln, col: cl }
 };

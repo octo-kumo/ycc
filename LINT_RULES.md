@@ -219,10 +219,17 @@ Implemented so far (level 2): 1.1-1.7, 1.9 (2.7 is its condition form),
 ### 3.1 Index `while` to `foreach`
 - **Instead** `let i = 0; while (i < len(a)) { B; i = i + 1; };`
 - **Write** `a.foreach((e, i) => { B });`.
-- **Detect** the `Decl`/`While`/increment shape of 2.8 with `hi = len(a)`.
-- **Skip** `a` is resized in `B`; the index is read after the loop; `B` has
-  a `return`/`break`/`continue` (they would leave the closure, not the
-  function); `B` is empty (delete the loop instead).
+- **Detect** the `Decl`/`While`/increment shape of 2.8 with `hi = len(a)`
+  and `i` starting at the literal `0`.
+- **Skip** `a` is not known to be an array — a slice of a `str` is not one,
+  and `foreach` is not a str method; `a` is resized in `B`; the index is
+  read after the loop; `B` has a `return`/`break`/`continue` (they would
+  leave the closure, not the function); `B` is empty (delete the loop
+  instead). Also skip a receiver whose name is a module basename: `strip_ns`
+  rewrites any `name.field` as a module reference, so `labels.foreach` in a
+  unit that imports `labels.y` is not a method call at all. When any of
+  these holds, 2.8's `for i in 0..len(a)` is still offered — it needs no
+  dot and no closure.
 
 ### 3.2 Builder loop to `map`
 - **Instead** `let out: [T] = []; foreach (x in a) { out += f(x); }; out`
@@ -260,9 +267,8 @@ Implemented so far (level 2): 1.1-1.7, 1.9 (2.7 is its condition form),
   when the index is used too.
 - **Detect** a `Foreach` whose iterable is `range(len(a))` and whose body
   reads `a[i]` and nothing else that needs `i`.
-- **Skip** `a` is resized in the body; the body assigns `a[i]` (an element
-  write is fine with `a.foreach((e, i) => ...)`, but not with `foreach (e
-  in a)`).
+- **Skip** `a` is not known to be an array (see 3.1); `a` is resized in
+  the body.
 
 ## 4. Closures
 

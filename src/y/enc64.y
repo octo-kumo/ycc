@@ -129,10 +129,8 @@ def le64(v: long) -> [byte] {
 // 256^i (the weight of byte i).
 def pow256(i: long) -> long {
     let r = 1;
-    let j = 0;
-    while (j < i) {
+    for j in 0..i {
         r *= 256;
-        j++;
     };
     r
 };

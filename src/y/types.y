@@ -325,13 +325,11 @@ def union_parts(t: Type) -> [Type] {
 def union_parts_go(out: [Type], t: Type, depth: long) -> long {
     let union: TList = t;
     let ms: [Type] = union.ts;
-    let i = 0;
-    while (i < len(ms)) {
+    ms.foreach((_el, i) => {
         let m = ms[i];
         let u = unfold(m);
         if (u.k == K.tunion && depth < 16) { union_parts_go(out, u, depth + 1); } else { out += m; };
-        i++;
-    };
+    });
     0
 };
 
@@ -339,11 +337,9 @@ def union_parts_go(out: [Type], t: Type, depth: long) -> long {
 def members(t: Type) -> [Type] {
     let ps = union_parts(t);
     let out: [Type] = [];
-    let i = 0;
-    while (i < len(ps)) {
+    ps.foreach((_el, i) => {
         out += unfold(ps[i]);
-        i++;
-    };
+    });
     out
 };
 
@@ -354,11 +350,9 @@ def pat_members(s: Type, t: Type) -> [Type] {
     let pat: TPat = t;
     let names: [str] = pat.names;
     let out: [Type] = [];
-    let i = 0;
-    while (i < len(ps)) {
+    ps.foreach((_el, i) => {
         if (rec_has_names(unfold(ps[i]), names)) { out += ps[i]; }
-        i++;
-    };
+    });
     out
 };
 
@@ -399,8 +393,7 @@ def teq_ref(a: Type, b: Type) -> bool {
 // xs sorted (insertion sort: field lists are short).
 def str_sorted(xs: [str]) -> [str] {
     let out: [str] = [];
-    let i = 0;
-    while (i < len(xs)) {
+    xs.foreach((_el, i) => {
         let x: str = xs[i];
         out += x;
         let j = len(out) - 1;
@@ -409,8 +402,7 @@ def str_sorted(xs: [str]) -> [str] {
             j = j - 1;
         };
         out[j] = x;
-        i++;
-    };
+    });
     out
 };
 
@@ -418,11 +410,9 @@ def str_sorted(xs: [str]) -> [str] {
 // (native.y "records at run time").
 def rec_names(fs: [Field]) -> [str] {
     let names: [str] = [];
-    let i = 0;
-    while (i < len(fs)) {
+    for i in 0..len(fs) {
         let f = fs[i];
         names += f.name;
-        i++;
     };
     str_sorted(names)
 };
@@ -490,11 +480,9 @@ def tcanon_go(out: [str], t: Type, stack: [str]) -> [str] {
         let func: TFunc = t;
         let args: [Type] = func.args;
         out += "(";
-        let i = 0;
-        while (i < len(args)) {
+        for i in 0..len(args) {
             out = tcanon_go(out, args[i], stack);
             out += ",";
-            i++;
         };
         out += ")";
         tcanon_go(out, func.ret, stack)
@@ -503,28 +491,24 @@ def tcanon_go(out: [str], t: Type, stack: [str]) -> [str] {
         let fs: [Field] = rec.fields;
         let names = rec_names(fs);
         out += "{";
-        let i = 0;
-        while (i < len(names)) {
+        names.foreach((_el, i) => {
             let nm: str = names[i];
             let f = fs[field_pos(fs, nm, 0)];
             out += nm + ":";
             out = tcanon_go(out, f.typ, stack);
             out += ",";
-            i++;
-        };
+        });
         out += "}";
         out
     } else if (k == K.tunion) {
         let union: TList = t;
         let ms = union_parts(union);
         let forms: [str] = [];
-        let i = 0;
-        while (i < len(ms)) {
+        ms.foreach((_el, i) => {
             let mout: [str] = [];
             let mf = join(tcanon_go(mout, ms[i], stack), "");
             if (!str_in(forms, mf)) { forms += mf; }
-            i++;
-        };
+        });
         out += "<" + join(str_sorted(forms), "|") + ">";
         out
     } else if (k == K.tref) {
@@ -631,13 +615,11 @@ def trec_field_type(rec: Type, key: str) -> Type {
     if (rec.k == K.trec) {
         let record: TRec = rec;
         let fs: [Field] = record.fields;
-        let i = 0;
-        while (i < len(fs)) {
+        for i in 0..len(fs) {
             let f = fs[i];
             if (f.name == key) {
                 found = f.typ;
             }
-            i++;
         };
     };
     found
@@ -692,10 +674,8 @@ def tuple_typs(fs: [Field]) -> [Type] {
     let out: [Type] = [];
     if (n < 0) {
     } else {
-        let i = 0;
-        while (i < n) {
+        for i in 0..n {
             out += { k: K.tunk };
-            i++;
         };
         foreach (f in fs) {
             let ix = tuple_field_no(f.name);
@@ -738,16 +718,13 @@ def tstr_go(t: Type) -> str {
         if (tn >= 0) {
             let tys = tuple_typs(fs);
             let tparts: [str] = [];
-            let ti = 0;
-            while (ti < len(tys)) {
+            tys.foreach((_el, ti) => {
                 tparts += tstr_go(tys[ti]);
-                ti++;
-            };
+            });
             "(" + join(tparts, ", ") + ")"
         } else {
         let parts: [str] = [];
-        let i = 0;
-        while (i < len(fs)) {
+        for i in 0..len(fs) {
             // NOTE: bound once — `fields` is a bare param here, so an inline
             // `fs[i]` would merge shapes across arms (see teq note).
             let f = fs[i];
@@ -757,7 +734,6 @@ def tstr_go(t: Type) -> str {
                 let fo: TOf = ft;
                 parts += fname + "?: " + tstr_go(fo.of);
             } else { parts += fname + ": " + tstr_go(ft); };
-            i++;
         };
         "{ " + join(parts, ", ") + " }"
         }
@@ -766,11 +742,9 @@ def tstr_go(t: Type) -> str {
         let parts: [str] = [];
         let func: TFunc = t;
         let ta: [Type] = func.args;
-        let i = 0;
-        while (i < len(ta)) {
+        ta.foreach((_el, i) => {
             parts += tstr_go(ta[i]);
-            i++;
-        };
+        });
         "(" + join(parts, ", ") + ") -> " + tstr_go(func.ret)
     } else { "<" + ktag(t.k) + ">" }
 };
@@ -779,11 +753,9 @@ def tstr(t: Type) -> str { tstr_go(t) };
 
 def tstr_union(ts: [Type], sep: str) -> str {
     let parts: [str] = [];
-    let i = 0;
-    while (i < len(ts)) {
+    ts.foreach((_el, i) => {
         parts += tstr_go(ts[i]);
-        i++;
-    };
+    });
     join(parts, sep)
 };
 
@@ -848,11 +820,9 @@ def member_fields(m: Type) -> [Field] {
 def member_field_type(m: Type, key: str) -> Type {
     let fs = member_fields(m);
     let found: Type = { k: K.tnone };
-    let i = 0;
-    while (i < len(fs)) {
+    for i in 0..len(fs) {
         let f = fs[i];
         if (f.name == key) { found = f.typ; };
-        i++;
     };
     found
 };
@@ -864,11 +834,9 @@ def type_names(t: Type) -> [str] {
     let tk: long = t.k;
     if (tk == K.trec || is_boxable_type(unfold(t))) {
         let fs: [Field] = member_fields(t);
-        let i = 0;
-        while (i < len(fs)) {
+        for i in 0..len(fs) {
             let f = fs[i];
             out += f.name;
-            i++;
         };
     } else if (tk == K.tpat) {
         let pat: TPat = t;
@@ -883,19 +851,15 @@ def rec_has_names(r: Type, names: [str]) -> bool {
     if (rk != K.trec) { false } else {
         let have = type_names(r);
         let ok = true;
-        let i = 0;
-        while (i < len(names)) {
+        names.foreach((_el, i) => {
             let nm: str = names[i];
             let found = false;
-            let j = 0;
-            while (j < len(have)) {
+            have.foreach((_el, j) => {
                 let hn: str = have[j];
                 if (hn == nm) { found = true; }
-                j++;
-            };
+            });
             if (!found) { ok = false; }
-            i++;
-        };
+        });
         ok
     }
 };
@@ -917,11 +881,9 @@ def narrow_type(s: Type, t: Type) -> Type {
         let pat: TPat = t;
         let names: [str] = pat.names;
         let found: [Type] = [];
-        let i = 0;
-        while (i < len(ms)) {
+        ms.foreach((_el, i) => {
             if (rec_has_names(ms[i], names)) { found += ms[i]; }
-            i++;
-        };
+        });
         if (len(found) == 0) { t_unk() }
         else if (len(found) == 1) { found[0] }
         else {
@@ -984,13 +946,11 @@ def dotassign_union(st: TcSt, t: Type, node: DotAssign) -> TcRes {
 def union_ok(t: Type) -> bool {
     let ms = members(t);
     let ok = true;
-    let i = 0;
-    while (i < len(ms)) {
+    ms.foreach((_el, i) => {
         let m = ms[i];
         let mk: long = m.k;
         if (mk != K.trec && !is_boxable_type(m)) { ok = false; }
-        i++;
-    };
+    });
     ok
 };
 
@@ -1002,20 +962,16 @@ def union_accepts(got: Type, want: Type) -> bool {
     if (gk == K.tunion) {
         let gs = members(got);
         let ok = true;
-        let i = 0;
-        while (i < len(gs)) {
+        gs.foreach((_el, i) => {
             if (!union_accepts(gs[i], want)) { ok = false; }
-            i++;
-        };
+        });
         ok
     } else {
         let ws = members(want);
         let any = false;
-        let j = 0;
-        while (j < len(ws)) {
+        ws.foreach((_el, j) => {
             if (tcompat(got, ws[j])) { any = true; }
-            j++;
-        };
+        });
         any
     }
 };
@@ -1099,10 +1055,8 @@ def num_mantissa_zero(s: str) -> bool {
 // per field was quadratic in the literal's field count in *copies*: 722 MB at
 // 4 000 fields, every field copied once per field after it.
 def field_merge(fields: [Field], name: str, typ: Type) -> [Field] {
-    let i = 0;
-    while (i < len(fields)) {
+    for i in 0..len(fields) {
         if (fields[i].name == name) { return field_merge_dup(fields, name, typ); };
-        i++;
     };
     fields += { name: name, opt: false, typ: typ };
     fields
@@ -1771,11 +1725,9 @@ def tci_reset() {
     let keys: [long] = [];
     let typs: [Type] = [];
     let bkts: [[long]] = [];
-    let i = 0;
-    while (i < 1024) {
+    for i in 0..1024 {
         let b: [long] = [];
         bkts += b;
-        i++;
     };
     tci_keys = keys;
     tci_typs = typs;
@@ -2347,12 +2299,10 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
                     if (r.typ.k == K.trec) {
                         let record: TRec = r.typ;
                         let sfs: [Field] = record.fields;
-                        let si = 0;
-                        while (si < len(sfs)) {
+                        sfs.foreach((_el, si) => {
                             let sf = sfs[si];
                             fields = field_merge(fields, sf.name, sf.typ);
-                            si++;
-                        };
+                        });
                     } else if (r.typ.k == K.tunk || r.typ.k == K.tnone || r.typ.k == K.tname) {
                         // poison quietly (tcompat law)
                         ok = false;
@@ -2865,11 +2815,9 @@ def typeof_matchend(st: TcSt, node: MatchEnd) -> TcRes {
     } else if (sk == K.tunion) {
         let ms = members(s);
         let missing: [str] = [];
-        let i = 0;
-        while (i < len(ms)) {
+        ms.foreach((_el, i) => {
             if (!covered(ms[i], cover)) { missing += tstr(ms[i]); }
-            i++;
-        };
+        });
         if (len(missing) > 0) {
             st = fail(st, "non-exhaustive match: nothing matches " + join(missing, ", ") + " (add an arm or '_'" + hint + ")", node.line, node.col);
         }
@@ -2883,15 +2831,13 @@ def typeof_matchend(st: TcSt, node: MatchEnd) -> TcRes {
 // A member is covered by a type arm of its type.
 def covered(m: Type, cover: [Type]) -> bool {
     let any = false;
-    let i = 0;
-    while (i < len(cover)) {
+    cover.foreach((_el, i) => {
         let c = unfold(cover[i]);
         let ck: long = c.k;
         if (ck == K.trec) {
             if (teq(m, c)) { any = true; }
         }
-        i++;
-    };
+    });
     any
 };
 
@@ -2952,8 +2898,7 @@ def typeof_field(st: TcSt, t: Type, dkey: str, line: long, col: long) -> TcRes {
         let ftyp: Type = t_unk();
         let rec: TRec = t;
         let fs: [Field] = rec.fields;
-        let j = 0;
-        while (j < len(fs)) {
+        for j in 0..len(fs) {
             // NOTE: bound once (flow-snapshot, see the dot arm's note).
             // NOTE: :str bindings (see teq note).
             let f = fs[j];
@@ -2962,7 +2907,6 @@ def typeof_field(st: TcSt, t: Type, dkey: str, line: long, col: long) -> TcRes {
                 found = true;
                 ftyp = f.typ;
             };
-            j++;
         };
         if (found) {
             tc_res(ftyp, st)
@@ -3090,27 +3034,22 @@ def typeof_method(st: TcSt, node: Call, m: str) -> TcRes {
         let hint = "";
         if (m == "length") { hint = " ('.length' is a property: no parentheses)"; };
         st = fail(st, "str has no method '" + m + "'" + hint, node.line, node.col);
-        let i = 0;
-        while (i < na) {
+        for i in 0..na {
             let r = typeof_expr(st, margs[i]);
             st = r.st;
-            i++;
         };
         tc_res(t_unk(), st)
     } else if (na < sm.nreq || na > np) {
         let want = tostring(np);
         if (sm.nreq < np) { want = tostring(sm.nreq) + " or " + tostring(np); };
         st = fail(st, what + " takes " + want + " args, got " + tostring(na), node.line, node.col);
-        let i = 0;
-        while (i < na) {
+        for i in 0..na {
             let r = typeof_expr(st, margs[i]);
             st = r.st;
-            i++;
         };
         tc_res(sm.ret, st)
     } else {
-        let i = 0;
-        while (i < na) {
+        for i in 0..na {
             let r = typeof_expr(st, margs[i]);
             st = r.st;
             let ak: long = r.typ.k;
@@ -3119,7 +3058,6 @@ def typeof_method(st: TcSt, node: Call, m: str) -> TcRes {
             } else if (!sm_accepts(r.typ, ps[i])) {
                 st = fail(st, what + " arg " + tostring(i) + ": expected " + tstr(ps[i]) + ", got " + tstr(r.typ), node.line, node.col);
             }
-            i++;
         };
         tc_res(sm.ret, st)
     }
@@ -3415,10 +3353,8 @@ def fmt_type(c: long) -> bool {
 // that large is over fmt_spec's limit anyway).
 def fmt_number(spec: str, a: long, b: long) -> long {
     let v = 0;
-    let i = a;
-    while (i < b) {
+    for i in a..b {
         if (v < 1000000) { v = v * 10 + spec[i] - '0'; }
-        i = i + 1;
     };
     v
 };
@@ -3763,11 +3699,9 @@ def typeof_arr_method(st: TcSt, node: Call, key: str, at: Type) -> TcRes {
         tc_res(at, st)
     } else {
         st = fail(st, "array has no method '" + key + "'", node.line, node.col);
-        let i = 0;
-        while (i < na) {
+        for i in 0..na {
             let r = typeof_expr(st, args[i]);
             st = r.st;
-            i++;
         };
         tc_res(t_unk(), st)
     }
@@ -3839,22 +3773,18 @@ def typeof_call_go(st: TcSt, node: Call) -> TcRes {
                 st = fail(st, "call takes " + tostring(len(cfargs)) + " args, got " + tostring(len(cargs)), node.line, node.col);
                 tc_res(cft.ret, st)
             } else {
-                let ci = 0;
-                while (ci < len(cargs)) {
+                cargs.foreach((_el, ci) => {
                     let ra = typeof_want(st, cargs[ci], cfargs[ci]);
                     st = ra.st;
                     st = expect_cast(st, ra.typ, cfargs[ci], "call arg " + tostring(ci), node.line, node.col);
-                    ci++;
-                };
+                });
                 tc_res(cft.ret, st)
             }
         } else {
             st = fail(st, "cannot call " + tstr(cf.typ) + " (not a function)", node.line, node.col);
-            let i = 0;
-            while (i < len(node.args)) {
+            for i in 0..len(node.args) {
                 let r = typeof_expr(st, cargs[i]);
                 st = r.st;
-                i++;
             };
             tc_res(t_unk(), st)
         }
@@ -4438,8 +4368,7 @@ def typeof_call_go(st: TcSt, node: Call) -> TcRes {
                     st = fail(st, "os_call: '" + nm.v + "' is not a call name (see os_call_names)",
                               node.line, node.col);
                 };
-                let i = 1;
-                while (i < len(cargs)) {
+                for i in 1..len(cargs) {
                     let r = typeof_expr(st, cargs[i]);
                     st = r.st;
                     // The same argument types `syscall` takes after its
@@ -4451,7 +4380,6 @@ def typeof_call_go(st: TcSt, node: Call) -> TcRes {
                         st = fail(st, "os_call arg " + tostring(i) + " must be long/bool/str/*T, got " + tstr(r.typ),
                                   node.line, node.col);
                     };
-                    i++;
                 };
                 tc_res(type_node({ k: K.tlong }), st)
             }
@@ -4472,8 +4400,7 @@ def typeof_call_go(st: TcSt, node: Call) -> TcRes {
                 st = fail(st, "syscall needs 1-" + tostring(maxargs) + " arguments (number + up to " + m + " args)", node.line, node.col);
                 tc_res(type_node({ k: K.tlong }), st)
             } else {
-                let i = 0;
-                while (i < len(cargs)) {
+                cargs.foreach((_el, i) => {
                     let r = typeof_expr(st, cargs[i]);
                     st = r.st;
                     if (i == 0) {
@@ -4487,8 +4414,7 @@ def typeof_call_go(st: TcSt, node: Call) -> TcRes {
                     } else if (r.typ.k != K.tlong && r.typ.k != K.tbool && r.typ.k != K.tstr && r.typ.k != K.tptr && r.typ.k != K.tunk) {
                         st = fail(st, "syscall arg " + tostring(i) + " must be long/bool/str/*T, got " + tstr(r.typ), node.line, node.col);
                     };
-                    i++;
-                };
+                });
                 tc_res(type_node({ k: K.tlong }), st)
             }
         } else if (name == "jmp_at") {
@@ -4538,23 +4464,19 @@ def typeof_call_go(st: TcSt, node: Call) -> TcRes {
                 tc_res(t_unk(), st)
             } else if (ret_pending(ft)) {
                 st = fail(st, "'" + disp(name) + "' is used before its return type is known (annotate it)", node.line, node.col);
-                let i = 0;
-                while (i < len(cargs)) {
+                cargs.foreach((_el, i) => {
                     let r = typeof_expr(st, cargs[i]);
                     st = r.st;
-                    i++;
-                };
+                });
                 tc_res(t_unk(), st)
             } else if (ft.k != K.tfunc) {
                 // poisoned binding (tunk) from an earlier error — don't
                 // cascade new errors, but still check the arguments for
                 // their own errors.
-                let i = 0;
-                while (i < len(cargs)) {
+                cargs.foreach((_el, i) => {
                     let r = typeof_expr(st, cargs[i]);
                     st = r.st;
-                    i++;
-                };
+                });
                 tc_res(t_unk(), st)
             } else {
                 let func: TFunc = ft;
@@ -4563,8 +4485,7 @@ def typeof_call_go(st: TcSt, node: Call) -> TcRes {
                     st = fail(st, "'" + disp(name) + "' takes " + tostring(len(cargs_ft)) + " args, got " + tostring(len(cargs)), node.line, node.col);
                     tc_res(call_result(func), st)
                 } else {
-                    let i = 0;
-                    while (i < len(cargs)) {
+                    cargs.foreach((_el, i) => {
                         let r = typeof_want(st, cargs[i], cargs_ft[i]);
                         st = r.st;
                         let ak: long = r.typ.k;
@@ -4575,8 +4496,7 @@ def typeof_call_go(st: TcSt, node: Call) -> TcRes {
                         } else {
                             st = expect_arg(st, r.typ, cargs_ft[i], cargs[i], "'" + disp(name) + "' arg " + tostring(i), node.line, node.col);
                         };
-                        i++;
-                    };
+                    });
                     tc_res(call_result(func), st)
                 }
             }
@@ -4588,13 +4508,11 @@ def typeof_block(st: TcSt, node: Block) -> TcRes {
     // No scope push: names are unique post-rename, blocks share the frame.
     let last: Type = type_node({ k: K.tvoid });
     let bstmts: [Node] = node.stmts;
-    let i = 0;
-    while (i < len(bstmts)) {
+    bstmts.foreach((_el, i) => {
         let r = typeof_expr(st, bstmts[i]);
         st = r.st;
         last = r.typ;
-        i++;
-    };
+    });
     tc_res(last, st)
 };
 
@@ -4603,15 +4521,13 @@ def typeof_block(st: TcSt, node: Block) -> TcRes {
 def typeof_block_want(st: TcSt, node: Block, want: Type) -> TcRes {
     let last: Type = type_node({ k: K.tvoid });
     let bstmts: [Node] = node.stmts;
-    let i = 0;
-    while (i < len(bstmts)) {
+    bstmts.foreach((_el, i) => {
         let w: Type = type_node({ k: K.tnone });
         if (i == len(bstmts) - 1) { w = want; }
         let rr = typeof_want(st, bstmts[i], w);
         st = rr.st;
         last = rr.typ;
-        i++;
-    };
+    });
     tc_res(last, st)
 };
 
@@ -4736,13 +4652,11 @@ def same_names(t: Type, keys: [str]) -> bool {
         let fs: [Field] = rec.fields;
         let distinct: [str] = [];
         let ok = true;
-        let i = 0;
-        while (i < len(keys)) {
+        keys.foreach((_el, i) => {
             let key: str = keys[i];
             if (!str_in(distinct, key)) { distinct += key; }
             if (field_pos(fs, key, 0) < 0) { ok = false; }
-            i++;
-        };
+        });
         ok && len(distinct) == len(fs)
     }
 };
@@ -4754,8 +4668,7 @@ def typeof_lit(st: TcSt, node: RecLit, target: Type) -> TcRes {
     let tu = unfold(target);
     let keys: [str] = node.keys;
     let vals: [Node] = node.vals;
-    let i = 0;
-    while (i < len(keys)) {
+    keys.foreach((_el, i) => {
         let key: str = keys[i];
         let ft = trec_field_type(tu, key);
         let what = "record field '" + key + "'";
@@ -4771,8 +4684,7 @@ def typeof_lit(st: TcSt, node: RecLit, target: Type) -> TcRes {
             let r = typeof_want(st, vals[i], ft);
             st = expect_type(r.st, r.typ, ft, what, node.line, node.col);
         };
-        i++;
-    };
+    });
     tc_res(target, st)
 };
 
@@ -4903,11 +4815,9 @@ def inf_reset() {
     let keys: [long] = [];
     let typs: [Type] = [];
     let bkts: [[long]] = [];
-    let i = 0;
-    while (i < 1024) {
+    for i in 0..1024 {
         let b: [long] = [];
         bkts += b;
-        i++;
     };
     inf_keys = keys;
     inf_typs = typs;
@@ -5031,8 +4941,7 @@ def typeof_def(st: TcSt, name: str, func: Func, line: long, col: long, nline: lo
         let saved_ret = st.ret;
         let saved_depth = st.fdepth;
         st = st_fdepth(st, saved_depth + 1);
-        let j = 0;
-        while (j < len(fparams)) {
+        fparams.foreach((_el, j) => {
             // The binding's position is the FUNCTION's, because a parameter has no
             // node of its own -- but the parser does now keep each name's own
             // position (`Func.ppos`), and that is where a hover, a semantic token
@@ -5052,8 +4961,7 @@ def typeof_def(st: TcSt, name: str, func: Func, line: long, col: long, nline: lo
             // hovering the `p` in `def g(p: P)` showed nothing while hovering a USE
             // of `p` showed `P`.
             if (tc_index) { tci_note_key(pl * 65536 + pc, args[j]); };
-            j++;
-        };
+        });
         st = st_self(st, ft);
         st = st_ret(st, body_ret);
         let nerr = len(st.errors);
@@ -5109,14 +5017,12 @@ def typeof_def(st: TcSt, name: str, func: Func, line: long, col: long, nline: lo
                 let b2 = typeof_block_want(st, body, br);
                 st = b2.st;
                 st = expect_type(st, b2.typ, br, "'" + disp(name) + "' body", line, col);
-                let ri2 = 0;
-                while (ri2 < len(rets2)) {
+                rets2.foreach((_el, ri2) => {
                     let rn2 = rets2[ri2];
                     if (!tcompat(rn2.typ, br)) {
                         st = fail(st, "'return': expected " + tstr(br) + ", got " + tstr(rn2.typ) + " (the return type is inferred from " + rsrc + ret_inferred_hint(rn2.typ), rn2.line, rn2.col);
                     }
-                    ri2++;
-                };
+                });
             }
             ft = type_node({ k: K.tfunc, args: args, ret: br });
             st = st_bind(st, name, ft, "func", nline, ncol);
@@ -5163,8 +5069,7 @@ def check_program(ast: Block, ext: [Sym]) -> [Diag] {
     // pass 1: collect top-level def signatures (allows mutual recursion).
     let defs: [Field] = [];
     let pstmts: [Node] = ast.stmts;
-    let i = 0;
-    while (i < len(pstmts)) {
+    pstmts.foreach((_el, i) => {
         let s: Node = pstmts[i];
         // NOTE: nested ifs, not `&&` (house style — the `s.v.k` read is
         // only reached once `s` is known to be a decl; `&&` would
@@ -5180,8 +5085,7 @@ def check_program(ast: Block, ext: [Sym]) -> [Diag] {
                 defs += def_sig(decl.name, func);
             }
         }
-        i++;
-    };
+    });
     // pass 2: check everything in order (depth 0 = top level)
     let st: TcSt = { bindings: [], errors: [], ret: type_node({ k: K.tnone }), self: type_node({ k: K.tnone }), fdepth: 0, loops: 0, loop_fd: -1 };
     // top-level defs are visible at top level
@@ -5200,21 +5104,17 @@ def check_program(ast: Block, ext: [Sym]) -> [Diag] {
     // ... syscall), so these two bindings are never consulted by a call; they
     // exist only so `print`/`syscall` read as defined when they appear as
     // values (e.g. `let p = print;`).
-    let x = 0;
-    while (x < len(ext)) {
+    ext.foreach((_el, x) => {
         let xe = ext[x];
         // a package's global (its cell label, native.y arch_global_label)
         // is read-only to its importers
         let xk = "func";
         if (xe.label.starts_with("yg_")) { xk = "const"; }
         st = st_bind(st, xe.name, xe.typ, xk, 0 - 1, 0 - 1);
-        x++;
-    };
-    let d = 0;
-    while (d < len(defs)) {
+    });
+    defs.foreach((_el, d) => {
         st = st_bind(st, defs[d].name, defs[d].typ, "func", 0 - 1, 0 - 1);
-        d++;
-    };
+    });
     let r = typeof_block(st, ast);
     r.st.errors
 };
@@ -5224,12 +5124,10 @@ def def_sig(name: str, func: Func) -> Field {
     // pass 2 (typeof_def) reports each exactly once.
     let args: [Type] = [];
     let fpt: [Type] = func.ptypes;
-    let i = 0;
-    while (i < len(func.params)) {
+    for i in 0..len(func.params) {
         let pt: Type = fpt[i];
         if (pt.k == K.tnone) { pt = t_unk(); };
         args += pt;
-        i++;
     };
     let ret: Type = func.ret;
     if (ret.k == K.tnone) { ret = t_pend(); };

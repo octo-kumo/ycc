@@ -127,8 +127,7 @@ def pe_sec(name: str, vsz: long, rva: long, rawptr: long, chars: long) -> PeSecH
 def pe_place(secs: [PeSecHdr]) -> [PeSecHdr] {
     let raw = pe_align(pe_headers_size(secs), PE_FILE_ALIGN);
     let rva = PE_TEXT_RVA;
-    let i = 0;
-    while (i < len(secs)) {
+    secs.foreach((_el, i) => {
         let s = secs[i];
         if (i > 0) { rva = pe_align(rva, PE_SECT_ALIGN); };
         let rs = pe_align(s.vsz, PE_FILE_ALIGN);
@@ -139,8 +138,7 @@ def pe_place(secs: [PeSecHdr]) -> [PeSecHdr] {
             raw = raw + rs;
         };
         rva = rva + s.vsz;
-        i++;
-    };
+    });
     secs
 };
 
@@ -269,12 +267,10 @@ def pe_import_bytes(spec: [WImport], rva: long, bss_rva: long) -> [byte] {
     i = 0;
     while (i < nd) {
         let row: [long] = [];
-        let k = 0;
-        while (k < len(spec[i].funcs)) {
+        for k in 0..len(spec[i].funcs) {
             row += at;
             at = at + 2 + len(spec[i].funcs[k]) + 1;
             if (at % 2 != 0) { at = at + 1; };
-            k++;
         };
         hoff += row;
         i++;
@@ -300,12 +296,10 @@ def pe_import_bytes(spec: [WImport], rva: long, bss_rva: long) -> [byte] {
         // code's `mov y_iat_X(%rip), %rax` and this agree by construction),
         // with a zeroed terminator cell after each DLL's functions.
         pe_put32(out, d + 16, bss_rva + arch.w_iat_offset(i, 0));
-        let k = 0;
-        while (k < len(spec[i].funcs)) {
+        for k in 0..len(spec[i].funcs) {
             pe_put64(out, ilt[i] + 8 * k, rva + hoff[i][k]);
             pe_put64(out, iat[i] + 8 * k, rva + hoff[i][k]);
             pe_put_str(out, hoff[i][k] + 2, spec[i].funcs[k]);
-            k++;
         };
         pe_put_str(out, noff[i], spec[i].dll);
         i++;
@@ -341,13 +335,11 @@ def pe_build(code: [byte], rodata: [byte], entry_off: long, bss_len: long, pdata
     if (imp_sz > 0) {
         let idr = pe_find(secs, ".idata").rva;
         let bss_rva = pe_find(secs, ".bss").rva;
-        let dj = 0;
-        while (dj < len(dsecs2)) {
+        dsecs2.foreach((_el, dj) => {
             if (dsecs2[dj].name == ".idata") {
                 ddata2[dj] = pe_import_bytes(imp, idr, bss_rva);
             };
-            dj++;
-        };
+        });
     };
     let size_headers = pe_align(pe_headers_size(secs), PE_FILE_ALIGN);
     let size_image = pe_align(pe_text_rva(secs) + textlen, PE_SECT_ALIGN);
@@ -432,11 +424,9 @@ def pe_fix_pdata(pdata: [byte], rva: long) -> [byte] {
 // table and its string table are in the file only -- nothing maps them.
 def pe_symptr(secs: [PeSecHdr]) -> long {
     let raw = pe_align(pe_headers_size(secs), PE_FILE_ALIGN);
-    let i = 0;
-    while (i < len(secs)) {
+    secs.foreach((_el, i) => {
         raw = raw + secs[i].rawsz;
-        i++;
-    };
+    });
     raw
 };
 
@@ -556,10 +546,8 @@ def pe_optional(out: [byte], secs: [PeSecHdr], size_headers: long, size_image: l
 // not a correctness problem here.
 def pe_shdr(out: [byte], s: PeSecHdr) -> [byte] {
     let nm = s.name;
-    let i = 0;
-    while (i < 8) {
+    for i in 0..8 {
         if (i < len(nm)) { out += nm[i]; } else { out += 0; };
-        i++;
     };
     out = push_le32(out, s.vsz);
     out = push_le32(out, s.rva);

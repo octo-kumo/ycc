@@ -202,11 +202,9 @@ def dw_program(rows: [long], text_addr: long, text_len: long) -> [byte] {
 // v's low n bytes, little-endian (v >= 0).
 def dw_le(out: [byte], v: long, n: long) -> [byte] {
     let x = v;
-    let i = 0;
-    while (i < n) {
+    for i in 0..n {
         out += x % 256;
         x = x / 256;
-        i++;
     };
     out
 };

@@ -196,13 +196,11 @@ def rn_bind(st: RnSt, orig: str, line: long, col: long) -> { st: RnSt, uniq: str
 
 def rn_list(nodes: [Node], st: RnSt) -> { st: RnSt, nodes: [Node] } {
     let out: [Node] = [];
-    let i = 0;
-    while (i < len(nodes)) {
+    nodes.foreach((_el, i) => {
         let r = rn_node(nodes[i], st);
         st = r.st;
         out += r.node;
-        i++;
-    };
+    });
     { st: st, nodes: out }
 };
 
@@ -219,11 +217,9 @@ def rn_prepass(stmts: [Node], st: RnSt) -> RnSt {
     // NOTE: stmts elements are bare {k}-holes at the boundary (like res);
     // pass each element as a BARE value (rn_prepass_one takes unannotated
     // s) so field reads resolve via the tcompat law, not merged shapes.
-    let i = 0;
-    while (i < len(stmts)) {
+    stmts.foreach((_el, i) => {
         st = rn_prepass_one(stmts[i], st);
-        i++;
-    };
+    });
     st
 };
 
@@ -285,12 +281,10 @@ def rn_note_defaults(st: RnSt, uniq: str, func: Func) -> RnSt {
 def rn_find_defaults(st: RnSt, name: str) -> [Node] {
     let out: [Node] = [];
     let ds = st.dfl;
-    let i = 0;
-    while (i < len(ds)) {
+    ds.foreach((_el, i) => {
         let d = ds[i];
         if (d.name == name) { out = d.vals; };
-        i++;
-    };
+    });
     out
 };
 
@@ -304,12 +298,10 @@ def rn_fill_defaults(vals: [Node], args: [Node], line: long, col: long) -> [Node
         args
     } else {
         let ok = true;
-        let i = n;
-        while (i < len(vals)) {
+        for i in n..len(vals) {
             let d = vals[i];
             let dk: long = d.k;
             if (dk == K.void) { ok = false; };
-            i = i + 1;
         };
         let out: [Node] = [];
         let j = 0;
@@ -414,11 +406,9 @@ def rn_types(st: RnSt, ts: [Type]) -> [Type] {
         ts
     } else {
         let out: [Type] = [];
-        let i = 0;
-        while (i < len(ts)) {
+        ts.foreach((_el, i) => {
             out += rn_type(st, ts[i]);
-            i++;
-        };
+        });
         out
     }
 };
@@ -592,29 +582,24 @@ def rn_reaches_go(st: RnSt, t: Type, id: long, seen: [long], bare: bool) -> bool
 
 def rn_type_list(st: RnSt, ts: [Type], depth: long) -> [Type] {
     let out: [Type] = [];
-    let i = 0;
-    while (i < len(ts)) {
+    ts.foreach((_el, i) => {
         out += rn_type_go(st, ts[i], depth);
-        i++;
-    };
+    });
     out
 };
 
 def rn_type_fields(st: RnSt, fs: [Field], depth: long) -> [Field] {
     let out: [Field] = [];
-    let i = 0;
-    while (i < len(fs)) {
+    for i in 0..len(fs) {
         let f = fs[i];
         out += { name: f.name, opt: f.opt, typ: rn_type_go(st, f.typ, depth) };
-        i++;
     };
     out
 };
 
 def rn_union_flat(ts: [Type]) -> [Type] {
     let out: [Type] = [];
-    let i = 0;
-    while (i < len(ts)) {
+    ts.foreach((_el, i) => {
         let t = ts[i];
         let tk: long = t.k;
         if (tk == K.tunion) {
@@ -624,15 +609,13 @@ def rn_union_flat(ts: [Type]) -> [Type] {
         } else {
             out += t;
         };
-        i++;
-    };
+    });
     out
 };
 
 def rn_drop_typedefs(stmts: [Node], st: RnSt) -> [Node] {
     let out: [Node] = [];
-    let i = 0;
-    while (i < len(stmts)) {
+    stmts.foreach((_el, i) => {
         let s = stmts[i];
         let sk: long = s.k;
         if (sk == K.typedef) {
@@ -644,8 +627,7 @@ def rn_drop_typedefs(stmts: [Node], st: RnSt) -> [Node] {
             rn_mod = mod0;
             if (te.k == K.err) { out += te; }
         } else { out += s; };
-        i++;
-    };
+    });
     out
 };
 
@@ -734,14 +716,12 @@ def rn_shadow_dups(stmts: [Node]) -> [Node] {
     } else {
         let later = rn_later(names);
         let out: [Node] = [];
-        let i = 0;
-        while (i < len(stmts)) {
+        stmts.foreach((_el, i) => {
             if (later[i]) {
                 let decl: Decl = stmts[i];
                 out += rn_rebuild_decl(decl, names[i] + "$shadow" + tostring(i));
             } else { out += stmts[i]; };
-            i++;
-        };
+        });
         out
     }
 };
@@ -781,10 +761,8 @@ def rn_later(names: [str]) -> [bool] {
 // A 24-bit hash of s (rn_later's slots).
 def rn_hash(s: str) -> long {
     let h = 0;
-    let i = 0;
-    while (i < len(s)) {
+    for i in 0..len(s) {
         h = (h * 33 + s[i]) & 16777215;
-        i++;
     };
     h
 };

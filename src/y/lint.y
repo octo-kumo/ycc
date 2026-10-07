@@ -34,7 +34,7 @@ import tags from "./tags.y";
 import types from "./types.y";
 import parser from "./parser.y";
 
-type LintVar = { name: str, kind: str, num: long, line: long, col: long, scal: bool, fresh: bool, strf: bool, top: bool };
+type LintVar = { name: str, kind: str, num: long, line: long, col: long, scal: bool, fresh: bool, strf: bool, top: bool, vec: bool };
 // Where each top-level name was declared last: a name -> line map (the
 // parser's NameIx, which lint already keeps one of). A walk of `vars` would
 // do it too, but that list holds every local -- measured at +4.4% of a
@@ -93,14 +93,12 @@ def lint_unit(ast: Block, ast3: Block, ofile: [long], fmods: [str], wlevel: long
 // (indexed by the statement's line) says which lines those are. Anything else
 // is a statement with side effects the reader cannot see running twice.
 def lint_meta_top(st: LintSt, stmts: [Node], ogen: [bool]) -> long {
-    let i = 0;
-    while (i < len(stmts)) {
+    stmts.foreach((_el, i) => {
         let s = stmts[i];
         if (s.k != K.decl && s.k != K.void && !meta_gen(s, ogen)) {
             lint_warn_start(st, "a top-level statement runs once in the meta generator and once in the program, so with a meta block in the file it must be a declaration (a def, type, const or let) -- keep a top-level let initializer pure", s);
         };
-        i++;
-    };
+    });
     0
 };
 
@@ -128,11 +126,9 @@ def meta_gen(s: Node, ogen: [bool]) -> bool {
 
 // Every `def` in the tree, by its renamed name.
 def lint_rets(st: LintSt, stmts: [Node]) -> long {
-    let i = 0;
-    while (i < len(stmts)) {
+    stmts.foreach((_el, i) => {
         lint_rets_node(st, stmts[i]);
-        i++;
-    };
+    });
     0
 };
 
@@ -274,10 +270,10 @@ def lint_mark(st: LintSt, name: str, bit: long) -> long {
 // A local binding (let, const, nested def), checked for use at the end.
 // `scal`: it holds a number, string or bool, whose `+=` makes a new value
 // only it sees. `fresh`: it starts as an array literal no one else holds.
-def lint_note(st: LintSt, name: str, kind: str, line: long, col: long, scal: bool, fresh: bool, strf: bool) -> long {
+def lint_note(st: LintSt, name: str, kind: str, line: long, col: long, scal: bool, fresh: bool, strf: bool, vec: bool) -> long {
     let d = lint_disp(name);
     if (d != "" && d[0] != 95 && index_of(name, "$shadow") < 0) {
-        st.vars += { name: d, kind: kind, num: lint_num(name), line: line, col: col, scal: scal, fresh: fresh, strf: strf, top: false };
+        st.vars += { name: d, kind: kind, num: lint_num(name), line: line, col: col, scal: scal, fresh: fresh, strf: strf, top: false, vec: vec };
     };
     0
 };
@@ -309,7 +305,7 @@ def lint_note_top(st: LintSt, node: Decl) -> long {
         // LAST, so a third declaration names the second
         parser.nameix_put(st.tops, d, node.line);
         if (first == 0) {
-            st.vars += { name: d, kind: node.kind, num: lint_num(name), line: node.line, col: node.col, scal: lint_scal(node.typ, node.v), fresh: lint_fresh(node.v), strf: lint_strheld(node.typ, node.v), top: true };
+            st.vars += { name: d, kind: node.kind, num: lint_num(name), line: node.line, col: node.col, scal: lint_scal(node.typ, node.v), fresh: lint_fresh(node.v), strf: lint_strheld(node.typ, node.v), top: true, vec: lint_vec(node.typ, node.v) };
         };
     };
     0
@@ -357,13 +353,11 @@ def lint_strheld(typ: Type, v: Node) -> bool {
 def lint_var_str(st: LintSt, name: str) -> bool {
     let n = lint_num(name);
     let d = lint_disp(name);
-    let i = 0;
-    while (i < len(st.vars)) {
+    for i in 0..len(st.vars) {
         let v: LintVar = st.vars[i];
         if (v.strf && ((n > 0 && v.num == n) || (n == 0 && v.num == 0 && v.name == d))) {
             return true;
         };
-        i++;
     };
     false
 };
@@ -374,13 +368,11 @@ def lint_var_str(st: LintSt, name: str) -> bool {
 def lint_var_scal(st: LintSt, name: str) -> bool {
     let n = lint_num(name);
     let d = lint_disp(name);
-    let i = 0;
-    while (i < len(st.vars)) {
+    for i in 0..len(st.vars) {
         let v: LintVar = st.vars[i];
         if (v.scal && ((n > 0 && v.num == n) || (n == 0 && v.num == 0 && v.name == d))) {
             return true;
         };
-        i++;
     };
     false
 };
@@ -392,13 +384,33 @@ def lint_tscal(typ: Type) -> bool {
     k == K.tlong || k == K.tfloat || k == K.tbyte || k == K.tstr || k == K.tbool
 };
 
+// Whether a type and initializer make a binding an array. A slice of a str
+// is not one, which is the case `lint_var_str` cannot see (it is not a str
+// literal): rules 3.1/3.5 need positive proof before they say `.foreach`.
+def lint_vec(typ: Type, v: Node) -> bool {
+    typ.k == K.tarr || typ.k == K.tarrfix || lint_fresh(v)
+};
+
+// Whether the binding a name refers to was noted as an array.
+def lint_var_vec(st: LintSt, name: str) -> bool {
+    let n = lint_num(name);
+    let d = lint_disp(name);
+    for i in 0..len(st.vars) {
+        let v: LintVar = st.vars[i];
+        if (v.vec && ((n > 0 && v.num == n) || (n == 0 && v.num == 0 && v.name == d))) {
+            return true;
+        };
+    };
+    false
+};
+
 // Note a parameter, so the shortening rules can tell a `str` or a number
 // from an array. `top` keeps lint_vars from calling it unused -- a
 // parameter is never that.
 def lint_note_param(st: LintSt, name: str, typ: Type, line: long, col: long) -> long {
     let d = lint_disp(name);
     if (d != "" && d[0] != 95) {
-        st.vars += { name: d, kind: "param", num: lint_num(name), line: line, col: col, scal: lint_tscal(typ), fresh: false, strf: typ.k == K.tstr, top: true };
+        st.vars += { name: d, kind: "param", num: lint_num(name), line: line, col: col, scal: lint_tscal(typ), fresh: false, strf: typ.k == K.tstr, top: true, vec: typ.k == K.tarr || typ.k == K.tarrfix };
     };
     0
 };
@@ -414,8 +426,7 @@ def lint_stmts(st: LintSt, stmts: [Node], used: bool, top: bool) -> long {
     st.dropnext = false;
     let dead = false;
     let told = false;
-    let i = 0;
-    while (i < n) {
+    for i in 0..n {
         let s = stmts[i];
         if (dead && !told && lint_code(s)) {
             lint_warn_start(st, "unreachable code", s);
@@ -427,7 +438,6 @@ def lint_stmts(st: LintSt, stmts: [Node], used: bool, top: bool) -> long {
         if (!dead && lint_diverges(s)) {
             dead = true;
         };
-        i++;
     };
     0
 };
@@ -680,11 +690,9 @@ def lint_unused_expr(st: LintSt, node: Node, used: bool) -> long {
 };
 
 def lint_list(st: LintSt, nodes: [Node]) -> long {
-    let i = 0;
-    while (i < len(nodes)) {
+    nodes.foreach((_el, i) => {
         lint_node(st, nodes[i], true);
-        i++;
-    };
+    });
     0
 };
 
@@ -978,8 +986,7 @@ def lint_short_chain(st: LintSt, node: Bin) -> long {
     let vals: [long] = [];
     let allint = true;
     let allstr = true;
-    let i = 0;
-    while (i < len(leaves)) {
+    for i in 0..len(leaves) {
         let leaf = leaves[i];
         if (leaf.k != K.bin) { return 0; };
         let b: Bin = leaf;
@@ -992,17 +999,14 @@ def lint_short_chain(st: LintSt, node: Bin) -> long {
             vals += v;
             allstr = false;
         };
-        i++;
     };
     if (allint) {
         let lo = vals[0];
         let hi = vals[0];
-        let j = 0;
-        while (j < len(vals)) {
+        vals.foreach((_el, j) => {
             if (vals[j] < lo) { lo = vals[j]; };
             if (vals[j] > hi) { hi = vals[j]; };
-            j++;
-        };
+        });
         if (hi - lo + 1 == len(vals)) {
             lint_warn_at(st, "these equalities are a consecutive range; write a range comparison", node);
         } else {
@@ -1036,13 +1040,11 @@ def lint_single_stmt(block: Node) -> Node {
         let b: Block = block;
         let found: Node = { k: K.void, line: block.line, col: block.col };
         let n = 0;
-        let i = 0;
-        while (i < len(b.stmts)) {
+        for i in 0..len(b.stmts) {
             if (b.stmts[i].k != K.void) {
                 found = b.stmts[i];
                 n++;
             };
-            i++;
         };
         if (n == 1) { return found; };
     };
@@ -1162,10 +1164,8 @@ def lint_short_while(st: LintSt, loop: While) -> long {
 def lint_first_stmt(block: Node) -> Node {
     if (block.k == K.block) {
         let b: Block = block;
-        let i = 0;
-        while (i < len(b.stmts)) {
+        for i in 0..len(b.stmts) {
             if (b.stmts[i].k != K.void) { return b.stmts[i]; };
-            i++;
         };
     };
     { k: K.void, line: block.line, col: block.col }
@@ -1181,8 +1181,9 @@ def lint_find(node: Node, name: str, mask: long) -> bool {
     if (k == K.ret && mask & 1 != 0) { return true; };
     if (k == K.kw_break && mask & 2 != 0) { return true; };
     if (k == K.kw_continue && mask & 4 != 0) { return true; };
+    if (mask & 8 != 0 && lint_resizes(node, name)) { return true; };
     if (k == K.id) {
-        if (name == "") { return false; };
+        if (name == "" || mask & 8 != 0) { return false; };
         let l: Leaf = node;
         l.v == name
     } else if (k == K.bin) {
@@ -1270,12 +1271,40 @@ def lint_find(node: Node, name: str, mask: long) -> bool {
 };
 
 def lint_find_list(nodes: [Node], name: str, mask: long) -> bool {
-    let i = 0;
-    while (i < len(nodes)) {
+    for i in 0..len(nodes) {
         if (lint_find(nodes[i], name, mask)) { return true; };
-        i++;
     };
     false
+};
+
+// Whether this node changes what `name` holds as a whole (mask bit 8): a
+// whole-array assign or `op=`, `++`, or a length-changing method call. An
+// element store (`a[i] = x`) is not one.
+def lint_resizes(node: Node, name: str) -> bool {
+    let k: long = node.k;
+    if (k == K.assign) {
+        let a: Assign = node;
+        a.name == name
+    } else if (k == K.opassign) {
+        let o: OpAssign = node;
+        if (o.tgt.k != K.id) { false } else { let t: Leaf = o.tgt; t.v == name }
+    } else if (k == K.incdec) {
+        let o: IncDec = node;
+        if (o.tgt.k != K.id) { false } else { let t: Leaf = o.tgt; t.v == name }
+    } else if (k == K.call) {
+        let c: Call = node;
+        if (c.callee.k != K.dot) {
+            false
+        } else {
+            let d: Dot = c.callee;
+            if (d.obj.k != K.id) { false } else { let o: Leaf = d.obj; o.v == name && lint_resize_method(d.key) }
+        }
+    } else { false }
+};
+
+def lint_resize_method(key: str) -> bool {
+    key == "push" || key == "pop" || key == "remove" || key == "insert" ||
+    key == "shift" || key == "unshift" || key == "sort"
 };
 
 // Whether the last real statement of a loop body is `iv = iv + 1` (also
@@ -1284,10 +1313,8 @@ def lint_step_one(body: Node, iv: str) -> bool {
     if (body.k != K.block) { return false; };
     let b: Block = body;
     let last: Node = { k: K.void, line: body.line, col: body.col };
-    let i = 0;
-    while (i < len(b.stmts)) {
+    for i in 0..len(b.stmts) {
         if (b.stmts[i].k != K.void) { last = b.stmts[i]; };
-        i++;
     };
     if (last.k == K.assign) {
         let a: Assign = last;
@@ -1339,8 +1366,11 @@ def lint_short_index_loop(st: LintSt, stmts: [Node], i: long) -> long {
     // scopes it to the loop, so a later read would not compile.
     if (lint_find_from(stmts, i + 2, iv, 0)) { return 0; };
     let arr = lint_len_of(cb.r);
-    if (cb.op == "<" && arr != "") {
-        if (lint_find(loop.body, "", 7)) { return 0; };
+    // `foreach` starts at element 0 and needs an array, so the array form
+    // is offered only for a start of 0 on a receiver not known to be a str,
+    // with no jump and no resize of the receiver in the body.
+    let can_foreach = cb.op == "<" && arr != "" && lint_int_val(decl.v) == 0 && lint_var_vec(st, arr) && !lint_find(loop.body, "", 7) && !lint_find(loop.body, arr, 8);
+    if (can_foreach) {
         lint_warn_at(st, "this index loop can be '" + lint_disp(arr) + ".foreach((e, i) => { ... })'", d);
     } else {
         if (lint_find(loop.body, "", 4)) { return 0; };
@@ -1351,28 +1381,26 @@ def lint_short_index_loop(st: LintSt, stmts: [Node], i: long) -> long {
 
 // Rule 3.5: `foreach (i in range(len(a)))` can iterate the array directly.
 def lint_short_range(st: LintSt, fe: Foreach) -> long {
-    if (!lint_range_len(fe.iter)) { return 0; };
-    if (lint_find(fe.body, "", 7)) { return 0; };
+    let arr = lint_range_arr(fe.iter);
+    if (arr == "" || !lint_var_vec(st, arr) || lint_find(fe.body, "", 7) || lint_find(fe.body, arr, 8)) { return 0; };
     lint_warn_at(st, "this range loop over an array's indices can be '<a>.foreach((e, i) => { ... })'", fe);
     0
 };
 
-// Whether the node is `range(len(a))`.
-def lint_range_len(node: Node) -> bool {
-    if (node.k != K.call) { return false; };
+// The name inside `range(len(a))`, or "".
+def lint_range_arr(node: Node) -> str {
+    if (node.k != K.call) { return ""; };
     let c: Call = node;
-    if (c.callee.k != K.id || len(c.args) != 1) { return false; };
+    if (c.callee.k != K.id || len(c.args) != 1) { return ""; };
     let id: Leaf = c.callee;
-    if (id.v != "range") { return false; };
-    lint_len_of(c.args[0]) != ""
+    if (id.v != "range") { return ""; };
+    lint_len_of(c.args[0])
 };
 
 // The statements from index `from` on, walked without copying the list.
 def lint_find_from(nodes: [Node], from: long, name: str, mask: long) -> bool {
-    let i = from;
-    while (i < len(nodes)) {
+    for i in from..len(nodes) {
         if (lint_find(nodes[i], name, mask)) { return true; };
-        i = i + 1;
     };
     false
 };
@@ -1492,10 +1520,10 @@ def lint_func(st: LintSt, node: Func) -> long {
 def lint_decl(st: LintSt, node: Decl) -> long {
     let v = node.v;
     if (node.kind == "def") {
-        lint_note(st, node.name, "def", node.line, node.col, false, false, false);
+        lint_note(st, node.name, "def", node.line, node.col, false, false, false, false);
         lint_def_body(st, node.name, v)
     } else {
-        lint_note(st, node.name, node.kind, node.line, node.col, lint_scal(node.typ, v), lint_fresh(v), lint_strheld(node.typ, v));
+        lint_note(st, node.name, node.kind, node.line, node.col, lint_scal(node.typ, v), lint_fresh(v), lint_strheld(node.typ, v), lint_vec(node.typ, v));
         lint_node(st, v, true)
     }
 };
@@ -1597,14 +1625,12 @@ def lint_opassign(st: LintSt, node: OpAssign, used: bool) -> long {
 def lint_lit(st: LintSt, node: RecLit, what: str, kind: str) -> long {
     let keys: [str] = node.keys;
     lint_list(st, node.vals);
-    let i = 0;
-    while (i < len(keys)) {
+    keys.foreach((_el, i) => {
         let key = keys[i];
         if (key != "..." && lint_seen(keys, i)) {
             lint_warn_at(st, "duplicate " + what + " '" + key + "' in a " + kind + " literal; the last one wins", node);
         };
-        i++;
-    };
+    });
     0
 };
 
@@ -1706,11 +1732,9 @@ def lint_types(st: LintSt, stmts: [Node]) -> long {
 };
 
 def lint_tw_list(t: LintTy, nodes: [Node]) -> long {
-    let i = 0;
-    while (i < len(nodes)) {
+    nodes.foreach((_el, i) => {
         lint_tw(t, nodes[i]);
-        i++;
-    };
+    });
     0
 };
 
@@ -1846,11 +1870,9 @@ def lint_tw_func(t: LintTy, node: Func) -> long {
     let line: long = node.line;
     let col: long = node.col;
     let ps = node.ptypes;
-    let i = 0;
-    while (i < len(ps)) {
+    ps.foreach((_el, i) => {
         lint_root(t, ps[i], line, col, "");
-        i++;
-    };
+    });
     lint_root(t, node.ret, line, col, "");
     lint_tw(t, node.body)
 };
@@ -1928,11 +1950,9 @@ def lint_tk(t: LintTy, ty: Type, rec: bool, parent: long) -> str {
 
 def lint_tk_list(t: LintTy, ts: [Type], rec: bool, parent: long) -> str {
     let parts: [str] = [];
-    let i = 0;
-    while (i < len(ts)) {
+    ts.foreach((_el, i) => {
         parts += lint_tk(t, ts[i], rec, parent);
-        i++;
-    };
+    });
     join(parts, ",")
 };
 
@@ -1970,11 +1990,9 @@ def lint_tk_rec(t: LintTy, ty: TRec, rec: bool, parent: long) -> str {
         me = lint_occ(t, ty, parent);
     };
     let parts: [str] = [];
-    let i = 0;
-    while (i < len(fs)) {
+    for i in 0..len(fs) {
         let f = fs[i];
         parts += f.name + ":" + lint_tk(t, f.typ, rec, me);
-        i++;
     };
     let key = "{" + join(parts, ",") + "}";
     if (me != parent) {
@@ -2001,8 +2019,7 @@ def lint_tk_union(t: LintTy, ty: TList, rec: bool, parent: long) -> str {
 
 def lint_tk_members(t: LintTy, u: TList, rec: bool, me: long, parts: [str]) -> long {
     let ts = u.ts;
-    let i = 0;
-    while (i < len(ts)) {
+    ts.foreach((_el, i) => {
         let m = ts[i];
         let ai = lint_union_alias(t, m);
         if (ai >= 0) {
@@ -2013,8 +2030,7 @@ def lint_tk_members(t: LintTy, u: TList, rec: bool, me: long, parts: [str]) -> l
         } else {
             parts += lint_tk(t, m, rec, me);
         };
-        i++;
-    };
+    });
     0
 };
 
@@ -2055,8 +2071,7 @@ def lint_occ_key(t: LintTy, i: long, key: str) -> long {
 
 def lint_sort_uniq(xs: [str]) -> [str] {
     let out: [str] = [];
-    let i = 0;
-    while (i < len(xs)) {
+    xs.foreach((_el, i) => {
         let x = xs[i];
         let j = len(out);
         out += x;
@@ -2065,16 +2080,13 @@ def lint_sort_uniq(xs: [str]) -> [str] {
             j = j - 1;
         };
         out[j] = x;
-        i++;
-    };
+    });
     let res: [str] = [];
-    let k = 0;
-    while (k < len(out)) {
+    out.foreach((_el, k) => {
         if (k == 0 || out[k] != out[k - 1]) {
             res += out[k];
         };
-        k++;
-    };
+    });
     res
 };
 
@@ -2160,15 +2172,13 @@ def lint_rep(occs: [LintOcc], i: long) -> bool {
 def lint_sorted(ws: [Diag]) -> [Diag] {
     let all = lint_msort(ws);
     let out: [Diag] = [];
-    let i = 0;
-    while (i < len(all)) {
+    all.foreach((_el, i) => {
         let w = all[i];
         let n = len(out);
         if (n == 0 || lint_before(out[n - 1], w)) {
             out += w;
         };
-        i++;
-    };
+    });
     out
 };
 

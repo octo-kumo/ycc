@@ -1042,8 +1042,7 @@ def sg_drop() -> long {
 def sg_splice(slot: long, at: long) -> long {
     let lines = mg_lines(mg_piece[slot]);
     let last = len(lines) - 1;
-    let i = 0;
-    while (i < len(lines)) {
+    lines.foreach((_el, i) => {
         sg_mbuf += lines[i];
         if (i < last) {
             sg_mol += at;
@@ -1051,8 +1050,7 @@ def sg_splice(slot: long, at: long) -> long {
             sg_molast = false;
             sg_gline = at;
         };
-        i++;
-    };
+    });
     0
 };
 
@@ -1119,14 +1117,12 @@ def sg_ts_go(t: str) -> long {
 def sg_ml_go(t: str) -> bool {
     if (sg_molast) { true }
     else {
-        let i = 0;
-        while (i < len(t)) {
+        for i in 0..len(t) {
             if (!m_blank(t[i])) {
                 sg_molast = true;
                 sg_mline = sg_gline;
                 i = len(t);
             };
-            i++;
         };
         sg_molast
     }
@@ -1218,12 +1214,10 @@ def sg_fail(msg: str, line: long, col: long) -> long {
 // question and the header question separately.
 def sg_in_body() -> bool {
     let hit = false;
-    let i = 0;
-    while (i < len(sg_bkind)) {
+    sg_bkind.foreach((_el, i) => {
         let k = sg_bkind[i];
         if (k == 1 || k == 2) { hit = true };
-        i++;
-    };
+    });
     hit
 };
 
@@ -1717,13 +1711,11 @@ def sg_m_close(k: long) -> long {
     };
     let lines = mg_lines(sg_mbuf);
     let ol: [long] = [];
-    let i = 0;
-    while (i < len(lines)) {
+    lines.foreach((_el, i) => {
         if (i < len(sg_mol)) { ol += sg_mol[i] }
         else if (sg_molast) { ol += sg_mline }
         else { ol += sg_gline };
-        i++;
-    };
+    });
     let line = sg_tsline;
     let off = sg_tsoff;
     if (line < 1) { line = 1 };
@@ -1760,12 +1752,10 @@ def sg_mids_move() -> long {
     let left = n;
     while (left > 0) {
         let at = 0 - 1;
-        let j = 0;
-        while (j < n) {
+        for j in 0..n {
             if (!done[j]) {
                 if (at < 0 || mg_after(j, at)) { at = j };
             };
-            j++;
         };
         if (at < 0) { left = 0 }
         else {
@@ -1803,22 +1793,18 @@ def sg_mids_one(k: long) -> long {
     let restf = sg_gf[0:ln];
     let restl = sg_gol[0:ln];
     if (head != "") { rest += head; restf += sg_fid; restl += m.line };
-    let i = 0;
-    while (i < len(m.text)) {
+    for i in 0..len(m.text) {
         rest += m.text[i];
         restf += sg_fid;
         let o = 0;
         if (i < len(m.ol)) { o = m.ol[i] };
         restl += o;
-        i++;
     };
     if (tail != "") { rest += tail; restf += sg_fid; restl += m.line };
-    let t = ln + 1;
-    while (t < len(sg_g)) {
+    for t in ln + 1..len(sg_g) {
         rest += sg_g[t];
         restf += sg_gf[t];
         restl += sg_gol[t];
-        t = t + 1;
     };
     sg_g = rest;
     sg_gf = restf;
@@ -2290,11 +2276,9 @@ def mg_set(on: bool) -> long {
 
 def mg_in(xs: [str], s: str) -> bool {
     let hit = false;
-    let i = 0;
-    while (i < len(xs)) {
+    xs.foreach((_el, i) => {
         if (xs[i] == s) { hit = true; };
-        i++;
-    };
+    });
     hit
 };
 
@@ -2358,16 +2342,12 @@ def mg_helpers() -> [str] {
 def meta_gtext() -> str {
     let out: [str] = [];
     let hs = mg_helpers();
-    let i = 0;
-    while (i < len(hs)) {
+    hs.foreach((_el, i) => {
         out += hs[i];
-        i++;
-    };
-    let k = 0;
-    while (k < len(mg_imp)) {
+    });
+    mg_imp.foreach((_el, k) => {
         out += mg_imp[k];
-        k++;
-    };
+    });
     join(out + mg_g, "\n") + "\n"
 };
 
@@ -2453,10 +2433,8 @@ def mg_unframe(data: str) -> long {
 // did not reach it -- and the message can name it.
 def mg_first_missing() -> long {
     let at = 0 - 1;
-    let i = 0;
-    while (i < mg_next) {
+    for i in 0..mg_next {
         if (!mg_have[i]) { at = i; };
-        i++;
     };
     at
 };
@@ -2487,8 +2465,7 @@ def mg_take_pieces(status: long, sig: long, out: [byte]) -> bool {
     // block's real text and nothing downstream can mistake the rest for it.
     // mg_pending is what asks for the next round.
     mg_commit();
-    let i = 0;
-    while (i < mg_next) {
+    for i in 0..mg_next {
         // A block that ran for real owes the table a piece, and one that did not
         // run does not: a nested block whose text was spliced into the block
         // around it already has its piece from the round that produced it.
@@ -2496,7 +2473,6 @@ def mg_take_pieces(status: long, sig: long, out: [byte]) -> bool {
             mg_report("the block at " + mg_where(i) + " produced no output: every meta block runs once, in the generator's top level, so reaching it is not optional");
         };
         mg_check(i);
-        i++;
     };
     mg_ready = true;
     r
@@ -2511,13 +2487,11 @@ def mg_take_pieces(status: long, sig: long, out: [byte]) -> bool {
 // present only when it is framed, so a slot holding its piece from an earlier
 // round is not disturbed by a round that stubbed the block.
 def mg_commit() -> long {
-    let i = 0;
-    while (i < mg_next) {
+    for i in 0..mg_next {
         if (i < len(mg_have) && mg_have[i] && !mg_bok[i]) {
             mg_have[i] = false;
             mg_piece[i] = "";
         };
-        i++;
     };
     0
 };
@@ -2602,12 +2576,10 @@ def mg_probe(src: str, dir: str) -> bool {
 def mg_norm_path(p: str) -> str {
     let parts = split(p, "/");
     let out: [str] = [];
-    let i = 0;
-    while (i < len(parts)) {
+    parts.foreach((_el, i) => {
         let seg = parts[i];
         if (seg != ".") { out += seg; };
-        i++;
-    };
+    });
     join(out, "/")
 };
 // ── the splice ──────────────────────────────────────────────────────────
@@ -2624,13 +2596,11 @@ def mg_lines(text: str) -> [str] {
     let out: [str] = [];
     let n = len(text);
     let start = 0;
-    let i = 0;
-    while (i < n) {
+    for i in 0..n {
         if (text[i] == 10) {
             out += text[start:i];
             start = i + 1;
         };
-        i++;
     };
     out += text[start:];
     out
@@ -2650,15 +2620,13 @@ def mg_emit(segs: [str], sego: [long], segp: [bool], fid: long, nl: [str],
     let cur = "";
     let curo = 0;
     let cgen = true;
-    let s = 0;
-    while (s < len(segs)) {
+    segs.foreach((_el, s) => {
         let text = segs[s];
         let o = sego[s];
         let p = false;
         if (s < len(segp)) { p = segp[s] };
         let parts = mg_lines(text);
-        let k = 0;
-        while (k < len(parts)) {
+        parts.foreach((_el, k) => {
             if (k == 0) {
                 // this part joins the line being built: it is that line's
                 // first text if it is empty, and joins the rest otherwise
@@ -2673,10 +2641,8 @@ def mg_emit(segs: [str], sego: [long], segp: [bool], fid: long, nl: [str],
                 cgen = p;
             };
             cur += parts[k];
-            k++;
-        };
-        s++;
-    };
+        });
+    });
     nl += cur;
     nf += fid;
     nll += curo;
@@ -2695,11 +2661,9 @@ def mg_splice(lo: long, hi: long) -> long {
         let nf: [long] = [];
         let nll: [long] = [];
         let ngen: [bool] = [];
-        let i = 0;
-        while (i < len(lines)) {
+        lines.foreach((_el, i) => {
             mg_splice_line(lines[i], ols[i], i, lo, hi, nl, nf, nll, ngen);
-            i++;
-        };
+        });
         sg_p = nl;
         sg_pf = nf;
         sg_pol = nll;

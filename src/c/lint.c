@@ -44,7 +44,7 @@ static Yv *lint_disp(Yv *name);
 static ylong lint_num(Yv *name);
 static ylong lint_mark(LintSt st, Yv *name, ylong bit);
 static ylong lint_note(LintSt st, Yv *name, Yv *kind, ylong line, ylong col,
-                      int scal, int fresh, int strf);
+                      int scal, int fresh, int strf, int vec);
 static ylong lint_note_top(LintSt st, Yv *node);
 static ylong lint_top_first(LintSt st, Yv *d, ylong fid);
 static ylong lint_file_of(ylong ln);
@@ -52,6 +52,8 @@ static int lint_strheld(Yv *typ, Yv *v);
 static int lint_var_str(LintSt st, Yv *name);
 static int lint_var_scal(LintSt st, Yv *name);
 static int lint_tscal(Yv *typ);
+static int lint_vec(Yv *typ, Yv *v);
+static int lint_var_vec(LintSt st, Yv *name);
 static ylong lint_note_param(LintSt st, Yv *name, Yv *typ, ylong line, ylong col);
 static ylong lint_int_val(Yv *node);
 static int lint_compound_op(Yv *op);
@@ -77,12 +79,13 @@ static ylong lint_short_pair(LintSt st, Yv *stmts, ylong i);
 static ylong lint_short_while(LintSt st, Yv *loop);
 static int lint_find(Yv *node, Yv *name, ylong mask);
 static int lint_find_list(Yv *nodes, Yv *name, ylong mask);
+static int lint_resizes(Yv *node, Yv *name);
 static int lint_find_from(Yv *nodes, ylong from, Yv *name, ylong mask);
 static int lint_step_one(Yv *body, Yv *iv);
 static Yv *lint_len_of(Yv *node);
 static ylong lint_short_index_loop(LintSt st, Yv *stmts, ylong i);
 static ylong lint_short_range(LintSt st, Yv *fe);
-static int lint_range_len(Yv *node);
+static Yv *lint_range_arr(Yv *node);
 static ylong lint_loop_body(LintSt st, Yv *body);
 static ylong lint_stmts(LintSt st, Yv *stmts, int used, int top);
 static ylong lint_warn_at(LintSt st, Yv *msg, Yv *node);
@@ -302,16 +305,16 @@ static ylong lint_mark(LintSt st, Yv *name, ylong bit) {
  * `scal`: it holds a number, string or bool, whose `+=` makes a new value
  * only it sees. `fresh`: it starts as an array literal no one else holds. */
 static ylong lint_note(LintSt st, Yv *name, Yv *kind, ylong line, ylong col,
-                      int scal, int fresh, int strf) {
+                       int scal, int fresh, int strf, int vec) {
     Yv *d = lint_disp(name);
     if (!ys_eq_lit(d, "") && ys_byte_at(d, 0) != 95 &&
         ys_index_of(name, ys("$shadow")) < 0) {
         (void)ya_push(yr_get(st, "vars"),
-                      yr(9, "name", d, "kind", kind, "num",
+                      yr(10, "name", d, "kind", kind, "num",
                          yv_long(lint_num(name)), "line", yv_long(line),
                          "col", yv_long(col), "scal", yv_bool(scal),
                          "fresh", yv_bool(fresh), "strf", yv_bool(strf),
-                         "top", yv_bool(0)));
+                         "top", yv_bool(0), "vec", yv_bool(vec)));
     }
     return 0;
 }
@@ -350,13 +353,14 @@ static ylong lint_note_top(LintSt st, Yv *node) {
         nameix_put(yr_get(st, "tops"), d, line);
         if (first == 0) {
             (void)ya_push(yr_get(st, "vars"),
-                          yr(9, "name", d, "kind", yr_get(node, "kind"), "num",
+                          yr(10, "name", d, "kind", yr_get(node, "kind"), "num",
                              yv_long(lint_num(name)), "line", yv_long(line),
                              "col", yv_long(col), "scal",
                              yv_bool(lint_scal(yr_get(node, "typ"), v)), "fresh",
                              yv_bool(lint_fresh(v)), "strf",
                              yv_bool(lint_strheld(yr_get(node, "typ"), v)),
-                             "top", yv_bool(1)));
+                             "top", yv_bool(1), "vec",
+                             yv_bool(lint_vec(yr_get(node, "typ"), v))));
         }
     }
     return 0;
@@ -451,6 +455,32 @@ static int lint_tscal(Yv *typ) {
            k == K_tstr || k == K_tbool;
 }
 
+/* Whether a type and initializer make a binding an array. A slice of a str
+ * is not one, which is the case lint_var_str cannot see (it is not a str
+ * literal): rules 3.1/3.5 need positive proof before they say `.foreach`. */
+static int lint_vec(Yv *typ, Yv *v) {
+    ylong k = yv_l(yr_get(typ, "k"));
+    return k == K_tarr || k == K_tarrfix || lint_fresh(v);
+}
+
+/* Whether the binding a name refers to was noted as an array. */
+static int lint_var_vec(LintSt st, Yv *name) {
+    ylong n = lint_num(name);
+    Yv *d = lint_disp(name);
+    Yv *vars = yr_get(st, "vars");
+    ylong i = 0;
+    while (i < yv_len(vars)) {
+        Yv *v = ya_get(vars, i);
+        if (yv_b(yr_get(v, "vec")) &&
+            ((n > 0 && yv_l(yr_get(v, "num")) == n) ||
+             (n == 0 && yv_l(yr_get(v, "num")) == 0 && ys_eq(yr_get(v, "name"), d)))) {
+            return 1;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
 /* Note a parameter, so the shortening rules can tell a `str` or a number
  * from an array. `top` keeps lint_vars from calling it unused -- a
  * parameter is never that. */
@@ -458,12 +488,14 @@ static ylong lint_note_param(LintSt st, Yv *name, Yv *typ, ylong line, ylong col
     Yv *d = lint_disp(name);
     if (!ys_eq_lit(d, "") && ys_byte_at(d, 0) != 95) {
         (void)ya_push(yr_get(st, "vars"),
-                      yr(9, "name", d, "kind", ys("param"), "num",
+                      yr(10, "name", d, "kind", ys("param"), "num",
                          yv_long(lint_num(name)), "line", yv_long(line),
                          "col", yv_long(col), "scal", yv_bool(lint_tscal(typ)),
                          "fresh", yv_bool(0),
                          "strf", yv_bool(yv_l(yr_get(typ, "k")) == K_tstr),
-                         "top", yv_bool(1)));
+                         "top", yv_bool(1), "vec",
+                         yv_bool(yv_l(yr_get(typ, "k")) == K_tarr ||
+                                 yv_l(yr_get(typ, "k")) == K_tarrfix)));
     }
     return 0;
 }
@@ -1422,8 +1454,9 @@ static int lint_find(Yv *node, Yv *name, ylong mask) {
     if (k == K_ret && (mask & 1) != 0) { return 1; }
     if (k == K_kw_break && (mask & 2) != 0) { return 1; }
     if (k == K_kw_continue && (mask & 4) != 0) { return 1; }
+    if ((mask & 8) != 0 && lint_resizes(node, name)) { return 1; }
     if (k == K_id) {
-        if (ys_eq_lit(name, "")) { return 0; }
+        if (ys_eq_lit(name, "") || (mask & 8) != 0) { return 0; }
         return ys_eq(yr_get(node, "v"), name);
     } else if (k == K_bin) {
         return lint_find(yr_get(node, "l"), name, mask) ||
@@ -1513,6 +1546,36 @@ static int lint_find_list(Yv *nodes, Yv *name, ylong mask) {
     return 0;
 }
 
+/* Whether this node changes what `name` holds as a whole (mask bit 8): a
+ * whole-array assign or `op=`, `++`, or a length-changing method call. An
+ * element store (`a[i] = x`) is not one. */
+static int lint_resizes(Yv *node, Yv *name) {
+    ylong k = yv_l(yr_get(node, "k"));
+    if (k == K_assign) {
+        return ys_eq(yr_get(node, "name"), name);
+    } else if (k == K_opassign) {
+        Yv *tgt = yr_get(node, "tgt");
+        if (yv_l(yr_get(tgt, "k")) != K_id) { return 0; }
+        return ys_eq(yr_get(tgt, "v"), name);
+    } else if (k == K_incdec) {
+        Yv *tgt = yr_get(node, "tgt");
+        if (yv_l(yr_get(tgt, "k")) != K_id) { return 0; }
+        return ys_eq(yr_get(tgt, "v"), name);
+    } else if (k == K_call) {
+        Yv *callee = yr_get(node, "callee");
+        if (yv_l(yr_get(callee, "k")) != K_dot) { return 0; }
+        Yv *obj = yr_get(callee, "obj");
+        if (yv_l(yr_get(obj, "k")) != K_id) { return 0; }
+        Yv *key = yr_get(callee, "key");
+        return ys_eq(yr_get(obj, "v"), name) &&
+               (ys_eq_lit(key, "push") || ys_eq_lit(key, "pop") ||
+                ys_eq_lit(key, "remove") || ys_eq_lit(key, "insert") ||
+                ys_eq_lit(key, "shift") || ys_eq_lit(key, "unshift") ||
+                ys_eq_lit(key, "sort"));
+    }
+    return 0;
+}
+
 static int lint_find_from(Yv *nodes, ylong from, Yv *name, ylong mask) {
     ylong i = from;
     while (i < yv_len(nodes)) {
@@ -1524,8 +1587,12 @@ static int lint_find_from(Yv *nodes, ylong from, Yv *name, ylong mask) {
 
 /* Rule 3.5: `foreach (i in range(len(a)))` can iterate the array directly. */
 static ylong lint_short_range(LintSt st, Yv *fe) {
-    if (!lint_range_len(yr_get(fe, "iter"))) { return 0; }
-    if (lint_find(yr_get(fe, "body"), ys(""), 7)) { return 0; }
+    Yv *arr = lint_range_arr(yr_get(fe, "iter"));
+    if (ys_eq_lit(arr, "") || !lint_var_vec(st, arr) ||
+        lint_find(yr_get(fe, "body"), ys(""), 7) ||
+        lint_find(yr_get(fe, "body"), arr, 8)) {
+        return 0;
+    }
     (void)lint_warn_at(
         st,
         ys("this range loop over an array's indices can be '<a>.foreach((e, i) "
@@ -1534,16 +1601,18 @@ static ylong lint_short_range(LintSt st, Yv *fe) {
     return 0;
 }
 
-/* Whether the node is `range(len(a))`. */
-static int lint_range_len(Yv *node) {
-    if (yv_l(yr_get(node, "k")) != K_call) { return 0; }
+/* The name inside `range(len(a))`, or "". */
+static Yv *lint_range_arr(Yv *node) {
+    if (yv_l(yr_get(node, "k")) != K_call) { return ys(""); }
     Yv *args = yr_get(node, "args");
     if (yv_l(yr_get(yr_get(node, "callee"), "k")) != K_id ||
         yv_len(args) != 1) {
-        return 0;
+        return ys("");
     }
-    if (!ys_eq_lit(yr_get(yr_get(node, "callee"), "v"), "range")) { return 0; }
-    return !ys_eq_lit(lint_len_of(ya_get(args, 0)), "");
+    if (!ys_eq_lit(yr_get(yr_get(node, "callee"), "v"), "range")) {
+        return ys("");
+    }
+    return lint_len_of(ya_get(args, 0));
 }
 
 /* Whether the last real statement of a loop body is `iv = iv + 1` (also
@@ -1632,8 +1701,15 @@ static ylong lint_short_index_loop(LintSt st, Yv *stmts, ylong i) {
     }
     if (lint_find_from(stmts, i + 2, iv, 0)) { return 0; }
     Yv *arr = lint_len_of(yr_get(cond, "r"));
-    if (ys_eq_lit(op, "<") && !ys_eq_lit(arr, "")) {
-        if (lint_find(yr_get(n, "body"), ys(""), 7)) { return 0; }
+    /* `foreach` starts at element 0 and needs an array, so the array form
+     * is offered only for a start of 0 on a receiver not known to be a str,
+     * with no jump and no resize of the receiver in the body. */
+    int can_foreach = ys_eq_lit(op, "<") && !ys_eq_lit(arr, "") &&
+                      lint_int_val(yr_get(d, "v")) == 0 &&
+                      lint_var_vec(st, arr) &&
+                      !lint_find(yr_get(n, "body"), ys(""), 7) &&
+                      !lint_find(yr_get(n, "body"), arr, 8);
+    if (can_foreach) {
         (void)lint_warn_at(st,
                            lint_cat(3, ys("this index loop can be '"),
                                     lint_disp(arr),
@@ -1779,13 +1855,14 @@ static ylong lint_decl(LintSt st, Yv *node) {
     ylong col = yv_l(yr_get(node, "col"));
     if (ys_eq_lit(yr_get(node, "kind"), "def")) {
         (void)lint_note(st, yr_get(node, "name"), ys("def"), line, col, 0, 0,
-                        0);
+                        0, 0);
         return lint_def_body(st, yr_get(node, "name"), v);
     } else {
         (void)lint_note(st, yr_get(node, "name"), yr_get(node, "kind"), line,
                         col, lint_scal(yr_get(node, "typ"), v),
                         lint_fresh(v),
-                        lint_strheld(yr_get(node, "typ"), v));
+                        lint_strheld(yr_get(node, "typ"), v),
+                        lint_vec(yr_get(node, "typ"), v));
         return lint_node(st, v, 1);
     }
 }

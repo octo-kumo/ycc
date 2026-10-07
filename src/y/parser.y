@@ -77,10 +77,8 @@ def p_infer_reset() -> long {
 
 def p_body_note(name: str, t: Type) -> long {
     if (t.k == K.tnone) { return 0; };
-    let i = 0;
-    while (i < len(pbody_names)) {
+    for i in 0..len(pbody_names) {
         if (pbody_names[i] == name) { pbody_typs[i] = t; return 0; };
-        i++;
     };
     pbody_names += name;
     pbody_typs += t;
@@ -88,10 +86,8 @@ def p_body_note(name: str, t: Type) -> long {
 };
 
 def p_body_get(name: str) -> Type {
-    let i = 0;
-    while (i < len(pbody_names)) {
+    for i in 0..len(pbody_names) {
         if (pbody_names[i] == name) { return pbody_typs[i]; };
-        i++;
     };
     { k: K.tnone }
 };
@@ -130,11 +126,9 @@ def p_bin_hint(op: str, other: Node) -> Type {
 };
 def p_str_in(xs: [str], s: str) -> bool {
     let found = false;
-    let i = 0;
-    while (i < len(xs)) {
+    xs.foreach((_el, i) => {
         if (xs[i] == s) { found = true; };
-        i++;
-    };
+    });
     found
 };
 
@@ -154,24 +148,20 @@ def p_body_bin_clue(left: Node, op: str, right: Node) -> long {
 def p_call_note(callee: Node, args: [Node]) -> long {
     if (callee.k != K.id) { return 0; };
     let id: Leaf = callee;
-    let i = 0;
-    while (i < len(args)) {
+    for i in 0..len(args) {
         let lt = lit_type(args[i]);
         if (lt.k != K.tnone) {
             pcall_names += id.v;
             pcall_idxs += i;
             pcall_typs += lt;
         };
-        i++;
     };
     0
 };
 
 def p_infer_finish() -> long {
-    let c = 0;
-    while (c < len(pcall_names)) {
-        let fi = 0;
-        while (fi < len(pfunc_names)) {
+    pcall_names.foreach((_el, c) => {
+        pfunc_names.foreach((_el, fi) => {
             if (pfunc_names[fi] == pcall_names[c]) {
                 let f = pfunc_nodes[fi];
                 let ix = pcall_idxs[c];
@@ -179,10 +169,8 @@ def p_infer_finish() -> long {
                     f.ptypes[ix] = pcall_typs[c];
                 };
             };
-            fi++;
-        };
-        c++;
-    };
+        });
+    });
     0
 };
 
@@ -1075,10 +1063,8 @@ def parse_args(toks: [Tok], p: long) -> ParsedList {
 def mk_call(callee: Node, args: [Node], ln: long, cl: long) -> Call {
     if (is_id_named(callee, "print") && len(args) > 1) {
         let cat: Node = tostring_call(args[0], ln, cl);
-        let i = 1;
-        while (i < len(args)) {
+        for i in 1..len(args) {
             cat = { k: K.bin, op: "+", l: cat, r: tostring_call(args[i], ln, cl), line: ln, col: cl };
-            i++;
         };
         let one: [Node] = [];
         one += cat;
@@ -1534,21 +1520,17 @@ def type_err_then(first: Node, t: Type) -> Node {
 
 def type_err_list(ts: [Type]) -> Node {
     let out: Node = { k: K.void, line: 1, col: 1 };
-    let i = 0;
-    while (i < len(ts)) {
+    ts.foreach((_el, i) => {
         if (out.k == K.void) { out = type_err(ts[i]); }
-        i++;
-    };
+    });
     out
 };
 
 def type_err_fields(fs: [Field]) -> Node {
     let out: Node = { k: K.void, line: 1, col: 1 };
-    let i = 0;
-    while (i < len(fs)) {
+    for i in 0..len(fs) {
         let f = fs[i];
         if (out.k == K.void) { out = type_err(f.typ); }
-        i++;
     };
     out
 };
@@ -1739,11 +1721,9 @@ def parse_type_tparams(toks: [Tok], apos: long, tlist: [Type]) -> PType {
         // with positional field names. The old tparams result was rejected
         // by the checker everywhere; tuples give it a meaning.
         let fields: [Field] = [];
-        let ti = 0;
-        while (ti < len(ts0)) {
+        ts0.foreach((_el, ti) => {
             fields += { name: tuple_key(ti), opt: false, typ: ts0[ti] };
-            ti++;
-        };
+        });
         tres({ k: K.trec, fields: fields }, apos)
     }
 };
@@ -2842,8 +2822,7 @@ def parse_value_pattern(toks: [Tok], node: Node, pos: long, tmp: str, ln: long, 
         let vals: [Node] = rec.vals;
         let ty: Type = { k: K.tpat, names: keys };
         let test: Node = { k: K.rectest, e: subj, typ: ty, line: ln, col: cl };
-        let i = 0;
-        while (i < len(keys)) {
+        keys.foreach((_el, i) => {
             let key = keys[i];
             if (key == "...") {
                 test = { k: K.err, msg: "'...' is not allowed in a match pattern", line: ln, col: cl };
@@ -2851,8 +2830,7 @@ def parse_value_pattern(toks: [Tok], node: Node, pos: long, tmp: str, ln: long, 
                 let fread: Node = { k: K.dot, obj: { k: K.narrow, e: subj, typ: ty, line: ln, col: cl }, key: key, line: ln, col: cl, nline: ln, ncol: cl };
                 test = { k: K.bin, op: "&&", l: test, r: { k: K.bin, op: "==", l: fread, r: vals[i], line: ln, col: cl }, line: ln, col: cl };
             };
-            i++;
-        };
+        });
         let np = pos;
         if (tt(toks, pos) == "id") {
             binds += let_node(tv(toks, pos), { k: K.narrow, e: subj, typ: ty, line: ln, col: cl }, ln, cl);
@@ -2893,14 +2871,12 @@ def parse_program(toks: [Tok]) -> Block {
     // that can see it: renaming makes every name unique, so by the time the
     // checker runs the two would look like different names.
     let clash: [Node] = [];
-    let ci = 0;
-    while (ci < len(stmts)) {
+    stmts.foreach((_el, ci) => {
         let cs: Node = stmts[ci];
         if (cs.k == K.decl) {
             let cdec: Decl = cs;
             if (cdec.kind == "native") {
-                let co = 0;
-                while (co < len(stmts)) {
+                stmts.foreach((_el, co) => {
                     let os: Node = stmts[co];
                     if (os.k == K.decl) {
                         let odec: Decl = os;
@@ -2908,12 +2884,10 @@ def parse_program(toks: [Tok]) -> Block {
                             clash += { k: K.err, msg: "'" + cdec.name + "' is a ndef and is declared again at the top level (a ndef cannot share a name)", line: cdec.line, col: cdec.col };
                         };
                     };
-                    co++;
-                };
+                });
             };
         };
-        ci++;
-    };
+    });
     let all: [Node] = [];
     all += clash;
     all += stmts;
@@ -2930,11 +2904,9 @@ type NameIx = { keys: [str], vals: [long], n: long };
 def nameix_new(cap: long) -> NameIx {
     let keys: [str] = [];
     let vals: [long] = [];
-    let i = 0;
-    while (i < cap) {
+    for i in 0..cap {
         keys += "";
         vals += 0;
-        i++;
     };
     { keys: keys, vals: vals, n: 0 }
 };
@@ -2943,10 +2915,8 @@ def nameix_new(cap: long) -> NameIx {
 def nameix_slot(keys: [str], k: str) -> long {
     let mask = len(keys) - 1;
     let h = 0;
-    let i = 0;
-    while (i < len(k)) {
+    for i in 0..len(k) {
         h = (h * 31 + k[i]) & 1073741823;
-        i++;
     };
     let s = (h ^ (h >> 15)) & mask;
     let go = true;
@@ -2964,16 +2934,14 @@ def nameix_put(m: NameIx, k: str, v: long) -> void {
         let big = nameix_new(len(ok) * 2);
         let bk = big.keys;
         let bv = big.vals;
-        let i = 0;
-        while (i < len(ok)) {
+        ok.foreach((_el, i) => {
             let e: str = ok[i];
             if (e != "") {
                 let s = nameix_slot(bk, e);
                 bk[s] = e;
                 bv[s] = ov[i];
             };
-            i++;
-        };
+        });
         m.keys = bk;
         m.vals = bv;
     };

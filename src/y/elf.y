@@ -237,13 +237,11 @@ def elf_debug(code_off: long, codesz: long, ro_len: long, filesz: long, bss_vadd
         blob = push_shdr(blob, n_sym, 2, 0, 0, symtab_off, len(symtab), symtab_idx + 1, nlocal, 8, 24);
         blob = push_shdr(blob, n_str, 3, 0, 0, strtab_off, len(strtab), 0, 0, 1, 0);
         blob = push_shdr(blob, n_shs, 3, 0, 0, shstr_off, len(shstr), 0, 0, 1, 0);
-        let di = 0;
-        while (di < len(dsecs)) {
+        dsecs.foreach((_el, di) => {
             let ds = dsecs[di];
             let dd = ds.data;
             blob = push_shdr(blob, dnames[di], 1, 0, 0, doffs[di], len(dd), 0, 0, 1, 0);
-            di++;
-        };
+        });
         { bytes: blob, shoff: shoff, shnum: symtab_idx + 3 + len(dsecs), shstrndx: symtab_idx + 2, bss_foff: bss_foff, bss_fsz: bss_fsz }
     }
 };
@@ -290,10 +288,8 @@ def push_cstr(out: [byte], s: str) -> [byte] {
 };
 
 def push_zeros(out: [byte], n: long) -> [byte] {
-    let i = 0;
-    while (i < n) {
+    for i in 0..n {
         out += 0;
-        i++;
     };
     out
 };
@@ -305,11 +301,9 @@ def push_zeros(out: [byte], n: long) -> [byte] {
 def push_bytes(out: [byte], bytes: [byte]) -> [byte] {
     // NOTE: annotated `[byte]`, not a bare hole: a hole takes its element
     // type from the call site, and these buffers are always packed bytes.
-    let i = 0;
-    while (i < len(bytes)) {
+    bytes.foreach((_el, i) => {
         out += bytes[i];
-        i++;
-    };
+    });
     out
 };
 

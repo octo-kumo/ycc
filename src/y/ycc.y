@@ -289,12 +289,10 @@ def print_phase_rows(times: [Timing]) -> long {
     // copies today; the binding stays only because the compiled compiler
     // is byte-gated against refs/ycc.ref.
     let all = times;
-    let i = 0;
-    while (i < len(all)) {
+    all.foreach((_el, i) => {
         let e = all[i];
         eputs("  " + padr(e.name, 12) + padl(fmt_ms(e.us), 12) + " ms" + padl(fmt_kb(e.heap), 12) + " KB\n");
-        i++;
-    };
+    });
     0
 };
 
@@ -316,8 +314,7 @@ def print_native_errors(errors: [Diag], origin: Origin, bare: bool) -> long {
     // construct it broke, then the statement it ended), and the second
     // message only repeats the first.
     let seen: [str] = [];
-    let i = 0;
-    while (i < len(all)) {
+    all.foreach((_el, i) => {
         let e = all[i];
         let at = nativelib.origin_at(origin, e.line, bare) + ":" + tostring(e.col);
         let dup = false;
@@ -328,8 +325,7 @@ def print_native_errors(errors: [Diag], origin: Origin, bare: bool) -> long {
             seen += at;
             puts(at + ": error: " + e.msg + "\n");
         }
-        i++;
-    };
+    });
     0
 };
 
@@ -342,12 +338,10 @@ def print_native_errors(errors: [Diag], origin: Origin, bare: bool) -> long {
 // which child finished first.
 def warning_text(warnings: [Diag], origin: Origin, bare: bool) -> str {
     let out = "";
-    let i = 0;
-    while (i < len(warnings)) {
+    warnings.foreach((_el, i) => {
         let w = warnings[i];
         out = out + nativelib.origin_at(origin, w.line, bare) + ":" + tostring(w.col) + ": warning: " + w.msg + "\n";
-        i++;
-    };
+    });
     out
 };
 
@@ -366,8 +360,7 @@ def build_args(cl: [str]) -> { dir: str, debug: bool, nowarn: bool, wlevel: long
     let allow_exec = true;
     let std_src = false;
     let one = "";
-    let i = 2;  // skip the program and the command
-    while (i < len(cl)) {
+    for i in 2..len(cl) {
         let a = cl[i];
         if (a == "-g") {
             debug = true;
@@ -397,7 +390,6 @@ def build_args(cl: [str]) -> { dir: str, debug: bool, nowarn: bool, wlevel: long
         } else {
             dir = a;
         };
-        i++;
     };
     if (len(dir) == 0) { dir = "."; }
     { dir: dir, debug: debug, nowarn: nowarn, wlevel: wlevel, allow_exec: allow_exec, std_src: std_src, one: one }
@@ -421,22 +413,18 @@ def build_resolve(path: str, allow_exec: bool, pkgs: [str], roots: [str]) -> Res
 def std_order(names: [str]) -> [str] {
     let all = nativelib.std_unit_names();
     let out: [str] = [];
-    let i = 0;
-    while (i < len(all)) {
+    all.foreach((_el, i) => {
         let nm: str = all[i];
         if (pkg.pk_has(names, nm)) { out += nm; }
-        i++;
-    };
+    });
     out
 };
 
 def longs_text(xs: [long]) -> str {
     let out: [str] = [];
-    let i = 0;
-    while (i < len(xs)) {
+    xs.foreach((_el, i) => {
         out += tostring(xs[i]);
-        i++;
-    };
+    });
     join(out, ",")
 };
 
@@ -468,12 +456,10 @@ def build_key(cid: str, name: str, base: long, allow_exec: bool, nr: Resolved, u
     pkg.pk_hash_str(h, join(nr.std, ","));
     let ps = nr.pkgs;
     pkg.pk_hash_str(h, join(ps, ","));
-    let i = 0;
-    while (i < len(units)) {
+    units.foreach((_el, i) => {
         let u = units[i];
         if (pkg.pk_has(ps, u.name)) { pkg.pk_hash_str(h, nativelib.unit_iface(u)); }
-        i++;
-    };
+    });
     pkg.pk_hash_text(h)
 };
 
@@ -605,11 +591,9 @@ def build_child_flags(debug: bool, nowarn: bool, wlevel: long, allow_exec: bool)
 // Where `name` sits in the package order, or -1.
 def pkg_index(pkgs: [PkNode], name: str) -> long {
     let at = -1;
-    let i = 0;
-    while (i < len(pkgs)) {
+    pkgs.foreach((_el, i) => {
         if (pkgs[i].name == name) { at = i; };
-        i++;
-    };
+    });
     at
 };
 
@@ -634,8 +618,7 @@ def build_one(dir: str, one: str, debug: bool, nowarn: bool, wlevel: long, allow
     let want: [str] = [];
     want += pkgs[target].deps;
     let units: [Unit] = [];
-    let k = 0;
-    while (k < target) {
+    for k in 0..target {
         let p = pkgs[k];
         if (pkg.pk_has(want, p.name)) {
             let nr = build_resolve(p.lib, allow_exec, p.deps, p.roots);
@@ -654,7 +637,6 @@ def build_one(dir: str, one: str, debug: bool, nowarn: bool, wlevel: long, allow
             units += uo.unit;
             want += p.deps;
         };
-        k++;
     };
     let p = pkgs[target];
     let nr = build_resolve(p.lib, allow_exec, p.deps, p.roots);
@@ -693,26 +675,22 @@ def build_dispatch_level(dir: str, pkgs: [PkNode], odir: str, lo: long, hi: long
             let dirarg = "";
             if (dir != ".") { dirarg = " " + build_q(dir); };
             let wave: [str] = [];
-            let k = lo;
-            while (k < hi) {
+            for k in lo..hi {
                 let name = pkgs[k].name;
                 if (!fs.exists(odir + "/" + name + ".yo")) { wave += name; };
-                k = k + 1;
             };
             let w = 0;
             while (w < len(wave)) {
                 let take = len(wave) - w;
                 if (take > BUILD_JOBS) { take = BUILD_JOBS; };
                 let cmd = "";
-                let c = 0;
-                while (c < take) {
+                for c in 0..take {
                     let nm = wave[w + c];
                     eputs("compiling " + nm + "\n");
                     // quote the two paths, not the whole command: the flags and
                     // the directory are already quoted
                     cmd = cmd + build_q(exe) + " build --one " + build_q(nm) + flags + dirarg + " & ";
                     n++;
-                    c++;
                 };
                 exec(cmd + "wait");
                 w += take;
@@ -885,8 +863,7 @@ def build_project(dir: str, debug: bool, nowarn: bool, wlevel: long, allow_exec:
 def dump_source(src: str, origin: Origin) -> long {
     let lines = split(src, "\n");
     let prev = "\x01none";
-    let i = 0;
-    while (i < len(lines)) {
+    lines.foreach((_el, i) => {
         let l = lines[i];
         let at = nativelib.origin_at(origin, i + 1, false);
         if (at == prev) {
@@ -895,8 +872,7 @@ def dump_source(src: str, origin: Origin) -> long {
             puts(l + "\t// " + at + "\n");
             prev = at;
         };
-        i++;
-    };
+    });
     0
 };
 
@@ -1007,12 +983,10 @@ def main(cmdline: [str]) -> long {
             // emit_program reports its own sub-phases (strip_ns, rename,
             // typecheck, lint, emit_fns, emit_start, asm_text); splice them in.
             let sub = r.times;
-            let si = 0;
-            while (si < len(sub)) {
+            sub.foreach((_el, si) => {
                 let se = sub[si];
                 dt += se;
-                si++;
-            };
+            });
             if (r.ok && !pargs.nowarn) {
                 print_native_warnings(r.warnings, nrorigin, true);
             };
@@ -1068,12 +1042,10 @@ def main(cmdline: [str]) -> long {
                 // ycc_assemble reports its own sub-phases: a:split,
                 // a:encode, a:link, then l:labmap, l:patch, l:elf.
                 let asub = ab.times;
-                let ai = 0;
-                while (ai < len(asub)) {
+                asub.foreach((_el, ai) => {
                     let ae = asub[ai];
                     dt += ae;
-                    ai++;
-                };
+                });
                 let abok = ab.ok;
                 if (!abok) {
                     puts("error: assemble: " + ab.error + "\n");

@@ -42,12 +42,10 @@ embed WSELFTEST_ASM from "./arch/wselftest.s";
 def arch_asm_lines(text: str) -> [str] {
     let out: [str] = [];
     let all = text.split("\n");
-    let i = 0;
-    while (i < len(all)) {
+    all.foreach((_el, i) => {
         let l = all[i];
         if (len(l) > 0 && l[0] != 35) { out += l; };
-        i++;
-    };
+    });
     out
 };
 
@@ -186,16 +184,12 @@ def w_iat_term_label(dll: str) -> str { "y_iatz_" + dll };
 def w_iat_bss_lines() -> [str] {
     let out: [str] = [];
     let imps = w_imports();
-    let i = 0;
-    while (i < len(imps)) {
-        let f = 0;
-        while (f < len(imps[i].funcs)) {
+    imps.foreach((_el, i) => {
+        for f in 0..len(imps[i].funcs) {
             out += w_iat_label(imps[i].funcs[f]) + ":\n.zero 8\n";
-            f++;
         };
         out += w_iat_term_label(imps[i].dll) + ":\n.zero 8\n";
-        i++;
-    };
+    });
     out
 };
 
@@ -204,10 +198,8 @@ def w_iat_bss_lines() -> [str] {
 def w_iat_offset(d: long, f: long) -> long {
     let imps = w_imports();
     let at = 0;
-    let i = 0;
-    while (i < d) {
+    for i in 0..d {
         at += 8 * (len(imps[i].funcs) + 1);
-        i++;
     };
     at + 8 * f
 };
@@ -305,14 +297,12 @@ def arch_prelude_lines() -> [str] {
 // gives GNU as a second opinion on wsys.s as well.
 def arch_windows_lines() -> [str] {
     let blocks = arch_win_blocks(split(W_SYS_ASM, "\n"));
-    let i = 0;
-    while (i < len(blocks)) {
+    blocks.foreach((_el, i) => {
         if (blocks[i][1] == "2") {
             puts("error: arch/wsys.s: bad block marker ('" + blocks[i][0] + "'): want '#=== replace: NAME ===' or '#=== add: NAME ==='\n");
             exit(1);
         };
-        i++;
-    };
+    });
     let lines = arch_asm_lines(PRELUDE_ASM);
     arch_win_check(lines, blocks);
     arch_win_sub(lines, blocks)
@@ -326,16 +316,14 @@ def arch_windows_lines() -> [str] {
 // program calls the wrong syscall. It cost one whole debugging session to
 // earn, which is why it is a hard error rather than a comment.
 def arch_win_check(lines: [str], blocks: [[str]]) -> long {
-    let i = 0;
-    while (i < len(blocks)) {
+    blocks.foreach((_el, i) => {
         if (blocks[i][1] == "0") {
             if (arch_win_labeled(lines, blocks[i][0])) { } else {
                 puts("error: arch/wsys.s replaces '" + blocks[i][0] + "', which src/y/arch/prelude.s does not define\n");
                 exit(1);
             };
         };
-        i++;
-    };
+    });
     0
 };
 
@@ -447,16 +435,12 @@ def arch_win_sub(lines: [str], blocks: [[str]]) -> [str] {
 
 def arch_win_split(out: [str]) -> [str] {
     let res: [str] = [];
-    let i = 0;
-    while (i < len(out)) {
+    out.foreach((_el, i) => {
         let parts = split(out[i], "\n");
-        let j = 0;
-        while (j < len(parts)) {
+        parts.foreach((_el, j) => {
             if (len(parts[j]) > 0) { res += parts[j]; };
-            j++;
-        };
-        i++;
-    };
+        });
+    });
     res
 };
 
@@ -464,11 +448,9 @@ def arch_win_split(out: [str]) -> [str] {
 // "0", name `nm`).
 def arch_win_find(blocks: [[str]], nm: str) -> long {
     let at = -1;
-    let i = 0;
-    while (i < len(blocks)) {
+    blocks.foreach((_el, i) => {
         if (blocks[i][1] == "0" && blocks[i][0] == nm) { at = i; };
-        i++;
-    };
+    });
     at
 };
 
