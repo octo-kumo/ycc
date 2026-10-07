@@ -1214,3 +1214,25 @@ that fixture's program rather than a general builtin or a regression from this
 branch's work.  Next: read the fixture the case builds and see how it reaches
 `exec` -- the error is at line 1 column 5, and `exec` as a *value* or a method is
 not the same thing as the builtin call that just worked.
+
+### Round 77: what the ycc/ysh failure is NOT, and where it must be
+
+Read the fixture (test/sh/test_ycc.sh, around line 52): it builds
+test/y/examples/ysh.y with $YCC_BIN, symlinks that same binary into a temp dir as
+`ycc`, and then runs `ysh -c 'eval print(6 * 7)'`, which compiles that STRING at
+runtime by forking the symlinked compiler.  The plain case must print 42; the
+`--no-exec` case must fail with "undefined function 'exec'".
+
+Measured this round, to rule out the obvious:
+* a one-line `exec("echo exec-works")` compiles AND runs on the main tree's
+  compiler and on this branch's (round 76);
+* the same program compiled by a compiler SYMLINKED into a temp directory, and by
+  the tree's own ./ycc, both print `from-tmp` -- so the std pack travels with the
+  binary and "a compiler away from its std/" is not the problem.
+
+So `exec` works in every configuration tried, and the failing case is
+`ysh -c 'eval print(6 * 7)'` -- an expression with NO exec in it -- reporting an
+`exec` error.  The error therefore comes from what ysh COMPILES AROUND the
+expression (its prelude / builtins), not from the expression.  Next: read
+test/y/examples/ysh.y's eval path -- what it passes ycc (flags, --no-exec, the
+prelude it splices) -- and reproduce that exact command line by hand.
