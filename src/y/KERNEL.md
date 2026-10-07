@@ -1958,3 +1958,18 @@ program through ./ycc AND through ./cycc -- and diff the two transcripts, since 
 comparison is per engine and one of them must be producing something else.
 
 test/kernel is 49 passed, 0 failed / 49 total with the fixture removed.
+
+### Round 115: getdents64 -- the last syscall M4's ls needs
+
+The broker gained fd_ino, fd_tell and fd_seek_set (the inode behind an fd, its
+position, and a setter), and std/kernel.y gained sys_getdents64 on top of the
+directory reader that was already there: it writes Linux's linux_dirent64 layout --
+d_ino (u64), d_off (u64), d_reclen (u16), d_type (u8), then the NUL-terminated name
+-- into the caller's buffer and returns the bytes written.  The fd's offset is the
+ENTRY INDEX, so calling it twice walks the directory rather than restarting it.
+
+It is additive: nothing calls it yet, so test/kernel stays 51 passed, 0 failed / 51
+total and the syscall is compile-checked (a kernel program that imports the kernel
+builds clean) but not yet exercised.  The fixture that runs `ls` from ring 3 --
+openat("/"), getdents64, then decoding the records -- is the next step, and it is
+also the first thing M4's command set needs.

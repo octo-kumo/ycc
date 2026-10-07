@@ -848,6 +848,7 @@ const SYS_MMAP = 9;
 const SYS_CLOSE = 3;
 const SYS_LSEEK = 8;
 const SYS_OPENAT = 257;
+const SYS_GETDENTS64 = 217;
 const SYS_GETPID = 39;
 // The kernel's own calls, above the Linux numbers so they can never collide
 // with one that Linux adds later.
@@ -965,6 +966,7 @@ def y_sys_dispatch(nr: long, a1: long, a2: long, a3: long, a4: long, a5: long, a
     if (nr == SYS_CLOSE) { return sys_close(a1); };
     if (nr == SYS_LSEEK) { return sys_lseek(a1, a2, a3); };
     if (nr == SYS_OPENAT) { return sys_openat(a1, a2, a3); };
+    if (nr == SYS_GETDENTS64) { return sys_getdents64(a1, a2, a3); };
     E_NOSYS
 };
 
@@ -1284,6 +1286,37 @@ def sys_openat(dirfd: long, pathp: long, flags: long) -> long {
 def sys_close(fdno: long) -> long { fd.fd_close(fdno) };
 
 def sys_lseek(fdno: long, off: long, whence: long) -> long { fd.fd_lseek(fdno, off) };
+
+// A directory listing in Linux's linux_dirent64 layout: d_ino (u64), d_off (u64),
+// d_reclen (u16), d_type (u8), then the NUL-terminated name.  The fd's offset is
+// the ENTRY INDEX, so successive calls walk the directory.
+def put16b(buf: long, off: long, v: long) -> void {
+    poke_va8(buf + off, v & 255);
+    poke_va8(buf + off + 1, (v >> 8) & 255);
+};
+
+def sys_getdents64(fdno: long, buf: long, len: long) -> long {
+    if (!fd.fd_valid(fdno)) { return E_FAULT; };
+    let ino = fd.fd_ino(fdno);
+    let count = yfs_dir_count(ino);
+    let off = fd.fd_tell(fdno);
+    let w = 0;
+    while (off < count) {
+        let nl = yfs_readdir(ino, off, buf + w + 19);
+        if (nl < 0) { break; };
+        let reclen = (19 + nl + 1 + 7) & (0 - 8);
+        if (w + reclen > len) { break; };
+        poke_va64(buf + w, yfs_dir_inode(ino, off));
+        poke_va64(buf + w + 8, 0);
+        put16b(buf, w + 16, reclen);
+        poke_va8(buf + w + 18, 0);
+        poke_va8(buf + w + 19 + nl, 0);
+        w = w + reclen;
+        off = off + 1;
+        fd.fd_seek_set(fdno, off);
+    };
+    w
+};
 
 def sys_fork() -> long {
     let me = cur_task;

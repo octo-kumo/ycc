@@ -62,3 +62,21 @@ def fd_close(fd: long) -> long {
     fd_used[fd - 3] = 0;
     0
 };
+
+// What a directory listing needs: the inode behind an fd and its position, with
+// the position settable so getdents64 can walk a directory across calls.
+def fd_ino(fd: long) -> long {
+    if (!fd_valid(fd)) { return 0 - 14; };
+    fd_inode[fd - 3]
+};
+
+def fd_tell(fd: long) -> long {
+    if (!fd_valid(fd)) { return 0 - 14; };
+    fd_off[fd - 3]
+};
+
+def fd_seek_set(fd: long, off: long) -> long {
+    if (!fd_valid(fd)) { return 0 - 14; };
+    fd_off[fd - 3] = off;
+    off
+};
