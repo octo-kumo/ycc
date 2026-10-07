@@ -1431,3 +1431,16 @@ entirely about how the harness drives a u* case that has both .driver.y and
 stdin).  The next thing to read is the harness's u* path itself -- which driver
 it builds into the image, whether it also compiles .user.y into the initrd, and
 whether the stdin feed is attached to the same qemu invocation.
+
+### Round 86: the serial-input fixture is committed
+
+The harness's u* loop runs qemu with `</dev/null`; only the t*/x* loop (cases
+built with --kernel and booted without -initrd) attaches a `.stdin`.  So the
+fixture belongs there, and it is now test/kernel/t012_serialin.y -- a kernel-only
+program that reads one byte with kernel.getc() and reports it:
+
+    .stdin: Z      .expected: read byte 90      .exit: 19  (kexit(9))
+
+test/kernel is 36 passed, 0 failed / 36 total.  M3's console work is now pinned
+in BOTH directions -- SYS_WRITE for output, serial input here -- with u005_ipc
+covering the IPC path end to end, and the callee-saved frame contract fixed.
