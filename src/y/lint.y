@@ -826,20 +826,34 @@ def lint_same_node(a: Node, b: Node) -> bool {
     }
 };
 
-// `lo` and `hi` are `E` and `E + 1` (either operand order).
+// `lo` and `hi` are `E + n` and `E + (n + 1)` (either operand order, and
+// `n` may be 0), so `raw[k + 1:k + 2]` counts as well as `s[i:i + 1]`.
 def lint_slice_one(lo: Node, hi: Node) -> bool {
-    if (hi.k != K.bin) {
-        false
-    } else {
-        let b: Bin = hi;
-        if (b.op != "+") {
-            false
-        } else if (lint_int_val(b.r) == 1 && lint_same_node(lo, b.l)) {
-            true
-        } else {
-            lint_int_val(b.l) == 1 && lint_same_node(lo, b.r)
-        }
-    }
+    lint_same_node(lint_slice_base(lo), lint_slice_base(hi)) && lint_slice_off(hi) == lint_slice_off(lo) + 1
+};
+
+// The `E` of `E + n`, or the whole node when it is not a sum.
+def lint_slice_base(node: Node) -> Node {
+    if (node.k == K.bin) {
+        let b: Bin = node;
+        if (b.op == "+") {
+            if (lint_int_val(b.r) >= 0) { return b.l; };
+            if (lint_int_val(b.l) >= 0) { return b.r; };
+        };
+    };
+    node
+};
+
+// The `n` of `E + n`, or 0.
+def lint_slice_off(node: Node) -> long {
+    if (node.k == K.bin) {
+        let b: Bin = node;
+        if (b.op == "+") {
+            if (lint_int_val(b.r) >= 0) { return lint_int_val(b.r); };
+            if (lint_int_val(b.l) >= 0) { return lint_int_val(b.l); };
+        };
+    };
+    0
 };
 
 // Whether a written expression is a str (a literal, or a binding noted as

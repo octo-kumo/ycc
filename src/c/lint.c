@@ -1000,15 +1000,35 @@ static int lint_same_node(Yv *a, Yv *b) {
 }
 
 /* `lo` and `hi` are `E` and `E + 1` (either operand order). */
-static int lint_slice_one(Yv *lo, Yv *hi) {
-    if (yv_l(yr_get(hi, "k")) != K_bin) { return 0; }
-    if (!ys_eq_lit(yr_get(hi, "op"), "+")) { return 0; }
-    if (lint_int_val(yr_get(hi, "r")) == 1 &&
-        lint_same_node(lo, yr_get(hi, "l"))) {
-        return 1;
+/* The `E` of `E + n`, or the whole node when it is not a sum. */
+static Yv *lint_slice_base(Yv *node) {
+    if (yv_l(yr_get(node, "k")) == K_bin &&
+        ys_eq_lit(yr_get(node, "op"), "+")) {
+        if (lint_int_val(yr_get(node, "r")) >= 0) { return yr_get(node, "l"); }
+        if (lint_int_val(yr_get(node, "l")) >= 0) { return yr_get(node, "r"); }
     }
-    return lint_int_val(yr_get(hi, "l")) == 1 &&
-           lint_same_node(lo, yr_get(hi, "r"));
+    return node;
+}
+
+/* The `n` of `E + n`, or 0. */
+static ylong lint_slice_off(Yv *node) {
+    if (yv_l(yr_get(node, "k")) == K_bin &&
+        ys_eq_lit(yr_get(node, "op"), "+")) {
+        if (lint_int_val(yr_get(node, "r")) >= 0) {
+            return lint_int_val(yr_get(node, "r"));
+        }
+        if (lint_int_val(yr_get(node, "l")) >= 0) {
+            return lint_int_val(yr_get(node, "l"));
+        }
+    }
+    return 0;
+}
+
+/* `lo` and `hi` are `E + n` and `E + (n + 1)` (either operand order, and
+ * `n` may be 0). */
+static int lint_slice_one(Yv *lo, Yv *hi) {
+    return lint_same_node(lint_slice_base(lo), lint_slice_base(hi)) &&
+           lint_slice_off(hi) == lint_slice_off(lo) + 1;
 }
 
 /* Whether a written expression is a str (a literal, or a binding noted as

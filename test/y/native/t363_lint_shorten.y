@@ -20,3 +20,7 @@ def main() -> long {
     0
 };
 exit(main());
+
+def slice2(raw: str, k: long) -> str {
+    raw[k + 1:k + 2] // expect-warning: a one-character slice can be written as an index (a byte)
+};
