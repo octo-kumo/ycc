@@ -210,6 +210,52 @@ y_pe_master:
 
 
 
+#=== add: y_mb_info_get ===
+# The Multiboot info structure's physical address, as the loader left it in
+# %ebx and the 64-bit entry stored it (arch_x64.y's kernel head).  0 when
+# there is none, which is what the memory-map readers check for.
+y_mb_info_get:
+    mov y_mb_info(%rip), %rax
+    ret
+
+#=== add: y_kernel_end_get ===
+# The address one past everything the image occupies: the first byte of RAM
+# a physical page allocator may hand out.
+y_kernel_end_get:
+    lea y_kernel_end(%rip), %rax
+    ret
+
+#=== add: y_cr3_get ===
+# The three control-register instructions are raw bytes: the in-tree encoder
+# has no control-register operand (its register file is the GPRs and XMM),
+# and one 3-byte `.ascii` is cheaper than a new operand kind in both copies
+# of the compiler.  0F 20 /r is `mov %crN, %r64`, 0F 22 /r the other way.
+y_cr3_get:
+    .ascii "\017\040\330"
+    ret
+
+#=== add: y_cr3_set ===
+# y_cr3_set(dir) -> void: the address-space switch, and the whole of it.
+y_cr3_set:
+    mov 8(%rsp), %rax
+    .ascii "\017\042\330"
+    ret
+
+#=== add: y_invlpg ===
+# y_invlpg(vaddr): drop one page from the TLB.  0F 01 /7 takes a memory
+# operand and nothing else, so the address comes off the stack into %rax.
+y_invlpg:
+    mov 8(%rsp), %rax
+    .ascii "\017\001\070"
+    ret
+
+#=== add: y_cr2_get ===
+# CR2 holds the faulting address of the last #PF: what a page-fault report
+# needs and what no GPR carries.
+y_cr2_get:
+    .ascii "\017\040\320"
+    ret
+
 #=== replace: y_alloc_map ===
 # The page source under y_alloc.  A hosted build asks mmap; a kernel has no
 # mmap, so this bumps through y_kheap, a 16 MB .bss reservation (arch_x64.y's

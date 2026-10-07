@@ -162,7 +162,14 @@ let x = log("hi");         // error: cannot bind a void value to 'x'
 
 \noindent Pointers are for interfacing with the system-call level
 (buffers for \ic{read}/\ic{write}-style calls); ordinary code uses
-arrays and records.
+arrays and records. They support C-style arithmetic: \ic{p + n} and
+\ic{p - n} move by whole \ty{T} elements (one byte for \ic{*byte},
+eight bytes for every other pointer), \ic{n + p} is the mirror,
+\ic{p - q} counts elements when both pointers have the same type, and
+\ic{+=}, \ic{-=}, \ic{++} and \ic{--} scale the same way. Ordering
+comparisons compare raw addresses; equality is word equality. The
+offset must be \ic{long} or \ic{byte}, and mixing pointer types in a
+difference is a compile error.
 
 \noindent\textbf{A pointer does not outlive what it points into.}
 \ic{\&x} on a local or a parameter is the address of a cell in that

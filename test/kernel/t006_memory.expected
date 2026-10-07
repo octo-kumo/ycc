@@ -1,0 +1,16 @@
+multiboot info present: true
+ram above 1MB (KB): 129920 usable: true
+available regions: 2
+free bytes after the kernel: true
+page_alloc: true
+1GB is unmapped to start: true
+vm_map: true
+translate gives the page back: true
+write VA, read PA: true
+write PA, read VA: true
+the rest of the page is untouched: true
+vm_map_range: true
+sum over the four pages: 10
+after vm_unmap: true
+new dir shares the kernel's map: true
+new dir has no user mappings: true

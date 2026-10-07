@@ -101,3 +101,412 @@ def putc(c: long) -> void {
 def getc() -> long {
     y_serial_getb()
 };
+
+// ── raw memory ──────────────────────────────────────────────────────────
+// Y has no address-to-pointer conversion -- a `*T` comes only from `&x` or
+// `arr.ptr` -- but a pointer to a GLOBAL can be MOVED by pointer arithmetic,
+// and a global's address is known.  So one 8-byte anchor is the whole of the
+// kernel's raw memory access: every read and write below is a pointer
+// arithmetic step away from it.  (This is the hack the language needs until
+// an integer-to-pointer cast exists; it is also why the kernel can touch page
+// tables, the Multiboot structure and device memory with no assembly.)
+let mem_word: long = 0;
+
+// The aligned 8-byte word at `addr`, which is the one operation pointer
+// arithmetic gives us: `*(p + k)` addresses p + 8k, so `addr` has to be
+// 8-byte aligned.  Everything else is built on top of it, and the mask is
+// spelled out rather than written as 2^52-1 because a 64-bit literal is what
+// the encoder can emit (an ALU immediate is 32 bits).
+def peek_word(addr: long) -> long {
+    let p: *long = &mem_word;
+    *(p + (addr - ptr_addr(p)) / 8)
+};
+
+def poke_word(addr: long, v: long) -> void {
+    let p: *long = &mem_word;
+    *(p + (addr - ptr_addr(p)) / 8) = v;
+};
+
+// The 32-bit field at `addr`, zero-extended.  The Multiboot memory map's
+// u64 fields sit at offset 4 of a 24-byte entry -- 4-aligned, not 8 -- so
+// this is the primitive, and the 64-bit read below is two of them.
+def peek32(addr: long) -> long {
+    let sh = (addr % 8) * 8;
+    ((peek_word(addr - addr % 8) >> sh) << 32) >>> 32
+};
+
+def poke32(addr: long, v: long) -> void {
+    let base = addr - addr % 8;
+    let sh = (addr % 8) * 8;
+    let w = peek_word(base);
+    let mask = 4294967295 << sh;
+    poke_word(base, (w & ~mask) | (((v << 32) >>> 32) << sh));
+};
+
+// The 64-bit word at `addr`, any 4-byte alignment.
+def peek64(addr: long) -> long {
+    peek32(addr) | (peek32(addr + 4) << 32)
+};
+
+def poke64(addr: long, v: long) -> void {
+    poke32(addr, v);
+    poke32(addr + 4, v >> 32);
+};
+
+// A byte, any alignment.
+def peek8(addr: long) -> long {
+    let sh = (addr % 8) * 8;
+    (peek_word(addr - addr % 8) >> sh) & 255
+};
+
+def poke8(addr: long, v: long) -> void {
+    let base = addr - addr % 8;
+    let sh = (addr % 8) * 8;
+    let w = peek_word(base);
+    let mask = 255 << sh;
+    poke_word(base, (w & ~mask) | ((v & 255) << sh));
+};
+
+// ── physical memory ─────────────────────────────────────────────────────
+ndef y_mb_info_get() -> long = "y_mb_info_get";
+ndef y_kernel_end_get() -> long = "y_kernel_end_get";
+
+// The Multiboot info structure (`info`), as the loader left it.  Offsets are
+// the Multiboot 1 spec's: flags, mem_lower, mem_upper, boot_device, cmdline,
+// mods_count, mods_addr, syms[4], mmap_length, mmap_addr.
+const MB_FLAG_MEM = 1;
+const MB_FLAG_MMAP = 64;
+
+def mb_present() -> bool {
+    y_mb_info_get() != 0
+};
+
+def mb_flags() -> long {
+    if (mb_present()) { peek32(y_mb_info_get()) } else { 0 }
+};
+
+// RAM in KB below and above 1 MB (the spec's mem_lower/mem_upper).
+def mb_mem_lower_kb() -> long {
+    if (mb_present()) { peek32(y_mb_info_get() + 4) } else { 0 }
+};
+
+def mb_mem_upper_kb() -> long {
+    if (mb_present()) { peek32(y_mb_info_get() + 8) } else { 0 }
+};
+
+// The kernel's command line, as the loader left it.  It is a NUL-terminated
+// string at a physical address, and (QEMU, at least) it lives in the pages
+// just past the loaded image -- which is also where a page allocator wants to
+// start.  phys_init reads it so the first page it hands out cannot be the
+// one holding the command line.
+def mb_cmdline_addr() -> long {
+    if (mb_present()) { peek32(y_mb_info_get() + 16) } else { 0 }
+};
+
+def str_len_at(addr: long) -> long {
+    let n = 0;
+    while (peek8(addr + n) != 0) { n = n + 1; };
+    n
+};
+
+def mb_mmap_addr() -> long {
+    if (mb_present()) { peek32(y_mb_info_get() + 48) } else { 0 }
+};
+
+def mb_mmap_len() -> long {
+    if (mb_present()) { peek32(y_mb_info_get() + 44) } else { 0 }
+};
+
+// The length of the largest available RAM region the loader reported, in
+// bytes, and the address where it starts.  A Multiboot mmap entry is
+// {size: u32, base: u64, length: u64, type: u32} with `size` NOT counting
+// itself; type 1 is available RAM.  Reading the whole map rather than
+// mem_upper is what makes a kernel work on a machine whose RAM is not one
+// contiguous block.
+type MemRegion = { base: long, len: long };
+
+def mb_region_count() -> long {
+    let n = 0;
+    if ((mb_flags() & MB_FLAG_MMAP) != 0) {
+        let at = mb_mmap_addr();
+        let end = at + mb_mmap_len();
+        while (at < end) {
+            if (peek32(at + 20) == 1) { n = n + 1; };
+            at = at + peek32(at) + 4;
+        };
+    };
+    n
+};
+
+def mb_region(i: long) -> MemRegion {
+    let out: MemRegion = { base: 0, len: 0 };
+    if ((mb_flags() & MB_FLAG_MMAP) != 0) {
+        let at = mb_mmap_addr();
+        let end = at + mb_mmap_len();
+        let k = 0;
+        while (at < end) {
+            if (peek32(at + 20) == 1) {
+                if (k == i) {
+                    out = { base: peek64(at + 4), len: peek64(at + 12) };
+                };
+                k = k + 1;
+            };
+            at = at + peek32(at) + 4;
+        };
+    };
+    out
+};
+
+// The first available region that holds memory past the kernel image: what a
+// page allocator hands out of.
+def phys_region() -> MemRegion {
+    let out: MemRegion = { base: 0, len: 0 };
+    let n = mb_region_count();
+    let i = 0;
+    let end = y_kernel_end_get();
+    while (i < n) {
+        let r = mb_region(i);
+        if (out.len == 0 && r.base + r.len > end + 65536) { out = r; };
+        i = i + 1;
+    };
+    if (out.len == 0) {
+        // No usable map (or no Multiboot info at all): the spec's mem_upper
+        // still says how much RAM is above 1 MB, so fall back to a block
+        // that starts past the kernel and trusts that number.
+        let top = 1048576 + mb_mem_upper_kb() * 1024;
+        if (top > end + 1048576) { out = { base: end, len: top - end }; };
+    };
+    out
+};
+
+// A bump allocator over that region: the honest first version (no free yet).
+// Pages come back 4 KB aligned, which is what page tables, stacks and the
+// Y heap all need.
+let phys_next = 0;
+let phys_limit = 0;
+
+def phys_init() -> void {
+    if (phys_next == 0) {
+        let r = phys_region();
+        let start = y_kernel_end_get();
+        // Everything the loader left in the way, above the image: the
+        // command-line string is the one that sits there (QEMU puts it just
+        // past the kernel), and handing out that page would clobber it.
+        let cl = mb_cmdline_addr();
+        if (cl != 0) {
+            let cle = cl + str_len_at(cl) + 1;
+            if (cle > start) { start = cle; };
+        };
+        if (start % 4096 != 0) { start = start + 4096 - start % 4096; };
+        if (r.base > start) { start = r.base; };
+        if (start % 4096 != 0) { start = start + 4096 - start % 4096; };
+        let limit = r.base + r.len;
+        if (mb_mem_upper_kb() > 0) {
+            let top = 1048576 + mb_mem_upper_kb() * 1024;
+            if (top < limit) { limit = top; };
+        };
+        phys_next = start;
+        phys_limit = limit;
+    };
+};
+
+// How much physical RAM the allocator can still hand out, in bytes.
+def phys_free_bytes() -> long {
+    phys_init();
+    phys_limit - phys_next
+};
+
+def page_alloc() -> long {
+    phys_init();
+    if (phys_next + 4096 > phys_limit) { return 0; };
+    let p = phys_next;
+    phys_next = phys_next + 4096;
+    p
+};
+
+// `n` bytes, page aligned: what a future `y_alloc_map` would ask for.
+def pages_alloc(n: long) -> long {
+    phys_init();
+    let want = n;
+    if (want % 4096 != 0) { want = want + 4096 - want % 4096; };
+    if (phys_next + want > phys_limit) { return 0; };
+    let p = phys_next;
+    phys_next = phys_next + want;
+    p
+};
+
+// ── virtual memory ──────────────────────────────────────────────────────
+// Four levels, 4 KB pages, 48-bit virtual addresses: PML4 -> PDPT -> PD ->
+// PT.  Every table is a physical page, identity-mapped (the trampoline maps
+// the first 1 GB), so a walk is pointer arithmetic and nothing else -- the
+// whole of a page-table write is peek64/poke64, which is why this needs no
+// assembly at all.
+const PTE_P = 1;
+const PTE_W = 2;
+const PTE_U = 4;
+const PTE_PWT = 8;
+const PTE_PCD = 16;
+const PTE_A = 32;
+const PTE_D = 64;
+const PTE_PS = 128;
+// The physical-address field of a page-table entry: bits 12..51.  NOT
+// 2^52-1, which keeps the low twelve FLAG bits in the address -- that
+// mistake walks to entry|flags, reads the next word at a misaligned offset,
+// and the walk still returns a plausible-looking number, so it fails as a
+// page fault far from here rather than as a wrong mask.
+const PHYS_MASK = 4503599627366400;
+// A large-page entry keeps its offset bits inside the entry: a 2 MB page's
+// low 21 bits are flags, a 1 GB page's low 30.  A walker that reads one as a
+// table address walks into the mapped memory itself -- which is what the
+// kernel's own identity map is made of (the trampoline uses 2 MB pages), so
+// this is not an exotic case, it is the common one.
+const PHYS_MASK_2M = 4503599625273344;
+const PHYS_MASK_1G = 4503598553628672;
+
+ndef y_cr3_get() -> long = "y_cr3_get";
+ndef y_cr3_set(dir: long) -> long = "y_cr3_set";
+ndef y_cr2_get() -> long = "y_cr2_get";
+
+def pml4_index(v: long) -> long { (v >> 39) & 511 };
+def pdpt_index(v: long) -> long { (v >> 30) & 511 };
+def pd_index(v: long) -> long { (v >> 21) & 511 };
+def pt_index(v: long) -> long { (v >> 12) & 511 };
+
+// One level of the walk: the table `entry` names, or 0.  `create` makes a
+// missing one (and answers 0 when physical memory runs out).
+def vm_next_table(entry: long, create: bool) -> long {
+    if ((entry & PTE_P) != 0) { entry & PHYS_MASK } else if (!create) { 0 } else { page_alloc() }
+};
+
+// The page-table slot that maps `v` under `dir`, or 0.  A 4 KB mapping
+// cannot be made inside a large page, so an entry with PS set at either
+// level refuses (0) rather than being read as a table address; splitting a
+// large page is a page-table operation this runtime does not have yet.
+def vm_slot(dir: long, v: long, create: bool) -> long {
+    let e4 = peek64(dir + pml4_index(v) * 8);
+    let l4 = vm_next_table(e4, create);
+    if (l4 == 0) { return 0; };
+    if ((e4 & PTE_PS) != 0) { return 0; };
+    if (create) { poke64(dir + pml4_index(v) * 8, l4 | PTE_P | PTE_W); };
+    let e3 = peek64(l4 + pdpt_index(v) * 8);
+    let l3 = vm_next_table(e3, create);
+    if (l3 == 0) { return 0; };
+    if ((e3 & PTE_PS) != 0) { return 0; };
+    if (create) { poke64(l4 + pdpt_index(v) * 8, l3 | PTE_P | PTE_W); };
+    let e2 = peek64(l3 + pd_index(v) * 8);
+    let l2 = vm_next_table(e2, create);
+    if (l2 == 0) { return 0; };
+    if ((e2 & PTE_PS) != 0) { return 0; };
+    if (create) { poke64(l3 + pd_index(v) * 8, l2 | PTE_P | PTE_W); };
+    l2 + pt_index(v) * 8
+};
+
+// Map one 4 KB page: `v` (the virtual address) sees `p` (the physical one).
+def vm_map(dir: long, v: long, p: long, flags: long) -> bool {
+    let slot = vm_slot(dir, v, true);
+    if (slot == 0) { return false; };
+    poke64(slot, (p & PHYS_MASK) | flags | PTE_P);
+    vm_flush(v);
+    true
+};
+
+// Map `pages` 4 KB pages, virtual and physical both stepping by 4 KB.
+def vm_map_range(dir: long, v: long, p: long, pages: long, flags: long) -> long {
+    let i = 0;
+    let n = 0;
+    while (i < pages) {
+        if (vm_map(dir, v + i * 4096, p + i * 4096, flags)) { n = n + 1; };
+        i = i + 1;
+    };
+    n
+};
+
+def vm_unmap(dir: long, v: long) -> void {
+    let slot = vm_slot(dir, v, false);
+    if (slot != 0) { poke64(slot, 0); vm_flush(v); };
+};
+
+// The physical address `v` maps to under `dir`, or 0 when it does not map.
+// Its own walk rather than vm_slot's, because this one has to UNDERSTAND a
+// large page (the kernel's 1 GB is 512 of them) and vm_slot cannot.
+def vm_translate(dir: long, v: long) -> long {
+    let e4 = peek64(dir + pml4_index(v) * 8);
+    if ((e4 & PTE_P) == 0) { return 0; };
+    let e3 = peek64((e4 & PHYS_MASK) + pdpt_index(v) * 8);
+    if ((e3 & PTE_P) == 0) { return 0; };
+    if ((e3 & PTE_PS) != 0) { return (e3 & PHYS_MASK_1G) + v % 1073741824; };
+    let e2 = peek64((e3 & PHYS_MASK) + pd_index(v) * 8);
+    if ((e2 & PTE_P) == 0) { return 0; };
+    if ((e2 & PTE_PS) != 0) { return (e2 & PHYS_MASK_2M) + v % 2097152; };
+    let e1 = peek64((e2 & PHYS_MASK) + pt_index(v) * 8);
+    if ((e1 & PTE_P) == 0) { return 0; };
+    (e1 & PHYS_MASK) + v % 4096
+};
+
+// Drop `v` from the TLB.  `invlpg` is the only instruction here and it is
+// raw bytes for the same reason the control-register reads are: one operand
+// kind the encoder does not have.  0F 01 /7.
+def vm_flush(v: long) -> void {
+    vm_flush_raw(v);
+};
+
+ndef vm_flush_raw(v: long) -> long = "y_invlpg";
+
+def vm_switch(dir: long) -> void {
+    y_cr3_set(dir);
+};
+
+def vm_current() -> long {
+    y_cr3_get()
+};
+
+// A fresh address space.  The kernel's own 1 GB -- PML4[0] -> PDPT[0] -> the
+// 512 2 MB pages the trampoline built -- is copied entry by entry, so the
+// kernel's code, its stacks and the serial port stay reachable from every
+// address space; everything above it starts unmapped, which is what makes
+// two address spaces two address spaces.
+//
+// The first version shared PML4[0] itself, and that shares the whole subtree
+// under it: a second address space saw the first one's user pages (the
+// t006 fixture's last two lines are the difference).  Copying the top PDPT
+// entry instead of the PML4 entry is the cheap fix; the real one is a
+// higher-half kernel, where user space owns PML4[0] and the kernel owns
+// entries 256..511 and nothing has to be copied at all.
+def vm_new_dir() -> long {
+    let dir = page_alloc();
+    if (dir == 0) { return 0; };
+    let pdpt = page_alloc();
+    if (pdpt == 0) { return 0; };
+    let src = peek64(vm_current()) & PHYS_MASK;
+    let i = 0;
+    while (i < 512) {
+        poke64(pdpt + i * 8, peek64(src + i * 8));
+        i = i + 1;
+    };
+    // entries above the kernel's own gigabyte belong to the process
+    i = 1;
+    while (i < 512) {
+        poke64(pdpt + i * 8, 0);
+        i = i + 1;
+    };
+    poke64(dir, pdpt | PTE_P | PTE_W);
+    dir
+};
+
+// ── the CPU's exceptions ────────────────────────────────────────────────
+// Called by the stubs the compiler generates (arch_x64.y's kernel_irq_text)
+// with the vector number and the CPU's error code.  A program may replace it
+// by defining its own `y_kernel_trap(vec, err)`: `y_` is the reserved prefix
+// the compiler emits under its bare name, and the generated stubs call that
+// name.  (Not while this file is linked, which also defines it -- the
+// override is a bare kernel program's, or a fork of this file's.)
+def y_kernel_trap(vec: long, err: long) -> void {
+    // Built with tostring, not print: `print` ends its value with a newline,
+    // and the report is one line.  No allocation beyond the message, so a
+    // trap that fires while the allocator is the problem still reports.
+    let msg = "\ntrap vector=" + tostring(vec) + " err=" + tostring(err);
+    if (vec == 14) { msg = msg + " cr2=" + tostring(y_cr2_get()); };
+    if (vec == 13) { msg = msg + " (general protection)"; };
+    puts(msg + "\n");
+    y_kernel_halt();
+};

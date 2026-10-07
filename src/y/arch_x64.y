@@ -279,7 +279,10 @@ def arch_kernel_bss() -> str {
     "y_kernel_stack_top:\n" +
     ".align 4096\n" +
     "y_kheap:\n.zero 16777216\n" +
-    "y_kheap_used:\n.zero 8\n"
+    "y_kheap_used:\n.zero 8\n" +
+    // Where the kernel's own memory ends.  A physical page allocator starts
+    // at the next page after this, and nothing in the image is above it.
+    "y_kernel_end:\n"
 };
 
 // The prelude as its lines: labels alone at column 0, everything else
@@ -574,10 +577,68 @@ def arch_consts() -> str {
 // A handler that clobbers an XMM register would need the SSE state saved as
 // well; nothing does that yet, and the Y backend only touches XMM in float
 // code.
-def kernel_irq_text() -> str {
+// Is `v` in `xs`?  An index loop, not foreach: a foreach closure comparing
+// its element to a captured value is broken (target.y has the note).
+def name_in_ints(xs: [long], v: long) -> bool {
+    let i = 0;
+    let found = false;
+    while (i < len(xs)) {
+        if (xs[i] == v) { found = true; };
+        i++;
+    };
+    found
+};
+
+def kernel_irq_text(has_trap: bool) -> str {
     let out = ".text\n";
     out += "y_kernel_irq_default:\n";
     out += "    jmp y_kernel_halt\n";
+    // ── the CPU's own exceptions (vectors 0..31) ────────────────────────
+    // Each stub saves the caller-saved set, puts its vector and the CPU's
+    // error code on the stack and calls the Y handler y_kernel_trap(vec,
+    // err); a fault is not resumed from, so there is no `iretq` here.  The
+    // push of the vector is a register push rather than `push $N` because
+    // the encoder has no immediate push -- and it runs AFTER the saves, so
+    // the interrupt's own %rax is already safe.
+    //
+    // Vectors 8, 10-14, 17, 21, 29 and 30 push an error code (Intel SDM,
+    // "Exception and Interrupt Vectors"); it sits just above the ten saved
+    // registers, at 80(%rbp).  The rest push a zero so the handler always
+    // reads a second argument.
+    let errv = [8, 10, 11, 12, 13, 14, 17, 21, 29, 30];
+    let v = 0;
+    while (v < 32) {
+        out += "y_trap_stub_" + tostring(v) + ":\n";
+        out += "    push %rbp\n";
+        out += "    push %rax\n";
+        out += "    push %rcx\n";
+        out += "    push %rdx\n";
+        out += "    push %rsi\n";
+        out += "    push %rdi\n";
+        out += "    push %r8\n";
+        out += "    push %r9\n";
+        out += "    push %r10\n";
+        out += "    push %r11\n";
+        out += "    mov %rsp, %rbp\n";
+        out += "    and $-16, %rsp\n";
+        out += "    mov $" + tostring(v) + ", %eax\n";
+        out += "    push %rax\n";
+        if (name_in_ints(errv, v)) {
+            out += "    mov 80(%rbp), %rax\n";
+        } else {
+            out += "    mov $0, %eax\n";
+        };
+        out += "    push %rax\n";
+        out += "    call y_kernel_trap\n";
+        out += "    jmp y_kernel_halt\n";
+        v++;
+    };
+    if (!has_trap) {
+        // No unit defines one: the stubs must still resolve.  std/kernel.y's
+        // is the diagnostic version; this is what a bare kernel gets.
+        out += "y_kernel_trap:\n";
+        out += "    jmp y_kernel_halt\n";
+    };
     res_irq_stubs.foreach((e) => {
         out += "y_irq_stub_" + tostring(e.line) + ":\n";
         out += "    push %rbp\n";
@@ -641,6 +702,15 @@ def kernel_irq_text() -> str {
     out += "    sub $1, %esi\n";
     out += "    cmp $0, %esi\n";
     out += "    jne y_kii_loop\n";
+    let tv = 0;
+    while (tv < 32) {
+        out += "    lea y_trap_stub_" + tostring(tv) + "(%rip), %rax\n";
+        out += "    call y_kernel_idt_pack\n";
+        out += "    lea y_kernel_idt(%rip), %rdi\n";
+        out += "    mov %rax, " + tostring(tv * 16) + "(%rdi)\n";
+        out += "    mov $0, " + tostring(tv * 16 + 8) + "(%rdi)\n";
+        tv++;
+    };
     res_irq_stubs.foreach((e) => {
         let v = 32 + e.line;
         out += "    lea y_irq_stub_" + tostring(e.line) + "(%rip), %rax\n";
@@ -751,6 +821,17 @@ def kernel_head_text() -> str {
     text += "y_kernel_entry64:\n";
     text += "    lea y_kernel_stack_top(%rip), %rsp\n";
     text += "    xor %rbp, %rbp\n";
+    // The Multiboot loader left the info structure's physical address in
+    // %ebx (multiboot spec: %eax = 0x2BADB002, %ebx = the info pointer).
+    // Nothing in the 32-bit half touches %ebx, and the upper half of a GPR
+    // is not architecturally defined across the mode switch, so the 32 bits
+    // are zero-extended before the store: shl 32 then shr 32 (a logical
+    // shift) is how Y reaches a zero-extension here, and the kernel's
+    // memory map lives behind this one cell.
+    text += "    mov %rbx, %rax\n";
+    text += "    shl $32, %rax\n";
+    text += "    shr $32, %rax\n";
+    text += "    mov %rax, y_mb_info(%rip)\n";
     text += "    call y_kernel_main\n";
     text += "    jmp y_kernel_halt\n";
     text

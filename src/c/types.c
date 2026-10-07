@@ -1733,10 +1733,80 @@ static int is_some_call(Yv *n) {
     }
 }
 
+/* Pointer arithmetic. A pointer travels by whole elements, so the result
+ * keeps the pointer type; pointer-minus-pointer counts elements and is a
+ * long. Only long/byte offsets are accepted, and a difference needs two
+ * identical pointer types (the emitter divides by the element width). */
+static int is_ptr_math_int(Yv *t) {
+    ylong k = yv_l(yr_get(t, "k"));
+    return k == K_tlong || k == K_tbyte;
+}
+
+static Yv *typeof_ptr_arith(Yv *st, Yv *op, Yv *lt, Yv *rt, ylong line, ylong col) {
+    Yv *lu = unfold(lt);
+    Yv *ru = unfold(rt);
+    if (ys_eq_lit(op, "+")) {
+        if (yv_l(yr_get(lu, "k")) == K_tptr && is_ptr_math_int(ru)) {
+            return yr(2, "typ", lu, "st", st);
+        } else if (yv_l(yr_get(ru, "k")) == K_tptr && is_ptr_math_int(lu)) {
+            return yr(2, "typ", ru, "st", st);
+        } else {
+            st = fail(st,
+                      ys_cat(ys_cat(ys_cat(ys("cannot add "), tstr(lt)),
+                                    ys(" and ")),
+                             ys_cat(tstr(rt),
+                                    ys(" (pointer arithmetic needs a pointer and a long/byte offset)"))),
+                      line, col);
+            return yr(2, "typ", t_unk(), "st", st);
+        }
+    } else if (ys_eq_lit(op, "-")) {
+        if (yv_l(yr_get(lu, "k")) == K_tptr && is_ptr_math_int(ru)) {
+            return yr(2, "typ", lu, "st", st);
+        } else if (yv_l(yr_get(lu, "k")) == K_tptr &&
+                   yv_l(yr_get(ru, "k")) == K_tptr) {
+            if (teq(lu, ru)) {
+                return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
+            } else {
+                st = fail(st,
+                          ys_cat(ys_cat(ys_cat(ys("pointer subtraction needs identical pointer types, got "),
+                                                tstr(lu)),
+                                          ys(" and ")),
+                                 tstr(ru)),
+                          line, col);
+                return yr(2, "typ", t_unk(), "st", st);
+            }
+        } else {
+            st = fail(st,
+                      ys_cat(ys_cat(ys_cat(ys("cannot subtract "), tstr(rt)),
+                                    ys(" from ")),
+                             ys_cat(tstr(lt),
+                                    ys(" (pointer arithmetic needs a pointer and a long/byte offset)"))),
+                      line, col);
+            return yr(2, "typ", t_unk(), "st", st);
+        }
+    } else {
+        st = fail(st,
+                  ys_cat(ys_cat(ys_cat(ys("operator '"), op),
+                                ys("' is not defined on pointers")),
+                         ys("")),
+                  line, col);
+        return yr(2, "typ", t_unk(), "st", st);
+    }
+}
+
 // Binary-operator result typing. Split out of the `bin` arm so the operator
 // table there stays a flat `op == "..."` dispatch and each operator's rule
 // lives in one named place.
 static Yv *typeof_arith(Yv *st, Yv *op, Yv *lt, Yv *rt, ylong line, ylong col) {
+    /* Pointer arithmetic is its own family: a pointer +/- a long moves by
+     * whole elements, and a pointer - pointer counts elements. */
+    Yv *lu0 = unfold(lt);
+    Yv *ru0 = unfold(rt);
+    if ((ys_eq_lit(op, "+") || ys_eq_lit(op, "-")) &&
+        (yv_l(yr_get(lu0, "k")) == K_tptr ||
+         yv_l(yr_get(ru0, "k")) == K_tptr)) {
+        return typeof_ptr_arith(st, op, lt, rt, line, col);
+    }
     // "+" on strings concatenates (either side may be poison tunk, but at
     // least one side must be a real str — hence the per-kind arms below).
     // AUTO-STRINGIFY: str + long/bool/float (and the mirror) stringify the
@@ -1934,7 +2004,24 @@ static Yv *typeof_bits(Yv *st, Yv *op, Yv *lt, Yv *rt, ylong line, ylong col) {
 }
 
 static Yv *typeof_cmp(Yv *st, Yv *op, Yv *lt, Yv *rt, ylong line, ylong col) {
-    if (yv_l(yr_get(lt, "k")) == K_tstr) {
+    Yv *lu = unfold(lt);
+    Yv *ru = unfold(rt);
+    if (yv_l(yr_get(lu, "k")) == K_tptr || yv_l(yr_get(ru, "k")) == K_tptr) {
+        if (yv_l(yr_get(lu, "k")) == K_tptr &&
+            yv_l(yr_get(ru, "k")) == K_tptr && teq(lu, ru)) {
+            return tc_res(type_node(yr(1, "k", yv_long(K_tbool))), st);
+        } else {
+            st = fail(st,
+                      ys_cat(ys_cat(ys_cat(ys_cat(ys_cat(ys("'"), op),
+                                                  ys("' compares ")),
+                                            tstr(lt)),
+                                      ys(" with ")),
+                             ys_cat(tstr(rt),
+                                    ys(" (pointer ordering needs identical pointer types)"))),
+                      line, col);
+            return yr(2, "typ", t_unk(), "st", st);
+        }
+    } else if (yv_l(yr_get(lt, "k")) == K_tstr) {
         // str < str is lexicographic ordering (byte by byte), matching the
         // y_str_cmp helper native.y emits.
         st = expect_type(st, rt, yr(1, "k", yv_long(K_tstr)),
@@ -4251,7 +4338,8 @@ static Yv *incdec_check(Yv *st, Yv *node, Yv *tt) {
     if (yv_l(yr_get(tt, "k")) == K_tlong ||
         yv_l(yr_get(tt, "k")) == K_tbyte ||
         yv_l(yr_get(tt, "k")) == K_tfloat ||
-        yv_l(yr_get(tt, "k")) == K_tbigint) {
+        yv_l(yr_get(tt, "k")) == K_tbigint ||
+        yv_l(yr_get(tt, "k")) == K_tptr) {
         return yr(2, "typ", tt, "st", st);
     } else if (yv_l(yr_get(tt, "k")) == K_tunk ||
                yv_l(yr_get(tt, "k")) == K_tnone) {
@@ -4279,7 +4367,25 @@ static Yv *incdec_check(Yv *st, Yv *node, Yv *tt) {
 // The result is always the target's type (the new value).
 static Yv *opassign_check(Yv *st, Yv *node, Yv *tt, Yv *vt) {
     Yv *op = yr_get(node, "op");
-    if (is_bits_op(op) && yv_l(yr_get(tt, "k")) != K_tbigint) {
+    if (yv_l(yr_get(tt, "k")) == K_tptr) {
+        if (ys_eq_lit(op, "+") || ys_eq_lit(op, "-")) {
+            st = expect_type(st, vt, yr(1, "k", yv_long(K_tlong)),
+                             ys_cat(ys_cat(ys_cat(ys("'"), op),
+                                           ys("=' offset")),
+                                    ys("")),
+                             yv_l(yr_get(node, "line")),
+                             yv_l(yr_get(node, "col")));
+            return yr(2, "typ", tt, "st", st);
+        } else {
+            st = fail(st,
+                      ys_cat(ys_cat(ys_cat(ys("pointers support only '+=' and '-=' offsets, not '"), op),
+                                    ys("='")),
+                             ys("")),
+                      yv_l(yr_get(node, "line")),
+                      yv_l(yr_get(node, "col")));
+            return yr(2, "typ", t_unk(), "st", st);
+        }
+    } else if (is_bits_op(op) && yv_l(yr_get(tt, "k")) != K_tbigint) {
         if (yv_l(yr_get(tt, "k")) == K_tlong ||
             yv_l(yr_get(tt, "k")) == K_tbyte) {
             st = expect_type(st, vt, yr(1, "k", yv_long(K_tlong)),
