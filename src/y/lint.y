@@ -569,7 +569,7 @@ def lint_node(st: LintSt, node: Node, used: bool) -> long {
         if (st.wlevel < 2 || !lint_short_ord(st, call)) {
             lint_list(st, call.args);
         };
-        if (st.wlevel >= 2) { lint_short_call(st, call); };
+        if (st.wlevel >= 2) { lint_short_call(st, call); lint_short_foreach_elem(st, call); };
         lint_unused_call(st, node, used, call)
     } else if (k == K.dot) {
         let dot: Dot = node;
@@ -967,6 +967,26 @@ def lint_short_call(st: LintSt, call: Call) -> long {
         lint_warn_at(st, "'byte_at(s, i)' can be written 's[i]'", call);
         lint_fix(st, "1.3", callee.line, callee.col, "", "");
     };
+    0
+};
+
+// Rule 3.6: a `foreach` closure whose element parameter is unused while the
+// body indexes the array again: `a.foreach((e, i) => { let x = a[i]; })` is
+// `a.foreach((e2, i) => { let x = e2; })`, and the index goes when nothing
+// else needs it.
+def lint_short_foreach_elem(st: LintSt, call: Call) -> long {
+    if (call.callee.k != K.dot || len(call.args) != 1) { return 0; };
+    let d: Dot = call.callee;
+    if (d.key != "foreach" || d.obj.k != K.id || call.args[0].k != K.func) { return 0; };
+    let arr: Leaf = d.obj;
+    let f: Func = call.args[0];
+    if (len(f.params) < 2) { return 0; };
+    let el = f.params[0];
+    let ix = f.params[1];
+    if (lint_find(f.body, el, 0)) { return 0; };
+    if (!lint_find(f.body, arr.v, 64)) { return 0; };
+    lint_warn_at(st, "the element parameter of this 'foreach' is unused; use it instead of indexing '" + lint_disp(arr.v) + "' again", call);
+    lint_fix(st, "3.6", call.line, call.col, lint_disp(arr.v), lint_disp(ix));
     0
 };
 
@@ -1859,6 +1879,55 @@ def fx_if_line(rule: str, b: str, ln: long, lines: [str]) -> [str] {
     lines
 };
 
+
+// 3.6: drop the unused element parameter and put the element name on the
+// `arr[ix]` the body kept writing.
+def fx_foreach_elem(arr: str, idx: str, ln: long, col: long, lines: [str]) -> [str] {
+    if (ln < 1 || ln > len(lines)) { return lines; };
+    let line = lines[ln - 1];
+    let ht = fx_strip(line);
+    if (len(ht) == 0 || ht[len(ht) - 1:len(ht)] != "{") { return lines; };
+    let i = fx_find(line, "foreach", 0);
+    if (i < 0) { return lines; };
+    let o = fx_ws(line, i + 7);
+    if (o >= len(line) || line[o] != 40) { return lines; };
+    // the params are the closure's own parens inside the call's, and the
+    // call's own `)` is on the `});` line, so match the inner one
+    let p = fx_ws(line, o + 1);
+    if (p >= len(line) || line[p] != 40) { return lines; };
+    let c = fx_match(line, p, 40, 41);
+    if (c < 0) { return lines; };
+    let indent = fx_indent(line);
+    let close = -1;
+    let j = ln + 1;
+    while (j <= len(lines)) {
+        if (fx_strip(lines[j - 1]) == "});" && fx_indent(lines[j - 1]) == indent) { close = j; break; };
+        j = j + 1;
+    };
+    if (close < 0) { return lines; };
+    let body: [str] = [];
+    j = ln + 1;
+    while (j < close) { body += lines[j - 1]; j = j + 1; };
+    let el = "e";
+    if (fx_find(fx_join(body), "e", 0) >= 0) { el = "el"; };
+    let nb: [str] = [];
+    let hit = false;
+    j = 0;
+    while (j < len(body)) {
+        let x = fx_sub_index(body[j], arr, idx, el);
+        if (x != body[j]) { hit = true; };
+        nb += x;
+        j = j + 1;
+    };
+    if (!hit) { return lines; };
+    let keep = fx_find(fx_join(nb), idx, 0) >= 0;
+    let params = "(" + el + ")";
+    if (keep) { params = "(" + el + ", " + idx + ")"; };
+    lines[ln - 1] = line[:p] + params + line[c + 1:];
+    lines = lines[:ln] + nb + lines[close - 1:];
+    lines
+};
+
 // The fixers, by rule. A rule with no case here stays a warning.
 def fx_one(rule: str, a: str, b: str, ln: long, col: long, lines: [str]) -> [str] {
     if (ln < 1 || ln > len(lines)) { return lines; };
@@ -1870,7 +1939,8 @@ def fx_one(rule: str, a: str, b: str, ln: long, col: long, lines: [str]) -> [str
     else if (rule == "3.1") { lines = fx_loop(rule, b, a, ln, lines); }
     else if (rule == "3.5") { lines = fx_range(a, ln, lines); }
     else if (rule == "2.1") { lines = fx_if_line(rule, b, ln, lines); }
-    else if (rule == "2.3") { lines = fx_if_line(rule, b, ln, lines); };
+    else if (rule == "2.3") { lines = fx_if_line(rule, b, ln, lines); }
+    else if (rule == "3.6") { lines = fx_foreach_elem(a, b, ln, col, lines); };
     lines
 };
 
@@ -1894,7 +1964,7 @@ def fx_local(line: long, nmap: long, lmap: [long]) -> long {
 // first), and later positions before earlier ones so an edit never moves
 // the text a later fix anchors on.
 def fx_prio(rule: str) -> long {
-    if (rule == "2.1" || rule == "2.2" || rule == "2.3" || rule == "2.8" || rule == "3.1" || rule == "3.5") { 0 } else { 1 }
+    if (rule == "2.1" || rule == "2.2" || rule == "2.3" || rule == "2.8" || rule == "3.1" || rule == "3.5" || rule == "3.6") { 0 } else { 1 }
 };
 
 def fx_before(x: LintFix, y: LintFix, nmap: long, lmap: [long]) -> bool {
