@@ -3910,7 +3910,17 @@ def gen_go(st: EmitSt, node: Node) -> EmitSt {
         let narrow: Narrow = node;
         let src = infer(st, narrow.e);
         st = gen(st, narrow.e);
-        gen_convert(st, src, types.narrow_type(src, narrow.typ), false)
+        let dst = types.narrow_type(src, narrow.typ);
+        if (src.k == K.topt && dst.k != K.topt) {
+            // `if let long n = v`: the binding is the option's payload -- the
+            // deref `unwrap` does, trap and all (rectest proved it is there).
+            // The box holds the payload in the destination type's own layout,
+            // so there is no conversion to do afterwards.
+            st = emit_insn(st, insn.F_JZ_L, lbl_new("y_opt_unwrap"), 0, 0, 0, 0, 0, 0);
+            emit_insn(st, insn.F_MOV_0_R, insn.R_RAX, -1, 1, -1, -1, insn.R_RAX, 64)
+        } else {
+            gen_convert(st, src, dst, false)
+        }
     } else if (k == K.matchend) {
         // unreachable when the checker accepted the match
         st = emit_insn(st, insn.F_CALL_L, lbl_new("y_match_fail"), 0, 0, 0, 0, 0, 0);
@@ -4571,8 +4581,16 @@ def gen_rectest(st: EmitSt, node: Narrow) -> EmitSt {
     st = gen(st, node.e);
     if (sk == K.tunion) {
         gen_tag_in(st, rectest_members(s, node.typ), s)
+    } else if (sk == K.topt) {
+        // `if let long n = v` where v is an option (TODO.md item 13; `some(m)`
+        // lowers to exactly this). The checker only lets a scalar pattern
+        // reach here, so the test is the option's own: %rax is 0 for none.
+        st = emit_insn(st, insn.F_TEST_R_R, insn.R_RAX, 64, insn.R_RAX, 64, 0, 0, 0);
+        st = emit_insn(st, insn.F_SETNE_R, insn.R_RAX, 8, 0, 0, 0, 0, 0);
+        emit_insn(st, insn.F_MOVZBQ_R_R, insn.R_RAX, 8, insn.R_RAX, 64, 0, 0, 0)
     } else {
-        // a record: the checker took the pattern as its own type
+        // a record, or the scalar itself: the checker took the pattern as its
+        // own type, so it always matches
         emit_insn(st, insn.F_MOV_I_R, 1, insn.R_RAX, 64, 0, 0, 0, 0)
     }
 };

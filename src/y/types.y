@@ -2813,9 +2813,17 @@ def typeof_rectest(st: TcSt, node: Narrow) -> TcRes {
             };
         } else if (sk == K.trec) {
             st = fail(st, "match pattern type " + tstr(t) + " is not a record type", node.line, node.col);
+        } else if (sk == K.topt) {
+            // `if let long n = v`: the subject is an option, so the test is
+            // the option's own and the type is its payload's.
+            let inner = scalar_pat_narrow(s);
+            let iu = unfold(inner);
+            if (iu.k != K.tunk && !tcompat(iu, t) && !teq(iu, t)) {
+                st = fail(st, "pattern type " + tstr(t) + " can never match " + tstr(s), node.line, node.col);
+            };
         } else {
             if (!pattern_fits(s, t)) {
-                st = fail(st, "match pattern type " + tstr(t) + " is not a record type", node.line, node.col);
+                st = fail(st, "pattern type " + tstr(t) + " can never match " + tstr(s), node.line, node.col);
             };
         };
     } else if (tk != K.trec && tk != K.tpat) {
@@ -2833,6 +2841,16 @@ def typeof_rectest(st: TcSt, node: Narrow) -> TcRes {
         st = fail(st, "cannot match a record pattern against " + tstr(s), node.line, node.col);
     };
     tc_res(type_node({ k: K.tbool }), st)
+};
+
+// What a scalar pattern leaves bound: the subject with its option unwrapped,
+// so `if let long n = v` is `v != none and v is a long` -- the binding is the
+// payload, not the box (TODO.md item 13). A union member of the type matches
+// too, which is what makes the spelling useful once a union has primitive
+// members.
+def scalar_pat_narrow(s: Type) -> Type {
+    let u = unfold(s);
+    if (u.k == K.topt) { let opt: TOf = u; opt.of } else { s }
 };
 
 // The record type t is the subject s (a record) or one of its members (a
@@ -2853,6 +2871,10 @@ def typeof_narrow(st: TcSt, node: Narrow) -> TcRes {
     let tu = unfold(t);
     let tk: long = tu.k;
     if (is_prim_type(tu)) {
+        // The PATTERN's type is what is bound, not the subject's: for a union
+        // subject (a primitive member is boxed in a hidden one-field record) the
+        // member is `long`, and for an option subject the payload is. Taking
+        // the subject instead would bind the whole union.
         tc_res(tu, r.st)
     } else if (tk == K.trec || tk == K.tpat) {
         tc_res(narrow_type(r.typ, t), r.st)

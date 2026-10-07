@@ -207,6 +207,7 @@ static int union_ok(Yv *t);
 static int union_accepts(Yv *got, Yv *want);
 static Yv *typeof_rectest(Yv *st, Yv *node);
 static int pattern_fits(Yv *s, Yv *t);
+static Yv *scalar_pat_narrow(Yv *s);
 static Yv *typeof_narrow(Yv *st, Yv *node);
 static Yv *typeof_matchend(Yv *st, Yv *node);
 static int covered(Yv *m, Yv *cover);
@@ -3771,9 +3772,17 @@ static Yv *typeof_rectest(Yv *st, Yv *node) {
             };
         } else if (yv_l(sk) == K_trec) {
             st = fail(st, ys_cat(ys_cat(ys("match pattern type "), tstr(t)), ys(" is not a record type")), NLINE, NCOL);
+        } else if (yv_l(sk) == K_topt) {
+            /* `if let long n = v`: the subject is an option, so the test is
+             * the option's own and the type is its payload's. */
+            Yv *inner = scalar_pat_narrow(s);
+            Yv *iu = unfold(inner);
+            if (yv_l(yr_get(iu, "k")) != K_tunk && !tcompat(iu, t) && !teq(iu, t)) {
+                st = fail(st, ys_cat(ys_cat(ys_cat(ys("pattern type "), tstr(t)), ys(" can never match ")), tstr(s)), NLINE, NCOL);
+            };
         } else {
             if (!pattern_fits(s, t)) {
-                st = fail(st, ys_cat(ys_cat(ys("match pattern type "), tstr(t)), ys(" is not a record type")), NLINE, NCOL);
+                st = fail(st, ys_cat(ys_cat(ys_cat(ys("pattern type "), tstr(t)), ys(" can never match ")), tstr(s)), NLINE, NCOL);
             };
         };
     } else if (yv_l(tk) != K_trec && yv_l(tk) != K_tpat) {
@@ -3797,6 +3806,17 @@ static Yv *typeof_rectest(Yv *st, Yv *node) {
 
 // The record type t is the subject s (a record) or one of its members (a
 // union): membership is exact.
+/* What a scalar pattern leaves bound: the subject with its option unwrapped,
+ * so `if let long n = v` is `v != none and v is a long` -- the binding is the
+ * payload, not the box (TODO.md item 13). A union member of the type matches
+ * too, which is what makes the spelling useful once a union has primitive
+ * members. */
+static Yv *scalar_pat_narrow(Yv *s) {
+    Yv *u = unfold(s);
+    if (yv_l(yr_get(u, "k")) == K_topt) { return yr_get(u, "of"); }
+    return s;
+}
+
 static int pattern_fits(Yv *s, Yv *t) {
     if (yv_l(yr_get(s, "k")) == K_tunion) {
         Yv *m = union_member(s, t);
@@ -3813,6 +3833,10 @@ static Yv *typeof_narrow(Yv *st, Yv *node) {
     Yv *tu = unfold(t);
     Yv *tk = yr_get(tu, "k");
     if (is_prim_type(tu)) {
+        /* The PATTERN's type is what is bound, not the subject's: for a union
+         * subject (a primitive member is boxed in a hidden one-field record)
+         * the member is `long`, and for an option subject the payload is.
+         * Taking the subject instead would bind the whole union. */
         return yr(2, "typ", tu, "st", yr_get(r, "st"));
     } else if (yv_l(tk) == K_trec || yv_l(tk) == K_tpat) {
         return yr(2, "typ", narrow_type(yr_get(r, "typ"), t), "st", yr_get(r, "st"));

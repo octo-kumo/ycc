@@ -5016,7 +5016,17 @@ Yv *gen_go(Yv *st, Yv *node) {
          * arm's binding: rectest checked its tag) */
         Yv *src = infer(st, yr_get(node, "e"));
         st = gen(st, yr_get(node, "e"));
-        return gen_convert(st, src, narrow_type(src, yr_get(node, "typ")), 0);
+        Yv *dst = narrow_type(src, yr_get(node, "typ"));
+        if (yv_l(yr_get(src, "k")) == K_topt &&
+            yv_l(yr_get(dst, "k")) != K_topt) {
+            /* `if let long n = v`: the binding is the option's payload -- the
+             * deref `unwrap` does, trap and all (rectest proved it is there).
+             * The box holds the payload in the destination type's own layout,
+             * so there is no conversion to do afterwards. */
+            st = emit_insn(st, F_JZ_L, yv_l(lbl_new(ys("y_opt_unwrap"))), 0, 0, 0, 0, 0, 0);
+            return emit_insn(st, F_MOV_0_R, R_RAX, -1, 1, -1, -1, R_RAX, 64);
+        }
+        return gen_convert(st, src, dst, 0);
     } else if (yv_l(k) == K_matchend) {
         /* unreachable when the checker accepted the match */
         st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_match_fail"))), 0, 0, 0, 0, 0, 0);
@@ -5774,8 +5784,16 @@ Yv *gen_rectest(Yv *st, Yv *node) {
     st = gen(st, yr_get(node, "e"));
     if (yv_l(sk) == K_tunion) {
         return gen_tag_in(st, rectest_members(s, yr_get(node, "typ")), s);
+    } else if (yv_l(sk) == K_topt) {
+        /* `if let long n = v` where v is an option (TODO.md item 13; `some(m)`
+         * lowers to exactly this). The checker only lets a scalar pattern
+         * reach here, so the test is the option's own: %rax is 0 for none. */
+        st = emit_insn(st, F_TEST_R_R, R_RAX, 64, R_RAX, 64, 0, 0, 0);
+        st = emit_insn(st, F_SETNE_R, R_RAX, 8, 0, 0, 0, 0, 0);
+        return emit_insn(st, F_MOVZBQ_R_R, R_RAX, 8, R_RAX, 64, 0, 0, 0);
     } else {
-        // a record: the checker took the pattern as its own type
+        /* a record, or the scalar itself: the checker took the pattern as its
+         * own type, so it always matches */
         return emit_insn(st, F_MOV_I_R, 1, R_RAX, 64, 0, 0, 0, 0);
     }
 }
