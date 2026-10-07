@@ -41,7 +41,7 @@ type LintVar = { name: str, kind: str, num: long, line: long, col: long, scal: b
 // self-compile -- and a list of the top-level names in order is quadratic in
 // them (+1.4%). The line says which file too (lint_file_of), so a module's
 // name and the program's do not shadow each other's warning.
-type LintRet = { name: str, ret: Type, line: long, col: long, called: bool, used: bool, retval: bool };
+type LintRet = { name: str, ret: Type, line: long, col: long, called: bool, used: bool, retval: bool, nested: bool };
 // Three fields say, in the emitter's terms, whether the statement being
 // walked is generated through `gen` (a value is produced) or through
 // `gen_stmt` (nothing reads one). `dropnext`: the statement list about to be
@@ -108,7 +108,7 @@ def lint_unit(ast: Block, ast3: Block, ofile: [long], fmods: [str], wlevel: long
     if (wlevel >= 2) {
         for vi in 0..len(st.rets) {
             let r = st.rets[vi];
-            if (r.called && !r.used && !r.retval && r.ret.k != K.tvoid) {
+            if (r.called && !r.used && r.ret.k != K.tvoid && (!r.retval || !r.nested)) {
                 lint_fixes += { rule: "void", line: r.line, col: r.col, a: r.name, b: "" };
             };
         };
@@ -172,7 +172,7 @@ def lint_rets_node(st: LintSt, node: Node) -> long {
             let n = lint_num(decl.name);
             if (n > 0 && parser.nameix_get(st.ridx, decl.name) < 0) {
                 parser.nameix_put(st.ridx, decl.name, len(st.rets));
-                st.rets += { name: decl.name, ret: func.ret, line: node.line, col: node.col, called: false, used: false, retval: lint_find(func.body, "", 256) };
+                st.rets += { name: decl.name, ret: func.ret, line: node.line, col: node.col, called: false, used: false, retval: lint_find(func.body, "", 256), nested: len(func.defs) > 0 };
             };
             lint_rets(st, func.defs)
         } else {
@@ -1091,13 +1091,13 @@ def lint_short_chain(st: LintSt, node: Bin) -> long {
 };
 
 // The `==` comparisons of a `||` chain, in order.
-def lint_chain_leaves(node: Node, out: [Node]) -> long {
+def lint_chain_leaves(node: Node, out: [Node]) -> void {
     if (node.k == K.bin) {
         let b: Bin = node;
         if (b.op == "||") {
             lint_chain_leaves(b.l, out);
             lint_chain_leaves(b.r, out);
-            return 0;
+            return;
         };
     };
     out += node;
@@ -2230,16 +2230,19 @@ def fx_ord_index(line: str, col: long) -> str {
 };
 
 // Level 1: `def f(...) -> T {` -> `def f(...) -> void {`, for a def whose
-// value no call reads. A void function may still `return x;` (the value is
-// dropped), so the body is left alone.
-def fx_void(line: str) -> str {
+// value no call reads. A value `return x;` becomes `return;` (a `-> void`
+// function may not return one); the linter only offers this for a def with
+// no nested def, so every `return` on its own line here is the outer one.
+def fx_void(ln: long, lines: [str]) -> [str] {
+    if (ln < 1 || ln > len(lines)) { return lines; };
+    let line = lines[ln - 1];
     let i = fx_find(line, "def", 0);
-    if (i < 0) { return line; };
+    if (i < 0) { return lines; };
     let po = index_of(line[i:], "(");
-    if (po < 0) { return line; };
+    if (po < 0) { return lines; };
     po = i + po;
     let pc = fx_match(line, po, 40, 41);
-    if (pc < 0) { return line; };
+    if (pc < 0) { return lines; };
     let after = line[pc + 1:];
     let j = fx_ws(after, 0);
     if (j + 1 < len(after) && after[j] == 45 && after[j + 1] == 62) {
@@ -2247,8 +2250,24 @@ def fx_void(line: str) -> str {
         while (j < len(after) && after[j] != 123 && after[j] != 59) { j = j + 1; };
     };
     j = fx_ws(after, j);
-    if (j >= len(after) || after[j] != 123) { return line; };
-    line[:pc + 1] + " -> void " + after[j:]
+    if (j >= len(after) || after[j] != 123) { return lines; };
+    let br = pc + 1 + j;
+    if (!fx_scan(lines, ln, br, 123, 125)) { return lines; };
+    let l2 = fx_sline;
+    for k in ln..l2 + 1 {
+        let code = fx_nocomment(lines[k - 1]);
+        let ri = fx_find(code, "return", 0);
+        if (ri >= 0) {
+            let st = fx_strip(code);
+            if (!fx_word(st, 0, "return")) { return lines; };
+            if (st != "return;") {
+                if (!fx_endswith(st, ";")) { return lines; };
+                lines[k - 1] = code[:ri] + "return;";
+            };
+        };
+    };
+    lines[ln - 1] = line[:pc + 1] + " -> void " + after[j:];
+    lines
 };
 
 // The fixers, by rule. A rule with no case here stays a warning.
@@ -2267,7 +2286,7 @@ def fx_one(rule: str, a: str, b: str, ln: long, col: long, lines: [str]) -> [str
     else if (rule == "2.3") { lines = fx_if_line(rule, b, ln, lines); }
     else if (rule == "2.2") { lines = fx_let_cond(ln, lines); }
     else if (rule == "3.6") { lines = fx_foreach_elem(a, b, ln, col, lines); }
-    else if (rule == "void") { lines[ln - 1] = fx_void(lines[ln - 1]); };
+    else if (rule == "void") { lines = fx_void(ln, lines); };
     lines
 };
 
