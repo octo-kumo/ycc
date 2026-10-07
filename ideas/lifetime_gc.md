@@ -430,3 +430,34 @@ out or frees a region that a live `cur` still points at. Chasing it wants the
 clamp to be checked against *every* writer of a heap block's words 0/8 --
 `y_alloc_go`, `y_alloc_more`, the pair's spare stores in the tcb -- rather than
 against the sweep alone, and the fault reproduces in one run.
+
+## Handover: where the threaded collector stands
+
+Done, committed, and covered by the suites: the whole-heap conservative
+mark-sweep collector with `--gc=auto|always|never`, `--gc-stress` and
+`--no-gc`; the stop-the-world for threads (park at the allocator's safepoint,
+publish the caller's `%rsp`, spill all callee-saved registers, 100us futex
+waits so a blocked thread comes back and parks, walk accepts only a real park);
+per-thread heaps and tcb fields; the thread-only locks and safepoint (A9);
+pointer-free string/`[byte]`/`[long]` payloads. Two bugs the stress mode found
+are fixed and committed: a fork child resetting the registry through a `%fs`
+that did not exist, uninitialized tcb fields, and the `y_heap` overflow (the
+main thread's tcb was 32 bytes while the code writes words 11-13, which landed
+on `y_gc_meta_cur`/`y_gc_meta_end`).
+
+Open: `test/y/native/t160_threads.y` under `--gc-stress` (four threads, one
+mutex, no fork needed -- its first two sections are the minimal case). With the
+current tree it trips the invariant trap; with the round-27 pair (spare
+`{start,end}` in the joining tcb, and the sweep clamped to the lowest registered
+`cur` inside a chunk) every normal fixture passes, including
+`t343_threads_queue`, and it instead faults in `y_alloc_go` from the first
+`y_spawn` -- a clobbered bump pointer.
+
+Concretely, the next attempt should: keep the pair; give the trap the block's
+neighbours (already done); and audit every writer of a heap block's words 0/8 --
+`y_alloc_go` (`mov %rdi,(%rcx)`), `y_alloc_more` (words 0/1 of the tcb),
+`y_join_done`/`y_spawn` (the spare) -- against what the collector decides to
+free, because the failure is a `cur` that pointed into memory someone else now
+owns. The pair, the reproducer and the reporting trap are all in this tree; the
+trap prints chunk base/end, the block, its header, both neighbours and the map
+register, and the fault reproduces on the first spawn in a single run.
