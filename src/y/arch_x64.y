@@ -467,7 +467,45 @@ def arch_block_sub(lines: [str], name: str, repl: [str]) -> [str] {
 // shows up as a crash or a wrong answer in minutes instead of days. It is also
 // the strongest check the threaded stop-the-world has.
 def arch_gc_stress_lines(lines: [str]) -> [str] {
-    arch_block_sub(lines, "y_gc_maybe", ["y_gc_maybe:", "    call y_gc_collect", "    ret"])
+    let out = arch_block_sub(lines, "y_gc_maybe", ["y_gc_maybe:", "    call y_gc_collect", "    ret"]);
+    // The invariant trap reports the walking state in the fields a reader needs
+    // -- chunk base, chunk end, block, its header word, then the map/block
+    // register and its word -- because a bare "bad block header" says nothing
+    // about which chunk or which writer's signature is in the wrong place.
+    arch_block_sub(out, "y_bad_trap", [
+        "y_bad_trap:",
+        "    push %rbx",
+        "    push %r12",
+        "    push %r13",
+        "    mov 0(%rbx), %rax",
+        "    push %rax",
+        "    call y_os_print_int",
+        "    add $8, %rsp",
+        "    mov 8(%rbx), %rax",
+        "    push %rax",
+        "    call y_os_print_int",
+        "    add $8, %rsp",
+        "    push %r12",
+        "    call y_os_print_int",
+        "    add $8, %rsp",
+        "    mov 0(%r12), %rax",
+        "    push %rax",
+        "    call y_os_print_int",
+        "    add $8, %rsp",
+        "    push %r13",
+        "    call y_os_print_int",
+        "    add $8, %rsp",
+        "    mov 0(%r13), %rax",
+        "    push %rax",
+        "    call y_os_print_int",
+        "    add $8, %rsp",
+        "    pop %r13",
+        "    pop %r12",
+        "    pop %rbx",
+        "    mov $1, %rax",
+        "    mov $1, %rdi",
+        "    syscall"
+    ])
 };
 
 def arch_nogc_lines(lines: [str]) -> [str] {

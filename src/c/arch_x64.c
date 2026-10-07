@@ -561,8 +561,11 @@ static Yv *arch_block_sub(Yv *lines, Yv *name, Yv *repl) {
      y_gc_chunk_add  returns the base the allocator wants, registers nothing */
 /* --gc-stress: a cycle at every allocating slow path (native.y). */
 Yv *arch_gc_stress_lines(Yv *lines) {
-    return arch_block_sub(lines, ys("y_gc_maybe"),
+    Yv *out = arch_block_sub(lines, ys("y_gc_maybe"),
         yav(3, ys("y_gc_maybe:"), ys("    call y_gc_collect"), ys("    ret")));
+    /* The invariant trap reports chunk base/end, block, its header and the
+       map/block register, because "bad block header" alone names nothing. */
+    return arch_block_sub(out, ys("y_bad_trap"), yav(32, ys("y_bad_trap:"), ys("    push %rbx"), ys("    push %r12"), ys("    push %r13"), ys("    mov 0(%rbx), %rax"), ys("    push %rax"), ys("    call y_os_print_int"), ys("    add $8, %rsp"), ys("    mov 8(%rbx), %rax"), ys("    push %rax"), ys("    call y_os_print_int"), ys("    add $8, %rsp"), ys("    push %r12"), ys("    call y_os_print_int"), ys("    add $8, %rsp"), ys("    mov 0(%r12), %rax"), ys("    push %rax"), ys("    call y_os_print_int"), ys("    add $8, %rsp"), ys("    push %r13"), ys("    call y_os_print_int"), ys("    add $8, %rsp"), ys("    mov 0(%r13), %rax"), ys("    push %rax"), ys("    call y_os_print_int"), ys("    add $8, %rsp"), ys("    pop %r13"), ys("    pop %r12"), ys("    pop %rbx"), ys("    mov $1, %rax"), ys("    mov $1, %rdi"), ys("    syscall")));
 }
 
 Yv *arch_nogc_lines(Yv *lines) {

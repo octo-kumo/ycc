@@ -258,3 +258,27 @@ sweep freed a block that was still live, and the next cycle's pass1 read the
 bookkeeping as a header. The bump-tail hazard (free space with no header that
 the owner still bumps into) is a second, separate thing, still open, and the
 clamp above is the shape its fix should take.
+
+## Round 20: the stress trap prints its state
+
+`--gc-stress` builds now replace `y_bad_trap` as well as `y_gc_maybe`
+(`arch_gc_stress_lines`), so the invariant failure prints the walking state
+instead of just dying: chunk base, chunk end, the block pointer `%r12`, the word
+it read as a header, then `%r13` (pass1's map) and its word. On t160_threads
+that reads, in order:
+
+    140465496129536    chunk base   0x7ffff5800000
+    140465500323840    chunk end    0x7ffff5c00000
+    140465496316344    block        base+0x2d9b8, 8-aligned
+    140465500323840    "header"     == the chunk END
+    140465463820528    %r13         the map (descriptor word 2)
+    2594636358205046853 its word     bitmap bits
+
+So the word where a header belongs is exactly the chunk's `end` -- the value a
+thread's bump allocator stores in a tcb's word 1, and the only pointer-shaped
+number a chunk-take writes. `y_gc_flush_run` itself writes a proper free-run
+header (`mov %r15,(%r14)`, r15 = run size), so this is not the free list's own
+bookkeeping: something wrote a heap-block `end` field into the middle of this
+chunk. The chunk is one a thread is bump-allocating in (its `end` is this
+chunk's end), which keeps the tail hypothesis alive as the place to look next,
+with the reporting trap now in place to say which object is hit.
