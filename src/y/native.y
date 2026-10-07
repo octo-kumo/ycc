@@ -5994,9 +5994,13 @@ def arr_direct_label(st: EmitSt, fnode: Node) -> long {
     }
 };
 
-// The per-element call for an array method.
-def gen_arr_call(st: EmitSt, foff: long, arg_regs: [long], direct: long) -> EmitSt {
-    if (direct < 0) {
+// The per-element call for an array method: the body inlined when the literal
+// allows it (arr_can_inline), a direct call when it captures nothing, and the
+// closure record otherwise.
+def gen_arr_call(st: EmitSt, foff: long, arg_regs: [long], direct: long, fnode: Node, inl: bool) -> EmitSt {
+    if (inl) {
+        gen_lambda_inline(st, fnode, arg_regs)
+    } else if (direct < 0) {
         gen_closure_call(st, foff, arg_regs)
     } else {
         arg_regs.foreach((e) => {
@@ -6005,6 +6009,74 @@ def gen_arr_call(st: EmitSt, foff: long, arg_regs: [long], direct: long) -> Emit
         st = emit_insn(st, insn.F_CALL_L, direct, 0, 0, 0, 0, 0, 0);
         emit_insn(st, insn.F_ADD_I_R, 8 * len(arg_regs), insn.R_RSP, 64, 0, 0, 0, 0)
     }
+};
+
+// Whether a literal closure's body can be emitted INSIDE the loop. It must not
+// need anything a separate frame gives it: no captures, no `self`, no nested
+// function literal, and no append to one of its own parameters (those move
+// into an own copy at a function boundary, see bind_own).
+def arr_can_inline(st: EmitSt, fnode: Node) -> bool {
+    if (fnode.k != K.func) {
+        false
+    } else {
+        let f: Func = fnode;
+        if (len(fn_captures(f, st.fns.ix, "")) > 0) { false }
+        else if (name_in(fv_ids(f.body, []), "self")) { false }
+        else if (len(box_names(f)) > 0) { false }
+        else if (param_appended(f.params, app_names(f.body, false, []))) { false }
+        else { true }
+    }
+};
+
+def param_appended(ps: [str], ap: [str]) -> bool {
+    let out = false;
+    ps.foreach((e) => {
+        if (name_in(ap, e)) { out = true; };
+    });
+    out
+};
+
+// `return` inside an inlined body lands on this state's end_label.
+def st_end_label(st: EmitSt, l: long) -> EmitSt {
+    { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid, fuid: st.fuid,
+        loc: st.loc, env: st.env, slots: st.slots, temp: st.temp,
+        self_label: st.self_label, end_label: l, fns: st.fns,
+        bodies: st.bodies, btext: st.btext, blabels: st.blabels }
+};
+
+// Emit a literal closure's body inside the caller's loop, its parameters bound
+// to the values the loop has in arg_regs. This is what makes
+// `a.foreach((x) => ...)` cost what the raw loop costs: no record, no separate
+// body, no call/ret and no frame per element. The body's value ends in %rax,
+// exactly like the call it replaces.
+def gen_lambda_inline(st: EmitSt, fnode: Node, arg_regs: [long]) -> EmitSt {
+    let f: Func = fnode;
+    let save_slots = st.slots;
+    let save_temp = st.temp;
+    let save_end = st.end_label;
+    // The caller's live temporaries (the method's own slots) become block
+    // slots first: the body's statements declare locals -- a compound
+    // assignment's synthetic `let`, for one -- and those are allocated from
+    // st.slots, which would otherwise land on top of them.
+    st = st_slots(st, st.slots + st.temp);
+    st = st_temp(st, 0);
+    let n = len(f.params);
+    if (n > len(arg_regs)) { n = len(arg_regs); };
+    let base = st.slots;
+    st = st_slots(st, st.slots + n);
+    let rl = next_loc(st);
+    st = rl.st;
+    for i in 0..n {
+        let off = (base + 1 + i) * -8;
+        st = emit_insn(st, insn.F_MOV_R_D, arg_regs[i], 64, insn.R_RBP, -1, 1, off, -1);
+        st = env_define(st, f.params[i], "param", off, -1, "", f.ptypes[i]);
+    };
+    st = st_end_label(st, rl.label);
+    st = gen_block(st, f.body);
+    st = emit_label(st, rl.label);
+    st = st_end_label(st, save_end);
+    st = st_slots(st, save_slots);
+    st_temp(st, save_temp)
 };
 
 def gen_closure_call(st: EmitSt, foff: long, arg_regs: [long]) -> EmitSt {
@@ -6225,9 +6297,13 @@ def gen_arr_sort(st: EmitSt, node: Call, sorted: bool) -> EmitSt {
         st = emit_insn(st, insn.F_ADD_I_R, 32, insn.R_RSP, 64, 0, 0, 0, 0);
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, aoff, -1);
     };
-    st = gen(st, args[0]);
-    let adir = arr_direct_label(st, args[0]);
-    st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, foff, -1);
+    let inl = arr_can_inline(st, args[0]);
+    let adir = 0 - 1;
+    if (!inl) {
+        st = gen(st, args[0]);
+        adir = arr_direct_label(st, args[0]);
+        st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, foff, -1);
+    };
     st = emit_insn(st, insn.F_MOV_I_R, 1, insn.R_RAX, 64, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, ioff, -1);
     let loop_i = next_loc(st);
@@ -6268,7 +6344,7 @@ def gen_arr_sort(st: EmitSt, node: Call, sorted: bool) -> EmitSt {
     let regs: [long] = [];
     regs += insn.R_RAX;
     regs += insn.R_RCX;
-    st = gen_arr_call(st, foff, regs, adir);
+    st = gen_arr_call(st, foff, regs, adir, args[0], inl);
     st = emit_insn(st, insn.F_CMP_I_R, 0, insn.R_RAX, 64, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_JLE_L, shift_done.label, 0, 0, 0, 0, 0, 0);
     // a[j+1] = a_j
@@ -6348,9 +6424,13 @@ def gen_arr_iter_method(st: EmitSt, node: Call, key: str, at: Type) -> EmitSt {
         st = st_temp(st, st.temp + 5);
         st = gen(st, dot.obj);
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, aoff, -1);
-        st = gen(st, fnode);
-        let adir = arr_direct_label(st, fnode);
-        st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, foff, -1);
+        let inl = arr_can_inline(st, fnode);
+        let adir = 0 - 1;
+        if (!inl) {
+            st = gen(st, fnode);
+            adir = arr_direct_label(st, fnode);
+            st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, foff, -1);
+        };
         st = gen_arr_new_empty(st);
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, roff, -1);
         st = emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
@@ -6367,7 +6447,7 @@ def gen_arr_iter_method(st: EmitSt, node: Call, key: str, at: Type) -> EmitSt {
         let regs: [long] = [];
         if (nargs >= 1) { regs += insn.R_RAX; };
         if (nargs >= 2) { regs += insn.R_RCX; };
-        st = gen_arr_call(st, foff, regs, adir);
+        st = gen_arr_call(st, foff, regs, adir, fnode, inl);
         if (key == "map") {
             st = gen_arr_push_slot(st, roff, resesz);
         } else {
@@ -6393,9 +6473,13 @@ def gen_arr_iter_method(st: EmitSt, node: Call, key: str, at: Type) -> EmitSt {
         st = st_temp(st, st.temp + 4);
         st = gen(st, dot.obj);
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, aoff, -1);
-        st = gen(st, fnode);
-        let adir = arr_direct_label(st, fnode);
-        st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, foff, -1);
+        let inl = arr_can_inline(st, fnode);
+        let adir = 0 - 1;
+        if (!inl) {
+            st = gen(st, fnode);
+            adir = arr_direct_label(st, fnode);
+            st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, foff, -1);
+        };
         st = emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, ioff, -1);
         let loop = next_loc(st);
@@ -6412,7 +6496,7 @@ def gen_arr_iter_method(st: EmitSt, node: Call, key: str, at: Type) -> EmitSt {
         let regs: [long] = [];
         if (nargs >= 1) { regs += insn.R_RAX; };
         if (nargs >= 2) { regs += insn.R_RCX; };
-        st = gen_arr_call(st, foff, regs, adir);
+        st = gen_arr_call(st, foff, regs, adir, fnode, inl);
         if (key == "foreach") {
             st = emit_insn(st, insn.F_INC_D, insn.R_RBP, -1, 1, ioff, -1, 0, 0);
             st = emit_insn(st, insn.F_JMP_L, loop.label, 0, 0, 0, 0, 0, 0);
@@ -6464,9 +6548,13 @@ def gen_arr_iter_method(st: EmitSt, node: Call, key: str, at: Type) -> EmitSt {
         st = st_temp(st, st.temp + 4);
         st = gen(st, dot.obj);
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, aoff, -1);
-        st = gen(st, fnode);
-        let adir = arr_direct_label(st, fnode);
-        st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, foff, -1);
+        let inl = arr_can_inline(st, fnode);
+        let adir = 0 - 1;
+        if (!inl) {
+            st = gen(st, fnode);
+            adir = arr_direct_label(st, fnode);
+            st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, foff, -1);
+        };
         st = gen(st, args[1]);
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, acoff, -1);
         st = emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
@@ -6482,7 +6570,7 @@ def gen_arr_iter_method(st: EmitSt, node: Call, key: str, at: Type) -> EmitSt {
         let regs: [long] = [];
         regs += insn.R_RAX;
         regs += insn.R_RCX;
-        st = gen_arr_call(st, foff, regs, adir);
+        st = gen_arr_call(st, foff, regs, adir, fnode, inl);
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, acoff, -1);
         st = emit_insn(st, insn.F_INC_D, insn.R_RBP, -1, 1, ioff, -1, 0, 0);
         st = emit_insn(st, insn.F_JMP_L, loop.label, 0, 0, 0, 0, 0, 0);

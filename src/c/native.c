@@ -7369,8 +7369,91 @@ static ylong arr_direct_label(Yv *st, Yv *fnode) {
     return lit_label;
 }
 
-/* The per-element call for an array method. */
-static Yv *gen_arr_call(Yv *st, ylong foff, Yv *arg_regs, ylong direct) {
+/* Whether a literal closure's body can be emitted INSIDE the loop. It must
+ * not need anything a separate frame gives it: no captures, no `self`, no
+ * nested function literal, and no append to one of its own parameters (those
+ * move into an own copy at a function boundary, see bind_own). */
+static int param_appended(Yv *ps, Yv *ap) {
+    ylong i = 0;
+    while (i < yv_len(ps)) {
+        if (name_in(ap, ya_get(ps, i))) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+static int arr_can_inline(Yv *st, Yv *fnode) {
+    if (yv_l(yr_get(fnode, "k")) != K_func) { return 0; }
+    if (yv_len(fn_captures(fnode, yr_get(yr_get(st, "fns"), "ix"), ys(""))) > 0) {
+        return 0;
+    }
+    if (name_in(fv_ids(yr_get(fnode, "body"), yav(0)), ys("self"))) { return 0; }
+    if (yv_len(box_names(fnode)) > 0) { return 0; }
+    if (param_appended(yr_get(fnode, "params"),
+                       app_names(yr_get(fnode, "body"), 0, yav(0)))) {
+        return 0;
+    }
+    return 1;
+}
+
+/* `return` inside an inlined body lands on this state's end_label. */
+static Yv *st_end_label(Yv *st, ylong l) {
+    return yr(15, "ir", yr_get(st, "ir"), "txt", yr_get(st, "txt"), "rodata",
+              yr_get(st, "rodata"), "uid", yr_get(st, "uid"), "fuid",
+              yr_get(st, "fuid"), "loc", yr_get(st, "loc"), "env",
+              yr_get(st, "env"), "slots", yr_get(st, "slots"), "temp",
+              yr_get(st, "temp"), "self_label", yr_get(st, "self_label"),
+              "end_label", yv_long(l), "fns", yr_get(st, "fns"), "bodies",
+              yr_get(st, "bodies"), "btext", yr_get(st, "btext"), "blabels",
+              yr_get(st, "blabels"));
+}
+
+/* Emit a literal closure's body inside the caller's loop, its parameters bound
+ * to the values the loop has in arg_regs. This is what makes
+ * `a.foreach((x) => ...)` cost what the raw loop costs: no record, no separate
+ * body, no call/ret and no frame per element. The body's value ends in %rax,
+ * exactly like the call it replaces. */
+static Yv *gen_lambda_inline(Yv *st, Yv *fnode, Yv *arg_regs) {
+    ylong save_slots = yv_l(yr_get(st, "slots"));
+    ylong save_temp = yv_l(yr_get(st, "temp"));
+    ylong save_end = yv_l(yr_get(st, "end_label"));
+    /* The caller's live temporaries (the method's own slots) become block
+     * slots first: the body's statements declare locals -- a compound
+     * assignment's synthetic `let`, for one -- and those are allocated from
+     * st.slots, which would otherwise land on top of them. */
+    st = st_slots(st, save_slots + save_temp);
+    st = st_temp(st, 0);
+    Yv *params = yr_get(fnode, "params");
+    ylong n = yv_len(params);
+    if (n > yv_len(arg_regs)) { n = yv_len(arg_regs); }
+    ylong base = yv_l(yr_get(st, "slots"));
+    st = st_slots(st, base + n);
+    Yv *rl = next_loc(st);
+    st = yr_get(rl, "st");
+    ylong lbl = yv_l(yr_get(rl, "label"));
+    ylong i = 0;
+    while (i < n) {
+        ylong off = (base + 1 + i) * -8;
+        st = emit_insn(st, F_MOV_R_D, yv_l(ya_get(arg_regs, i)), 64, R_RBP, -1,
+                       1, off, -1);
+        st = env_define(st, ya_get(params, i), ys("param"), off, yv_long(-1),
+                        ys(""), ya_get(yr_get(fnode, "ptypes"), i));
+        i = i + 1;
+    }
+    st = st_end_label(st, lbl);
+    st = gen_block(st, yr_get(fnode, "body"));
+    st = emit_label(st, lbl);
+    st = st_end_label(st, save_end);
+    st = st_slots(st, save_slots);
+    return st_temp(st, save_temp);
+}
+
+/* The per-element call for an array method: the body inlined when the literal
+ * allows it (arr_can_inline), a direct call when it captures nothing, and the
+ * closure record otherwise. */
+static Yv *gen_arr_call(Yv *st, ylong foff, Yv *arg_regs, ylong direct,
+                        Yv *fnode, int inl) {
+    if (inl) { return gen_lambda_inline(st, fnode, arg_regs); }
     if (direct < 0) { return gen_closure_call(st, foff, arg_regs); }
     ylong i = 0;
     while (i < yv_len(arg_regs)) {
@@ -7624,9 +7707,13 @@ static Yv *gen_arr_sort(Yv *st, Yv *node, int sorted) {
         st = emit_insn(st, F_ADD_I_R, 32, R_RSP, 64, 0, 0, 0, 0);
         st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, aoff, -1);
     }
-    st = gen(st, ya_get(args, 0));
-    ylong adir = arr_direct_label(st, ya_get(args, 0));
-    st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, foff, -1);
+    int inl = arr_can_inline(st, ya_get(args, 0));
+    ylong adir = -1;
+    if (!inl) {
+        st = gen(st, ya_get(args, 0));
+        adir = arr_direct_label(st, ya_get(args, 0));
+        st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, foff, -1);
+    }
     st = emit_insn(st, F_MOV_I_R, 1, R_RAX, 64, 0, 0, 0, 0);
     st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, ioff, -1);
     Yv *loop_i = next_loc(st);
@@ -7660,7 +7747,7 @@ static Yv *gen_arr_sort(Yv *st, Yv *node, int sorted) {
     st = emit_insn(st, F_MOV_R_D, R_RDX, 64, R_RBP, -1, 1, ajoff, -1);
     st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, ajoff, -1, R_RAX, 64);
     st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, koff, -1, R_RCX, 64);
-    st = gen_arr_call(st, foff, yav(2, yv_long(R_RAX), yv_long(R_RCX)), adir);
+    st = gen_arr_call(st, foff, yav(2, yv_long(R_RAX), yv_long(R_RCX)), adir, ya_get(args, 0), inl);
     st = emit_insn(st, F_CMP_I_R, 0, R_RAX, 64, 0, 0, 0, 0);
     st = emit_insn(st, F_JLE_L, yv_l(yr_get(shift_done, "label")), 0, 0, 0, 0, 0, 0);
     st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, aoff, -1, R_RAX, 64);
@@ -7744,9 +7831,13 @@ static Yv *gen_arr_iter_method(Yv *st, Yv *node, Yv *key, Yv *at) {
         st = st_temp(st, save + 5);
         st = gen(st, yr_get(dot, "obj"));
         st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, aoff, -1);
-        st = gen(st, fnode);
-        ylong adir = arr_direct_label(st, fnode);
-        st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, foff, -1);
+        int inl = arr_can_inline(st, fnode);
+        ylong adir = -1;
+        if (!inl) {
+            st = gen(st, fnode);
+            adir = arr_direct_label(st, fnode);
+            st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, foff, -1);
+        }
         st = gen_arr_new_empty(st);
         st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, roff, -1);
         st = emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
@@ -7763,7 +7854,7 @@ static Yv *gen_arr_iter_method(Yv *st, Yv *node, Yv *key, Yv *at) {
         Yv *regs = yav(0);
         if (nargs >= 1) { regs = ya_push(regs, yv_long(R_RAX)); }
         if (nargs >= 2) { regs = ya_push(regs, yv_long(R_RCX)); }
-        st = gen_arr_call(st, foff, regs, adir);
+        st = gen_arr_call(st, foff, regs, adir, fnode, inl);
         if (ys_eq_lit(key, "map")) {
             st = gen_arr_push_slot(st, roff, resesz);
         } else {
@@ -7792,9 +7883,13 @@ static Yv *gen_arr_iter_method(Yv *st, Yv *node, Yv *key, Yv *at) {
         st = st_temp(st, save + 4);
         st = gen(st, yr_get(dot, "obj"));
         st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, aoff, -1);
-        st = gen(st, fnode);
-        ylong adir = arr_direct_label(st, fnode);
-        st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, foff, -1);
+        int inl = arr_can_inline(st, fnode);
+        ylong adir = -1;
+        if (!inl) {
+            st = gen(st, fnode);
+            adir = arr_direct_label(st, fnode);
+            st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, foff, -1);
+        }
         st = emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
         st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, ioff, -1);
         Yv *loop = next_loc(st);
@@ -7811,7 +7906,7 @@ static Yv *gen_arr_iter_method(Yv *st, Yv *node, Yv *key, Yv *at) {
         Yv *regs = yav(0);
         if (nargs >= 1) { regs = ya_push(regs, yv_long(R_RAX)); }
         if (nargs >= 2) { regs = ya_push(regs, yv_long(R_RCX)); }
-        st = gen_arr_call(st, foff, regs, adir);
+        st = gen_arr_call(st, foff, regs, adir, fnode, inl);
         if (ys_eq_lit(key, "foreach")) {
             st = emit_insn(st, F_INC_D, R_RBP, -1, 1, ioff, -1, 0, 0);
             st = emit_insn(st, F_JMP_L, yv_l(yr_get(loop, "label")), 0, 0, 0, 0, 0, 0);
@@ -7865,9 +7960,13 @@ static Yv *gen_arr_iter_method(Yv *st, Yv *node, Yv *key, Yv *at) {
         st = st_temp(st, save + 4);
         st = gen(st, yr_get(dot, "obj"));
         st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, aoff, -1);
-        st = gen(st, fnode);
-        ylong adir = arr_direct_label(st, fnode);
-        st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, foff, -1);
+        int inl = arr_can_inline(st, fnode);
+        ylong adir = -1;
+        if (!inl) {
+            st = gen(st, fnode);
+            adir = arr_direct_label(st, fnode);
+            st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, foff, -1);
+        }
         st = gen(st, ya_get(args, 1));
         st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, acoff, -1);
         st = emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
@@ -7880,7 +7979,7 @@ static Yv *gen_arr_iter_method(Yv *st, Yv *node, Yv *key, Yv *at) {
         st = gen_arr_loop_head(st, at, aoff, ioff, yv_l(yr_get(done, "label")));
         st = emit_insn(st, F_MOV_R_R, R_RAX, 64, R_RCX, 64, 0, 0, 0);
         st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, acoff, -1, R_RAX, 64);
-        st = gen_arr_call(st, foff, yav(2, yv_long(R_RAX), yv_long(R_RCX)), adir);
+        st = gen_arr_call(st, foff, yav(2, yv_long(R_RAX), yv_long(R_RCX)), adir, fnode, inl);
         st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, acoff, -1);
         st = emit_insn(st, F_INC_D, R_RBP, -1, 1, ioff, -1, 0, 0);
         st = emit_insn(st, F_JMP_L, yv_l(yr_get(loop, "label")), 0, 0, 0, 0, 0, 0);

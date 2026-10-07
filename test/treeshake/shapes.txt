@@ -12,6 +12,6 @@
 hello.y 381
 minimal.y 440
 forloop.y 3497
-foreach.y 3384
+foreach.y 3333
 dead.y 1551
 alloc_once.y 1312

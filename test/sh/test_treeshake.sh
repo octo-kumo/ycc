@@ -124,6 +124,17 @@ for cc in "$CYCC" "$YREF"; do
     else
         pass "treeshake [$tag] hello.y prints a literal without the string helpers"
     fi
+    # 4c. The inlining guards: a capturing literal and one with a nested
+    #     function literal must still compute the right thing (they take the
+    #     record path).
+    FC="$ROOT/test/treeshake/foreach_capture.y"
+    if compile "$cc" "$FC" "$WORK/fc.$tag" && ( cd "$ROOT" && "$WORK/fc.$tag" ) > "$WORK/fc.$tag.out" 2>&1 \
+        && [ "$(cat "$WORK/fc.$tag.out")" = "6
+9" ]; then
+        pass "treeshake [$tag] capturing and nested literal closures still work"
+    else
+        fail "treeshake [$tag] capturing and nested literal closures" "$(cat "$WORK/fc.$tag.out" 2>/dev/null | tr '\n' ' ')"
+    fi
     PRINTV="$ROOT/test/treeshake/print_var.y"
     if listing "$PRINTV" | grep -q 'y_print_hstr'; then
         pass "treeshake [$tag] print(variable) still links the string helper"
