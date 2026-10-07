@@ -1682,10 +1682,13 @@ inferring:
    its saved rsp is a plain kernel stack, not a canonical frame, so the pops and
    iretq would land anywhere.
 
-Fixed here: (1).  The pick now idles when nothing is runnable, which is what a
-scheduler should do and turns a triple fault into an honest idle -- the harness
-kills the machine on its timeout instead, and the transcript checks (what both
-fixtures assert) are unaffected.  (2) is the real reason a driver never reaches
+TRIED AND REVERTED: making the pick idle when nothing is runnable turned a triple
+fault into an idle, and dropped test/kernel to 43/1/44 -- some cases that
+previously exited now never do, so the machine outlives its expected kexit.  The
+fix is right in principle but it is not this one line: `found < 0` is clearly
+reached in states other than "the last task exited", and which states those are
+has to be measured before the pick changes.  Reverted to keep the suite green,
+with the diagnosis kept.  (2) is the real reason a driver never reaches
 its kexit after starting a task, and it needs a design decision rather than a line
 change: either give the boot context a canonical frame at sched_init so the
 switch can resume it, or have task_start save a resumable kernel context and

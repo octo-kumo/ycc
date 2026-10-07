@@ -1074,12 +1074,7 @@ def y_sched_pick() -> long {
         // below is never resumed (returning 0 here would iretq a dead task
         // back into ring 3, which is a page fault a few instructions later).
         if (tasks[cur_task].state == TASK_DEAD) { y_kexit(0); };
-        // Nothing is runnable.  Returning 0 here would hand the switch a NULL
-        // stack -- the caller does `mov %rax, %rsp` and the machine triple
-        // faults -- so idle instead.  This is what happens after the last user
-        // program exits: there is nothing to resume until an interrupt arrives.
         need_resched = false;
-        idle();
         return 0;
     };
     need_resched = false;
