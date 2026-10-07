@@ -2269,11 +2269,16 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
         let fe = typeof_expr(st, loop.iter);
         st = fe.st;
         let elt: Type = t_unk();
-        if (fe.typ.k == K.tarr) { let arr: TOf = fe.typ; elt = arr.of; }
-        else if (fe.typ.k == K.tarrfix) { let arr: TFix = fe.typ; elt = arr.of; }
-        else if (fe.typ.k == K.tmap) { let mp: TMap = fe.typ; elt = mp.key; }
-        else if (fe.typ.k == K.tstr) { elt = type_node({ k: K.tbyte }); }
-        else if (fe.typ.k == K.tunk) { }
+        // A recursive alias used as a variable's OWN type is a tref (TODO.md
+        // item 1: `type Ids = [Ids]` is legal), so what the iterable IS has to
+        // be read through the alias -- as the emitter's own infer does, and as
+        // every other shape test here already does.
+        let fu = unfold(fe.typ);
+        if (fu.k == K.tarr) { let arr: TOf = fu; elt = arr.of; }
+        else if (fu.k == K.tarrfix) { let arr: TFix = fu; elt = arr.of; }
+        else if (fu.k == K.tmap) { let mp: TMap = fu; elt = mp.key; }
+        else if (fu.k == K.tstr) { elt = type_node({ k: K.tbyte }); }
+        else if (fu.k == K.tunk) { }
         else {
             st = fail(st, "'foreach' needs an array, a map or a string, got " + tstr(fe.typ), loop.line, loop.col);
         };

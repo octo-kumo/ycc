@@ -2949,19 +2949,24 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
         Yv *fe = typeof_expr(st, yr_get(node, "iter"));
         st = yr_get(fe, "st");
         Yv *elt = t_unk();
-        if (yv_l(yr_get(yr_get(fe, "typ"), "k")) == K_tarr) {
-            elt = yr_get(yr_get(fe, "typ"), "of");
+        /* A recursive alias used as a variable's OWN type is a tref (TODO.md
+         * item 1: `type Ids = [Ids]` is legal), so what the iterable IS has to
+         * be read through the alias -- as the emitter's own infer does, and as
+         * every other shape test here already does. */
+        Yv *fu = unfold(yr_get(fe, "typ"));
+        if (yv_l(yr_get(fu, "k")) == K_tarr) {
+            elt = yr_get(fu, "of");
             ;
-        } else if (yv_l(yr_get(yr_get(fe, "typ"), "k")) == K_tarrfix) {
-            elt = yr_get(yr_get(fe, "typ"), "of");
+        } else if (yv_l(yr_get(fu, "k")) == K_tarrfix) {
+            elt = yr_get(fu, "of");
             ;
-        } else if (yv_l(yr_get(yr_get(fe, "typ"), "k")) == K_tmap) {
-            elt = yr_get(yr_get(fe, "typ"), "key");
+        } else if (yv_l(yr_get(fu, "k")) == K_tmap) {
+            elt = yr_get(fu, "key");
             ;
-        } else if (yv_l(yr_get(yr_get(fe, "typ"), "k")) == K_tstr) {
+        } else if (yv_l(yr_get(fu, "k")) == K_tstr) {
             elt = yr(1, "k", yv_long(K_tbyte));
             ;
-        } else if (yv_l(yr_get(yr_get(fe, "typ"), "k")) == K_tunk) {
+        } else if (yv_l(yr_get(fu, "k")) == K_tunk) {
             ;
         } else {
             st = fail(st,
