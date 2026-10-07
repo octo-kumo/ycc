@@ -304,3 +304,28 @@ The plan, which is the one asked for:
 This is strictly better than the file-level bisect: every step is a commit that
 compiles on its own, so the interdependency that defeated the hunk-level bisect
 does not arise.
+
+### Round 41: the culprit is one of FOUR emitter commits, and files cannot be swapped alone
+
+The upstream commits that touch src/c/native.c between the pre-merge base and
+master's tip are exactly four, and master's tip is an ancestor of the tag (the
+merge-base IS 9078372), so nothing else is in play:
+
+    ee66a02  pointer arithmetic
+    51c36a5  whole-heap mark-sweep collector (+ stop linking it where unused)
+    64f7556  call a literal closure directly when it captures nothing
+    9078372  --gc, so a program that cannot grow does not link the collector
+
+Tried: substitute just the emitter files from 64f7556 into the green base.  It
+does not build -- `error: assemble: undefined label 'y_gc_stack_top'` -- because
+that commit's emitter expects the arch prelude's y_gc_* cells, which arrive with
+51c36a5.  The emitter and the arch prelude move TOGETHER, so the one-file
+substitution that worked at FILE level does not work at COMMIT level here.
+
+Next, and it is the reliable form: cherry-pick those four commits onto the green
+base one at a time -- each brings its whole file set, so the coupling is
+satisfied -- resolving conflicts in favour of this branch's kernel work, and
+running test/kernel after each.  The first that turns the kernel image red names
+the culprit.  Note that master's tree cannot simply be taken wholesale: `--kernel`
+is this branch's, so master has no such flag at all (a wholesale checkout of
+src/y or src/c answers "unknown flag '--kernel'").
