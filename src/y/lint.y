@@ -154,8 +154,7 @@ def lint_unit(ast: Block, ast3: Block, ofile: [long], fmods: [str], wlevel: long
 // (indexed by the statement's line) says which lines those are. Anything else
 // is a statement with side effects the reader cannot see running twice.
 def lint_meta_top(st: LintSt, stmts: [Node], ogen: [bool]) -> void {
-    stmts.foreach((e) => {
-        let s = e;
+    stmts.foreach((s) => {
         if (s.k != K.decl && s.k != K.void && !meta_gen(s, ogen)) {
             lint_warn_start(st, "a top-level statement runs once in the meta generator and once in the program, so with a meta block in the file it must be a declaration (a def, type, const or let) -- keep a top-level let initializer pure", s);
         };
@@ -3395,8 +3394,7 @@ def lint_opassign(st: LintSt, node: OpAssign, used: bool) -> void {
 def lint_lit(st: LintSt, node: RecLit, what: str, kind: str) -> void {
     let keys: [str] = node.keys;
     lint_list(st, node.vals);
-    keys.foreach((e, i) => {
-        let key = e;
+    keys.foreach((key, i) => {
         if (key != "..." && lint_seen(keys, i)) {
             lint_warn_at(st, "duplicate " + what + " '" + key + "' in a " + kind + " literal; the last one wins", node);
         };
@@ -3785,8 +3783,7 @@ def lint_tk_union(t: LintTy, ty: TList, rec: bool, parent: long) -> str {
 
 def lint_tk_members(t: LintTy, u: TList, rec: bool, me: long, parts: [str]) -> void {
     let ts = u.ts;
-    ts.foreach((e) => {
-        let m = e;
+    ts.foreach((m) => {
         let ai = lint_union_alias(t, m);
         if (ai >= 0) {
             let union: TList = t.atyps[ai];
@@ -3837,8 +3834,7 @@ def lint_occ_key(t: LintTy, i: long, key: str) -> void {
 
 def lint_sort_uniq(xs: [str]) -> [str] {
     let out: [str] = [];
-    xs.foreach((e) => {
-        let x = e;
+    xs.foreach((x) => {
         let j = len(out);
         out += x;
         while (j > 0 && x < out[j - 1]) {
@@ -3938,8 +3934,7 @@ def lint_rep(occs: [LintOcc], i: long) -> bool {
 def lint_sorted(ws: [Diag]) -> [Diag] {
     let all = lint_msort(ws);
     let out: [Diag] = [];
-    all.foreach((e) => {
-        let w = e;
+    all.foreach((w) => {
         let n = len(out);
         if (n == 0 || lint_before(out[n - 1], w)) {
             out += w;

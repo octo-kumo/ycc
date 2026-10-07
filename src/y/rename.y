@@ -281,8 +281,7 @@ def rn_note_defaults(st: RnSt, uniq: str, func: Func) -> RnSt {
 def rn_find_defaults(st: RnSt, name: str) -> [Node] {
     let out: [Node] = [];
     let ds = st.dfl;
-    ds.foreach((e) => {
-        let d = e;
+    ds.foreach((d) => {
         if (d.name == name) { out = d.vals; };
     });
     out
@@ -598,8 +597,7 @@ def rn_type_fields(st: RnSt, fs: [Field], depth: long) -> [Field] {
 
 def rn_union_flat(ts: [Type]) -> [Type] {
     let out: [Type] = [];
-    ts.foreach((e) => {
-        let t = e;
+    ts.foreach((t) => {
         let tk: long = t.k;
         if (tk == K.tunion) {
             let list: TList = t;
@@ -614,8 +612,7 @@ def rn_union_flat(ts: [Type]) -> [Type] {
 
 def rn_drop_typedefs(stmts: [Node], st: RnSt) -> [Node] {
     let out: [Node] = [];
-    stmts.foreach((e) => {
-        let s = e;
+    stmts.foreach((s) => {
         let sk: long = s.k;
         if (sk == K.typedef) {
             // Dropped -- unless its type names something undefined.

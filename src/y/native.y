@@ -472,8 +472,7 @@ def seen_any(seen: [long], lo: long, hi: long, level: long) -> bool {
 def norm_path(p: str) -> str {
     let parts = split(p, "/");
     let out: [str] = [];
-    parts.foreach((e) => {
-        let seg = e;
+    parts.foreach((seg) => {
         let n = len(out);
         if (seg == ".") {
         } else if (seg == ".." && n > 0 && out[n - 1] != "..") {
@@ -1328,8 +1327,7 @@ def ir_refs_item(ir: [long], at: long, out: [str]) -> [str] {
     let f = ir[at];
     let kinds = insn.ir_form(f).kinds;
     let wp = at + 1;
-    kinds.foreach((e) => {
-        let k = e;
+    kinds.foreach((k) => {
         if (k == insn.O_LBL) {
             out = ir_refs_push(out, lname(ir[wp]));
         } else if (k == insn.O_DIFF) {
@@ -1368,8 +1366,7 @@ def cell_reads(ir: [long], out: [str]) -> [str] {
             let form = insn.ir_form(f);
             let kinds = form.kinds;
             let wp = at + 1;
-            kinds.foreach((e, i) => {
-                let k = e;
+            kinds.foreach((k, i) => {
                 if (k == insn.O_MEM || k == insn.O_MEM0) {
                     let last = i == len(kinds) - 1;
                     if (!(last && form.mn == "mov")) {
@@ -1511,8 +1508,7 @@ def ir_relabel(ir: [long], m: [AsmLabel], dup_new: [str]) -> [long] {
         if (f < insn.IR_LABEL) {
             let kinds = insn.ir_form(f).kinds;
             let wp = at + 1;
-            kinds.foreach((e) => {
-                let k = e;
+            kinds.foreach((k) => {
                 if (k == insn.O_LBL) {
                     ir[wp] = ir_relabel_one(ir[wp], m, dup_new);
                 } else if (k == insn.O_DIFF) {
@@ -1681,8 +1677,7 @@ def fntab_of(syms: [Sym], ids: [long]) -> FnTab {
 // `ids` for a Sym list: intern each label, in order.
 def fntab_ids(syms: [Sym]) -> [long] {
     let ids: [long] = [];
-    syms.foreach((el) => {
-        let e = el;
+    syms.foreach((e) => {
         ids += lbl_new(e.label);
     });
     ids
@@ -2929,8 +2924,7 @@ def infer_go(st: EmitSt, node: Node) -> Type {
                     if (mf.k == K.trec) {
                         let rec: TRec = mf;
                         let msfs: [Field] = rec.fields;
-                        msfs.foreach((e) => {
-                            let msf = e;
+                        msfs.foreach((msf) => {
                             mfields = types.field_merge(mfields, msf.name, msf.typ);
                         });
                     }
@@ -2960,8 +2954,7 @@ def infer_go(st: EmitSt, node: Node) -> Type {
             let ftyp: Type = normtype({ k: K.tunk });
             let rec: TRec = dt;
             let dfs: [Field] = rec.fields;
-            dfs.foreach((e) => {
-                let df = e;
+            dfs.foreach((df) => {
                 // NOTE: :str binding (see teq note in types.y): df flows
                 // from bare values (tunk), so a direct `==` would compare
                 // string POINTERS; annotated let forces content compare.
@@ -3202,8 +3195,7 @@ def infer_block(st: EmitSt, node: Block) -> Type {
         // (print then reads a str option as a raw number, and a match arm's
         // `v.f` as one). Only these: every other name is in scope after its
         // own statement, which gen has run by the time anything asks.
-        stmts.foreach((e) => {
-            let s = e;
+        stmts.foreach((s) => {
             if (s.k == K.decl) {
                 let d: Decl = s;
                 if (d.kind == "let" && env_find(st, d.name).kind == "none") {
@@ -3706,8 +3698,7 @@ def fv_bind_params(ps: [str], out: [str]) -> [str] {
 
 def fn_names_of(fns: [Sym]) -> [str] {
     let out: [str] = [];
-    fns.foreach((el) => {
-        let e = el;
+    fns.foreach((e) => {
         out += e.name;
     });
     out
@@ -4374,16 +4365,14 @@ def gen_discard(st: EmitSt, node: Node) -> EmitSt {
 // only when it has a str global at all.
 def app_cells(gl: [Sym], stmts: [Node]) -> [Sym] {
     let anystr = false;
-    gl.foreach((e) => {
-        let ge = e;
+    gl.foreach((ge) => {
         if (ge.typ.k == K.tstr) { anystr = true; }
     });
     if (anystr) {
         let names = app_names({ k: K.block, stmts: stmts, line: 1, col: 1 }, true, []);
         let out: [Sym] = [];
         out += gl;
-        gl.foreach((e) => {
-            let g2 = e;
+        gl.foreach((g2) => {
             if (g2.typ.k == K.tstr && name_in(names, g2.name)) {
                 out += { name: g2.name + "#o", label: "ygo_" + g2.label[3:], typ: normtype({ k: K.tnone }) };
             }
@@ -8089,8 +8078,7 @@ def gen_reclit(st: EmitSt, node: RecLit, want: Type) -> EmitSt {
             if (srec.k == K.trec) {
                 let spread: TRec = srec;
                 let sfs: [Field] = spread.fields;
-                sfs.foreach((e) => {
-                    let sf = e;
+                sfs.foreach((sf) => {
                     if (mfield_idx(names, sf.name) < 0) {
                         names += sf.name;
                     }
@@ -8142,8 +8130,7 @@ def gen_reclit(st: EmitSt, node: RecLit, want: Type) -> EmitSt {
             if (srec2.k == K.trec) {
                 let spread: TRec = srec2;
                 let sfs2: [Field] = spread.fields;
-                sfs2.foreach((e) => {
-                    let sf2 = e;
+                sfs2.foreach((sf2) => {
                     let mi2 = mfield_idx(slots, sf2.name);
                     // %rdx is the source's record VALUE (slot 0 at +0);
                     // %rcx is the fresh record's ALLOC base (slots at +8).
@@ -11171,8 +11158,7 @@ def find_dup(stmts: [Node], origin: Origin) -> [Diag] {
     let ppos: [long] = [];
     let pnext: [long] = [];
     let errs: [Diag] = [];
-    names.foreach((e, j) => {
-        let nj = e;
+    names.foreach((nj, j) => {
         let fj = fids[j];
         let slot = -1;
         let g = asm.labmap_get(ix, nj);
@@ -11360,8 +11346,7 @@ def capturing_defs(defs: [FnDef], gnames: [str]) -> [str] {
 def fix_fn_types(st: EmitSt, hdefs: [FnDef], only: [str]) -> [Sym] {
     let out: [Sym] = [];
     let ftab = st.fns.syms;
-    hdefs.foreach((e, fx) => {
-        let d = e;
+    hdefs.foreach((d, fx) => {
         let fe0 = ftab[fx];
         let redo = ret_omitted(d.func);
         if (redo && len(only) > 0) {
@@ -11532,8 +11517,7 @@ def std_units(names: [str], pack: str) -> [Unit] {
             let nm: str = el;
             let ext: [Sym] = [];
             if (nm == "exec") {
-                out.foreach((e) => {
-                    let u = e;
+                out.foreach((u) => {
                     if (u.name == "prelude") { ext += u.exports; }
                 });
             }
@@ -11568,8 +11552,7 @@ def std_compile(name: str, ext: [Sym]) -> Unit {
     let r = compile_unit(ast, noimports, { files: [path], nuser: 1, file: nolines, line: nolines, mods: [""] }, true, 0, name, std_unit_base(name), xt, []);
     if (!r.ok) {
         let errs = r.errors;
-        errs.foreach((el) => {
-            let e = el;
+        errs.foreach((e) => {
             puts("ycc: internal error: " + path + ":" + tostring(e.line) + ":" + tostring(e.col) + ": " + e.msg + "\n");
         });
         exit(1);
@@ -11851,8 +11834,7 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
         pr = phase_end(times, "emit_start", pt, ph);
         times = pr.times; pt = pr.t; ph = pr.h;
         let glabels: [str] = [];
-        gl.foreach((e) => {
-            let ge = e;
+        gl.foreach((ge) => {
             glabels += ge.label;
         });
         // Each body's label and the labels it references: what linking
@@ -11888,8 +11870,7 @@ def pkg_base(base: long) -> bool {
 def pkg_exports(xs: [Sym], gl: [Sym]) -> [Sym] {
     let all: [Sym] = [];
     all += xs;
-    gl.foreach((e) => {
-        let ge = e;
+    gl.foreach((ge) => {
         let gn: str = ge.name;
         let xn = "";
         if (gn[len(gn) - 2:] == "#o") {
@@ -11901,8 +11882,7 @@ def pkg_exports(xs: [Sym], gl: [Sym]) -> [Sym] {
         if (len(xn) > 0) { all += { name: xn, label: ge.label, typ: ge.typ }; }
     });
     let out: [Sym] = [];
-    all.foreach((el, j) => {
-        let e = el;
+    all.foreach((e, j) => {
         let later = false;
         let m = j + 1;
         while (!later && m < len(all)) {
@@ -11926,8 +11906,7 @@ def unit_dfl(stmts: [Node], origin: Origin) -> [DflCode] {
         // (not an imported module's: see export_name)
         if (len(nm) > 0 && index_of(nm, ".") < 0) {
             let keep: [DflCode] = [];
-            out.foreach((e) => {
-                let d = e;
+            out.foreach((d) => {
                 if (d.name != nm) { keep += d; }
             });
             let decl: Decl = s;
@@ -11946,8 +11925,7 @@ def dfl_codes(func: Func) -> [str] {
     let dv: [Node] = func.defs;
     let out: [str] = [];
     let any = false;
-    dv.foreach((e) => {
-        let d = e;
+    dv.foreach((d) => {
         let dk: long = d.k;
         if (dk != K.void) { any = true; }
         out += lit_code(d);
@@ -12426,8 +12404,7 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
 // text they replace (ir_render_all), the text parts as they are.
 def link_text(parts: [LinkPart]) -> str {
     let pieces: [str] = [];
-    parts.foreach((e) => {
-        let p = e;
+    parts.foreach((p) => {
         if (len(p.ir) > 0) {
             // the render has no newline of its own, so the line is closed here
             pieces += insn.ir_render_all(p.ir, p.txt, p.loc, p.fno);
@@ -12941,8 +12918,7 @@ def std_pack(units: [Unit]) -> str {
     let out: [str] = [];
     out += pack_version();
     out = pack_put(out, tostring(len(units)));
-    units.foreach((e) => {
-        let u = e;
+    units.foreach((u) => {
         out = pack_put(out, u.name);
         out = pack_put(out, pack_unit_fields(u));
     });
@@ -13059,8 +13035,7 @@ def std_unpack(pack: str, names: [str]) -> [Unit] {
         };
         names.foreach((el) => {
             let want: str = el;
-            got.foreach((e) => {
-                let u = e;
+            got.foreach((u) => {
                 if (u.name == want) { out += u; }
             });
         });

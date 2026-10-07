@@ -410,8 +410,7 @@ def pk_manifest(dir: str) -> PkMan {
     let bins: [PkBin] = [];
     let deps: [PkDep] = [];
     let m = { file: file, name: "", lib: "", roots: pk_nostrs(), bins: bins, deps: deps };
-    ents.foreach((el) => {
-        let e = el;
+    ents.foreach((e) => {
         let at = file + ":" + tostring(e.line) + ": ";
         let tab = e.tab;
         if (e.n >= 0) {
@@ -504,8 +503,7 @@ def pk_src(d: PkDep, fdir: str) -> str {
 
 def pk_dep_names(ds: [PkDep]) -> [str] {
     let out: [str] = [];
-    ds.foreach((e) => {
-        let d = e;
+    ds.foreach((d) => {
         out += d.name;
     });
     out
@@ -689,8 +687,7 @@ def pk_lock_read(dir: str) -> [PkLock] {
     let txt = fs.read_file(file);
     if (txt != none) {
         let ents = pk_toml(unwrap(txt), file);
-        ents.foreach((el) => {
-            let e = el;
+        ents.foreach((e) => {
             if (e.tab == "package" && e.n >= 0) {
                 while (len(out) <= e.n) {
                     out += { name: "", git: "", rev: "", commit: "" };
@@ -717,8 +714,7 @@ def pk_lock_read(dir: str) -> [PkLock] {
 // match its git and rev too).
 def pk_lock_find(locks: [PkLock], d: PkDep) -> str {
     let out = "";
-    locks.foreach((e) => {
-        let lk = e;
+    locks.foreach((lk) => {
         if (lk.name == d.name && lk.git == d.git && lk.rev == d.rev) { out = lk.commit; }
     });
     out
@@ -731,8 +727,7 @@ def pk_lock_write(dir: str, nodes: [PkNode]) -> void {
     out += "# y.lock -- written by `ycc build`: the commit each git dependency\n";
     out += "# resolved to. Delete an entry to move it to its rev again.\n";
     let any = false;
-    nodes.foreach((e) => {
-        let p = e;
+    nodes.foreach((p) => {
         if (len(p.git) > 0 && len(p.commit) > 0) {
             out += "\n[[package]]\nname = " + pk_tq(p.name) + "\ngit = " + pk_tq(p.git) + "\nrev = " + pk_tq(p.rev) + "\ncommit = " + pk_tq(p.commit) + "\n";
             any = true;
@@ -755,8 +750,7 @@ def pk_vendor(dir: str) -> void {
     let g = pk_load(dir);
     let ps = g.pkgs;
     let n = 0;
-    ps.foreach((e) => {
-        let p = e;
+    ps.foreach((p) => {
         if (len(p.git) > 0) {
             let vd = pk_join(dir, "vendor/" + p.name);
             if (p.dir != vd) {

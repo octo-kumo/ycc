@@ -1212,8 +1212,7 @@ def sg_fail(msg: str, line: long, col: long) -> void {
 // question and the header question separately.
 def sg_in_body() -> bool {
     let hit = false;
-    sg_bkind.foreach((e) => {
-        let k = e;
+    sg_bkind.foreach((k) => {
         if (k == 1 || k == 2) { hit = true };
     });
     hit
@@ -2567,8 +2566,7 @@ def mg_probe(src: str, dir: str) -> bool {
 def mg_norm_path(p: str) -> str {
     let parts = split(p, "/");
     let out: [str] = [];
-    parts.foreach((e) => {
-        let seg = e;
+    parts.foreach((seg) => {
         if (seg != ".") { out += seg; };
     });
     join(out, "/")
@@ -2611,8 +2609,7 @@ def mg_emit(segs: [str], sego: [long], segp: [bool], fid: long, nl: [str],
     let cur = "";
     let curo = 0;
     let cgen = true;
-    segs.foreach((el, s) => {
-        let text = el;
+    segs.foreach((text, s) => {
         let o = sego[s];
         let p = false;
         if (s < len(segp)) { p = segp[s] };

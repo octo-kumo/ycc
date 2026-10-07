@@ -42,8 +42,7 @@ embed WSELFTEST_ASM from "./arch/wselftest.s";
 def arch_asm_lines(text: str) -> [str] {
     let out: [str] = [];
     let all = text.split("\n");
-    all.foreach((e) => {
-        let l = e;
+    all.foreach((l) => {
         if (len(l) > 0 && l[0] != 35) { out += l; };
     });
     out

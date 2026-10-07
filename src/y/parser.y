@@ -1695,13 +1695,12 @@ def parse_type_plain(toks: [Tok], apos: long, anode: Type) -> PType {
     }
 };
 
-def parse_type_tparams(toks: [Tok], apos: long, tlist: [Type]) -> PType {
+def parse_type_tparams(toks: [Tok], apos: long, ts0: [Type]) -> PType {
     // Reached only from parse_type_params (a parenthesized list), which
     // passes the TS LIST itself (not a tparams record), so this body
     // contains NO record field reads at all — nothing to merge, nothing to
     // mis-resolve.
     // `->` after a param list: (A, B) -> R. Else bare grouping: (T) = T.
-    let ts0 = tlist;
     if (is_op(toks, apos, "->")) {
         let rhs = parse_type_node(toks, apos + 1);
         tres({ k: K.tfunc, args: ts0, ret: rhs.node }, rhs.pos)
@@ -2811,8 +2810,7 @@ def parse_value_pattern(toks: [Tok], node: Node, pos: long, tmp: str, ln: long, 
         let vals: [Node] = rec.vals;
         let ty: Type = { k: K.tpat, names: keys };
         let test: Node = { k: K.rectest, e: subj, typ: ty, line: ln, col: cl };
-        keys.foreach((el, i) => {
-            let key = el;
+        keys.foreach((key, i) => {
             if (key == "...") {
                 test = { k: K.err, msg: "'...' is not allowed in a match pattern", line: ln, col: cl };
             } else {

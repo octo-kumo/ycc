@@ -294,13 +294,11 @@ def fmt_kb(b: long) -> str {
     tostring(b / 1024)
 };
 
-def print_phase_rows(times: [Timing]) -> void {
+def print_phase_rows(all: [Timing]) -> void {
     // NOTE: vestigial alias — `times[i]` parses and typechecks in both
     // copies today; the binding stays only because the compiled compiler
     // is byte-gated against refs/ycc.ref.
-    let all = times;
-    all.foreach((el) => {
-        let e = el;
+    all.foreach((e) => {
         eputs("  " + padr(e.name, 12) + padl(fmt_ms(e.us), 12) + " ms" + padl(fmt_kb(e.heap), 12) + " KB\n");
     });
     0
@@ -313,19 +311,17 @@ def print_counter(name: str, v: long) -> void {
 
 // ── main ─────────────────────────────────────────────────────────────────
 
-def print_native_errors(errors: [Diag], origin: Origin, bare: bool) -> void {
+def print_native_errors(all: [Diag], origin: Origin, bare: bool) -> void {
     // NOTE: vestigial alias (see print_phase_rows) — `errors[i]` works.
     // Positions are lines of the spliced program (std chunks and imported
     // modules included); the origin map turns each back into the file it
     // came from: `line:col` in the program's own file (unless not `bare`:
     // `ycc build` names every file), `path:line:col` in any other.
-    let all = errors;
     // One error per position: a malformed token can trip two checks (the
     // construct it broke, then the statement it ended), and the second
     // message only repeats the first.
     let seen: [str] = [];
-    all.foreach((el) => {
-        let e = el;
+    all.foreach((e) => {
         let at = nativelib.origin_at(origin, e.line, bare) + ":" + tostring(e.col);
         let dup = false;
         foreach (s in seen) {
@@ -348,8 +344,7 @@ def print_native_errors(errors: [Diag], origin: Origin, bare: bool) -> void {
 // which child finished first.
 def warning_text(warnings: [Diag], origin: Origin, bare: bool) -> str {
     let out = "";
-    warnings.foreach((e) => {
-        let w = e;
+    warnings.foreach((w) => {
         out = out + nativelib.origin_at(origin, w.line, bare) + ":" + tostring(w.col) + ": warning: " + w.msg + "\n";
     });
     out
@@ -466,8 +461,7 @@ def build_key(cid: str, name: str, base: long, allow_exec: bool, nr: Resolved, u
     pkg.pk_hash_str(h, join(nr.std, ","));
     let ps = nr.pkgs;
     pkg.pk_hash_str(h, join(ps, ","));
-    units.foreach((e) => {
-        let u = e;
+    units.foreach((u) => {
         if (pkg.pk_has(ps, u.name)) { pkg.pk_hash_str(h, nativelib.unit_iface(u)); }
     });
     pkg.pk_hash_text(h)
@@ -873,8 +867,7 @@ def build_project(dir: str, debug: bool, nowarn: bool, wlevel: long, allow_exec:
 def dump_source(src: str, origin: Origin) -> void {
     let lines = split(src, "\n");
     let prev = "\x01none";
-    lines.foreach((e, i) => {
-        let l = e;
+    lines.foreach((l, i) => {
         let at = nativelib.origin_at(origin, i + 1, false);
         if (at == prev) {
             puts(l + "\n");
@@ -989,8 +982,7 @@ def main(cmdline: [str]) -> long {
             // emit_program reports its own sub-phases (strip_ns, rename,
             // typecheck, lint, emit_fns, emit_start, asm_text); splice them in.
             let sub = r.times;
-            sub.foreach((e) => {
-            let se = e;
+            sub.foreach((se) => {
             dt += se;
             });
             if (r.ok && !pargs.nowarn) {
@@ -1066,8 +1058,7 @@ def main(cmdline: [str]) -> long {
             // ycc_assemble reports its own sub-phases: a:split,
             // a:encode, a:link, then l:labmap, l:patch, l:elf.
             let asub = ab.times;
-            asub.foreach((e) => {
-            let ae = e;
+            asub.foreach((ae) => {
             dt += ae;
             });
             let abok = ab.ok;

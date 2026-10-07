@@ -718,8 +718,7 @@ def asm_assemble(parts: [LinkPart], debug: bool) -> AsmOutI {
               { name: "a:relax", us: tr1 - tr0, heap: hr1 - hr0 },
               { name: "a:link", us: t3 - tr1, heap: h3 - hr1 } ];
         let lsub = lk.times;
-        lsub.foreach((e) => {
-            let le = e;
+        lsub.foreach((le) => {
             tl += le;
         });
         { ok: lk.ok, bytes: lk.bytes, error: lk.error, items: len(items),
@@ -1411,8 +1410,7 @@ def relax_round(items: [AsmItem], labels: [AsmLabel], rlmap: [AsmLabel], lens: [
     // one round that way, against 6,673 with the frozen layout, and 140 short
     // branches at the end instead of 8,047).
     let grew = false;
-    brs.foreach((e) => {
-        let i = e;
+    brs.foreach((i) => {
         // len 2 is the short form; a grower is already long.
         if (lens[i] == 2) {
             let it = items[i];
@@ -1649,8 +1647,7 @@ def pe_image(code: [byte], ro: [byte], entry_off: long, bss_len: long, syms: [El
     let un = pe_unwind(items, labels);
     let dsecs2: [PeSecHdr] = [];
     let ddata: [[byte]] = [];
-    dsecs.foreach((e) => {
-        let ds = e;
+    dsecs.foreach((ds) => {
         dsecs2 += pe.pe_sec(ds.name, len(ds.data), 0, 0, 1073741888);
         ddata += ds.data;
     });
@@ -1999,8 +1996,7 @@ def pe_prologue_push(reg: long, done: long, fp: bool, fp_off: long, alloc: long,
 def pe_unwind_bytes(frames: [PeFrame], xbase: long) -> PeUnwind {
     let pdata: [byte] = [];
     let xdata: [byte] = [];
-    frames.foreach((e) => {
-        let f = e;
+    frames.foreach((f) => {
         pdata = push_le32(pdata, f.start);
         pdata = push_le32(pdata, f.end);
         pdata = push_le32(pdata, xbase + len(xdata));
@@ -2100,8 +2096,7 @@ def pe_unwind_info(xdata: [byte], f: PeFrame) -> [byte] {
 def pe_coff_syms(syms: [ElfSym]) -> [byte] {
     let out: [byte] = [];
     let strtab: [byte] = [];
-    syms.foreach((e) => {
-        let s = e;
+    syms.foreach((s) => {
         out = pe_coff_sym(out, s.name, s.off, pe_coff_secnum(s.sec));
     });
     let tail: [byte] = [];

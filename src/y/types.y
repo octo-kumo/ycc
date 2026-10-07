@@ -325,8 +325,7 @@ def union_parts(t: Type) -> [Type] {
 def union_parts_go(out: [Type], t: Type, depth: long) -> void {
     let union: TList = t;
     let ms: [Type] = union.ts;
-    ms.foreach((e) => {
-        let m = e;
+    ms.foreach((m) => {
         let u = unfold(m);
         if (u.k == K.tunion && depth < 16) { union_parts_go(out, u, depth + 1); } else { out += m; };
     });
@@ -945,8 +944,7 @@ def dotassign_union(st: TcSt, t: Type, node: DotAssign) -> TcRes {
 def union_ok(t: Type) -> bool {
     let ms = members(t);
     let ok = true;
-    ms.foreach((e) => {
-        let m = e;
+    ms.foreach((m) => {
         let mk: long = m.k;
         if (mk != K.trec && !is_boxable_type(m)) { ok = false; }
     });
@@ -2327,8 +2325,7 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
                     if (r.typ.k == K.trec) {
                         let record: TRec = r.typ;
                         let sfs: [Field] = record.fields;
-                        sfs.foreach((e) => {
-                            let sf = e;
+                        sfs.foreach((sf) => {
                             fields = field_merge(fields, sf.name, sf.typ);
                         });
                     } else if (r.typ.k == K.tunk || r.typ.k == K.tnone || r.typ.k == K.tname) {
@@ -5035,8 +5032,7 @@ def typeof_def(st: TcSt, name: str, func: Func, line: long, col: long, nline: lo
                 let b2 = typeof_block_want(st, body, br);
                 st = b2.st;
                 st = expect_type(st, b2.typ, br, "'" + disp(name) + "' body", line, col);
-                rets2.foreach((e) => {
-                    let rn2 = e;
+                rets2.foreach((rn2) => {
                     if (!tcompat(rn2.typ, br)) {
                         st = fail(st, "'return': expected " + tstr(br) + ", got " + tstr(rn2.typ) + " (the return type is inferred from " + rsrc + ret_inferred_hint(rn2.typ), rn2.line, rn2.col);
                     }
@@ -5122,8 +5118,7 @@ def check_program(ast: Block, ext: [Sym]) -> [Diag] {
     // ... syscall), so these two bindings are never consulted by a call; they
     // exist only so `print`/`syscall` read as defined when they appear as
     // values (e.g. `let p = print;`).
-    ext.foreach((e) => {
-        let xe = e;
+    ext.foreach((xe) => {
         // a package's global (its cell label, native.y arch_global_label)
         // is read-only to its importers
         let xk = "func";
