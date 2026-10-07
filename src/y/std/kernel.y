@@ -61,6 +61,7 @@ def init() -> void {
     // own allocation cannot land in the middle of the decision.
     y_kernel_cli();
     phys_init();
+    gdt_init();
     y_serial_init();
     y_pic_remap();
     y_kernel_irq_init();
@@ -611,4 +612,115 @@ def y_kernel_trap(vec: long, err: long) -> void {
     if (vec == 13) { msg = msg + " (general protection)"; };
     puts(msg + "\n");
     y_kernel_halt();
+};
+
+// ── the CPU's descriptor tables ─────────────────────────────────────────
+// The boot GDT (arch_x64.y's blob) has three entries, all ring 0.  A kernel
+// that will run user code needs six: user code and user data, and a TSS for
+// the ring-0 stack a ring-3 interrupt lands on.  Building them is ordinary
+// arithmetic and two aligned writes per entry -- a descriptor is a data
+// structure, not an instruction -- and the only machine step is the `lgdt`
+// and `ltr` pair that loads them (arch/kernel.s).
+//
+// The selectors matter to SYSCALL/SYSRET, which derive them from STAR:
+// SYSCALL gets CS = STAR[47:32] and SS = that + 8, SYSRET gets SS =
+// STAR[63:48] + 8 and CS = that + 16.  With kernel code 0x08 and user data
+// 0x1B / user code 0x23, STAR is 0x0013000000080000 and no selector is
+// written down twice.
+const SEL_KCODE = 8;
+const SEL_KDATA = 16;
+const SEL_UDATA = 24;
+const SEL_UCODE = 32;
+const SEL_TSS = 40;
+
+// A `y_`-prefixed def is emitted under its bare label and is NOT reachable as
+// `kernel.name` from a program: these two-line wrappers are the public surface.
+def tr_get() -> long { y_tr_get() };
+def lgdt(addr: long) -> void { y_lgdt(addr); };
+def ltr(sel: long) -> void { y_ltr(sel); };
+def kernel_stack_top() -> long { y_kernel_stack_top_get() };
+
+ndef y_lgdt(addr: long) -> long = "y_lgdt";
+ndef y_ltr(sel: long) -> long = "y_ltr";
+ndef y_tr_get() -> long = "y_tr_get";
+ndef y_kernel_stack_top_get() -> long = "y_kernel_stack_top_get";
+
+// A flat 64-bit segment descriptor: base 0, limit 4 GB, one byte of access
+// rights and the flags/limit nibble the SDM's figure wants.  0x9A is a
+// ring-0 code segment, 0x92 ring-0 data, and DPL adds 0x60.
+def gdt_code(dpl: long) -> long {
+    65535 | ((154 + dpl * 96) << 40) | (175 << 48)
+};
+
+def gdt_data(dpl: long) -> long {
+    65535 | ((146 + dpl * 96) << 40) | (175 << 48)
+};
+
+// A 64-bit TSS descriptor, in the two halves the architecture splits it into
+// (its base spans both 8-byte halves, which is why this is a function and not
+// a poked constant).  0x89 is present + an available 64-bit TSS.
+def tss_desc_lo(base: long, limit: long) -> long {
+    (limit & 65535) | ((base & 65535) << 16) | (((base >> 16) & 255) << 32)
+        | (137 << 40) | (((limit >> 16) & 15) << 48) | (((base >> 24) & 255) << 56)
+};
+
+// The high half is the base's upper 32 bits, zero-extended: the field above
+// them is reserved and must be zero, so a LOGICAL shift (the base is a
+// direct-map address and its top bit is set).
+def tss_desc_hi(base: long) -> long {
+    base >>> 32
+};
+
+// The GDT, its descriptor and the TSS.  Global arrays, so their addresses are
+// stable and reachable with `ptr_addr(&a[0])`; a kernel that switches address
+// spaces later must keep them mapped (they are in the Y heap, which is).
+let gdt_cells: [long; 8] = [0, 0, 0, 0, 0, 0, 0, 0];
+let gdtr_cells: [long; 2] = [0, 0];
+let tss_cells: [long; 13] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+
+// Three steps, so a test can drive them one at a time: gdt_build fills the
+// tables and answers the GDT's address, gdt_load runs `lgdt`, tss_load runs
+// `ltr`.  A bad descriptor faults on the load, and a fault here is before the
+// IDT exists, so the split is how the kernel is brought up.
+def gdt_build() -> long {
+    let g = ptr_addr(&gdt_cells[0]);
+    poke_va64(g + 0, 0);
+    poke_va64(g + 8, gdt_code(0));
+    poke_va64(g + 16, gdt_data(0));
+    poke_va64(g + 24, gdt_data(3));
+    poke_va64(g + 32, gdt_code(3));
+    let t = ptr_addr(&tss_cells[0]);
+    let i = 0;
+    while (i < 13) {
+        poke_va64(t + i * 8, 0);
+        i = i + 1;
+    };
+    // RSP0: the kernel stack an interrupt from ring 3 switches to.
+    poke_va64(t + 4, y_kernel_stack_top_get());
+    poke_va64(g + 40, tss_desc_lo(t, 103));
+    poke_va64(g + 48, tss_desc_hi(t));
+    g
+};
+
+def gdt_load(g: long) -> void {
+    // The 10-byte descriptor: limit, then the base.  Two aligned writes,
+    // because the base starts at byte 2.  The limit is 8 entries minus one:
+    // a TSS descriptor is SIXTEEN bytes and spans two 8-byte slots, so the
+    // six tables above need seven of them and a limit of 47 faulted -- the
+    // load reads the descriptor's high half past the limit, which is a #GP
+    // with the selector in the error code.
+    let gr = ptr_addr(&gdtr_cells[0]);
+    poke_va64(gr, 55 | (g << 16));
+    poke_va64(gr + 8, g >>> 48);
+    y_lgdt(gr);
+};
+
+def tss_load() -> void {
+    y_ltr(SEL_TSS);
+};
+
+def gdt_init() -> void {
+    let g = gdt_build();
+    gdt_load(g);
+    tss_load();
 };

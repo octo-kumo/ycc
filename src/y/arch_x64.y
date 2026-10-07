@@ -282,6 +282,9 @@ def arch_kernel_bss() -> str {
     ".align 16\n" +
     // The Y heap's region, as a physical address and direct-map addresses:
     // set once by y_heap_region_set, bumped by y_alloc_map.
+    // The kernel's own GDT (six entries), its descriptor and the TSS are
+    // built by std/kernel.y's gdt_init in heap memory, not here: a descriptor
+    // table is a data structure, and only `lgdt`/`ltr` have to be instructions.
     "y_heap_start:\n.zero 8\n" +
     "y_heap_bias:\n.zero 8\n" +
     "y_heap_next:\n.zero 8\n" +

@@ -328,6 +328,59 @@ y_heap_limit_get:
     mov y_heap_limit(%rip), %rax
     ret
 
+#=== add: y_lgdt ===
+# y_lgdt(addr): load a GDT whose 10-byte descriptor the caller built in memory
+# (std/kernel.y builds it with two aligned 64-bit writes).  `lgdt m16&64` has
+# no mnemonic in the in-tree encoder, so it is three raw bytes: 0F 01 /2.
+y_lgdt:
+    mov 8(%rsp), %rax
+    .ascii "\017\001\020"
+    ret
+
+#=== add: y_ltr ===
+# y_ltr(sel): load the task register with a TSS selector.  0F 00 /3, and the
+# only instruction here that the encoder cannot spell.  The selector is loaded
+# as a full GPR -- `ltr %ax` reads only the low 16 bits, and `mov r16, m16` is
+# a size the encoder wants spelled, which a GPR load is not.
+y_ltr:
+    mov 8(%rsp), %rax
+    .ascii "\017\000\330"
+    ret
+
+#=== add: y_tr_get ===
+# The task register, as a selector: 0x28 once y_ltr has run.  0F 00 /1.
+y_tr_get:
+    .ascii "\017\000\310"
+    and $65535, %rax
+    ret
+
+#=== add: y_kernel_stack_top_get ===
+# The boot kernel stack's top: what the TSS's RSP0 points at, so a ring-3
+# interrupt lands on kernel memory.  M2 gives each task one of its own.
+y_kernel_stack_top_get:
+    lea y_kernel_stack_top(%rip), %rax
+    ret
+
+#=== add: y_msr_read ===
+# y_msr_read(reg) -> value.  EFER, STAR, LSTAR and FMASK are the ones the
+# syscall path needs; rdmsr splits the answer across edx:eax.
+y_msr_read:
+    mov 8(%rsp), %rcx
+    .ascii "\017\062"
+    shl $32, %rdx
+    or %rdx, %rax
+    ret
+
+#=== add: y_msr_write ===
+# y_msr_write(reg, value).  wrmsr reads edx:eax.
+y_msr_write:
+    mov 8(%rsp), %rdx
+    mov %rdx, %rax
+    shr $32, %rdx
+    mov 16(%rsp), %rcx
+    .ascii "\017\060"
+    ret
+
 #=== add: y_kexit ===
 # kexit(code): leave qemu through the isa-debug-exit device, port 0x501.  The
 # DEVICE applies the encoding -- it exits with (value << 1) | 1 -- so the code
