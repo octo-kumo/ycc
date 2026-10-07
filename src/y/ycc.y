@@ -25,11 +25,12 @@ import nasm from "./asm.y";
 import nativelib from "./native.y";
 import meta from "./meta.y";
 import pkg from "./pkg.y";
+import lint from "./lint.y";
 import fs;
 
 // ── argument parsing ─────────────────────────────────────────────────────
 
-def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, timing: bool, allow_exec: bool, debug: bool, nowarn: bool, wlevel: long, std_src: bool, std_pack: str, run: bool, dump: bool, prog: [str] } {
+def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, timing: bool, allow_exec: bool, debug: bool, nowarn: bool, wlevel: long, std_src: bool, std_pack: str, run: bool, dump: bool, prog: [str], fix: bool } {
     let out = "";
     let files: [str] = [];
     let asm_only = false;
@@ -43,6 +44,7 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
     let run = false;
     let dump = false;
     let prog: [str] = [];
+    let fix = false;
     let i = 1;  // skip argv[0]
     let n = len(argv);
     while (i < n) {
@@ -88,6 +90,11 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
             debug = true;
         } else if (a == "-w") {
             nowarn = true;
+        } else if (a == "--fix") {
+            // Apply the level-2 shortenings to the source in place. Warning
+            // level 2 is what names them, so --fix implies it.
+            fix = true;
+            if (wlevel < 2) { wlevel = 2; };
         } else if (a == "-W") {
             wlevel = wlevel_arg(argv, i, n);
             i++;
@@ -102,7 +109,7 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
                 exit(1);
             };
         } else if (a == "--help" || a == "-h") {
-            puts("Usage: ycc [-o OUTPUT] [-S] [-E] [-t] [-g] [-w] [-W N] [--no-exec] [-h] FILE\n");
+            puts("Usage: ycc [-o OUTPUT] [-S] [-E] [-t] [-g] [-w] [-W N] [--fix] [--no-exec] [-h] FILE\n");
             puts("       ycc run [-g] [--no-exec] FILE [-- ARG...]\n");
             puts("                                       compile FILE and run it in a\n");
             puts("                                       child; ycc's exit status is\n");
@@ -133,6 +140,9 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
             puts("               reads, a bare a[i] or x.f as a statement,\n");
             puts("               an else branch that does nothing; 2 adds the\n");
             puts("               shortening suggestions of LINT_RULES.md\n");
+            puts("  --fix        apply the level-2 shortenings of LINT_RULES.md to\n");
+            puts("               the source files in place (implies -W 2), then\n");
+            puts("               stop; the emitted bytes never depend on this\n");
             puts("  --no-exec    omit exec() -- the binary cannot reach a shell\n");
             puts("  --std-src    compile the std units (the runtime and std library)\n");
             puts("               from source instead of using the precompiled ones\n");
@@ -163,7 +173,7 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
         };
         i++;
     };
-    { out: out, files: files, asm_only: asm_only, timing: timing, allow_exec: allow_exec, debug: debug, nowarn: nowarn, wlevel: wlevel, std_src: std_src, std_pack: std_pack, run: run, dump: dump, prog: prog }
+    { out: out, files: files, asm_only: asm_only, timing: timing, allow_exec: allow_exec, debug: debug, nowarn: nowarn, wlevel: wlevel, std_src: std_src, std_pack: std_pack, run: run, dump: dump, prog: prog, fix: fix }
 };
 
 // --target NAME: the one place a target name becomes the global every other
@@ -989,6 +999,26 @@ def main(cmdline: [str]) -> long {
             });
             if (r.ok && !pargs.nowarn) {
                 print_native_warnings(r.warnings, nrorigin, true);
+            };
+            // --fix: the linter named the shortenings; write each one's file
+            // back with them applied, then stop (nothing downstream reads a
+            // source file, and the caller wants the tree, not a binary).
+            if (r.ok && pargs.fix) {
+                let fixes = lint.lint_fixes_get();
+                let fids = lint.lint_fix_ids(fixes, nrorigin.file);
+                let fi = 0;
+                while (fi < len(fids)) {
+                    let fid = fids[fi];
+                    if (fid >= 0 && fid < len(nrorigin.files)) {
+                        let rd = fs.read_file(nrorigin.files[fid]);
+                        if (rd != none) {
+                            fs.write_file(nrorigin.files[fid], lint.lint_fix_text(fid, fixes, nrorigin.file, nrorigin.line, unwrap(rd)));
+                        };
+                    };
+                    fi++;
+                };
+                exit(0);
+                0
             };
             t0 = clock_us();
             h0 = heap_used();

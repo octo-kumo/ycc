@@ -54,6 +54,12 @@ type LintRet = { name: str, ret: Type, line: long, col: long };
 // an expression sees decides whether a `+=` on a string appends in place or
 // copies; see lint_opassign.
 type LintSt = { warns: [Diag], vars: [LintVar], tops: NameIx, flags: [long], rets: [LintRet], ridx: NameIx, self: str, wlevel: long, dropnext: bool, vused: bool, loops: long, logic: long };
+// A shortening the compiler can apply itself (`ycc -W 2 --fix`): `rule` is
+// the section of LINT_RULES.md, `line`/`col` anchor it in the spliced
+// program, and `a`/`b` are that rule's own operands (a name, an operator, a
+// receiver). fix.y does the text rewrite; the emitted bytes never depend on
+// whether a fix was recorded.
+type LintFix = { rule: str, line: long, col: long, a: str, b: str };
 type LintRoot = { typ: Type, line: long, col: long, alias: str, mod: str };
 type LintOcc = { key: str, typ: Type, line: long, col: long, parent: long, decl: bool, alias: str, rep: bool };
 type LintTy = { roots: [LintRoot], atyps: [Type], amods: [str], amap: NameIx, amemo: [str], abusy: [bool], occs: [LintOcc], line: long, col: long, mod: str };
@@ -62,6 +68,22 @@ type LintTy = { roots: [LintRoot], atyps: [Type], amods: [str], amap: NameIx, am
 // file lint_ofile[i], module lint_fmods of it ("" for none).
 let lint_ofile: [long] = [];
 let lint_fmods: [str] = [];
+
+// The shortenings found in the unit being linted, for `--fix` (see lint_fix,
+// fix.y). Cleared at the top of every lint_unit.
+let lint_fixes: [LintFix] = [];
+
+def lint_fixes_get() -> [LintFix] { lint_fixes };
+
+// Record a fixable shortening beside the warning it names. `a`/`b` are the
+// rule's operands; fix.y reads them, so adding a fix is a call here and a
+// case there, never a second search of the tree.
+def lint_fix(st: LintSt, rule: str, line: long, col: long, a: str, b: str) -> long {
+    if (st.wlevel >= 2) {
+        lint_fixes += { rule: rule, line: line, col: col, a: a, b: b };
+    };
+    0
+};
 
 // The warnings for one unit: `ast` as parsed, `ast3` renamed (and
 // checked), sorted by position; ofile and fmods say which lines are a
@@ -74,6 +96,7 @@ def lint_unit(ast: Block, ast3: Block, ofile: [long], fmods: [str], wlevel: long
     let vars: [LintVar] = [];
     let flags: [long] = [];
     let rets: [LintRet] = [];
+    lint_fixes = [];
     let st = { warns: warns, vars: vars, tops: parser.nameix_new(256), flags: flags, rets: rets, ridx: parser.nameix_new(64), self: "", wlevel: wlevel, dropnext: false, vused: false, loops: 0, logic: 0 };
     if (wlevel >= 1) {
         lint_rets(st, ast3.stmts)
@@ -894,12 +917,15 @@ def lint_short_assign(st: LintSt, node: Assign, name: str, v: Node) -> long {
     let d = lint_disp(name);
     if (op == "+" && lint_int_val(b.r) == 1 && lint_var_scal(st, name)) {
         lint_warn_at(st, "'" + d + " = " + d + " + 1' can be written '" + d + "++'", node);
+        lint_fix(st, "1.2", node.line, node.col, d, "+");
         0
     } else if (op == "-" && lint_int_val(b.r) == 1 && lint_var_scal(st, name)) {
         lint_warn_at(st, "'" + d + " = " + d + " - 1' can be written '" + d + "--'", node);
+        lint_fix(st, "1.2", node.line, node.col, d, "-");
         0
     } else if (lint_compound_op(op) && lint_var_scal(st, name)) {
         lint_warn_at(st, "'" + d + " = " + d + " " + op + " <expr>' can be written '" + d + " " + op + "= <expr>'", node);
+        lint_fix(st, "1.1", node.line, node.col, d, op);
         0
     } else {
         0
@@ -925,8 +951,10 @@ def lint_short_bin(st: LintSt, node: Bin) -> long {
         lint_warn_at(st, "a comparison against true or false is the value itself, or its negation", node);
     } else if (neg) {
         lint_warn_at(st, "'" + d + " " + op + " " + lb.v + "' can be written '!" + d + "'", node);
+        if (node.r.k == K.bool) { lint_fix(st, "1.9", node.line, node.col, op, lb.v); };
     } else {
         lint_warn_at(st, "'" + d + " " + op + " " + lb.v + "' can be written '" + d + "'", node);
+        if (node.r.k == K.bool) { lint_fix(st, "1.9", node.line, node.col, op, lb.v); };
     };
     0
 };
@@ -938,6 +966,7 @@ def lint_short_call(st: LintSt, call: Call) -> long {
     let id: Leaf = callee;
     if (id.v == "byte_at" && len(call.args) == 2 && parser.nameix_get(st.ridx, "byte_at") < 0) {
         lint_warn_at(st, "'byte_at(s, i)' can be written 's[i]'", call);
+        lint_fix(st, "1.3", callee.line, callee.col, "", "");
     };
     0
 };
@@ -959,6 +988,7 @@ def lint_short_ord(st: LintSt, call: Call) -> bool {
             lint_two(st, sl.arr, sl.lo);
             lint_node(st, sl.hi, true);
             lint_warn_at(st, "'ord' of a one-character slice can be written as an index (a byte)", call);
+            lint_fix(st, "1.5", callee.line, callee.col, "", "");
             true
         }
     }
@@ -1073,8 +1103,10 @@ def lint_short_empty_if(st: LintSt, node: If) -> long {
     let ee = node.has_else && lint_empty_arm(node.els);
     if (te && ee) {
         lint_warn_at(st, "both branches of this 'if' are empty; it does nothing", node);
+        lint_fix(st, "2.1", node.line, node.col, "both", "");
     } else if (te) {
         lint_warn_at(st, "the 'if' branch is empty; invert the condition and drop the arm", node);
+        lint_fix(st, "2.1", node.line, node.col, "then", "");
     };
     0
 };
@@ -1089,6 +1121,7 @@ def lint_short_if_ternary(st: LintSt, node: If) -> long {
         let bb: Assign = b;
         if (aa.name == bb.name) {
             lint_warn_at(st, "'" + lint_disp(aa.name) + "' is chosen by a condition in both arms; write one conditional assignment", node);
+            lint_fix(st, "2.3", node.line, node.col, "", "");
         };
     } else if (a.k == K.ret && b.k == K.ret) {
         let wa: Wrap = a;
@@ -1372,9 +1405,11 @@ def lint_short_index_loop(st: LintSt, stmts: [Node], i: long) -> long {
     let can_foreach = cb.op == "<" && arr != "" && lint_int_val(decl.v) == 0 && lint_var_vec(st, arr) && !lint_find(loop.body, "", 7) && !lint_find(loop.body, arr, 8);
     if (can_foreach) {
         lint_warn_at(st, "this index loop can be '" + lint_disp(arr) + ".foreach((e, i) => { ... })'", d);
+        lint_fix(st, "3.1", d.line, d.col, lint_disp(iv), lint_disp(arr));
     } else {
         if (lint_find(loop.body, "", 4)) { return 0; };
         lint_warn_at(st, "this index loop can be 'for " + lint_disp(iv) + " in <lo>..<hi> { ... }'", d);
+        lint_fix(st, "2.8", d.line, d.col, lint_disp(iv), "");
     };
     0
 };
@@ -1384,6 +1419,7 @@ def lint_short_range(st: LintSt, fe: Foreach) -> long {
     let arr = lint_range_arr(fe.iter);
     if (arr == "" || !lint_var_vec(st, arr) || lint_find(fe.body, "", 7) || lint_find(fe.body, arr, 8)) { return 0; };
     lint_warn_at(st, "this range loop over an array's indices can be '<a>.foreach((e, i) => { ... })'", fe);
+    lint_fix(st, "3.5", fe.line, fe.col, lint_disp(arr), "");
     0
 };
 
@@ -1395,6 +1431,529 @@ def lint_range_arr(node: Node) -> str {
     let id: Leaf = c.callee;
     if (id.v != "range") { return ""; };
     lint_len_of(c.args[0])
+};
+
+// ── --fix: apply the level-2 shortenings to the source ───────────────────
+// The rules above say what is shortenable; these say how to write it. A fix
+// never changes what the program means, so a fix that cannot find the text
+// it expected leaves the line alone and the warning stands. The C copy is
+// lint.c (PORTING.md).
+
+def fx_ident(c: long) -> bool {
+    (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_'
+};
+
+// Does `line` hold `w` as a whole word at `i`?
+def fx_word(line: str, i: long, w: str) -> bool {
+    if (i < 0 || i + len(w) > len(line)) { return false; };
+    if (line[i:i + len(w)] != w) { return false; };
+    let b = i == 0 || !fx_ident(line[i - 1]);
+    let a = i + len(w) >= len(line) || !fx_ident(line[i + len(w)]);
+    b && a
+};
+
+def fx_ws(line: str, i: long) -> long {
+    let j = i;
+    while (j < len(line) && (line[j] == 32 || line[j] == 9)) { j++; };
+    j
+};
+
+// The index of `w` as a word at or after `from`, or -1.
+def fx_find(line: str, w: str, from: long) -> long {
+    let i = from;
+    while (i < len(line)) {
+        if (fx_word(line, i, w)) { return i; };
+        i = i + 1;
+    };
+    -1
+};
+
+def fx_strip(s: str) -> str {
+    let a = 0;
+    while (a < len(s) && (s[a] == 32 || s[a] == 9)) { a++; };
+    let b = len(s);
+    while (b > a && (s[b - 1] == 32 || s[b - 1] == 9)) { b--; };
+    s[a:b]
+};
+
+def fx_indent(s: str) -> str {
+    let a = 0;
+    while (a < len(s) && (s[a] == 32 || s[a] == 9)) { a++; };
+    s[:a]
+};
+
+// The index of the `cc` matching the `oc` at `i`, skipping quoted text, or
+// -1. Comments do not nest brackets that matter in the lines this reads.
+def fx_match(line: str, i: long, oc: long, cc: long) -> long {
+    let d = 0;
+    let q = 0;
+    let j = i;
+    while (j < len(line)) {
+        let c = line[j];
+        if (q != 0) {
+            if (c == 92) { j = j + 2; }
+            else { if (c == q) { q = 0; }; j = j + 1; };
+        } else if (c == 34 || c == 39) {
+            q = c;
+            j = j + 1;
+        } else if (c == oc) {
+            d = d + 1;
+            j = j + 1;
+        } else if (c == cc) {
+            d = d - 1;
+            if (d == 0) { return j; };
+            j = j + 1;
+        } else { j = j + 1; };
+    };
+    -1
+};
+
+// Split `s` at its top-level commas.
+def fx_split_comma(s: str) -> [str] {
+    let out: [str] = [];
+    let d = 0;
+    let cur = "";
+    let i = 0;
+    while (i < len(s)) {
+        let c = s[i];
+        if (c == 40 || c == 91 || c == 123) { d = d + 1; };
+        if (c == 41 || c == 93 || c == 125) { d = d - 1; };
+        if (c == 44 && d == 0) { out += cur; cur = ""; } else { cur = cur + s[i:i + 1]; };
+        i = i + 1;
+    };
+    out += cur;
+    out
+};
+
+// 1.1: `name = name op e` -> `name op= e`.
+def fx_compound(line: str, name: str, op: str, col: long) -> str {
+    let i = col - 1;
+    if (!fx_word(line, i, name)) { return line; };
+    let j = fx_ws(line, i + len(name));
+    if (j >= len(line) || line[j] != 61 || (j + 1 < len(line) && line[j + 1] == 61)) { return line; };
+    let k = fx_ws(line, j + 1);
+    if (!fx_word(line, k, name)) { return line; };
+    let m = fx_ws(line, k + len(name));
+    if (m + len(op) > len(line) || line[m:m + len(op)] != op) { return line; };
+    let e = fx_ws(line, m + len(op));
+    line[:i] + name + " " + op + "= " + line[e:]
+};
+
+// 1.2: `name = name op 1` and `name op= 1` -> `name++` / `name--`.
+def fx_incdec(line: str, name: str, op: str, col: long) -> str {
+    let inc = "++";
+    if (op == "-") { inc = "--"; };
+    let i = col - 1;
+    if (!fx_word(line, i, name)) { return line; };
+    let j = fx_ws(line, i + len(name));
+    // `name op= 1`
+    if (j + 1 < len(line) && line[j] == fx_ident_of(op) && line[j + 1] == 61) {
+        let e = fx_ws(line, j + 2);
+        if (e < len(line) && line[e] == 49 && (e + 1 >= len(line) || !fx_ident(line[e + 1]))) {
+            return line[:i] + name + inc + line[e + 1:];
+        };
+    };
+    // `name = name op 1`
+    if (j >= len(line) || line[j] != 61 || (j + 1 < len(line) && line[j + 1] == 61)) { return line; };
+    let k = fx_ws(line, j + 1);
+    if (!fx_word(line, k, name)) { return line; };
+    let m = fx_ws(line, k + len(name));
+    if (m + len(op) > len(line) || line[m:m + len(op)] != op) { return line; };
+    let e = fx_ws(line, m + len(op));
+    if (e < len(line) && line[e] == 49 && (e + 1 >= len(line) || !fx_ident(line[e + 1]))) {
+        return line[:i] + name + inc + line[e + 1:];
+    };
+    line
+};
+
+def fx_ident_of(op: str) -> long {
+    op[0]
+};
+
+// 1.3: `byte_at(A, B)` -> `A[B]`.
+def fx_byte_at(line: str, col: long) -> str {
+    let i = col - 1;
+    if (!fx_word(line, i, "byte_at")) { return line; };
+    let o = fx_ws(line, i + 7);
+    if (o >= len(line) || line[o] != 40) { return line; };
+    let c = fx_match(line, o, 40, 41);
+    if (c < 0) { return line; };
+    let parts = fx_split_comma(line[o + 1:c]);
+    if (len(parts) != 2) { return line; };
+    line[:i] + fx_strip(parts[0]) + "[" + fx_strip(parts[1]) + "]" + line[c + 1:]
+};
+
+// 1.9: `A == true` / `A != false` -> `A`, and the negated pair -> `!A`.
+def fx_bool(line: str, op: str, lit: str, col: long) -> str {
+    let i = fx_find(line, op, col - 1);
+    if (i < 0) { return line; };
+    let j = fx_ws(line, i + len(op));
+    if (j + len(lit) > len(line) || line[j:j + len(lit)] != lit) { return line; };
+    let neg = (op == "!=") == (lit == "true");
+    let a = fx_strip(line[:i]);
+    let head = fx_indent(line);
+    if (neg) { head + "!" + a + line[j + len(lit):] } else { head + a + line[j + len(lit):] }
+};
+
+// The `lo` of `let var = lo;`, or "".
+def fx_let_lo(line: str, var: str) -> str {
+    let i = fx_find(line, "let", 0);
+    if (i < 0) { return ""; };
+    let v = fx_find(line, var, i + 3);
+    if (v < 0) { return ""; };
+    let e = fx_ws(line, v + len(var));
+    if (e >= len(line) || line[e] != 61) { return ""; };
+    let s = fx_ws(line, e + 1);
+    let c = index_of(line, ";");
+    if (c < 0 || c < s) { return ""; };
+    fx_strip(line[s:c])
+};
+
+// The `hi` of `while (var < hi) {`, or "".
+def fx_while_hi(line: str, var: str) -> str {
+    let i = fx_find(line, "while", 0);
+    if (i < 0) { return ""; };
+    let o = fx_ws(line, i + 5);
+    if (o >= len(line) || line[o] != 40) { return ""; };
+    let c = fx_match(line, o, 40, 41);
+    if (c < 0) { return ""; };
+    let cond = line[o + 1:c];
+    let v = fx_find(cond, var, 0);
+    if (v < 0) { return ""; };
+    let lt = fx_ws(cond, v + len(var));
+    if (lt >= len(cond)) { return ""; };
+    let s = fx_ws(cond, lt + 1);
+    if (cond[lt] == 60 && lt + 1 < len(cond) && cond[lt + 1] == 61) { s = fx_ws(cond, lt + 2); };
+    let out = fx_strip(cond[s:]);
+    // `while (i <= hi)` keeps hi + 1.
+    if (cond[lt] == 60 && lt + 1 < len(cond) && cond[lt + 1] == 61) { out = out + " + 1"; };
+    out
+};
+
+// Is this line the loop's own step?
+def fx_is_step(line: str, var: str) -> bool {
+    let t = fx_strip(line);
+    if (t == var + "++;") { return true; };
+    if (t == var + "--;") { return true; };
+    let j = fx_ws(t, len(var));
+    if (!fx_word(t, 0, var)) { return false; };
+    if (j + 1 < len(t) && (t[j] == 43 || t[j] == 45) && t[j + 1] == 61) { return true; };
+    if (j < len(t) && t[j] == 61) {
+        let k = fx_ws(t, j + 1);
+        if (fx_word(t, k, var)) {
+            let m = fx_ws(t, k + len(var));
+            if (m < len(t) && (t[m] == 43 || t[m] == 45)) { return true; };
+        };
+    };
+    false
+};
+
+def fx_drop(a: [str], k: long) -> [str] {
+    a[:k] + a[k + 1:]
+};
+
+def fx_join(a: [str]) -> str {
+    let out = "";
+    let i = 0;
+    while (i < len(a)) { out = out + a[i] + "\n"; i = i + 1; };
+    out
+};
+
+// `arr[var]` -> the element name.
+def fx_sub_index(line: str, arr: str, var: str, el: str) -> str {
+    let i = 0;
+    let out = "";
+    while (i < len(line)) {
+        if (fx_word(line, i, arr)) {
+            let j = fx_ws(line, i + len(arr));
+            if (j < len(line) && line[j] == 91) {
+                let k = fx_ws(line, j + 1);
+                if (fx_word(line, k, var)) {
+                    let m = fx_ws(line, k + len(var));
+                    if (m < len(line) && line[m] == 93) {
+                        out = out + el;
+                        i = m + 1;
+                        continue;
+                    };
+                };
+            };
+        };
+        out = out + line[i:i + 1];
+        i = i + 1;
+    };
+    out
+};
+
+// 2.8/3.1: `let var = lo; while (var < hi) { B; var++; };` at line `ln`.
+def fx_loop(rule: str, arr: str, var: str, ln: long, lines: [str]) -> [str] {
+    if (ln < 1 || ln >= len(lines)) { return lines; };
+    let dline = lines[ln - 1];
+    let wline = lines[ln];
+    let lo = fx_let_lo(dline, var);
+    if (lo == "") { return lines; };
+    let hi = fx_while_hi(wline, var);
+    if (hi == "") { return lines; };
+    let indent = fx_indent(dline);
+    let close = -1;
+    let j = ln + 1;
+    while (j < len(lines)) {
+        if (fx_strip(lines[j]) == "};" && fx_indent(lines[j]) == indent) { close = j; break; };
+        j = j + 1;
+    };
+    if (close < 0) { return lines; };
+    let body: [str] = [];
+    j = ln + 1;
+    while (j < close) { body += lines[j]; j = j + 1; };
+    let k = len(body) - 1;
+    while (k >= 0 && fx_strip(body[k]) == "") { k = k - 1; };
+    if (k < 0 || !fx_is_step(body[k], var)) { return lines; };
+    body = fx_drop(body, k);
+    if (rule == "3.1") {
+        let el = "e";
+        if (fx_find(fx_join(body), "e", 0) >= 0) { el = "el"; };
+        let nb: [str] = [];
+        j = 0;
+        while (j < len(body)) { nb += fx_sub_index(body[j], arr, var, el); j = j + 1; };
+        body = nb;
+        let keep = fx_find(fx_join(body), var, 0) >= 0;
+        let params = "(" + el + ")";
+        if (keep) { params = "(" + el + ", " + var + ")"; };
+        lines = lines[:ln - 1] + [indent + arr + ".foreach(" + params + " => {"] + body + [indent + "});"] + lines[close + 1:];
+    } else {
+        lines = lines[:ln - 1] + [indent + "for " + var + " in " + lo + ".." + hi + " {"] + body + [indent + "};"] + lines[close + 1:];
+    };
+    lines
+};
+
+// 3.5: `foreach (i in range(len(a))) { B }` -> `a.foreach((e, i) => { B })`.
+def fx_range(arr: str, ln: long, lines: [str]) -> [str] {
+    if (ln < 1 || ln > len(lines)) { return lines; };
+    let h = lines[ln - 1];
+    let indent = fx_indent(h);
+    let i = fx_find(h, "foreach", 0);
+    if (i < 0) { return lines; };
+    let o = fx_ws(h, i + 7);
+    if (o >= len(h) || h[o] != 40) { return lines; };
+    let c = fx_match(h, o, 40, 41);
+    if (c < 0) { return lines; };
+    let inner = fx_strip(h[o + 1:c]);
+    let inw = fx_find(inner, "in", 0);
+    if (inw < 0) { return lines; };
+    let var = fx_strip(inner[:inw]);
+    if (var == "") { return lines; };
+    // the body: to the matching `};`
+    let close = -1;
+    let j = ln;
+    while (j < len(lines)) {
+        if (fx_strip(lines[j]) == "};" && fx_indent(lines[j]) == indent) { close = j; break; };
+        j = j + 1;
+    };
+    if (close < 0) { return lines; };
+    let body: [str] = [];
+    j = ln;
+    while (j < close) { body += lines[j]; j = j + 1; };
+    let el = "e";
+    if (fx_find(fx_join(body), "e", 0) >= 0) { el = "el"; };
+    let nb: [str] = [];
+    j = 0;
+    while (j < len(body)) { nb += fx_sub_index(body[j], arr, var, el); j = j + 1; };
+    body = nb;
+    let keep = fx_find(fx_join(body), var, 0) >= 0;
+    let params = "(" + el + ")";
+    if (keep) { params = "(" + el + ", " + var + ")"; };
+    lines = lines[:ln - 1] + [indent + arr + ".foreach(" + params + " => {"] + body + [indent + "});"] + lines[close + 1:];
+    lines
+};
+
+// `x = A;` -> `x|A`, or "" when it is not a plain assignment to a name.
+def fx_assign(s: str) -> str {
+    let t = fx_strip(s);
+    let e = fx_find(t, "=", 0);
+    if (e < 0) { return ""; };
+    if (e > 0 && (t[e - 1] == 33 || t[e - 1] == 60 || t[e - 1] == 62 || t[e - 1] == 61)) { return ""; };
+    if (e + 1 < len(t) && t[e + 1] == 61) { return ""; };
+    let name = fx_strip(t[:e]);
+    if (!fx_is_name(name)) { return ""; };
+    let v = fx_strip(t[e + 1:]);
+    if (len(v) > 0 && v[len(v) - 1:len(v)] == ";") { v = fx_strip(v[:len(v) - 1]); };
+    if (v == "") { return ""; };
+    name + "|" + v
+};
+
+def fx_is_name(s: str) -> bool {
+    if (len(s) == 0) { return false; };
+    let c0 = s[0];
+    if (!((c0 >= 97 && c0 <= 122) || (c0 >= 65 && c0 <= 90) || c0 == 95)) { return false; };
+    let i = 1;
+    while (i < len(s)) { if (!fx_ident(s[i])) { return false; }; i = i + 1; };
+    true
+};
+
+def fx_pipe_name(s: str) -> str {
+    let i = index_of(s, "|");
+    if (i < 0) { "" } else { s[:i] }
+};
+
+def fx_pipe_val(s: str) -> str {
+    let i = index_of(s, "|");
+    if (i < 0) { "" } else { s[i + 1:] }
+};
+
+def fx_semi(tail: str) -> str {
+    if (len(tail) > 0 && tail[0] == 59) { ";" } else { "" }
+};
+
+// 2.1/2.3: an `if`/`else` written on one line.
+def fx_if_line(rule: str, ln: long, lines: [str]) -> [str] {
+    if (ln < 1 || ln > len(lines)) { return lines; };
+    let line = lines[ln - 1];
+    let i = fx_find(line, "if", 0);
+    if (i < 0) { return lines; };
+    let o = fx_ws(line, i + 2);
+    if (o >= len(line) || line[o] != 40) { return lines; };
+    let c = fx_match(line, o, 40, 41);
+    if (c < 0) { return lines; };
+    let cond = fx_strip(line[o + 1:c]);
+    let b1 = fx_ws(line, c + 1);
+    if (b1 >= len(line) || line[b1] != 123) { return lines; };
+    let e1 = fx_match(line, b1, 123, 125);
+    if (e1 < 0) { return lines; };
+    let then = fx_strip(line[b1 + 1:e1]);
+    let indent = fx_indent(line);
+    let after = line[e1 + 1:];
+    let el = fx_ws(after, 0);
+    if (el < len(after) && fx_word(after, el, "else")) {
+        let b2 = fx_ws(after, el + 4);
+        if (b2 >= len(after) || after[b2] != 123) { return lines; };
+        let e2 = fx_match(after, b2, 123, 125);
+        if (e2 < 0) { return lines; };
+        let els = fx_strip(after[b2 + 1:e2]);
+        let tail = fx_strip(after[e2 + 1:]);
+        if (rule == "2.3") {
+            let av = fx_assign(then);
+            let bv = fx_assign(els);
+            if (av == "" || bv == "" || fx_pipe_name(av) != fx_pipe_name(bv)) { return lines; };
+            lines[ln - 1] = indent + fx_pipe_name(av) + " = " + cond + " ? " + fx_pipe_val(av) + " : " + fx_pipe_val(bv) + ";";
+        } else if (rule == "2.1") {
+            if (then == "" && els != "") {
+                lines[ln - 1] = indent + "if (!(" + cond + ")) { " + els + " }" + fx_semi(tail);
+            } else if (then != "" && els == "") {
+                lines[ln - 1] = indent + "if (" + cond + ") { " + then + " }" + fx_semi(tail);
+            } else if (then == "" && els == "") {
+                lines = fx_drop(lines, ln - 1);
+            };
+        };
+    } else if (rule == "2.1" && then == "") {
+        lines = fx_drop(lines, ln - 1);
+    };
+    lines
+};
+
+// The fixers, by rule. A rule with no case here stays a warning.
+def fx_one(rule: str, a: str, b: str, ln: long, col: long, lines: [str]) -> [str] {
+    if (ln < 1 || ln > len(lines)) { return lines; };
+    if (rule == "1.1") { lines[ln - 1] = fx_compound(lines[ln - 1], a, b, col); }
+    else if (rule == "1.2") { lines[ln - 1] = fx_incdec(lines[ln - 1], a, b, col); }
+    else if (rule == "1.3") { lines[ln - 1] = fx_byte_at(lines[ln - 1], col); }
+    else if (rule == "1.9") { lines[ln - 1] = fx_bool(lines[ln - 1], a, b, col); }
+    else if (rule == "2.8") { lines = fx_loop(rule, b, a, ln, lines); }
+    else if (rule == "3.1") { lines = fx_loop(rule, b, a, ln, lines); }
+    else if (rule == "3.5") { lines = fx_range(a, ln, lines); }
+    else if (rule == "2.1") { lines = fx_if_line(rule, ln, lines); }
+    else if (rule == "2.3") { lines = fx_if_line(rule, ln, lines); };
+    lines
+};
+
+// The file id a spliced-program line came from (origin_at's own math).
+def fx_fid(line: long, nmap: long, fmap: [long]) -> long {
+    if (nmap == 0 || line < 1) { return 0; };
+    let k = line;
+    if (k > nmap) { k = nmap; };
+    fmap[k - 1]
+};
+
+def fx_local(line: long, nmap: long, lmap: [long]) -> long {
+    if (nmap == 0 || line < 1) { return line; };
+    let k = line;
+    if (k > nmap) { k = nmap; };
+    lmap[k - 1] + line - k
+};
+
+// A wrapping rule runs before the expression rules on the line it wraps
+// (2.3 reads its arms as assignments, and 1.1 would have rewritten them
+// first), and later positions before earlier ones so an edit never moves
+// the text a later fix anchors on.
+def fx_prio(rule: str) -> long {
+    if (rule == "2.1" || rule == "2.2" || rule == "2.3" || rule == "2.8" || rule == "3.1" || rule == "3.5") { 0 } else { 1 }
+};
+
+def fx_before(x: LintFix, y: LintFix, nmap: long, lmap: [long]) -> bool {
+    let xp = fx_prio(x.rule);
+    let yp = fx_prio(y.rule);
+    if (xp != yp) { return xp < yp; };
+    let xl = fx_local(x.line, nmap, lmap);
+    let yl = fx_local(y.line, nmap, lmap);
+    if (xl != yl) { return xl > yl; };
+    x.col > y.col
+};
+
+// Sort descending by (line, col): a fix never moves the text a later one
+// anchors on.
+def fx_sort(a: [LintFix], nmap: long, lmap: [long]) -> long {
+    let i = 1;
+    while (i < len(a)) {
+        let cur = a[i];
+        let j = i - 1;
+        while (j >= 0 && fx_before(cur, a[j], nmap, lmap)) { a[j + 1] = a[j]; j = j - 1; };
+        a[j + 1] = cur;
+        i = i + 1;
+    };
+    0
+};
+
+def fx_has(a: [long], v: long) -> bool {
+    let i = 0;
+    while (i < len(a)) { if (a[i] == v) { return true; }; i = i + 1; };
+    false
+};
+
+// Rewrite one file's fixes in place.
+def fx_file(fid: long, fixes: [LintFix], src: str, nmap: long, fmap: [long], lmap: [long]) -> str {
+    let lines = split(src, "\n");
+    let mine: [LintFix] = [];
+    let i = 0;
+    while (i < len(fixes)) {
+        let f = fixes[i];
+        if (fx_fid(f.line, nmap, fmap) == fid) { mine += f; };
+        i = i + 1;
+    };
+    fx_sort(mine, nmap, lmap);
+    i = 0;
+    while (i < len(mine)) {
+        let f = mine[i];
+        lines = fx_one(f.rule, f.a, f.b, fx_local(f.line, nmap, lmap), f.col, lines);
+        i = i + 1;
+    };
+    "\n".join(lines)
+};
+
+// The file ids a fix list names, in first-seen order.
+def lint_fix_ids(fixes: [LintFix], fmap: [long]) -> [long] {
+    let nmap = len(fmap);
+    let fids: [long] = [];
+    let i = 0;
+    while (i < len(fixes)) {
+        let fid = fx_fid(fixes[i].line, nmap, fmap);
+        if (!fx_has(fids, fid)) { fids += fid; };
+        i = i + 1;
+    };
+    fids
+};
+
+// One file's fixes applied to its own text: the driver reads and writes the
+// file, the linter owns what changes.
+def lint_fix_text(fid: long, fixes: [LintFix], fmap: [long], lmap: [long], src: str) -> str {
+    fx_file(fid, fixes, src, len(fmap), fmap, lmap)
 };
 
 // The statements from index `from` on, walked without copying the list.
