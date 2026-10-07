@@ -10,8 +10,8 @@
 // has `tokenize_lsp`, the compiler's own loop with comments kept, an f-string
 // whole, byte spans on every token, and an error token where the compiler
 // would exit. So this file holds no lexing rules at all: it maps a token to a
-// span KIND (the numeric constants below, which the semantic-token legend and
-// the formatter index by) and hands the compiler's byte span through.
+// span KIND (the numeric constants below, which the formatter and the
+// outline read) and hands the compiler's byte span through.
 //
 // WHY THIS IS NOT JUST `lexer.tokenize`: the compiler's entry point stays
 // exactly what it was -- comments dropped, f-strings desugared, a malformed
@@ -27,9 +27,8 @@
 import lexer from "../../y/lexer.y";
 
 // ── span kinds ──────────────────────────────────────────────────────────
-// Numeric so the map to an LSP semantic-token type is one table. These are
-// syntactic classes only: variable / parameter / function / method / type /
-// builtin need the checker's index (LSP.md §9.2) and are layered on later.
+// Numeric so the formatter and outline can compare kinds without string
+// comparisons. These are syntactic classes only.
 const K_comment = 1;      // // and /* */ both
 const K_string = 2;       // "..."
 const K_bstring = 3;      // b"..." b'...'
