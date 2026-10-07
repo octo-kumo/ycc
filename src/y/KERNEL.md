@@ -1915,3 +1915,23 @@ the ptr_addr(&buf[0]) for each.  The fixture is NOT committed (its expected woul
 have pinned the fault, the trap this run has hit three times).  Next: put a print
 between those statements to find which one writes at 0x88 -- the technique that
 settled yfs_lookup -- rather than reading the program again.
+
+### Round 112: the ring-3 fault is in the OPENAT CALL, not in the program's constructs
+
+Ran a probe program under the driver that already works (u007_fsexec), printing
+between every construct the u008 program uses.  All of them are fine in ring 3:
+
+    A B C 1 D E 7 F 4 G 4 H 5 I 272638432
+
+so `let b: [byte] = []` plus `+=`, a fixed [byte; 4] with an indexed store,
+`p += s[i] & 255` over a string, `p += 0` for the terminator, and `ptr_addr(&p[0])`
+all behave.  The fault therefore happens at the NEXT thing that program does --
+`syscall(257, -100, ptr_addr(&path[0]), 0)` -- i.e. inside the openat path, before
+the program prints again.
+
+That is a much sharper target than "the program faults": the kernel side of openat
+is user_path() (peek_va8 over the caller's address space into a [byte], then
+from_bytes) followed by fd.fd_open -> yfs_lookup_path -> yfs_find_in.  The next
+measurement is a print inside user_path (the pointer it was given, the byte it
+reads, the length it builds) and one at fd_open's entry: the kernel is the only
+place left, and it has just been proven that the caller's buffer is good.
