@@ -57,7 +57,7 @@ def ident_at(sps: [Span], src: str, off: long) -> Hit? {
 
 // ── visibility ───────────────────────────────────────────────────────────
 //
-// Positions are compared through `scope.pack`, which folds a (line, character)
+// Positions are compared through `scope.pos_key`, which folds a (line, character)
 // pair into one number: a packed position orders the same way the pair does, as
 // long as a character is under a million, which a UTF-16 offset within one line
 // cannot be. So one `<` is the whole comparison.
@@ -80,8 +80,8 @@ def ident_at(sps: [Span], src: str, off: long) -> Hit? {
 //   (that is what makes mutual recursion work), so a def may be used before it
 //   is written and must be offered there.
 def in_scope(idx: FileIdx, d: IdxDecl, line: long, ch: long) -> bool {
-    let here = scope.pack(line, ch);
-    let there = scope.pack(d.line, d.ch);
+    let here = scope.pos_key(line, ch);
+    let there = scope.pos_key(d.line, d.ch);
     let opened = true;
     if (d.scope_start >= 0) {
         // `d.scope_end` was resolved once per index (scope.y's post-pass), so this
@@ -113,7 +113,7 @@ def in_scope(idx: FileIdx, d: IdxDecl, line: long, ch: long) -> bool {
 // candidate at all (in_scope).
 def better(a: IdxDecl, b: IdxDecl, line: long, ch: long) -> bool {
     if (a.depth != b.depth) { a.depth > b.depth }
-    else { scope.pack(a.line, a.ch) > scope.pack(b.line, b.ch) }
+    else { scope.pos_key(a.line, a.ch) > scope.pos_key(b.line, b.ch) }
 };
 
 // The declaration `name` resolves to at a use at (line, ch), or none.

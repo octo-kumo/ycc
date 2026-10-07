@@ -333,14 +333,14 @@ def index_src(src: str, path: str) -> FileIdx {
 
         if (s.kind == scan.K_punct && src[s.off:s.end] == "{") {
             depth = depth + 1;
-            // pos.to_lsp, NOT pack(s.line, s.col): a span's line and column are
+            // pos.to_lsp, NOT pos_key(s.line, s.col): a span's line and column are
             // the compiler's 1-based ones, and packing them raw put every
             // `scope_start` one line BELOW the declaration it belongs to -- so
             // `let` inside a block looked as though it were declared after the
             // block's first line, and a use on the `{` line was judged to be
             // before the scope it is in.
             let op = pos.doc_to_lsp(d, s.line, s.col);
-            let pk = pack(op.line, op.character);
+            let pk = pos_key(op.line, op.character);
             opens += pk;
             if (len(pending_params) > 0) {
                 let q = 0;
@@ -358,7 +358,7 @@ def index_src(src: str, path: str) -> FileIdx {
                 opens = opens[0:len(opens) - 1];
                 let cl = pos.doc_to_lsp(d, s.line, s.col);
                 closed += started;
-                closed += pack(cl.line, cl.character);
+                closed += pos_key(cl.line, cl.character);
             };
             if (len(open_def) > 0) {
                 let fin = open_def[len(open_def) - 1];
@@ -469,7 +469,7 @@ def scan_word(src: str, s: Span) -> str {
     out
 }
 
-def pack(line: long, col: long) -> long { line * 1000000 + col }
+def pos_key(line: long, col: long) -> long { line * 1000000 + col }
 
 // The declaration introduced by the keyword at span index `i`, if the next span
 // is a name.
@@ -690,5 +690,5 @@ export {
     D_DEF, D_LET, D_CONST, D_PARAM, D_TYPE, D_IMPORT, D_SELF,
     IdxDecl, FileIdx, index_src, doc_above, trim_both, is_nameish,
     header_text, annotation_text, param_detail, colon_tail, import_target, scope_end, scope_end_map,
-    in_params, scan_word, pack
+    in_params, scan_word, pos_key
 };
