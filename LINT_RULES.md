@@ -20,8 +20,8 @@ The shortening rules are off by default and reported by `ycc -W 2`
 (level 1 is the dropped-value checks). The correctness rules of section 6
 are the default level 0.
 
-Implemented so far (level 2): 1.1, 1.2, 1.3, 1.4, 1.5, 1.9. The rest is
-the plan.
+Implemented so far (level 2): 1.1, 1.2, 1.3, 1.4, 1.5, 1.9, 2.1, 2.2,
+2.3, 2.4, 2.6. The rest is the plan.
 
 ## 1. Expressions
 

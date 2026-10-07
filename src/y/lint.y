@@ -422,6 +422,7 @@ def lint_stmts(st: LintSt, stmts: [Node], used: bool, top: bool) -> long {
             told = true;
         };
         st.vused = !drop && i == n - 1;
+        if (st.wlevel >= 2) { lint_short_pair(st, stmts, i); };
         lint_stmt(st, s, used && i == n - 1, top);
         if (!dead && lint_diverges(s)) {
             dead = true;
@@ -579,6 +580,7 @@ def lint_node(st: LintSt, node: Node, used: bool) -> long {
     } else if (k == K.kw_while) {
         let loop: While = node;
         lint_node(st, loop.cond, true);
+        if (st.wlevel >= 2) { lint_short_while(st, loop); };
         lint_loop_body(st, loop.body)
     } else if (k == K.func) {
         let func: Func = node;
@@ -935,6 +937,148 @@ def lint_short_slice(st: LintSt, slice: Slice) -> long {
     0
 };
 
+// The one statement of a block, or a void node when the block holds none
+// or more than one. A trailing `;` leaves a void filler (parse_block), so
+// only the real statements are counted.
+def lint_single_stmt(block: Node) -> Node {
+    if (block.k == K.block) {
+        let b: Block = block;
+        let found: Node = { k: K.void, line: block.line, col: block.col };
+        let n = 0;
+        let i = 0;
+        while (i < len(b.stmts)) {
+            if (b.stmts[i].k != K.void) {
+                found = b.stmts[i];
+                n = n + 1;
+            };
+            i = i + 1;
+        };
+        if (n == 1) { return found; };
+    };
+    { k: K.void, line: block.line, col: block.col }
+};
+
+// 1 for `true`, 0 for `false`, -1 for anything else.
+def lint_bool_lit(node: Node) -> long {
+    if (node.k == K.bool) {
+        let l: Leaf = node;
+        if (l.v == "true") { 1 } else { 0 }
+    } else { -1 }
+};
+
+// A value whose evaluation is the same whenever it happens: a literal or a
+// name. Deliberately not a call, a field or an index -- those can observe a
+// write between the two positions a rewrite moves them across.
+def lint_pure(node: Node) -> bool {
+    let k: long = node.k;
+    k == K.num || k == K.str || k == K.bool || k == K.char || k == K.id
+};
+
+// Rule 2.1: an empty `if` arm.
+def lint_short_empty_if(st: LintSt, node: If) -> long {
+    let te = lint_empty_arm(node.then);
+    let ee = node.has_else && lint_empty_arm(node.els);
+    if (te && ee) {
+        lint_warn_at(st, "both branches of this 'if' are empty; it does nothing", node);
+    } else if (te) {
+        lint_warn_at(st, "the 'if' branch is empty; invert the condition and drop the arm", node);
+    };
+    0
+};
+
+// Rules 2.3/2.4: an `if`/`else` that only chooses a value.
+def lint_short_if_ternary(st: LintSt, node: If) -> long {
+    if (!node.has_else) { return 0; };
+    let a = lint_single_stmt(node.then);
+    let b = lint_single_stmt(node.els);
+    if (a.k == K.assign && b.k == K.assign) {
+        let aa: Assign = a;
+        let bb: Assign = b;
+        if (aa.name == bb.name) {
+            lint_warn_at(st, "'" + lint_disp(aa.name) + "' is chosen by a condition in both arms; write one conditional assignment", node);
+        };
+    } else if (a.k == K.ret && b.k == K.ret) {
+        let wa: Wrap = a;
+        let wb: Wrap = b;
+        if (lint_bool_lit(wa.e) >= 0 && lint_bool_lit(wb.e) >= 0 && lint_bool_lit(wa.e) != lint_bool_lit(wb.e)) {
+            lint_warn_at(st, "an 'if' returning true and false can return the condition", node);
+        } else {
+            lint_warn_at(st, "an 'if' returning a value from both arms can return a conditional", node);
+        };
+    };
+    0
+};
+
+def lint_short_if(st: LintSt, node: If) -> long {
+    lint_short_empty_if(st, node);
+    lint_short_if_ternary(st, node);
+    0
+};
+
+// A name set once after its `let`, under a condition (rule 2.2), or a
+// return chosen by a condition (rule 2.4's tail form).
+def lint_short_pair(st: LintSt, stmts: [Node], i: long) -> long {
+    if (i + 1 >= len(stmts)) { return 0; };
+    let d = stmts[i];
+    let n = stmts[i + 1];
+    if (d.k == K.decl && n.k == K.kw_if) {
+        let decl: Decl = d;
+        let iff: If = n;
+        if (decl.kind == "let" && decl.typ.k == K.tnone && lint_pure(decl.v) && !iff.has_else && iff.cond.k == K.id) {
+            let cid: Leaf = iff.cond;
+            let body = lint_single_stmt(iff.then);
+            if (body.k == K.assign && cid.v != decl.name) {
+                let as: Assign = body;
+                if (as.name == decl.name) {
+                    lint_warn_at(st, "'" + lint_disp(decl.name) + "' is set once under a condition; write 'let " + lint_disp(decl.name) + " = <cond> ? <then> : <initial>'", d);
+                };
+            };
+        };
+    } else if (d.k == K.kw_if && n.k == K.ret) {
+        let iff: If = d;
+        let r: Wrap = n;
+        if (!iff.has_else && iff.cond.k == K.id) {
+            let a = lint_single_stmt(iff.then);
+            if (a.k == K.ret) {
+                let ra: Wrap = a;
+                if (lint_bool_lit(ra.e) >= 0 && lint_bool_lit(r.e) >= 0 && lint_bool_lit(ra.e) != lint_bool_lit(r.e)) {
+                    lint_warn_at(st, "an 'if' returning true and then false can return the condition", d);
+                } else {
+                    lint_warn_at(st, "an 'if' returning a value and a following return can be one conditional return", d);
+                };
+            };
+        };
+    };
+    0
+};
+
+// Rule 2.6: `while (true) { if (!c) { break; } ... }` is `while (c) ...`.
+def lint_short_while(st: LintSt, loop: While) -> long {
+    if (lint_bool_lit(loop.cond) != 1) { return 0; };
+    let b = lint_first_stmt(loop.body);
+    if (b.k != K.kw_if) { return 0; };
+    let iff: If = b;
+    if (iff.has_else) { return 0; };
+    let s = lint_single_stmt(iff.then);
+    if (s.k == K.kw_break) {
+        lint_warn_at(st, "'while (true)' with a leading 'break' guard can test the guard instead", b);
+    };
+    0
+};
+
+def lint_first_stmt(block: Node) -> Node {
+    if (block.k == K.block) {
+        let b: Block = block;
+        let i = 0;
+        while (i < len(b.stmts)) {
+            if (b.stmts[i].k != K.void) { return b.stmts[i]; };
+            i = i + 1;
+        };
+    };
+    { k: K.void, line: block.line, col: block.col }
+};
+
+
 
 // Whether evaluating a node can do more than compute its value.
 def lint_effect(node: Node) -> bool {
@@ -992,7 +1136,9 @@ def lint_if(st: LintSt, node: If, used: bool) -> long {
     lint_node(st, node.els, arms);
     if (st.wlevel >= 1 && node.has_else && lint_empty_arm(node.els)) {
         lint_warn_at(st, "the 'else' branch is empty", node)
-    } else { 0 }
+    } else { 0 };
+    if (st.wlevel >= 2) { lint_short_if(st, node); };
+    0
 };
 
 // An arm holding nothing at all: an empty block. Only an `else` is worth a

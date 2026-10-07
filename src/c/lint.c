@@ -64,6 +64,15 @@ static ylong lint_short_bin(LintSt st, Yv *node);
 static ylong lint_short_call(LintSt st, Yv *call);
 static int lint_short_ord(LintSt st, Yv *call);
 static ylong lint_short_slice(LintSt st, Yv *node);
+static Yv *lint_single_stmt(Yv *block);
+static Yv *lint_first_stmt(Yv *block);
+static ylong lint_bool_lit(Yv *node);
+static int lint_pure(Yv *node);
+static ylong lint_short_empty_if(LintSt st, Yv *node);
+static ylong lint_short_if_ternary(LintSt st, Yv *node);
+static ylong lint_short_if(LintSt st, Yv *node);
+static ylong lint_short_pair(LintSt st, Yv *stmts, ylong i);
+static ylong lint_short_while(LintSt st, Yv *loop);
 static ylong lint_loop_body(LintSt st, Yv *body);
 static ylong lint_stmts(LintSt st, Yv *stmts, int used, int top);
 static ylong lint_warn_at(LintSt st, Yv *msg, Yv *node);
@@ -468,6 +477,9 @@ static ylong lint_stmts(LintSt st, Yv *stmts, int used, int top) {
             told = 1;
         }
         (void)yr_set(st, "vused", yv_bool(!drop && i == n - 1));
+        if (yv_l(yr_get(st, "wlevel")) >= 2) {
+            (void)lint_short_pair(st, stmts, i);
+        }
         (void)lint_stmt(st, s, used && i == n - 1, top);
         if (!dead && lint_diverges(s)) {
             dead = 1;
@@ -605,6 +617,9 @@ static ylong lint_node(LintSt st, Yv *node, int used) {
         return lint_opassign(st, node, used);
     } else if (yv_l(k) == K_kw_while) {
         (void)lint_node(st, yr_get(node, "cond"), 1);
+        if (yv_l(yr_get(st, "wlevel")) >= 2) {
+            (void)lint_short_while(st, node);
+        }
         return lint_loop_body(st, yr_get(node, "body"));
     } else if (yv_l(k) == K_func) {
         (void)lint_func(st, node);
@@ -1094,6 +1109,181 @@ static ylong lint_short_slice(LintSt st, Yv *node) {
     return 0;
 }
 
+/* The one statement of a block, or a void node when the block holds none
+ * or more than one. A trailing `;` leaves a void filler (parse_block), so
+ * only the real statements are counted. */
+static Yv *lint_single_stmt(Yv *block) {
+    if (yv_l(yr_get(block, "k")) == K_block) {
+        Yv *stmts = yr_get(block, "stmts");
+        Yv *found = yr(3, "k", yv_long(K_void), "line", yr_get(block, "line"),
+                       "col", yr_get(block, "col"));
+        ylong n = 0;
+        ylong i = 0;
+        while (i < yv_len(stmts)) {
+            if (yv_l(yr_get(ya_get(stmts, i), "k")) != K_void) {
+                found = ya_get(stmts, i);
+                n = n + 1;
+            }
+            i = i + 1;
+        }
+        if (n == 1) { return found; }
+    }
+    return yr(3, "k", yv_long(K_void), "line", yr_get(block, "line"), "col",
+              yr_get(block, "col"));
+}
+
+static Yv *lint_first_stmt(Yv *block) {
+    if (yv_l(yr_get(block, "k")) == K_block) {
+        Yv *stmts = yr_get(block, "stmts");
+        ylong i = 0;
+        while (i < yv_len(stmts)) {
+            if (yv_l(yr_get(ya_get(stmts, i), "k")) != K_void) {
+                return ya_get(stmts, i);
+            }
+            i = i + 1;
+        }
+    }
+    return yr(3, "k", yv_long(K_void), "line", yr_get(block, "line"), "col",
+              yr_get(block, "col"));
+}
+
+/* 1 for `true`, 0 for `false`, -1 for anything else. */
+static ylong lint_bool_lit(Yv *node) {
+    if (yv_l(yr_get(node, "k")) == K_bool) {
+        return ys_eq_lit(yr_get(node, "v"), "true") ? 1 : 0;
+    }
+    return -1;
+}
+
+/* A value whose evaluation is the same whenever it happens: a literal or a
+ * name. Deliberately not a call, a field or an index. */
+static int lint_pure(Yv *node) {
+    ylong k = yv_l(yr_get(node, "k"));
+    return k == K_num || k == K_str || k == K_bool || k == K_char ||
+           k == K_id;
+}
+
+/* Rule 2.1: an empty `if` arm. */
+static ylong lint_short_empty_if(LintSt st, Yv *node) {
+    int te = lint_empty_arm(yr_get(node, "then"));
+    int ee = yv_b(yr_get(node, "has_else")) && lint_empty_arm(yr_get(node, "els"));
+    if (te && ee) {
+        (void)lint_warn_at(
+            st, ys("both branches of this 'if' are empty; it does nothing"),
+            node);
+    } else if (te) {
+        (void)lint_warn_at(
+            st,
+            ys("the 'if' branch is empty; invert the condition and drop the arm"),
+            node);
+    }
+    return 0;
+}
+
+/* Rules 2.3/2.4: an `if`/`else` that only chooses a value. */
+static ylong lint_short_if_ternary(LintSt st, Yv *node) {
+    if (!yv_b(yr_get(node, "has_else"))) { return 0; }
+    Yv *a = lint_single_stmt(yr_get(node, "then"));
+    Yv *b = lint_single_stmt(yr_get(node, "els"));
+    if (yv_l(yr_get(a, "k")) == K_assign && yv_l(yr_get(b, "k")) == K_assign) {
+        if (ys_eq(yr_get(a, "name"), yr_get(b, "name"))) {
+            (void)lint_warn_at(
+                st,
+                lint_cat(3, ys("'"), lint_disp(yr_get(a, "name")),
+                         ys("' is chosen by a condition in both arms; write one "
+                            "conditional assignment")),
+                node);
+        }
+    } else if (yv_l(yr_get(a, "k")) == K_ret && yv_l(yr_get(b, "k")) == K_ret) {
+        ylong la = lint_bool_lit(yr_get(a, "e"));
+        ylong lb = lint_bool_lit(yr_get(b, "e"));
+        if (la >= 0 && lb >= 0 && la != lb) {
+            (void)lint_warn_at(
+                st, ys("an 'if' returning true and false can return the condition"),
+                node);
+        } else {
+            (void)lint_warn_at(
+                st,
+                ys("an 'if' returning a value from both arms can return a conditional"),
+                node);
+        }
+    }
+    return 0;
+}
+
+static ylong lint_short_if(LintSt st, Yv *node) {
+    (void)lint_short_empty_if(st, node);
+    (void)lint_short_if_ternary(st, node);
+    return 0;
+}
+
+/* A name set once after its `let`, under a condition (rule 2.2), or a
+ * return chosen by a condition (rule 2.4's tail form). */
+static ylong lint_short_pair(LintSt st, Yv *stmts, ylong i) {
+    if (i + 1 >= yv_len(stmts)) { return 0; }
+    Yv *d = ya_get(stmts, i);
+    Yv *n = ya_get(stmts, i + 1);
+    if (yv_l(yr_get(d, "k")) == K_decl && yv_l(yr_get(n, "k")) == K_kw_if) {
+        if (ys_eq_lit(yr_get(d, "kind"), "let") &&
+            yv_l(yr_get(yr_get(d, "typ"), "k")) == K_tnone &&
+            lint_pure(yr_get(d, "v")) && !yv_b(yr_get(n, "has_else")) &&
+            yv_l(yr_get(yr_get(n, "cond"), "k")) == K_id) {
+            Yv *body = lint_single_stmt(yr_get(n, "then"));
+            if (yv_l(yr_get(body, "k")) == K_assign &&
+                !ys_eq(yr_get(yr_get(n, "cond"), "v"), yr_get(d, "name")) &&
+                ys_eq(yr_get(body, "name"), yr_get(d, "name"))) {
+                Yv *dn = lint_disp(yr_get(d, "name"));
+                (void)lint_warn_at(
+                    st,
+                    lint_cat(5, ys("'"), dn,
+                             ys("' is set once under a condition; write 'let "),
+                             dn, ys(" = <cond> ? <then> : <initial>'")),
+                    d);
+            }
+        }
+    } else if (yv_l(yr_get(d, "k")) == K_kw_if && yv_l(yr_get(n, "k")) == K_ret) {
+        if (!yv_b(yr_get(d, "has_else")) &&
+            yv_l(yr_get(yr_get(d, "cond"), "k")) == K_id) {
+            Yv *a = lint_single_stmt(yr_get(d, "then"));
+            if (yv_l(yr_get(a, "k")) == K_ret) {
+                ylong la = lint_bool_lit(yr_get(a, "e"));
+                ylong lb = lint_bool_lit(yr_get(n, "e"));
+                if (la >= 0 && lb >= 0 && la != lb) {
+                    (void)lint_warn_at(
+                        st,
+                        ys("an 'if' returning true and then false can return the "
+                           "condition"),
+                        d);
+                } else {
+                    (void)lint_warn_at(
+                        st,
+                        ys("an 'if' returning a value and a following return can be "
+                           "one conditional return"),
+                        d);
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+/* Rule 2.6: `while (true) { if (!c) { break; } ... }` is `while (c) ...`. */
+static ylong lint_short_while(LintSt st, Yv *loop) {
+    if (lint_bool_lit(yr_get(loop, "cond")) != 1) { return 0; }
+    Yv *b = lint_first_stmt(yr_get(loop, "body"));
+    if (yv_l(yr_get(b, "k")) != K_kw_if) { return 0; }
+    if (yv_b(yr_get(b, "has_else"))) { return 0; }
+    Yv *s = lint_single_stmt(yr_get(b, "then"));
+    if (yv_l(yr_get(s, "k")) == K_kw_break) {
+        (void)lint_warn_at(
+            st,
+            ys("'while (true)' with a leading 'break' guard can test the guard "
+               "instead"),
+            b);
+    }
+    return 0;
+}
+
 /* Whether evaluating a node can do more than compute its value. */
 static int lint_effect(Yv *node) {
     Yv *k = yr_get(node, "k");
@@ -1156,10 +1346,12 @@ static ylong lint_if(LintSt st, Yv *node, int used) {
     (void)lint_node(st, yr_get(node, "els"), arms);
     if (yv_l(yr_get(st, "wlevel")) >= 1 && yv_b(yr_get(node, "has_else")) &&
         lint_empty_arm(yr_get(node, "els"))) {
-        return lint_warn_at(st, ys("the 'else' branch is empty"), node);
-    } else {
-        return 0;
+        (void)lint_warn_at(st, ys("the 'else' branch is empty"), node);
     }
+    if (yv_l(yr_get(st, "wlevel")) >= 2) {
+        (void)lint_short_if(st, node);
+    }
+    return 0;
 }
 
 /* An arm holding nothing at all: an empty block. Only an `else` is worth a
