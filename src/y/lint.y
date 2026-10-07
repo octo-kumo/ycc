@@ -78,11 +78,10 @@ def lint_fixes_get() -> [LintFix] { lint_fixes };
 // Record a fixable shortening beside the warning it names. `a`/`b` are the
 // rule's operands; fix.y reads them, so adding a fix is a call here and a
 // case there, never a second search of the tree.
-def lint_fix(st: LintSt, rule: str, line: long, col: long, a: str, b: str) -> long {
+def lint_fix(st: LintSt, rule: str, line: long, col: long, a: str, b: str) {
     if (st.wlevel >= 2) {
         lint_fixes += { rule: rule, line: line, col: col, a: a, b: b };
     };
-    0
 };
 
 // The warnings for one unit: `ast` as parsed, `ast3` renamed (and
@@ -1106,7 +1105,8 @@ def lint_short_empty_if(st: LintSt, node: If) -> long {
         lint_fix(st, "2.1", node.line, node.col, "both", "");
     } else if (te) {
         lint_warn_at(st, "the 'if' branch is empty; invert the condition and drop the arm", node);
-        lint_fix(st, "2.1", node.line, node.col, "then", "");
+        if (node.has_else) { lint_fix(st, "2.1", node.line, node.col, "inv", ""); }
+        else { lint_fix(st, "2.1", node.line, node.col, "del", ""); };
     };
     0
 };
@@ -1689,6 +1689,10 @@ def fx_loop(rule: str, arr: str, var: str, ln: long, lines: [str]) -> [str] {
     if (ln < 1 || ln >= len(lines)) { return lines; };
     let dline = lines[ln - 1];
     let wline = lines[ln];
+    // A one-line `while (c) { B; i++; };` has its body on the header line;
+    // the close scan below would run past it.
+    let wt = fx_strip(wline);
+    if (len(wt) == 0 || wt[len(wt) - 1:len(wt)] != "{") { return lines; };
     let lo = fx_let_lo(dline, var);
     if (lo == "") { return lines; };
     let hi = fx_while_hi(wline, var);
@@ -1729,6 +1733,8 @@ def fx_loop(rule: str, arr: str, var: str, ln: long, lines: [str]) -> [str] {
 def fx_range(arr: str, ln: long, lines: [str]) -> [str] {
     if (ln < 1 || ln > len(lines)) { return lines; };
     let h = lines[ln - 1];
+    let ht = fx_strip(h);
+    if (len(ht) == 0 || ht[len(ht) - 1:len(ht)] != "{") { return lines; };
     let indent = fx_indent(h);
     let i = fx_find(h, "foreach", 0);
     if (i < 0) { return lines; };
@@ -1803,12 +1809,16 @@ def fx_semi(tail: str) -> str {
     if (len(tail) > 0 && tail[0] == 59) { ";" } else { "" }
 };
 
-// 2.1/2.3: an `if`/`else` written on one line.
-def fx_if_line(rule: str, ln: long, lines: [str]) -> [str] {
+// 2.1/2.3: an `if`/`else` written on one line. `b` is the 2.1 case (inv,
+// del, both); a multi-line arm is left for a later pass.
+def fx_if_line(rule: str, b: str, ln: long, lines: [str]) -> [str] {
     if (ln < 1 || ln > len(lines)) { return lines; };
     let line = lines[ln - 1];
     let i = fx_find(line, "if", 0);
     if (i < 0) { return lines; };
+    // Dropping or inverting an `else if` arm changes which branch runs.
+    let pre = fx_strip(line[:i]);
+    if (len(pre) >= 4 && pre[len(pre) - 4:len(pre)] == "else") { return lines; };
     let o = fx_ws(line, i + 2);
     if (o >= len(line) || line[o] != 40) { return lines; };
     let c = fx_match(line, o, 40, 41);
@@ -1835,16 +1845,20 @@ def fx_if_line(rule: str, ln: long, lines: [str]) -> [str] {
             if (av == "" || bv == "" || fx_pipe_name(av) != fx_pipe_name(bv)) { return lines; };
             lines[ln - 1] = indent + fx_pipe_name(av) + " = " + cond + " ? " + fx_pipe_val(av) + " : " + fx_pipe_val(bv) + ";";
         } else if (rule == "2.1") {
-            if (then == "" && els != "") {
+            if (tail != "" && tail != ";") { return lines; };
+            if (b == "inv" && then == "" && els != "") {
                 lines[ln - 1] = indent + "if (!(" + cond + ")) { " + els + " }" + fx_semi(tail);
-            } else if (then != "" && els == "") {
-                lines[ln - 1] = indent + "if (" + cond + ") { " + then + " }" + fx_semi(tail);
-            } else if (then == "" && els == "") {
+            } else if (b == "both" && then == "" && els == "") {
                 lines = fx_drop(lines, ln - 1);
+            } else if (b == "del" && then != "" && els == "") {
+                lines[ln - 1] = indent + "if (" + cond + ") { " + then + " }" + fx_semi(tail);
             };
         };
-    } else if (rule == "2.1" && then == "") {
-        lines = fx_drop(lines, ln - 1);
+    } else if (rule == "2.1" && b == "del" && then == "") {
+        // no else on this line: the whole `if` does nothing, and nothing
+        // else may share the line
+        let tail = fx_strip(line[e1 + 1:]);
+        if (tail == "" || tail == ";") { lines = fx_drop(lines, ln - 1); };
     };
     lines
 };
@@ -1859,8 +1873,8 @@ def fx_one(rule: str, a: str, b: str, ln: long, col: long, lines: [str]) -> [str
     else if (rule == "2.8") { lines = fx_loop(rule, b, a, ln, lines); }
     else if (rule == "3.1") { lines = fx_loop(rule, b, a, ln, lines); }
     else if (rule == "3.5") { lines = fx_range(a, ln, lines); }
-    else if (rule == "2.1") { lines = fx_if_line(rule, ln, lines); }
-    else if (rule == "2.3") { lines = fx_if_line(rule, ln, lines); };
+    else if (rule == "2.1") { lines = fx_if_line(rule, b, ln, lines); }
+    else if (rule == "2.3") { lines = fx_if_line(rule, b, ln, lines); };
     lines
 };
 
@@ -1934,7 +1948,13 @@ def fx_file(fid: long, fixes: [LintFix], src: str, nmap: long, fmap: [long], lma
         lines = fx_one(f.rule, f.a, f.b, fx_local(f.line, nmap, lmap), f.col, lines);
         i = i + 1;
     };
-    "\n".join(lines)
+    let out = "\n".join(lines);
+    // split drops a trailing empty field, so put the file's own final
+    // newline back.
+    if (len(src) > 0 && src[len(src) - 1:len(src)] == "\n" && (len(out) == 0 || out[len(out) - 1:len(out)] != "\n")) {
+        out = out + "\n";
+    };
+    out
 };
 
 // The file ids a fix list names, in first-seen order.
