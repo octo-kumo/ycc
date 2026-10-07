@@ -897,6 +897,13 @@ def main(cmdline: [str]) -> long {
         puts("ycc: -g is not supported with --kernel\n");
         exit(1);
     };
+    if (target_is_kernel() && args.run) {
+        // `ycc run` forks and execs the image it just wrote; an ELF32
+        // Multiboot payload is entered by a boot loader in 32-bit protected
+        // mode, which execve cannot do.  qemu -kernel is the way to run one.
+        puts("ycc: --kernel cannot run its image (boot it with 'qemu-system-x86_64 -kernel')\n");
+        exit(1);
+    };
     // NOTE: vestigial alias (see print_phase_rows) — `args.out` works.
     let pargs = args;
     let out = pargs.out;
