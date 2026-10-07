@@ -1320,3 +1320,23 @@ Two rules that each cost rounds in this run, both proved here: rebuild BOTH
 engines after touching an embedded arch/*.s (make cycc as well as the Y one)
 before reading any suite number, and run the main tree's compiler as a control
 before believing that something on this branch is broken.
+
+## M3's first acceptance test: u005_ipc (round 81)
+
+    [kernel] 34 passed, 0 failed / 34 total
+
+test/kernel/u005_ipc.{driver,user}.y run two processes through a synchronous
+request/reply IPC exchange, and the transcript is the fixture's .expected:
+
+    ports: 1 and 2 / starting the server / S1 / C1 / S2 / C2 / client got 42 /
+    S2b / S3 / S4 / client got 10 / server done
+
+Getting here needed the callee-saved frame change (see above), and the last
+piece was sys_fork: it copies the parent's canonical frame to the child, and the
+frame grew from 14 words to 20, so its `ktop - 14 * 8` and `while (i < 14)` had
+to follow.  The rax slot at +48 did NOT move, because the six sit above the nine.
+
+Two process lessons, both of which cost rounds here and are worth keeping:
+verify ANY hard-coded frame size or offset when the frame changes (sys_fork was
+the last one), and after editing an embedded arch/*.s rebuild BOTH engines before
+reading a suite number.
