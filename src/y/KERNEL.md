@@ -718,3 +718,22 @@ configuration -- patch them out of the control's native.c copy one at a time
 -- rather than any further source or commit hunting.  Note the size constant and
 the shake are the two that can interact with round 45's bump fix, which is why
 neither was a fix on its own.
+
+### Round 49: the header size is an INVARIANT, not a knob
+
+Tested item 3 of the three-item pure diff -- arr_header_size back to 24, with
+round 45's bump fix already in place (a combination never tried before).  The
+COMPILER segfaults: with the merged runtime, 24 is not a smaller header, it is
+an inconsistent one, and the emitter crashes building any program.  So the
+"three semantic items" are really two plus an invariant: the array header IS 32
+(the fourth word, front), the prologue line is provably harmless (round 33), and
+what remains is item 2 -- the merged link step DROPPING the ygiS_...CLK_TS
+initializer range.
+
+That item deserves the next look, and the mechanism to check is concrete: with
+the range dropped the CELL still exists (yg_...CLK_TS is emitted, zeroed), so
+any surviving reader sees an array header of {len 0, cap 0, data 0, front 0} and
+`&CLK_TS[0]` hands a data pointer of 0 to whatever reads or writes it -- which
+is exactly the shape of a read at 0.  The question to answer is whether
+clock_us/CLK_TS is genuinely dead in a kernel image or merely looks dead to a
+shake whose roots were computed for a hosted program (a kernel has no _start).
