@@ -75,10 +75,10 @@ def p_infer_reset() -> void {
     0
 };
 
-def p_body_note(name: str, t: Type) -> long {
-    if (t.k == K.tnone) { return 0; };
+def p_body_note(name: str, t: Type) -> void {
+    if (t.k == K.tnone) { 0; return; };
     for i in 0..len(pbody_names) {
-        if (pbody_names[i] == name) { pbody_typs[i] = t; return 0; };
+        if (pbody_names[i] == name) { pbody_typs[i] = t; 0; return; };
     };
     pbody_names += name;
     pbody_typs += t;
@@ -132,8 +132,8 @@ def p_str_in(xs: [str], s: str) -> bool {
     found
 };
 
-def p_body_bin_clue(left: Node, op: str, right: Node) -> long {
-    if (len(pbody_names) == 0) { return 0; };
+def p_body_bin_clue(left: Node, op: str, right: Node) -> void {
+    if (len(pbody_names) == 0) { 0; return; };
     if (left.k == K.id) {
         let id: Leaf = left;
         if (p_str_in(pbody_names, id.v)) { p_body_note(id.v, p_bin_hint(op, right)); };
@@ -145,8 +145,8 @@ def p_body_bin_clue(left: Node, op: str, right: Node) -> long {
     0
 };
 
-def p_call_note(callee: Node, args: [Node]) -> long {
-    if (callee.k != K.id) { return 0; };
+def p_call_note(callee: Node, args: [Node]) -> void {
+    if (callee.k != K.id) { 0; return; };
     let id: Leaf = callee;
     for i in 0..len(args) {
         let lt = lit_type(args[i]);
