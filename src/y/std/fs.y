@@ -263,8 +263,7 @@ def list_dir(path: str) -> [str]? {
         // seven bytes less than the array to keep that store inside it.
         if (len(y_fs_listbuf) < FS_LISTBUF) {
             let b: [byte] = [];
-            let z = 0;
-            while (z < FS_LISTBUF) { b += 0; z++; };
+            for z in 0..FS_LISTBUF { b += 0; };
             y_fs_listbuf = b;
         };
         let buf: [byte] = y_fs_listbuf;

@@ -2067,8 +2067,7 @@ def pe_codes_sorted(g: [[long]], i: long) -> [long] {
     };
     let slots: [long] = [];
     out.foreach((_el, k) => {
-        let q = 0;
-        while (q < len(out[k])) { slots += out[k][q]; q++; };
+        for q in 0..len(out[k]) { slots += out[k][q]; };
     });
     slots
 };

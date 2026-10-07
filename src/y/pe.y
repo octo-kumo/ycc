@@ -109,8 +109,7 @@ def pe_sections(textlen: long, bss_len: long, pdata: [byte], xdata: [byte], dsec
     if (len(xdata) > 0) {
         out += pe_sec(".xdata", len(xdata), 0, 0, PE_CH_R);
     };
-    let i = 0;
-    while (i < len(dsecs)) { out += dsecs[i]; i++; };
+    dsecs.foreach((_el, i) => { out += dsecs[i]; });
     pe_place(out)
 };
 
@@ -207,8 +206,7 @@ def pe_put64(b: [byte], at: long, v: long) -> void {
 };
 
 def pe_put_str(b: [byte], at: long, s: str) -> void {
-    let i = 0;
-    while (i < len(s)) { b[at + i] = s[i]; i++; };
+    for i in 0..len(s) { b[at + i] = s[i]; };
     b[at + len(s)] = 0;
 };
 
@@ -284,8 +282,7 @@ def pe_import_bytes(spec: [WImport], rva: long, bss_rva: long) -> [byte] {
     };
     let total = at;
     let out: [byte] = [];
-    let z = 0;
-    while (z < total) { out += 0; z++; };
+    for z in 0..total { out += 0; };
     i = 0;
     while (i < nd) {
         let d = 20 * i;
@@ -316,8 +313,7 @@ def pe_build(code: [byte], rodata: [byte], entry_off: long, bss_len: long, pdata
     // be built (an RVA is only known after pe_place) and rebuilt after it.
     let dsecs2: [PeSecHdr] = [];
     let ddata2: [[byte]] = [];
-    let di = 0;
-    while (di < len(dsecs)) { dsecs2 += dsecs[di]; ddata2 += ddata[di]; di++; };
+    dsecs.foreach((_el, di) => { dsecs2 += dsecs[di]; ddata2 += ddata[di]; });
     let imp_sz = 0;
     if (len(imp) > 0) {
         imp_sz = len(pe_import_bytes(imp, 0, 0));

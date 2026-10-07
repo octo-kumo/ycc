@@ -447,8 +447,7 @@ def rn_reaches_any(st: RnSt, id: long) -> bool {
     let n = len(st.tys);
     if (n != rn_reach_n) {
         let fresh: [long] = [];
-        let i = 0;
-        while (i < n) { fresh += 0; i++; };
+        for i in 0..n { fresh += 0; };
         rn_reach_memo = fresh;
         rn_reach_n = n;
     };

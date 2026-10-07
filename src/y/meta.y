@@ -458,8 +458,7 @@ def fab_stack(stk: [byte], av: [str]) -> long {
         let n = len(s);
         p = p - n - 1;
         let at = p - base;
-        let j = 0;
-        while (j < n) { stk[at + j] = s[j]; j++; };
+        for j in 0..n { stk[at + j] = s[j]; };
         stk[at + n] = 0;
         ptrs += p;
         k++;
@@ -708,8 +707,7 @@ def run_image_read(stk: [byte], m: Mapd, pid: long) -> RunRes {
             if (k <= 0) {
                 more = false;
             } else if (!capped) {
-                let i = 0;
-                while (i < k) { out += buf[i]; i++; };
+                for i in 0..k { out += buf[i]; };
                 if (len(out) > MG_MAX) { capped = true; };
             };
         };
@@ -1747,8 +1745,7 @@ def sg_m_live() -> long {
 def sg_mids_move() -> long {
     let n = len(sg_mids);
     let done: [bool] = [];
-    let i = 0;
-    while (i < n) { done += false; i++; };
+    for i in 0..n { done += false; };
     let left = n;
     while (left > 0) {
         let at = 0 - 1;

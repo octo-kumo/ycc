@@ -1444,14 +1444,12 @@ def range_is_pure(ir: [long], a: long, b: long, cell: str) -> bool {
                 if (lname(ir[at + 1]) != "y_alloc") { ok = false; };
             } else if (len(kinds) > 0 && form.mn == "mov" && kinds[len(kinds) - 1] == insn.O_MEM) {
                 let wp = at + 1;
-                let i = 0;
-                while (i < len(kinds) - 1) { wp = wp + insn.ir_kind_words(kinds[i]); i++; };
+                for i in 0..len(kinds) - 1 { wp = wp + insn.ir_kind_words(kinds[i]); };
                 let nm = lname(ir[wp + 4]);
                 if (len(nm) > 0 && nm != cell) { ok = false; };
             } else if (len(kinds) > 0 && form.mn == "mov" && kinds[len(kinds) - 1] == insn.O_LBL) {
                 let wp = at + 1;
-                let i = 0;
-                while (i < len(kinds) - 1) { wp = wp + insn.ir_kind_words(kinds[i]); i++; };
+                for i in 0..len(kinds) - 1 { wp = wp + insn.ir_kind_words(kinds[i]); };
                 let nm = lname(ir[wp]);
                 if (len(nm) > 0 && nm != cell) { ok = false; };
             };
@@ -12204,12 +12202,10 @@ def dup_y_label(deps: [Unit], prog: Unit) -> long {
     let nu = len(deps);
     if (nu > 0) {
         let m = asm.labmap_new((nu + 1) * 2 + 16);
-        let i = 0;
-        while (i <= nu) {
+        for i in 0..nu + 1 {
             let u: Unit = if (i < nu) { deps[i] } else { prog };
             let labs = u.labels;
-            let k = 0;
-            while (k < len(labs)) {
+            for k in 0..len(labs) {
                 let lb: str = labs[k];
                 if (lb[:2] == "y_") {
                     let g = asm.labmap_get(m, lb);
@@ -12223,9 +12219,7 @@ def dup_y_label(deps: [Unit], prog: Unit) -> long {
                         m = r.map;
                     };
                 };
-                k++;
             };
-            i++;
         };
     };
     0
@@ -12473,8 +12467,7 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
         // whatever is at that address instead -- .pdata, or code.
         if (target_is_windows()) {
             let wl = arch.w_iat_bss_lines();
-            let wj = 0;
-            while (wj < len(wl)) { gpieces += wl[wj]; wj++; };
+            for wj in 0..len(wl) { gpieces += wl[wj]; };
         };
         gpieces += heap_text;
         gls.foreach((_el, gk) => {
