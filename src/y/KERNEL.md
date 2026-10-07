@@ -1489,3 +1489,31 @@ Order of work, smallest verifiable step first: the format + mkfs on the host, th
 yfs_init/yfs_lookup/yfs_read in the kernel with a t* fixture that reads a known
 file out of a generated image and prints its contents, then the fd broker, then
 the fs server, then /init and /bin/sh.
+
+### Round 89: the kernel-side YFS1 reader
+
+os/kernel/yfs.y now implements yfs_init (validate "YFS1"/version, remember block
+size and root inode), yfs_size, yfs_block_of (twelve direct slots then one
+single-indirect), yfs_read (copies through the blocks into the caller's buffer,
+which is in the CURRENT address space -- the caller's at a syscall, the kernel's
+at boot), and yfs_lookup (one component in the root directory).  u16 is read by
+hand from two peek8s because the kernel's peek helpers cover 8, 32 and 64 bits.
+
+It compiles (a throwaway --kernel program that imports it builds clean) and the
+suite is unchanged at 36/36, but it is NOT yet exercised at runtime, and the
+reason is structural rather than an omission: no t* case can receive a filesystem
+image, because the harness builds a t* image from the .y source and boots it
+WITHOUT -initrd, while a u* case's -initrd is the compiled user program.  So the
+image has to arrive one of two ways:
+
+  * a `$KDIR/$base.initrd` convention in the t* loop (a small harness change:
+    pass -initrd when the file exists), which is also the general fix for any
+    future image-based case; or
+  * a t* program that BUILDS a YFS1 image in a scratch page itself (poke the
+    superblock, inode and data bytes exactly as os/tools/mkfs.y does) and then
+    runs yfs_init/yfs_lookup/yfs_read against it -- self-contained, no harness
+    change, and it pins the reader against the writer's format.
+
+The second is the better fixture because it tests the FORMAT CONTRACT between
+mkfs and the kernel in one file; the first is the better harness feature.  Both
+are small.
