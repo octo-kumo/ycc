@@ -434,6 +434,8 @@ HTTP_EXPECTED="200 OK 11 hello world
 twice hello world b'hello world' 4 4
 200 true hello world
 200 POST posted body
+same-origin 200 true
+cross-origin 200 -1 34
 custom value
 200 11 []
 404 no /nothing

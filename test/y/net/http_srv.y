@@ -1,7 +1,10 @@
 // An HTTP/1.1 server for test_net.sh's http client checks, on port
 // argv[1]: one connection at a time, each kept open for request after
 // request. Routes: /hello (Content-Length), /chunked, /redirect (302 to
-// /hello), /setcookie, /whoami (the Cookie header), /echo (the body back),
+// /hello), /sredirect (302 to /hdrs, same origin), /xredirect (302 to
+// /hdrs on localhost -- the same server by another name, so the origin
+// changes), /hdrs (every header this request carried, one name a line),
+// /setcookie, /whoami (the Cookie header), /echo (the body back),
 // /header (X-Custom back), /conn (which connection this is), /close
 // (Connection: close), /quit (the server ends). It prints "ready" once
 // it listens.
@@ -56,6 +59,24 @@ def serve(fd: long) {
                 net.send_str(fd, "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n4;ext=1\r\ndefg\r\n1\r\nh\r\n0\r\nX-Trailer: t\r\n\r\n");
             }
             else if (path == "/redirect") { reply(fd, "302 Found", "Location: /hello\r\n", ""); }
+            else if (path == "/sredirect") {
+                reply(fd, "302 Found", "Location: /hdrs\r\n", "");
+            }
+            // A redirect that leaves the origin: the same server, reached by
+            // another name. The client's credentials must not come with it.
+            else if (path == "/xredirect") {
+                reply(fd, "302 Found", "Location: http://localhost:" + tostring(port) + "/hdrs\r\n", "");
+            }
+            // Every header this request carried, one per line: what a
+            // cross-origin redirect is allowed to deliver.
+            else if (path == "/hdrs") {
+                let seen = "";
+                foreach (hl in head.lines()) {
+                    let hp = hl.index_of(":");
+                    if (hp > 0) { seen = seen + hl[0:hp].lower() + "\n"; };
+                };
+                reply(fd, "200 OK", "", seen);
+            }
             else if (path == "/setcookie") { reply(fd, "200 OK", "Set-Cookie: sid=abc123; Path=/\r\nSet-Cookie: theme=dark\r\n", "ok"); }
             else if (path == "/whoami") {
                 let c = header_of(head, "cookie");

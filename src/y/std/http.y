@@ -98,6 +98,15 @@ def parse_url(u: str) -> Url {
     { ok: true, secure: secure, host: host.lower(), port: port, path: path }
 };
 
+// A header that carries the caller's credentials to whoever answers: RFC 9110
+// Â§11.6.2 makes `Authorization` and `Cookie` conditional on the target being
+// the origin they were minted for, and a redirect is exactly the case where
+// the target stops being that.
+def is_credential(name: str) -> bool {
+    let l = name.lower();
+    l == "authorization" || l == "cookie"
+};
+
 def origin(u: Url) -> str {
     let scheme = "http://";
     if (u.secure) { scheme = "https://"; };
@@ -480,11 +489,18 @@ def fetch(method: str, url: str, o: Opts, extra: { str => str }, pool: [Link], k
     if (o.redirects != none) { hops = o.redirects !; };
     let cur = url;
     let m = method;
+    // The caller's credentials ride along until a redirect leaves the origin
+    // they were given for. Once stripped they stay stripped, even if a later
+    // hop returns to where the request started: the header has already been
+    // offered to a host it was not for.
+    let fwd = true;
     while (true) {
         let u = parse_url(cur);
         if (!u.ok) { return failed(cur, "not an http or https URL: " + cur); };
         let hdrs: { str => str } = {};
-        foreach (k in keys(base_hdrs)) { hdrs[k] = base_hdrs[k] !; };
+        foreach (k in keys(base_hdrs)) {
+            if (fwd || !is_credential(k)) { hdrs[k] = base_hdrs[k] !; };
+        };
         let ck = cookie_header(jar, u.host);
         if (ck != "") { hdrs["Cookie"] = ck; };
         let l = pick_link(pool, u, o, keep);
@@ -508,6 +524,8 @@ def fetch(method: str, url: str, o: Opts, extra: { str => str }, pool: [Link], k
         if (!keep) { link_close(l); };
         hops = hops - 1;
         cur = resolve_ref(cur, loc !);
+        let nu = parse_url(cur);
+        if (nu.ok && origin(nu) != origin(u)) { fwd = false; };
         if (r.status == 303 || ((r.status == 301 || r.status == 302) && m == "POST")) {
             m = "GET";
             body = "";

@@ -1209,8 +1209,15 @@ the URL; each then the options: \ic{headers} (a map; they replace the
 client's own of the same name), \ic{body}, \ic{timeout} (seconds a read
 or a connect may wait, 30), \ic{redirects} (how many to follow, 5),
 \ic{insecure} (do not check an \ic{https} server's chain) and
-\ic{anchors} (PEM certificates to trust instead of the system's). The
-response is an \ic{http.Response}: \ic{status} (0 when none came, and then \ic{err}
+\ic{anchors} (PEM certificates to trust instead of the system's).
+A redirect that leaves the origin --- a different scheme, host or port ---
+drops the caller's \ic{Authorization} and \ic{Cookie} headers, as
+RFC~9110 \S11.6.2 has them conditional on the target being the origin
+they were minted for; every other header rides along, and so do the
+cookies the jar holds for the new host. Once dropped they stay dropped,
+even if a later hop returns to where the request started: the header has
+already been offered to a host it was not for. The response is an
+\ic{http.Response}: \ic{status} (0 when none came, and then \ic{err}
 says why), \ic{reason}, \ic{headers} (names in lower case; a repeated
 header's values joined by \ic{", "}, \ic{set-cookie}'s by newlines),
 \ic{size} (the Content-Length, or $-1$), \ic{url} (after redirects), and
