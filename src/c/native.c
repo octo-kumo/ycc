@@ -2478,6 +2478,8 @@ static int range_is_pure(Yv *ir, ylong a, ylong b, Yv *cell) {
  * mark through its closing one, marks included, and only when the range is
  * pure (range_is_pure). */
 static Yv *ir_drop_inits(Yv *ir, Yv *dead) {
+    if (target_is_kernel()) { return ir; }
+
     Yv *out = yav(0);
     ylong at = 0;
     ylong keep_from = 0;

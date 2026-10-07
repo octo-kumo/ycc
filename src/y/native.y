@@ -1514,6 +1514,8 @@ def range_is_pure(ir: [long], a: long, b: long, cell: str) -> bool {
 };
 
 def ir_drop_inits(ir: [long], dead: [str]) -> [long] {
+    if (target_is_kernel()) { return ir; };
+
     let out: [long] = [];
     let at = 0;
     let keep_from = 0;
