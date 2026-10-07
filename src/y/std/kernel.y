@@ -1005,6 +1005,16 @@ def task_frame(kstack_top: long, entry: long, ustack: long) -> long {
     p = p - 8; poke_va64(p, 514);        // RFLAGS (IF and the reserved bit 1)
     p = p - 8; poke_va64(p, 35);         // CS (user code | 3)
     p = p - 8; poke_va64(p, entry);      // RIP
+    // The Y ABI's callee-saved set has to survive a suspension: a syscall that
+    // only traps and returns often leaves rbx/rbp/r12-r15 alone, but one that
+    // suspends the task hands the CPU to other code that uses them freely, and
+    // the resumed program then reads garbage (rounds 63's measurement).
+    p = p - 8; poke_va64(p, 0);          // r15
+    p = p - 8; poke_va64(p, 0);          // r14
+    p = p - 8; poke_va64(p, 0);          // r13
+    p = p - 8; poke_va64(p, 0);          // r12
+    p = p - 8; poke_va64(p, 0);          // rbp
+    p = p - 8; poke_va64(p, 0);          // rbx
     p = p - 8; poke_va64(p, 0);          // rcx (a rescue slot)
     p = p - 8; poke_va64(p, 0);          // r11 (ditto)
     p = p - 8; poke_va64(p, 0);          // rax
