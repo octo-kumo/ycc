@@ -777,6 +777,10 @@ const TASK_RUNNING = 1;
 const TASK_READY = 2;
 const TASK_DEAD = 3;
 const TASK_BLOCKED = 4;
+// Parked: a context that published a frame to resume once every task it started
+// is done (the boot context).  Distinct from BLOCKED so the scheduler can tell
+// "waiting for a message" from "waiting for the machine to go quiet".
+const TASK_BOOT = 5;
 const TASK_FREE = 5;
 
 // A message: what a client asks a server, and what a server answers.  Five
@@ -806,6 +810,7 @@ ndef y_msr_write(reg: long, value: long) -> long = "y_msr_write";
 ndef y_syscall_entry_addr() -> long = "y_syscall_entry_addr";
 ndef y_cur_kstack_set(top: long) -> long = "y_cur_kstack_set";
 ndef y_cur_task_rsp_get() -> long = "y_cur_task_rsp_get";
+ndef y_boot_frame(top: long) -> long = "y_boot_frame";
 ndef y_enter_frame(rsp: long) -> long = "y_enter_frame";
 ndef y_enter_user(rip: long, rsp: long, rflags: long) -> long = "y_enter_user";
 
@@ -1035,6 +1040,16 @@ def tss_set_rsp0(top: long) -> void {
 // the address-space switch plus the resume.
 def task_start(i: long) -> void {
     if (cur_task != i && tasks[cur_task].state == TASK_RUNNING) { tasks[cur_task].state = TASK_READY; };
+    // Publish a resumable frame for the context we are leaving and PARK it: the
+    // driver's next line should run once every task it started is done, and only
+    // the scheduler's nothing-else-runnable fallback knows when that is.  Leaving
+    // it READY would schedule it like any task and let it race its own children.
+    let bstack = pages_alloc_va(4096);
+    if (bstack != 0) {
+        tasks[cur_task].rsp = y_boot_frame(bstack + 4096);
+        tasks[cur_task].kstack = bstack + 4096;
+        tasks[cur_task].state = TASK_BOOT;
+    };
     cur_task = i;
     tasks[i].state = TASK_RUNNING;
     y_cr3_set(tasks[i].cr3);
@@ -1075,6 +1090,21 @@ def y_sched_pick() -> long {
         i = i + 1;
     };
     if (found < 0) {
+        // Nothing else can run.  A parked context (TASK_BOOT) is resumed HERE,
+        // and only here: this is exactly "every task it started is done".
+        let bi = 0;
+        while (bi < n) {
+            if (tasks[bi].state == TASK_BOOT && tasks[bi].rsp != 0) {
+                need_resched = false;
+                cur_task = bi;
+                tasks[bi].state = TASK_RUNNING;
+                y_cr3_set(tasks[bi].cr3);
+                y_cur_kstack_set(tasks[bi].kstack);
+                tss_set_rsp0(tasks[bi].kstack);
+                return tasks[bi].rsp;
+            };
+            bi = bi + 1;
+        };
         // Nothing else can run.  If the current task is also done, the machine
         // has no work left: the verdict goes to the test harness and the frame
         // below is never resumed (returning 0 here would iretq a dead task

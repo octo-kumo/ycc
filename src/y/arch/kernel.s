@@ -492,6 +492,58 @@ y_cur_task_rsp_get:
     mov y_cur_task_rsp(%rip), %rax
     ret
 
+#=== add: y_boot_frame ===
+# Publish a canonical twenty-word frame that resumes the CALLER of this function
+# -- the context task_start is about to park -- so the scheduler can come back to
+# the driver's own code once every task it started is done.  The argument is NOT
+# in %rdi: Y passes arguments on the stack, so 8(%rsp) is the frame's high end.
+# The context to resume is read through %rbp, which our caller set up: task_start
+# has a push-rbp prologue with locals, so fixed %rsp offsets do not work --
+# 8(%rbp) is task_start's return address (the RIP to resume), (%rbp) its saved rbp
+# (the driver's), and 16(%rbp) the stack once task_start has returned and its
+# caller has popped the argument.  Ring 0: CS 8, SS 16, RFLAGS 0x202.  Only
+# rax/rcx/r8/r10/r11 are touched, all caller-saved.
+y_boot_frame:
+    mov 8(%rbp), %r11
+    lea 16(%rbp), %rcx
+    mov (%rbp), %r8
+    mov 8(%rsp), %r10
+    sub $8, %r10
+    mov $16, %rax
+    mov %rax, (%r10)
+    sub $8, %r10
+    mov %rcx, (%r10)
+    sub $8, %r10
+    mov $514, %rax
+    mov %rax, (%r10)
+    sub $8, %r10
+    mov $8, %rax
+    mov %rax, (%r10)
+    sub $8, %r10
+    mov %r11, (%r10)
+    mov $0, %rax
+    sub $8, %r10
+    mov %rax, (%r10)
+    sub $8, %r10
+    mov %rax, (%r10)
+    sub $8, %r10
+    mov %rax, (%r10)
+    sub $8, %r10
+    mov %rax, (%r10)
+    sub $8, %r10
+    mov %r8, (%r10)
+    sub $8, %r10
+    mov %rax, (%r10)
+    mov $9, %rcx
+y_bf_zero:
+    sub $8, %r10
+    mov %rax, (%r10)
+    sub $1, %rcx
+    cmp $0, %rcx
+    jne y_bf_zero
+    mov %r10, %rax
+    ret
+
 #=== add: y_enter_frame ===
 # y_enter_frame(rsp): resume a suspended frame.  The syscall entry's tail, nine
 # register slots and an IRETQ, and the way a task is started for the first time
