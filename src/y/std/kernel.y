@@ -1,3 +1,15 @@
+// ⚠ KNOWN DEBT (2026-10, kernel branch): this file contains a ~400-line
+// section TWICE -- 32 top-level defs appear at two line ranges (roughly
+// 860-1200 and 1240-1560), because a patch that moved declarations above
+// their first use re-inserted the surrounding section instead of moving it.
+// The compiler only warns ("declared more than once; the last declaration
+// counts"), so the LATER copies are the live ones and editing the earlier
+// copy silently does nothing.  Fixing it by hand: keep the later copies (they
+// are the newest -- the earlier `sys_fork`/`sys_wait4` predate the exit-status
+// work), delete the earlier section, then rebuild and re-run test/kernel.  It
+// is why `test_fixpoint` (warning-free src/y and src/y/std) must be part of
+// the per-round check, which is how this went unnoticed for several rounds.
+//
 // std/kernel.y -- the freestanding half of std, for `ycc --kernel`.
 //
 // A kernel program imports this and nothing else that reaches a kernel: the
