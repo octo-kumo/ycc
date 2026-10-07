@@ -1129,10 +1129,13 @@ def lint_short_empty_if(st: LintSt, node: If) -> long {
     if (te && ee) {
         lint_warn_at(st, "both branches of this 'if' are empty; it does nothing", node);
     } else if (te) {
+        // An `else if` chain has no shorter form here: the arm being dropped
+        // is the then, but what follows it is another condition.
+        if (node.has_else && node.els.k == K.kw_if) { return 0; };
         lint_warn_at(st, "the 'if' branch is empty; invert the condition and drop the arm", node);
         // Only the invert is safe to apply: deleting the arm (or the whole
         // `if`) can leave the condition's names unused, a new warning.
-        if (node.has_else && node.els.k != K.kw_if) { lint_fix(st, "2.1", node.line, node.col, "", "inv"); };
+        if (node.has_else) { lint_fix(st, "2.1", node.line, node.col, "", "inv"); };
     };
     0
 };
