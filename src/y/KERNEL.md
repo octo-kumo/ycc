@@ -1757,3 +1757,27 @@ RULES that each cost rounds in this run:
  * verify every hard-coded frame size when the frame changes (sys_fork was the
    last one found);
  * strip ANSI colour before grep-matching harness output, or FAIL goes unseen.
+
+### Round 101: two scheduler fixes, and a correction to round 99
+
+FIXED, both verified against the suite (45 passed, 0 failed / 45 total):
+
+1. `y_sched_pick` demoted the current task to READY AFTER its search, but the
+   search wraps all the way round to the current task (`i = n` gives
+   (cur_task + n) % n = cur_task).  A lone runnable task was therefore never
+   pickable: the pick found nothing and returned 0, and the caller's
+   `mov %rax, %rsp` handed a null frame to the switch.  The demotion now happens
+   BEFORE the search.  Measured cause: making the pick idle without this fix
+   broke u003_preempt (43/1/44); with the demotion moved, idle is harmless.
+2. The `found < 0` branch now idles instead of returning 0.  Returning 0 there
+   hands the switch a null frame whatever the state, and idling is what a
+   scheduler should do when nothing is runnable at all.
+
+CORRECTION: this did NOT fix u007_fsexec's qemu status 1.  With both fixes the
+status is still 1, so the exit-path triple fault is NOT the pick's null-stack
+path as round 99 concluded -- it happens during the exit itself, before or around
+`sys_exit_group`/`task_exit` (a CR3 switched to a freed directory, a stack
+switched to a dead task's, or the frame the exit resumes on).  Next: trace the
+exit path with the same discipline that finally settled yfs_lookup -- print what
+it does, do not infer it.  The transcript still shows the program's output and
+nothing after, which puts the fault between the print and the driver's resume.

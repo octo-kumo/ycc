@@ -1057,6 +1057,12 @@ def y_sched_pick() -> long {
         return 0;
     };
     tasks[cur_task].rsp = y_cur_task_rsp_get();
+    // The search below wraps all the way round to the current task (i = n gives
+    // (cur_task + n) % n = cur_task), so it has to be READY to be found.  It was
+    // demoted AFTER the search before, which made a lone runnable task
+    // unpickable: the pick found nothing and returned 0, and the caller's
+    // `mov %rax, %rsp` iretq'd a null frame.  Demote first.
+    if (tasks[cur_task].state == TASK_RUNNING) { tasks[cur_task].state = TASK_READY; };
     let n = len(tasks);
     let found = 0 - 1;
     let i = 1;
@@ -1074,7 +1080,13 @@ def y_sched_pick() -> long {
         // below is never resumed (returning 0 here would iretq a dead task
         // back into ring 3, which is a page fault a few instructions later).
         if (tasks[cur_task].state == TASK_DEAD) { y_kexit(0); };
+        // Nothing is runnable at all -- every task is blocked or a zombie.
+        // Returning 0 hands the caller's `mov %rax, %rsp` a null frame and the
+        // machine triple faults (qemu status 1), which is what happened here
+        // after the last user program exited.  Idle instead: the timer keeps
+        // firing and the pick runs again, which is what a scheduler should do.
         need_resched = false;
+        idle();
         return 0;
     };
     need_resched = false;
