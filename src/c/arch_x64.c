@@ -297,7 +297,8 @@ Yv *arch_heap_cells(void) {
         "y_gc_threads:\n.zero 8\ny_gc_nthr:\n.zero 8\n"
         "y_gc_parked:\n.zero 8\ny_gc_stw:\n.zero 8\n"
         "y_gc_lk:\n.zero 8\ny_gc_mlk:\n.zero 8\n"
-        "y_gc_safe_fn:\n.zero 8\n");
+        "y_gc_safe_fn:\n.zero 8\n"
+        "y_gc_free_fn:\n.zero 8\ny_gc_chunk_fn:\n.zero 8\n");
 }
 
 ylong arch_frame(ylong slots) {

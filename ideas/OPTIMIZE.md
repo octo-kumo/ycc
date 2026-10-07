@@ -342,20 +342,24 @@ interleaving is unchanged). It is reached through the checker's named layer --
 `heap_used() > 0` is now `false` (printing no longer allocates) and the fixture says so.
 `test/y/native/t379_print_int_no_alloc.y` pins the heap delta across six prints at 0.
 
-### A9. The collector's thread support, and who pays for it (open)
+### A9. The collector's thread support, and who pays for it (partly done)
 
 Stopping the world for threads (`ideas/lifetime_gc.md` item 1) put a safepoint
-and two locks into the allocation path. The safepoint is now a pointer the
-thread runtime installs (`y_gc_safe_fn`, set by `y_threads_on`), so a program
-that never spawns carries no parking code and one that never allocates carries
-nothing at all. What is left is the free-list/metadata lock pair: it is called
-from the plain allocation path, so `test/treeshake/alloc_once.y` -- which
-`--gc=auto` leaves collector-free -- grew 1312 -> 1443 bytes, and a
-collector-carrying program (`forloop.y`) 3497 -> 4077. Both are recorded in
-`test/treeshake/shapes.txt`. The fix is the trick the safepoint already uses:
-route `y_gc_alloc_free` and `y_gc_chunk_add` through pointers that
-`y_threads_on` replaces with the locked variants, so the locks and their call
-sites belong to the thread runtime too.
+and locks into the allocation path. The first two are thread-only now: the
+safepoint and the locked halves of the slow path live in the thread runtime and
+are reached through pointers (`y_gc_safe_fn`, `y_gc_free_fn`, `y_gc_chunk_fn`)
+that `y_threads_on` installs, so a program that never spawns calls the plain
+functions. That recovered most of the cost: `alloc_once.y` (which `--gc=auto`
+leaves collector-free) 1443 -> 1378 bytes and `forloop.y` 4077 -> 4047, both
+recorded in `test/treeshake/shapes.txt`.
+
+What is left is smaller and deliberately deferred: the metadata arena's lock is
+still taken by a single-threaded collector (the arena is reached from too many
+call sites to indirect cheaply), and the collector's thread helpers themselves
+(`y_gc_stw_begin`, `y_gc_thread_roots`, `y_gc_mark_threads`, the block
+begin/end pair, ~450 bytes) are linked whenever the collector is. Making those
+thread-only wants the `#=== replace:` block machinery wsys.s already uses, but
+between prelude.s and threads.s rather than prelude.s and wsys.s.
 
 ### A8. Pointer-free payloads: do not scan bytes (partly done)
 

@@ -10,14 +10,15 @@
 # foreach_local/foreach_capture are the captured shapes (inlined via a stack
 # record). forloop/foreach are the loop-parity pair. alloc_once.y allocates once,
 # outside any loop, so --gc=auto leaves the collector out of it (1312 B before
-# the collector learned to stop the world for threads: the parking code moved to
-# the thread runtime, but the free-list/metadata locks are still called from the
-# plain allocation path, which is the +131 ideas/OPTIMIZE.md A9 records).
+# the collector learned to stop the world for threads: the parking code and the
+# locked halves of the slow path both moved to the thread runtime, reached
+# through pointers (ideas/OPTIMIZE.md A9); what is left is the metadata lock,
+# which a single-threaded collector still takes).
 hello.y 381
 minimal.y 440
-forloop.y 4077
-foreach.y 3913
-dead.y 1682
-alloc_once.y 1443
-foreach_local.y 3899
-foreach_capture.y 4537
+forloop.y 4047
+foreach.y 3883
+dead.y 1617
+alloc_once.y 1378
+foreach_local.y 3869
+foreach_capture.y 4507

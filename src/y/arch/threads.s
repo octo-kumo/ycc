@@ -25,6 +25,10 @@ y_threads_on:
 # puts code there: a program that never spawns keeps y_alloc_more lean.
     lea y_gc_safepoint(%rip), %rdx
     mov %rdx, y_gc_safe_fn(%rip)
+    lea y_gc_alloc_free_locked(%rip), %rdx
+    mov %rdx, y_gc_free_fn(%rip)
+    lea y_gc_chunk_add_locked(%rip), %rdx
+    mov %rdx, y_gc_chunk_fn(%rip)
     xor %edx, %edx
     mov %rdx, (%rcx)
     mov %rdx, 8(%rcx)
@@ -458,3 +462,41 @@ ygsp_done:
     pop %rbx
     pop %rbp
     ret
+
+# y_gc_alloc_free_locked(p) / y_gc_chunk_add_locked(base, size, dedicated): the
+# shared-memory halves of the slow path, with y_gc_lk held. Ordering is always
+# y_gc_lk then y_gc_meta_alloc's own lock (never the reverse).
+y_gc_alloc_free_locked:
+    push %rbp
+    mov %rsp, %rbp
+    push %rdi
+    lea y_gc_lk(%rip), %rdi
+    call y_gc_lock
+    pop %rdi
+    call y_gc_alloc_free
+    push %rax
+    lea y_gc_lk(%rip), %rdi
+    call y_gc_unlock
+    pop %rax
+    pop %rbp
+    ret
+
+y_gc_chunk_add_locked:
+    push %rbp
+    mov %rsp, %rbp
+    push %rdi
+    push %rsi
+    push %rdx
+    lea y_gc_lk(%rip), %rdi
+    call y_gc_lock
+    pop %rdx
+    pop %rsi
+    pop %rdi
+    call y_gc_chunk_add
+    push %rax
+    lea y_gc_lk(%rip), %rdi
+    call y_gc_unlock
+    pop %rax
+    pop %rbp
+    ret
+

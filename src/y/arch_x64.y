@@ -259,7 +259,11 @@ def arch_heap_cells() -> str {
     "y_gc_lk:\n.zero 8\ny_gc_mlk:\n.zero 8\n" +
     // The allocator's safepoint, as a pointer: only the thread runtime
     // installs one, so a program that never spawns carries no parking code.
-    "y_gc_safe_fn:\n.zero 8\n"
+    "y_gc_safe_fn:\n.zero 8\n" +
+    // The locked halves of the slow path, as pointers the thread runtime
+    // installs: a program that never spawns calls the plain functions and
+    // carries neither the locks nor their call sites.
+    "y_gc_free_fn:\n.zero 8\ny_gc_chunk_fn:\n.zero 8\n"
 };
 
 def arch_frame(slots: long) -> long {

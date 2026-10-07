@@ -401,8 +401,19 @@ yam_nostw:
 # The heap is full: collect when the bytes handed out since the last cycle
 # reach the threshold, then take a recycled block if one fits before mapping.
     call y_gc_maybe
+# The free lists and the chunk registry are shared, so the thread runtime
+# installs locked variants of these two calls when the first thread spawns
+# (y_threads_on). A program that never spawns calls the plain functions and
+# carries no lock at all.
     mov %rbx, %rdi
-    call y_gc_alloc_free_locked
+    mov y_gc_free_fn(%rip), %rax
+    test %rax, %rax
+    jnz yam_free_lk
+    call y_gc_alloc_free
+    jmp yam_free_done
+yam_free_lk:
+    call *%rax
+yam_free_done:
     test %rax, %rax
     jnz y_alloc_free_hit
     mov $262144, %rsi
@@ -413,7 +424,14 @@ yam_nostw:
     mov %rax, %rdi
     mov $4194304, %rsi
     xor %edx, %edx
-    call y_gc_chunk_add_locked
+    mov y_gc_chunk_fn(%rip), %rax
+    test %rax, %rax
+    jnz yam_chunk1_lk
+    call y_gc_chunk_add
+    jmp yam_chunk1_done
+yam_chunk1_lk:
+    call *%rax
+yam_chunk1_done:
     mov %rax, %rdx
     add %rbx, %rdx
     mov %rdx, 0(%r12)
@@ -428,7 +446,14 @@ y_alloc_big:
     call y_alloc_map
     mov %rax, %rdi
     mov $1, %edx
-    call y_gc_chunk_add_locked
+    mov y_gc_chunk_fn(%rip), %rax
+    test %rax, %rax
+    jnz yam_chunk2_lk
+    call y_gc_chunk_add
+    jmp yam_chunk2_done
+yam_chunk2_lk:
+    call *%rax
+yam_chunk2_done:
     jmp y_alloc_out
 y_alloc_free_hit:
     mov 16(%r12), %rdx
@@ -498,6 +523,25 @@ y_alloc_map:
 # y_gc_meta_alloc: the metadata arena, under its own lock. Every thread can
 # reach it (a chunk registration, a free-list table, the collector's own bit
 # maps), so the raw bump it wraps is serialized.
+# y_gc_lock(lk) / y_gc_unlock(lk): a spin lock on the word at %rdi. The
+# collector's allocation-side state is shared by every thread; the collector's
+# own cycle runs with the world stopped, so it never contends for these.
+y_gc_lock:
+    mov $1, %rax
+ygl_try:
+    xchg %rax, (%rdi)
+    test %rax, %rax
+    jz ygl_done
+    mov $1, %rax
+    jmp ygl_try
+ygl_done:
+    ret
+
+y_gc_unlock:
+    xor %eax, %eax
+    mov %rax, (%rdi)
+    ret
+
 y_gc_meta_alloc:
     push %rbp
     mov %rsp, %rbp
@@ -941,62 +985,6 @@ ygd_loop:
 ygd_done:
     pop %r12
     pop %rbx
-    pop %rbp
-    ret
-
-# y_gc_lock(lk) / y_gc_unlock(lk): a spin lock on the word at %rdi. The
-# collector's allocation-side state is shared by every thread; the collector's
-# own cycle runs with the world stopped, so it never contends for these.
-y_gc_lock:
-    mov $1, %rax
-ygl_try:
-    xchg %rax, (%rdi)
-    test %rax, %rax
-    jz ygl_done
-    mov $1, %rax
-    jmp ygl_try
-ygl_done:
-    ret
-
-y_gc_unlock:
-    xor %eax, %eax
-    mov %rax, (%rdi)
-    ret
-
-# y_gc_alloc_free_locked(p) / y_gc_chunk_add_locked(base, size, dedicated): the
-# shared-memory halves of the slow path, with y_gc_lk held. Ordering is always
-# y_gc_lk then y_gc_meta_alloc's own lock (never the reverse).
-y_gc_alloc_free_locked:
-    push %rbp
-    mov %rsp, %rbp
-    push %rdi
-    lea y_gc_lk(%rip), %rdi
-    call y_gc_lock
-    pop %rdi
-    call y_gc_alloc_free
-    push %rax
-    lea y_gc_lk(%rip), %rdi
-    call y_gc_unlock
-    pop %rax
-    pop %rbp
-    ret
-
-y_gc_chunk_add_locked:
-    push %rbp
-    mov %rsp, %rbp
-    push %rdi
-    push %rsi
-    push %rdx
-    lea y_gc_lk(%rip), %rdi
-    call y_gc_lock
-    pop %rdx
-    pop %rsi
-    pop %rdi
-    call y_gc_chunk_add
-    push %rax
-    lea y_gc_lk(%rip), %rdi
-    call y_gc_unlock
-    pop %rax
     pop %rbp
     ret
 
