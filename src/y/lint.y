@@ -1171,6 +1171,8 @@ def lint_short_empty_if(st: LintSt, node: If) -> long {
 
 // Rules 2.3/2.4: an `if`/`else` that only chooses a value.
 def lint_short_if_ternary(st: LintSt, node: If) -> long {
+    // An `else if` arm has no block of its own to hold the rewrite.
+    if (st.chain != 0) { return 0; };
     if (!node.has_else) { return 0; };
     let a = lint_single_stmt(node.then);
     let b = lint_single_stmt(node.els);
@@ -2017,11 +2019,23 @@ def fx_if_line(rule: str, b: str, ln: long, lines: [str]) -> [str] {
         let cline = lines[l1 - 1];
         let rest = cline[c1 + 1:];
         let el = fx_find(rest, "else", 0);
-        if (el < 0) { return lines; };
-        let b2r = fx_ws(rest, el + 4);
-        if (b2r >= len(rest) || rest[b2r] != 123) { return lines; };
-        let b2 = c1 + 1 + b2r;
-        if (!fx_scan(lines, l1, b2, 123, 125)) { return lines; };
+        let eline = l1;
+        if (el < 0) {
+            // the `else` is on a line of its own
+            let m = l1 + 1;
+            while (m <= len(lines) && fx_strip(lines[m - 1]) == "") { m = m + 1; };
+            if (m > len(lines)) { return lines; };
+            if (!fx_word(fx_strip(lines[m - 1]), 0, "else")) { return lines; };
+            eline = m;
+            el = index_of(lines[m - 1], "else");
+            if (el < 0) { return lines; };
+            rest = lines[m - 1];
+        } else {
+            el = c1 + 1 + el;
+        };
+        let b2 = fx_ws(rest, el + 4);
+        if (b2 >= len(rest) || rest[b2] != 123) { return lines; };
+        if (!fx_scan(lines, eline, b2, 123, 125)) { return lines; };
         let l2 = fx_sline;
         let c2 = fx_scol;
         let av = fx_assign(fx_text(lines, ln, b1, l1, c1));
@@ -2081,6 +2095,25 @@ def fx_if_line(rule: str, b: str, ln: long, lines: [str]) -> [str] {
                 lines[ln - 1] = indent + "if (" + cond + ") { " + then + " }" + fx_semi(tail);
             };
         };
+    } else if (rule == "2.3") {
+        // the `else` is on the next non-empty line
+        let m = ln + 1;
+        while (m <= len(lines) && fx_strip(lines[m - 1]) == "") { m = m + 1; };
+        if (m > len(lines)) { return lines; };
+        if (!fx_word(fx_strip(lines[m - 1]), 0, "else")) { return lines; };
+        let el2 = index_of(lines[m - 1], "else");
+        if (el2 < 0) { return lines; };
+        let b2 = fx_ws(lines[m - 1], el2 + 4);
+        if (b2 >= len(lines[m - 1]) || lines[m - 1][b2] != 123) { return lines; };
+        if (!fx_scan(lines, m, b2, 123, 125)) { return lines; };
+        let l2 = fx_sline;
+        let c2 = fx_scol;
+        let av = fx_assign(then);
+        let bv = fx_assign(fx_text(lines, m, b2, l2, c2));
+        if (av == "" || bv == "" || fx_pipe_name(av) != fx_pipe_name(bv)) { return lines; };
+        let composed = indent + fx_pipe_name(av) + " = " + cond + " ? " + fx_pipe_val(av) + " : " + fx_pipe_val(bv) + ";";
+        lines = lines[:ln - 1] + [composed] + lines[l2:];
+        return lines;
     } else if (rule == "2.1" && b == "del" && then == "") {
         // no else on this line: the whole `if` does nothing, and nothing
         // else may share the line
