@@ -2,7 +2,6 @@
 // superblock, a 64-byte inode table and data blocks, all read straight out of
 // the image's physical memory (the multiboot module today, a page the fs server
 // mapped later).  The path walk, the fd broker and the fs server build on these.
-import kernel;
 
 let yfs_phys: long = 0;
 let yfs_ok: long = 0;

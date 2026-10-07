@@ -1874,3 +1874,22 @@ exactly one copy and std/kernel.y imports them by a same-directory path
 os/, and the os/ copies go away.  That is the next change to make, and it is also
 the right shape for the plan: the kernel's own syscall layer should not depend on
 where a program's files happen to live.
+
+### Round 109: one module, one IDENTITY -- the rule the fixtures have to follow
+
+Re-applied the broker syscalls with std imports (import fd from "./fd.y" in
+std/kernel.y) and hit the same error class as round 108, now for a sharper reason:
+"imported files share one namespace", so a module must be brought in under ONE
+identity.  std/kernel.y imports ./fd.y -> ./yfs.y, while the fixtures import yfs by
+PATH ("../../src/y/std/yfs.y") -- the same file under two names -- and the compiler
+reports every definition twice.  Reverted; suite back to 49/0/49.
+
+The fix is to stop the fixtures importing yfs/fd at all: since they import kernel,
+and kernel imports fd -> yfs, those definitions are ALREADY in the shared namespace
+the compiler talks about, so the fixtures should call yfs_init / fd_open / fd_read
+UNQUALIFIED and drop their import lines.  That gives each module exactly one
+identity, which is what the error message is really asking for.
+
+Worth stating as a rule for the rest of M3/M4: in the kernel's world every module
+reaches the program through std/kernel.y, so a fixture or a server never imports a
+filesystem module by path -- it uses the names the kernel already brought in.
