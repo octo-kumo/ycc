@@ -231,6 +231,16 @@ expect_cli_error "assembly write failure" "error: writing '/nonexistent/dir/out'
     -S -o /nonexistent/dir/out "$ROOT/test/y/native/t01_arith.y"
 expect_cli_error "executable write failure" "error: writing '/nonexistent/dir/out' failed" \
     -o /nonexistent/dir/out "$ROOT/test/y/native/t01_arith.y"
+# A write that fails at the flush rather than at the write. /dev/full takes
+# the bytes and fails when they are flushed, so the answer is in the close's
+# return: the Y twin writes with write(2) and sees the error at once, the C
+# twin buffers and has to read fclose's return -- which it did not, so
+# `cycc -o /dev/full` exited 0 with nothing written. The /nonexistent/dir
+# cases above cannot see this: there fopen itself fails.
+expect_cli_error "assembly write failure at the flush" "error: writing '/dev/full' failed" \
+    -S -o /dev/full "$ROOT/test/y/native/t01_arith.y"
+expect_cli_error "executable write failure at the flush" "error: writing '/dev/full' failed" \
+    -o /dev/full "$ROOT/test/y/native/t01_arith.y"
 
 # Import depth: a chain of 33 nested imports is fatal. Only a chain reaches
 # the limit -- the resolver's `seen` list stops a cycle first.
