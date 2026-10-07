@@ -1361,3 +1361,30 @@ is NOT committed yet: my captured transcript and the harness's own comparison
 disagree, so the .stdin/driver convention needs sorting first -- the harness
 builds the driver its own way and my capture used test/kernel/uland.y directly.
 The suite is 34/34 with the implementation in place.
+
+## What the u006 serial-input fixture needs (round 83)
+
+Read the harness rather than guessing, and it is more specific than it looked:
+
+* It globs `$KDIR/[tx]*.y` as KERNEL DRIVERS -- each of those is compiled with
+  `--kernel` and booted.  The `u*` cases are handled by a separate path with a
+  DEFAULT driver, whose transcript begins "module bytes: true / it is an elf:
+  true / entering ring 3"; a `u*` fixture therefore supplies `.user.y` (+ an
+  optional `.driver.y`), `.expected` and, for input, `.stdin`.
+* `.stdin` is fed one second in, with a comment explaining why: `serial_init`
+  clears the UART's receive FIFO, so a byte that arrived first would be
+  discarded -- "a person types after the machine is up".
+
+The last u006 attempt captured a CORRECT transcript by hand (module bytes / it is
+an elf / entering ring 3 / read 1 byte 90) and the harness still reported a
+difference, and the reason is the one thing in the fixture that is not
+deterministic: the poll loop was BOUNDED (5,000,000 tries), so a run that fed the
+byte a moment later ended with "read 0 byte 0" instead.  The fix is to loop until
+a byte arrives (the harness always feeds one) rather than to any try count.
+
+One process note worth more than the fixture: `grep -q "FAIL u006"` silently
+found nothing because the harness colours `FAIL`, which took the wrong branch and
+left the suite red for a moment.  Strip the colour before matching on harness
+output.
+
+Suite: 34 passed, 0 failed / 34 total.
