@@ -11,7 +11,9 @@
 # same bytes as compiling from source, plain and -g, for programs that
 # pull in every unit; a pack this ycc cannot read, or none at all, falls
 # back to source; a program's own y_ helper or readline replaces std's;
-# --no-exec leaves exec out; std's line markers appear only under -g.
+# --no-exec leaves exec out; std's line markers appear only under -g; and a
+# compiler with no std/ beside it still resolves a library import, because every
+# std source is embedded in it (fails on a build made before that).
 
 source "$(dirname "$0")/lib.sh"
 
@@ -217,6 +219,22 @@ if [ $e1 -eq 1 ] && grep -q -- "--std-pack needs an argument" "$TMPD/e1" \
     pass "--std-pack: missing argument, unwritable path"
 else
     fail "--std-pack: missing argument, unwritable path" "$e1: $(head -c 100 "$TMPD/e1") / $e2: $(head -c 100 "$TMPD/e2")"
+fi
+
+# A ycc with no std/ beside it must still compile std imports: every std source
+# is embedded in the compiler (AGENTS.md, Build), and the attached pack carries
+# only the four core runtime units, so a lone binary used to answer "cannot find
+# module 'math'". Copy the compiler into an empty directory, run it from another
+# empty one, and ask for a library module.
+mkdir -p "$TMPD/lone/bin" "$TMPD/lone/run"
+cp "$YCC" "$TMPD/lone/bin/ycc"
+printf 'import math;\nprint(math.pi);\n' > "$TMPD/lone/run/m.y"
+lone_out=$( ( cd "$TMPD/lone/run" && timeout "$CTO" "$TMPD/lone/bin/ycc" m.y -o m && \
+              timeout "$CTO" ./m </dev/null ) 2>&1 )
+if [ "$lone_out" = "3.141593" ]; then
+    pass "lone ycc: a std import resolves with no std/ on disk"
+else
+    fail "lone ycc: a std import resolves with no std/ on disk" "$(echo "$lone_out" | head -c 120)"
 fi
 
 print_summary "link"
