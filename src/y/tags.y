@@ -105,7 +105,6 @@ def too_deep(what: str, line: long, col: long) -> void {
     puts(tostring(line) + ":" + tostring(col) + ": error: " + what +
         " nests deeper than " + tostring(MAX_NEST) + ", the compiler's limit");
     exit(1);
-    0
 };
 
 // K and KTAGS are written out twice because a record has fields named by

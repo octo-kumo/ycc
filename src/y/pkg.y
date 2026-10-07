@@ -47,7 +47,6 @@ type PkHash = { a: long, b: long };
 def pk_die(msg: str) -> void {
     puts("error: " + msg + "\n");
     exit(1);
-    1
 };
 
 def pk_has(xs: [str], s: str) -> bool {
@@ -116,7 +115,6 @@ def pk_is_file(path: str) -> bool {
 def pk_mkdir(path: str) -> void {
     syscall(83, path, 493);
     if (!pk_is_dir(path)) { pk_die("cannot create directory '" + path + "'"); }
-    0
 };
 
 // ── the manifest: a TOML subset ─────────────────────────────────────────
@@ -453,7 +451,6 @@ def pk_man_package(m: PkMan, e: PkEnt, at: str) -> void {
     } else {
         pk_die(at + "unknown key '" + key + "' in [package]");
     };
-    0
 };
 
 def pk_man_dep(e: PkEnt, at: str) -> PkDep {
@@ -599,7 +596,6 @@ def pk_visit(st: PkSt, d0: PkDep, by: str, fdir0: str) -> void {
         st.done += d.name;
         st.nodes += { name: m.name, dir: at.dir, lib: pk_join(at.dir, m.lib), roots: pk_roots(at.dir, m.roots), deps: pk_dep_names(mds), git: d.git, rev: d.rev, commit: at.commit };
     }
-    0
 };
 
 def pk_decl_name(e: PkDecl) -> str {
@@ -740,7 +736,6 @@ def pk_lock_write(dir: str, nodes: [PkNode]) -> void {
         if (old != none) { same = unwrap(old) == text; }
         if (!same && !fs.write_file(file, text)) { pk_die("writing '" + file + "' failed"); }
     }
-    0
 };
 
 // ── ycc vendor ──────────────────────────────────────────────────────────
@@ -759,7 +754,6 @@ def pk_vendor(dir: str) -> void {
         }
     });
     if (n == 0) { eputs("nothing to vendor: no git dependencies\n"); }
-    0
 };
 
 // ── hashing (the object cache's keys) ───────────────────────────────────
@@ -773,7 +767,6 @@ def pk_hash_new() -> PkHash {
 def pk_mix(h: PkHash, x: long) -> void {
     h.a = (h.a * 4294967296 + x) % 2147483647;
     h.b = (h.b * 4294967296 + x) % 2147483629;
-    0
 };
 
 def pk_hash_str(h: PkHash, s: str) -> void {
@@ -792,7 +785,6 @@ def pk_hash_str(h: PkHash, s: str) -> void {
         i++;
     };
     pk_mix(h, x);
-    0
 };
 
 def pk_hash_text(h: PkHash) -> str {

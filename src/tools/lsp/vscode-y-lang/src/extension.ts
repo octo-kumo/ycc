@@ -18,10 +18,15 @@
 //      bomb with a progress bar.
 //
 // Diagnostics and formatting need no code at all: the client registers them from
-// the server's advertised capabilities. Semantic tokens (M2), hover, definition
-// and completion (M4) are gated on the same advertisement, so a request is never
-// sent for something this server does not implement -- which would be a stream of
-// MethodNotFound errors in the log rather than a working feature.
+// the server's advertised capabilities. Hover, definition and completion (M4) are
+// gated on the same advertisement, so a request is never sent for something this
+// server does not implement -- which would be a stream of MethodNotFound errors in
+// the log rather than a working feature.
+//
+// Syntax highlighting is TextMate only: the grammar in `syntaxes/y.tmLanguage.json`
+// is contributed by `package.json`, and the server advertises no semantic-token
+// capability. Keeping the two layers apart is what lets highlighting work before
+// `yserve` has started or after it has stopped.
 
 import * as vscode from 'vscode';
 import {
@@ -310,7 +315,6 @@ async function restart(context: vscode.ExtensionContext, why: string): Promise<v
 function registerOptionalProviders(c: LanguageClient): void {
     const caps = c.initializeResult?.capabilities as
         | {
-              semanticTokensProvider?: unknown;
               hoverProvider?: unknown;
               definitionProvider?: unknown;
               completionProvider?: unknown;
@@ -319,19 +323,12 @@ function registerOptionalProviders(c: LanguageClient): void {
     if (!caps) {
         return;
     }
-    // Diagnostics, formatting, semantic tokens and the outline are ALL
-    // registered by the client library from the capabilities above, so there is
-    // nothing to write here for M1, M2 or M3. That is the whole reason those
-    // features cost a few hundred lines of Y and no TypeScript at all.
-    //
-    // Worth knowing, because it looks like a trap: the server sends semantic
-    // tokens as INDICES, so a client-side legend that disagreed would paint every
-    // token after the first difference as the wrong kind, silently. There is no
-    // such disagreement available here --
-    // `asSemanticTokensLegend(options.legend)` in the library builds the VS Code
-    // legend FROM the server's advertised one. So the legend is defined once, in
-    // src/tools/lsp/sem.y, and adding a client-side copy would be wrong, not
-    // merely redundant.
+    // Diagnostics, formatting and the outline are ALL registered by the
+    // client library from the capabilities above, so there is nothing to write
+    // here for M1 or M3. That is the whole reason those features cost a few
+    // hundred lines of Y and no TypeScript at all. Syntax highlighting is the
+    // TextMate grammar, registered by VS Code from `package.json`, not a server
+    // capability at all.
     // hover, definition and completion (M4) each need a handler that maps server
     // shapes onto VS Code enums. They are NOT advertised, so nothing is requested
     // and nothing fails; the gate is here so the wiring lands in one place.

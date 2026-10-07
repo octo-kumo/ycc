@@ -7,7 +7,7 @@
 // captured on one path only
 def one_path(c: bool) -> long {
     let v = 1;
-    if (c) { let f = def() -> long { v }; 0 } else { 0 }; // expect-warning: unused variable 'f'
+    if (c) { let f = def() -> long { v }; } else { 0 }; // expect-warning: unused variable 'f'
     v = 5;
     v
 };
@@ -41,7 +41,7 @@ print(c_for());
 def for_in() -> long {
     let fs: [() -> long] = [];
     for k in 0..4 {
-        if (k % 2 == 1) { fs += def() -> long { k * 10 }; 0 } else { 0 };
+        if (k % 2 == 1) { fs += def() -> long { k * 10 }; } else { 0 };
         k // expect-warning: the value of 'k' is not used
     };
     fs[0]() + fs[1]()
@@ -50,7 +50,7 @@ print(for_in());
 def for_each() -> str {
     let fs: [() -> str] = [];
     foreach (s in ["a", "b", "c"]) {
-        if (s != "b") { fs += def() -> str { s }; 0 } else { 0 };
+        if (s != "b") { fs += def() -> str { s }; } else { 0 };
         s // expect-warning: the value of 's' is not used
     };
     fs[0]() + fs[1]()

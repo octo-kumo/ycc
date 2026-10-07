@@ -59,7 +59,6 @@ def addr_set(a: [byte; 16], host: str, port: long) -> long {
         if (o1 != none) { a[5] = o1 !; };
         if (o2 != none) { a[6] = o2 !; };
         if (o3 != none) { a[7] = o3 !; };
-        0
     }
     0
 };

@@ -97,7 +97,6 @@ def random_bytes(n: long) -> [byte] {
         else {
             eputs("runtime error: no randomness source on this target\n");
             exit(1);
-            0
         };
     };
     out

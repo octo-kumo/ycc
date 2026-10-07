@@ -205,24 +205,17 @@ when the fixer rewrote the lexer's own bounds checks (round 9).
   the loop and the answer form cannot express it.
 
 ### 2.10 A variable read once
-- **Instead** `let x = E; ... use(x) ...` where `x` is read exactly once
-- **Write** `E` in place of that read, dropping the binding.
-- **Detect** a local whose read count is 1, whose single read is the
-  statement after its `Decl`, and whose value is never assigned again.
-- **Skip** `E` is not pure, or anything between the `Decl` and the read can
-  change what `E` reads (a call, an assignment through a pointer); `x` is
-  captured by a closure; the declaration is `const` and its name documents
-  the value; the read is inside a loop and `E` is not loop-invariant.
-- The tail case is worth its own line: `let x = E; return x;` → `return E;`.
-
-### 2.10 A variable read once
-- **Instead** `let x = E;` then the next statement reads `x` once.
-- **Write** `(E)` there and drop the binding.
-- **Detect** an UNWRITTEN `let` whose read count is 1, whose single read
-  is the next (non-blank) line, and which is never assigned.
+- **Instead** `let x = E; ... use(x) ...` where `x` is read exactly once.
+- **Write** `E` in place of that read, dropping the binding. The tail case
+  is its own line: `let x = E; return x;` → `return E;`.
+- **Detect** an UNWRITTEN `let` whose read count is 1, whose single read is
+  the next (non-blank) line, and which is never assigned.
 - **Skip** the `let` has a written type (`let n: Node = dot;` is a cast,
   and inlining would lose it); the read is on the same line; the binding
-  is an `if let` pattern.
+  is an `if let` pattern; the declaration is `const` and its name documents
+  the value; `E` is not pure, or anything between the `Decl` and the read
+  can change what `E` reads; `x` is captured by a closure; the read is
+  inside a loop and `E` is not loop-invariant.
 - **Fix** replace the read with `(E)` (parenthesized unless `E` is a
   primary), then delete the `let`.
 
@@ -249,6 +242,20 @@ when the fixer rewrote the lexer's own bounds checks (round 9).
   reassigned (2.3's business).
 - **Fix** rename the parameter (in the signature, found upward) to `x`
   and delete the `let`.
+
+### 2.13 A block that ends in an unused constant
+- **Instead** a block whose value is dropped ending in a literal:
+  `if (c) { dir = base; 0 };`, `def f() -> void { go(); 0 };`
+- **Write** the same block without it: the constant is the block's VALUE
+  (no `;`) and nothing reads it, so it only adds a line.
+- **Detect** the last statement of a statement list whose value is dropped
+  (`-> void` body, an `if`/loop body used as a statement, a closure body)
+  is `num`, `str`, `char`, `bool` or `bstr` -- and the list has another
+  statement.
+- **Skip** the constant is the block's only statement: removing it leaves
+  an empty arm, which is rule 2.1's business and not a deletion. A `return`
+  is not this rule (`return 0;` returns).
+- **Fix** delete the line. It holds the literal and nothing else.
 
 ## 3. Loops that are array methods
 

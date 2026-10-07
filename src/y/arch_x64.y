@@ -321,7 +321,6 @@ def arch_win_check(lines: [str], blocks: [[str]]) -> void {
             };
         };
     });
-    0
 };
 
 def arch_win_labeled(lines: [str], nm: str) -> bool {

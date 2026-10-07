@@ -423,7 +423,6 @@ def words_scan(code: str, lo: long, n: long, names: [str], seen: [long]) -> void
             prev = c;
         };
     };
-    0
 };
 
 // A byte of an identifier-shaped word (the lexer's isalnum: letters,
@@ -2614,7 +2613,6 @@ def env_index_all(env: [Slot], grow: bool) -> void {
     };
     env_ix = m;
     env_ix_id = env[0].off;
-    0
 };
 
 // Index the binding just appended to env, or rebuild. Four cases: a fresh env
@@ -2637,10 +2635,8 @@ def env_index_add(env: [Slot]) -> void {
             env_index_all(env, false)
         } else {
             env_ix = (asm.labmap_put(env_ix, e.name, len(env) - 1, 0)).map;
-            0
         };
     };
-    0
 };
 
 def env_find(st: EmitSt, name: str) -> Slot {
@@ -7582,7 +7578,6 @@ def tyset_grow() -> void {
         let lb: str = e;
         if (len(lb) > 0) { tyset_add(lb, oldf[j]); };
     });
-    0
 };
 
 def tyset_reset() -> void {
@@ -12054,7 +12049,6 @@ def dup_y_label(deps: [Unit], prog: Unit) -> void {
             };
         };
     };
-    0
 };
 
 def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {

@@ -93,6 +93,12 @@ static ylong lint_warn_start(LintSt st, Yv *msg, Yv *node);
 static ylong lint_meta_top(LintSt st, Yv *stmts, Yv *ogen);
 static int meta_gen(Yv *s, Yv *ogen);
 static ylong lint_stmt(LintSt st, Yv *s, int used, int top);
+static int lint_const_node(Yv *s);
+/* A void def's body drops its value, so the TAIL of it is a statement: the
+ * level-1 "value not used" warnings stay quiet there. */
+static int lint_droptail(LintSt st) {
+    return yv_b(yr_get(st, "voidfn")) && yv_b(yr_get(st, "tailflow"));
+}
 static int lint_code(Yv *s);
 static int lint_diverges(Yv *s);
 static int lint_any_diverges(Yv *stmts);
@@ -195,11 +201,12 @@ Yv *lint_unit(Yv *ast, Yv *ast3, Yv *ofile, Yv *fmods, ylong wlevel, Yv *ogen) {
     Yv *vars = yav(0);
     Yv *flags = yav(0);
     Yv *rets = yav(0);
-    LintSt st = yr(12, "warns", warns, "vars", vars, "tops",
+    LintSt st = yr(14, "warns", warns, "vars", vars, "tops",
                    nameix_new(256), "flags", flags, "rets",
                    rets, "ridx", nameix_new(64), "self", ys(""), "wlevel",
                    yv_long(wlevel), "dropnext", yv_bool(0), "vused",
-                   yv_bool(0), "loops", yv_long(0), "logic", yv_long(0));
+                   yv_bool(0), "loops", yv_long(0), "logic", yv_long(0),
+                   "voidfn", yv_bool(0), "tailflow", yv_bool(0));
     if (wlevel >= 1) {
         (void)lint_rets(st, yr_get(ast3, "stmts"));
     }
@@ -528,6 +535,7 @@ static ylong lint_stmts(LintSt st, Yv *stmts, int used, int top) {
     (void)yr_set(st, "dropnext", yv_bool(0));
     int dead = 0;
     int told = 0;
+    int wt = yv_b(yr_get(st, "tailflow"));
     ylong i = 0;
     while (i < n) {
         Yv *s = ya_get(stmts, i);
@@ -536,8 +544,15 @@ static ylong lint_stmts(LintSt st, Yv *stmts, int used, int top) {
             told = 1;
         }
         (void)yr_set(st, "vused", yv_bool(!drop && i == n - 1));
+        (void)yr_set(st, "tailflow", yv_bool(wt && i == n - 1));
         if (yv_l(yr_get(st, "wlevel")) >= 2) {
             (void)lint_short_pair(st, stmts, i);
+        }
+        /* Rule 2.13: the last statement of a list whose value is dropped is a
+         * bare constant. It is dead -- the block's value goes nowhere. */
+        if (i == n - 1 && n > 1 && !used && lint_const_node(s)) {
+            (void)lint_warn_start(st,
+                ys("the value of this block is not used; this constant does nothing"), s);
         }
         (void)lint_stmt(st, s, used && i == n - 1, top);
         if (!dead && lint_diverges(s)) {
@@ -545,6 +560,7 @@ static ylong lint_stmts(LintSt st, Yv *stmts, int used, int top) {
         }
         i = i + 1;
     }
+    (void)yr_set(st, "tailflow", yv_bool(wt));
     return 0;
 }
 
@@ -590,6 +606,13 @@ static ylong lint_stmt(LintSt st, Yv *s, int used, int top) {
 }
 
 /* Not the parser's trailing void, and not a def. */
+/* A literal node: num, str, char, bool, bstr. A block that ends with one and
+ * whose value is dropped computes nothing (rule 2.13). */
+static int lint_const_node(Yv *s) {
+    ylong k = yv_l(yr_get(s, "k"));
+    return k == K_num || k == K_str || k == K_char || k == K_bool || k == K_bstr;
+}
+
 static int lint_code(Yv *s) {
     Yv *k = yr_get(s, "k");
     if (yv_l(k) == K_void) {
@@ -818,7 +841,14 @@ static Yv *lint_self(LintSt st, Yv *name) {
  * a call to the def it is written in, so it is named for it. */
 static ylong lint_def_body(LintSt st, Yv *name, Yv *v) {
     Yv *was = lint_self(st, name);
+    int wv = yv_b(yr_get(st, "voidfn"));
+    if (yv_l(yr_get(v, "k")) == K_func) {
+        if (yv_l(yr_get(yr_get(v, "ret"), "k")) == K_tvoid) {
+            (void)yr_set(st, "voidfn", yv_bool(1));
+        }
+    }
     (void)lint_node(st, v, 1);
+    (void)yr_set(st, "voidfn", yv_bool(wv));
     (void)yr_set(st, "self", was);
     return 0;
 }
@@ -826,6 +856,7 @@ static ylong lint_def_body(LintSt st, Yv *name, Yv *v) {
 /* Level 1: a call whose result nobody reads, when the callee hands one
  * back. The message names the function the way the source spells it. */
 static ylong lint_unused_call(LintSt st, Yv *node, int used, Yv *call) {
+    if (lint_droptail(st)) { return 0; }
     Yv *nm = lint_binding(st, yr_get(call, "callee"));
     if (!ys_eq_lit(nm, "")) {
         ylong ri = nameix_get(yr_get(st, "ridx"), nm);
@@ -853,6 +884,7 @@ static ylong lint_unused_call(LintSt st, Yv *node, int used, Yv *call) {
  * else can be meant by it, and the statement is easy to miss. The
  * position says which expression it is. */
 static ylong lint_unused_expr(LintSt st, Yv *node, int used) {
+    if (lint_droptail(st)) { return 0; }
     if (yv_l(yr_get(st, "wlevel")) >= 1 && !used) {
         (void)lint_warn_at(st, ys("the value computed here is not used"),
                            node);
@@ -903,6 +935,7 @@ static ylong lint_two(LintSt st, Yv *a, Yv *b) {
 static ylong lint_id(LintSt st, Yv *node, int used) {
     Yv *name = yr_get(node, "v");
     (void)lint_mark(st, name, 1);
+    if (lint_droptail(st)) { return 0; }
     Yv *d = lint_disp(name);
     if (!used && !ys_eq_lit(d, "") && !ys_eq_lit(d, "none")) {
         (void)lint_warn_at(
@@ -915,6 +948,7 @@ static ylong lint_id(LintSt st, Yv *node, int used) {
 static ylong lint_un(LintSt st, Yv *node, int used) {
     Yv *e = yr_get(node, "e");
     (void)lint_node(st, e, 1);
+    if (lint_droptail(st)) { return 0; }
     if (!used && yv_l(yr_get(e, "k")) != K_num) {
         (void)lint_warn_at(st,
                            lint_cat(3, ys("the result of '"),
@@ -947,7 +981,7 @@ static ylong lint_bin(LintSt st, Yv *node, int used) {
         return res;
     } else {
         (void)lint_two(st, l, r);
-        if (!used) {
+        if (!used && !lint_droptail(st)) {
             Yv *msg = lint_cat(3, ys("the result of '"), op,
                                ys("' is not used"));
             if (ys_eq_lit(op, "==")) {
@@ -1872,7 +1906,12 @@ static ylong lint_func(LintSt st, Yv *node) {
         i = i + 1;
     }
     Yv *body = yr_get(node, "body");
-    return lint_stmts(st, yr_get(body, "stmts"), 1, 0);
+    int wt = yv_b(yr_get(st, "tailflow"));
+    (void)yr_set(st, "tailflow", yv_bool(1));
+    ylong r = lint_stmts(st, yr_get(body, "stmts"),
+                         !yv_b(yr_get(st, "voidfn")), 0);
+    (void)yr_set(st, "tailflow", yv_bool(wt));
+    return r;
 }
 
 static ylong lint_decl(LintSt st, Yv *node) {

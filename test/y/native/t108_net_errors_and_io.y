@@ -40,8 +40,7 @@ while (attempts < 2000) {
     let failed = net.connect_tcp("127.0.0.1", refused_port);
     if (failed != -111) {
         all_refused = false;
-        if (failed >= 0) { net.close_fd(failed); 0 } else { 0; };
-        0
+        if (failed >= 0) { net.close_fd(failed); } else { 0; };
     } else { 0; };
     attempts = attempts + 1;
 };

@@ -122,7 +122,6 @@ def popen(cmd: str) -> [long] {
         os_call("y_os_close", pout1);
         os_call("y_os_execve", ptr_addr(&shpath[0]), ptr_addr(&argv[0]), 0);
         exit(127);
-        0
     };
     // The parent keeps the write end of the first pipe and the read end of the
     // second; the other two are the child's and must not stay open here, or

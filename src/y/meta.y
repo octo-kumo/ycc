@@ -357,7 +357,6 @@ def put64(buf: [byte], at: long, v: long) -> void {
         x = x / 256;
         i++;
     };
-    0
 };
 
 // ── the image's own header, read back ───────────────────────────────────
@@ -732,7 +731,6 @@ def map_release(m: Mapd) -> void {
     };
     if (m.rfd >= 0) { syscall(SYS_CLOSE, m.rfd, 0, 0, 0, 0); };
     if (m.img > 0) { syscall(SYS_MUNMAP, m.img, m.span, 0, 0, 0); };
-    0
 };
 
 // ── the scanner ─────────────────────────────────────────────────────────
@@ -945,7 +943,6 @@ def sg_reset(src: str, fid: long, dir: str) -> void {
 // the block stood). Blocks nest, so `mid` is the innermost block's.
 def sg_gadd(t: str, mid: bool) -> void {
     if (mid) { sg_mbuf += t } else { sg_gbuf += t };
-    0
 };
 
 // Hold this block's text: from here to its `}#` it goes to a buffer of its own
@@ -965,7 +962,6 @@ def sg_hold() -> void {
     sg_mol = [];
     sg_molast = false;
     sg_mline = sg_gline;
-    0
 };
 
 // The enclosing block's buffer back, whatever this one did with its own.
@@ -1045,7 +1041,6 @@ def sg_splice(slot: long, at: long) -> void {
             sg_gline = at;
         };
     });
-    0
 };
 
 // One piece of text, into both buffers. A byte inside a block reaches G only:
@@ -1064,7 +1059,6 @@ def sg_put(t: str) -> void {
         };
         sg_col += len(t);
     };
-    0
 };
 
 // One byte that is never a blank: a delimiter, or a word's first byte.
@@ -1078,7 +1072,6 @@ def sg_put1(c: str) -> void {
         sg_bclean[sg_depth - 1] = false;
     };
     sg_col++;
-    0
 };
 
 // The top-level statement in progress: `t` is about to be written at
@@ -1102,7 +1095,6 @@ def sg_ts_go(t: str) -> void {
             i++;
         };
     };
-    0
 };
 
 // The source line a mid-token buffer's LAST line started at: the first byte of
@@ -1125,7 +1117,6 @@ def sg_ml_go(t: str) -> bool {
 // A top-level statement ends here, so the next one starts after what follows.
 def sg_ts_end() -> void {
     sg_tsp = false;
-    0
 };
 
 // End the current line in both texts. G always breaks (its line count tracks
@@ -1158,7 +1149,6 @@ def sg_break() -> void {
     };
     sg_line++;
     sg_col = 1;
-    0
 };
 
 // sg_src[a:b] into both buffers, breaking lines on the newlines it holds. So
@@ -1182,7 +1172,6 @@ def sg_out(a: long, b: long) -> void {
             i = nl + 1;
         };
     };
-    0
 };
 
 // Set while `mg_probe` scans: the probe is asking "is there a block in this
@@ -1197,7 +1186,6 @@ def sg_fail(msg: str, line: long, col: long) -> void {
         sg_eline = line;
         sg_ecol = col;
     };
-    0
 };
 
 // Any brace on the stack a `def`/`type` BODY opened? A `type` body is marked
@@ -1316,7 +1304,6 @@ def sg_check_name(w: str, called: bool) -> void {
     } else if (sg_depth > 0 && mg_thread(w) && called) {
         sg_fail("'" + w + "' cannot be used in a meta block: the generator runs in a forked child, and a thread or process primitive there is never what was meant", sg_line, sg_col);
     };
-    0
 };
 
 // An `import` inside a block, hoisted to the top of G so the existing splicer
@@ -1390,7 +1377,6 @@ def mg_bkids_had(slot: long) -> bool {
 def mg_kid_note(par: long) -> void {
     while (len(mg_bkids) <= par) { mg_bkids += false };
     mg_bkids[par] = true;
-    0
 };
 
 // ── the reduction ─────────────────────────────────────────────────────────
@@ -1440,7 +1426,6 @@ def sg_region_word(w: str) -> void {
         sg_rpend = false;
         if (mg_directive(w)) { sg_rkeep = true };
     };
-    0
 };
 
 // The words the reduction keeps: the four declarations, plus the splicer's own
@@ -1637,7 +1622,6 @@ def sg_m_open(slot: long) -> void {
     sg_hold();
     sg_mbuf += "ycc_meta_stmt(" + tostring(slot) + ", tostring({";
     sg_col += 2;
-    0
 };
 
 // `}#` of a top-level block that HELD its text: the call goes where the block
@@ -1668,7 +1652,6 @@ def sg_top_close(k: long) -> void {
         // right place and the text after the block follows it.
         sg_drop();
         sg_gbuf += mg_stub(slot, stmt);
-        0
     }
 };
 
@@ -1717,7 +1700,6 @@ def sg_m_live() -> void {
         if (sg_bhold[k]) { sg_mmid = true; sg_mdepth = k + 1 };
         k = k - 1;
     };
-    0
 };
 
 // Put every hoisted call at the top-level statement that contains its block.
@@ -1746,7 +1728,6 @@ def sg_mids_move() -> void {
         };
     };
     sg_mids = [];
-    0
 };
 
 // Whether move `a` belongs to a LATER statement (or the same one, further along
@@ -1790,7 +1771,6 @@ def sg_mids_one(k: long) -> void {
     sg_g = rest;
     sg_gf = restf;
     sg_gol = restl;
-    0
 };
 
 // `}#` with sg_depth == 0: nothing opened it.
@@ -2172,7 +2152,6 @@ def meta_begin() -> void {
     mg_reduce = false;
     mg_pass();
     mg_collect = true;
-    0
 };
 
 // The reduction, turned on once a pass has found nesting. The collecting pass
@@ -2180,7 +2159,6 @@ def meta_begin() -> void {
 // compile to exactly what it always did.
 def mg_reduce_on() -> void {
     mg_reduce = true;
-    0
 };
 
 // A new PASS over the same files -- and the block table, G's body and the
@@ -2212,7 +2190,6 @@ def mg_pass() -> void {
     mg_n = 0;
     mg_nest = 0;
     mg_collect = false;
-    0
 };
 
 // Is any block still without its text? That is the loop condition of the rounds,
@@ -2243,7 +2220,6 @@ def mg_setup(root: str, files: [str], base: str, exec: bool, pkgs: [str], roots:
     mg_gexec = exec;
     mg_pkgs = pkgs;
     mg_roots = roots;
-    0
 };
 
 // The pass is off for the generator's own compile: G is ordinary Y, and
@@ -2252,7 +2228,6 @@ def mg_setup(root: str, files: [str], base: str, exec: bool, pkgs: [str], roots:
 // construction rather than by checking.
 def mg_set(on: bool) -> void {
     mg_on = on;
-    0
 };
 
 def mg_in(xs: [str], s: str) -> bool {
@@ -2269,7 +2244,6 @@ def mg_in(xs: [str], s: str) -> bool {
 def mg_report(msg: str) -> void {
     puts("error: " + msg + "\n");
     exit(1);
-    0
 };
 
 // The helpers G carries, and the one they share. `y_`-prefixed, so a module
@@ -2401,7 +2375,6 @@ def mg_unframe(data: str) -> void {
     };
     if (bad) {
         mg_report("the meta generator wrote a malformed piece to fd 3 (this is the pass's own framing, so it is a bug)");
-        1
     } else {
         0
     }
@@ -2472,7 +2445,6 @@ def mg_commit() -> void {
             mg_piece[i] = "";
         };
     };
-    0
 };
 
 // The stand-in a block runs when it cannot produce its text this round. Same
@@ -2503,7 +2475,6 @@ def mg_check(s: long) -> void {
     if (index_of(p, "\x00") >= 0) {
         mg_report("the block at " + mg_where(s) + " emitted a NUL byte, which cannot be in a source file");
     };
-    0
 };
 
 // A `#{` in the text the generator resolved -- which is to say in a module the
@@ -2642,7 +2613,6 @@ def mg_splice(lo: long, hi: long) -> void {
         sg_pf = nf;
         sg_pol = nll;
         sg_gen = ngen;
-        0
     }
 };
 

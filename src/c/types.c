@@ -2061,6 +2061,22 @@ static Yv *typeof_eq(Yv *st, Yv *op, Yv *lt, Yv *rt, ylong line, ylong col) {
 
 /* `x in s` / `e in a` (LINT_RULES.md 5.1): a byte or one-char str in a
  * str, or an element in an array. Bool; the emitter desugars. */
+/* An integer array takes any integer element. The linter's chain-to-`in`
+ * rewrite (1.6/1.7) turns `c == 120 || c == 88 || c == 111` into
+ * `c in [120, 88, 111]`, where the literal is `[long]` and `c` is a byte --
+ * and the two compare numerically, as they do in the chain. `in` on a str
+ * already accepts a byte or a str for the same reason. */
+static int in_int_ok(Yv *lt, Yv *of) {
+    Yv *l = unfold(lt);
+    Yv *o = unfold(of);
+    if (yv_l(yr_get(l, "k")) == K_tbyte && yv_l(yr_get(o, "k")) == K_tlong) {
+        return 1;
+    } else if (yv_l(yr_get(l, "k")) == K_tlong && yv_l(yr_get(o, "k")) == K_tbyte) {
+        return 1;
+    }
+    return 0;
+}
+
 static Yv *typeof_in(Yv *st, Yv *lt, Yv *rt, ylong line, ylong col) {
     Yv *r = unfold(rt);
     ylong rk = yv_l(yr_get(r, "k"));
@@ -2074,7 +2090,8 @@ static Yv *typeof_in(Yv *st, Yv *lt, Yv *rt, ylong line, ylong col) {
                                       tstr(lt)), line, col));
     } else if (rk == K_tarr || rk == K_tarrfix) {
         if (yv_l(yr_get(lt, "k")) == K_tunk ||
-            teq(unfold(lt), unfold(yr_get(r, "of")))) {
+            teq(unfold(lt), unfold(yr_get(r, "of"))) ||
+            in_int_ok(lt, yr_get(r, "of"))) {
             return tc_res(type_node(yr(1, "k", yv_long(K_tbool))), st);
         }
         return tc_res(t_unk(),

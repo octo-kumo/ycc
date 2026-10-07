@@ -174,7 +174,6 @@ def lint_meta_top(st: LintSt, stmts: [Node], ogen: [bool]) -> void {
             lint_warn_start(st, "a top-level statement runs once in the meta generator and once in the program, so with a meta block in the file it must be a declaration (a def, type, const or let) -- keep a top-level let initializer pure", s);
         };
     });
-    0
 };
 
 // `ogen` is EMPTY for a unit with no meta blocks (see resolve_unit), so its
@@ -204,7 +203,6 @@ def lint_rets(st: LintSt, stmts: [Node]) -> void {
     stmts.foreach((e) => {
         lint_rets_node(st, e);
     });
-    0
 };
 
 def lint_rets_node(st: LintSt, node: Node) -> void {
@@ -295,12 +293,10 @@ def lint_def_body(st: LintSt, name: str, v: Node) -> void {
     lint_node(st, v, true);
     st.voidfn = wv;
     st.self = was;
-    0
 };
 
 def lint_warn(st: LintSt, msg: str, line: long, col: long) -> void {
     st.warns += { msg: msg, line: line, col: col };
-    0
 };
 
 // ── the renamed tree ────────────────────────────────────────────────────
@@ -343,7 +339,6 @@ def lint_mark(st: LintSt, name: str, bit: long) -> void {
         };
         fl[n] = fl[n] | bit;
     };
-    0
 };
 
 // A local binding (let, const, nested def), checked for use at the end.
@@ -354,7 +349,6 @@ def lint_note(st: LintSt, name: str, kind: str, line: long, col: long, scal: boo
     if (d != "" && d[0] != 95 && index_of(name, "$shadow") < 0) {
         st.vars += { name: d, kind: kind, num: lint_num(name), line: line, col: col, scal: scal, fresh: fresh, strf: strf, top: false, vec: vec, untyped: untyped };
     };
-    0
 };
 
 // A top-level binding: a global. Recorded, because the value-used append
@@ -386,7 +380,6 @@ def lint_note_top(st: LintSt, node: Decl) -> void {
             st.vars += { name: d, kind: node.kind, num: lint_num(name), line: node.line, col: node.col, scal: lint_scal(node.typ, node.v), fresh: lint_fresh(node.v), strf: lint_strheld(node.typ, node.v), top: true, vec: lint_vec(node.typ, node.v), untyped: node.typ.k == K.tnone };
         };
     };
-    0
 };
 
 // Where a top-level name was declared last, if that was in this file (0
@@ -490,7 +483,6 @@ def lint_note_param(st: LintSt, name: str, typ: Type, line: long, col: long) -> 
     if (d != "" && d[0] != 95) {
         st.vars += { name: d, kind: "param", num: lint_num(name), line: line, col: col, scal: lint_tscal(typ), fresh: false, strf: typ.k == K.tstr, top: true, vec: typ.k == K.tarr || typ.k == K.tarrfix, untyped: false };
     };
-    0
 };
 
 // A statement list: a block's, a function body's, the unit's. Only the
@@ -514,13 +506,22 @@ def lint_stmts(st: LintSt, stmts: [Node], used: bool, top: bool) -> void {
         st.vused = !drop && i == n - 1;
         st.tailflow = wt && i == n - 1;
         if (st.wlevel >= 2) { lint_short_pair(st, stmts, i); };
+        // Rule 2.13: the last statement of a list whose value is dropped is a
+        // bare constant. It is dead -- the block's value goes nowhere -- and
+        // the fix deletes the line. `n > 1`: with the constant as the block's
+        // ONLY statement, removing it would leave an empty arm, which rule 2.1
+        // then has to take apart (and emptying an `else` is a real edit, not a
+        // deletion). One statement is cheap; a cascade of warnings is not.
+        if (i == n - 1 && n > 1 && !used && lint_const_node(s)) {
+            lint_warn_start(st, "the value of this block is not used; this constant does nothing", s);
+            lint_fix(st, "2.13", s.line, s.col, "", "");
+        };
         lint_stmt(st, s, used && i == n - 1, top);
         if (!dead && lint_diverges(s)) {
             dead = true;
         };
     };
     st.tailflow = wt;
-    0
 };
 
 def lint_warn_at(st: LintSt, msg: str, node: Node) -> void {
@@ -573,6 +574,13 @@ def lint_stmt(st: LintSt, s: Node, used: bool, top: bool) -> void {
     } else {
         lint_node(st, s, used)
     }
+};
+
+// A literal node: num, str, char, bool, bstr. A block that ends with one and
+// whose value is dropped computes nothing (rule 2.13).
+def lint_const_node(s: Node) -> bool {
+    let k: long = s.k;
+    k == K.num || k == K.str || k == K.char || k == K.bool || k == K.bstr
 };
 
 // Not the parser's trailing void, and not a def.
@@ -791,7 +799,6 @@ def lint_list(st: LintSt, nodes: [Node]) -> void {
     nodes.foreach((e) => {
         lint_node(st, e, true);
     });
-    0
 };
 
 def lint_two(st: LintSt, a: Node, b: Node) -> void {
@@ -846,7 +853,6 @@ def lint_bin(st: LintSt, node: Bin, used: bool) -> void {
         lint_node(st, l, true);
         lint_node(st, r, false);
         st.logic = was;
-        0
     } else {
         lint_two(st, l, r);
         if (!used && !(st.voidfn && st.tailflow)) {
@@ -866,7 +872,6 @@ def lint_bin(st: LintSt, node: Bin, used: bool) -> void {
         };
         if (st.wlevel >= 2) { lint_short_bin(st, node); };
         st.logic = was;
-        0
     }
 };
 
@@ -1002,15 +1007,12 @@ def lint_short_assign(st: LintSt, node: Assign, name: str, v: Node) -> void {
     if (op == "+" && lint_int_val(b.r) == 1 && lint_var_scal(st, name)) {
         lint_warn_at(st, "'" + d + " = " + d + " + 1' can be written '" + d + "++'", node);
         lint_fix(st, "1.2", node.line, node.col, d, "+");
-        0
     } else if (op == "-" && lint_int_val(b.r) == 1 && lint_var_scal(st, name)) {
         lint_warn_at(st, "'" + d + " = " + d + " - 1' can be written '" + d + "--'", node);
         lint_fix(st, "1.2", node.line, node.col, d, "-");
-        0
     } else if (lint_compound_op(op) && lint_var_scal(st, name)) {
         lint_warn_at(st, "'" + d + " = " + d + " " + op + " <expr>' can be written '" + d + " " + op + "= <expr>'", node);
         lint_fix(st, "1.1", node.line, node.col, d, op);
-        0
     } else {
         0
     }
@@ -1040,7 +1042,6 @@ def lint_short_bin(st: LintSt, node: Bin) -> void {
         lint_warn_at(st, "'" + d + " " + op + " " + lb.v + "' can be written '" + d + "'", node);
         if (node.r.k == K.bool) { lint_fix(st, "1.9", node.line, node.col, op, lb.v); };
     };
-    0
 };
 
 // Rule 1.3: `byte_at(s, i)` is `s[i]`.
@@ -1052,7 +1053,6 @@ def lint_short_call(st: LintSt, call: Call) -> void {
         lint_warn_at(st, "'byte_at(s, i)' can be written 's[i]'", call);
         lint_fix(st, "1.3", callee.line, callee.col, "", "");
     };
-    0
 };
 
 // Rule 3.6: a `foreach` closure whose element parameter is unused while the
@@ -1075,7 +1075,6 @@ def lint_short_foreach_elem(st: LintSt, call: Call) -> void {
     if (lint_find(f.body, arr.v, 128)) { 0; return; };
     lint_warn_at(st, "the element parameter of this 'foreach' is unused; use it instead of indexing '" + lint_disp(arr.v) + "' again", call);
     lint_fix(st, "3.6", call.line, call.col, lint_disp(arr.v), lint_disp(ix));
-    0
 };
 
 // Rule 1.5: `ord(s[E:E + 1])` is `s[E]`. Handled here, before the slice
@@ -1108,7 +1107,6 @@ def lint_short_slice(st: LintSt, slice: Slice) -> void {
         // Not offered as a fix: the byte is not the 1-char string, and the
         // consumer (a comparison, a concat) must change too.
     };
-    0
 };
 
 // Rules 1.6/1.7: a `||` chain of equalities against the same value is one
@@ -1165,7 +1163,6 @@ def lint_short_chain(st: LintSt, node: Bin) -> void {
         lint_warn_at(st, "these equalities test one value against a set of strings; write one membership test", node);
         if (fid != "") { lint_fix(st, "1.6", fb.l.line, fb.l.col, fid, "str"); };
     };
-    0
 };
 
 // The `==` comparisons of a `||` chain, in order.
@@ -1179,7 +1176,6 @@ def lint_chain_leaves(node: Node, out: [Node]) -> void {
         };
     };
     out += node;
-    0
 };
 
 // The one statement of a block, or a void node when the block holds none
@@ -1232,7 +1228,6 @@ def lint_short_empty_if(st: LintSt, node: If) -> void {
         // `if`) can leave the condition's names unused, a new warning.
         if (node.has_else) { lint_fix(st, "2.1", node.line, node.col, "", "inv"); };
     };
-    0
 };
 
 // Rules 2.3/2.4: an `if`/`else` that only chooses a value.
@@ -1258,14 +1253,12 @@ def lint_short_if_ternary(st: LintSt, node: If) -> void {
             lint_warn_at(st, "an 'if' returning a value from both arms can return a conditional", node);
         };
     };
-    0
 };
 
 def lint_short_if(st: LintSt, node: If) -> void {
     lint_short_empty_if(st, node);
     lint_short_if_ternary(st, node);
     lint_short_if_chain(st, node);
-    0
 };
 
 // Rule 1.8: `if (x == A) { v } else if (x == B) { v } ... else { !v }` is
@@ -1291,7 +1284,6 @@ def lint_short_if_chain(st: LintSt, node: If) -> void {
     };
     lint_warn_at(st, "this 'if' chain tests one value against a set; write one membership test", node);
     lint_fix(st, "1.8", node.line, node.col, lint_disp(x), tostring(v0));
-    0
 };
 
 // The name `L == <literal>` (either order), or "".
@@ -1348,7 +1340,6 @@ def lint_short_pair(st: LintSt, stmts: [Node], i: long) -> void {
             };
         };
     };
-    0
 };
 
 // Rule 2.6: `while (true) { if (!c) { break; } ... }` is `while (c) ...`.
@@ -1361,7 +1352,6 @@ def lint_short_while(st: LintSt, loop: While) -> void {
     if (lint_single_stmt(iff.then).k == K.kw_break) {
         lint_warn_at(st, "'while (true)' with a leading 'break' guard can test the guard instead", b);
     };
-    0
 };
 
 def lint_first_stmt(block: Node) -> Node {
@@ -1625,7 +1615,6 @@ def lint_short_none(st: LintSt, stmts: [Node], i: long) -> void {
     if (lint_find_from(stmts, i + 2, x, 0)) { 0; return; };
     lint_warn_at(st, "'" + lint_disp(x) + "' is tested for 'none' and unwrapped; write 'if let some(" + lint_disp(x) + ") = <expr> { ... } else { ... }'", d);
     lint_fix(st, "2.11", d.line, d.col, lint_disp(x), "");
-    0
 };
 
 // The name compared against `none`, or "".
@@ -1700,7 +1689,6 @@ def lint_short_flag(st: LintSt, stmts: [Node], i: long) -> void {
     if (!lint_find_from(stmts, i + 2, f, 0) && lint_flag_fixable(loop.body, f)) {
         lint_fix(st, "2.5", d.line, d.col, lint_disp(f), "");
     };
-    0
 };
 
 // The loop condition is `f`, `f == <bool>` or `f != <bool>`.
@@ -1750,7 +1738,6 @@ def lint_short_index_loop(st: LintSt, stmts: [Node], i: long) -> void {
         lint_warn_at(st, "this index loop can be 'for " + lint_disp(iv) + " in <lo>..<hi> { ... }'", d);
         lint_fix(st, "2.8", d.line, d.col, lint_disp(iv), "");
     };
-    0
 };
 
 // Rule 3.5: `foreach (i in range(len(a)))` can iterate the array directly.
@@ -1759,7 +1746,6 @@ def lint_short_range(st: LintSt, fe: Foreach) -> void {
     if (arr == "" || !lint_var_vec(st, arr) || lint_find(fe.body, "", 7) || lint_find(fe.body, arr, 8)) { 0; return; };
     lint_warn_at(st, "this range loop over an array's indices can be '<a>.foreach((e, i) => { ... })'", fe);
     lint_fix(st, "3.5", fe.line, fe.col, lint_disp(arr), "");
-    0
 };
 
 // The name inside `range(len(a))`, or "".
@@ -3079,6 +3065,39 @@ def fx_chain(rule: str, name: str, kind: str, ln: long, col: long, lines: [str])
     lines
 };
 
+// 2.13: delete the trailing constant of a block whose value is dropped. It IS
+// the block's value (no `;`), so its line holds the literal and nothing else;
+// a line this cannot recognize is left alone and the warning stays.
+def fx_is_bare_lit(line: str) -> bool {
+    let t = fx_strip(fx_nocomment(line));
+    let n = len(t);
+    if (n == 0) { return false; };
+    if (t == "true" || t == "false") { return true; };
+    let c0 = t[0];
+    let cl = t[n - 1];
+    if (n >= 2 && c0 == 34 && cl == 34) { return true; };
+    if (n >= 3 && c0 == 39 && cl == 39) { return true; };
+    let i = 0;
+    if (c0 == 45 || c0 == 43) { i = 1; };
+    let ok = i < n;
+    while (i < n && ok) {
+        let c = t[i];
+        let dig = (c >= 48 && c <= 57) || c == 95 || c == 46;
+        let hex = (c >= 97 && c <= 102) || (c >= 65 && c <= 70);
+        if (!dig && !hex && !(c in "xXoObBn")) { ok = false; };
+        i++;
+    };
+    ok && i > 0
+};
+
+def fx_trailing_const(ln: long, lines: [str]) -> [str] {
+    if (ln < 1 || ln > len(lines)) { return lines; };
+    // The rule only fires on a list with another statement, so the block
+    // survives the deletion and the line holds the constant alone.
+    if (!fx_is_bare_lit(lines[ln - 1])) { return lines; };
+    lines[:ln - 1] + lines[ln:]
+};
+
 // The fixers, by rule. A rule with no case here stays a warning.
 def fx_one(rule: str, a: str, b: str, ln: long, col: long, lines: [str]) -> [str] {
     if (ln < 1 || ln > len(lines)) { return lines; };
@@ -3102,7 +3121,8 @@ def fx_one(rule: str, a: str, b: str, ln: long, col: long, lines: [str]) -> [str
     else if (rule == "void") { lines = fx_void(ln, lines); }
     else if (rule == "1.8") { lines = fx_if_chain(a, b, ln, col, lines); }
     else if (rule == "1.6") { lines = fx_chain(rule, a, b, ln, col, lines); }
-    else if (rule == "1.7") { lines = fx_chain(rule, a, b, ln, col, lines); };
+    else if (rule == "1.7") { lines = fx_chain(rule, a, b, ln, col, lines); }
+    else if (rule == "2.13") { lines = fx_trailing_const(ln, lines); };
     lines
 };
 
@@ -3148,7 +3168,6 @@ def fx_sort(a: [LintFix], nmap: long, lmap: [long]) -> void {
         while (j >= 0 && fx_before(cur, a[j], nmap, lmap)) { a[j + 1] = a[j]; j = j - 1; };
         a[j + 1] = cur;
     };
-    0
 };
 
 def fx_has(a: [long], v: long) -> bool {
@@ -3283,7 +3302,6 @@ def lint_if(st: LintSt, node: If, used: bool) -> void {
         lint_warn_at(st, "the 'else' branch is empty", node)
     } else { 0 };
     if (st.wlevel >= 2) { lint_short_if(st, node); };
-    0
 };
 
 // An arm holding nothing at all: an empty block. Only an `else` is worth a
@@ -3319,7 +3337,6 @@ def lint_loop_body(st: LintSt, body: Node) -> void {
     st.dropnext = was;
     st.vused = wv;
     st.loops = wl;
-    0
 };
 
 // Rule 2.12: a closure that opens by renaming its own parameter.
@@ -3376,7 +3393,6 @@ def lint_alias_param(st: LintSt, node: Func) -> void {
     let pn = lint_disp(p);
     lint_warn_at(st, "'" + dn + "' is only another name for the parameter '" + pn + "'; rename the parameter", d);
     lint_fix(st, "2.12", d.line, d.col, pn, dn);
-    0
 };
 
 def lint_func(st: LintSt, node: Func) -> void {
@@ -3395,7 +3411,6 @@ def lint_func(st: LintSt, node: Func) -> void {
     st.tailflow = true;
     lint_stmts(st, body.stmts, !st.voidfn, false);
     st.tailflow = wt;
-    0
 };
 
 def lint_decl(st: LintSt, node: Decl) -> void {
@@ -3436,7 +3451,6 @@ def lint_assign(st: LintSt, node: Assign) -> void {
         };
     };
     if (st.wlevel >= 2) { lint_short_assign(st, node, name, v); };
-    0
 };
 
 def lint_incdec(st: LintSt, node: IncDec, used: bool) -> void {
@@ -3447,7 +3461,6 @@ def lint_incdec(st: LintSt, node: IncDec, used: bool) -> void {
         if (used) {
             lint_mark(st, id.v, 1);
         };
-        0
     } else {
         lint_node(st, t, true)
     }
@@ -3498,7 +3511,6 @@ def lint_opassign(st: LintSt, node: OpAssign, used: bool) -> void {
             lint_warn_at(st, "'" + d + " " + op + "= 1' can be written '" + d + rs + "'", node);
         };
     };
-    0
 };
 
 // A record or map literal giving a key twice keeps the last value; the
@@ -3511,7 +3523,6 @@ def lint_lit(st: LintSt, node: RecLit, what: str, kind: str) -> void {
             lint_warn_at(st, "duplicate " + what + " '" + key + "' in a " + kind + " literal; the last one wins", node);
         };
     });
-    0
 };
 
 def lint_seen(keys: [str], i: long) -> bool {
@@ -3551,7 +3562,6 @@ def lint_vars(st: LintSt) -> void {
             };
         };
     };
-    0
 };
 
 def lint_word(kind: str) -> str {
@@ -3620,7 +3630,6 @@ def lint_tw_list(t: LintTy, nodes: [Node]) -> void {
     nodes.foreach((e) => {
         lint_tw(t, e);
     });
-    0
 };
 
 def lint_tw(t: LintTy, node: Node) -> void {
@@ -3769,7 +3778,6 @@ def lint_root(t: LintTy, typ: Type, line: long, col: long, alias: str) -> void {
         if (m != "" && alias != "") { name = m + "." + alias; };
         t.roots += { typ: typ, line: line, col: col, alias: name, mod: m };
     };
-    0
 };
 
 // The module line ln is in ("" for none).
@@ -3908,7 +3916,6 @@ def lint_tk_members(t: LintTy, u: TList, rec: bool, me: long, parts: [str]) -> v
             parts += lint_tk(t, m, rec, me);
         };
     });
-    0
 };
 
 // The alias a union member names when it is a union (and not one being
@@ -3942,7 +3949,6 @@ def lint_occ(t: LintTy, ty: Type, parent: long) -> long {
 
 def lint_occ_key(t: LintTy, i: long, key: str) -> void {
     t.occs[i].key = key;
-    0
 };
 
 def lint_sort_uniq(xs: [str]) -> [str] {

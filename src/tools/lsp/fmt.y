@@ -106,12 +106,16 @@ def space_before_full(src: str, prev: Span, was_unary: bool, cur: Span, in_brack
         // a TIGHT `?` is the option postfix (`Leaf?`); a spaced one is the
         // ternary (`a ? b : c`), and the `:` that follows it is spaced too
         if (cc == "?" && tight) { return false; }
+        // `!` after a value is always the unwrap POSTFIX: `nopt!`, never
+        // `nopt !` (before a value it is the sign, handled below)
+        if (cc == "!" && ends_expr(src, prev, was_unary)) { return false; }
         // after something that cannot end a value, an operator is a sign --
         // unless the author spaced it, which makes it an infix one
         if (tight && is_tight_op(cc)) {
             if (!ends_expr(src, prev, was_unary)) { return false; }
-            if (is_tight_op(cc) && cc == "++") { return false; }
-            if (is_tight_op(cc) && cc == "--") { return false; }
+            // after a value the tight sign is POSTFIX: `x++`, and `x!` the
+            // unwrap (`nopt!`, never `nopt !`)
+            if (cc == "++" || cc == "--" || cc == "!") { return false; }
         }
         return true;
     }

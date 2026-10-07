@@ -37,13 +37,10 @@ if (pid == 0) {
     net.close_fd(c);
     if (is_some(r)) {
         print("client got: " + unwrap(r)[:15]);
-        0
     } else {
         print("client got: nothing");
-        0
     };
     exit(0);
-    0
 } else {
     let conn = net.accept_tcp(srv);
     net.http_serve_one(conn, hello);
@@ -51,5 +48,4 @@ if (pid == 0) {
     net.close_fd(srv);
     print("server done");
     exit(0);
-    0
 };

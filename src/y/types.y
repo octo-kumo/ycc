@@ -327,7 +327,6 @@ def union_parts_go(out: [Type], t: Type, depth: long) -> void {
         let u = unfold(m);
         if (u.k == K.tunion && depth < 16) { union_parts_go(out, u, depth + 1); } else { out += m; };
     });
-    0
 };
 
 // A union's members, unfolded (union_parts).
@@ -1567,6 +1566,19 @@ def typeof_eq(st: TcSt, op: str, lt: Type, rt: Type, line: long, col: long) -> T
 // `x in s` / `e in a`: a byte or one-char str in a str, or an element in an
 // array. Bool. The emitter desugars it to `index_of(s, x) >= 0` /
 // `a.index(e) >= 0`, so this is only the type rule (LINT_RULES.md 5.1).
+// An integer array takes any integer element. The linter's chain-to-`in`
+// rewrite (1.6/1.7) turns `c == 120 || c == 88 || c == 111` into
+// `c in [120, 88, 111]`, where the literal is `[long]` and `c` is a byte --
+// and the two compare numerically, as they do in the chain. `in` on a str
+// already accepts a byte or a str for the same reason.
+def in_int_ok(lt: Type, of: Type) -> bool {
+    let l = unfold(lt);
+    let o = unfold(of);
+    if (l.k == K.tbyte && o.k == K.tlong) { true }
+    else if (l.k == K.tlong && o.k == K.tbyte) { true }
+    else { false }
+};
+
 def typeof_in(st: TcSt, lt: Type, rt: Type, line: long, col: long) -> TcRes {
     let r = unfold(rt);
     if (r.k == K.tstr) {
@@ -1577,14 +1589,14 @@ def typeof_in(st: TcSt, lt: Type, rt: Type, line: long, col: long) -> TcRes {
         }
     } else if (r.k == K.tarr) {
         let a: TOf = r;
-        if (lt.k == K.tunk || teq(unfold(lt), unfold(a.of))) {
+        if (lt.k == K.tunk || teq(unfold(lt), unfold(a.of)) || in_int_ok(lt, a.of)) {
             tc_res(type_node({ k: K.tbool }), st)
         } else {
             tc_res(t_unk(), fail(st, "'in' on an array needs one of its elements on the left, got " + tstr(lt), line, col))
         }
     } else if (r.k == K.tarrfix) {
         let a: TFix = r;
-        if (lt.k == K.tunk || teq(unfold(lt), unfold(a.of))) {
+        if (lt.k == K.tunk || teq(unfold(lt), unfold(a.of)) || in_int_ok(lt, a.of)) {
             tc_res(type_node({ k: K.tbool }), st)
         } else {
             tc_res(t_unk(), fail(st, "'in' on an array needs one of its elements on the left, got " + tstr(lt), line, col))
@@ -4772,7 +4784,6 @@ def typeof_decl(st: TcSt, node: Decl) -> TcRes {
 def ret_note(rl: TInfer, typ: Type, line: long, col: long) -> void {
     let rets: [RetNote] = rl.rets;
     rets += { typ: typ, line: line, col: col };
-    0
 };
 
 // The return types typeof_def inferred, by the def's position: the
@@ -4807,7 +4818,6 @@ def set_inferred_ret(func: Func, ret: Type) -> void {
     inf_keys += key;
     inf_typs += ret;
     bkt += len(inf_keys) - 1;
-    0
 };
 
 // The return type inferred for the def at (line, col); tnone for none.

@@ -28,12 +28,10 @@ let ploop_names: [str] = [];
 
 def loop_push(nm: str) -> void {
     ploop_names += nm;
-    0
 };
 
 def loop_pop() -> void {
     ploop_names = ploop_names[0:len(ploop_names) - 1];
-    0
 };
 
 def loop_resolve(label: str) -> str {
@@ -72,7 +70,6 @@ def p_infer_reset() -> void {
     pcall_typs = [];
     pfunc_names = [];
     pfunc_nodes = [];
-    0
 };
 
 def p_body_note(name: str, t: Type) -> void {
@@ -82,7 +79,6 @@ def p_body_note(name: str, t: Type) -> void {
     };
     pbody_names += name;
     pbody_typs += t;
-    0
 };
 
 def p_body_get(name: str) -> Type {
@@ -101,7 +97,6 @@ def p_body_apply(names: [str], ptypes: [Type]) -> void {
         };
         i++;
     };
-    0
 };
 
 // The type a binary operator implies for a missing parameter on one side
@@ -142,7 +137,6 @@ def p_body_bin_clue(left: Node, op: str, right: Node) -> void {
         let id2: Leaf = right;
         if (p_str_in(pbody_names, id2.v)) { p_body_note(id2.v, p_bin_hint(op, left)); };
     };
-    0
 };
 
 def p_call_note(callee: Node, args: [Node]) -> void {
@@ -156,7 +150,6 @@ def p_call_note(callee: Node, args: [Node]) -> void {
             pcall_typs += lt;
         };
     };
-    0
 };
 
 def p_infer_finish() -> void {
@@ -171,7 +164,6 @@ def p_infer_finish() -> void {
             };
         });
     });
-    0
 };
 
 // AST nodes have one type per shape; kinds with a shared shape use one

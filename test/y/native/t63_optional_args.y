@@ -7,7 +7,7 @@ print(show(1));
 print(show(1, 2));
 def greet(name: str, greeting?: str, punct = "!") -> str {
     let g = "hello";
-    if (is_some(greeting)) { g = unwrap(greeting); 0 };
+    if (is_some(greeting)) { g = unwrap(greeting); };
     g + " " + name + punct
 };
 print(greet("bob"));
@@ -15,8 +15,8 @@ print(greet("bob", "hi"));
 print(greet("bob", "hi", "?"));
 def opts(a?: long, b?: [long]) -> long {
     let n = 0;
-    if (is_some(a)) { n = n + unwrap(a); 0 };
-    if (is_some(b)) { n = n + len(unwrap(b)); 0 };
+    if (is_some(a)) { n = n + unwrap(a); };
+    if (is_some(b)) { n = n + len(unwrap(b)); };
     n
 };
 print(opts());

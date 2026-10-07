@@ -189,7 +189,6 @@ def parse_target(name: str) -> void {
         puts("ycc: unknown target '" + name + "' (linux, windows)\n");
         exit(1);
     };
-    0
 };
 
 // ── the std pack ─────────────────────────────────────────────────────────
@@ -260,7 +259,6 @@ def write_std_pack(path: str) -> void {
         puts("error: writing '" + path + "' failed\n");
         exit(1);
     }
-    0
 };
 
 // ── phase reporting (--time) ─────────────────────────────────────────────
@@ -299,12 +297,10 @@ def print_phase_rows(all: [Timing]) -> void {
     all.foreach((e) => {
         eputs("  " + padr(e.name, 12) + padl(fmt_ms(e.us), 12) + " ms" + padl(fmt_kb(e.heap), 12) + " KB\n");
     });
-    0
 };
 
 def print_counter(name: str, v: long) -> void {
     eputs("  " + padr(name, 12) + padl(tostring(v), 12) + "\n");
-    0
 };
 
 // ── main ─────────────────────────────────────────────────────────────────
@@ -330,7 +326,6 @@ def print_native_errors(all: [Diag], origin: Origin, bare: bool) -> void {
             puts(at + ": error: " + e.msg + "\n");
         }
     });
-    0
 };
 
 // What lint.y found in a unit that compiled, as `at: warning: msg` on
@@ -350,7 +345,6 @@ def warning_text(warnings: [Diag], origin: Origin, bare: bool) -> str {
 
 def print_native_warnings(warnings: [Diag], origin: Origin, bare: bool) -> void {
     eputs(warning_text(warnings, origin, bare));
-    0
 };
 
 // ── ycc build / ycc vendor (see pkg.y) ───────────────────────────────────
@@ -650,7 +644,6 @@ def build_one(dir: str, one: str, debug: bool, nowarn: bool, wlevel: long, allow
         puts("error: writing '" + op + "' failed\n");
         exit(1);
     };
-    0
 };
 
 // Hand the level pkgs[lo..hi) out to child compilers, in waves of at most
@@ -841,7 +834,6 @@ def build_project(dir: str, debug: bool, nowarn: bool, wlevel: long, allow_exec:
         eputs("built " + outp + "\n");
         b++;
     };
-    0
 };
 
 // `ycc -E`: the resolved text, each line tagged with the file and line it came
@@ -861,7 +853,6 @@ def dump_source(src: str, origin: Origin) -> void {
             prev = at;
         };
     });
-    0
 };
 
 def main(cmdline: [str]) -> long {
@@ -870,28 +861,22 @@ def main(cmdline: [str]) -> long {
     if (!tags.tags_agree()) {
         puts("ycc: internal error: the tag tables disagree (src/y/tags.y)\n");
         exit(1);
-        0
     }
     // ... and the nesting limit, which the two copies must also hold the same.
     if (!tags.max_nest_agree()) {
         puts("ycc: internal error: the nesting limit disagrees (src/y/tags.y)\n");
         exit(1);
-        0
     }
     if (len(cmdline) > 1 && (cmdline[1] == "build" || cmdline[1] == "vendor")) {
         let ba = build_args(cmdline);
         if (cmdline[1] == "build" && len(ba.one) == 0) {
             build_project(ba.dir, ba.debug, ba.nowarn, ba.wlevel, ba.allow_exec, ba.std_src);
-            0
         } else if (cmdline[1] == "build") {
             build_one(ba.dir, ba.one, ba.debug, ba.nowarn, ba.wlevel, ba.allow_exec, ba.std_src);
-            0
         } else {
             pkg.pk_vendor(ba.dir);
-            0
         };
         exit(0);
-        0
     }
     let args = parse_cli_args(cmdline);
     // NOTE: vestigial alias (see print_phase_rows) — `args.out` works.
@@ -928,7 +913,6 @@ def main(cmdline: [str]) -> long {
             let base_dir = ".";
             if (last_slash >= 0) {
                 base_dir = file[0:last_slash];
-                0
             }
 
             // splice imports, tokenize, parse, compile to assembly
@@ -945,7 +929,6 @@ def main(cmdline: [str]) -> long {
             if (pargs.dump) {
                 dump_source(nrsrc, nrorigin);
                 exit(0);
-                0
             };
             let toks = lexer.tokenize(nrsrc);
             ph = nativelib.phase_end(dt, "tokenize", t0, h0);
@@ -988,7 +971,6 @@ def main(cmdline: [str]) -> long {
                     };
                 };
                 exit(0);
-                0
             };
             t0 = clock_us();
             h0 = heap_used();
@@ -1001,12 +983,10 @@ def main(cmdline: [str]) -> long {
                 let wrote = true;
                 if (len(out) == 0) {
                     puts(rasm);
-                    0
                 } else {
                     // Checked, like the executable path below: silently
                     // exiting 0 after a failed write hid bad -o paths.
                     wrote = fs.write_file(out, rasm);
-                    0
                 };
                 ph = nativelib.phase_end(dt, "write", t0, h0);
                 dt = ph.times;
@@ -1017,7 +997,6 @@ def main(cmdline: [str]) -> long {
                     print_counter("src_bytes", len(nrsrc));
                     print_counter("tokens", len(toks));
                     print_counter("asm_bytes", len(rasm));
-                    0
                 }
                 if (!(wrote)) {
                     puts("error: writing '" + out + "' failed\n");
@@ -1055,10 +1034,8 @@ def main(cmdline: [str]) -> long {
                         if (!rr.ok) {
                             puts("error: " + rr.err + "\n");
                             exit(1);
-                            1
                         } else {
                             if (rr.sig > 0) { exit(128 + rr.sig); } else { exit(rr.status); };
-                            0
                         }
                     };
                     let out_path = out;
@@ -1076,7 +1053,6 @@ def main(cmdline: [str]) -> long {
                         print_counter("tokens", len(toks));
                         print_counter("asm_items", abitems);
                         print_counter("out_bytes", len(abbytes));
-                        0
                     }
                     if (!ok) {
                         puts("error: writing '" + out_path + "' failed\n");
