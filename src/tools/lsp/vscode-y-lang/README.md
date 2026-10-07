@@ -4,7 +4,7 @@ Language support for the Y programming language (the `ycc` language in this
 repo), by way of `yserve`, the language server in `src/tools/lsp/`. The design
 is `../LSP.md`.
 
-## What it does today (milestones M1–M3)
+## What it does today (milestones M1–M5)
 
 - **Errors and warnings, together.** `yserve` runs the checker and the linter
   side by side, so one buffer can show both kinds of squiggle at once. The
@@ -17,16 +17,15 @@ is `../LSP.md`.
   unresolvable `import` by printing and exiting; `yserve` finds it first.
 - **Formatting.** *Format Document* (or **Y: Format Document**) rewrites the
   whole file with `src/tools/lsp/fmt.y`.
-- **Syntax highlighting**, from the server's semantic tokens. There is **no
-  TextMate grammar registered at all** — this extension contributes no
-  `grammars` key, so every colour in a `.y` file comes from
-  `textDocument/semanticTokens/full`, and `scan.y` does that job from the real
-  lexer's rules rather than a hand-kept copy.
+- **Syntax highlighting**, from the extension's own TextMate grammar
+  (`syntaxes/y.tmLanguage.json`). It is registered in `contributes.grammars`, so
+  every colour in a `.y` file comes from that grammar — no server request, and it
+  works before `yserve` has started or after it has stopped.
 - **Bracket pair colourisation is off for `.y`**, contributed as a
-  `configurationDefaults` default. A `//` comment is one token, so nothing inside
-  it is painted by the server, and VS Code's own bracket pairing colours matching
-  brackets anywhere in the line — comments and strings included. Every other
-  language is untouched.
+  `configurationDefaults` default: the grammar's comments and strings are the
+  place a bracket is text rather than a pair, and disabling it for Y keeps that
+  distinction out of VS Code's own line-based fallback. Every other language is
+  untouched.
 - **An outline**: `def`, `const`, `let`, `type`, `import` and `export`, nested,
   in the breadcrumb bar and the symbol picker. A `let` inside a loop is
   deliberately not an entry.
@@ -34,10 +33,11 @@ is `../LSP.md`.
   unterminated string literal you get halfway through typing a `"` is a
   diagnostic rather than a dead server.
 
-Hover, go-to-definition and completion are **not** here yet. The server does not
-advertise them, so the extension does not ask for them — see `src/extension.ts`.
+Hover, go-to-definition and completion are advertised by the server and driven
+from the open buffer's own declarations — see `src/extension.ts`.
 Almost everything above needs **no code in this extension**: the client library
-registers each feature from the capability the server advertises.
+registers each request-shaped feature from the capability the server advertises,
+and VS Code registers the TextMate grammar from `package.json`.
 
 ## Install
 
@@ -84,45 +84,30 @@ The extension looks for it, in this order:
 shell and fails in VS Code, or picks up something unrelated. If it is on your
 `PATH`, set `y.lsp.serverPath`.
 
-## Colours
+## Syntax highlighting
 
-The legend has fourteen entries. VS Code registers 27 token types itself
-(`comment`, `string`, `keyword`, `function`, …) and has a default colour for each;
-**four of ours are not among them** — `selfNone`, `punctuation`, `error` and
-`builtin` — and nothing paints those unless the extension says so. Without that,
-`print`, `tostring`, `len`, `clock_us` and `heap_used` render as plain foreground.
+The highlighter is the TextMate grammar in
+`syntaxes/y.tmLanguage.json`, contributed by `package.json` as the `source.y`
+scope. It is deliberately **not** the server's job: the grammar keeps working
+when `yserve` is stopped, and the LSP advertises no semantic-token capability.
 
-They are handled in two layers, and the second exists because the first was not
-enough on its own:
+The grammar's patterns are ordered so strings win over comments (`#strings`
+precedes `#comments`), because TextMate takes the match that starts earliest. It
+also gives the language's own names their own scopes: `def` names and calls are
+`entity.name.function.y`, `type`, `str`, `long`, `float` and friends are
+`support.type.y`, and the predeclared builtins are `support.function.builtin.y`.
+The theme decides how those scopes look, exactly as it does for any other
+language.
 
-1. **`contributes.semanticTokenTypes`, each with a `superType`** — `builtin` falls
-   back to `function`, `punctuation` to `operator`, `selfNone` and `error` to
-   `keyword`. This is the theme-following mechanism: VS Code scores a theme rule
-   against a token type's superType *chain* (`getTypeHierarchy(n).indexOf(o.type)`,
-   `l += 100 - u`), so an exact rule in your theme still wins and the parent is only
-   the fallback.
-2. **A `configurationDefaults` colour for each of the four.** Shipping only the
-   first layer left `builtin` still white, so each one also carries an explicit
-   default. They are the colours Dark+ itself uses for the class each stands in for,
-   so a file stays internally consistent on the most common theme. A theme rule
-   beats a default, and your own `editor.semanticTokenTypes.*` setting beats both.
-
-To change one:
-
-```jsonc
-"editor.semanticTokenTypes.builtin": "#4EC9B0"
-```
-
-`client-check.js` asserts both layers, and it fails if either is dropped — checked
-by deleting the `builtin` entry and its colour, which turns two checks red.
-
+`client-check.js` asserts the grammar is contributed, that the file is valid
+JSON with `scopeName: source.y`, and that `#strings` still precedes `#comments`.
 ## Settings
 
 | Setting | Default | What it does |
 |---|---|---|
 | `y.lsp.serverPath` | `""` | The `yserve` binary. Empty means search as above. |
 | `y.lsp.rootPath` | `""` | Passed as `--root`. Imports in an open file resolve against **that file's own directory** first, so this only matters for files outside the workspace. Empty uses the first workspace folder. |
-| `y.lsp.checkOnChange` | `true` | Run the checker and the linter on every keystroke. Off checks on open and on save only, which is much cheaper on a large file and costs you live errors. **The other features are unaffected** — hover, completion, highlighting and Format Document all read your unsaved buffer, so they are never a keystroke behind. |
+| `y.lsp.checkOnChange` | `true` | Run the checker and the linter on every keystroke. Off checks on open and on save only, which is much cheaper on a large file and costs you live errors. **The other features are unaffected** — hover, completion and Format Document read your unsaved buffer, and the TextMate grammar never waits for a check. |
 | `y.lsp.warnings` | `false` | Passes `-W` to `yserve`, adding the dropped-value and empty-`else` checks. Off is `yserve`'s own default and is **less** than `ycc`, which warns by default — turn this on if you want the editor to agree with the compiler. |
 | `y.lsp.trace.server` | `"off"` | `messages` or `verbose` logs the JSON-RPC traffic to the **Y** output channel. |
 
@@ -177,10 +162,7 @@ loads anything.
 - `src/client.ts` — where to find `yserve`, and the argument list. Pure logic,
   so it can be tested without spawning anything.
 - `language-configuration.json` — comments, brackets, auto-close, indentation.
-- `syntaxes/y.tmLanguage.json` — the TextMate grammar. **Unregistered** from
-  `contributes` in this version, per R2.1: semantic tokens from the server
-  become the only highlighter in M2. The file stays in the tree, so
-  re-enabling it is a one-line revert.
+- `syntaxes/y.tmLanguage.json` — the TextMate grammar, contributed in `package.json` as the `source.y` scope.
 - `tsconfig.json` — strict, `commonjs`, `out/`.
 
 ## Tests
@@ -200,7 +182,7 @@ make lsp-e2e
   the JSON-RPC library VS Code itself uses, through the exact message sequence an
   editor sends. This is what proved the server agrees with a real LSP
   implementation rather than only with the hand-written driver in `test-e2e.sh`.
-  40 checks, and it **behaves like the editor**: when the server advertises the
+  It **behaves like the editor**: when the server advertises the
   pull-diagnostics capability it pulls, because a server that claims pull and
   answers only push makes VS Code ignore the push notifications and show no
   diagnostics at all — which is what happened, and what this driver now catches.
