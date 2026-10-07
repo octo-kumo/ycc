@@ -11628,6 +11628,13 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
                 // calls into. Everything else gets a generated label.
                 let label = "";
                 label = len(d.func.label) > 0 ? d.func.label : fn_label_of(rl.uid, d.name);
+                // An `irq N def`'s label is what the generated interrupt stub
+                // calls (arch_x64.y's kernel_irq_text), so it is recorded the
+                // moment it exists.  `disp` strips rename's `$N`.
+                if (target_is_kernel()) {
+                    let il = kernel_irq_line(disp(d.name));
+                    if (il >= 0) { kernel_irq_stub(il, label); };
+                };
                 let lid = lbl_new(label);
                 hsyms += { name: d.name, label: label, typ: func_type(d.func) };
                 hids += lid;
@@ -12162,6 +12169,14 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
     // set for shaking the arch prelude, and the kept prelude's references
     // shake the rodata constants.
     let extra: [str] = [];
+    // An `irq N def` handler has no caller in the program: the generated
+    // stub (a text part the shaker never sees) is what calls it, so it is a
+    // root here or its body is shaken away and the stub names nothing.
+    if (target_is_kernel()) {
+        res_irq_stubs.foreach((e) => {
+            extra += e.label;
+        });
+    };
     let shaken = prune_bodies(labels, refs, extra);
     let keep = shaken.keep;
     let body_refs = shaken.refs;
@@ -12279,6 +12294,14 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
         head = file_dirs(files) + head;
     }
     parts += [part_text(head + arch.arch_text() + ps.text)];
+    // The generated interrupt plumbing (kernel mode): one stub per declared
+    // `irq N def`, and the routine that fills the IDT and loads it.  It is a
+    // text part and so is never shaken, which is why it carries its own copy
+    // of the entry-packing helper rather than calling a prelude block the
+    // shaker may drop.
+    if (target_is_kernel()) {
+        parts += [part_text(arch.kernel_irq_text())];
+    };
     // The bodies, kept, as parts: their items, with the `.loc` markers moved
     // to the unit's place in the program's file table. Every body is items
     // now -- a unit read from a pack came with them (pack_body).

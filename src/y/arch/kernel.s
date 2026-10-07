@@ -29,6 +29,16 @@ y_kernel_halt:
     hlt
     jmp y_kernel_halt
 
+#=== add: y_kernel_idle ===
+# Wait for interrupts with them ENABLED: `hlt` wakes on the next one.  A
+# kernel whose work is done by handlers idles here rather than halting,
+# because y_kernel_halt's `cli` would never let another one in.
+y_kernel_idle:
+    sti
+y_ki_loop:
+    hlt
+    jmp y_ki_loop
+
 #=== add: y_kernel_sti ===
 # Let interrupts in (and back out).  A kernel's top level does this once the
 # IDT and the PIC are ready; nothing here does it for it.
@@ -111,7 +121,7 @@ y_sgb_wait:
 # never reaches the PIC).  The receiver interrupt itself stays OFF until
 # y_serial_irq_on, so a kernel that never enables it never takes IRQ4.
 y_serial_init:
-    mov $1021, %edx
+    mov $1017, %edx
     mov $0, %eax
     outb %al, %dx
     mov $1019, %edx
@@ -120,7 +130,7 @@ y_serial_init:
     mov $1016, %edx
     mov $3, %eax
     outb %al, %dx
-    mov $1021, %edx
+    mov $1017, %edx
     mov $0, %eax
     outb %al, %dx
     mov $1019, %edx
@@ -137,7 +147,7 @@ y_serial_init:
 #=== add: y_serial_irq_on ===
 # IER bit 0: "received data available" raises IRQ4.
 y_serial_irq_on:
-    mov $1021, %edx
+    mov $1017, %edx
     mov $1, %eax
     outb %al, %dx
     ret
@@ -196,62 +206,9 @@ y_pe_master:
     outb %al, %dx
     ret
 
-#=== add: y_idt_pack ===
-# %rax = a handler's address -> %rax = the first 8 bytes of its IDT entry:
-# offset[0:16] | selector 8 << 16 | type 0x8E << 40 | offset[16:32] << 48.
-# The high half of a 64-bit offset is always zero here (the payload lives
-# below 4 GB), which is what the caller's `movl $0, 8(%rdi)` writes.
-y_idt_pack:
-    mov %rax, %rdx
-    shr $16, %rdx
-    shl $48, %rdx
-    and $65535, %rax
-    mov $156130651668480, %rcx
-    or %rcx, %rax
-    or %rdx, %rax
-    ret
 
-#=== add: y_idt_fill_default ===
-# Every one of the 256 vectors points at y_irq_default to begin with, so a
-# stray exception is a loud '?' rather than a triple fault.  The generated
-# y_kernel_irq_init (native.y) overwrites the vectors a program declared and
-# then calls y_idt_load.
-y_idt_fill_default:
-    lea y_irq_default(%rip), %rax
-    call y_idt_pack
-    lea y_kernel_idt(%rip), %rdi
-    mov $256, %esi
-y_ifd_loop:
-    mov %rax, (%rdi)
-    mov $0, 8(%rdi)
-    add $16, %rdi
-    sub $1, %esi
-    cmp $0, %esi
-    jne y_ifd_loop
-    ret
 
-#=== add: y_idt_load ===
-# Build the 10-byte IDTR in y_kernel_idtr and load it.
-y_idt_load:
-    lea y_kernel_idtr(%rip), %rdi
-    lea y_kernel_idt(%rip), %rax
-    shl $16, %rax
-    or $4095, %rax
-    mov %rax, (%rdi)
-    mov $0, 8(%rdi)
-    lidt y_kernel_idtr(%rip)
-    ret
 
-#=== add: y_irq_default ===
-# An unhandled vector.  The number is not available (the stub pushes it only
-# for a vector a program declared), so this says "?" and stops: a kernel that
-# reaches here is a kernel whose IDT is short an entry, and a stopped machine
-# is a better diagnostic than a loop of them.
-y_irq_default:
-    mov $63, %eax
-    mov $1016, %edx
-    outb %al, %dx
-    jmp y_kernel_halt
 
 #=== replace: y_alloc_map ===
 # The page source under y_alloc.  A hosted build asks mmap; a kernel has no

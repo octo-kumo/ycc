@@ -4677,10 +4677,48 @@ def typeof_lit(st: TcSt, node: RecLit, target: Type) -> TcRes {
     tc_res(target, st)
 };
 
+// An `irq N def` (target.y's KernelIrq) is an ordinary def with a meaning its
+// signature has to match: no parameters and a void result, because the
+// generated stub calls it from the interrupt entry with nothing to pass and
+// nowhere to put an answer.  Checked here, where the CHECKED return type is
+// in hand, so `def rx() { ... }` with an omitted `-> void` whose body is void
+// passes.  `st.fdepth` is the nesting depth: a handler nested in another def
+// would be emitted at its creation site, where the generated stub (which
+// calls a top-level label) could not reach it.
+def check_irq_def(st: TcSt, node: Decl, ret: Type) -> TcSt {
+    let line = kernel_irq_line(disp(node.name));
+    if (line < 0) {
+        st
+    } else {
+        let f: Func = node.v;
+        if (st.fdepth != 0) {
+            st = fail(st, "an irq handler must be declared at the top level", node.line, node.col);
+        };
+        if (len(f.params) > 0) {
+            st = fail(st, "an irq handler takes no parameters (it is called from the interrupt entry)", node.line, node.col);
+        };
+        // The result: the annotation, or what the body inferred (typeof_def
+        // records an omitted return type in the side table rather than on
+        // the Func).  `ret` here is the FUNCTION type, so it is not read.
+        let rt = f.ret;
+        if (rt.k == K.tnone) { rt = inferred_ret(f.line, f.col); };
+        if (rt.k != K.tvoid) {
+            st = fail(st, "an irq handler returns void", node.line, node.col);
+        };
+        st
+    }
+};
+
 def typeof_decl(st: TcSt, node: Decl) -> TcRes {
     if (node.kind == "def") {
         // named function: full check (signature + body)
-        typeof_def(st, node.name, node.v, node.line, node.col, node.nline, node.ncol, false)
+        let r = typeof_def(st, node.name, node.v, node.line, node.col, node.nline, node.ncol, false);
+        // An `irq N def` is a def with a meaning the signature has to match
+        // (target.y's KernelIrq): no parameters, void.  It is checked here,
+        // where the checked return type is in hand, rather than in the
+        // parser, so an omitted `-> void` whose body is void passes.
+        let st2 = check_irq_def(r.st, node, r.typ);
+        { typ: r.typ, st: st2 }
     } else if (node.kind == "native") {
         // ndef: the signature, and three rules of its own
         typeof_def(st, node.name, node.v, node.line, node.col, node.nline, node.ncol, true)

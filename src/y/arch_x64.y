@@ -552,6 +552,115 @@ def arch_consts() -> str {
         ], "\n") + "\n"
 };
 
+// ── the generated interrupt plumbing ─────────────────────────────────────
+// One stub per `irq N def f()` the program declared (target.y's
+// res_irq_stubs), plus the routine that installs them: fill all 256 IDT
+// entries with a stop-the-machine default, overwrite the declared vectors,
+// load the IDT.  Generated rather than kept in arch/kernel.s because it names
+// the program's own handler labels; it is a text part, so the tree shaker
+// never sees it -- which is also why it carries its own copy of the
+// entry-packing helper instead of calling one the shaker could drop.
+//
+// The stub is the x86-64 interrupt entry:
+//   - save the CALLER-saved registers.  The handler is an ordinary Y
+//     function and is free to clobber rax/rcx/rdx/rsi/rdi/r8-r11; rbx, rbp
+//     and r12-r15 are callee-saved and it preserves them itself.  %rbp is
+//     saved too because the stub holds the pre-alignment stack in it.
+//   - align %rsp to 16 and call the handler, so the handler's own calls see
+//     the alignment the SysV convention wants (the interrupted stack has no
+//     alignment guarantee).
+//   - acknowledge the 8259 line (slave first, for IRQ8-15).
+//   - iretq.
+// A handler that clobbers an XMM register would need the SSE state saved as
+// well; nothing does that yet, and the Y backend only touches XMM in float
+// code.
+def kernel_irq_text() -> str {
+    let out = ".text\n";
+    out += "y_kernel_irq_default:\n";
+    out += "    jmp y_kernel_halt\n";
+    res_irq_stubs.foreach((e) => {
+        out += "y_irq_stub_" + tostring(e.line) + ":\n";
+        out += "    push %rbp\n";
+        out += "    push %rax\n";
+        out += "    push %rcx\n";
+        out += "    push %rdx\n";
+        out += "    push %rsi\n";
+        out += "    push %rdi\n";
+        out += "    push %r8\n";
+        out += "    push %r9\n";
+        out += "    push %r10\n";
+        out += "    push %r11\n";
+        out += "    mov %rsp, %rbp\n";
+        out += "    and $-16, %rsp\n";
+        out += "    call " + e.label + "\n";
+        out += "    mov %rbp, %rsp\n";
+        out += "    pop %r11\n";
+        out += "    pop %r10\n";
+        out += "    pop %r9\n";
+        out += "    pop %r8\n";
+        out += "    pop %rdi\n";
+        out += "    pop %rsi\n";
+        out += "    pop %rdx\n";
+        out += "    pop %rcx\n";
+        out += "    pop %rax\n";
+        out += "    pop %rbp\n";
+        if (e.line >= 8) {
+            out += "    mov $160, %edx\n";
+            out += "    mov $32, %eax\n";
+            out += "    outb %al, %dx\n";
+        };
+        out += "    mov $32, %edx\n";
+        out += "    mov $32, %eax\n";
+        out += "    outb %al, %dx\n";
+        out += "    iretq\n";
+    });
+    // %rax = a handler's address -> %rax = the first 8 bytes of its IDT
+    // entry: offset[0:16] | selector 8 << 16 | type 0x8E << 40 |
+    // offset[16:32] << 48.  The payload lives below 4 GB, so the entry's
+    // high half is always zero (the `mov $0, +8` below).
+    out += "y_kernel_idt_pack:\n";
+    out += "    mov %rax, %rdx\n";
+    out += "    shr $16, %rdx\n";
+    out += "    shl $48, %rdx\n";
+    out += "    and $65535, %rax\n";
+    out += "    mov $156130651668480, %rcx\n";
+    out += "    or %rcx, %rax\n";
+    out += "    or %rdx, %rax\n";
+    out += "    ret\n";
+    out += "y_kernel_irq_init:\n";
+    out += "    push %rbp\n";
+    out += "    mov %rsp, %rbp\n";
+    out += "    lea y_kernel_irq_default(%rip), %rax\n";
+    out += "    call y_kernel_idt_pack\n";
+    out += "    lea y_kernel_idt(%rip), %rdi\n";
+    out += "    mov $256, %esi\n";
+    out += "y_kii_loop:\n";
+    out += "    mov %rax, (%rdi)\n";
+    out += "    mov $0, 8(%rdi)\n";
+    out += "    add $16, %rdi\n";
+    out += "    sub $1, %esi\n";
+    out += "    cmp $0, %esi\n";
+    out += "    jne y_kii_loop\n";
+    res_irq_stubs.foreach((e) => {
+        let v = 32 + e.line;
+        out += "    lea y_irq_stub_" + tostring(e.line) + "(%rip), %rax\n";
+        out += "    call y_kernel_idt_pack\n";
+        out += "    lea y_kernel_idt(%rip), %rdi\n";
+        out += "    mov %rax, " + tostring(v * 16) + "(%rdi)\n";
+        out += "    mov $0, " + tostring(v * 16 + 8) + "(%rdi)\n";
+    });
+    out += "    lea y_kernel_idtr(%rip), %rdi\n";
+    out += "    lea y_kernel_idt(%rip), %rax\n";
+    out += "    shl $16, %rax\n";
+    out += "    or $4095, %rax\n";
+    out += "    mov %rax, (%rdi)\n";
+    out += "    mov $0, 8(%rdi)\n";
+    out += "    lidt y_kernel_idtr(%rip)\n";
+    out += "    pop %rbp\n";
+    out += "    ret\n";
+    out
+};
+
 // ── the kernel head: a Multiboot header and a 32-bit trampoline ──────────
 // `ycc --kernel` emits an ELF32 Multiboot-1 payload (kelf.y) whose entry is
 // 32-bit code, because that is the mode every Multiboot loader starts an

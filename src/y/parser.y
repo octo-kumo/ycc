@@ -1783,6 +1783,68 @@ def num_lit_type(s: str) -> Type {
     else { { k: K.tlong } }
 };
 
+// `irq N def name() -> void { ... }` -- a kernel IRQ handler (target.y's
+// KernelIrq).  Only reachable when target_is_kernel() (parse_stmt's gate), so
+// `irq` stays an ordinary identifier in every other compile.
+//
+// N is the 8259 LINE, 0..15, not the IDT vector: the line is what the
+// hardware numbers, what std/kernel.y's IRQ_* constants name and what a
+// datasheet calls IRQ4, and the +32 remap to vectors is the compiler's
+// business.  The body is parsed as an ordinary def and the declaration is
+// recorded beside it; the checker validates the signature (no parameters,
+// void) and the emitter generates the stub (arch_x64.y kernel_irq_text).
+def parse_irq_def(toks: [Tok], p: long) -> Parsed {
+    let ln = tline(toks, p);
+    let cl = tcol(toks, p);
+    let num = tolong(tv(toks, p + 1));
+    let v = -1;
+    if let some(n) = num { v = n; };
+    let pos = p + 2;
+    if (v < 0 || v > 15) {
+        res({ k: K.err, msg: "an irq line is 0..15 (the 8259's lines, remapped to IDT vectors 32..47)", line: ln, col: cl }, pos)
+    } else if (!is_kw(toks, pos, "def")) {
+        res({ k: K.err, msg: "expected 'def' after 'irq N': an irq handler is 'irq N def name() -> void { ... }'", line: ln, col: cl }, pos)
+    } else {
+        parse_irq_finish(parse_func(toks, pos, false), v, ln, cl)
+    }
+};
+
+// The def parsed; record it, or say why not.  A declaration already carrying
+// the name, or a line already carrying a handler, is an error here rather
+// than a duplicate stub label from the assembler.
+def parse_irq_finish(f: Parsed, v: long, ln: long, cl: long) -> Parsed {
+    if (f.node.k != K.decl) {
+        res(f.node, f.pos)
+    } else {
+        parse_irq_record(f, v, ln, cl)
+    }
+};
+
+def parse_irq_record(f: Parsed, v: long, ln: long, cl: long) -> Parsed {
+    let d: Decl = f.node;
+    if (d.kind != "def" || len(d.name) == 0) {
+        res(f.node, f.pos)
+    } else if (kernel_irq_line(d.name) >= 0) {
+        res({ k: K.err, msg: "'" + d.name + "' is declared for irq line " + tostring(kernel_irq_line(d.name)) + " twice", line: ln, col: cl }, f.pos)
+    } else {
+        // An index loop, not foreach: a foreach closure comparing its element
+        // to a captured value is broken in this compiler (see the bug note in
+        // target.y) and silently answers false.
+        let dup = false;
+        let i = 0;
+        while (i < len(res_irqs)) {
+            if (res_irqs[i].line == v) { dup = true; };
+            i++;
+        };
+        if (dup) {
+            res({ k: K.err, msg: "irq line " + tostring(v) + " already has a handler", line: ln, col: cl }, f.pos)
+        } else {
+            res_irqs += { line: v, name: d.name };
+            res(f.node, f.pos)
+        }
+    }
+};
+
 def parse_func(toks: [Tok], p: long, isnat: bool) -> Parsed {
     // Named:    def name(params) -> ret { body }      (top-level declaration)
     // Anonymous: def(params) -> ret { body }           (function expression)
@@ -2083,6 +2145,7 @@ def parse_stmt(toks: [Tok], p: long) -> Parsed {
         // An empty statement; the caller steps over the `;`.
         res({ k: K.void, line: tline(toks, p), col: tcol(toks, p) }, p)
     }
+    else if (target_is_kernel() && tt(toks, p) == "id" && tv(toks, p) == "irq" && tt(toks, p + 1) == "num") { parse_irq_def(toks, p) }
     else if (is_kw(toks, p, "let")) { parse_decl(toks, p) }
     else if (is_kw(toks, p, "const")) { parse_decl(toks, p) }
     else if (is_typedef_start(toks, p)) { parse_typedef(toks, p) }
