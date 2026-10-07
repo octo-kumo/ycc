@@ -2413,6 +2413,11 @@ def st_new() -> EmitSt {
 // by a block on the way, so this is the high-water mark; emit_one_fn resets it
 // and sizes the frame from it.
 let frame_max = 0;
+// The label of the last literal closure gen_func_literal emitted. The array
+// methods read it right after gen(st, fnode) to call the body DIRECTLY when
+// the closure captures nothing -- the callee never looks at the record, so
+// the per-element indirect load and the closure push are pure overhead.
+let lit_label: long = -1;
 
 def st_with(st: EmitSt, b: [long], txt: [str]) -> EmitSt {
     { ir: b, txt: txt, rodata: st.rodata, uid: st.uid,
@@ -5970,6 +5975,32 @@ def gen_call(st: EmitSt, node: Call) -> EmitSt {
 // The checker types `arr.m(...)` in types.y; here each method is emitted
 // inline. Element width comes from the receiver's static type, so packed
 // [byte] and word-per-element arrays share one body per method.
+// The body label of a literal closure the caller may call directly: it
+// captures nothing, so the callee never reads the closure record and the
+// call needs no indirect load (same stack layout, minus the pushed record).
+// -1 when the callee must go through the record.
+def arr_direct_label(st: EmitSt, fnode: Node) -> long {
+    if (fnode.k != K.func) {
+        -1
+    } else {
+        let f: Func = fnode;
+        if (len(fn_captures(f, st.fns.ix, "")) > 0) { -1 } else { lit_label }
+    }
+};
+
+// The per-element call for an array method.
+def gen_arr_call(st: EmitSt, foff: long, arg_regs: [long], direct: long) -> EmitSt {
+    if (direct < 0) {
+        gen_closure_call(st, foff, arg_regs)
+    } else {
+        arg_regs.foreach((e) => {
+            st = emit_insn(st, insn.F_PUSH_R, e, 64, 0, 0, 0, 0, 0);
+        });
+        st = emit_insn(st, insn.F_CALL_L, direct, 0, 0, 0, 0, 0, 0);
+        emit_insn(st, insn.F_ADD_I_R, 8 * len(arg_regs), insn.R_RSP, 64, 0, 0, 0, 0)
+    }
+};
+
 def gen_closure_call(st: EmitSt, foff: long, arg_regs: [long]) -> EmitSt {
     st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, foff, -1, insn.R_R10, 64);
     st = emit_insn(st, insn.F_PUSH_R, insn.R_R10, 64, 0, 0, 0, 0, 0);
@@ -6189,6 +6220,7 @@ def gen_arr_sort(st: EmitSt, node: Call, sorted: bool) -> EmitSt {
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, aoff, -1);
     };
     st = gen(st, args[0]);
+    let adir = arr_direct_label(st, args[0]);
     st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, foff, -1);
     st = emit_insn(st, insn.F_MOV_I_R, 1, insn.R_RAX, 64, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, ioff, -1);
@@ -6230,7 +6262,7 @@ def gen_arr_sort(st: EmitSt, node: Call, sorted: bool) -> EmitSt {
     let regs: [long] = [];
     regs += insn.R_RAX;
     regs += insn.R_RCX;
-    st = gen_closure_call(st, foff, regs);
+    st = gen_arr_call(st, foff, regs, adir);
     st = emit_insn(st, insn.F_CMP_I_R, 0, insn.R_RAX, 64, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_JLE_L, shift_done.label, 0, 0, 0, 0, 0, 0);
     // a[j+1] = a_j
@@ -6311,6 +6343,7 @@ def gen_arr_iter_method(st: EmitSt, node: Call, key: str, at: Type) -> EmitSt {
         st = gen(st, dot.obj);
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, aoff, -1);
         st = gen(st, fnode);
+        let adir = arr_direct_label(st, fnode);
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, foff, -1);
         st = gen_arr_new_empty(st);
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, roff, -1);
@@ -6328,7 +6361,7 @@ def gen_arr_iter_method(st: EmitSt, node: Call, key: str, at: Type) -> EmitSt {
         let regs: [long] = [];
         if (nargs >= 1) { regs += insn.R_RAX; };
         if (nargs >= 2) { regs += insn.R_RCX; };
-        st = gen_closure_call(st, foff, regs);
+        st = gen_arr_call(st, foff, regs, adir);
         if (key == "map") {
             st = gen_arr_push_slot(st, roff, resesz);
         } else {
@@ -6355,6 +6388,7 @@ def gen_arr_iter_method(st: EmitSt, node: Call, key: str, at: Type) -> EmitSt {
         st = gen(st, dot.obj);
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, aoff, -1);
         st = gen(st, fnode);
+        let adir = arr_direct_label(st, fnode);
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, foff, -1);
         st = emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, ioff, -1);
@@ -6372,7 +6406,7 @@ def gen_arr_iter_method(st: EmitSt, node: Call, key: str, at: Type) -> EmitSt {
         let regs: [long] = [];
         if (nargs >= 1) { regs += insn.R_RAX; };
         if (nargs >= 2) { regs += insn.R_RCX; };
-        st = gen_closure_call(st, foff, regs);
+        st = gen_arr_call(st, foff, regs, adir);
         if (key == "foreach") {
             st = emit_insn(st, insn.F_INC_D, insn.R_RBP, -1, 1, ioff, -1, 0, 0);
             st = emit_insn(st, insn.F_JMP_L, loop.label, 0, 0, 0, 0, 0, 0);
@@ -6425,6 +6459,7 @@ def gen_arr_iter_method(st: EmitSt, node: Call, key: str, at: Type) -> EmitSt {
         st = gen(st, dot.obj);
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, aoff, -1);
         st = gen(st, fnode);
+        let adir = arr_direct_label(st, fnode);
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, foff, -1);
         st = gen(st, args[1]);
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, acoff, -1);
@@ -6441,7 +6476,7 @@ def gen_arr_iter_method(st: EmitSt, node: Call, key: str, at: Type) -> EmitSt {
         let regs: [long] = [];
         regs += insn.R_RAX;
         regs += insn.R_RCX;
-        st = gen_closure_call(st, foff, regs);
+        st = gen_arr_call(st, foff, regs, adir);
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, acoff, -1);
         st = emit_insn(st, insn.F_INC_D, insn.R_RBP, -1, 1, ioff, -1, 0, 0);
         st = emit_insn(st, insn.F_JMP_L, loop.label, 0, 0, 0, 0, 0, 0);
@@ -8221,6 +8256,7 @@ def gen_func_literal(st: EmitSt, node: Func) -> EmitSt {
     let ru = next_uid(st);
     st = ru.st;
     st = emit_one_fn(st, lbl, ru.uid, node, false, false, captypes, "");
+    lit_label = lbl;
     caps.foreach((e) => {
         let bcn: str = e;
         st = box_capture(st, bcn);

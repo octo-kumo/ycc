@@ -625,6 +625,7 @@ Yv *obj_version(void);
 Yv *pack_put(Yv *out, Yv *s);
 Yv *pack_strs(Yv *out, Yv *xs);
 static Yv *unpack_body(Yv *blob);   /* a pack body's items, decoded when kept */
+static Yv *gen_closure_call(Yv *st, ylong foff, Yv *arg_regs);
 Yv *tcode(Yv *t);
 Yv *tcode_go(Yv *out, Yv *t);
 Yv *tcode_list(Yv *out, Yv *ts);
@@ -3408,6 +3409,11 @@ static Yv *st_ir(Yv *st, Yv *b) {
  * by a block on the way, so this is the high-water mark; emit_one_fn resets it
  * and sizes the frame from it. */
 static ylong frame_max = 0;
+/* The label of the last literal closure gen_func_literal emitted. The array
+ * methods read it right after gen(st, fnode) to call the body DIRECTLY when
+ * the closure captures nothing -- the callee never looks at the record, so
+ * the per-element indirect load and the closure push are pure overhead. */
+static ylong lit_label = -1;
 
 /* The state with the frame counter set: what a block does on the way out, so
  * the counter is a stack of depths (see gen_block_as) rather than a running
@@ -7339,6 +7345,30 @@ Yv *gen_call(Yv *st, Yv *node) {
  * the call goes to the builtin's own lowering, or straight to the
  * std/str.y helper by label -- a Y function like any other, so the
  * arguments are pushed and the caller pops them. */
+/* The body label of a literal closure the caller may call directly: it
+ * captures nothing, so the callee never reads the closure record and the call
+ * needs no indirect load (same stack layout, minus the pushed record). -1
+ * when the callee must go through the record. */
+static ylong arr_direct_label(Yv *st, Yv *fnode) {
+    if (yv_l(yr_get(fnode, "k")) != K_func) { return -1; }
+    if (yv_len(fn_captures(fnode, yr_get(yr_get(st, "fns"), "ix"), ys(""))) > 0) {
+        return -1;
+    }
+    return lit_label;
+}
+
+/* The per-element call for an array method. */
+static Yv *gen_arr_call(Yv *st, ylong foff, Yv *arg_regs, ylong direct) {
+    if (direct < 0) { return gen_closure_call(st, foff, arg_regs); }
+    ylong i = 0;
+    while (i < yv_len(arg_regs)) {
+        st = emit_insn(st, F_PUSH_R, yv_l(ya_get(arg_regs, i)), 64, 0, 0, 0, 0, 0);
+        i = i + 1;
+    }
+    st = emit_insn(st, F_CALL_L, direct, 0, 0, 0, 0, 0, 0);
+    return emit_insn(st, F_ADD_I_R, 8 * yv_len(arg_regs), R_RSP, 64, 0, 0, 0, 0);
+}
+
 static Yv *gen_closure_call(Yv *st, ylong foff, Yv *arg_regs) {
     st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, foff, -1, R_R10, 64);
     st = emit_insn(st, F_PUSH_R, R_R10, 64, 0, 0, 0, 0, 0);
@@ -7583,6 +7613,7 @@ static Yv *gen_arr_sort(Yv *st, Yv *node, int sorted) {
         st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, aoff, -1);
     }
     st = gen(st, ya_get(args, 0));
+    ylong adir = arr_direct_label(st, ya_get(args, 0));
     st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, foff, -1);
     st = emit_insn(st, F_MOV_I_R, 1, R_RAX, 64, 0, 0, 0, 0);
     st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, ioff, -1);
@@ -7617,7 +7648,7 @@ static Yv *gen_arr_sort(Yv *st, Yv *node, int sorted) {
     st = emit_insn(st, F_MOV_R_D, R_RDX, 64, R_RBP, -1, 1, ajoff, -1);
     st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, ajoff, -1, R_RAX, 64);
     st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, koff, -1, R_RCX, 64);
-    st = gen_closure_call(st, foff, yav(2, yv_long(R_RAX), yv_long(R_RCX)));
+    st = gen_arr_call(st, foff, yav(2, yv_long(R_RAX), yv_long(R_RCX)), adir);
     st = emit_insn(st, F_CMP_I_R, 0, R_RAX, 64, 0, 0, 0, 0);
     st = emit_insn(st, F_JLE_L, yv_l(yr_get(shift_done, "label")), 0, 0, 0, 0, 0, 0);
     st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, aoff, -1, R_RAX, 64);
@@ -7702,6 +7733,7 @@ static Yv *gen_arr_iter_method(Yv *st, Yv *node, Yv *key, Yv *at) {
         st = gen(st, yr_get(dot, "obj"));
         st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, aoff, -1);
         st = gen(st, fnode);
+        ylong adir = arr_direct_label(st, fnode);
         st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, foff, -1);
         st = gen_arr_new_empty(st);
         st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, roff, -1);
@@ -7719,7 +7751,7 @@ static Yv *gen_arr_iter_method(Yv *st, Yv *node, Yv *key, Yv *at) {
         Yv *regs = yav(0);
         if (nargs >= 1) { regs = ya_push(regs, yv_long(R_RAX)); }
         if (nargs >= 2) { regs = ya_push(regs, yv_long(R_RCX)); }
-        st = gen_closure_call(st, foff, regs);
+        st = gen_arr_call(st, foff, regs, adir);
         if (ys_eq_lit(key, "map")) {
             st = gen_arr_push_slot(st, roff, resesz);
         } else {
@@ -7749,6 +7781,7 @@ static Yv *gen_arr_iter_method(Yv *st, Yv *node, Yv *key, Yv *at) {
         st = gen(st, yr_get(dot, "obj"));
         st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, aoff, -1);
         st = gen(st, fnode);
+        ylong adir = arr_direct_label(st, fnode);
         st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, foff, -1);
         st = emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
         st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, ioff, -1);
@@ -7766,7 +7799,7 @@ static Yv *gen_arr_iter_method(Yv *st, Yv *node, Yv *key, Yv *at) {
         Yv *regs = yav(0);
         if (nargs >= 1) { regs = ya_push(regs, yv_long(R_RAX)); }
         if (nargs >= 2) { regs = ya_push(regs, yv_long(R_RCX)); }
-        st = gen_closure_call(st, foff, regs);
+        st = gen_arr_call(st, foff, regs, adir);
         if (ys_eq_lit(key, "foreach")) {
             st = emit_insn(st, F_INC_D, R_RBP, -1, 1, ioff, -1, 0, 0);
             st = emit_insn(st, F_JMP_L, yv_l(yr_get(loop, "label")), 0, 0, 0, 0, 0, 0);
@@ -7821,6 +7854,7 @@ static Yv *gen_arr_iter_method(Yv *st, Yv *node, Yv *key, Yv *at) {
         st = gen(st, yr_get(dot, "obj"));
         st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, aoff, -1);
         st = gen(st, fnode);
+        ylong adir = arr_direct_label(st, fnode);
         st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, foff, -1);
         st = gen(st, ya_get(args, 1));
         st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, acoff, -1);
@@ -7834,7 +7868,7 @@ static Yv *gen_arr_iter_method(Yv *st, Yv *node, Yv *key, Yv *at) {
         st = gen_arr_loop_head(st, at, aoff, ioff, yv_l(yr_get(done, "label")));
         st = emit_insn(st, F_MOV_R_R, R_RAX, 64, R_RCX, 64, 0, 0, 0);
         st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, acoff, -1, R_RAX, 64);
-        st = gen_closure_call(st, foff, yav(2, yv_long(R_RAX), yv_long(R_RCX)));
+        st = gen_arr_call(st, foff, yav(2, yv_long(R_RAX), yv_long(R_RCX)), adir);
         st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, acoff, -1);
         st = emit_insn(st, F_INC_D, R_RBP, -1, 1, ioff, -1, 0, 0);
         st = emit_insn(st, F_JMP_L, yv_l(yr_get(loop, "label")), 0, 0, 0, 0, 0, 0);
@@ -9811,6 +9845,7 @@ Yv *gen_func_literal(Yv *st, Yv *node) {
     st = yr_get(ru, "st");
     st = emit_one_fn(st, lbl, yv_l(yr_get(ru, "uid")), node, 0, 0, captypes,
                      ys(""));
+    lit_label = yv_l(lbl);
     ylong bci = 0;
     while (bci < yv_len(caps)) {
         Yv *bcn = ya_get(caps, bci);

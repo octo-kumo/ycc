@@ -11,5 +11,5 @@
 hello.y 390
 minimal.y 440
 forloop.y 3497
-foreach.y 3395
+foreach.y 3384
 dead.y 3667
