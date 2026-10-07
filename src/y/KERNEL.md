@@ -1814,3 +1814,40 @@ these helpers ON THE STACK -- `y_enter_frame`'s own prologue is `mov 8(%rsp),
     slots below the five, so the nine stay lowest exactly as the stubs expect;
   * allocate the stack with pages_alloc_va(4096) and set the task's kstack to the
     same page top, so a later interrupt on the boot task has a stack.
+
+### Round 104: the boot frame WORKS -- and the boot context must be BLOCKED
+
+The recipe from round 102 was right except for the offsets, and the listing settled
+those in one look: Y's caller does `push arg; call f; add $8, %rsp`, and task_start
+has a push-rbp prologue with locals, so fixed %rsp offsets cannot work.  Reading
+through %rbp does: 8(%rbp) is task_start's return address (the RIP to resume),
+(%rbp) its saved rbp (the driver's), and 16(%rbp) the stack once task_start has
+returned and its caller has popped the argument.  With that, y_boot_frame +
+task_start publishing it gives:
+
+    u002_two      status 19   ... process B / back in the kernel
+    u003_preempt  status 19
+    u005_ipc      status 19
+    u007_fsexec   status 19   fs ok / from the filesystem
+
+"back in the kernel" is a NEW line in u002's transcript: the driver's own code runs
+after the tasks it started finish.  That is what /init and every server-spawning
+driver in M4 needs, and it is a real capability this branch did not have.
+
+BUT IT IS NOT COMMITTED, because the same run showed the design is wrong in one
+detail: making the boot context READY means the scheduler picks it like any other
+task, so the pick round-robins between the driver and the user tasks -- u005's
+exchange stops after C1 (the driver runs to its kexit and exits the machine) and
+u003 loses "spin done".  The trap was that rewriting the fixtures' .expected with
+those truncated transcripts made the suite read 47/0/47: the harness compares a
+PREFIX, so a shortened expectation can never fail.  That is the third time this
+run a "green" number had to be distrusted, and this time the OUTPUT was read
+first, which is how it was caught.
+
+The correct design, for whoever picks this up: the boot context is not a normal
+schedulable task.  Publish its frame (y_boot_frame, exactly as the helper does) but
+leave its state TASK_BLOCKED, and resume it from the pick's `found < 0` fallback --
+the branch that currently idles or exits -- because that is precisely "nothing else
+can run", which is when the driver's next line should execute.  With that, u005's
+exchange proceeds to "server done" and only then does the driver's kexit run, and
+every fixture's .exit becomes the driver's own status (19) instead of 1.
