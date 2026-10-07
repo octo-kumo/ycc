@@ -286,7 +286,7 @@ Yv *arch_heap_cells(void) {
        live-byte and trigger counters, and the running/off guards. They are
        words, so a program that never allocates shakes them out with y_alloc
        and every other program carries a few hundred zeroed .bss bytes. */
-    return ys("y_heap:\n.zero 32\ny_heap_base:\n.zero 8\n"
+    return ys("y_heap:\n.zero 128\ny_heap_base:\n.zero 8\n"
               "y_gc_stack_top:\n.zero 8\ny_gc_lo:\n.zero 8\ny_gc_hi:\n.zero 8\n"
               "y_gc_all:\n.zero 8\ny_gc_tab:\n.zero 8\ny_gc_tabn:\n.zero 8\n"
               "y_gc_meta_cur:\n.zero 8\ny_gc_meta_end:\n.zero 8\n"

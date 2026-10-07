@@ -59,7 +59,7 @@ y_spawn:
 # walk that decides every thread is stopped. The closure is already in %rbx,
 # which this prologue pushed, so a parked thread's roots are complete.
     call y_gc_safepoint
-    mov $112, %rdi
+    mov $128, %rdi
     call y_alloc
     mov %rax, %r12
     mov %r12, 24(%r12)
@@ -76,12 +76,19 @@ y_spawn:
     mov %rax, 88(%r12)
     mov %rax, 96(%r12)
     mov %rax, 104(%r12)
+    mov %rax, 112(%r12)
+    mov %rax, 120(%r12)
 # Register before clone: the child starts out a registered, running thread
 # (state 0), so a cycle either waits for it or scans it -- never skips it.
     mov y_gc_threads(%rip), %rdx
     mov %rdx, 80(%r12)
     mov %r12, y_gc_threads(%rip)
     mov %rbx, 64(%r12)
+# The spare is the unused tail of a chunk some joined thread left behind, kept
+# in the tcb (words 14/15), never in the tail itself: the old chain wrote the
+# tail's END into its first word (y_join_done), and pass1 -- which stops a chunk
+# at a ZERO header -- then read that pointer as a block header whose size runs
+# past the chunk (--gc-stress on t160_threads).
     mov %fs:24, %rcx
     mov 40(%rcx), %rax
     test %rax, %rax
@@ -253,6 +260,9 @@ y_join_done:
     sub %rdi, %rsi
     cmp $4096, %rsi
     jl y_join_value
+# Record the unused tail in the JOINING thread's tcb (words 14/15), writing
+# nothing into the chunk: the collector still finds the zero header its walk
+# stops at.
     mov %fs:24, %rcx
     mov %rax, 0(%rdi)
     mov 40(%rcx), %rdx
