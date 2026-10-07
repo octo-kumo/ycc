@@ -49,7 +49,7 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
         let a = argv[i];
         if (a == "-o") {
             if (i + 1 < n) {
-                i = i + 1;
+                i++;
                 out = argv[i];
                 if (len(out) == 0) {
                     // an empty path used to be taken for "no -o", and the
@@ -68,7 +68,7 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
             parse_target(a[9:]);
         } else if (a == "--target") {
             if (i + 1 < n) {
-                i = i + 1;
+                i++;
                 parse_target(argv[i]);
             } else {
                 puts("ycc: --target needs a name (linux, windows)\n");
@@ -90,12 +90,12 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
             nowarn = true;
         } else if (a == "-W") {
             wlevel = wlevel_arg(argv, i, n);
-            i = i + 1;
+            i++;
         } else if (a == "--std-src") {
             std_src = true;
         } else if (a == "--std-pack") {
             if (i + 1 < n) {
-                i = i + 1;
+                i++;
                 std_pack = argv[i];
             } else {
                 puts("ycc: --std-pack needs an argument\n");
@@ -150,10 +150,10 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
             // `ycc run p.y -- -x foo` hands the program ["-x", "foo"], so a
             // test can drive argv without the driver reading the program's
             // flags as its own. Without `run`, `--` stays an unknown flag.
-            i = i + 1;
+            i++;
             while (i < n) {
                 prog += argv[i];
-                i = i + 1;
+                i++;
             };
         } else if (a[0:1] == "-") {
             puts("ycc: unknown flag '" + a + "' (see ycc -h)\n");
@@ -161,7 +161,7 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
         } else {
             files += a;
         };
-        i = i + 1;
+        i++;
     };
     { out: out, files: files, asm_only: asm_only, timing: timing, allow_exec: allow_exec, debug: debug, nowarn: nowarn, wlevel: wlevel, std_src: std_src, std_pack: std_pack, run: run, dump: dump, prog: prog }
 };
@@ -293,7 +293,7 @@ def print_phase_rows(times: [Timing]) -> long {
     while (i < len(all)) {
         let e = all[i];
         eputs("  " + padr(e.name, 12) + padl(fmt_ms(e.us), 12) + " ms" + padl(fmt_kb(e.heap), 12) + " KB\n");
-        i = i + 1;
+        i++;
     };
     0
 };
@@ -328,7 +328,7 @@ def print_native_errors(errors: [Diag], origin: Origin, bare: bool) -> long {
             seen += at;
             puts(at + ": error: " + e.msg + "\n");
         }
-        i = i + 1;
+        i++;
     };
     0
 };
@@ -346,7 +346,7 @@ def warning_text(warnings: [Diag], origin: Origin, bare: bool) -> str {
     while (i < len(warnings)) {
         let w = warnings[i];
         out = out + nativelib.origin_at(origin, w.line, bare) + ":" + tostring(w.col) + ": warning: " + w.msg + "\n";
-        i = i + 1;
+        i++;
     };
     out
 };
@@ -375,7 +375,7 @@ def build_args(cl: [str]) -> { dir: str, debug: bool, nowarn: bool, wlevel: long
             nowarn = true;
         } else if (a == "-W") {
             wlevel = wlevel_arg(cl, i, len(cl));
-            i = i + 1;
+            i++;
         } else if (a == "--no-exec") {
             allow_exec = false;
         } else if (a == "--std-src") {
@@ -387,7 +387,7 @@ def build_args(cl: [str]) -> { dir: str, debug: bool, nowarn: bool, wlevel: long
                 exit(1);
             };
             one = cl[i + 1];
-            i = i + 1;
+            i++;
         } else if (a[0:1] == "-") {
             puts("ycc: unknown flag '" + a + "' (see ycc -h)\n");
             exit(1);
@@ -397,7 +397,7 @@ def build_args(cl: [str]) -> { dir: str, debug: bool, nowarn: bool, wlevel: long
         } else {
             dir = a;
         };
-        i = i + 1;
+        i++;
     };
     if (len(dir) == 0) { dir = "."; }
     { dir: dir, debug: debug, nowarn: nowarn, wlevel: wlevel, allow_exec: allow_exec, std_src: std_src, one: one }
@@ -425,7 +425,7 @@ def std_order(names: [str]) -> [str] {
     while (i < len(all)) {
         let nm: str = all[i];
         if (pkg.pk_has(names, nm)) { out += nm; }
-        i = i + 1;
+        i++;
     };
     out
 };
@@ -435,7 +435,7 @@ def longs_text(xs: [long]) -> str {
     let i = 0;
     while (i < len(xs)) {
         out += tostring(xs[i]);
-        i = i + 1;
+        i++;
     };
     join(out, ",")
 };
@@ -472,7 +472,7 @@ def build_key(cid: str, name: str, base: long, allow_exec: bool, nr: Resolved, u
     while (i < len(units)) {
         let u = units[i];
         if (pkg.pk_has(ps, u.name)) { pkg.pk_hash_str(h, nativelib.unit_iface(u)); }
-        i = i + 1;
+        i++;
     };
     pkg.pk_hash_text(h)
 };
@@ -486,7 +486,7 @@ def build_reach(direct: [str], pkgs: [PkNode], nrs: [Resolved]) -> [bool] {
     let k = 0;
     while (k < len(pkgs)) {
         reach += false;
-        k = k + 1;
+        k++;
     };
     k = len(pkgs) - 1;
     while (k >= 0) {
@@ -496,7 +496,7 @@ def build_reach(direct: [str], pkgs: [PkNode], nrs: [Resolved]) -> [bool] {
             let nr = nrs[k];
             want += nr.pkgs;
         }
-        k = k - 1;
+        k--;
     };
     reach
 };
@@ -516,10 +516,10 @@ def wlevel_arg(argv: [str], i: long, n: long) -> long {
         let v = 0;
         let d = 0;
         while (ok && d < len(a)) {
-            let c = byte_at(a, d);
+            let c = a[d];
             ok = c >= '0' && c <= '9';
             if (ok && v <= 2) { v = v * 10 + (c - '0'); 0; };
-            d = d + 1;
+            d++;
         };
         if (!ok || v > 2) {
             puts("ycc: -W needs a warning level (0, 1 or 2), got '" + a + "'\n");
@@ -595,10 +595,10 @@ def self_exe() -> str {
 // The flags a child needs to compile its package exactly as this run would.
 def build_child_flags(debug: bool, nowarn: bool, wlevel: long, allow_exec: bool) -> str {
     let out = "";
-    if (debug) { out = out + " -g"; };
-    if (nowarn) { out = out + " -w"; };
+    if (debug) { out += " -g"; };
+    if (nowarn) { out += " -w"; };
     if (wlevel > 0) { out = out + " -W " + tostring(wlevel); };
-    if (!allow_exec) { out = out + " --no-exec"; };
+    if (!allow_exec) { out += " --no-exec"; };
     out
 };
 
@@ -608,7 +608,7 @@ def pkg_index(pkgs: [PkNode], name: str) -> long {
     let i = 0;
     while (i < len(pkgs)) {
         if (pkgs[i].name == name) { at = i; };
-        i = i + 1;
+        i++;
     };
     at
 };
@@ -654,7 +654,7 @@ def build_one(dir: str, one: str, debug: bool, nowarn: bool, wlevel: long, allow
             units += uo.unit;
             want += p.deps;
         };
-        k = k + 1;
+        k++;
     };
     let p = pkgs[target];
     let nr = build_resolve(p.lib, allow_exec, p.deps, p.roots);
@@ -711,11 +711,11 @@ def build_dispatch_level(dir: str, pkgs: [PkNode], odir: str, lo: long, hi: long
                     // quote the two paths, not the whole command: the flags and
                     // the directory are already quoted
                     cmd = cmd + build_q(exe) + " build --one " + build_q(nm) + flags + dirarg + " & ";
-                    n = n + 1;
-                    c = c + 1;
+                    n++;
+                    c++;
                 };
                 exec(cmd + "wait");
-                w = w + take;
+                w += take;
             };
         };
     };
@@ -745,7 +745,7 @@ def build_project(dir: str, debug: bool, nowarn: bool, wlevel: long, allow_exec:
     while (k < len(pkgs)) {
         let p = pkgs[k];
         nrs += build_resolve(p.lib, allow_exec, p.deps, p.roots);
-        k = k + 1;
+        k++;
     };
     let bdeps: [str] = [];
     bdeps += g.deps;
@@ -754,14 +754,14 @@ def build_project(dir: str, debug: bool, nowarn: bool, wlevel: long, allow_exec:
     while (b < len(bins)) {
         let bn = bins[b];
         nrs += build_resolve(bn.path, allow_exec, bdeps, g.roots);
-        b = b + 1;
+        b++;
     };
     let needs: [str] = [];
     k = 0;
     while (k < len(nrs)) {
         let nr = nrs[k];
         needs += nr.std;
-        k = k + 1;
+        k++;
     };
     let pack = "";
     if (!std_src) { pack = self_pack(); }
@@ -782,7 +782,7 @@ def build_project(dir: str, debug: bool, nowarn: bool, wlevel: long, allow_exec:
             let ready = true;
             while (d < len(deps)) {
                 if (pkg_index(pkgs, deps[d]) >= k) { ready = false; };
-                d = d + 1;
+                d++;
             };
             if (ready) { hi = hi + 1; } else { scanning = false; };
         };
@@ -824,7 +824,7 @@ def build_project(dir: str, debug: bool, nowarn: bool, wlevel: long, allow_exec:
                 };
                 units += r.unit;
             };
-            k = k + 1;
+            k++;
         };
     };
     b = 0;
@@ -842,7 +842,7 @@ def build_project(dir: str, debug: bool, nowarn: bool, wlevel: long, allow_exec:
                 let pn = nrs[k];
                 lneeds += pn.std;
             }
-            k = k + 1;
+            k++;
         };
         let lstd = std_order(lneeds);
         let bstd: [Unit] = [];
@@ -850,7 +850,7 @@ def build_project(dir: str, debug: bool, nowarn: bool, wlevel: long, allow_exec:
         while (k < len(su)) {
             let su1 = su[k];
             if (pkg.pk_has(lstd, su1.name)) { bstd += su1; }
-            k = k + 1;
+            k++;
         };
         let ast = parser.parse_program(lexer.tokenize(nr.src));
         let r = nativelib.emit_program(ast, nr, debug, wlevel, bstd, linked);
@@ -872,7 +872,7 @@ def build_project(dir: str, debug: bool, nowarn: bool, wlevel: long, allow_exec:
             exit(1);
         }
         eputs("built " + outp + "\n");
-        b = b + 1;
+        b++;
     };
     0
 };
@@ -895,7 +895,7 @@ def dump_source(src: str, origin: Origin) -> long {
             puts(l + "\t// " + at + "\n");
             prev = at;
         };
-        i = i + 1;
+        i++;
     };
     0
 };
@@ -1011,7 +1011,7 @@ def main(cmdline: [str]) -> long {
             while (si < len(sub)) {
                 let se = sub[si];
                 dt += se;
-                si = si + 1;
+                si++;
             };
             if (r.ok && !pargs.nowarn) {
                 print_native_warnings(r.warnings, nrorigin, true);
@@ -1072,7 +1072,7 @@ def main(cmdline: [str]) -> long {
                 while (ai < len(asub)) {
                     let ae = asub[ai];
                     dt += ae;
-                    ai = ai + 1;
+                    ai++;
                 };
                 let abok = ab.ok;
                 if (!abok) {

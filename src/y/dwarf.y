@@ -77,7 +77,7 @@ def dw_line(files: [str], rows: [long], text_addr: long, text_len: long) -> [byt
     let fbase: [str] = [];
     foreach (fname in files) {
         let cut = len(fname) - 1;
-        while (cut >= 0 && byte_at(fname, cut) != 47) {
+        while (cut >= 0 && fname[cut] != 47) {
             cut = cut - 1;
         };
         if (cut < 0) {
@@ -87,7 +87,7 @@ def dw_line(files: [str], rows: [long], text_addr: long, text_len: long) -> [byt
             let d = "/";
             if (cut > 0) { d = fname[0:cut]; };
             let di = 0;
-            for (let i = 0; i < len(dirs); i = i + 1) {
+            for (let i = 0; i < len(dirs); i++) {
                 if (di == 0 && dirs[i] == d) { di = i + 1; };
             };
             if (di == 0) {
@@ -102,7 +102,7 @@ def dw_line(files: [str], rows: [long], text_addr: long, text_len: long) -> [byt
         hdr = dw_cstr(hdr, d);
     };
     hdr += 0;
-    for (let i = 0; i < len(fbase); i = i + 1) {
+    for (let i = 0; i < len(fbase); i++) {
         hdr = dw_cstr(hdr, fbase[i]);
         hdr = dw_uleb(hdr, fdir[i]);
         hdr += 0;
@@ -145,7 +145,7 @@ def dw_program(rows: [long], text_addr: long, text_len: long) -> [byte] {
             keep += rf;
             keep += rl;
         };
-        i = i + 3;
+        i += 3;
     };
     let b: [byte] = [];
     if (len(keep) > 0) {
@@ -185,7 +185,7 @@ def dw_program(rows: [long], text_addr: long, text_len: long) -> [byte] {
             b += op;
             addr = off;
             cur_line = l;
-            j = j + 3;
+            j += 3;
         };
         if (text_len > addr) {
             b += 2;
@@ -206,7 +206,7 @@ def dw_le(out: [byte], v: long, n: long) -> [byte] {
     while (i < n) {
         out += x % 256;
         x = x / 256;
-        i = i + 1;
+        i++;
     };
     out
 };

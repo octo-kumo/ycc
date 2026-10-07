@@ -80,7 +80,7 @@ def p_body_note(name: str, t: Type) -> long {
     let i = 0;
     while (i < len(pbody_names)) {
         if (pbody_names[i] == name) { pbody_typs[i] = t; return 0; };
-        i = i + 1;
+        i++;
     };
     pbody_names += name;
     pbody_typs += t;
@@ -91,7 +91,7 @@ def p_body_get(name: str) -> Type {
     let i = 0;
     while (i < len(pbody_names)) {
         if (pbody_names[i] == name) { return pbody_typs[i]; };
-        i = i + 1;
+        i++;
     };
     { k: K.tnone }
 };
@@ -103,7 +103,7 @@ def p_body_apply(names: [str], ptypes: [Type]) -> long {
             let cl = p_body_get(names[i]);
             if (cl.k != K.tnone) { ptypes[i] = cl; };
         };
-        i = i + 1;
+        i++;
     };
     0
 };
@@ -133,7 +133,7 @@ def p_str_in(xs: [str], s: str) -> bool {
     let i = 0;
     while (i < len(xs)) {
         if (xs[i] == s) { found = true; };
-        i = i + 1;
+        i++;
     };
     found
 };
@@ -162,7 +162,7 @@ def p_call_note(callee: Node, args: [Node]) -> long {
             pcall_idxs += i;
             pcall_typs += lt;
         };
-        i = i + 1;
+        i++;
     };
     0
 };
@@ -179,9 +179,9 @@ def p_infer_finish() -> long {
                     f.ptypes[ix] = pcall_typs[c];
                 };
             };
-            fi = fi + 1;
+            fi++;
         };
-        c = c + 1;
+        c++;
     };
     0
 };
@@ -673,9 +673,9 @@ def arrow_params_at(toks: [Tok], p: long) -> bool {
                         while (!tdone) {
                             let tk = tt(toks, pos);
                             if (tk == "eof") { ok = false; tdone = true; }
-                            else if (tk == "punct" && (tv(toks, pos) == "(" || tv(toks, pos) == "[" || tv(toks, pos) == "{")) { depth = depth + 1; pos = pos + 1; }
+                            else if (tk == "punct" && (tv(toks, pos) == "(" || tv(toks, pos) == "[" || tv(toks, pos) == "{")) { depth++; pos = pos + 1; }
                             else if (tk == "punct" && (tv(toks, pos) == ")" || tv(toks, pos) == "]" || tv(toks, pos) == "}")) {
-                                if (depth == 0) { tdone = true; } else { depth = depth - 1; pos = pos + 1; };
+                                if (depth == 0) { tdone = true; } else { depth--; pos = pos + 1; };
                             }
                             else if (tk == "punct" && tv(toks, pos) == "," && depth == 0) { tdone = true; }
                             else { pos = pos + 1; };
@@ -1078,7 +1078,7 @@ def mk_call(callee: Node, args: [Node], ln: long, cl: long) -> Call {
         let i = 1;
         while (i < len(args)) {
             cat = { k: K.bin, op: "+", l: cat, r: tostring_call(args[i], ln, cl), line: ln, col: cl };
-            i = i + 1;
+            i++;
         };
         let one: [Node] = [];
         one += cat;
@@ -1173,10 +1173,10 @@ def parse_unary(toks: [Tok], p: long) -> Parsed {
 // of running the stack out. Each guard is a wrapper, so the one return path
 // decrements again.
 def parse_expr(toks: [Tok], p: long) -> Parsed {
-    nest = nest + 1;
+    nest++;
     if (nest > MAX_NEST) { too_deep("an expression", tline(toks, p), tcol(toks, p)); };
     let r = parse_expr_go(toks, p);
-    nest = nest - 1;
+    nest--;
     r
 };
 
@@ -1240,7 +1240,7 @@ def size_lit(s: str) -> long {
         } else {
             v = v * radix + d;
         };
-        i = i + 1;
+        i++;
     };
     v
 };
@@ -1405,10 +1405,10 @@ def maplit_node(is_map: bool, keys: [str], vals: [Node], ln: long, cl: long) -> 
 // additive.
 
 def parse_type_node(toks: [Tok], p: long) -> PType {
-    nest = nest + 1;
+    nest++;
     if (nest > MAX_NEST) { too_deep("a type", tline(toks, p), tcol(toks, p)); };
     let r = parse_type_node_go(toks, p);
-    nest = nest - 1;
+    nest--;
     r
 };
 
@@ -1537,7 +1537,7 @@ def type_err_list(ts: [Type]) -> Node {
     let i = 0;
     while (i < len(ts)) {
         if (out.k == K.void) { out = type_err(ts[i]); }
-        i = i + 1;
+        i++;
     };
     out
 };
@@ -1548,7 +1548,7 @@ def type_err_fields(fs: [Field]) -> Node {
     while (i < len(fs)) {
         let f = fs[i];
         if (out.k == K.void) { out = type_err(f.typ); }
-        i = i + 1;
+        i++;
     };
     out
 };
@@ -1742,7 +1742,7 @@ def parse_type_tparams(toks: [Tok], apos: long, tlist: [Type]) -> PType {
         let ti = 0;
         while (ti < len(ts0)) {
             fields += { name: tuple_key(ti), opt: false, typ: ts0[ti] };
-            ti = ti + 1;
+            ti++;
         };
         tres({ k: K.trec, fields: fields }, apos)
     }
@@ -2005,7 +2005,7 @@ def parse_func(toks: [Tok], p: long, isnat: bool) -> Parsed {
                 pbody_names += names[pi];
                 pbody_typs += { k: K.tnone };
             };
-            pi = pi + 1;
+            pi++;
         };
         let body = parse_block(toks, pos);
         p_body_apply(names, ptypes);
@@ -2036,10 +2036,10 @@ def parse_func(toks: [Tok], p: long, isnat: bool) -> Parsed {
 // ── block { stmt; stmt; ... } ────────────────────────────────────────────
 
 def parse_block(toks: [Tok], p: long) -> Parsed {
-    nest = nest + 1;
+    nest++;
     if (nest > MAX_NEST) { too_deep("a statement", tline(toks, p), tcol(toks, p)); };
     let r = parse_block_go(toks, p);
-    nest = nest - 1;
+    nest--;
     r
 };
 
@@ -2389,9 +2389,9 @@ def sync_stmt(toks: [Tok], p: long) -> long {
                 go = false;
             } else {
                 if (v == "(" || v == "[" || v == "{") {
-                    depth = depth + 1;
+                    depth++;
                 } else if (v == ")" || v == "]" || v == "}") {
-                    if (depth > 0) { depth = depth - 1; }
+                    if (depth > 0) { depth--; }
                 }
                 pos = pos + 1;
             }
@@ -2664,7 +2664,7 @@ def parse_match(toks: [Tok], subj: Node, bpos: long, ln: long, cl: long) -> Pars
                 ts += body;
                 thens += { k: K.block, stmts: ts, line: ln, col: cl };
                 let pc = pr.cover;
-                if (pc.k == K.tnone) { nvals = nvals + 1; } else { covers += pc; };
+                if (pc.k == K.tnone) { nvals++; } else { covers += pc; };
             };
             if (go) {
                 if (is_punct(toks, pos, ",")) {
@@ -2851,7 +2851,7 @@ def parse_value_pattern(toks: [Tok], node: Node, pos: long, tmp: str, ln: long, 
                 let fread: Node = { k: K.dot, obj: { k: K.narrow, e: subj, typ: ty, line: ln, col: cl }, key: key, line: ln, col: cl, nline: ln, ncol: cl };
                 test = { k: K.bin, op: "&&", l: test, r: { k: K.bin, op: "==", l: fread, r: vals[i], line: ln, col: cl }, line: ln, col: cl };
             };
-            i = i + 1;
+            i++;
         };
         let np = pos;
         if (tt(toks, pos) == "id") {
@@ -2884,7 +2884,7 @@ def parse_program(toks: [Tok]) -> Block {
         // NOTE: `0;` tail — the while body must be void-typed (see the
         // parse_block note).
         if (pos == before) {
-            pos = pos + 1;
+            pos++;
         };
     };
     p_infer_finish();
@@ -2908,11 +2908,11 @@ def parse_program(toks: [Tok]) -> Block {
                             clash += { k: K.err, msg: "'" + cdec.name + "' is a ndef and is declared again at the top level (a ndef cannot share a name)", line: cdec.line, col: cdec.col };
                         };
                     };
-                    co = co + 1;
+                    co++;
                 };
             };
         };
-        ci = ci + 1;
+        ci++;
     };
     let all: [Node] = [];
     all += clash;
@@ -2934,7 +2934,7 @@ def nameix_new(cap: long) -> NameIx {
     while (i < cap) {
         keys += "";
         vals += 0;
-        i = i + 1;
+        i++;
     };
     { keys: keys, vals: vals, n: 0 }
 };
@@ -2945,8 +2945,8 @@ def nameix_slot(keys: [str], k: str) -> long {
     let h = 0;
     let i = 0;
     while (i < len(k)) {
-        h = (h * 31 + byte_at(k, i)) & 1073741823;
-        i = i + 1;
+        h = (h * 31 + k[i]) & 1073741823;
+        i++;
     };
     let s = (h ^ (h >> 15)) & mask;
     let go = true;
@@ -2972,7 +2972,7 @@ def nameix_put(m: NameIx, k: str, v: long) -> void {
                 bk[s] = e;
                 bv[s] = ov[i];
             };
-            i = i + 1;
+            i++;
         };
         m.keys = bk;
         m.vals = bv;

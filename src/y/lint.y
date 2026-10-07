@@ -99,7 +99,7 @@ def lint_meta_top(st: LintSt, stmts: [Node], ogen: [bool]) -> long {
         if (s.k != K.decl && s.k != K.void && !meta_gen(s, ogen)) {
             lint_warn_start(st, "a top-level statement runs once in the meta generator and once in the program, so with a meta block in the file it must be a declaration (a def, type, const or let) -- keep a top-level let initializer pure", s);
         };
-        i = i + 1;
+        i++;
     };
     0
 };
@@ -131,7 +131,7 @@ def lint_rets(st: LintSt, stmts: [Node]) -> long {
     let i = 0;
     while (i < len(stmts)) {
         lint_rets_node(st, stmts[i]);
-        i = i + 1;
+        i++;
     };
     0
 };
@@ -245,16 +245,16 @@ def lint_num(name: str) -> long {
     let m = 1;
     let go = true;
     while (go && i >= 0) {
-        let c = byte_at(name, i);
+        let c = name[i];
         if (c >= '0' && c <= '9') {
-            v = v + (c - '0') * m;
-            m = m * 10;
+            v += (c - '0') * m;
+            m *= 10;
             i = i - 1;
         } else {
             go = false;
         };
     };
-    if (i >= 0 && m > 1 && byte_at(name, i) == 36) { v } else { 0 }
+    if (i >= 0 && m > 1 && name[i] == 36) { v } else { 0 }
 };
 
 // What happened to a binding, by its N: 1 read, 2 assigned, 4 grown
@@ -276,7 +276,7 @@ def lint_mark(st: LintSt, name: str, bit: long) -> long {
 // only it sees. `fresh`: it starts as an array literal no one else holds.
 def lint_note(st: LintSt, name: str, kind: str, line: long, col: long, scal: bool, fresh: bool, strf: bool) -> long {
     let d = lint_disp(name);
-    if (d != "" && byte_at(d, 0) != 95 && index_of(name, "$shadow") < 0) {
+    if (d != "" && d[0] != 95 && index_of(name, "$shadow") < 0) {
         st.vars += { name: d, kind: kind, num: lint_num(name), line: line, col: col, scal: scal, fresh: fresh, strf: strf, top: false };
     };
     0
@@ -289,7 +289,7 @@ def lint_note(st: LintSt, name: str, kind: str, line: long, col: long, scal: boo
 def lint_note_top(st: LintSt, node: Decl) -> long {
     let name = node.name;
     let d = lint_disp(name);
-    if (d != "" && byte_at(d, 0) != 95) {
+    if (d != "" && d[0] != 95) {
         // A name bound twice at the top level is legal -- the later
         // declaration shadows the earlier one, which t14_shadow, t30 and
         // t53 all pin -- and rename.y keeps the earlier one under its
@@ -363,7 +363,7 @@ def lint_var_str(st: LintSt, name: str) -> bool {
         if (v.strf && ((n > 0 && v.num == n) || (n == 0 && v.num == 0 && v.name == d))) {
             return true;
         };
-        i = i + 1;
+        i++;
     };
     false
 };
@@ -380,7 +380,7 @@ def lint_var_scal(st: LintSt, name: str) -> bool {
         if (v.scal && ((n > 0 && v.num == n) || (n == 0 && v.num == 0 && v.name == d))) {
             return true;
         };
-        i = i + 1;
+        i++;
     };
     false
 };
@@ -397,7 +397,7 @@ def lint_tscal(typ: Type) -> bool {
 // parameter is never that.
 def lint_note_param(st: LintSt, name: str, typ: Type, line: long, col: long) -> long {
     let d = lint_disp(name);
-    if (d != "" && byte_at(d, 0) != 95) {
+    if (d != "" && d[0] != 95) {
         st.vars += { name: d, kind: "param", num: lint_num(name), line: line, col: col, scal: lint_tscal(typ), fresh: false, strf: typ.k == K.tstr, top: true };
     };
     0
@@ -427,7 +427,7 @@ def lint_stmts(st: LintSt, stmts: [Node], used: bool, top: bool) -> long {
         if (!dead && lint_diverges(s)) {
             dead = true;
         };
-        i = i + 1;
+        i++;
     };
     0
 };
@@ -519,7 +519,7 @@ def lint_any_diverges(stmts: [Node]) -> bool {
     let i = 0;
     while (!found && i < len(stmts)) {
         found = lint_diverges(stmts[i]);
-        i = i + 1;
+        i++;
     };
     found
 };
@@ -683,7 +683,7 @@ def lint_list(st: LintSt, nodes: [Node]) -> long {
     let i = 0;
     while (i < len(nodes)) {
         lint_node(st, nodes[i], true);
-        i = i + 1;
+        i++;
     };
     0
 };
@@ -786,13 +786,13 @@ def lint_int_val(node: Node) -> long {
     let ok = len(s) > 0;
     let i = 0;
     while (ok && i < len(s)) {
-        let c = byte_at(s, i);
+        let c = s[i];
         if (c == '_') {
         } else if (c >= '0' && c <= '9') { v = v * base + (c - '0'); }
         else if (base == 16 && c >= 'a' && c <= 'f') { v = v * 16 + (c - 'a' + 10); }
         else if (base == 16 && c >= 'A' && c <= 'F') { v = v * 16 + (c - 'A' + 10); }
         else { ok = false; };
-        i = i + 1;
+        i++;
     };
     if (ok) { v } else { -1 }
 };
@@ -884,10 +884,10 @@ def lint_short_assign(st: LintSt, node: Assign, name: str, v: Node) -> long {
     let lid: Leaf = b.l;
     if (lid.v != name) { return 0; };
     let d = lint_disp(name);
-    if (op == "+" && lint_int_val(b.r) == 1) {
+    if (op == "+" && lint_int_val(b.r) == 1 && lint_var_scal(st, name)) {
         lint_warn_at(st, "'" + d + " = " + d + " + 1' can be written '" + d + "++'", node);
         0
-    } else if (op == "-" && lint_int_val(b.r) == 1) {
+    } else if (op == "-" && lint_int_val(b.r) == 1 && lint_var_scal(st, name)) {
         lint_warn_at(st, "'" + d + " = " + d + " - 1' can be written '" + d + "--'", node);
         0
     } else if (lint_compound_op(op) && lint_var_scal(st, name)) {
@@ -992,7 +992,7 @@ def lint_short_chain(st: LintSt, node: Bin) -> long {
             vals += v;
             allstr = false;
         };
-        i = i + 1;
+        i++;
     };
     if (allint) {
         let lo = vals[0];
@@ -1001,7 +1001,7 @@ def lint_short_chain(st: LintSt, node: Bin) -> long {
         while (j < len(vals)) {
             if (vals[j] < lo) { lo = vals[j]; };
             if (vals[j] > hi) { hi = vals[j]; };
-            j = j + 1;
+            j++;
         };
         if (hi - lo + 1 == len(vals)) {
             lint_warn_at(st, "these equalities are a consecutive range; write a range comparison", node);
@@ -1040,9 +1040,9 @@ def lint_single_stmt(block: Node) -> Node {
         while (i < len(b.stmts)) {
             if (b.stmts[i].k != K.void) {
                 found = b.stmts[i];
-                n = n + 1;
+                n++;
             };
-            i = i + 1;
+            i++;
         };
         if (n == 1) { return found; };
     };
@@ -1165,7 +1165,7 @@ def lint_first_stmt(block: Node) -> Node {
         let i = 0;
         while (i < len(b.stmts)) {
             if (b.stmts[i].k != K.void) { return b.stmts[i]; };
-            i = i + 1;
+            i++;
         };
     };
     { k: K.void, line: block.line, col: block.col }
@@ -1273,7 +1273,7 @@ def lint_find_list(nodes: [Node], name: str, mask: long) -> bool {
     let i = 0;
     while (i < len(nodes)) {
         if (lint_find(nodes[i], name, mask)) { return true; };
-        i = i + 1;
+        i++;
     };
     false
 };
@@ -1287,7 +1287,7 @@ def lint_step_one(body: Node, iv: str) -> bool {
     let i = 0;
     while (i < len(b.stmts)) {
         if (b.stmts[i].k != K.void) { last = b.stmts[i]; };
-        i = i + 1;
+        i++;
     };
     if (last.k == K.assign) {
         let a: Assign = last;
@@ -1421,9 +1421,9 @@ def lint_zero_text(s: str) -> bool {
     let ok = len(digits) > 0;
     let i = 0;
     while (ok && i < len(digits)) {
-        let c = byte_at(digits, i);
+        let c = digits[i];
         ok = c == '0' || c == '_';
-        i = i + 1;
+        i++;
     };
     ok
 };
@@ -1483,7 +1483,7 @@ def lint_func(st: LintSt, node: Func) -> long {
     let i = 0;
     while (i < len(node.params) && i < len(node.ptypes)) {
         lint_note_param(st, node.params[i], node.ptypes[i], node.line, node.col);
-        i = i + 1;
+        i++;
     };
     let body: Block = node.body;
     lint_stmts(st, body.stmts, true, false)
@@ -1585,7 +1585,9 @@ def lint_opassign(st: LintSt, node: OpAssign, used: bool) -> long {
         let d = lint_disp(tid.v);
         let rs = "++";
         if (op == "-") { rs = "--"; };
-        lint_warn_at(st, "'" + d + " " + op + "= 1' can be written '" + d + rs + "'", node);
+        if (lint_var_scal(st, tid.v)) {
+            lint_warn_at(st, "'" + d + " " + op + "= 1' can be written '" + d + rs + "'", node);
+        };
     };
     0
 };
@@ -1601,7 +1603,7 @@ def lint_lit(st: LintSt, node: RecLit, what: str, kind: str) -> long {
         if (key != "..." && lint_seen(keys, i)) {
             lint_warn_at(st, "duplicate " + what + " '" + key + "' in a " + kind + " literal; the last one wins", node);
         };
-        i = i + 1;
+        i++;
     };
     0
 };
@@ -1612,7 +1614,7 @@ def lint_seen(keys: [str], i: long) -> bool {
     let j = 0;
     while (!found && j < i) {
         found = keys[j] == key;
-        j = j + 1;
+        j++;
     };
     found
 };
@@ -1697,7 +1699,7 @@ def lint_types(st: LintSt, stmts: [Node]) -> long {
                     o.alias = r.alias;
                 };
             };
-            tdi = tdi + 1;
+            tdi++;
         };
     };
     lint_report(st, t)
@@ -1707,7 +1709,7 @@ def lint_tw_list(t: LintTy, nodes: [Node]) -> long {
     let i = 0;
     while (i < len(nodes)) {
         lint_tw(t, nodes[i]);
-        i = i + 1;
+        i++;
     };
     0
 };
@@ -1847,7 +1849,7 @@ def lint_tw_func(t: LintTy, node: Func) -> long {
     let i = 0;
     while (i < len(ps)) {
         lint_root(t, ps[i], line, col, "");
-        i = i + 1;
+        i++;
     };
     lint_root(t, node.ret, line, col, "");
     lint_tw(t, node.body)
@@ -1929,7 +1931,7 @@ def lint_tk_list(t: LintTy, ts: [Type], rec: bool, parent: long) -> str {
     let i = 0;
     while (i < len(ts)) {
         parts += lint_tk(t, ts[i], rec, parent);
-        i = i + 1;
+        i++;
     };
     join(parts, ",")
 };
@@ -1972,7 +1974,7 @@ def lint_tk_rec(t: LintTy, ty: TRec, rec: bool, parent: long) -> str {
     while (i < len(fs)) {
         let f = fs[i];
         parts += f.name + ":" + lint_tk(t, f.typ, rec, me);
-        i = i + 1;
+        i++;
     };
     let key = "{" + join(parts, ",") + "}";
     if (me != parent) {
@@ -2011,7 +2013,7 @@ def lint_tk_members(t: LintTy, u: TList, rec: bool, me: long, parts: [str]) -> l
         } else {
             parts += lint_tk(t, m, rec, me);
         };
-        i = i + 1;
+        i++;
     };
     0
 };
@@ -2063,7 +2065,7 @@ def lint_sort_uniq(xs: [str]) -> [str] {
             j = j - 1;
         };
         out[j] = x;
-        i = i + 1;
+        i++;
     };
     let res: [str] = [];
     let k = 0;
@@ -2071,7 +2073,7 @@ def lint_sort_uniq(xs: [str]) -> [str] {
         if (k == 0 || out[k] != out[k - 1]) {
             res += out[k];
         };
-        k = k + 1;
+        k++;
     };
     res
 };
@@ -2123,7 +2125,7 @@ def lint_report(st: LintSt, t: LintTy) -> long {
             };
         };
         gone += g;
-        i = i + 1;
+        i++;
     };
     i = 0;
     while (i < len(occs)) {
@@ -2142,7 +2144,7 @@ def lint_report(st: LintSt, t: LintTy) -> long {
             };
             o.rep = true;
         };
-        i = i + 1;
+        i++;
     };
     0
 };
@@ -2165,7 +2167,7 @@ def lint_sorted(ws: [Diag]) -> [Diag] {
         if (n == 0 || lint_before(out[n - 1], w)) {
             out += w;
         };
-        i = i + 1;
+        i++;
     };
     out
 };
@@ -2183,10 +2185,10 @@ def lint_msort(ws: [Diag]) -> [Diag] {
         while (i < len(a) || j < len(b)) {
             if (j >= len(b) || (i < len(a) && !lint_before(b[j], a[i]))) {
                 out += a[i];
-                i = i + 1;
+                i++;
             } else {
                 out += b[j];
-                j = j + 1;
+                j++;
             };
         };
         out

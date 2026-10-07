@@ -45,8 +45,8 @@ def arch_asm_lines(text: str) -> [str] {
     let i = 0;
     while (i < len(all)) {
         let l = all[i];
-        if (len(l) > 0 && byte_at(l, 0) != 35) { out += l; };
-        i = i + 1;
+        if (len(l) > 0 && l[0] != 35) { out += l; };
+        i++;
     };
     out
 };
@@ -191,10 +191,10 @@ def w_iat_bss_lines() -> [str] {
         let f = 0;
         while (f < len(imps[i].funcs)) {
             out += w_iat_label(imps[i].funcs[f]) + ":\n.zero 8\n";
-            f = f + 1;
+            f++;
         };
         out += w_iat_term_label(imps[i].dll) + ":\n.zero 8\n";
-        i = i + 1;
+        i++;
     };
     out
 };
@@ -206,8 +206,8 @@ def w_iat_offset(d: long, f: long) -> long {
     let at = 0;
     let i = 0;
     while (i < d) {
-        at = at + 8 * (len(imps[i].funcs) + 1);
-        i = i + 1;
+        at += 8 * (len(imps[i].funcs) + 1);
+        i++;
     };
     at + 8 * f
 };
@@ -311,7 +311,7 @@ def arch_windows_lines() -> [str] {
             puts("error: arch/wsys.s: bad block marker ('" + blocks[i][0] + "'): want '#=== replace: NAME ===' or '#=== add: NAME ==='\n");
             exit(1);
         };
-        i = i + 1;
+        i++;
     };
     let lines = arch_asm_lines(PRELUDE_ASM);
     arch_win_check(lines, blocks);
@@ -334,7 +334,7 @@ def arch_win_check(lines: [str], blocks: [[str]]) -> long {
                 exit(1);
             };
         };
-        i = i + 1;
+        i++;
     };
     0
 };
@@ -345,7 +345,7 @@ def arch_win_labeled(lines: [str], nm: str) -> bool {
     while (i < len(lines)) {
         let l = lines[i];
         if (arch_is_label_line(l) && trim(l[0:len(l) - 1]) == nm) { found = true; };
-        i = i + 1;
+        i++;
     };
     found
 };
@@ -362,12 +362,12 @@ def arch_win_blocks(lines: [str]) -> [[str]] {
         if (mk != "") {
             if (len(cur) > 0) { out += cur; };
             cur = arch_win_head(mk);
-            i = i + 1;
+            i++;
         } else {
             // Comments are documentation here (GNU as reads them too) and
             // must not reach the assembler, which calls one a backend bug.
-            if (len(l) == 0 || byte_at(l, 0) != 35) { cur += l; };
-            i = i + 1;
+            if (len(l) == 0 || l[0] != 35) { cur += l; };
+            i++;
         };
     };
     if (len(cur) > 0) { out += cur; };
@@ -410,7 +410,7 @@ def arch_win_head(nm: str) -> [str] {
 
 def arch_is_label_line(l: str) -> bool {
     if (len(l) == 0) { false }
-    else if (byte_at(l, 0) == 32 || byte_at(l, 0) == 9) { false }
+    else if (l[0] == 32 || l[0] == 9) { false }
     else if (l[len(l) - 1:] != ":") { false }
     else { index_of(l, " ") < 0 }
 };
@@ -428,17 +428,17 @@ def arch_win_sub(lines: [str], blocks: [[str]]) -> [str] {
         };
         if (b >= 0) {
             arch_win_push(out, join(blocks[b][2:len(blocks[b])], "\n"));
-            i = i + 1;
-            while (i < len(lines) && !arch_is_label_line(lines[i])) { i = i + 1; };
+            i++;
+            while (i < len(lines) && !arch_is_label_line(lines[i])) { i++; };
         } else {
             arch_win_push(out, l);
-            i = i + 1;
+            i++;
         };
     };
     i = 0;
     while (i < len(blocks)) {
         if (blocks[i][1] == "1") { arch_win_push(out, join(blocks[i][2:len(blocks[i])], "\n")); };
-        i = i + 1;
+        i++;
     };
     // one line per list element: arch_prelude_lines' contract with
     // native.y's prelude_blocks and shake_prelude.
@@ -453,9 +453,9 @@ def arch_win_split(out: [str]) -> [str] {
         let j = 0;
         while (j < len(parts)) {
             if (len(parts[j]) > 0) { res += parts[j]; };
-            j = j + 1;
+            j++;
         };
-        i = i + 1;
+        i++;
     };
     res
 };
@@ -467,7 +467,7 @@ def arch_win_find(blocks: [[str]], nm: str) -> long {
     let i = 0;
     while (i < len(blocks)) {
         if (blocks[i][1] == "0" && blocks[i][0] == nm) { at = i; };
-        i = i + 1;
+        i++;
     };
     at
 };

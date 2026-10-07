@@ -41,7 +41,7 @@ def lbl_reindex(cap: long) {
     while (i < len(lbl_names)) {
         let r = asm.labmap_put(m, lbl_names[i], 1, i);
         m = r.map;
-        i = i + 1;
+        i++;
     };
     lbl_ix = m
 };
@@ -57,7 +57,7 @@ def lbl_new(name: str) -> long {
         lbl_ix = r.map;
         let id = lbl_next;
         lbl_names += name;
-        lbl_next = lbl_next + 1;
+        lbl_next++;
         id
     }
 };
@@ -70,7 +70,7 @@ def lbl_new(name: str) -> long {
 def lbl_fresh(name: str) -> long {
     let id = lbl_next;
     lbl_names += name;
-    lbl_next = lbl_next + 1;
+    lbl_next++;
     id
 };
 

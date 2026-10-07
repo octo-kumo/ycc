@@ -115,7 +115,7 @@ def rn_lookup_to(st: RnSt, name: str, lo: long) -> str {
             while (rn_ixn < len(frame)) {
                 let b = frame[rn_ixn];
                 if (len(b.orig) > 0) { parser.nameix_put(rn_ix, b.orig, rn_ixn); };
-                rn_ixn = rn_ixn + 1;
+                rn_ixn++;
             };
             let at = parser.nameix_get(rn_ix, name);
             if (at >= 0) {
@@ -201,7 +201,7 @@ def rn_list(nodes: [Node], st: RnSt) -> { st: RnSt, nodes: [Node] } {
         let r = rn_node(nodes[i], st);
         st = r.st;
         out += r.node;
-        i = i + 1;
+        i++;
     };
     { st: st, nodes: out }
 };
@@ -222,7 +222,7 @@ def rn_prepass(stmts: [Node], st: RnSt) -> RnSt {
     let i = 0;
     while (i < len(stmts)) {
         st = rn_prepass_one(stmts[i], st);
-        i = i + 1;
+        i++;
     };
     st
 };
@@ -273,7 +273,7 @@ def rn_note_defaults(st: RnSt, uniq: str, func: Func) -> RnSt {
         let d = dv[i];
         let dk: long = d.k;
         if (dk != K.void) { any = true; };
-        i = i + 1;
+        i++;
     };
     if (any) {
         st.dfl += { name: uniq, vals: dv };
@@ -289,7 +289,7 @@ def rn_find_defaults(st: RnSt, name: str) -> [Node] {
     while (i < len(ds)) {
         let d = ds[i];
         if (d.name == name) { out = d.vals; };
-        i = i + 1;
+        i++;
     };
     out
 };
@@ -321,7 +321,7 @@ def rn_fill_defaults(vals: [Node], args: [Node], line: long, col: long) -> [Node
             } else {
                 out += args[j];
             };
-            j = j + 1;
+            j++;
         };
         if (ok) {
             while (j < len(vals)) {
@@ -330,7 +330,7 @@ def rn_fill_defaults(vals: [Node], args: [Node], line: long, col: long) -> [Node
                 } else {
                     out += vals[j];
                 };
-                j = j + 1;
+                j++;
             };
         };
         out
@@ -417,7 +417,7 @@ def rn_types(st: RnSt, ts: [Type]) -> [Type] {
         let i = 0;
         while (i < len(ts)) {
             out += rn_type(st, ts[i]);
-            i = i + 1;
+            i++;
         };
         out
     }
@@ -458,7 +458,7 @@ def rn_reaches_any(st: RnSt, id: long) -> bool {
     if (n != rn_reach_n) {
         let fresh: [long] = [];
         let i = 0;
-        while (i < n) { fresh += 0; i = i + 1; };
+        while (i < n) { fresh += 0; i++; };
         rn_reach_memo = fresh;
         rn_reach_n = n;
     };
@@ -498,7 +498,7 @@ def rn_tref(st: RnSt, id: long, name: str) -> Type {
     let i = 0;
     while (at < 0 && i < len(rn_tref_ids)) {
         if (rn_tref_ids[i] == id) { at = i; }
-        i = i + 1;
+        i++;
     };
     if (at >= 0) {
         rn_tref_nodes[at]
@@ -595,7 +595,7 @@ def rn_type_list(st: RnSt, ts: [Type], depth: long) -> [Type] {
     let i = 0;
     while (i < len(ts)) {
         out += rn_type_go(st, ts[i], depth);
-        i = i + 1;
+        i++;
     };
     out
 };
@@ -606,7 +606,7 @@ def rn_type_fields(st: RnSt, fs: [Field], depth: long) -> [Field] {
     while (i < len(fs)) {
         let f = fs[i];
         out += { name: f.name, opt: f.opt, typ: rn_type_go(st, f.typ, depth) };
-        i = i + 1;
+        i++;
     };
     out
 };
@@ -624,7 +624,7 @@ def rn_union_flat(ts: [Type]) -> [Type] {
         } else {
             out += t;
         };
-        i = i + 1;
+        i++;
     };
     out
 };
@@ -644,7 +644,7 @@ def rn_drop_typedefs(stmts: [Node], st: RnSt) -> [Node] {
             rn_mod = mod0;
             if (te.k == K.err) { out += te; }
         } else { out += s; };
-        i = i + 1;
+        i++;
     };
     out
 };
@@ -727,7 +727,7 @@ def rn_shadow_dups(stmts: [Node]) -> [Node] {
     foreach (s in stmts) {
         let nm = rn_decl_name(s);
         names += nm;
-        if (nm != "") { ndefs = ndefs + 1; }
+        if (nm != "") { ndefs++; }
     };
     if (ndefs < 2) {
         stmts
@@ -740,7 +740,7 @@ def rn_shadow_dups(stmts: [Node]) -> [Node] {
                 let decl: Decl = stmts[i];
                 out += rn_rebuild_decl(decl, names[i] + "$shadow" + tostring(i));
             } else { out += stmts[i]; };
-            i = i + 1;
+            i++;
         };
         out
     }
@@ -753,13 +753,13 @@ def rn_shadow_dups(stmts: [Node]) -> [Node] {
 def rn_later(names: [str]) -> [bool] {
     let n = len(names);
     let size = 16;
-    while (size < 2 * n) { size = size * 2; };
+    while (size < 2 * n) { size *= 2; };
     let slots: [str] = [];
     let k = 0;
-    while (k < size) { slots += ""; k = k + 1; };
+    while (k < size) { slots += ""; k++; };
     let out: [bool] = [];
     k = 0;
-    while (k < n) { out += false; k = k + 1; };
+    while (k < n) { out += false; k++; };
     let i = n - 1;
     while (i >= 0) {
         let nm = names[i];
@@ -783,8 +783,8 @@ def rn_hash(s: str) -> long {
     let h = 0;
     let i = 0;
     while (i < len(s)) {
-        h = (h * 33 + byte_at(s, i)) & 16777215;
-        i = i + 1;
+        h = (h * 33 + s[i]) & 16777215;
+        i++;
     };
     h
 };
@@ -842,10 +842,10 @@ def rn_block(stmts: [Node], st: RnSt) -> RnStmts {
 // a `+` chain parses in a loop but renames recursively, so a chain of a few
 // thousand terms would run the stack out here even with the parser's guard.
 def rn_node(node: Node, st: RnSt) -> RnRes {
-    nest = nest + 1;
+    nest++;
     if (nest > MAX_NEST) { too_deep("an expression", node.line, node.col); };
     let r = rn_node_go(node, st);
-    nest = nest - 1;
+    nest--;
     r
 };
 

@@ -1056,12 +1056,14 @@ static ylong lint_short_assign(LintSt st, Yv *node, Yv *name, Yv *v) {
     if (yv_l(yr_get(l, "k")) != K_id) { return 0; }
     if (!ys_eq(yr_get(l, "v"), name)) { return 0; }
     Yv *d = lint_disp(name);
-    if (ys_eq_lit(op, "+") && lint_int_val(yr_get(v, "r")) == 1) {
+    if (ys_eq_lit(op, "+") && lint_int_val(yr_get(v, "r")) == 1 &&
+        lint_var_scal(st, name)) {
         (void)lint_warn_at(st,
                            lint_cat(7, ys("'"), d, ys(" = "), d,
                                     ys(" + 1' can be written '"), d, ys("++'")),
                            node);
-    } else if (ys_eq_lit(op, "-") && lint_int_val(yr_get(v, "r")) == 1) {
+    } else if (ys_eq_lit(op, "-") && lint_int_val(yr_get(v, "r")) == 1 &&
+               lint_var_scal(st, name)) {
         (void)lint_warn_at(st,
                            lint_cat(7, ys("'"), d, ys(" = "), d,
                                     ys(" - 1' can be written '"), d, ys("--'")),
@@ -1875,7 +1877,8 @@ static ylong lint_opassign(LintSt st, Yv *node, int used) {
             node);
     }
     if (yv_l(yr_get(st, "wlevel")) >= 2 && yv_l(yr_get(t, "k")) == K_id &&
-        (ys_eq_lit(op, "+") || ys_eq_lit(op, "-")) && lint_int_val(v) == 1) {
+        (ys_eq_lit(op, "+") || ys_eq_lit(op, "-")) && lint_int_val(v) == 1 &&
+        lint_var_scal(st, yr_get(t, "v"))) {
         Yv *d = lint_disp(yr_get(t, "v"));
         Yv *rs = ys_eq_lit(op, "+") ? ys("++") : ys("--");
         (void)lint_warn_at(st,

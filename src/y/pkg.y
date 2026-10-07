@@ -56,7 +56,7 @@ def pk_has(xs: [str], s: str) -> bool {
     while (!found && i < len(xs)) {
         let x: str = xs[i];
         found = x == s;
-        i = i + 1;
+        i++;
     };
     found
 };
@@ -88,7 +88,7 @@ def pk_clean(path: str) -> str {
         } else {
             out += s;
         };
-        i = i + 1;
+        i++;
     };
     let r = join(out, "/");
     if (abs) { "/" + r } else if (len(r) == 0) { "." } else { r }
@@ -138,7 +138,7 @@ def pk_peek(cur: Cursor) -> str {
 def pk_skip(cur: Cursor) -> long {
     let s = cur.s;
     let p = cur.p;
-    while (p < len(s) && (byte_at(s, p) == 32 || byte_at(s, p) == 9)) {
+    while (p < len(s) && (s[p] == 32 || s[p] == 9)) {
         p = p + 1;
     };
     cur.p = p;
@@ -155,8 +155,8 @@ def pk_is_key(s: str) -> bool {
     let ok = len(s) > 0;
     let i = 0;
     while (ok && i < len(s)) {
-        ok = pk_keych(byte_at(s, i));
-        i = i + 1;
+        ok = pk_keych(s[i]);
+        i++;
     };
     ok
 };
@@ -165,7 +165,7 @@ def pk_is_key(s: str) -> bool {
 def pk_is_ident(s: str) -> bool {
     let ok = pk_is_key(s) && index_of(s, "-") < 0;
     if (ok) {
-        let c = byte_at(s, 0);
+        let c = s[0];
         ok = c < '0' || c > '9';
     }
     ok
@@ -187,7 +187,7 @@ def pk_uncomment(line: str) -> str {
         let c = line[i:i + 1];
         if (len(q) > 0) {
             if (c == "\\" && q == "\"") {
-                i = i + 1;
+                i++;
             } else if (c == q) {
                 q = "";
             }
@@ -196,7 +196,7 @@ def pk_uncomment(line: str) -> str {
         } else if (c == "#") {
             end = i;
         }
-        i = i + 1;
+        i++;
     };
     line[:end]
 };
@@ -273,7 +273,7 @@ def pk_bare(cur: Cursor, at: str) -> str {
     pk_skip(cur);
     let s = cur.s;
     let p = cur.p;
-    while (p < len(s) && pk_keych(byte_at(s, p))) {
+    while (p < len(s) && pk_keych(s[p])) {
         p = p + 1;
     };
     let key = s[cur.p:p];
@@ -320,8 +320,8 @@ def pk_count(xs: [str], s: str) -> long {
     let i = 0;
     while (i < len(xs)) {
         let x: str = xs[i];
-        if (x == s) { n = n + 1; }
-        i = i + 1;
+        if (x == s) { n++; }
+        i++;
     };
     n
 };
@@ -392,7 +392,7 @@ def pk_toml(text: str, path: str) -> [PkEnt] {
             if (cur.p < len(cur.s)) { pk_die(at + "unexpected text after the value"); }
             out += e;
         };
-        i = i + 1;
+        i++;
     };
     out
 };
@@ -443,7 +443,7 @@ def pk_manifest(dir: str) -> PkMan {
         } else {
             pk_die(at + "'" + e.key + "' is outside any table");
         };
-        i = i + 1;
+        i++;
     };
     if (len(m.name) == 0) { pk_die(file + ": [package] has no name"); }
     m
@@ -488,7 +488,7 @@ def pk_man_dep(e: PkEnt, at: str) -> PkDep {
         } else {
             pk_die(at + "unknown key '" + k + "' in dependency '" + nm + "'");
         };
-        i = i + 1;
+        i++;
     };
     if (e.k != K.t || (len(d.path) == 0 && len(d.git) == 0)) {
         pk_die(at + "dependency '" + nm + "' must be { path = \"...\" } or { git = \"...\", rev = \"...\" }");
@@ -521,7 +521,7 @@ def pk_dep_names(ds: [PkDep]) -> [str] {
     while (i < len(ds)) {
         let d = ds[i];
         out += d.name;
-        i = i + 1;
+        i++;
     };
     out
 };
@@ -531,7 +531,7 @@ def pk_roots(dir: str, roots: [str]) -> [str] {
     let i = 0;
     while (i < len(roots)) {
         out += pk_join(dir, roots[i]);
-        i = i + 1;
+        i++;
     };
     out
 };
@@ -548,12 +548,12 @@ def pk_load(dir: str) -> PkGraph {
     while (i < len(ds)) {
         let d = ds[i];
         st.decls += { name: d.name, src: pk_src(d, dir), by: m.name, dep: d, fdir: dir };
-        i = i + 1;
+        i++;
     };
     i = 0;
     while (i < len(ds)) {
         pk_visit(st, ds[i], m.name, dir);
-        i = i + 1;
+        i++;
     };
     let roots = pk_roots(dir, m.roots);
     let lib = "";
@@ -568,7 +568,7 @@ def pk_load(dir: str) -> PkGraph {
     while (i < len(mb)) {
         let b = mb[i];
         bins += { name: b.name, path: pk_join(dir, b.path) };
-        i = i + 1;
+        i++;
     };
     { dir: dir, name: m.name, lib: lib, roots: roots, bins: bins, deps: pk_dep_names(ds), pkgs: st.nodes }
 };
@@ -582,7 +582,7 @@ def pk_visit(st: PkSt, d0: PkDep, by: str, fdir0: str) -> long {
     let ds = st.decls;
     let k = 0;
     while (k < len(ds) && pk_decl_name(ds[k]) != d.name) {
-        k = k + 1;
+        k++;
     };
     if (k < len(ds)) {
         let e = ds[k];
@@ -617,7 +617,7 @@ def pk_visit(st: PkSt, d0: PkDep, by: str, fdir0: str) -> long {
         let i = 0;
         while (i < len(mds)) {
             pk_visit(st, mds[i], m.name, at.dir);
-            i = i + 1;
+            i++;
         };
         let stk = st.stack;
         st.stack = stk[:len(stk) - 1];
@@ -670,7 +670,7 @@ def pk_env() -> str {
         let start = 0;
         let i = 0;
         while (i <= len(s)) {
-            if (i == len(s) || byte_at(s, i) == 0) {
+            if (i == len(s) || s[i] == 0) {
                 let kv = s[start:i];
                 let eq = index_of(kv, "=");
                 if (eq > 0 && pk_is_ident(kv[:eq])) {
@@ -678,7 +678,7 @@ def pk_env() -> str {
                 }
                 start = i + 1;
             }
-            i = i + 1;
+            i++;
         };
         join(out, "")
     }
@@ -731,7 +731,7 @@ def pk_lock_read(dir: str) -> [PkLock] {
                     lk.commit = e.s;
                 }
             }
-            i = i + 1;
+            i++;
         };
     }
     out
@@ -745,7 +745,7 @@ def pk_lock_find(locks: [PkLock], d: PkDep) -> str {
     while (i < len(locks)) {
         let lk = locks[i];
         if (lk.name == d.name && lk.git == d.git && lk.rev == d.rev) { out = lk.commit; }
-        i = i + 1;
+        i++;
     };
     out
 };
@@ -764,7 +764,7 @@ def pk_lock_write(dir: str, nodes: [PkNode]) -> long {
             out += "\n[[package]]\nname = " + pk_tq(p.name) + "\ngit = " + pk_tq(p.git) + "\nrev = " + pk_tq(p.rev) + "\ncommit = " + pk_tq(p.commit) + "\n";
             any = true;
         }
-        i = i + 1;
+        i++;
     };
     if (any) {
         let text = join(out, "");
@@ -793,9 +793,9 @@ def pk_vendor(dir: str) -> long {
                 if (exec(cmd) != 0) { pk_die("vendoring '" + p.name + "' failed"); }
             }
             eputs("vendored " + p.name + " (" + vd + ")\n");
-            n = n + 1;
+            n++;
         }
-        i = i + 1;
+        i++;
     };
     if (n == 0) { eputs("nothing to vendor: no git dependencies\n"); }
     0
@@ -820,15 +820,15 @@ def pk_hash_str(h: PkHash, s: str) -> long {
     pk_mix(h, n);
     let i = 0;
     while (i + 4 <= n) {
-        pk_mix(h, byte_at(s, i) + byte_at(s, i + 1) * 256 + byte_at(s, i + 2) * 65536 + byte_at(s, i + 3) * 16777216);
-        i = i + 4;
+        pk_mix(h, s[i] + s[i + 1] * 256 + s[i + 2] * 65536 + s[i + 3] * 16777216);
+        i += 4;
     };
     let x = 0;
     let m = 1;
     while (i < n) {
-        x = x + byte_at(s, i) * m;
-        m = m * 256;
-        i = i + 1;
+        x += s[i] * m;
+        m *= 256;
+        i++;
     };
     pk_mix(h, x);
     0

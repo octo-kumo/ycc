@@ -87,10 +87,10 @@ def op_size(o: Operand) -> long {
 };
 def rex(w: bool, r: long, x: long, b: long) -> long {
     let v = 64;
-    if (w) { v = v + 8; };
-    if (r >= 8) { v = v + 4; };
-    if (x >= 8) { v = v + 2; };
-    if (b >= 8) { v = v + 1; };
+    if (w) { v += 8; };
+    if (r >= 8) { v += 4; };
+    if (x >= 8) { v += 2; };
+    if (b >= 8) { v++; };
     if (v == 64) { -1 } else { v }
 };
 
@@ -131,8 +131,8 @@ def pow256(i: long) -> long {
     let r = 1;
     let j = 0;
     while (j < i) {
-        r = r * 256;
-        j = j + 1;
+        r *= 256;
+        j++;
     };
     r
 };

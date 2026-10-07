@@ -35,11 +35,11 @@ Implemented so far (level 2): 1.1-1.7, 1.9 (2.7 is its condition form),
   string, bool) — the `scal` flag `lint_note` already records.
 
 ### 1.2 Increment and decrement
-- **Instead** `x = x + 1` / `x = x - 1`
+- **Instead** `x = x + 1` / `x = x - 1`, and `x += 1` / `x -= 1`
 - **Write** `x++` / `x--`.
 - **Detect** 1.1 with the right operand the literal `1`.
-- **Skip** nothing: any type that accepts `x = x + 1` accepts `x++`.
-- Also `x += 1` → `x++`, `x -= 1` → `x--` (an `OpAssign`).
+- **Skip** `x` is not a scalar: on an array `x = x + 1` and `x += 1`
+  append the element, and `x++` is not valid there.
 
 ### 1.3 `byte_at(s, i)` → `s[i]`
 - **Instead** `byte_at(s, i)`

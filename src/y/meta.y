@@ -85,19 +85,19 @@ def leading_long(s: str) -> long {
     let i = 0;
     let go = true;
     while (i < n && go) {
-        let c = byte_at(s, i);
-        if (c == 32 || (c >= 9 && c <= 13)) { i = i + 1; } else { go = false; };
+        let c = s[i];
+        if (c == 32 || (c >= 9 && c <= 13)) { i++; } else { go = false; };
     };
     let neg = false;
     if (i < n) {
-        let sg = byte_at(s, i);
-        if (sg == 45 || sg == 43) { neg = sg == 45; i = i + 1; };
+        let sg = s[i];
+        if (sg == 45 || sg == 43) { neg = sg == 45; i++; };
     };
     let v = 0;
     let any = false;
     let clamp = false;
     while (i < n) {
-        let c = byte_at(s, i);
+        let c = s[i];
         if (c >= 48 && c <= 57) {
             let d = c - 48;
             if (!clamp) {
@@ -106,7 +106,7 @@ def leading_long(s: str) -> long {
                 else { v = v * 10 + d; };
             };
             any = true;
-            i = i + 1;
+            i++;
         } else { i = n; };
     };
     if (!any) {
@@ -274,7 +274,7 @@ def scan_none(src: str, fid: long) -> Scan {
         f += fid;
         l += i + 1;
         gn += false;
-        i = i + 1;
+        i++;
     };
     { ok: true, err: "", eline: 0, ecol: 0, p: lines, pf: f, pol: l, gen: gn,
       g: lines, gf: f, gol: l }
@@ -295,7 +295,7 @@ def m_blank(c: long) -> bool {
 // The word at src[i], i known to be a word byte.
 def m_word_at(src: str, i: long, n: long) -> str {
     let j = i + 1;
-    while (j < n && m_word(byte_at(src, j))) { j = j + 1; };
+    while (j < n && m_word(src[j])) { j = j + 1; };
     src[i:j]
 };
 
@@ -304,15 +304,17 @@ def m_all_blank(s: str) -> bool {
     let ok = true;
     let i = 0;
     while (ok && i < len(s)) {
-        if (!m_blank(byte_at(s, i))) { ok = false; };
-        i = i + 1;
+        if (!m_blank(s[i])) { ok = false; };
+        i++;
     };
     ok
 };
 
 // The byte before src[i] (i > 0), or 0.
 def m_prev(src: str, i: long) -> long {
-    if (i <= 0) { 0 } else { byte_at(src, i - 1) }
+    let c: byte = 0;
+    if (i > 0) { c = src[i - 1]; };
+    c
 };
 
 // Whether the byte before a `#{` ends a token -- a name, a number, a literal
@@ -356,7 +358,7 @@ def put64(buf: [byte], at: long, v: long) -> long {
     while (i < 8) {
         buf[at + i] = x % 256;
         x = x / 256;
-        i = i + 1;
+        i++;
     };
     0
 };
@@ -428,7 +430,7 @@ def elf_img_bss(b: [byte], n: long, phoff: long, phentsize: long, phnum: long,
             vaddr = rd64(b, ph + 16);
             msize = rd64(b, ph + 40);
         };
-        k = k + 1;
+        k++;
     };
     if (!found) {
         img_ok(0, 0, eoff, filesz, memsz)
@@ -457,17 +459,17 @@ def fab_stack(stk: [byte], av: [str]) -> long {
         p = p - n - 1;
         let at = p - base;
         let j = 0;
-        while (j < n) { stk[at + j] = byte_at(s, j); j = j + 1; };
+        while (j < n) { stk[at + j] = s[j]; j++; };
         stk[at + n] = 0;
         ptrs += p;
-        k = k + 1;
+        k++;
     };
     p = p - 8 * (m + 1);
     p = p - p % 8;
     k = 0;
     while (k < m) {
         put64(stk, p - base + 8 * k, ptrs[k]);
-        k = k + 1;
+        k++;
     };
     put64(stk, p - base + 8 * m, 0);
     p = p - 8;
@@ -584,7 +586,7 @@ def image_fd_write(b: [byte], fd: long, span: long) -> long {
             fd = 0 - 1;
             off = n;
         } else {
-            off = off + k;
+            off += k;
         };
     };
     // Sized after the write: a memfd starts empty, and mmap past the end of a
@@ -707,7 +709,7 @@ def run_image_read(stk: [byte], m: Mapd, pid: long) -> RunRes {
                 more = false;
             } else if (!capped) {
                 let i = 0;
-                while (i < k) { out += buf[i]; i = i + 1; };
+                while (i < k) { out += buf[i]; i++; };
                 if (len(out) > MG_MAX) { capped = true; };
             };
         };
@@ -1012,7 +1014,7 @@ def sg_restore(pre: str, post: str) -> long {
         } else {
             sg_gbuf += segs[i];
         };
-        i = i + 1;
+        i++;
     };
     if (post != "") { sg_gbuf += post };
     if (sg_molast) { sg_gline = sg_mline };
@@ -1049,7 +1051,7 @@ def sg_splice(slot: long, at: long) -> long {
             sg_molast = false;
             sg_gline = at;
         };
-        i = i + 1;
+        i++;
     };
     0
 };
@@ -1068,7 +1070,7 @@ def sg_put(t: str) -> long {
         } else if (!m_all_blank(t)) {
             sg_bclean[sg_depth - 1] = false;
         };
-        sg_col = sg_col + len(t);
+        sg_col += len(t);
     };
     0
 };
@@ -1083,7 +1085,7 @@ def sg_put1(c: str) -> long {
     } else {
         sg_bclean[sg_depth - 1] = false;
     };
-    sg_col = sg_col + 1;
+    sg_col++;
     0
 };
 
@@ -1099,13 +1101,13 @@ def sg_ts_go(t: str) -> long {
         let i = 0;
         let go = true;
         while (go && i < len(t)) {
-            if (!m_blank(byte_at(t, i))) {
+            if (!m_blank(t[i])) {
                 sg_tsline = sg_gline;
                 sg_tsoff = len(sg_gbuf) + i;
                 sg_tsp = true;
                 go = false;
             };
-            i = i + 1;
+            i++;
         };
     };
     0
@@ -1119,12 +1121,12 @@ def sg_ml_go(t: str) -> bool {
     else {
         let i = 0;
         while (i < len(t)) {
-            if (!m_blank(byte_at(t, i))) {
+            if (!m_blank(t[i])) {
                 sg_molast = true;
                 sg_mline = sg_gline;
                 i = len(t);
             };
-            i = i + 1;
+            i++;
         };
         sg_molast
     }
@@ -1164,7 +1166,7 @@ def sg_break() -> long {
         sg_pbuf = "";
         sg_pline = sg_line + 1;
     };
-    sg_line = sg_line + 1;
+    sg_line++;
     sg_col = 1;
     0
 };
@@ -1179,7 +1181,7 @@ def sg_out(a: long, b: long) -> long {
         let j = i;
         let go = true;
         while (go && j < b) {
-            if (byte_at(sg_src, j) == 10) { nl = j; go = false; } else { j = j + 1; };
+            if (sg_src[j] == 10) { nl = j; go = false; } else { j = j + 1; };
         };
         if (nl < 0) {
             sg_put(sg_src[i:b]);
@@ -1220,7 +1222,7 @@ def sg_in_body() -> bool {
     while (i < len(sg_bkind)) {
         let k = sg_bkind[i];
         if (k == 1 || k == 2) { hit = true };
-        i = i + 1;
+        i++;
     };
     hit
 };
@@ -1256,7 +1258,7 @@ def sg_next(i: long, n: long) -> long {
     let j = i;
     let found = false;
     while (j < n && !found) {
-        let c = byte_at(sg_src, j);
+        let c = sg_src[j];
         if (c == 35 || c == 34 || c == 39 || c == 47 || c == 123 || c == 125 || c == 59 || c == 10) {
             found = true;
         } else if (sg_depth > 0 && m_word(c)) {
@@ -1275,10 +1277,10 @@ def sg_next(i: long, n: long) -> long {
 def sg_word(i: long, n: long) -> long {
     let k = i;
     let go = true;
-    while (go && k < n && (byte_at(sg_src, k) == 32 || byte_at(sg_src, k) == 9 || byte_at(sg_src, k) == 13)) {
+    while (go && k < n && (sg_src[k] == 32 || sg_src[k] == 9 || sg_src[k] == 13)) {
         k = k + 1;
     };
-    if (k < n && m_word(byte_at(sg_src, k))) {
+    if (k < n && m_word(sg_src[k])) {
         let w = m_word_at(sg_src, k, n);
         let after = k + len(w);
         if (w == "import" && sg_depth > 0) {
@@ -1300,15 +1302,15 @@ def sg_word_go(w: str, after: long, n: long) -> long {
     if (mg_reduce && sg_depth == 0) { sg_region_word(w) };
     let j = after;
     let go = true;
-    while (go && j < n && (byte_at(sg_src, j) == 32 || byte_at(sg_src, j) == 9)) {
+    while (go && j < n && (sg_src[j] == 32 || sg_src[j] == 9)) {
         j = j + 1;
     };
-    let called = j < n && (byte_at(sg_src, j) == 40 || byte_at(sg_src, j) == 123);
+    let called = j < n && (sg_src[j] == 40 || sg_src[j] == 123);
     if (w == "def" || w == "type") {
         // the NAME it defines, not the keyword: a collision with an injected
         // helper is a duplicate top-level def, and it is silent in the
         // generator the same way it would be in the program
-        if (j < n && m_word(byte_at(sg_src, j))) {
+        if (j < n && m_word(sg_src[j])) {
             sg_check_name(m_word_at(sg_src, j, n), true);
         };
         sg_pending = true;
@@ -1348,7 +1350,7 @@ def sg_import(after: long, n: long) -> long {
         let go = true;
         let semi = 0;
         while (go && j < n) {
-            let c = byte_at(sg_src, j);
+            let c = sg_src[j];
             if (c == 34 || c == 39) {
                 j = lit_end(sg_src, j, [0]);
             } else if (c == 59) {
@@ -1492,7 +1494,7 @@ def sg_region_close() -> long {
 // `f(#{ … }#, 2)` and `a[#{ … }#]` all keep the call in place.
 def sg_open(i: long, n: long) -> long {
     let prev = 0;
-    if (i > 0) { prev = byte_at(sg_src, i - 1); };
+    if (i > 0) { prev = sg_src[i - 1]; };
     let mid = sg_col > 1 && m_token_end(prev);
     // A block may not be lexically inside a def or type body: in-place emission
     // there would give compile-time-fixed values and a silent "never ran" mode.
@@ -1529,7 +1531,7 @@ def sg_open(i: long, n: long) -> long {
         // it can never produce.
         let pdead = false;
         if (nested) {
-            mg_nest = mg_nest + 1;
+            mg_nest++;
             pdead = sg_bdead[sg_depth - 1];
             mg_kid_note(sg_bslot[sg_depth - 1])
         } else {
@@ -1550,7 +1552,7 @@ def sg_open(i: long, n: long) -> long {
         mg_bslot += slot;
         mg_bp += mg_p_at;
         mg_bpo += len(sg_pbuf);
-        mg_n = mg_n + 1;
+        mg_n++;
         mg_live += !dead && !spliced;
         // Does this block's text have to exist? A top-level block's does: it goes
         // into the program. A nested one's does only while the block around it is
@@ -1580,7 +1582,7 @@ def sg_open(i: long, n: long) -> long {
         // nesting never pays for any of this.
         let hold = !mg_collect && !nested && !dead && mg_bkids_had(slot);
         sg_bhold += hold;
-        sg_depth = sg_depth + 1;
+        sg_depth++;
         sg_bound = true;
         // the `#{` is a token like any other, so a block that starts a statement
         // starts it here: the anchor of a hoisted call is this position, and the
@@ -1633,10 +1635,10 @@ def sg_open(i: long, n: long) -> long {
             let helper = "ycc_meta_expr";
             if (stmt) { helper = "ycc_meta_stmt" };
             sg_gadd(helper + "(" + tostring(slot) + ", tostring({", sg_mmid);
-            sg_col = sg_col + 2;
+            sg_col += 2;
         };
         let k = sg_word(i + 2, n);
-        sg_col = sg_col + (k - (i + 2));
+        sg_col += (k - (i + 2));
         k
     }
 };
@@ -1654,7 +1656,7 @@ def sg_open(i: long, n: long) -> long {
 def sg_m_open(slot: long) -> long {
     sg_hold();
     sg_mbuf += "ycc_meta_stmt(" + tostring(slot) + ", tostring({";
-    sg_col = sg_col + 2;
+    sg_col += 2;
     0
 };
 
@@ -1720,7 +1722,7 @@ def sg_m_close(k: long) -> long {
         if (i < len(sg_mol)) { ol += sg_mol[i] }
         else if (sg_molast) { ol += sg_mline }
         else { ol += sg_gline };
-        i = i + 1;
+        i++;
     };
     let line = sg_tsline;
     let off = sg_tsoff;
@@ -1754,7 +1756,7 @@ def sg_mids_move() -> long {
     let n = len(sg_mids);
     let done: [bool] = [];
     let i = 0;
-    while (i < n) { done += false; i = i + 1; };
+    while (i < n) { done += false; i++; };
     let left = n;
     while (left > 0) {
         let at = 0 - 1;
@@ -1763,7 +1765,7 @@ def sg_mids_move() -> long {
             if (!done[j]) {
                 if (at < 0 || mg_after(j, at)) { at = j };
             };
-            j = j + 1;
+            j++;
         };
         if (at < 0) { left = 0 }
         else {
@@ -1808,7 +1810,7 @@ def sg_mids_one(k: long) -> long {
         let o = 0;
         if (i < len(m.ol)) { o = m.ol[i] };
         restl += o;
-        i = i + 1;
+        i++;
     };
     if (tail != "") { rest += tail; restf += sg_fid; restl += m.line };
     let t = ln + 1;
@@ -1911,7 +1913,7 @@ def sg_code(i: long, n: long) -> long {
     let j = sg_next(i, n);
     sg_out(i, j);
     let c = 0;
-    if (j < n) { c = byte_at(sg_src, j) };
+    if (j < n) { c = sg_src[j] };
     if (sg_depth > 0 && m_word(c)) {
         // sg_next stops at a word start inside a block, so this is where a
         // name mid-expression gets read (sg_word emits the word as it goes)
@@ -1952,12 +1954,12 @@ def sg_code(i: long, n: long) -> long {
 
 // A `/`: `//`, `/*`, or division.
 def sg_slash(j: long, n: long) -> long {
-    if (j + 1 < n && byte_at(sg_src, j + 1) == 47) {
+    if (j + 1 < n && sg_src[j + 1] == 47) {
         sg_state = 1;
         sg_put1("/");
         sg_put1("/");
         j + 2
-    } else if (j + 1 < n && byte_at(sg_src, j + 1) == 42) {
+    } else if (j + 1 < n && sg_src[j + 1] == 42) {
         sg_state = 2;
         sg_put1("/");
         sg_put1("*");
@@ -1987,7 +1989,7 @@ def sg_open_brace(j: long, n: long) -> long {
 // `}`: the block's own close when it is followed by `#`, else an ordinary
 // brace. The block's `}` closes no Y brace -- its `{` was never pushed.
 def sg_close_brace(j: long, n: long) -> long {
-    if (j + 1 < n && byte_at(sg_src, j + 1) == 35) {
+    if (j + 1 < n && sg_src[j + 1] == 35) {
         if (sg_depth == 0) {
             sg_stray(j);
             n
@@ -2018,8 +2020,8 @@ def sg_close_brace(j: long, n: long) -> long {
                 // wants its ';'; in expression position the call is the
                 // expression and a ';' there would be a syntax error
                 sg_gadd("}))", sg_mmid);
-                sg_col = sg_col + 2;
-                if (stmt) { sg_gadd(";", sg_mmid); sg_col = sg_col + 1; };
+                sg_col += 2;
+                if (stmt) { sg_gadd(";", sg_mmid); sg_col++; };
             };
             // the per-block stacks are popped here, so `sg_depth - 1` is always
             // this block's entry and never one left over from a block that has
@@ -2033,7 +2035,7 @@ def sg_close_brace(j: long, n: long) -> long {
             sg_bsplice = sg_bsplice[0:len(sg_bsplice) - 1];
             sg_bdead = sg_bdead[0:len(sg_bdead) - 1];
             sg_bhold = sg_bhold[0:len(sg_bhold) - 1];
-            sg_depth = sg_depth - 1;
+            sg_depth--;
             sg_m_live();
             // A block STATEMENT ends at its own `}#` -- there is no `;` after it
             // to end the region -- so the reduction treats it as a statement that
@@ -2068,7 +2070,7 @@ def sg_close_brace(j: long, n: long) -> long {
 // `#` already reaches the lexer as "expected an expression, got '#'"; this is
 // the same refusal with a message that names the construct.
 def sg_hash(j: long, n: long) -> long {
-    if (j + 1 < n && byte_at(sg_src, j + 1) == 123) {
+    if (j + 1 < n && sg_src[j + 1] == 123) {
         sg_open(j, n)
     } else {
         sg_fail("'#' in code position: a meta block is #{ … }#", sg_line, sg_col);
@@ -2082,7 +2084,7 @@ def sg_line_comment(i: long, n: long) -> long {
     let j = i;
     let go = true;
     while (go && j < n) {
-        if (byte_at(sg_src, j) == 10) { go = false; } else { j = j + 1; };
+        if (sg_src[j] == 10) { go = false; } else { j = j + 1; };
     };
     sg_out(i, j);
     sg_state = 0;
@@ -2103,7 +2105,7 @@ def sg_block_comment(i: long, n: long) -> long {
     let go = true;
     let found = false;
     while (go && j + 1 < n) {
-        if (byte_at(sg_src, j) == 42 && byte_at(sg_src, j + 1) == 47) {
+        if (sg_src[j] == 42 && sg_src[j + 1] == 47) {
             found = true;
             go = false;
         } else {
@@ -2153,8 +2155,8 @@ def sg_literal(i: long, n: long) -> long {
 
 // Whether the quote at i opens an f-string: `f` before it, standing alone.
 def sg_fstring(i: long) -> bool {
-    byte_at(sg_src, i) == 34 && i > 0 && byte_at(sg_src, i - 1) == 102 &&
-        (i == 1 || !m_word(byte_at(sg_src, i - 2)))
+    sg_src[i] == 34 && i > 0 && sg_src[i - 1] == 102 &&
+        (i == 1 || !m_word(sg_src[i - 2]))
 };
 // ── the driver ──────────────────────────────────────────────────────────
 // `meta_begin`/`mg_*` accumulate across a whole resolve; `meta_run_gen` builds
@@ -2258,7 +2260,7 @@ def mg_pending() -> bool {
     let go = false;
     while (i < mg_next) {
         if (mg_need[i] && (i >= len(mg_have) || !mg_have[i])) { go = true };
-        i = i + 1;
+        i++;
     };
     go
 };
@@ -2291,7 +2293,7 @@ def mg_in(xs: [str], s: str) -> bool {
     let i = 0;
     while (i < len(xs)) {
         if (xs[i] == s) { hit = true; };
-        i = i + 1;
+        i++;
     };
     hit
 };
@@ -2359,12 +2361,12 @@ def meta_gtext() -> str {
     let i = 0;
     while (i < len(hs)) {
         out += hs[i];
-        i = i + 1;
+        i++;
     };
     let k = 0;
     while (k < len(mg_imp)) {
         out += mg_imp[k];
-        k = k + 1;
+        k++;
     };
     join(out + mg_g, "\n") + "\n"
 };
@@ -2387,7 +2389,7 @@ def mg_where(s: long) -> str {
     let f = 0;
     while (k < len(mg_bslot)) {
         if (mg_bslot[k] == s) { ln = mg_bline[k]; f = mg_bfile[k]; };
-        k = k + 1;
+        k++;
     };
     let path = mg_root;
     if (f < len(mg_files)) { path = mg_files[f] };
@@ -2406,7 +2408,7 @@ def mg_unframe(data: str) -> long {
     while (i < n && !bad) {
         let j = i;
         let go = true;
-        while (go && j < n && byte_at(data, j) != 10) { j = j + 1; };
+        while (go && j < n && data[j] != 10) { j = j + 1; };
         if (j >= n) {
             bad = true;
         } else {
@@ -2454,7 +2456,7 @@ def mg_first_missing() -> long {
     let i = 0;
     while (i < mg_next) {
         if (!mg_have[i]) { at = i; };
-        i = i + 1;
+        i++;
     };
     at
 };
@@ -2494,7 +2496,7 @@ def mg_take_pieces(status: long, sig: long, out: [byte]) -> bool {
             mg_report("the block at " + mg_where(i) + " produced no output: every meta block runs once, in the generator's top level, so reaching it is not optional");
         };
         mg_check(i);
-        i = i + 1;
+        i++;
     };
     mg_ready = true;
     r
@@ -2515,7 +2517,7 @@ def mg_commit() -> long {
             mg_have[i] = false;
             mg_piece[i] = "";
         };
-        i = i + 1;
+        i++;
     };
     0
 };
@@ -2604,7 +2606,7 @@ def mg_norm_path(p: str) -> str {
     while (i < len(parts)) {
         let seg = parts[i];
         if (seg != ".") { out += seg; };
-        i = i + 1;
+        i++;
     };
     join(out, "/")
 };
@@ -2624,11 +2626,11 @@ def mg_lines(text: str) -> [str] {
     let start = 0;
     let i = 0;
     while (i < n) {
-        if (byte_at(text, i) == 10) {
+        if (text[i] == 10) {
             out += text[start:i];
             start = i + 1;
         };
-        i = i + 1;
+        i++;
     };
     out += text[start:];
     out
@@ -2671,9 +2673,9 @@ def mg_emit(segs: [str], sego: [long], segp: [bool], fid: long, nl: [str],
                 cgen = p;
             };
             cur += parts[k];
-            k = k + 1;
+            k++;
         };
-        s = s + 1;
+        s++;
     };
     nl += cur;
     nf += fid;
@@ -2696,7 +2698,7 @@ def mg_splice(lo: long, hi: long) -> long {
         let i = 0;
         while (i < len(lines)) {
             mg_splice_line(lines[i], ols[i], i, lo, hi, nl, nf, nll, ngen);
-            i = i + 1;
+            i++;
         };
         sg_p = nl;
         sg_pf = nf;

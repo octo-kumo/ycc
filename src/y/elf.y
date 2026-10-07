@@ -165,7 +165,7 @@ def elf_debug(code_off: long, codesz: long, ro_len: long, filesz: long, bss_vadd
             if (sy.name != "_start") {
                 symtab = push_sym(symtab, len(strtab), sy, bss_idx, base + code_off, bss_addr, 0);
                 strtab = push_cstr(strtab, sy.name);
-                nlocal = nlocal + 1;
+                nlocal++;
             };
         };
         foreach (sy in syms) {
@@ -242,7 +242,7 @@ def elf_debug(code_off: long, codesz: long, ro_len: long, filesz: long, bss_vadd
             let ds = dsecs[di];
             let dd = ds.data;
             blob = push_shdr(blob, dnames[di], 1, 0, 0, doffs[di], len(dd), 0, 0, 1, 0);
-            di = di + 1;
+            di++;
         };
         { bytes: blob, shoff: shoff, shnum: symtab_idx + 3 + len(dsecs), shstrndx: symtab_idx + 2, bss_foff: bss_foff, bss_fsz: bss_fsz }
     }
@@ -293,7 +293,7 @@ def push_zeros(out: [byte], n: long) -> [byte] {
     let i = 0;
     while (i < n) {
         out += 0;
-        i = i + 1;
+        i++;
     };
     out
 };
@@ -308,7 +308,7 @@ def push_bytes(out: [byte], bytes: [byte]) -> [byte] {
     let i = 0;
     while (i < len(bytes)) {
         out += bytes[i];
-        i = i + 1;
+        i++;
     };
     out
 };

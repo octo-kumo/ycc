@@ -117,7 +117,7 @@ def parse_num_go(s: str, i: long, neg: bool) -> AsmNum {
         } else {
             ok = false;
         };
-        i = i + 1;
+        i++;
     };
     { ok: ok, v: if (neg) { 0 - v } else { v } }
 };
@@ -139,7 +139,7 @@ def split_ops(s: str) -> [str] {
     let i = 0;
     let n = len(s);
     while (i < n) {
-        let b = byte_at(s, i);
+        let b = s[i];
         if (b == '(') { depth++ };
         if (b == ')') { depth-- };
         if (b == ',') {
@@ -435,7 +435,7 @@ def decode_str(s: str) -> {ok: bool, bytes: [byte], error: str} {
         let c = s[i];
         if (c != '\\') {                // '\\'
             out += c;
-            i = i + 1;
+            i++;
         } else if (i + 1 >= n) {
             // a backslash as the last byte: no escape follows it
             err = "bad escape '\\'";
@@ -444,19 +444,19 @@ def decode_str(s: str) -> {ok: bool, bytes: [byte], error: str} {
             let e = s[i + 1];
             if (e == 'n') {            // 'n', the letter of \n
                 out += '\n';
-                i = i + 2;
+                i += 2;
             } else if (e == 't') {      // 't', the letter of \t
                 out += '\t';
-                i = i + 2;
+                i += 2;
             } else if (e == 'r') {      // 'r', the letter of \r
                 out += '\r';
-                i = i + 2;
+                i += 2;
             } else if (e == '\\') {      // '\\'
                 out += '\\';
-                i = i + 2;
+                i += 2;
             } else if (e == '\x22') {      // '"'
                 out += '\x22';
-                i = i + 2;
+                i += 2;
             } else if (is_oct_ch(e)) {
                 // NOTE: nested ifs, not `&&` (see is_digit_ch note); `0;`
                 // tails (see parser.y parse_binary note).
@@ -491,7 +491,7 @@ def decode_oct(s: str, k: long, n: long) -> {v: long, k: long, err: str} {
             if (is_oct_ch(d)) {
                 v = v * 8 + d - '0';
                 kk = kk + 1;
-                nd = nd + 1;
+                nd++;
             } else {
                 kk = n + 1;
             };
@@ -532,8 +532,8 @@ def hash_str(s: str) -> long {
     let i = 0;
     let n = len(s);
     while (i < n) {
-        h = (h * 31 + byte_at(s, i)) & 4294967295;
-        i = i + 1;
+        h = (h * 31 + s[i]) & 4294967295;
+        i++;
     };
     h ^ (h >> 13)
 };
@@ -543,7 +543,7 @@ def labmap_new(cap: long) -> [AsmLabel] {
     let i = 0;
     while (i < cap) {
         m += { name: "", sec: 0, off: 0, at_item: 0 };
-        i = i + 1;
+        i++;
     };
     m
 };
@@ -554,7 +554,7 @@ def labmap_put(m: [AsmLabel], name: str, sec: long, off: long) -> { map: [AsmLab
     let dup = false;
     let done = false;
     let n = 0;
-    while (done == false) {
+    while (!done) {
         let e = m[i];
         if (e.name == "") {
             m[i] = { name: name, sec: sec, off: off, at_item: 0 };
@@ -566,7 +566,7 @@ def labmap_put(m: [AsmLabel], name: str, sec: long, off: long) -> { map: [AsmLab
             i = i + 1;
             if (i >= cap) { i = 0; }
         };
-        n = n + 1;
+        n++;
         if (n > cap) { done = true; }
     };
     { map: m, dup: dup }
@@ -579,7 +579,7 @@ def labmap_get(m: [AsmLabel], name: str) -> { sec: long, off: long } {
     let found_off = 0;
     let done = false;
     let n = 0;
-    while (done == false) {
+    while (!done) {
         let e = m[i];
         if (e.name == "") {
             done = true;
@@ -591,7 +591,7 @@ def labmap_get(m: [AsmLabel], name: str) -> { sec: long, off: long } {
             i = i + 1;
             if (i >= cap) { i = 0; }
         };
-        n = n + 1;
+        n++;
         if (n > cap) { done = true; }
     };
     { sec: found_sec, off: found_off }
@@ -610,7 +610,7 @@ def labmap_build(labels: [AsmLabel]) -> { map: [AsmLabel], dup: str } {
         let r = labmap_put(m, e.name, e.sec, e.off);
         m = r.map;
         if (r.dup) { dup = e.name; }
-        i = i + 1;
+        i++;
     };
     { map: m, dup: dup }
 };
@@ -670,7 +670,7 @@ def asm_assemble(parts: [LinkPart], debug: bool) -> AsmOutI {
             segs += { lines: [], ir: p.ir, txt: p.txt, fno: p.fno,
                       loc: p.loc };
         };
-        pi = pi + 1;
+        pi++;
     };
     let t1 = clock_us();
     let h1 = heap_used();
@@ -694,10 +694,10 @@ def asm_assemble(parts: [LinkPart], debug: bool) -> AsmOutI {
                 let li = 0;
                 while (li < len(lines) && st.err == "") {
                     st = asm_st_seg(st, lines, li);
-                    li = li + 1;
+                    li++;
                 };
             };
-            pi = pi + 1;
+            pi++;
         };
     };
     let items = st.items;
@@ -726,7 +726,7 @@ def asm_assemble(parts: [LinkPart], debug: bool) -> AsmOutI {
         while (k < len(lsub)) {
             let le = lsub[k];
             tl += le;
-            k = k + 1;
+            k++;
         };
         { ok: lk.ok, bytes: lk.bytes, error: lk.error, items: len(items),
           times: tl }
@@ -1089,7 +1089,7 @@ def asm_zero(line: str, lno: long, sec: long, offs: [long], rest: str) -> AsmCon
             let i = 0;
             while (i < n) {
                 zb += 0;
-                i = i + 1;
+                i++;
             };
         }
         let item: AsmItem = { sec: sec, off: offs[sec], len: n, kind: "data", bytes: zb, fix: [], br: -1 };
@@ -1128,7 +1128,7 @@ def asm_insn(line: str, lno: long, sec: long, offs: [long]) -> AsmContent {
             } else {
                 ops += r.op;
             };
-            i = i + 1;
+            i++;
         };
         if (!ok) {
             { err: "L" + tostring(lno) + ": bad operand", sec: sec, offs: offs, item: { sec: -1, off: 0, len: 0, kind: "", bytes: [], fix: [], br: -1 } }
@@ -1233,7 +1233,7 @@ def ir_enc_item(ir: [long], at: long, sec: long, offs: [long], where: str) -> As
     while (i < len(kinds)) {
         ops += ir_operand(ir, wp, kinds[i]);
         wp = wp + insn.ir_kind_words(kinds[i]);
-        i = i + 1;
+        i++;
     };
     // The encoder writes into the same scratch the text path uses, and a
     // branch is asked for in the short form: asm_relax grows the ones that
@@ -1302,7 +1302,7 @@ def asm_ir_items(ir: [long], txt: [str], fno: long, loc: bool, sec: long, offs: 
             items = st.items;
             labels = st.labels;
             err = st.err;
-            lno = lno + 1;
+            lno++;
         } else {
             let r = ir_enc_item(ir, at, sec, offs, ir_where(cur, n));
             offs = r.offs;
@@ -1312,8 +1312,8 @@ def asm_ir_items(ir: [long], txt: [str], fno: long, loc: bool, sec: long, offs: 
                 items += r.item;
             };
         };
-        at = at + insn.IR_W;
-        n = n + 1;
+        at += insn.IR_W;
+        n++;
     };
     { sec: sec, offs: offs, items: items, labels: labels, err: err, lno: lno }
 };
@@ -1364,14 +1364,14 @@ def asm_relax(items: [AsmItem], labels: [AsmLabel], debug: bool) -> long {
         lens += items[i].len;
         secs += items[i].sec;
         if (items[i].br >= 0 && items[i].sec == 0) { brs += i; };
-        i = i + 1;
+        i++;
     };
     let cum: [long] = [];
     let rlmap = relax_map(labels);
     let rounds = 0;
     let again = true;
     while (again && rounds < RELAX_ROUNDS) {
-        rounds = rounds + 1;
+        rounds++;
         // Round 1 has nothing to place: pass 1 laid the items and the labels
         // out with every branch short, which is exactly this round's frozen
         // layout.
@@ -1397,7 +1397,7 @@ def relax_map(labels: [AsmLabel]) -> [AsmLabel] {
     while (i < len(labels)) {
         let r = labmap_put(m, labels[i].name, 0, i);
         m = r.map;
-        i = i + 1;
+        i++;
     };
     m
 };
@@ -1413,8 +1413,8 @@ def relax_round(items: [AsmItem], labels: [AsmLabel], rlmap: [AsmLabel], lens: [
         let i = 0;
         while (i < len(lens)) {
             if (i < len(cum)) { cum[i] = at; } else { cum += at; };
-            if (secs[i] == 0) { at = at + lens[i]; };
-            i = i + 1;
+            if (secs[i] == 0) { at += lens[i]; };
+            i++;
         };
         let j = 0;
         while (j < len(labels)) {
@@ -1422,7 +1422,7 @@ def relax_round(items: [AsmItem], labels: [AsmLabel], rlmap: [AsmLabel], lens: [
             if (lb.sec == 0) {
                 labels[j] = { name: lb.name, sec: 0, off: cum[lb.at_item], at_item: lb.at_item };
             };
-            j = j + 1;
+            j++;
         };
     };
     // The branches, against the FROZEN offsets: growth is permanent, so a
@@ -1456,7 +1456,7 @@ def relax_round(items: [AsmItem], labels: [AsmLabel], rlmap: [AsmLabel], lens: [
                 grew = true;
             };
         };
-        k = k + 1;
+        k++;
     };
     grew
 };
@@ -1486,9 +1486,9 @@ def relax_all_long(items: [AsmItem], labels: [AsmLabel], lens: [long]) -> long {
         let it = items[i];
         if (it.sec == 0 && it.br >= 0 && lens[i] != 2) {
             relax_grow(items, i, lens, it.fix[0].lbl);
-            n = n + 1;
+            n++;
         };
-        i = i + 1;
+        i++;
     };
     n
 };
@@ -1505,7 +1505,7 @@ def relax_place(items: [AsmItem], labels: [AsmLabel], lens: [long], secs: [long]
         while (j < len(labels) && labels[j].at_item <= i) {
             let lb = labels[j];
             labels[j] = { name: lb.name, sec: lb.sec, off: offs[lb.sec], at_item: lb.at_item };
-            j = j + 1;
+            j++;
         };
         let s = secs[i];
         if (s >= 0) {
@@ -1515,12 +1515,12 @@ def relax_place(items: [AsmItem], labels: [AsmLabel], lens: [long], secs: [long]
             };
             offs[s] = offs[s] + lens[i];
         };
-        i = i + 1;
+        i++;
     };
     while (j < len(labels)) {
         let lb = labels[j];
         labels[j] = { name: lb.name, sec: lb.sec, off: offs[lb.sec], at_item: lb.at_item };
-        j = j + 1;
+        j++;
     };
     offs[0]
 };
@@ -1540,10 +1540,10 @@ def asm_link(items: [AsmItem], labels: [AsmLabel], debug: bool) -> AsmOut {
     // elf_build takes the rodata bytes and sizes that segment itself; the
     // rodata length only places the .bss.
     foreach (it in items) {
-        if (it.sec == 0) { code_len = code_len + it.len; }
-        else if (it.sec == 1) { ro_len = ro_len + it.len; }
+        if (it.sec == 0) { code_len += it.len; }
+        else if (it.sec == 1) { ro_len += it.len; }
         else if (it.sec == 2) {
-            bss_len = bss_len + it.len;
+            bss_len += it.len;
             if (len(it.bytes) > 0) { bss_data = true; };
         };
     };
@@ -1600,7 +1600,7 @@ def asm_link(items: [AsmItem], labels: [AsmLabel], debug: bool) -> AsmOut {
                     // array header never moves), so no per-byte loop here.
                     ro += it.bytes;
                 };
-                i = i + 1;
+                i++;
             };
         };
         if (err != "") {
@@ -1679,7 +1679,7 @@ def pe_image(code: [byte], ro: [byte], entry_off: long, bss_len: long, syms: [El
         let ds = dsecs[i];
         dsecs2 += pe.pe_sec(ds.name, len(ds.data), 0, 0, 1073741888);
         ddata += ds.data;
-        i = i + 1;
+        i++;
     };
     let coff = pe_coff_syms(syms);
     // Windows has no syscall for randomness, sockets or the console: those
@@ -1730,7 +1730,7 @@ def patch_item_loop(code: [byte], it: AsmItem, lmap: [AsmLabel], code_len: long,
                 bytes = rk.bytes;
                 if (rk.err != "") { err = rk.err; }
             };
-            f = f + 1;
+            f++;
         };
     };
     patch_item_finish(code, bytes, err)
@@ -1888,7 +1888,7 @@ def pe_frames(items: [AsmItem], labels: [AsmLabel]) -> [PeFrame] {
         if (lb.sec == 0 && is_sym_label(lb.name, 0)) {
             out += { start: lb.off, end: 0, first: lb.at_item, last: 0, fp: false, fp_off: 0, alloc: 0, alloc_off: 0, pushes: [], prolog: 0 };
         };
-        i = i + 1;
+        i++;
     };
     pe_frame_prologues(items, out)
 };
@@ -1926,7 +1926,7 @@ def pe_frame_prologues(items: [AsmItem], frames: [PeFrame]) -> [PeFrame] {
             last = frames[i + 1].first;
         };
         frames[i] = pe_prologue(items, frames[i], stop, last);
-        i = i + 1;
+        i++;
     };
     frames
 };
@@ -2037,7 +2037,7 @@ def pe_unwind_bytes(frames: [PeFrame], xbase: long) -> PeUnwind {
         pdata = push_le32(pdata, f.end);
         pdata = push_le32(pdata, xbase + len(xdata));
         xdata = pe_unwind_info(xdata, f);
-        i = i + 1;
+        i++;
     };
     { pdata: pdata, xdata: xdata }
 };
@@ -2061,7 +2061,7 @@ def pe_codes(f: PeFrame) -> [long] {
         // the register is OpInfo, i.e. the HIGH nibble: multiply by 16.
         let packed = f.pushes[i];
         g += [[(packed / 16) + (packed % 16) * 4096]];
-        i = i + 1;
+        i++;
     };
     if (f.fp) { g += [[f.fp_off + 1 + 3 * 256]]; };
     if (f.alloc > 0) { g += pe_alloc(f.alloc, f.alloc_off); };
@@ -2103,8 +2103,8 @@ def pe_codes_sorted(g: [[long]], i: long) -> [long] {
     let k = 0;
     while (k < len(out)) {
         let q = 0;
-        while (q < len(out[k])) { slots += out[k][q]; q = q + 1; };
-        k = k + 1;
+        while (q < len(out[k])) { slots += out[k][q]; q++; };
+        k++;
     };
     slots
 };
@@ -2125,7 +2125,7 @@ def pe_unwind_info(xdata: [byte], f: PeFrame) -> [byte] {
     while (i < n) {
         xdata += c[i] % 256;
         xdata += c[i] / 256 % 256;
-        i = i + 1;
+        i++;
     };
     if (n % 2 == 1) {
         xdata += 0;
@@ -2146,7 +2146,7 @@ def pe_coff_syms(syms: [ElfSym]) -> [byte] {
     while (i < len(syms)) {
         let s = syms[i];
         out = pe_coff_sym(out, s.name, s.off, pe_coff_secnum(s.sec));
-        i = i + 1;
+        i++;
     };
     let tail: [byte] = [];
     tail = push_le32(tail, len(strtab) + len(out));
@@ -2166,8 +2166,8 @@ def pe_coff_sym(out: [byte], nm: str, val: long, secnum: long) -> [byte] {
     let i = 0;
     let n = len(nm);
     while (i < 8) {
-        if (i < n) { out += byte_at(nm, i); } else { out += 0; };
-        i = i + 1;
+        if (i < n) { out += nm[i]; } else { out += 0; };
+        i++;
     };
     out = push_le32(out, val);
     out = push_le16(out, secnum);
@@ -2306,7 +2306,7 @@ def asm_cwd() -> str {
     let i = 0;
     while (i < 4096) {
         buf += 0;
-        i = i + 1;
+        i++;
     };
     let n = syscall(79, ptr_addr(&buf[0]), 4096);
     if (n > 1) { from_bytes(buf[0:n - 1]) } else { "." }

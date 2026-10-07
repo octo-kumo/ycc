@@ -284,7 +284,7 @@ def ir_init() {
             eputs("INTERNAL: ir form table: " + tostring(t[i].id) + " at " + tostring(i) + "\n");
             exit(1);
         };
-        i = i + 1;
+        i++;
     };
     ir_tab = t;
     ir_ready = true
@@ -424,7 +424,7 @@ def ir_render(ir: [long], txt: [str], at: long, fno: long) -> str {
                 line = line + ", " + op;
             };
             w = w + ir_kind_words(kinds[i]);
-            i = i + 1;
+            i++;
         };
         line
     }
@@ -449,7 +449,7 @@ def ir_render_all(ir: [long], txt: [str], locs: bool, fno: long) -> str {
         if (locs || ir[at] != IR_LOC) {
             out += ir_render(ir, txt, at, fno);
         };
-        at = at + IR_W;
+        at += IR_W;
     };
     join(out, "\n")
 };

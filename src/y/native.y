@@ -348,7 +348,7 @@ def words_seen(code: str, names: [str]) -> [long] {
     let k = 0;
     while (k <= len(names)) {
         seen += 0;
-        k = k + 1;
+        k++;
     };
     words_scan(code, 0, len(code), names, seen);
     seen
@@ -364,21 +364,21 @@ def words_scan(code: str, lo: long, n: long, names: [str], seen: [long]) -> long
     let prev = 0;
     let pend = 0 - 1;
     while (i < n) {
-        let c = byte_at(code, i);
+        let c = code[i];
         if (blank_byte(c)) {
             i = i + 1;
-        } else if (c == '/' && i + 1 < n && byte_at(code, i + 1) == '/') {
+        } else if (c == '/' && i + 1 < n && code[i + 1] == '/') {
             // `//`: up to the newline
             i = i + 2;
-            while (i < n && byte_at(code, i) != '\n') {
+            while (i < n && code[i] != '\n') {
                 i = i + 1;
             };
-        } else if (c == '/' && i + 1 < n && byte_at(code, i + 1) == '*') {
+        } else if (c == '/' && i + 1 < n && code[i + 1] == '*') {
             // `/*`: past the first `*/`
             i = i + 2;
             let open = true;
             while (open && i < n) {
-                if (byte_at(code, i) == '*' && i + 1 < n && byte_at(code, i + 1) == '/') {
+                if (code[i] == '*' && i + 1 < n && code[i + 1] == '/') {
                     open = false;
                     i = i + 1;
                 }
@@ -396,10 +396,10 @@ def words_scan(code: str, lo: long, n: long, names: [str], seen: [long]) -> long
                 i = lexer.lit_end(code, i, [0]);
             } else if (word_byte(c)) {
                 let j = i + 1;
-                while (j < n && word_byte(byte_at(code, j))) {
+                while (j < n && word_byte(code[j])) {
                     j = j + 1;
                 };
-                if (j == i + 1 && c == 'f' && j < n && byte_at(code, j) == '\"') {
+                if (j == i + 1 && c == 'f' && j < n && code[j] == '\"') {
                     // f"...": the fields, and whether one has a spec
                     let w = lexer.fstr_walk(code, j);
                     let fs = w.fields;
@@ -407,7 +407,7 @@ def words_scan(code: str, lo: long, n: long, names: [str], seen: [long]) -> long
                     while (f < len(fs)) {
                         words_scan(code, fs[f], fs[f + 1], names, seen);
                         if (fs[f + 3] > fs[f + 2]) { seen[len(names)] = 2; }
-                        f = f + 4;
+                        f += 4;
                     };
                     i = w.end;
                 } else {
@@ -418,7 +418,7 @@ def words_scan(code: str, lo: long, n: long, names: [str], seen: [long]) -> long
                             if (seen[m] == 0) { seen[m] = 1; }
                             if (prev == '.') { pend = m; }
                         }
-                        m = m + 1;
+                        m++;
                     };
                     i = j;
                 };
@@ -447,8 +447,8 @@ def word_at(code: str, i: long, nm: str) -> bool {
     let ok = true;
     let k = 0;
     while (ok && k < len(nm)) {
-        if (byte_at(code, i + k) != byte_at(nm, k)) { ok = false; }
-        k = k + 1;
+        if (code[i + k] != nm[k]) { ok = false; }
+        k++;
     };
     ok
 };
@@ -488,7 +488,7 @@ def norm_path(p: str) -> str {
         } else {
             out += seg;
         };
-        i = i + 1;
+        i++;
     };
     join(out, "/")
 };
@@ -499,7 +499,7 @@ def seen_index(seen: [str], full: str) -> long {
     let i = 0;
     while (at < 0 && i < len(seen)) {
         if (seen[i] == full) { at = i; }
-        i = i + 1;
+        i++;
     };
     at
 };
@@ -512,7 +512,7 @@ def seen_has(seen: [str], full: str) -> bool {
         if (e == full) {
             found = true;
         };
-        i = i + 1;
+        i++;
     };
     found
 };
@@ -609,7 +609,7 @@ def meta_resolve(src: str, base_dir: str, depth: long, allow_exec: bool,
     let done = false;
     while (!done) {
         meta_run_generator(src, base_dir, allow_exec, root, first);
-        rounds = rounds + 1;
+        rounds++;
         if (!meta.mg_pending()) {
             done = true
         } else if (rounds >= meta.MG_ROUND) {
@@ -701,7 +701,7 @@ def meta_compile_gen() -> [byte] {
                 seen += at;
                 puts(at + ": error: " + e.msg + "\n");
             };
-            i = i + 1;
+            i++;
         };
         meta.mg_set(true);
         meta.mg_report("the meta generator did not compile");
@@ -721,7 +721,7 @@ def dup_at(seen: [str], at: str) -> bool {
     let i = 0;
     while (i < len(seen)) {
         if (seen[i] == at) { hit = true; };
-        i = i + 1;
+        i++;
     };
     hit
 };
@@ -741,7 +741,7 @@ def meta_gorigin(nbody: long) -> Origin {
         f += 0;
         l += 1;
         m += "";
-        i = i + 1;
+        i++;
     };
     let gol = meta.mg_gol;
     let k = 0;
@@ -749,7 +749,7 @@ def meta_gorigin(nbody: long) -> Origin {
         let ln = 1;
         if (k < len(gol)) { ln = gol[k]; };
         l[hs + k] = ln;
-        k = k + 1;
+        k++;
     };
     { files: [meta.mg_root + ".meta"], nuser: 1, file: f, line: l, mods: m }
 };
@@ -798,7 +798,7 @@ def std_resolve(name: str, base_dir: str) -> str {
     while (ri < len(res_roots)) {
         let rr: str = res_roots[ri];
         cands += rr + "/" + name + ".y";
-        ri = ri + 1;
+        ri++;
     };
     cands += "std/" + name + ".y";
     cands += "src/y/std/" + name + ".y";
@@ -818,7 +818,7 @@ def std_resolve(name: str, base_dir: str) -> str {
                 found = norm_path(c);
             };
         }
-        i = i + 1;
+        i++;
     };
     found
 };
@@ -989,7 +989,7 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str], smods
                         let m = 0;
                         while (m < len(subns)) {
                             imports += subns[m];
-                            m = m + 1;
+                            m++;
                         };
                         // a module imported by name keeps its namespace
                         // (rename.y), one imported by path is flattened
@@ -1015,12 +1015,12 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str], smods
                     // them through the one that closes the list.
                     if (index_of(line, "{") >= 0) {
                         while (index_of(lines[i], "}") < 0 && i + 1 < n) {
-                            i = i + 1;
+                            i++;
                         };
                     };
                 };
             };
-            i = i + 1;
+            i++;
         };
         { lines: out_lines, imports: imports, seen: seen, smods: smods,
           ofile: ofile, oline: oline, ogen: ogen }
@@ -1093,7 +1093,7 @@ def quote_text(s: str) -> str {
             out += esc;
             run = i + 1;
         }
-        i = i + 1;
+        i++;
     };
     out += s[run:];
     out += "\"";
@@ -1203,8 +1203,8 @@ def sse_mnemonic(w: str) -> bool {
     if (n < 5) {
         false
     } else {
-        let a = byte_at(w, n - 2);
-        let b = byte_at(w, n - 1);
+        let a = w[n - 2];
+        let b = w[n - 1];
         (a == 115 && b == 100) || (a == 100 && b == 115)
     }
 };
@@ -1347,7 +1347,7 @@ def ir_refs(ir: [long]) -> [str] {
             // a form: walk its operands by kind
             out = ir_refs_item(ir, at, out);
         };
-        at = at + insn.IR_W;
+        at += insn.IR_W;
     };
     out
 };
@@ -1370,7 +1370,7 @@ def ir_refs_item(ir: [long], at: long, out: [str]) -> [str] {
             };
         };
         wp = wp + insn.ir_kind_words(k);
-        i = i + 1;
+        i++;
     };
     out
 };
@@ -1420,10 +1420,10 @@ def cell_reads(ir: [long], out: [str]) -> [str] {
                     };
                 };
                 wp = wp + insn.ir_kind_words(k);
-                i = i + 1;
+                i++;
             };
         };
-        at = at + insn.IR_W;
+        at += insn.IR_W;
     };
     out
 };
@@ -1473,13 +1473,13 @@ def range_is_pure(ir: [long], a: long, b: long, cell: str) -> bool {
             } else if (len(kinds) > 0 && form.mn == "mov" && kinds[len(kinds) - 1] == insn.O_MEM) {
                 let wp = at + 1;
                 let i = 0;
-                while (i < len(kinds) - 1) { wp = wp + insn.ir_kind_words(kinds[i]); i = i + 1; };
+                while (i < len(kinds) - 1) { wp = wp + insn.ir_kind_words(kinds[i]); i++; };
                 let nm = lname(ir[wp + 4]);
                 if (len(nm) > 0 && nm != cell) { ok = false; };
             } else if (len(kinds) > 0 && form.mn == "mov" && kinds[len(kinds) - 1] == insn.O_LBL) {
                 let wp = at + 1;
                 let i = 0;
-                while (i < len(kinds) - 1) { wp = wp + insn.ir_kind_words(kinds[i]); i = i + 1; };
+                while (i < len(kinds) - 1) { wp = wp + insn.ir_kind_words(kinds[i]); i++; };
                 let nm = lname(ir[wp]);
                 if (len(nm) > 0 && nm != cell) { ok = false; };
             };
@@ -1519,7 +1519,7 @@ def ir_drop_inits(ir: [long], dead: [str]) -> [long] {
                 keep_from = at + insn.IR_W;
             };
         };
-        at = at + insn.IR_W;
+        at += insn.IR_W;
     };
     // The runs are copied by SLICE and appended with `+=`: appending word by
     // word is what the rodata comment above calls out -- each append copies
@@ -1560,10 +1560,10 @@ def ir_relabel(ir: [long], m: [AsmLabel], dup_new: [str]) -> [long] {
                     };
                 };
                 wp = wp + insn.ir_kind_words(k);
-                i = i + 1;
+                i++;
             };
         };
-        at = at + insn.IR_W;
+        at += insn.IR_W;
     };
     ir
 };
@@ -1582,7 +1582,7 @@ def pack_bodies(u: Unit) -> [str] {
     let b = 0;
     while (b < len(u.bodies)) {
         out += pack_body(u, b);
-        b = b + 1;
+        b++;
     };
     out
 };
@@ -1680,7 +1680,7 @@ def namemap_build(names: [str]) -> [AsmLabel] {
             let r = asm.labmap_put(m, nm, i, 0);
             m = r.map;
         }
-        i = i + 1;
+        i++;
     };
     m
 };
@@ -1728,7 +1728,7 @@ def fntab_ids(syms: [Sym]) -> [long] {
     while (i < len(syms)) {
         let e = syms[i];
         ids += lbl_new(e.label);
-        i = i + 1;
+        i++;
     };
     ids
 };
@@ -1743,13 +1743,13 @@ def shake_keep(names: [str], refs: [[str]], falls: [bool], keep: [bool], roots: 
     while (r < len(roots)) {
         let idx = namemap_get(map, roots[r]);
         if (idx >= 0) { keep[idx] = true; }
-        r = r + 1;
+        r++;
     };
     let scanned: [bool] = [];
     let i = 0;
     while (i < n) {
         scanned += false;
-        i = i + 1;
+        i++;
     };
     let more = true;
     while (more) {
@@ -1772,11 +1772,11 @@ def shake_keep(names: [str], refs: [[str]], falls: [bool], keep: [bool], roots: 
                         if (idx >= 0) {
                             if (!(keep[idx])) { keep[idx] = true; }
                         }
-                        j = j + 1;
+                        j++;
                     };
                 }
             }
-            b = b + 1;
+            b++;
         };
     };
     keep
@@ -1807,7 +1807,7 @@ def shake_refs(text: str, root_refs: [str]) -> str {
             };
             ls = i + 1;
         }
-        i = i + 1;
+        i++;
     };
     if (ls < n) {
         let lab = label_at(text, b, ls, n);
@@ -1843,7 +1843,7 @@ def shake_refs(text: str, root_refs: [str]) -> str {
             } else {
                 falls += false;
             };
-            k = k + 1;
+            k++;
         };
         let keep: [bool] = [];
         k = 0;
@@ -1853,7 +1853,7 @@ def shake_refs(text: str, root_refs: [str]) -> str {
             } else {
                 keep += false;
             };
-            k = k + 1;
+            k++;
         };
         keep = shake_keep(names, refs, falls, keep, root_refs);
         // reassemble kept blocks (their byte ranges), in order
@@ -1866,7 +1866,7 @@ def shake_refs(text: str, root_refs: [str]) -> str {
                 if (k + 1 < nb) { hi = starts[k + 1]; }
                 pieces += text[lo:hi];
             }
-            k = k + 1;
+            k++;
         };
         join(pieces, "")
     }
@@ -1907,7 +1907,7 @@ def check_os_call_names(lines: [str]) -> [str] {
     while (j < len(lines)) {
         let nm = arch_label_name(lines[j]);
         if (nm != "") { labels += nm; };
-        j = j + 1;
+        j++;
     };
     let names = types.os_call_names();
     let i = 0;
@@ -1916,7 +1916,7 @@ def check_os_call_names(lines: [str]) -> [str] {
         let k = 0;
         while (k < len(labels)) {
             if (labels[k] == names[i]) { found = true; };
-            k = k + 1;
+            k++;
         };
         if (!found) {
             puts("error: os_call_names lists '" + names[i]
@@ -1925,7 +1925,7 @@ def check_os_call_names(lines: [str]) -> [str] {
                 + ")\n");
             exit(1);
         };
-        i = i + 1;
+        i++;
     };
     lines
 };
@@ -1938,15 +1938,15 @@ def check_os_call_names(lines: [str]) -> [str] {
 // whole-line '#' comment has already been dropped by then.
 def arch_label_name(l: str) -> str {
     if (len(l) < 2) { "" }
-    else if (byte_at(l, len(l) - 1) != 58) { "" }
+    else if (l[len(l) - 1] != 58) { "" }
     else {
         let nm = l[0:len(l) - 1];
         let ok = true;
         let i = 0;
         while (i < len(nm)) {
-            let c = byte_at(nm, i);
+            let c = nm[i];
             if (c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) { } else { ok = false; };
-            i = i + 1;
+            i++;
         };
         if (ok) { nm } else { "" }
     }
@@ -1959,7 +1959,7 @@ def prelude_blocks(lines: [str]) -> PBlocks {
     while (i < len(lines)) {
         let l: str = lines[i];
         let lab = "";
-        if (len(l) > 0 && byte_at(l, 0) != 32) {
+        if (len(l) > 0 && l[0] != 32) {
             let lb = bytes(l);
             lab = label_at(l, lb, 0, len(lb));
         };
@@ -1970,7 +1970,7 @@ def prelude_blocks(lines: [str]) -> PBlocks {
             names += "";
             starts += 0;
         };
-        i = i + 1;
+        i++;
     };
     { lines: lines, starts: starts, names: names, ix: namemap_build(names) }
 };
@@ -2035,13 +2035,13 @@ def shake_prelude(pb: PBlocks, roots: [str]) -> PShake {
         scanned += false;
         let none: [str] = [];
         brefs += [none];
-        k = k + 1;
+        k++;
     };
     let r = 0;
     while (r < len(roots)) {
         let idx = namemap_get(pb.ix, roots[r]);
         if (idx >= 0) { keep[idx] = true; };
-        r = r + 1;
+        r++;
     };
     let more = true;
     while (more) {
@@ -2061,10 +2061,10 @@ def shake_prelude(pb: PBlocks, roots: [str]) -> PShake {
                 while (j < len(rs)) {
                     let idx = namemap_get(pb.ix, rs[j]);
                     if (idx >= 0) { keep[idx] = true; };
-                    j = j + 1;
+                    j++;
                 };
             };
-            b = b + 1;
+            b++;
         };
     };
     let pieces: [str] = [];
@@ -2083,7 +2083,7 @@ def shake_prelude(pb: PBlocks, roots: [str]) -> PShake {
             };
             out += brefs[k];
         };
-        k = k + 1;
+        k++;
     };
     { text: join(pieces, ""), refs: out }
 };
@@ -2111,7 +2111,7 @@ def unkept_refs(refs: [str], bmap: [AsmLabel], keep: [bool]) -> [str] {
         if (idx >= 0) {
             if (!(keep[idx])) { out += refs[i]; };
         };
-        i = i + 1;
+        i++;
     };
     out
 };
@@ -2132,7 +2132,7 @@ def prune_bodies(labels: [str], refs: [[str]], extra_roots: [str]) -> { refs: [s
     while (i < nb) {
         keep += false;
         falls += false;
-        i = i + 1;
+        i++;
     };
     let roots: [str] = [];
     roots += extra_roots;
@@ -2149,10 +2149,10 @@ def prune_bodies(labels: [str], refs: [[str]], extra_roots: [str]) -> { refs: [s
             let j = 0;
             while (j < len(rs)) {
                 outrefs += rs[j];
-                j = j + 1;
+                j++;
             };
         }
-        i = i + 1;
+        i++;
     };
     { refs: outrefs, keep: keep }
 };
@@ -2175,7 +2175,7 @@ def is_all_digits(s: str) -> bool {
         let ok = true;
         while (i < len(s)) {
             if (index_of("0123456789", s[i:i + 1]) < 0) { ok = false; }
-            i = i + 1;
+            i++;
         };
         ok
     }
@@ -2218,7 +2218,7 @@ def is_ns(name: str, imports: [str]) -> bool {
     let found = false;
     while (i < len(imports)) {
         if (imports[i] == name) { found = true; }
-        i = i + 1;
+        i++;
     };
     found
 };
@@ -2330,7 +2330,7 @@ def strip_type_list(ts: [Type], imports: [str]) -> [Type] {
     let i = 0;
     while (i < len(ts)) {
         out += strip_type(ts[i], imports);
-        i = i + 1;
+        i++;
     };
     out
 }
@@ -2340,7 +2340,7 @@ def strip_list(nodes: [Node], imports: [str]) -> [Node] {
     let i = 0;
     while (i < len(nodes)) {
         out += strip_ns(nodes[i], imports);
-        i = i + 1;
+        i++;
     };
     out
 };
@@ -2651,7 +2651,7 @@ def esc_asm(s: str) -> str {
             out += esc;
             run = i + 1;
         }
-        i = i + 1;
+        i++;
     };
     out += s[run:];
     join(out, "")
@@ -2691,7 +2691,7 @@ let env_id = 0;
 
 // Open a fresh env: the sentinel that carries its id (its off field).
 def env_open(env: [Slot]) -> [Slot] {
-    env_id = env_id + 1;
+    env_id++;
     env += { name: "", kind: "env", off: env_id, label: -1, mark: "", typ: normtype({ k: K.tnone }) };
     env
 };
@@ -3017,13 +3017,13 @@ def infer_go(st: EmitSt, node: Node) -> Type {
                         while (msi < len(msfs)) {
                             let msf = msfs[msi];
                             mfields = types.field_merge(mfields, msf.name, msf.typ);
-                            msi = msi + 1;
+                            msi++;
                         };
                     }
                 } else {
                     mfields = types.field_merge(mfields, mk, mf);
                 };
-                mi = mi + 1;
+                mi++;
             };
             normtype({ k: K.trec, fields: mfields })
         }
@@ -3058,7 +3058,7 @@ def infer_go(st: EmitSt, node: Node) -> Type {
                     found = true;
                     ftyp = df.typ;
                 }
-                di = di + 1;
+                di++;
             };
             if (found) { ftyp } else { normtype({ k: K.tunk }) }
         } else if (dt.k == K.tunion) {
@@ -3302,7 +3302,7 @@ def infer_block(st: EmitSt, node: Block) -> Type {
                     env_index_add(st.env);
                 };
             };
-            i = i + 1;
+            i++;
         };
         infer(st, stmts[len(stmts) - 1])
     }
@@ -3340,7 +3340,7 @@ def uses_argv(stmts: [Node]) -> bool {
     let i = 0;
     while (i < len(stmts)) {
         reads = fv_walk(stmts[i], reads, true);
-        i = i + 1;
+        i++;
     };
     name_in(reads, "argv")
 };
@@ -3355,7 +3355,7 @@ def collect_from_block(stmts: [Node], out: [FnDef]) -> [FnDef] {
     let i = 0;
     while (i < len(stmts)) {
         out = collect_from_node(stmts[i], out);
-        i = i + 1;
+        i++;
     };
     out
 };
@@ -3424,7 +3424,7 @@ def uses_threads(refs: [str]) -> bool {
         // the entry points (an unlock comes with a lock or a try), by
         // length first: the self-compile has ~50K references
         found = (n == 6 && r == "y_fork") || (n == 7 && r == "y_spawn") || (n == 10 && (r == "y_sem_wait" || r == "y_sem_post")) || (n == 12 && r == "y_mutex_lock") || (n == 15 && r == "y_mutex_trylock");
-        i = i + 1;
+        i++;
     };
     found
 };
@@ -3455,7 +3455,7 @@ def uses_math(refs: [str]) -> bool {
             // y_test_imm
             || (n == 11 && (r == "y_sse_forms" || r == "y_sse_flags"))
             || (n == 10 && r == "y_test_imm");
-        i = i + 1;
+        i++;
     };
     found
 };
@@ -3468,7 +3468,7 @@ def name_in(xs: [str], n: str) -> bool {
     while ((i < len(xs)) && (!found)) {
         let x: str = xs[i];
         if (x == n) { found = true; }
-        i = i + 1;
+        i++;
     };
     found
 };
@@ -3630,7 +3630,7 @@ def fv_walk_list(nodes: [Node], out: [str], collect: bool) -> [str] {
     let i = 0;
     while (i < len(nodes)) {
         out = fv_walk(nodes[i], out, collect);
-        i = i + 1;
+        i++;
     };
     out
 };
@@ -3766,7 +3766,7 @@ def fv_binds_list(nodes: [Node], out: [str]) -> [str] {
     let i = 0;
     while (i < len(nodes)) {
         out = fv_binds(nodes[i], out);
-        i = i + 1;
+        i++;
     };
     out
 };
@@ -3792,7 +3792,7 @@ def fn_captures(func: EmitFunc, ex: [AsmLabel], extra: str) -> [str] {
         else {
             caps += n;
         };
-        i = i + 1;
+        i++;
     };
     caps
 };
@@ -3802,7 +3802,7 @@ def fv_bind_params(ps: [str], out: [str]) -> [str] {
     while (i < len(ps)) {
         let p: str = ps[i];
         out += p;
-        i = i + 1;
+        i++;
     };
     out
 };
@@ -3813,7 +3813,7 @@ def fn_names_of(fns: [Sym]) -> [str] {
     while (i < len(fns)) {
         let e = fns[i];
         out += e.name;
-        i = i + 1;
+        i++;
     };
     out
 };
@@ -3831,10 +3831,10 @@ def fns_kind(label: str) -> str {
 
 // The emitter's walk counts its depth (tags.y MAX_NEST) like the others'.
 def gen(st: EmitSt, node: Node) -> EmitSt {
-    nest = nest + 1;
+    nest++;
     if (nest > MAX_NEST) { too_deep("an expression", node.line, node.col); };
     let r = gen_go(st, node);
-    nest = nest - 1;
+    nest--;
     r
 };
 
@@ -4018,7 +4018,7 @@ def gen_bstr(st: EmitSt, node: Leaf) -> EmitSt {
     while (bi < bn) {
         let bnum: Leaf = { k: K.num, v: tostring(ord(bv[bi:bi + 1])), line: node.line, col: node.col };
         elems += bnum;
-        bi = bi + 1;
+        bi++;
     };
     let barr: ArrLit = { k: K.array, elems: elems, line: node.line, col: node.col };
     gen_array_esz(st, barr, 1, { k: K.tnone })
@@ -4181,7 +4181,7 @@ def box_names(func: EmitFunc) -> [str] {
         if (name_in(out, n)) { } else {
             out += n;
         };
-        i = i + 1;
+        i++;
     };
     out
 };
@@ -4336,7 +4336,7 @@ def app_walk_list(nodes: [Node], out: [str], deep: bool) -> [str] {
     let i = 0;
     while (i < len(nodes)) {
         out = app_walk(nodes[i], out, deep);
-        i = i + 1;
+        i++;
     };
     out
 };
@@ -4353,7 +4353,7 @@ def app_names(node: Node, deep: bool, skip: [str]) -> [str] {
         if (n[:1] == "&" || name_in(out, n) || name_in(skip, n) || name_in(seen, "&" + n)) { } else {
             out += n;
         };
-        i = i + 1;
+        i++;
     };
     out
 };
@@ -4489,7 +4489,7 @@ def app_cells(gl: [Sym], stmts: [Node]) -> [Sym] {
     while (i < len(gl)) {
         let ge = gl[i];
         if (ge.typ.k == K.tstr) { anystr = true; }
-        i = i + 1;
+        i++;
     };
     if (anystr) {
         let names = app_names({ k: K.block, stmts: stmts, line: 1, col: 1 }, true, []);
@@ -4501,7 +4501,7 @@ def app_cells(gl: [Sym], stmts: [Node]) -> [Sym] {
             if (g2.typ.k == K.tstr && name_in(names, g2.name)) {
                 out += { name: g2.name + "#o", label: "ygo_" + g2.label[3:], typ: normtype({ k: K.tnone }) };
             }
-            j = j + 1;
+            j++;
         };
         out
     } else {
@@ -4524,7 +4524,7 @@ def gen_make_closure(st: EmitSt, label: long, caps: [str]) -> EmitSt {
         st = emit_insn(st, insn.F_POP_R, insn.R_RCX, 64, 0, 0, 0, 0, 0);
         st = emit_insn(st, insn.F_PUSH_R, insn.R_RCX, 64, 0, 0, 0, 0, 0);
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RCX, -1, 1, 8 * (i + 1), -1);
-        i = i + 1;
+        i++;
     };
     emit_insn(st, insn.F_POP_R, insn.R_RAX, 64, 0, 0, 0, 0, 0)
 };
@@ -4671,7 +4671,7 @@ def gen_tag_in(st: EmitSt, ts: [Type], inu: Type) -> EmitSt {
         st = emit_insn(st, insn.F_LEA_P_R, -1, -1, 1, 0, dr.label, insn.R_RDX, 64);
         st = emit_insn(st, insn.F_CMP_R_R, insn.R_RDX, 64, insn.R_RCX, 64, 0, 0, 0);
         st = emit_insn(st, insn.F_JE_L, yes.label, 0, 0, 0, 0, 0, 0);
-        i = i + 1;
+        i++;
     };
     st = emit_label(st, rno.label);
     st = emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
@@ -4711,7 +4711,7 @@ def gen_union_str_rax(st: EmitSt, t: Type, path: [Type]) -> EmitSt {
         };
         st = emit_insn(st, insn.F_JMP_L, rdone.label, 0, 0, 0, 0, 0, 0);
         st = emit_label(st, rnext.label);
-        m = m + 1;
+        m++;
     };
     st = emit_insn(st, insn.F_POP_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     st = gen_str_const(st, "<union>");
@@ -5662,7 +5662,7 @@ def gen_push_args(st: EmitSt, args: [Node]) -> EmitSt {
     while (i < len(args)) {
         st = gen(st, args[i]);
         st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
-        i = i + 1;
+        i++;
     };
     st
 };
@@ -5678,7 +5678,7 @@ def gen_push_args_as(st: EmitSt, args: [Node], ptypes: [Type]) -> EmitSt {
             st = gen(st, args[i]);
         };
         st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
-        i = i + 1;
+        i++;
     };
     st
 };
@@ -5770,7 +5770,7 @@ def union_within(s: Type, t: Type) -> bool {
         let i = 0;
         while (ok && i < len(ss)) {
             if (types.union_member(u, ss[i]).k == K.tnone) { ok = false; };
-            i = i + 1;
+            i++;
         };
         ok
     }
@@ -5792,7 +5792,7 @@ def cast_members(s: Type, t: Type) -> [Type] {
     while (i < len(ts)) {
         let m = types.union_member(su, ts[i]);
         if (m.k != K.tnone) { out += m; };
-        i = i + 1;
+        i++;
     };
     out
 };
@@ -5810,7 +5810,7 @@ def gen_cast_check(st: EmitSt, ts: [Type], u: Type) -> EmitSt {
         st = emit_insn(st, insn.F_LEA_P_R, -1, -1, 1, 0, dr.label, insn.R_RDX, 64);
         st = emit_insn(st, insn.F_CMP_R_R, insn.R_RDX, 64, insn.R_RCX, 64, 0, 0, 0);
         st = emit_insn(st, insn.F_JE_L, ok.label, 0, 0, 0, 0, 0, 0);
-        i = i + 1;
+        i++;
     };
     st = emit_insn(st, insn.F_JMP_L, lbl_new("y_cast_trap"), 0, 0, 0, 0, 0, 0);
     emit_label(st, ok.label)
@@ -6053,7 +6053,7 @@ def gen_call(st: EmitSt, node: Call) -> EmitSt {
                     st = emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RAX, 64, 0, 0, 0, 0);
                 };
                 st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
-                k = k + 1;
+                k++;
             };
             // The name is a str literal: the checker required one (a variable
             // holding a name would put the choice back in the program's hands,
@@ -6082,7 +6082,7 @@ def gen_closure_call(st: EmitSt, foff: long, arg_regs: [long]) -> EmitSt {
     let i = 0;
     while (i < len(arg_regs)) {
         st = emit_insn(st, insn.F_PUSH_R, arg_regs[i], 64, 0, 0, 0, 0, 0);
-        i = i + 1;
+        i++;
     };
     st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, foff, -1, insn.R_R10, 64);
     st = emit_insn(st, insn.F_MOV_0_R, insn.R_R10, -1, 1, -1, -1, insn.R_R10, 64);
@@ -6663,7 +6663,7 @@ def gen_method(st: EmitSt, node: Call) -> EmitSt {
     let i = 0;
     while (i < len(margs)) {
         args += margs[i];
-        i = i + 1;
+        i++;
     };
     if (len(margs) < len(sm.params)) {
         // The left-out optional argument's default: the table carries its
@@ -6811,7 +6811,7 @@ def gen_rec_str_rax(st: EmitSt, t: Type, lay: [str], path: [Type]) -> EmitSt {
         if (i > 0) { sep = ", "; }
         st = gen_acc_cat_const(st, sep + fname + ": ");
         st = gen_rec_field_str(st, mfield_idx(lay, fname), f.typ, path);
-        i = i + 1;
+        i++;
     };
     st = gen_acc_cat_const(st, "}");
     st = emit_insn(st, insn.F_MOV_0_R, insn.R_RSP, -1, 1, -1, -1, insn.R_RAX, 64);
@@ -7036,7 +7036,7 @@ def gen_syscall(st: EmitSt, node: Call) -> EmitSt {
     while (k <= nreg) {
         st = gen(st, args[k]);
         st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
-        k = k + 1;
+        k++;
     };
     let j = nreg;
     while (j >= 1) {
@@ -7070,7 +7070,7 @@ def capture_off(st: EmitSt) -> long {
         if (e.kind == "capture") {
             res = e.off;
         }
-        i = i + 1;
+        i++;
     };
     res
 };
@@ -7517,7 +7517,7 @@ def gen_tail_call(st: EmitSt, node: Call) -> EmitSt {
         st = st_temp(st, st.temp + 1);
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, off, -1);
         offs += off;
-        i = i + 1;
+        i++;
     };
     // copy the locals over the parameter slots (param k: 16 + 8*(n-1-k))
     let j = 0;
@@ -7525,7 +7525,7 @@ def gen_tail_call(st: EmitSt, node: Call) -> EmitSt {
         let po = 16 + 8 * (n - 1 - j);
         st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, offs[j], -1, insn.R_RAX, 64);
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, po, -1);
-        j = j + 1;
+        j++;
     };
     // tear down this frame and re-enter the prologue; the return address
     // of the original call stays where it is, so the caller sees a normal
@@ -7572,7 +7572,7 @@ def gen_tail(st: EmitSt, node: Node) -> EmitSt {
             st = gen_loc_stmt(st, tl[ti]);
             st = gen_stmt(st, tl[ti]);
             st = st_temp(st, tdepth);
-            ti = ti + 1;
+            ti++;
         };
         if (m > 0) {
             let lastn = tl[m - 1];
@@ -7645,7 +7645,7 @@ def gen_block_as(st: EmitSt, node: Block, dropped: bool) -> EmitSt {    // No sc
             // this statement's own temporaries are dead; the ones of the
             // statement this block sits in are not, hence the depth and not 0.
             st = st_temp(st, tdepth);
-            i = i + 1;
+            i++;
         };
         st_slots(st, depth)
     }
@@ -7724,7 +7724,7 @@ def file_dirs(files: [str]) -> str {
     while (i < len(files)) {
         let fname: str = files[i];
         pieces += ".file " + tostring(i + 1) + " \"" + esc_asm(fname) + "\"\n";
-        i = i + 1;
+        i++;
     };
     join(pieces, "")
 };
@@ -7738,7 +7738,7 @@ def mfield_idx(names: [str], name: str) -> long {
         if (nm == name) {
             out = i;
         }
-        i = i + 1;
+        i++;
     };
     out
 };
@@ -7763,7 +7763,7 @@ def fnv64(s: str) -> long {
     let i = 0;
     while (i < n) {
         h = (h ^ s[i]) * 1099511628211;
-        i = i + 1;
+        i++;
     };
     h
 };
@@ -7776,7 +7776,7 @@ def hex16(h: long) -> str {
     while (sh >= 0) {
         let d = (h >>> sh) & 15;
         out += digits[d:d + 1];
-        sh = sh - 4;
+        sh -= 4;
     };
     out
 };
@@ -7791,9 +7791,9 @@ def rec_slot(fs: [Field], key: str) -> long {
         let f = fs[i];
         let fname: str = f.name;
         if (fname == key) { found = true; }
-        else if (fname < key) { below = below + 1; }
+        else if (fname < key) { below++; }
 
-        i = i + 1;
+        i++;
     };
     if (found) { below } else { -1 }
 };
@@ -7812,7 +7812,7 @@ def tyset_add(lbl: str, form: str) -> long {
         if (len(cur) == 0) {
             ty_seen[i] = lbl;
             ty_forms[i] = form;
-            ty_count = ty_count + 1;
+            ty_count++;
             looking = false;
         } else if (cur == lbl) {
             let had: str = ty_forms[i];
@@ -7836,7 +7836,7 @@ def tyset_grow() -> long {
     while (i < cap) {
         fresh += "";
         freshf += "";
-        i = i + 1;
+        i++;
     };
     ty_seen = fresh;
     ty_forms = freshf;
@@ -7845,7 +7845,7 @@ def tyset_grow() -> long {
     while (j < len(old)) {
         let lb: str = old[j];
         if (len(lb) > 0) { tyset_add(lb, oldf[j]); };
-        j = j + 1;
+        j++;
     };
     0
 };
@@ -7873,7 +7873,7 @@ def ty_sig_init() {
     while (i < 512) {
         let b: [long] = [];
         bkts += b;
-        i = i + 1;
+        i++;
     };
     ty_sig_keys = nokeys;
     ty_sig_ids = noids;
@@ -7951,7 +7951,7 @@ def alias_of(t: Type) -> Type {
             let a: TOf = x;
             todo += a.of;
         };
-        i = i + 1;
+        i++;
     };
     found
 };
@@ -8020,7 +8020,7 @@ def union_shared(u: Type) -> [str] {
     let i = 0;
     while (found < 0 && i < len(ush_nodes)) {
         if (ush_nodes[i] == u) { found = i; };
-        i = i + 1;
+        i++;
     };
     if (found >= 0) { return ush_vals[found]; };
     let ms = types.members(u);
@@ -8070,7 +8070,7 @@ def same_lay(a: [str], b: [str]) -> bool {
     let i = 0;
     while (same && i < len(a)) {
         if (a[i] != b[i]) { same = false; };
-        i = i + 1;
+        i++;
     };
     same
 };
@@ -8099,7 +8099,7 @@ def gen_copy_rec(st: EmitSt, from: [str], to: [str], tag: long) -> EmitSt {
         let s = mfield_idx(from, to[i]);
         st = emit_insn(st, insn.F_MOV_D_R, insn.R_RSI, -1, 1, 8 * s, -1, insn.R_RCX, 64);
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RCX, 64, insn.R_RAX, -1, 1, 8 + 8 * i, -1);
-        i = i + 1;
+        i++;
     };
     emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RAX, 64, 0, 0, 0, 0)
 };
@@ -8202,7 +8202,7 @@ def gen_convert(st: EmitSt, src0: Type, want0: Type, check: bool) -> EmitSt {
                 st = emit_insn(st, insn.F_LEA_P_R, -1, -1, 1, 0, dr.label, insn.R_RDX, 64);
                 st = emit_insn(st, insn.F_CMP_R_R, insn.R_RDX, 64, insn.R_RCX, 64, 0, 0, 0);
                 st = emit_insn(st, insn.F_JE_L, l.label, 0, 0, 0, 0, 0, 0);
-                i = i + 1;
+                i++;
             };
             st = emit_insn(st, insn.F_JMP_L, lbl_new("y_cast_trap"), 0, 0, 0, 0, 0, 0);
             i = 0;
@@ -8217,7 +8217,7 @@ def gen_convert(st: EmitSt, src0: Type, want0: Type, check: bool) -> EmitSt {
                 };
                 // not on the last arm: that one falls through into `done:`
                 if (i < len(ms) - 1) { st = emit_insn(st, insn.F_JMP_L, done.label, 0, 0, 0, 0, 0, 0); };
-                i = i + 1;
+                i++;
             };
             emit_label(st, done.label)
         }
@@ -8254,7 +8254,7 @@ def rec_lit_type(lt: Type, want: Type) -> Type {
         let i = 0;
         while (looking && i < len(ms)) {
             if (same_rec(lt, types.unfold(ms[i]))) { found = ms[i]; looking = false; }
-            i = i + 1;
+            i++;
         };
         found
     } else { lt }
@@ -8294,7 +8294,7 @@ def gen_reclit(st: EmitSt, node: RecLit, want: Type) -> EmitSt {
                     if (mfield_idx(names, sf.name) < 0) {
                         names += sf.name;
                     }
-                    si = si + 1;
+                    si++;
                 };
             }
         } else {
@@ -8302,7 +8302,7 @@ def gen_reclit(st: EmitSt, node: RecLit, want: Type) -> EmitSt {
                 names += nk;
             }
         };
-        ni = ni + 1;
+        ni++;
     };
     let rt: Type = types.lit_target(node, want);
     if (rt.k == K.tnone) { rt = rec_lit_type(infer(st, node), want); }
@@ -8353,7 +8353,7 @@ def gen_reclit(st: EmitSt, node: RecLit, want: Type) -> EmitSt {
                     // %rcx is the fresh record's ALLOC base (slots at +8).
                     st = emit_insn(st, insn.F_MOV_D_R, insn.R_RDX, -1, 1, 8 * rec_slot(sfs2, sf2.name), -1, insn.R_RSI, 64);
                     st = emit_insn(st, insn.F_MOV_R_D, insn.R_RSI, 64, insn.R_RCX, -1, 1, 8 + mi2 * 8, -1);
-                    sj = sj + 1;
+                    sj++;
                 };
             }
         } else {
@@ -8371,7 +8371,7 @@ def gen_reclit(st: EmitSt, node: RecLit, want: Type) -> EmitSt {
             st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RCX, -1, 1, 8 + mi * 8, -1);
         };
         st = emit_insn(st, insn.F_PUSH_R, insn.R_RCX, 64, 0, 0, 0, 0, 0);
-        i = i + 1;
+        i++;
     };
     st = emit_insn(st, insn.F_POP_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RAX, 64, 0, 0, 0, 0)
@@ -8409,7 +8409,7 @@ def gen_func_literal(st: EmitSt, node: Func) -> EmitSt {
         let cn: str = caps[ci];
         let ce = env_find(st, cn);
         captypes += ce.typ;
-        ci = ci + 1;
+        ci++;
     };
     let rl = next_uid(st);
     st = rl.st;
@@ -8421,7 +8421,7 @@ def gen_func_literal(st: EmitSt, node: Func) -> EmitSt {
     while (bci < len(caps)) {
         let bcn: str = caps[bci];
         st = box_capture(st, bcn);
-        bci = bci + 1;
+        bci++;
     };
     gen_make_closure(st, lbl, caps)
 };
@@ -8438,7 +8438,7 @@ def gen_closure_binding(st: EmitSt, name: str, func: Func, caps: [str]) -> EmitS
         let cn2: str = caps[ci];
         let ce = env_find(st, cn2);
         captypes += ce.typ;
-        ci = ci + 1;
+        ci++;
     };
     let rl = next_uid(st);
     st = rl.st;
@@ -8450,7 +8450,7 @@ def gen_closure_binding(st: EmitSt, name: str, func: Func, caps: [str]) -> EmitS
     while (bci < len(caps)) {
         let bcn: str = caps[bci];
         st = box_capture(st, bcn);
-        bci = bci + 1;
+        bci++;
     };
     st = gen_make_closure(st, lbl, caps);
     // a NAME (let f = ...), so its slot lives to the end of the block
@@ -8729,7 +8729,7 @@ def norm_num(s: str) -> str {
             if (c == "_") { } else {
                 v = v * radix + hexval_ch(c);
             };
-            i = i + 1;
+            i++;
         };
         tostring(v)
     }
@@ -8788,7 +8788,7 @@ def flit_dmul(a: [long], m: long, n: long) -> bool {
         let p = a[i] * m + carry;
         a[i] = p % FLIT_BASE;
         carry = p / FLIT_BASE;
-        i = i + 1;
+        i++;
     };
     carry == 0
 };
@@ -8816,7 +8816,7 @@ def flit_dmul_limb(a: [long], n: long) -> bool {
         let v = a[i];
         a[i] = carry;
         carry = v;
-        i = i + 1;
+        i++;
     };
     carry == 0
 };
@@ -8827,7 +8827,7 @@ def flit_ddiv_limb(a: [long], n: long) {
     let i = 0;
     while (i < n - 1) {
         a[i] = a[i + 1];
-        i = i + 1;
+        i++;
     };
     a[n - 1] = 0;
 };
@@ -8875,7 +8875,7 @@ def flit_dzero(a: [long], n: long) -> bool {
     let z = true;
     while (i < n) {
         if (a[i] != 0) { z = false; };
-        i = i + 1;
+        i++;
     };
     z
 };
@@ -8898,7 +8898,7 @@ def flit_copy(a: [long], n: long) -> [long] {
     let i = 0;
     while (i < n) {
         if (i < len(a)) { out += a[i]; } else { out += 0; };
-        i = i + 1;
+        i++;
     };
     out
 };
@@ -8911,7 +8911,7 @@ def flit_dfrom(d: long, n: long) -> [long] {
     while (i < n) {
         a += rest % FLIT_BASE;
         rest = rest / FLIT_BASE;
-        i = i + 1;
+        i++;
     };
     a
 };
@@ -8923,7 +8923,7 @@ def flit_scaled(digs: [long], n: long, dp: long, t: long, flags: [bool]) -> [lon
     let a = flit_copy(digs, n);
     let j = 0;
     while (j < t / 32) {
-        if (flit_dmul(a, 4294967296, n)) { j = j + 1; } else { flags[1] = true; j = t / 32; };
+        if (flit_dmul(a, 4294967296, n)) { j++; } else { flags[1] = true; j = t / 32; };
     };
     // Nine decades per pass: a limb is 10^9, so multiplying by it moves the
     // value up one limb and dividing drops the lowest limb outright (whatever
@@ -9026,14 +9026,14 @@ def flit_finish(digs: [long], ndig: long, dp: long, neg: bool) -> long {
         let down = 0;
         while (flit_dgt(a, p85, n)) {
             if (flit_ddiv(a, 4294967296, n) != 0) { flags[0] = true; };
-            down = down + 32;
+            down += 32;
         };
         // And then a bit at a time down to 2^54: what that leaves is the 53
         // significand bits AND the round bit above them, and everything it
         // dropped is below the round bit, so sticky is all that carries.
         while (!flit_dlt(a, p54, n)) {
             if (flit_ddiv(a, 2, n) != 0) { flags[0] = true; };
-            down = down + 1;
+            down++;
         };
         // 2^54 fits in two limbs, so the significand and the round bit are one
         // divide apart
@@ -9070,12 +9070,12 @@ def flit_finish(digs: [long], ndig: long, dp: long, neg: bool) -> long {
             };
             // what is left is the fraction itself: no implicit leading bit
             mant = a[0];
-            if (n > 1) { mant = mant + a[1] * FLIT_BASE; };
+            if (n > 1) { mant += a[1] * FLIT_BASE; };
         };
         if (round != 0) {
-            if (flags[0]) { mant = mant + 1; }
+            if (flags[0]) { mant++; }
             else {
-                if ((mant & 1) != 0) { mant = mant + 1; };
+                if ((mant & 1) != 0) { mant++; };
             };
         };
         let bits = 0;
@@ -9089,7 +9089,7 @@ def flit_finish(digs: [long], ndig: long, dp: long, neg: bool) -> long {
         } else {
             let e2 = e;
             if (mant >= 0x20000000000000) {
-                mant = mant >> 1;
+                mant >>= 1;
                 e2 = e + 1;
             };
             if (e2 > 1023) {
@@ -9131,20 +9131,20 @@ def flit_bits(s: str) -> long {
     while (i < eb) {
         let c = s[i:i + 1];
         if (c == ".") { past_dot = true; } else {
-            if (past_dot) { nfrac = nfrac + 1; };
+            if (past_dot) { nfrac++; };
             if (seen || c != "0") {
                 seen = true;
-                ndig = ndig + 1;
+                ndig++;
             };
         };
-        i = i + 1;
+        i++;
     };
     let n0 = flit_size(ndig, 0, 0);
     let over = n0 > FLIT_LIMBS;
     if (over) { n0 = FLIT_LIMBS; };
     let a: [long] = [];
     i = 0;
-    while (i < n0) { a += 0; i = i + 1; };
+    while (i < n0) { a += 0; i++; };
     seen = false;
     past_dot = false;
     i = 0;
@@ -9155,10 +9155,10 @@ def flit_bits(s: str) -> long {
         if (c == ".") { past_dot = true; } else {
             if (seen || c != "0") {
                 seen = true;
-                if (!flit_dpush(a, byte_at(c, 0) - 48, n0)) { over = true; };
+                if (!flit_dpush(a, c[0] - 48, n0)) { over = true; };
             };
         };
-        i = i + 1;
+        i++;
     };
     if (!seen) {
         // 0.0, 0e999 -- zero, with the literal's sign
@@ -9176,7 +9176,7 @@ def flit_bits(s: str) -> long {
             let past = false;
             while (j < len(s)) {
                 if (!past) {
-                    ex = ex * 10 + (byte_at(s[j:j + 1], 0) - 48);
+                    ex = ex * 10 + (s[j:j + 1][0] - 48);
                     if (ex > 5000) { past = true; ex = 5001; };
                 };
                 j = j + 1;
@@ -9216,7 +9216,7 @@ def num_i64(s: str) -> long {
         } else {
             if (c == '-' && i == 0) { neg = true; };
         };
-        i = i + 1;
+        i++;
     };
     if (neg) { 0 - v } else { v }
 };
@@ -9441,7 +9441,7 @@ def block_bind(first: Node, rest: [Node], ln: long, cl: long) -> Block {
         let i = 0;
         while (i < len(fs)) {
             st += [fs[i]];
-            i = i + 1;
+            i++;
         };
     } else {
         st += [first];
@@ -9449,7 +9449,7 @@ def block_bind(first: Node, rest: [Node], ln: long, cl: long) -> Block {
     let j = 0;
     while (j < len(rest)) {
         st += [rest[j]];
-        j = j + 1;
+        j++;
     };
     { k: K.block, stmts: st, line: ln, col: cl }
 };
@@ -9963,7 +9963,7 @@ def type_on_path(t: Type, path: [Type]) -> bool {
     while (i < len(path)) {
         // the same node: a recursive alias is one shared node (teq)
         if (path[i] == t) { found = true; };
-        i = i + 1;
+        i++;
     };
     found
 };
@@ -10320,9 +10320,9 @@ def gen_narrow_field(st: EmitSt, nar: Narrow, s: Type, dkey: str) -> EmitSt {
                     st = emit_insn(st, insn.F_CMP_R_R, insn.R_RSI, 64, insn.R_RCX, 64, 0, 0, 0);
                     st = emit_insn(st, insn.F_JE_L, l.label, 0, 0, 0, 0, 0, 0);
                 };
-                j = j + 1;
+                j++;
             };
-            d = d + 1;
+            d++;
         };
         st = gen_slot_move(st, ds[len(ds) - 1], false);
         st = emit_insn(st, insn.F_JMP_L, done.label, 0, 0, 0, 0, 0, 0);
@@ -10332,7 +10332,7 @@ def gen_narrow_field(st: EmitSt, nar: Narrow, s: Type, dkey: str) -> EmitSt {
             st = gen_slot_move(st, ds[e], false);
             // not on the last arm: that one falls through into `done:`
             if (e < len(lbls) - 1) { st = emit_insn(st, insn.F_JMP_L, done.label, 0, 0, 0, 0, 0, 0); };
-            e = e + 1;
+            e++;
         };
         emit_label(st, done.label)
     }
@@ -10400,7 +10400,7 @@ def rec_field_type(t: Type, key: str) -> Type {
             if (f.name == key) {
                 ft = f.typ;
             }
-            i = i + 1;
+            i++;
         };
     }
     ft
@@ -10425,7 +10425,7 @@ def gen_array_esz(st: EmitSt, node: ArrLit, esz: long, ety: Type) -> EmitSt {
     while (gi < len(elems)) {
         st = gen_as(st, elems[gi], ety);
         st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
-        gi = gi + 1;
+        gi++;
     };
     let n = len(elems);
     st = emit_insn(st, insn.F_MOV_I_R, arr_alloc_size(esz, n), insn.R_RDI, 64, 0, 0, 0, 0);
@@ -10834,8 +10834,8 @@ def fmt_code(f: FmtSpec, kind: long, ty: long) -> long {
     }
     let sg = 0;
     if (f.sign == '+') { sg = 1; } else if (f.sign == ' ') { sg = 2; }
-    if (f.alt) { sg = sg + 4; }
-    if (f.grp == ',') { sg = sg + 8; } else if (f.grp == '_') { sg = sg + 16; }
+    if (f.alt) { sg += 4; }
+    if (f.grp == ',') { sg += 8; } else if (f.grp == '_') { sg += 16; }
     ty + 256 * fill + 65536 * align + 16777216 * sg
 };
 
@@ -11192,7 +11192,7 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
     while (bi < len(bnames)) {
         let bnm: str = bnames[bi];
         f = env_define(f, "", "boxmark", 0, -1, bnm, type_node({ k: K.tnone }));
-        bi = bi + 1;
+        bi++;
     };
     // The names this body appends to (see own_wanted), the same way.
     let anames = app_names(func.body, false, bnames);
@@ -11200,7 +11200,7 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
     while (ai < len(anames)) {
         let anm: str = anames[ai];
         f = env_define(f, "", "appmark", 0, -1, anm, type_node({ k: K.tnone }));
-        ai = ai + 1;
+        ai++;
     };
     // A capturing named function is not in that table (see
     // capturing_defs): bind its own name to this body, so a call by name
@@ -11217,7 +11217,7 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
     let i = 0;
     while (i < nargs) {
         f = env_define(f, params[i], "param", 16 + (nargs - 1 - i) * 8, -1, "", ptypes[i]);
-        i = i + 1;
+        i++;
     };
     // Captures: the caller pushed the closure record BEFORE the args, so it
     // lives just past them at rbp+16+8*nargs. Each capture reads slot idx+1
@@ -11239,7 +11239,7 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
                 ct = captypes[c];
             }
             f = env_define(f, cn, "capture", cloff, -1, tostring(c), ct);
-            c = c + 1;
+            c++;
         };
     };
     // Captured parameters (and the own name) move into their cells
@@ -11252,7 +11252,7 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
     while (pbi < nargs) {
         let pbn: str = params[pbi];
         f = box_bound(f, pbn);
-        pbi = pbi + 1;
+        pbi++;
     };
     // An appended-to str parameter moves into an own pair (bind_own).
     let opi = 0;
@@ -11264,7 +11264,7 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
             f = emit_insn(f, insn.F_MOV_D_R, insn.R_RBP, -1, 1, ope.off, -1, insn.R_RAX, 64);
             f = bind_own(f, opn, opt);
         }
-        opi = opi + 1;
+        opi++;
     };
     f = gen_tail(f, func.body);
     if (f.slots + f.temp > frame_max) { frame_max = f.slots + f.temp; };
@@ -11374,7 +11374,7 @@ def infer_fn_ret(st: EmitSt, func: Func) -> Type {
     let i = 0;
     while (i < n) {
         f = env_define(f, params[i], "param", 16 + (n - 1 - i) * 8, -1, "", ptypes[i]);
-        i = i + 1;
+        i++;
     };
     infer(f, func.body)
 };
@@ -11427,7 +11427,7 @@ def find_dup(stmts: [Node], origin: Origin) -> [Diag] {
             lines += ln;
             cols += s.col;
         }
-        i = i + 1;
+        i++;
     };
     // A name's earlier definitions, not every statement's: with 20 000
     // top-level defs the scan of all earlier names was 75% of the compile
@@ -11469,7 +11469,7 @@ def find_dup(stmts: [Node], origin: Origin) -> [Diag] {
         ppos += j;
         pnext += top[slot];
         top[slot] = len(pfile) - 1;
-        j = j + 1;
+        j++;
     };
     errs
 };
@@ -11529,7 +11529,7 @@ def global_decls(stmts: [Node]) -> [Node] {
             else if (decl.v.k == K.func) { }
             else { out += decl; };
         }
-        i = i + 1;
+        i++;
     };
     out
 };
@@ -11560,7 +11560,7 @@ def global_entries(st: EmitSt, gdecls: [Node], gbase: long) -> [Sym] {
         let lbl = arch.arch_global_label(gbase + i, gn);
         out += { name: gn, label: lbl, typ: t };
         f = env_define(f, gn, "global", 0, lbl_new(lbl), "", t);
-        i = i + 1;
+        i++;
     };
     out
 };
@@ -11584,7 +11584,7 @@ def capturing_defs(defs: [FnDef], gnames: [str]) -> [str] {
     while (i < len(defs)) {
         let d = defs[i];
         fnames += d.name;
-        i = i + 1;
+        i++;
     };
     let caps: [[str]] = [];
     let out: [str] = [];
@@ -11600,10 +11600,10 @@ def capturing_defs(defs: [FnDef], gnames: [str]) -> [str] {
         while (j < len(cs)) {
             let cn: str = cs[j];
             if (namemap_get(fnm, cn) >= 0) { } else { reads_var = true; };
-            j = j + 1;
+            j++;
         };
         if (reads_var) { out += d.name; }
-        i = i + 1;
+        i++;
     };
     let changed = true;
     while (changed) {
@@ -11618,14 +11618,14 @@ def capturing_defs(defs: [FnDef], gnames: [str]) -> [str] {
                 while (j < len(cs)) {
                     let cn: str = cs[j];
                     if (name_in(out, cn)) { hit = true; }
-                    j = j + 1;
+                    j++;
                 };
                 if (hit) {
                     out += d.name;
                     changed = true;
                 }
             };
-            i = i + 1;
+            i++;
         };
     };
     out
@@ -11652,7 +11652,7 @@ def fix_fn_types(st: EmitSt, hdefs: [FnDef], only: [str]) -> [Sym] {
         } else {
             out += fe0;
         };
-        fx = fx + 1;
+        fx++;
     };
     out
 };
@@ -11673,7 +11673,7 @@ def reads_any(func: Func, names: [str]) -> bool {
     while (i < len(reads)) {
         let n: str = reads[i];
         if (name_in(names, n)) { found = true; }
-        i = i + 1;
+        i++;
     };
     found
 };
@@ -11817,11 +11817,11 @@ def std_units(names: [str], pack: str) -> [Unit] {
                 while (j < len(out)) {
                     let u = out[j];
                     if (u.name == "prelude") { ext += u.exports; }
-                    j = j + 1;
+                    j++;
                 };
             }
             out += std_compile(nm, ext);
-            i = i + 1;
+            i++;
         };
     }
     out
@@ -11856,7 +11856,7 @@ def std_compile(name: str, ext: [Sym]) -> Unit {
         while (k < len(errs)) {
             let e = errs[k];
             puts("ycc: internal error: " + path + ":" + tostring(e.line) + ":" + tostring(e.col) + ": " + e.msg + "\n");
-            k = k + 1;
+            k++;
         };
         exit(1);
     }
@@ -11894,7 +11894,7 @@ def unit_exports(stmts: [Node], hdefs: [FnDef], fns: [Sym]) -> [Sym] {
             let found = false;
             while (!found && h < len(hdefs)) {
                 let hd = hdefs[h];
-                if (hd.name == nm) { found = true; } else { h = h + 1; };
+                if (hd.name == nm) { found = true; } else { h++; };
             };
             if (found) {
                 let xn = export_name(nm);
@@ -11902,12 +11902,12 @@ def unit_exports(stmts: [Node], hdefs: [FnDef], fns: [Sym]) -> [Sym] {
                     let fe = fns[h];
                     out += { name: xn, label: fe.label, typ: fe.typ };
                 }
-                h = h + 1;
+                h++;
             } else {
                 h = h0;
             };
         }
-        i = i + 1;
+        i++;
     };
     out
 };
@@ -11969,7 +11969,7 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
         while (gi < len(gdecls)) {
             let gdecl: Decl = gdecls[gi];
             gnames += decl_name(gdecl);
-            gi = gi + 1;
+            gi++;
         };
         // The externs, and the init functions `_start` calls (by their
         // labels: no Y name has that shape, and the checker never sees
@@ -11982,7 +11982,7 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
             let il: str = inits[ii];
             xfns += { name: il, label: il, typ: { k: K.tfunc, args: [], ret: { k: K.tvoid } } };
             xids += lbl_new(il);
-            ii = ii + 1;
+            ii++;
         };
         // A def needing a closure record is emitted where it is created
         // (gen_decl); every other one is hoisted: a label in st.fns. A
@@ -12019,7 +12019,7 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
                 hids += lid;
                 st = env_define(st, d.name, "func", 0, lid, "", func_type(d.func));
             };
-            i = i + 1;
+            i++;
         };
         // The externs go after the hoisted defs (fix_fn_types and the
         // emission loop read those by position), the globals after both
@@ -12082,7 +12082,7 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
                 st = rf.st;
                 st = emit_one_fn(st, st.fns.ids[i], rf.uid, d.func, false, false, [], "");
             };
-            i = i + 1;
+            i++;
         };
         pr = phase_end(times, "emit_fns", pt, ph);
         times = pr.times; pt = pr.t; ph = pr.h;
@@ -12104,7 +12104,7 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
             let cl: str = inits[ci];
             let call: Call = { k: K.call, callee: { k: K.id, v: cl, line: 0, col: 0 }, args: noargs, line: 0, col: 0 };
             main_stmts += call;
-            ci = ci + 1;
+            ci++;
         };
         let pstmts: [Node] = ast3.stmts;
         let i = 0;
@@ -12126,7 +12126,7 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
             } else {
                 main_stmts += s;
             };
-            i = i + 1;
+            i++;
         };
         let rm = next_uid(st);
         st = rm.st;
@@ -12151,7 +12151,7 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
         while (gk < len(gl)) {
             let ge = gl[gk];
             glabels += ge.label;
-            gk = gk + 1;
+            gk++;
         };
         // Each body's label and the labels it references: what linking
         // shakes by (prune_bodies). The label the emitter recorded beside
@@ -12166,7 +12166,7 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
         while (bk < len(ubodies)) {
             let ub: [long] = ubodies[bk];
             brefs += [ir_refs(ub)];
-            bk = bk + 1;
+            bk++;
         };
         let unit: Unit = { name: name, files: origin.files, exports: exports,
           init: init, bodies: ubodies, btext: ubtext, blob: [],
@@ -12200,7 +12200,7 @@ def pkg_exports(xs: [Sym], gl: [Sym]) -> [Sym] {
             xn = export_name(gn);
         };
         if (len(xn) > 0) { all += { name: xn, label: ge.label, typ: ge.typ }; }
-        i = i + 1;
+        i++;
     };
     let out: [Sym] = [];
     let j = 0;
@@ -12214,7 +12214,7 @@ def pkg_exports(xs: [Sym], gl: [Sym]) -> [Sym] {
             m = m + 1;
         };
         if (!later) { out += e; }
-        j = j + 1;
+        j++;
     };
     out
 };
@@ -12235,7 +12235,7 @@ def unit_dfl(stmts: [Node], origin: Origin) -> [DflCode] {
             while (j < len(out)) {
                 let d = out[j];
                 if (d.name != nm) { keep += d; }
-                j = j + 1;
+                j++;
             };
             let decl: Decl = s;
             let func: Func = decl.v;
@@ -12243,7 +12243,7 @@ def unit_dfl(stmts: [Node], origin: Origin) -> [DflCode] {
             if (len(vals) > 0) { keep += { name: nm, vals: vals }; }
             out = keep;
         }
-        i = i + 1;
+        i++;
     };
     out
 };
@@ -12260,7 +12260,7 @@ def dfl_codes(func: Func) -> [str] {
         let dk: long = d.k;
         if (dk != K.void) { any = true; }
         out += lit_code(d);
-        i = i + 1;
+        i++;
     };
     if (any) { out } else { let nd: [str] = []; nd }
 };
@@ -12320,7 +12320,7 @@ def link_locs(b: str, off: long) -> str {
                 let nl = index_of(p, "\n");
                 if (nl >= 0) { out += p[nl:]; }
             };
-            i = i + 1;
+            i++;
         };
         join(out, "")
     }
@@ -12361,7 +12361,7 @@ def rodata_intern(pieces: [str], allrod: [[str]], refs: [str]) -> { pieces: [str
     while (ri < len(refs)) {
         let r = asm.labmap_put(m, refs[ri], 1, 0);
         m = r.map;
-        ri = ri + 1;
+        ri++;
     };
     let nall = len(allrod);
     // text -> the index of the winner in `win`, plus loser pairs
@@ -12400,7 +12400,7 @@ def rodata_intern(pieces: [str], allrod: [[str]], refs: [str]) -> { pieces: [str
                 pieces += lbl + ":\n.zero 1\n";
             }
         };
-        s2 = s2 + 1;
+        s2++;
     };
     { pieces: pieces, dup_old: dup_old, dup_new: dup_new }
 };
@@ -12435,7 +12435,7 @@ def relabel_dups(body: str, m: [AsmLabel], dup_new: [str]) -> str {
                 };
             };
         };
-        i = i + 1;
+        i++;
     };
     join(lines, "\n")
 };
@@ -12483,9 +12483,9 @@ def dup_y_label(deps: [Unit], prog: Unit) -> long {
                         m = r.map;
                     };
                 };
-                k = k + 1;
+                k++;
             };
-            i = i + 1;
+            i++;
         };
     };
     0
@@ -12506,14 +12506,14 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
     let k = 0;
     while (k < nu) {
         offs += 0;
-        k = k + 1;
+        k++;
     };
     k = nu - 1;
     while (k >= 0) {
         let uk = units[k];
         offs[k] = len(files);
         files += uk.files;
-        k = k - 1;
+        k--;
     };
     // The runtime labels the program and the packages define (every
     // runtime label starts `y_`): they replace the std units' own.
@@ -12526,7 +12526,7 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
         while (pi < len(olab)) {
             let pl: str = olab[pi];
             if (pl[:2] == "y_") { plabels += pl; }
-            pi = pi + 1;
+            pi++;
         };
         ou = ou + 1;
     };
@@ -12570,9 +12570,9 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
                 refs += [ur[b]];
                 fno += f;
             }
-            b = b + 1;
+            b++;
         };
-        j = j + 1;
+        j++;
     };
     let plab = prog.labels;
     let pbodies = prog.bodies;
@@ -12585,7 +12585,7 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
         labels += plab[pb2];
         refs += [prefs[pb2]];
         fno += -1;
-        pb2 = pb2 + 1;
+        pb2++;
     };
     // Body-level tree shaking comes first: its output is also the root
     // set for shaking the arch prelude, and the kept prelude's references
@@ -12628,7 +12628,7 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
     let ci = 0;
     while (ci < len(body_refs)) {
         const_refs += [body_refs[ci]];
-        ci = ci + 1;
+        ci++;
     };
     // The rodata first, because it decides the labels the bodies use: one
     // block per distinct literal text, the losers recorded.
@@ -12640,7 +12640,7 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
         let u = units[ju];
         allrod += u.rodata;
         gls += u.globals;
-        ju = ju + 1;
+        ju++;
     };
     // Which of the PROGRAM's globals the kept code reads. Only these: a unit
     // from the std pack carries packed bodies, whose references are not IR
@@ -12664,13 +12664,13 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
                 reads += refs[ri]
             };
         };
-        ri = ri + 1;
+        ri++;
     };
     let dead_cells: [str] = [];
     let di = 0;
     while (di < len(prog.globals)) {
         if (!name_in(reads, prog.globals[di])) { dead_cells += prog.globals[di]; };
-        di = di + 1;
+        di++;
     };
     if (len(dead_cells) > 0) {
         let dj = 0;
@@ -12682,7 +12682,7 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
                     refs[dj] = ir_refs(ni);
                 };
             };
-            dj = dj + 1;
+            dj++;
         };
         // The CELLS stay: a dead cell's storage is .bss, which costs no file
         // bytes, and the read scan above is the one thing here that has to be
@@ -12693,7 +12693,7 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
         let lv = 0;
         while (lv < len(gls)) {
             live += gls[lv];
-            lv = lv + 1;
+            lv++;
         };
         gls = live;
     };
@@ -12709,7 +12709,7 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
     while (di < len(dup_old)) {
         let dr = asm.labmap_put(dupmap, dup_old[di], 1, di);
         dupmap = dr.map;
-        di = di + 1;
+        di++;
     };
     // Piece-list + single join: `asm = asm + piece` per iteration is
     // quadratic (each concat re-copies the whole 1.4MB+ accumulator —
@@ -12739,7 +12739,7 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
             if (kf >= 0) { off = kf; };
             parts += [part_ir(kb, alltxt[ab], off, dbg_lines)];
         }
-        ab = ab + 1;
+        ab++;
     };
     // The rodata, then the .bss cells: text.
     let consts_text = shake_refs(arch.arch_consts(), const_refs);
@@ -12760,13 +12760,13 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
         if (target_is_windows()) {
             let wl = arch.w_iat_bss_lines();
             let wj = 0;
-            while (wj < len(wl)) { gpieces += wl[wj]; wj = wj + 1; };
+            while (wj < len(wl)) { gpieces += wl[wj]; wj++; };
         };
         gpieces += heap_text;
         let gk = 0;
         while (gk < len(gls)) {
             gpieces += arch.arch_global_cell(gls[gk]);
-            gk = gk + 1;
+            gk++;
         };
         parts += [part_text(join(gpieces, ""))];
     }
@@ -12794,7 +12794,7 @@ def link_text(parts: [LinkPart]) -> str {
                 pieces += t;
             };
         };
-        i = i + 1;
+        i++;
     };
     join(pieces, "")
 };
@@ -12829,7 +12829,7 @@ def pack_strs(out: [str], xs: [str]) -> [str] {
     let i = 0;
     while (i < len(xs)) {
         out = pack_put(out, xs[i]);
-        i = i + 1;
+        i++;
     };
     out
 };
@@ -12841,7 +12841,7 @@ def pack_strss(out: [str], xss: [[str]]) -> [str] {
     let i = 0;
     while (i < len(xss)) {
         out = pack_strs(out, xss[i]);
-        i = i + 1;
+        i++;
     };
     out
 };
@@ -12889,8 +12889,8 @@ def pack_word(out: [str], v: long) -> [str] {
         let i = 0;
         while (i < 8) {
             out += chr((v >> sh) & 255);
-            sh = sh + 8;
-            i = i + 1;
+            sh += 8;
+            i++;
         };
     };
     out
@@ -12945,10 +12945,10 @@ def pack_body(u: Unit, b: long) -> str {
                     if (insn.ir_kind_words(k) > 1) { out = pack_word(out, ir[wp + 1]); };
                 };
                 wp = wp + insn.ir_kind_words(k);
-                ki = ki + 1;
+                ki++;
             };
         };
-        at = at + insn.IR_W;
+        at += insn.IR_W;
     };
     join(out, "")
 };
@@ -12963,19 +12963,19 @@ def unpack_body(blob: str) -> [long] {
     let at = 0;
     while (at < n) {
         let f = b[at];
-        at = at + 1;
+        at++;
         let w: [long] = [0, 0, 0, 0, 0, 0, 0];
         if (f == insn.IR_LABEL) {
             w[0] = unpack_lbl(b, at);
-            at = at + lbl_w(b, at);
+            at += lbl_w(b, at);
         } else if (f == insn.IR_LOC) {
             w[0] = unpack_word(b, at);
-            at = at + word_w(b, at);
+            at += word_w(b, at);
             w[1] = unpack_word(b, at);
-            at = at + word_w(b, at);
+            at += word_w(b, at);
         } else if (f == insn.IR_TEXT) {
             w[0] = unpack_word(b, at);
-            at = at + word_w(b, at);
+            at += word_w(b, at);
         } else {
             let kinds = insn.ir_form(f).kinds;
             let ki = 0;
@@ -12985,33 +12985,33 @@ def unpack_body(blob: str) -> [long] {
                 let nw = insn.ir_kind_words(k);
                 if (k == insn.O_LBL) {
                     w[wp] = unpack_lbl(b, at);
-                    at = at + lbl_w(b, at);
+                    at += lbl_w(b, at);
                 } else if (k == insn.O_DIFF) {
                     w[wp] = unpack_lbl(b, at);
-                    at = at + lbl_w(b, at);
+                    at += lbl_w(b, at);
                     w[wp + 1] = unpack_lbl(b, at);
-                    at = at + lbl_w(b, at);
+                    at += lbl_w(b, at);
                 } else if (k == insn.O_MEM || k == insn.O_MEM0) {
                     w[wp] = unpack_word(b, at);
-                    at = at + word_w(b, at);
+                    at += word_w(b, at);
                     w[wp + 1] = unpack_word(b, at);
-                    at = at + word_w(b, at);
+                    at += word_w(b, at);
                     w[wp + 2] = unpack_word(b, at);
-                    at = at + word_w(b, at);
+                    at += word_w(b, at);
                     w[wp + 3] = unpack_word(b, at);
-                    at = at + word_w(b, at);
+                    at += word_w(b, at);
                     w[wp + 4] = unpack_lbl(b, at);
-                    at = at + lbl_w(b, at);
+                    at += lbl_w(b, at);
                 } else {
                     w[wp] = unpack_word(b, at);
-                    at = at + word_w(b, at);
+                    at += word_w(b, at);
                     if (nw > 1) {
                         w[wp + 1] = unpack_word(b, at);
-                        at = at + word_w(b, at);
+                        at += word_w(b, at);
                     };
                 };
-                wp = wp + nw;
-                ki = ki + 1;
+                wp += nw;
+                ki++;
             };
         };
         // word by word into `ir`: ir_push would hand back a whole new array
@@ -13043,13 +13043,13 @@ def unpack_word(b: [byte], at: long) -> long {
         let sh = 0;
         let i = 0;
         while (i < 8) {
-            v = v + b[at + 1 + i] * (1 << sh);
-            sh = sh + 8;
-            i = i + 1;
+            v += b[at + 1 + i] * (1 << sh);
+            sh += 8;
+            i++;
         };
     } else {
         v = b[at + 1] + b[at + 2] * 256;
-        if (t == 127) { v = v - 65536; };
+        if (t == 127) { v -= 65536; };
     };
     v
 };
@@ -13145,10 +13145,10 @@ def tcode_go(out: [str], t: Type) -> [str] {
             let f = fs[i];
             // an optional field is `name?` (tdecode_go)
             let fname: str = f.name;
-            if (f.opt) { fname = fname + "?"; };
+            if (f.opt) { fname += "?"; };
             out = pack_put(out, fname);
             out = tcode_go(out, f.typ);
-            i = i + 1;
+            i++;
         };
         out
     }
@@ -13164,7 +13164,7 @@ def tcode_list(out: [str], ts: [Type]) -> [str] {
     let i = 0;
     while (i < len(ts)) {
         out = tcode_go(out, ts[i]);
-        i = i + 1;
+        i++;
     };
     out
 };
@@ -13211,7 +13211,7 @@ def tdecode_go(cur: Cursor) -> Type {
         // it pointing back at it (tdec_encs/tdec_refs)
         let name = pack_get(cur);
         let enc = pack_get(cur);
-        tdec_n = tdec_n + 1;
+        tdec_n++;
         let tref: TRef = { k: K.tref, name: name, tmp: "~" + tostring(tdec_n), to: type_node({ k: K.tnone }) };
         tdec_encs += enc;
         tdec_refs += tref;
@@ -13236,7 +13236,7 @@ def tdecode_go(cur: Cursor) -> Type {
             let fopt = len(fname) > 0 && fname[len(fname) - 1] == '?';
             if (fopt) { fname = fname[0:len(fname) - 1]; };
             fields += { name: fname, opt: fopt, typ: tdecode_go(cur) };
-            i = i + 1;
+            i++;
         };
         normtype({ k: K.trec, fields: fields })
     }
@@ -13248,7 +13248,7 @@ def tdecode_list(cur: Cursor) -> [Type] {
     let i = 0;
     while (i < n) {
         out += tdecode_go(cur);
-        i = i + 1;
+        i++;
     };
     out
 };
@@ -13264,7 +13264,7 @@ def pack_iface(out: [str], u: Unit) -> [str] {
         out = pack_put(out, x.name);
         out = pack_put(out, x.label);
         out = pack_put(out, tcode(x.typ));
-        j = j + 1;
+        j++;
     };
     let ds = u.dfl;
     out = pack_put(out, tostring(len(ds)));
@@ -13273,7 +13273,7 @@ def pack_iface(out: [str], u: Unit) -> [str] {
         let d = ds[j];
         out = pack_put(out, d.name);
         out = pack_strs(out, d.vals);
-        j = j + 1;
+        j++;
     };
     out
 };
@@ -13292,14 +13292,14 @@ def pack_unit_fields(u: Unit) -> str {
     let j = 0;
     while (j < len(rf)) {
         out = pack_strs(out, rf[j]);
-        j = j + 1;
+        j++;
     };
     let rd = u.rodata;
     out = pack_put(out, tostring(len(rd)));
     j = 0;
     while (j < len(rd)) {
         out = pack_strs(out, rd[j]);
-        j = j + 1;
+        j++;
     };
     out = pack_strs(out, u.globals);
     join(out, "")
@@ -13315,7 +13315,7 @@ def std_pack(units: [Unit]) -> str {
         let u = units[i];
         out = pack_put(out, u.name);
         out = pack_put(out, pack_unit_fields(u));
-        i = i + 1;
+        i++;
     };
     join(out, "")
 };
@@ -13326,11 +13326,11 @@ def pack_len(cur: Cursor) -> long {
     let s = cur.s;
     let p = cur.p;
     let n = 0;
-    let c = byte_at(s, p);
+    let c = s[p];
     while (c != ':' && p < len(s)) {
         n = n * 10 + c - '0';
         p = p + 1;
-        c = byte_at(s, p);
+        c = s[p];
     };
     cur.p = p + 1;
     n
@@ -13354,7 +13354,7 @@ def pack_get_strs(cur: Cursor) -> [str] {
     let i = 0;
     while (i < n) {
         out += pack_get(cur);
-        i = i + 1;
+        i++;
     };
     out
 };
@@ -13373,7 +13373,7 @@ def unit_read(cur: Cursor, name: str, bound: bool) -> Unit {
         let xt: Type = { k: K.tnone };
         if (bound) { xt = tdecode(tc); }
         xs += { name: xn, label: xl, typ: xt };
-        j = j + 1;
+        j++;
     };
     let dfl: [DflCode] = [];
     let nf = pack_num(cur);
@@ -13381,7 +13381,7 @@ def unit_read(cur: Cursor, name: str, bound: bool) -> Unit {
     while (j < nf) {
         let dn = pack_get(cur);
         dfl += { name: dn, vals: pack_get_strs(cur) };
-        j = j + 1;
+        j++;
     };
     let init = pack_get(cur);
     // The bodies stay packed: a link decodes only the ones the shake keeps
@@ -13393,7 +13393,7 @@ def unit_read(cur: Cursor, name: str, bound: bool) -> Unit {
     let bi = 0;
     while (bi < nb) {
         btext += [pack_get_strs(cur)];
-        bi = bi + 1;
+        bi++;
     };
     let labels = pack_get_strs(cur);
     let refs: [[str]] = [];
@@ -13401,14 +13401,14 @@ def unit_read(cur: Cursor, name: str, bound: bool) -> Unit {
     j = 0;
     while (j < nr) {
         refs += [pack_get_strs(cur)];
-        j = j + 1;
+        j++;
     };
     let rodata: [[str]] = [];
     let nd = pack_num(cur);
     j = 0;
     while (j < nd) {
         rodata += [pack_get_strs(cur)];
-        j = j + 1;
+        j++;
     };
     let globals = pack_get_strs(cur);
     { name: name, files: files, exports: xs, init: init, bodies: [],
@@ -13432,7 +13432,7 @@ def std_unpack(pack: str, names: [str]) -> [Unit] {
             let at = cur.p;
             if (name_in(names, nm)) { got += unit_read(cur, nm, std_unit_bound(nm)); }
             cur.p = at + ul;
-            i = i + 1;
+            i++;
         };
         let k = 0;
         while (k < len(names)) {
@@ -13441,9 +13441,9 @@ def std_unpack(pack: str, names: [str]) -> [Unit] {
             while (a < len(got)) {
                 let u = got[a];
                 if (u.name == want) { out += u; }
-                a = a + 1;
+                a++;
             };
-            k = k + 1;
+            k++;
         };
         if (len(out) != len(names)) { out = []; }
     }
@@ -13530,7 +13530,7 @@ def unit_externs(std: [Unit], snames: [str], deps: [Unit], pkgs: [str]) -> Exter
     while (i < len(std)) {
         let u = std[i];
         if (std_unit_bound(u.name) && name_in(snames, u.name)) { ext += u.exports; }
-        i = i + 1;
+        i++;
     };
     let dfl: [Dfl] = [];
     i = 0;
@@ -13542,7 +13542,7 @@ def unit_externs(std: [Unit], snames: [str], deps: [Unit], pkgs: [str]) -> Exter
             while (j < len(xs)) {
                 let x = xs[j];
                 ext += { name: u.name + "." + x.name, label: x.label, typ: x.typ };
-                j = j + 1;
+                j++;
             };
             let ds = u.dfl;
             j = 0;
@@ -13553,13 +13553,13 @@ def unit_externs(std: [Unit], snames: [str], deps: [Unit], pkgs: [str]) -> Exter
                 let m = 0;
                 while (m < len(dv)) {
                     vals += lit_decode(dv[m]);
-                    m = m + 1;
+                    m++;
                 };
                 dfl += { name: u.name + "." + d.name, vals: vals };
-                j = j + 1;
+                j++;
             };
         }
-        i = i + 1;
+        i++;
     };
     xt.ext = ext;
     xt.dfl = dfl;
@@ -13589,7 +13589,7 @@ def emit_program(ast: Block, nr: Resolved, debug: bool, wlevel: long, std: [Unit
     while (i < len(units)) {
         let u = units[i];
         if (len(u.init) > 0) { inits += u.init; }
-        i = i + 1;
+        i++;
     };
     xt.inits = inits;
     // a package reading argv() needs `_start` to materialize it
@@ -13601,9 +13601,9 @@ def emit_program(ast: Block, nr: Resolved, debug: bool, wlevel: long, std: [Unit
         let b = 0;
         while (!wargv && b < len(rf)) {
             wargv = name_in(rf[b], "y_argv");
-            b = b + 1;
+            b++;
         };
-        i = i + 1;
+        i++;
     };
     xt.argv = wargv;
     let r = compile_unit(ast, nr.imports, nr.origin, debug, wlevel, "", 0, xt, nr.ogen);
@@ -13714,14 +13714,14 @@ def gen_maplit(st: EmitSt, node: RecLit) -> EmitSt {
                 vals[fi] = mv;
                 found = true;
             }
-            fi = fi + 1;
+            fi++;
         };
         if (found) {
         } else {
             keys += mk;
             vals += mv;
         };
-        mi = mi + 1;
+        mi++;
     };
     let knodes: [Node] = [];
     let bnodes: [Node] = [];
@@ -13730,7 +13730,7 @@ def gen_maplit(st: EmitSt, node: RecLit) -> EmitSt {
         let ks: str = keys[ki];
         knodes += n_str(ks, ln, cl);
         bnodes += n_id("none", ln, cl);
-        ki = ki + 1;
+        ki++;
     };
     let keysarr: ArrLit = { k: K.array, elems: knodes, line: ln, col: cl };
     let valsarr: ArrLit = { k: K.array, elems: vals, line: ln, col: cl };

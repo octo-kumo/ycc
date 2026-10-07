@@ -97,7 +97,7 @@ def write_data(fd: long, b: [byte]) -> bool {
     let ok = true;
     while (ok && off < total) {
         let w = os_call("y_os_write", fd, &b[off], total - off);
-        if (w <= 0) { ok = false; } else { off = off + w; };
+        if (w <= 0) { ok = false; } else { off += w; };
     };
     ok
 };
@@ -264,7 +264,7 @@ def list_dir(path: str) -> [str]? {
         if (len(y_fs_listbuf) < FS_LISTBUF) {
             let b: [byte] = [];
             let z = 0;
-            while (z < FS_LISTBUF) { b += 0; z = z + 1; };
+            while (z < FS_LISTBUF) { b += 0; z++; };
             y_fs_listbuf = b;
         };
         let buf: [byte] = y_fs_listbuf;
@@ -300,8 +300,8 @@ def sort_names(xs: [str]) -> [str] {
         let i = 0;
         let j = 0;
         while (i < len(a) || j < len(b)) {
-            if (j >= len(b) || (i < len(a) && a[i] <= b[j])) { out += a[i]; i = i + 1; }
-            else { out += b[j]; j = j + 1; };
+            if (j >= len(b) || (i < len(a) && a[i] <= b[j])) { out += a[i]; i++; }
+            else { out += b[j]; j++; };
         };
         out
     }

@@ -110,7 +110,7 @@ def pe_sections(textlen: long, bss_len: long, pdata: [byte], xdata: [byte], dsec
         out += pe_sec(".xdata", len(xdata), 0, 0, PE_CH_R);
     };
     let i = 0;
-    while (i < len(dsecs)) { out += dsecs[i]; i = i + 1; };
+    while (i < len(dsecs)) { out += dsecs[i]; i++; };
     pe_place(out)
 };
 
@@ -139,7 +139,7 @@ def pe_place(secs: [PeSecHdr]) -> [PeSecHdr] {
             raw = raw + rs;
         };
         rva = rva + s.vsz;
-        i = i + 1;
+        i++;
     };
     secs
 };
@@ -157,7 +157,7 @@ def pe_find(secs: [PeSecHdr], nm: str) -> PeSecHdr {
     let found = pe_sec("", 0, 0, 0, 0);
     while (i < len(secs)) {
         if (secs[i].name == nm) { found = secs[i]; };
-        i = i + 1;
+        i++;
     };
     found
 };
@@ -210,7 +210,7 @@ def pe_put64(b: [byte], at: long, v: long) -> void {
 
 def pe_put_str(b: [byte], at: long, s: str) -> void {
     let i = 0;
-    while (i < len(s)) { b[at + i] = byte_at(s, i); i = i + 1; };
+    while (i < len(s)) { b[at + i] = s[i]; i++; };
     b[at + len(s)] = 0;
 };
 
@@ -256,13 +256,13 @@ def pe_import_bytes(spec: [WImport], rva: long, bss_rva: long) -> [byte] {
     while (i < nd) {
         ilt += at;
         at = at + 8 * (len(spec[i].funcs) + 1);
-        i = i + 1;
+        i++;
     };
     i = 0;
     while (i < nd) {
         iat += at;
         at = at + 8 * (len(spec[i].funcs) + 1);
-        i = i + 1;
+        i++;
     };
     // The hint/name entries, then the DLL names.
     let hoff: [[long]] = [];
@@ -274,22 +274,22 @@ def pe_import_bytes(spec: [WImport], rva: long, bss_rva: long) -> [byte] {
             row += at;
             at = at + 2 + len(spec[i].funcs[k]) + 1;
             if (at % 2 != 0) { at = at + 1; };
-            k = k + 1;
+            k++;
         };
         hoff += row;
-        i = i + 1;
+        i++;
     };
     let noff: [long] = [];
     i = 0;
     while (i < nd) {
         noff += at;
         at = at + len(spec[i].dll) + 1;
-        i = i + 1;
+        i++;
     };
     let total = at;
     let out: [byte] = [];
     let z = 0;
-    while (z < total) { out += 0; z = z + 1; };
+    while (z < total) { out += 0; z++; };
     i = 0;
     while (i < nd) {
         let d = 20 * i;
@@ -305,10 +305,10 @@ def pe_import_bytes(spec: [WImport], rva: long, bss_rva: long) -> [byte] {
             pe_put64(out, ilt[i] + 8 * k, rva + hoff[i][k]);
             pe_put64(out, iat[i] + 8 * k, rva + hoff[i][k]);
             pe_put_str(out, hoff[i][k] + 2, spec[i].funcs[k]);
-            k = k + 1;
+            k++;
         };
         pe_put_str(out, noff[i], spec[i].dll);
-        i = i + 1;
+        i++;
     };
     out
 };
@@ -323,7 +323,7 @@ def pe_build(code: [byte], rodata: [byte], entry_off: long, bss_len: long, pdata
     let dsecs2: [PeSecHdr] = [];
     let ddata2: [[byte]] = [];
     let di = 0;
-    while (di < len(dsecs)) { dsecs2 += dsecs[di]; ddata2 += ddata[di]; di = di + 1; };
+    while (di < len(dsecs)) { dsecs2 += dsecs[di]; ddata2 += ddata[di]; di++; };
     let imp_sz = 0;
     if (len(imp) > 0) {
         imp_sz = len(pe_import_bytes(imp, 0, 0));
@@ -346,7 +346,7 @@ def pe_build(code: [byte], rodata: [byte], entry_off: long, bss_len: long, pdata
             if (dsecs2[dj].name == ".idata") {
                 ddata2[dj] = pe_import_bytes(imp, idr, bss_rva);
             };
-            dj = dj + 1;
+            dj++;
         };
     };
     let size_headers = pe_align(pe_headers_size(secs), PE_FILE_ALIGN);
@@ -363,7 +363,7 @@ def pe_build(code: [byte], rodata: [byte], entry_off: long, bss_len: long, pdata
     let i = 0;
     while (i < len(secs)) {
         out = pe_shdr(out, secs[i]);
-        i = i + 1;
+        i++;
     };
     out = pe_pad(out, size_headers);
     // .text: code, rodata, the 8-byte zero trailer.
@@ -389,7 +389,7 @@ def pe_build(code: [byte], rodata: [byte], entry_off: long, bss_len: long, pdata
         let dd = ddata2[i];
         out = pe_payload(out, d, dd);
         out = pe_pad(out, d.rawptr + d.rawsz);
-        i = i + 1;
+        i++;
     };
     out = push_bytes(out, symtab);
     out
@@ -423,7 +423,7 @@ def pe_fix_pdata(pdata: [byte], rva: long) -> [byte] {
         out[i + 9] = b[1];
         out[i + 10] = b[2];
         out[i + 11] = b[3];
-        i = i + 12;
+        i += 12;
     };
     out
 };
@@ -435,7 +435,7 @@ def pe_symptr(secs: [PeSecHdr]) -> long {
     let i = 0;
     while (i < len(secs)) {
         raw = raw + secs[i].rawsz;
-        i = i + 1;
+        i++;
     };
     raw
 };
@@ -488,8 +488,8 @@ def pe_optional(out: [byte], secs: [PeSecHdr], size_headers: long, size_image: l
     let i = 0;
     while (i < len(secs)) {
         let s = secs[i];
-        if (s.chars != PE_CH_TEXT && s.chars != PE_CH_BSS) { size_init = size_init + s.rawsz; };
-        i = i + 1;
+        if (s.chars != PE_CH_TEXT && s.chars != PE_CH_BSS) { size_init += s.rawsz; };
+        i++;
     };
     out = push_le16(out, 0x20B);        // Magic: PE32+
     out = push_le16(out, 0);            // linker version 0.0, for the bytes
@@ -542,7 +542,7 @@ def pe_optional(out: [byte], secs: [PeSecHdr], size_headers: long, size_image: l
     i = 6;
     while (i < 16) {
         out = push_bytes(out, zero8);
-        i = i + 1;
+        i++;
     };
     out
 };
@@ -558,8 +558,8 @@ def pe_shdr(out: [byte], s: PeSecHdr) -> [byte] {
     let nm = s.name;
     let i = 0;
     while (i < 8) {
-        if (i < len(nm)) { out += byte_at(nm, i); } else { out += 0; };
-        i = i + 1;
+        if (i < len(nm)) { out += nm[i]; } else { out += 0; };
+        i++;
     };
     out = push_le32(out, s.vsz);
     out = push_le32(out, s.rva);
