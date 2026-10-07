@@ -1935,3 +1935,26 @@ from_bytes) followed by fd.fd_open -> yfs_lookup_path -> yfs_find_in.  The next
 measurement is a print inside user_path (the pointer it was given, the byte it
 reads, the length it builds) and one at fd_open's entry: the kernel is the only
 place left, and it has just been proven that the caller's buffer is good.
+
+### Round 113: the ring-3 file read WORKS -- the harness comparison is what differs
+
+Instrumenting the openat path is what settled it, after two wrong inferences:
+
+    OA p=272638016 / UP ptr=272638016 / OA path=/prog len=5 / OA fd=3
+    f=3 / bufok / n=12 b0=127
+
+openat and read both work from ring 3; 127 is 0x7f, the first byte of an ELF.  The
+earlier u008 fault was its own hand-built TWO-file image, not the program or the
+syscalls -- which is why the working version reuses u007_fsexec's driver and its
+single-file image.
+
+Parked anyway, because the harness still reports "serial output differs" for it even
+with a clean transcript (fs ok=true ino=2 size=4715 / f=3 / bufok / n=12 b0=127)
+and qemu status 19.  The rebless produced the SAME ref, so a stale embedded std was
+NOT the cause (worth knowing: every src/y/std/*.y is embedded in the compiler now,
+so a std edit needs both engines rebuilt, and `make rebless` is how that is checked).
+The next measurement is to run the harness's two builds by hand -- the driver and
+program through ./ycc AND through ./cycc -- and diff the two transcripts, since the
+comparison is per engine and one of them must be producing something else.
+
+test/kernel is 49 passed, 0 failed / 49 total with the fixture removed.
