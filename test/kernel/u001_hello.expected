@@ -1,0 +1,5 @@
+module bytes: true
+it is an elf: true
+entering ring 3
+hello from userland
+sum: 30

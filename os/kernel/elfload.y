@@ -1,0 +1,109 @@
+// The ELF64 loader: what turns a ycc-compiled Linux binary into a running
+// program.  The format is the one src/y/elf.y writes -- ET_EXEC, two
+// PT_LOADs, no interpreter, no relocations -- and it is read straight out of
+// physical memory (Multiboot's module, or a file the FS server maps), because
+// the kernel is looking at a byte string, not at a file.
+//
+// Every reference inside such an image is rip-relative or a length
+// difference (src/y/NATIVE.md), so the loader honours p_vaddr and does not
+// have to relocate: the image is linked at 0x400000, which is why the kernel
+// maps itself into one 2 MB page and keeps the rest of the low half free.
+import kernel;
+
+const ELF_MAGIC = 1179403647;         // 0x464C457F, little-endian "\x7fELF"
+const PT_LOAD = 1;
+
+// Where the program's stack goes, and how much of it: below the mmap region,
+// so neither can grow into the other in this milestone's single address space.
+const STACK_BASE = 100663296;         // 0x6000000
+const STACK_BYTES = 65536;
+
+def elf_ok(phys: long) -> bool {
+    kernel.peek32(phys) == ELF_MAGIC
+};
+
+// Map `want` bytes of the module's image at `va`, copy `filesz` bytes of it
+// from `phys + off`, and zero the rest.  The copy goes through the kernel's
+// virtual accessors: the mapping belongs to the program, and the kernel is
+// simply the one that made it.
+def elf_segment(phys: long, off: long, va: long, filesz: long, memsz: long, flags: long) -> bool {
+    let pte = kernel.PTE_U | kernel.PTE_W;
+    let dir = kernel.vm_current();
+    let page = 0;
+    while (page < memsz) {
+        let got = kernel.page_alloc();
+        if (got == 0) { return false; };
+        if (!kernel.vm_map(dir, va + page, got, pte)) { return false; };
+        page = page + 4096;
+    };
+    let i = 0;
+    while (i < filesz) {
+        kernel.poke_va8(va + i, kernel.peek8(phys + off + i));
+        i = i + 1;
+    };
+    while (i < memsz) {
+        kernel.poke_va8(va + i, 0);
+        i = i + 1;
+    };
+    flags == 0 || true
+};
+
+// The program's first stack frame: [argc][argv0]...[NULL] and a NULL envp,
+// with the argument strings above it -- exactly the layout the emitted
+// `_start` reads (it takes argc from (%rsp) and argv from %rsp+8).
+def elf_stack(top: long, arg: str) -> long {
+    let n = len(arg);
+    let sp = top;
+    sp = sp - n - 1;
+    let i = 0;
+    while (i < n) {
+        kernel.poke_va8(sp + i, byte_at(arg, i));
+        i = i + 1;
+    };
+    kernel.poke_va8(sp + n, 0);
+    let argv0 = sp;
+    sp = sp - 8;
+    kernel.poke_va64(sp, 0);            // envp = NULL
+    sp = sp - 8;
+    kernel.poke_va64(sp, 0);            // argv[1] = NULL
+    sp = sp - 8;
+    kernel.poke_va64(sp, argv0);        // argv[0]
+    sp = sp - 8;
+    kernel.poke_va64(sp, 1);            // argc
+    sp
+};
+
+// Load the image at `phys` (`size` bytes) and leave for ring 3.  `name` is
+// what argv[0] becomes.  Returns the entry point, or 0 if the image is not
+// one this loader can run -- the caller decides what a failure means.
+def elf_load(phys: long, size: long, name: str) -> long {
+    if (!elf_ok(phys)) { return 0; };
+    let entry = kernel.peek64(phys + 24);
+    let phoff = kernel.peek64(phys + 32);
+    let phentsize = kernel.peek32(phys + 54);
+    let phnum = kernel.peek32(phys + 56);
+    let i = 0;
+    while (i < phnum) {
+        let ph = phys + phoff + i * phentsize;
+        let ptype = kernel.peek32(ph);
+        if (ptype == PT_LOAD) {
+            let off = kernel.peek64(ph + 8);
+            let va = kernel.peek64(ph + 16);
+            let filesz = kernel.peek64(ph + 32);
+            let memsz = kernel.peek64(ph + 40);
+            if (!elf_segment(phys, off, va, filesz, memsz, kernel.peek32(ph + 4))) { return 0; };
+        };
+        i = i + 1;
+    };
+    // The stack, mapped and filled, then the program's own RSP.
+    let sp_page = 0;
+    while (sp_page < STACK_BYTES) {
+        let got = kernel.page_alloc();
+        if (got == 0) { return 0; };
+        if (!kernel.vm_map(kernel.vm_current(), STACK_BASE + sp_page, got, kernel.PTE_U | kernel.PTE_W)) { return 0; };
+        sp_page = sp_page + 4096;
+    };
+    let sp = elf_stack(STACK_BASE + STACK_BYTES - 16, name);
+    kernel.enter_user(entry, sp, 514);
+    0
+};

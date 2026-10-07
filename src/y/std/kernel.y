@@ -322,6 +322,10 @@ def mb_mod_addr() -> long {
     if (mb_present()) { peek32(y_mb_info_get() + 24) } else { 0 }
 };
 
+def mb_mod_start(i: long) -> long {
+    if (mb_present()) { peek32(mb_mod_addr() + i * 16) } else { 0 }
+};
+
 def mb_mod_end(i: long) -> long {
     if (mb_present()) { peek32(mb_mod_addr() + i * 16 + 4) } else { 0 }
 };
@@ -839,6 +843,34 @@ def sys_write(fd: long, buf: long, len: long) -> long {
     len
 };
 
+// mmap(NULL, len, PROT_RW, MAP_PRIVATE|MAP_ANON, -1, 0): the Y runtime asks
+// for its heap this way, 4 MB at a time (arch/prelude.s's y_alloc_map), so a
+// program that allocates at all needs it.  Anonymous memory is zero pages,
+// and they are mapped eagerly -- demand paging is M2's page-fault work, and a
+// heap that faults on first touch would need it before there is anything to
+// test with.
+const MMAP_BASE = 268435456;
+let mmap_next = MMAP_BASE;
+
+def sys_mmap(addr: long, len: long, prot: long, flags: long, fd: long, off: long) -> long {
+    if (len <= 0 || len > 67108864) { return E_FAULT; };
+    let want = len;
+    if (want % 4096 != 0) { want = want + 4096 - want % 4096; };
+    let base = mmap_next;
+    if (addr != 0) { base = addr; };
+    mmap_next = base + want + 4096;
+    let p = 0;
+    while (p < want) {
+        let page = page_alloc();
+        if (page == 0) { return E_FAULT; };
+        if (!vm_map(vm_current(), base + p, page, PTE_U | PTE_W)) { return E_FAULT; };
+        p = p + 4096;
+    };
+    base
+};
+
+def mmap_bytes() -> long { mmap_next - MMAP_BASE };
+
 // exit_group(status): M1 has one task, so the verdict goes to the test
 // harness; M2 turns this into a task teardown and a reschedule.
 def sys_exit_group(status: long) -> long {
@@ -850,6 +882,7 @@ def sys_exit_group(status: long) -> long {
 // assembly calls it by that label, and kept by the tree shaker as the helper
 // a kept prelude block references.
 def y_sys_dispatch(nr: long, a1: long, a2: long, a3: long, a4: long, a5: long, a6: long) -> long {
+    if (nr == SYS_MMAP) { return sys_mmap(a1, a2, a3, a4, a5, a6); };
     if (nr == SYS_WRITE) { return sys_write(a1, a2, a3); };
     if (nr == SYS_EXIT_GROUP) { return sys_exit_group(a1); };
     if (nr == SYS_READ) { return 0; };

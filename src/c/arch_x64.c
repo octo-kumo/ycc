@@ -343,6 +343,11 @@ Yv *arch_kernel_bss(void) {
               "y_kernel_stack_bottom:\n.zero 32768\n"
               "y_kernel_stack_top:\n"
               ".align 16\n"
+              /* The syscall path's two words: where the user stack was when
+                 SYSCALL arrived, and the kernel stack it switched to (M2
+                 gives each task one). */
+              "y_user_rsp:\n.zero 8\n"
+              "y_syscall_stack:\n.zero 8\n"
               /* The Y heap's region: a physical address and direct-map
                  addresses, set once by y_heap_region_set. */
               "y_heap_start:\n.zero 8\n"
