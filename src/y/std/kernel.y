@@ -951,7 +951,7 @@ def y_sys_dispatch(nr: long, a1: long, a2: long, a3: long, a4: long, a5: long, a
     if (nr == IPC_REPLY) { return sys_ipc_reply(a1); };
     if (nr == SYS_WRITE) { return sys_write(a1, a2, a3); };
     if (nr == SYS_EXIT_GROUP) { return sys_exit_group(a1); };
-    if (nr == SYS_READ) { return 0; };
+    if (nr == SYS_READ) { return sys_read(a1, a2, a3); };
     E_NOSYS
 };
 
@@ -1195,6 +1195,25 @@ def vm_copy_user(src: long, dst: long) -> bool {
 
 // fork: a copy of this address space and a frame that is a copy of this one,
 // with %rax 0 -- which is what the child's fork() returns.
+// Read up to `len` bytes into the caller's buffer from fd 0, the serial
+// console.  A byte that is not there yet ends the call with what has been read
+// so far (possibly 0), so a program polls rather than spins inside the kernel:
+// the scheduler only runs at kernel exit, and a read that blocked here would
+// hold the CPU until the interrupt arrived.
+def sys_read(fd: long, buf: long, len: long) -> long {
+    if (fd != 0) { return E_FAULT; };
+    if (buf == 0 || len <= 0) { return 0; };
+    let i = 0;
+    while (i < len) {
+        let c = y_serial_getb();
+        if (c < 0) { break; };
+        poke_va8(buf + i, c & 255);
+        i = i + 1;
+        if ((c & 255) == 10) { break; };
+    };
+    i
+};
+
 def sys_fork() -> long {
     let me = cur_task;
     let dir = vm_new_dir();

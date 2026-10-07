@@ -1340,3 +1340,24 @@ Two process lessons, both of which cost rounds here and are worth keeping:
 verify ANY hard-coded frame size or offset when the frame changes (sys_fork was
 the last one), and after editing an embedded arch/*.s rebuild BOTH engines before
 reading a suite number.
+
+## M3: serial input (round 82)
+
+SYS_READ is now implemented for fd 0, the serial console: it copies up to `len`
+bytes from y_serial_getb into the caller's buffer and returns the count, ending
+early on a newline or when no byte is ready.  A program therefore polls rather
+than blocking inside the kernel -- the scheduler runs at kernel exit, so a read
+that blocked there would hold the CPU until the interrupt arrived; making it a
+real blocking read (IRQ 4 + a wake) is the follow-up.
+
+Verified by hand, end to end, with qemu's stdin feeding the guest:
+
+    { sleep 1; cat stdin-with-Z; } | qemu -kernel uland.y -initrd u006.prog ...
+    -> module bytes: true / it is an elf: true / entering ring 3 /
+       read 1 byte 90            (90 is 'Z')
+
+The fixture for it (u006_serialin with a .stdin file, which the harness supports)
+is NOT committed yet: my captured transcript and the harness's own comparison
+disagree, so the .stdin/driver convention needs sorting first -- the harness
+builds the driver its own way and my capture used test/kernel/uland.y directly.
+The suite is 34/34 with the implementation in place.
