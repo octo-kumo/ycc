@@ -46,7 +46,12 @@ if (len(a) < 3 || ((len(a) - 2) % 2) != 0) {
     let data_start = 1 + inode_blocks;
     let total_data = 0;
     let k = 0;
-    while (k < n) { total_data = total_data + blocks_for(len(datas[k])); k = k + 1; };
+    while (k < n) {
+        let nbk = blocks_for(len(datas[k]));
+        total_data = total_data + nbk;
+        if (nbk > 12) { total_data = total_data + 1; };
+        k = k + 1;
+    };
     let root_block = data_start;
     let total = data_start + 1 + total_data;
     let img: [byte] = [];
@@ -76,13 +81,20 @@ if (len(a) < 3 || ((len(a) - 2) % 2) != 0) {
         eoff = eoff + round4(8 + len(nm));
         let foff = BS + (j + 2) * 64;
         let nb = blocks_for(len(datas[j]));
+        let di = 0;
+        while (di < nb && di < 12) {
+            put32(img, foff + 8 + di * 4, blk + di);
+            di = di + 1;
+        };
+        // Past twelve blocks the rest live in one single-indirect block, which is
+        // allocated straight after this file's data.
         if (nb > 12) {
-            eputs("mkfs: " + nm + " needs " + tostring(nb) + " blocks; the indirect block is not written yet\n");
-        } else {
-            let di = 0;
-            while (di < nb) {
-                put32(img, foff + 8 + di * 4, blk + di);
-                di = di + 1;
+            let ind = blk + nb;
+            put32(img, foff + 56, ind);
+            let ii = 12;
+            while (ii < nb) {
+                put32(img, ind * BS + (ii - 12) * 4, blk + ii);
+                ii = ii + 1;
             };
         };
         put32(img, foff, 1);
@@ -90,7 +102,8 @@ if (len(a) < 3 || ((len(a) - 2) % 2) != 0) {
         let off = blk * BS;
         let c2 = 0;
         while (c2 < len(datas[j])) { img[off + c2] = datas[j][c2]; c2 = c2 + 1; };
-        blk = blk + blocks_for(len(datas[j]));
+        blk = blk + nb;
+        if (nb > 12) { blk = blk + 1; };
         j = j + 1;
     };
     if (fs.write_bytes(a[1], img)) { eputs("mkfs: " + a[1] + " written\n"); }
