@@ -661,3 +661,32 @@ comments go in the block header, above the `#=== add: ===` marker's body.
 Standing: round 45's fix DOES hold (the extra 8 is gone from the bump, and the
 kernel image's fault is the reduced `err=5 cr2=0` rather than the write at 0x18).
 The remaining read-at-0 is the next thing to find, and it is not the heap cells.
+
+### Round 47: the symptom, the file and the commit now agree
+
+qemu's interrupt log on the merged tree: `v=0e e=0005 i=0 cpl=3
+IP=0023:0000000000400137 ... CR2=0`, and objdump has NO instruction at
+0x400137 -- it is past the end of the program's text.  The program's last
+instruction is `syscall` (exit_group) at 0x400135, so 0x400137 is where the
+kernel RETURNED to it; the program then executes the zeros beyond its own text,
+which dereference %rax (= 0), and the fault follows.
+
+That is the same finding as rounds 16 and 29 -- a syscall that reaches the
+kernel and returns without dispatching (round 29's print at the top of
+sys_exit_group never fired) -- and it now sits in a tree where three things are
+measured rather than inferred:
+
+* the FILE is src/c/native.c (round 34: swapping it into a working pre-merge
+  control makes that control fail, while swapping arch_x64.c does not);
+* the COMMIT is 51c36a5 (round 43: merging master at that commit alone, onto the
+  green un-merged base, reproduces "runtime error: out of memory"; with --gc the
+  same commit's stubbed entry points turn that into this read-at-0);
+* the SOURCES are correct (round 31: the pre-merge compiler builds the SAME
+  sources into a kernel image that works).
+
+So the work left is one emitter change inside 51c36a5 that breaks a kernel
+image's syscall path -- and the shared stub is provably identical between the
+two compilers (round 31 diffed y_syscall_entry, y_enter_user, y_enter_frame,
+y_syscall_entry_addr and y_cur_kstack_set), so what is miscompiled is the
+dispatcher or its setup on the Y side: y_sys_dispatch or syscall_init, both in
+std/kernel.y, as emitted by that commit's native.c.
