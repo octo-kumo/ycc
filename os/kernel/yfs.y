@@ -108,3 +108,46 @@ def yfs_lookup(name: str) -> long {
     };
     0 - 1
 };
+
+// The entry at `index`: its name is copied into the caller's buffer and its
+// length returned, or -1 when there is no such entry.  yfs_dir_inode gives the
+// same entry's inode; a path walk and `ls` are these two plus yfs_lookup.
+def yfs_entry_off(ino: long, index: long) -> long {
+    let base = yfs_inode_off(ino);
+    let blk = yfs_u32(base + 8);
+    if (blk == 0) { return 0; };
+    let e = blk * yfs_block_size;
+    let i = 0;
+    while (i < index) {
+        let nl = yfs_u16(e);
+        if (nl == 0) { return 0; };
+        e = e + ((8 + nl + 3) & (0 - 4));
+        i = i + 1;
+    };
+    e
+};
+
+def yfs_dir_count(ino: long) -> long {
+    yfs_u32(yfs_inode_off(ino) + 4)
+};
+
+def yfs_readdir(ino: long, index: long, buf: long) -> long {
+    if (yfs_ok == 0 || index >= yfs_dir_count(ino)) { return 0 - 1; };
+    let e = yfs_entry_off(ino, index);
+    if (e == 0) { return 0 - 1; };
+    let nl = yfs_u16(e);
+    if (nl == 0) { return 0 - 1; };
+    let k = 0;
+    while (k < nl) {
+        kernel.poke_va8(buf + k, kernel.peek8(yfs_phys + e + 8 + k));
+        k = k + 1;
+    };
+    nl
+};
+
+def yfs_dir_inode(ino: long, index: long) -> long {
+    if (yfs_ok == 0 || index >= yfs_dir_count(ino)) { return 0 - 1; };
+    let e = yfs_entry_off(ino, index);
+    if (e == 0) { return 0 - 1; };
+    yfs_u32(e + 4)
+};
