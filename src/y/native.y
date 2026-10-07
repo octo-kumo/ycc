@@ -1393,9 +1393,14 @@ def ir_refs_item(ir: [long], at: long, out: [str]) -> [str] {
             out = ir_refs_push(out, lname(ir[wp]));
             out = ir_refs_push(out, lname(ir[wp + 1]));
         } else if (k == insn.O_MEM || k == insn.O_MEM0) {
-            if (insn.ir_form(f).mn == "lea") {
-                out = ir_refs_push(out, lname(ir[wp + 4]));
-            };
+            // A label a memory operand names is a reference whether the
+            // instruction loads or stores: dropping the cell (or the rodata)
+            // while the instruction that names it stays emitted is an
+            // undefined label at assembly. cell_reads is the other half --
+            // it decides whether that name is a READ, for the dead-global
+            // initializer pass.
+            let nm = lname(ir[wp + 4]);
+            if (len(nm) > 0) { out = ir_refs_push(out, nm); };
         };
         wp = wp + insn.ir_kind_words(k);
     });
@@ -1875,7 +1880,9 @@ def shake_refs(text: str, root_refs: [str]) -> str {
 // are scanned for references. Blocks and rules are shake_refs'.
 type PBlocks = { lines: [str], starts: [long], names: [str], ix: [AsmLabel] };
 // The kept text, and every reference the kept blocks make.
-type PShake = { text: str, refs: [str] };
+// The kept prelude: its text, every reference the kept blocks make, and the
+// per-block [name, direct refs] the --gc analysis closes over.
+type PShake = { text: str, refs: [str], bnames: [str], brefs: [[str]] };
 
 // Every name in types.y's os_call_names must be a label in the arch lines
 // that were actually emitted. This runs on both targets, and it is here rather
@@ -2043,6 +2050,8 @@ def shake_prelude(pb: PBlocks, roots: [str]) -> PShake {
     };
     let pieces: [str] = [];
     let out: [str] = [];
+    let knames: [str] = [];
+    let krefs: [[str]] = [];
     k = 0;
     while (k < nb) {
         if (keep[k]) {
@@ -2054,10 +2063,12 @@ def shake_prelude(pb: PBlocks, roots: [str]) -> PShake {
                 pieces += "\n";
             };
             out += brefs[k];
+            knames += names[k];
+            krefs += brefs[k];
         };
         k++;
     };
-    { text: join(pieces, ""), refs: out }
+    { text: join(pieces, ""), refs: out, bnames: knames, brefs: krefs }
 };
 
 // The prelude's lines, then the thread runtime's and the float primitives'
@@ -2484,6 +2495,11 @@ def st_new() -> EmitSt {
 // by a block on the way, so this is the high-water mark; emit_one_fn resets it
 // and sizes the frame from it.
 let frame_max = 0;
+// The label of the last literal closure gen_func_literal emitted. The array
+// methods read it right after gen(st, fnode) to call the body DIRECTLY when
+// the closure captures nothing -- the callee never looks at the record, so
+// the per-element indirect load and the closure push are pure overhead.
+let lit_label: long = -1;
 
 def st_with(st: EmitSt, b: [long], txt: [str]) -> EmitSt {
     { ir: b, txt: txt, rodata: st.rodata, uid: st.uid,
@@ -6048,6 +6064,32 @@ def gen_call(st: EmitSt, node: Call) -> EmitSt {
 // The checker types `arr.m(...)` in types.y; here each method is emitted
 // inline. Element width comes from the receiver's static type, so packed
 // [byte] and word-per-element arrays share one body per method.
+// The body label of a literal closure the caller may call directly: it
+// captures nothing, so the callee never reads the closure record and the
+// call needs no indirect load (same stack layout, minus the pushed record).
+// -1 when the callee must go through the record.
+def arr_direct_label(st: EmitSt, fnode: Node) -> long {
+    if (fnode.k != K.func) {
+        -1
+    } else {
+        let f: Func = fnode;
+        if (len(fn_captures(f, st.fns.ix, "")) > 0) { -1 } else { lit_label }
+    }
+};
+
+// The per-element call for an array method.
+def gen_arr_call(st: EmitSt, foff: long, arg_regs: [long], direct: long) -> EmitSt {
+    if (direct < 0) {
+        gen_closure_call(st, foff, arg_regs)
+    } else {
+        arg_regs.foreach((e) => {
+            st = emit_insn(st, insn.F_PUSH_R, e, 64, 0, 0, 0, 0, 0);
+        });
+        st = emit_insn(st, insn.F_CALL_L, direct, 0, 0, 0, 0, 0, 0);
+        emit_insn(st, insn.F_ADD_I_R, 8 * len(arg_regs), insn.R_RSP, 64, 0, 0, 0, 0)
+    }
+};
+
 def gen_closure_call(st: EmitSt, foff: long, arg_regs: [long]) -> EmitSt {
     st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, foff, -1, insn.R_R10, 64);
     st = emit_insn(st, insn.F_PUSH_R, insn.R_R10, 64, 0, 0, 0, 0, 0);
@@ -6267,6 +6309,7 @@ def gen_arr_sort(st: EmitSt, node: Call, sorted: bool) -> EmitSt {
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, aoff, -1);
     };
     st = gen(st, args[0]);
+    let adir = arr_direct_label(st, args[0]);
     st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, foff, -1);
     st = emit_insn(st, insn.F_MOV_I_R, 1, insn.R_RAX, 64, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, ioff, -1);
@@ -6308,7 +6351,7 @@ def gen_arr_sort(st: EmitSt, node: Call, sorted: bool) -> EmitSt {
     let regs: [long] = [];
     regs += insn.R_RAX;
     regs += insn.R_RCX;
-    st = gen_closure_call(st, foff, regs);
+    st = gen_arr_call(st, foff, regs, adir);
     st = emit_insn(st, insn.F_CMP_I_R, 0, insn.R_RAX, 64, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_JLE_L, shift_done.label, 0, 0, 0, 0, 0, 0);
     // a[j+1] = a_j
@@ -6389,6 +6432,7 @@ def gen_arr_iter_method(st: EmitSt, node: Call, key: str, at: Type) -> EmitSt {
         st = gen(st, dot.obj);
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, aoff, -1);
         st = gen(st, fnode);
+        let adir = arr_direct_label(st, fnode);
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, foff, -1);
         st = gen_arr_new_empty(st);
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, roff, -1);
@@ -6406,7 +6450,7 @@ def gen_arr_iter_method(st: EmitSt, node: Call, key: str, at: Type) -> EmitSt {
         let regs: [long] = [];
         if (nargs >= 1) { regs += insn.R_RAX; };
         if (nargs >= 2) { regs += insn.R_RCX; };
-        st = gen_closure_call(st, foff, regs);
+        st = gen_arr_call(st, foff, regs, adir);
         if (key == "map") {
             st = gen_arr_push_slot(st, roff, resesz);
         } else {
@@ -6433,6 +6477,7 @@ def gen_arr_iter_method(st: EmitSt, node: Call, key: str, at: Type) -> EmitSt {
         st = gen(st, dot.obj);
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, aoff, -1);
         st = gen(st, fnode);
+        let adir = arr_direct_label(st, fnode);
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, foff, -1);
         st = emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, ioff, -1);
@@ -6450,7 +6495,7 @@ def gen_arr_iter_method(st: EmitSt, node: Call, key: str, at: Type) -> EmitSt {
         let regs: [long] = [];
         if (nargs >= 1) { regs += insn.R_RAX; };
         if (nargs >= 2) { regs += insn.R_RCX; };
-        st = gen_closure_call(st, foff, regs);
+        st = gen_arr_call(st, foff, regs, adir);
         if (key == "foreach") {
             st = emit_insn(st, insn.F_INC_D, insn.R_RBP, -1, 1, ioff, -1, 0, 0);
             st = emit_insn(st, insn.F_JMP_L, loop.label, 0, 0, 0, 0, 0, 0);
@@ -6503,6 +6548,7 @@ def gen_arr_iter_method(st: EmitSt, node: Call, key: str, at: Type) -> EmitSt {
         st = gen(st, dot.obj);
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, aoff, -1);
         st = gen(st, fnode);
+        let adir = arr_direct_label(st, fnode);
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, foff, -1);
         st = gen(st, args[1]);
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, acoff, -1);
@@ -6519,7 +6565,7 @@ def gen_arr_iter_method(st: EmitSt, node: Call, key: str, at: Type) -> EmitSt {
         let regs: [long] = [];
         regs += insn.R_RAX;
         regs += insn.R_RCX;
-        st = gen_closure_call(st, foff, regs);
+        st = gen_arr_call(st, foff, regs, adir);
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, acoff, -1);
         st = emit_insn(st, insn.F_INC_D, insn.R_RBP, -1, 1, ioff, -1, 0, 0);
         st = emit_insn(st, insn.F_JMP_L, loop.label, 0, 0, 0, 0, 0, 0);
@@ -8299,6 +8345,7 @@ def gen_func_literal(st: EmitSt, node: Func) -> EmitSt {
     let ru = next_uid(st);
     st = ru.st;
     st = emit_one_fn(st, lbl, ru.uid, node, false, false, captypes, "");
+    lit_label = lbl;
     caps.foreach((e) => {
         let bcn: str = e;
         st = box_capture(st, bcn);
@@ -10081,16 +10128,18 @@ def elem_store_rdx_const(st: EmitSt, esz: long, base: long, k: long) -> EmitSt {
 // The array header is {len, cap, data, front} and NEVER moves: elements
 // live in a separate block, so growth keeps every alias valid (that is
 // what makes `arr += v` in-place). front, the free slots before data, is
-// the header's fourth word: y_alloc(arr_header_size()) hands out 32
-// zeroed bytes (NATIVE.md). This is the block size for n elements.
+// the header's fourth word: the header is all four words (NATIVE.md), and
+// the request must cover them, since y_alloc hands out at most the bytes
+// asked for (the collector's 8-byte block header sits in what used to be
+// the allocator's spare). This is the block size for n elements.
 def arr_alloc_size(esz: long, n: long) -> long {
     let b = n * esz;
     if (b < 8) { 8 } else { b }
 };
 
-// Bytes to allocate for the header itself.
+// Bytes to allocate for the header itself: {len, cap, data, front}.
 def arr_header_size() -> long {
-    24
+    32
 };
 
 // Field read rec.field: the checker guarantees a trec with that field.
@@ -10743,7 +10792,7 @@ def gen_join_conv(st: EmitSt, node: Call, tostr_fn: str, esz: long) -> EmitSt {
     st = emit_insn(st, insn.F_SHL_I_R, 3, insn.R_RDI, 64, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_CALL_L, lbl_new("y_alloc"), 0, 0, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
-    st = emit_insn(st, insn.F_MOV_I_R, 24, insn.R_RDI, 64, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_MOV_I_R, arr_header_size(), insn.R_RDI, 64, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_CALL_L, lbl_new("y_alloc"), 0, 0, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_POP_R, insn.R_RDX, 64, 0, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, doff, -1);
@@ -11099,6 +11148,11 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
         body = is_main ? ir_loc(body, 0) : ir_loc(body, func.line);
     }
     if (is_main) {
+        // The collector scans the stack for roots, so the process entry has to
+        // remember where the stack began: every live value sits below it. This
+        // is the first instruction, before any allocation can happen.
+        body = insn.ir_push(body, insn.F_MOV_R_P, insn.R_RSP, 64, -1, -1, 1, 0,
+            lbl_new("y_gc_stack_top"));
         // The Windows syscall self-test runs BEFORE anything else: its whole
         // point is that a drifted w_sysno number is caught in the first
         // instruction rather than in the first wrong write.
@@ -12244,7 +12298,195 @@ def dup_y_label(deps: [Unit], prog: Unit) -> void {
     };
 };
 
-def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
+// 0 = auto (decide from the program), 1 = always, 2 = never: the --gc switch,
+// set by the driver before compiling. Auto keeps the collector whenever an
+// allocation could happen more than once -- a loop or a recursion that
+// reaches the allocator -- because a wrong "no" is an unbounded heap.
+let gc_mode: long = 0;
+
+def set_gc_mode(m: long) -> void { gc_mode = m; };
+
+// ── the --gc decision ───────────────────────────────────────────────────
+// The collector is needed exactly when an allocation site can run more than
+// once: a loop or a recursion that can reach y_alloc. Everything here errs
+// toward keeping it -- a wrong "no" is an unbounded heap, a wrong "yes" is a
+// few KB of runtime.
+//
+// A backward jump inside one body's IR (a jump to a label defined earlier in
+// the same body) is a loop.
+def ir_has_loop(ir: [long]) -> bool {
+    let lid: [long] = [];
+    let lpos: [long] = [];
+    let at = 0;
+    while (at < len(ir)) {
+        if (ir[at] == insn.IR_LABEL) {
+            lid += ir[at + 1];
+            lpos += at;
+        };
+        at += insn.IR_W;
+    };
+    let found = false;
+    at = 0;
+    while (at < len(ir)) {
+        let f = ir[at];
+        if (f < insn.IR_LABEL) {
+            let form = insn.ir_form(f);
+            if (form.mn[0:1] == "j") {
+                let wp = at + 1;
+                form.kinds.foreach((k) => {
+                    if (k == insn.O_LBL) {
+                        let t = ir[wp];
+                        let i = 0;
+                        while (i < len(lid)) {
+                            if (lid[i] == t && lpos[i] < at) { found = true; };
+                            i++;
+                        };
+                    };
+                    wp = wp + insn.ir_kind_words(k);
+                });
+            };
+        };
+        at += insn.IR_W;
+    };
+    found
+};
+
+// Every label that can reach y_alloc, over kept bodies and kept prelude
+// blocks: the reverse closure of y_alloc. Plain loops, not closures: a lambda
+// here captures a dozen bindings, and this file is compiler source.
+def gc_users(labels: [str], refs: [[str]], keep: [bool], ps: PShake) -> [str] {
+    let names: [str] = [];
+    let edges: [[str]] = [];
+    let i = 0;
+    while (i < len(labels)) {
+        if (keep[i]) {
+            names += labels[i];
+            edges += refs[i];
+        };
+        i++;
+    };
+    let bn = ps.bnames;
+    let br = ps.brefs;
+    i = 0;
+    while (i < len(bn)) {
+        names += bn[i];
+        edges += br[i];
+        i++;
+    };
+    let rev: [[str]] = [];
+    i = 0;
+    while (i < len(names)) {
+        let none: [str] = [];
+        rev += [none];
+        i++;
+    };
+    let ix = namemap_build(names);
+    i = 0;
+    while (i < len(names)) {
+        let es = edges[i];
+        let j = 0;
+        while (j < len(es)) {
+            let k = namemap_get(ix, es[j]);
+            if (k >= 0) { rev[k] += names[i]; };
+            j++;
+        };
+        i++;
+    };
+    let out: [str] = [];
+    let work: [str] = [];
+    if (namemap_get(ix, "y_alloc") >= 0) {
+        out += "y_alloc";
+        work += "y_alloc";
+        while (len(work) > 0) {
+            let w = work[0];
+            work = work[1:len(work)];
+            let j = namemap_get(ix, w);
+            if (j >= 0) {
+                let rs = rev[j];
+                let k = 0;
+                while (k < len(rs)) {
+                    if (!(name_in(out, rs[k]))) {
+                        out += rs[k];
+                        work += rs[k];
+                    };
+                    k++;
+                };
+            };
+        };
+    };
+    out
+};
+
+// A body that calls back into itself, directly or through a cycle, and can
+// reach y_alloc. Only consulted when nothing has a loop, so the walk is over
+// a handful of nodes.
+def gc_recursive(labels: [str], refs: [[str]], keep: [bool], users: [str]) -> bool {
+    let ix = namemap_build(labels);
+    let found = false;
+    let i = 0;
+    while (i < len(labels) && !found) {
+        if (keep[i] && name_in(users, labels[i])) {
+            let stack: [str] = [];
+            let rs = refs[i];
+            let j = 0;
+            while (j < len(rs)) { stack += rs[j]; j++; };
+            let seen: [str] = [];
+            while (len(stack) > 0 && !found) {
+                let w = stack[len(stack) - 1];
+                stack = stack[0:len(stack) - 1];
+                if (w == labels[i]) {
+                    found = true;
+                } else if (!(name_in(seen, w))) {
+                    seen += w;
+                    let k = namemap_get(ix, w);
+                    if (k >= 0 && keep[k]) {
+                        let ks = refs[k];
+                        let m = 0;
+                        while (m < len(ks)) { stack += ks[m]; m++; };
+                    };
+                };
+            };
+        };
+        i++;
+    };
+    found
+};
+
+// auto (0): link the collector only when an allocation can repeat. always (1)
+// and never (2) say so outright.
+def gc_decide(mode: long, labels: [str], refs: [[str]], keep: [bool], all: [[long]], allblob: [str], ps: PShake, threads: bool) -> bool {
+    if (mode == 1) { true }
+    else if (mode == 2) { false }
+    else if (threads) { true }
+    else {
+        let users = gc_users(labels, refs, keep, ps);
+        // a kept body with a loop that can reach y_alloc
+        let loops = false;
+        let i = 0;
+        while (i < len(labels) && !loops) {
+            if (keep[i] && name_in(users, labels[i])) {
+                let bd: [long] = all[i];
+                if (len(bd) == 0) { bd = unpack_body(allblob[i]); };
+                if (len(bd) > 0 && ir_has_loop(bd)) { loops = true; };
+            };
+            i++;
+        };
+        if (loops) { true } else {
+            // a kept prelude block other than the allocator's own that can
+            // reach y_alloc: the helpers loop, and their asm is not parsed
+            let pu = false;
+            let bn = ps.bnames;
+            i = 0;
+            while (i < len(bn) && !pu) {
+                if (!(bn[i][0:7] == "y_alloc") && name_in(users, bn[i])) { pu = true; };
+                i++;
+            };
+            if (pu) { true } else { gc_recursive(labels, refs, keep, users) }
+        }
+    }
+};
+
+def link_units(std: [Unit], deps: [Unit], prog: Unit, gcmode: long) -> [LinkPart] {
     let units: [Unit] = [];
     units += std;
     units += deps;
@@ -12360,6 +12602,62 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
     let mth = uses_math(body_refs);
     let pb = prelude_blocks(prelude_with(core_lines, thr, mth));
     let ps = shake_prelude(pb, body_refs);
+    // A cell no kept code reads, whose initializer only allocates, is dead:
+    // dropping that range is what keeps the allocator -- and with it the whole
+    // collector -- out of a program that never allocates. Every unit's cells
+    // count, not just the program's (rt.y's CLK_TS is `[0; 2]`, and its
+    // initializer was the only thing naming y_alloc in hello.y), and a packed
+    // body's items are decoded so a cell is read only if a body really reads
+    // it. The prelude is then shaken again, because the drop can remove the
+    // last reference to a prelude block.
+    let reads: [str] = [];
+    all.foreach((e, ri) => {
+        if (keep[ri]) {
+            let bd: [long] = e;
+            if (len(bd) == 0) { bd = unpack_body(allblob[ri]); };
+            if (len(bd) > 0) {
+                reads = cell_reads(bd, reads)
+            } else {
+                // No blob: the refs are all that can be seen and they include
+                // the stores, so this body's cells look read. Conservative on
+                // purpose -- a cell dropped while a body reads it is an
+                // undefined label at assembly.
+                reads += refs[ri]
+            };
+        };
+    });
+    reads += ps.refs;
+    let cells: [str] = [];
+    units.foreach((u) => {
+        cells += u.globals;
+    });
+    cells += prog.globals;
+    let dead_cells: [str] = [];
+    cells.foreach((cell) => {
+        if (!name_in(reads, cell)) { dead_cells += [cell]; };
+    });
+    if (len(dead_cells) > 0) {
+        all.foreach((_el, dj) => {
+            if (keep[dj]) {
+                let bd: [long] = all[dj];
+                if (len(bd) == 0) { bd = unpack_body(allblob[dj]); };
+                if (len(bd) > 0) {
+                    let ni = ir_drop_inits(bd, dead_cells);
+                    if (len(ni) != len(bd)) {
+                        all[dj] = ni;
+                        refs[dj] = ir_refs(ni);
+                    };
+                };
+            };
+        });
+        // The CELLS stay: a dead cell is one `.bss` slot, which costs no file
+        // bytes, and keeping it is the conservative half of this pass.
+        shaken = prune_bodies(labels, refs, extra);
+        keep = shaken.keep;
+        body_refs = shaken.refs;
+        pb = prelude_blocks(prelude_with(core_lines, thr, mth));
+        ps = shake_prelude(pb, body_refs);
+    };
     // A kept prelude block may call a Y helper (none does today): the
     // helper is kept too, and everything shaken again from there.
     let bmap = namemap_build(labels);
@@ -12376,6 +12674,14 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
         };
         ps = shake_prelude(pb, body_refs);
         more = unkept_refs(ps.refs, bmap, keep);
+    };
+    // --gc: when the collector cannot be needed, its three entry points become
+    // stubs, so the registry, metadata arena, marker, sweeper and free lists go
+    // unreachable and shake out. The allocator and heap_used() are untouched.
+    if (!(gc_decide(gcmode, labels, refs, keep, all, allblob, ps, thr))) {
+        core_lines = arch.arch_nogc_lines(core_lines);
+        pb = prelude_blocks(prelude_with(core_lines, thr, mth));
+        ps = shake_prelude(pb, body_refs);
     };
     // Everything the kept code can reach: the kept bodies' own references
     // plus the kept prelude's. Computed before the rodata, which uses it as
@@ -12395,53 +12701,10 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
         allrod += u.rodata;
         gls += u.globals;
     };
-    // Which of the PROGRAM's globals the kept code reads. Only these: a unit
-    // from the std pack carries packed bodies, whose references are not IR
-    // that can be walked, so a cell whose only reader lives in one would look
-    // dead (it did, and the failure is an undefined label at assembly). A
-    // packed unit cannot read a program global anyway -- it was compiled
-    // before the program existed -- and the spliced units this is for
-    // (std/math.y and friends) are the program's own.
-    let reads: [str] = [];
-    all.foreach((e, ri) => {
-        if (keep[ri]) {
-            if (len(e) > 0) {
-                reads = cell_reads(e, reads)
-            } else {
-                // A body from the std pack carries no items: its REFS are all
-                // that can be seen, and they include the stores, so a packed
-                // unit's cells look read and are never dropped. Conservative
-                // on purpose -- the alternative is a cell dropped while a
-                // packed body reads it.
-                reads += refs[ri]
-            };
-        };
-    });
-    let dead_cells: [str] = [];
-    for di in 0..len(prog.globals) {
-        if (!name_in(reads, prog.globals[di])) { dead_cells += prog.globals[di]; };
-    };
-    if (len(dead_cells) > 0) {
-        all.foreach((_el, dj) => {
-            if (keep[dj] && len(all[dj]) > 0) {
-                let ni = ir_drop_inits(all[dj], dead_cells);
-                if (len(ni) != len(all[dj])) {
-                    all[dj] = ni;
-                    refs[dj] = ir_refs(ni);
-                };
-            };
-        });
-        // The CELLS stay: a dead cell's storage is .bss, which costs no file
-        // bytes, and the read scan above is the one thing here that has to be
-        // exactly right (a cell dropped while something reads it is an
-        // undefined label at assembly, or worse). What this pass is for is the
-        // INSTRUCTIONS, and those are gone.
-        let live: [str] = [];
-        gls.foreach((e) => {
-            live += e;
-        });
-        gls = live;
-    };
+    // Which cells the kept code reads, and the drop of a dead cell's
+    // initializer range, ran above -- before the prelude was shaken, because
+    // the range's own references (y_alloc, and through it the collector) are
+    // what the prelude's roots are built from.
     allrod += prog.rodata;
     gls += prog.globals;
     let interned = rodata_intern([], allrod, const_refs);
@@ -13321,7 +13584,7 @@ def emit_program(ast: Block, nr: Resolved, debug: bool, wlevel: long, std: [Unit
         dup_y_label(deps, r.unit);
         let pt = clock_us();
         let ph = heap_used();
-        let parts = link_units(std, deps, r.unit);
+        let parts = link_units(std, deps, r.unit, gc_mode);
         let pr = phase_end(times, "asm_parts", pt, ph);
         { ok: true, asm: parts, errors: r.errors, warnings: r.warnings,
             times: pr.times }

@@ -18,6 +18,7 @@
  *   ycc build [-g] [-w] [--no-exec] [--std-src] [DIR]   build its programs
  *   ycc vendor [DIR]   copy its git dependencies into vendor/
  */
+#include <stdlib.h>
 #include "ylong.h"
 #include "ycc.h"
 #include "target.h"
@@ -110,6 +111,19 @@ Yv *parse_cli_args(Yv *argv) {
             wlevel = wlevel_arg(argv, i, n);
             i = i + 1;
             ;
+        } else if (yv_len(a) >= 5 && ys_eq_lit(ys_slice(a, 0, 5), "--gc=")) {
+            /* Whether the collector is linked: auto (the default) decides from
+               the program, always and never say so outright. The decision lives
+               in native.c's link_units; this only records the wish. */
+            Yv *m = ys_slice_from(a, 5);
+            if (ys_eq_lit(m, "auto")) { set_gc_mode(0); }
+            else if (ys_eq_lit(m, "always")) { set_gc_mode(1); }
+            else if (ys_eq_lit(m, "never")) { set_gc_mode(2); }
+            else {
+                puts_(ys_cat(ys("ycc: --gc wants auto, always or never, got '"),
+                             ys_cat(m, ys("'\n"))));
+                exit(1);
+            }
         } else if (ys_eq_lit(a, "--std-src")) {
             std_src = 1;
             ;
@@ -174,6 +188,11 @@ puts_(ys("               status; everything after `--` is the program's argv\n")
             puts_(ys("               an else branch that does nothing; 2 adds the\n"));
             puts_(ys("               shortening suggestions of LINT_RULES.md\n"));
             puts_(ys("  --no-exec    omit exec() -- the binary cannot reach a shell\n"));
+            puts_(ys("  --gc=MODE    the collector: auto (the default) links it only\n"));
+            puts_(ys("               when an allocation can happen in a loop or a\n"));
+            puts_(ys("               recursion; always and never force it. Without the\n"));
+            puts_(ys("               collector a program is smaller but its heap never\n"));
+            puts_(ys("               reclaims.\n"));
             puts_(ys("  --std-src    compile the std units (the runtime and std library)\n"));
             puts_(ys("               from source instead of using the precompiled ones\n"));
             puts_(ys("               attached to ycc; the output is the same\n"));

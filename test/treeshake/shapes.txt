@@ -1,0 +1,17 @@
+# Recorded binary size, in bytes, for the shapes a runtime addition moves
+# first. Growth fails the suite; shrinkage is reported so the file can be
+# lowered deliberately.
+#
+# hello.y allocates nothing, so the allocator and the whole collector shake
+# out: 3069 bytes before the dead-global-initializer fix, 390 after.
+# minimal.y prints a number; print(<integer>) now formats into a stack buffer
+# (rt.y y_print_long -> arch y_os_print_int), so it allocates nothing either and
+# fell from 3120 to 440.
+# forloop/foreach are the loop-parity pair. alloc_once.y allocates once, outside
+# any loop, so --gc=auto leaves the collector out of it (1312 B).
+hello.y 390
+minimal.y 440
+forloop.y 3497
+foreach.y 3384
+dead.y 1551
+alloc_once.y 1312

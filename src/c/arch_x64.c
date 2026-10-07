@@ -306,8 +306,22 @@ Yv *arch_heap_cells(void) {
        the command (SUGGESTIONS.md 24: heap_used() moved one byte per
        character of argv[0]). y_heap_used subtracts it, on the main heap only:
        a spawned thread gets a heap of its own, and the argv copies are not in
-       it. */
-    return ys("y_heap:\n.zero 32\ny_heap_base:\n.zero 8\n");
+       it.
+
+       The y_gc_* cells are the collector's state (arch/prelude.s): the stack
+       top _start records, the heap's low/high bounds, the chunk list and its
+       hash table, the metadata bump, the free-list heads and mark stack, the
+       live-byte and trigger counters, and the running/off guards. They are
+       words, so a program that never allocates shakes them out with y_alloc
+       and every other program carries a few hundred zeroed .bss bytes. */
+    return ys("y_heap:\n.zero 32\ny_heap_base:\n.zero 8\n"
+              "y_gc_stack_top:\n.zero 8\ny_gc_lo:\n.zero 8\ny_gc_hi:\n.zero 8\n"
+              "y_gc_all:\n.zero 8\ny_gc_tab:\n.zero 8\ny_gc_tabn:\n.zero 8\n"
+              "y_gc_meta_cur:\n.zero 8\ny_gc_meta_end:\n.zero 8\n"
+              "y_gc_free:\n.zero 8\ny_gc_ms_cur:\n.zero 8\ny_gc_ms_end:\n.zero 8\n"
+              "y_gc_ms_seg:\n.zero 8\n"
+              "y_gc_live:\n.zero 8\ny_gc_last:\n.zero 8\n"
+              "y_gc_run:\n.zero 8\ny_gc_off:\n.zero 8\n");
 }
 
 ylong arch_frame(ylong slots) {
@@ -595,6 +609,52 @@ static int arch_is_label_line(Yv *l) {
 
 // `lines` walked; at a label a replacing block claims, that block's lines and
 // not the prelude's. The new blocks go after the last replaced one.
+/* Replace the block that starts at the column-0 label `name` (through the line
+   before the next label) with `repl`. */
+static Yv *arch_block_sub(Yv *lines, Yv *name, Yv *repl) {
+    Yv *out = yav(0);
+    ylong i = 0;
+    while (i < yv_len(lines)) {
+        Yv *l = ya_get(lines, i);
+        if (arch_is_label_line(l)
+            && ys_eq(ys_trim(ys_slice(l, 0, yv_len(l) - 1)), name)) {
+            ylong r = 0;
+            while (r < yv_len(repl)) {
+                out = ya_push(out, ya_get(repl, r));
+                r = r + 1;
+            }
+            i = i + 1;
+            while (i < yv_len(lines) && !arch_is_label_line(ya_get(lines, i))) {
+                i = i + 1;
+            }
+        } else {
+            out = ya_push(out, l);
+            i = i + 1;
+        }
+    }
+    return out;
+}
+
+/* The GC-free runtime: a program whose heap cannot grow does not link the
+   collector at all (--gc, or the auto analysis). The allocator itself is
+   UNCHANGED -- only the collector's three entry points become stubs -- so the
+   chunk layout and heap_used() accounting are bit-identical, and every other
+   collector block (the registry, metadata arena, marker, sweeper, free lists)
+   becomes unreachable and is shaken out.
+     y_gc_maybe      never runs a cycle
+     y_gc_alloc_free never recycles a block (0 = none)
+     y_gc_chunk_add  returns the base the allocator wants, registers nothing */
+Yv *arch_nogc_lines(Yv *lines) {
+    Yv *out = arch_block_sub(lines, ys("y_gc_maybe"),
+                             yavs(ys("y_gc_maybe:"), ys("    ret"), NULL));
+    out = arch_block_sub(out, ys("y_gc_alloc_free"),
+                         yavs(ys("y_gc_alloc_free:"), ys("    xor %eax, %eax"),
+                              ys("    ret"), NULL));
+    return arch_block_sub(out, ys("y_gc_chunk_add"),
+                          yavs(ys("y_gc_chunk_add:"), ys("    mov %rdi, %rax"),
+                               ys("    ret"), NULL));
+}
+
 static Yv *arch_win_sub(Yv *lines, Yv *blocks) {
     Yv *out = yav(0);
     ylong i = 0;

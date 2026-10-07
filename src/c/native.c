@@ -620,12 +620,13 @@ Yv *check_os_call_names(Yv *lines);
 Yv *arch_label_name(Yv *l);
 Yv *rodata_intern(Yv *pieces, Yv *allrod, Yv *refs);
 Yv *relabel_dups(Yv *body, Yv *m, Yv *dup_new);
-Yv *link_units(Yv *std, Yv *deps, Yv *prog);
+Yv *link_units(Yv *std, Yv *deps, Yv *prog, ylong gcmode);
 Yv *pack_version(void);
 Yv *obj_version(void);
 Yv *pack_put(Yv *out, Yv *s);
 Yv *pack_strs(Yv *out, Yv *xs);
 static Yv *unpack_body(Yv *blob);   /* a pack body's items, decoded when kept */
+static Yv *gen_closure_call(Yv *st, ylong foff, Yv *arg_regs);
 Yv *tcode(Yv *t);
 Yv *tcode_go(Yv *out, Yv *t);
 Yv *tcode_list(Yv *out, Yv *ts);
@@ -2331,9 +2332,13 @@ static Yv *ir_refs_item(Yv *ir, ylong at, Yv *out) {
             out = ir_refs_push(out, lname(ya_get(ir, wp)));
             out = ir_refs_push(out, lname(ya_get(ir, wp + 1)));
         } else if (k == O_MEM || k == O_MEM0) {
-            if (ys_eq_lit(yr_get(fo, "mn"), "lea")) {
-                out = ir_refs_push(out, lname(ya_get(ir, wp + 4)));
-            };
+            /* A label a memory operand names is a reference whether the
+               instruction loads or stores: dropping the cell (or the rodata)
+               while the instruction that names it stays emitted is an
+               undefined label at assembly. cell_reads is the other half -- it
+               decides whether that name is a READ, for the dead-global
+               initializer pass. */
+            out = ir_refs_push(out, lname(ya_get(ir, wp + 4)));
         };
         wp = wp + ir_kind_words(k);
         i = i + 1;
@@ -2954,6 +2959,8 @@ Yv *shake_prelude(Yv *pb, Yv *roots) {
     }
     Yv *pieces = yav(0);
     Yv *out = yav(0);
+    Yv *knames = yav(0);
+    Yv *krefs = yav(0);
     k = 0;
     while (k < nb) {
         if (yv_b(ya_get(keep, k))) {
@@ -2974,10 +2981,13 @@ Yv *shake_prelude(Yv *pb, Yv *roots) {
                 out = ya_push(out, ya_get(bk, j));
                 j = j + 1;
             }
+            knames = ya_push(knames, ya_get(names, k));
+            krefs = ya_push(krefs, bk);
         }
         k = k + 1;
     }
-    return yr(2, "text", ys_join(pieces, ys("")), "refs", out);
+    return yr(4, "text", ys_join(pieces, ys("")), "refs", out,
+              "bnames", knames, "brefs", krefs);
 }
 
 /* The prelude's lines, the thread runtime's after them when it is used. */
@@ -3490,6 +3500,18 @@ static Yv *st_ir(Yv *st, Yv *b) {
  * by a block on the way, so this is the high-water mark; emit_one_fn resets it
  * and sizes the frame from it. */
 static ylong frame_max = 0;
+/* 0 = auto (decide from the program), 1 = always, 2 = never: the --gc switch,
+   set by the driver before compiling. Auto keeps the collector whenever an
+   allocation could happen more than once -- a loop or a recursion that reaches
+   the allocator -- because a wrong "no" is an unbounded heap. */
+static ylong gc_mode = 0;
+
+void set_gc_mode(ylong m) { gc_mode = m; }
+/* The label of the last literal closure gen_func_literal emitted. The array
+ * methods read it right after gen(st, fnode) to call the body DIRECTLY when
+ * the closure captures nothing -- the callee never looks at the record, so
+ * the per-element indirect load and the closure push are pure overhead. */
+static ylong lit_label = -1;
 
 /* The state with the frame counter set: what a block does on the way out, so
  * the counter is a stack of depths (see gen_block_as) rather than a running
@@ -7421,6 +7443,30 @@ Yv *gen_call(Yv *st, Yv *node) {
  * the call goes to the builtin's own lowering, or straight to the
  * std/str.y helper by label -- a Y function like any other, so the
  * arguments are pushed and the caller pops them. */
+/* The body label of a literal closure the caller may call directly: it
+ * captures nothing, so the callee never reads the closure record and the call
+ * needs no indirect load (same stack layout, minus the pushed record). -1
+ * when the callee must go through the record. */
+static ylong arr_direct_label(Yv *st, Yv *fnode) {
+    if (yv_l(yr_get(fnode, "k")) != K_func) { return -1; }
+    if (yv_len(fn_captures(fnode, yr_get(yr_get(st, "fns"), "ix"), ys(""))) > 0) {
+        return -1;
+    }
+    return lit_label;
+}
+
+/* The per-element call for an array method. */
+static Yv *gen_arr_call(Yv *st, ylong foff, Yv *arg_regs, ylong direct) {
+    if (direct < 0) { return gen_closure_call(st, foff, arg_regs); }
+    ylong i = 0;
+    while (i < yv_len(arg_regs)) {
+        st = emit_insn(st, F_PUSH_R, yv_l(ya_get(arg_regs, i)), 64, 0, 0, 0, 0, 0);
+        i = i + 1;
+    }
+    st = emit_insn(st, F_CALL_L, direct, 0, 0, 0, 0, 0, 0);
+    return emit_insn(st, F_ADD_I_R, 8 * yv_len(arg_regs), R_RSP, 64, 0, 0, 0, 0);
+}
+
 static Yv *gen_closure_call(Yv *st, ylong foff, Yv *arg_regs) {
     st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, foff, -1, R_R10, 64);
     st = emit_insn(st, F_PUSH_R, R_R10, 64, 0, 0, 0, 0, 0);
@@ -7665,6 +7711,7 @@ static Yv *gen_arr_sort(Yv *st, Yv *node, int sorted) {
         st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, aoff, -1);
     }
     st = gen(st, ya_get(args, 0));
+    ylong adir = arr_direct_label(st, ya_get(args, 0));
     st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, foff, -1);
     st = emit_insn(st, F_MOV_I_R, 1, R_RAX, 64, 0, 0, 0, 0);
     st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, ioff, -1);
@@ -7699,7 +7746,7 @@ static Yv *gen_arr_sort(Yv *st, Yv *node, int sorted) {
     st = emit_insn(st, F_MOV_R_D, R_RDX, 64, R_RBP, -1, 1, ajoff, -1);
     st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, ajoff, -1, R_RAX, 64);
     st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, koff, -1, R_RCX, 64);
-    st = gen_closure_call(st, foff, yav(2, yv_long(R_RAX), yv_long(R_RCX)));
+    st = gen_arr_call(st, foff, yav(2, yv_long(R_RAX), yv_long(R_RCX)), adir);
     st = emit_insn(st, F_CMP_I_R, 0, R_RAX, 64, 0, 0, 0, 0);
     st = emit_insn(st, F_JLE_L, yv_l(yr_get(shift_done, "label")), 0, 0, 0, 0, 0, 0);
     st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, aoff, -1, R_RAX, 64);
@@ -7784,6 +7831,7 @@ static Yv *gen_arr_iter_method(Yv *st, Yv *node, Yv *key, Yv *at) {
         st = gen(st, yr_get(dot, "obj"));
         st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, aoff, -1);
         st = gen(st, fnode);
+        ylong adir = arr_direct_label(st, fnode);
         st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, foff, -1);
         st = gen_arr_new_empty(st);
         st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, roff, -1);
@@ -7801,7 +7849,7 @@ static Yv *gen_arr_iter_method(Yv *st, Yv *node, Yv *key, Yv *at) {
         Yv *regs = yav(0);
         if (nargs >= 1) { regs = ya_push(regs, yv_long(R_RAX)); }
         if (nargs >= 2) { regs = ya_push(regs, yv_long(R_RCX)); }
-        st = gen_closure_call(st, foff, regs);
+        st = gen_arr_call(st, foff, regs, adir);
         if (ys_eq_lit(key, "map")) {
             st = gen_arr_push_slot(st, roff, resesz);
         } else {
@@ -7831,6 +7879,7 @@ static Yv *gen_arr_iter_method(Yv *st, Yv *node, Yv *key, Yv *at) {
         st = gen(st, yr_get(dot, "obj"));
         st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, aoff, -1);
         st = gen(st, fnode);
+        ylong adir = arr_direct_label(st, fnode);
         st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, foff, -1);
         st = emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
         st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, ioff, -1);
@@ -7848,7 +7897,7 @@ static Yv *gen_arr_iter_method(Yv *st, Yv *node, Yv *key, Yv *at) {
         Yv *regs = yav(0);
         if (nargs >= 1) { regs = ya_push(regs, yv_long(R_RAX)); }
         if (nargs >= 2) { regs = ya_push(regs, yv_long(R_RCX)); }
-        st = gen_closure_call(st, foff, regs);
+        st = gen_arr_call(st, foff, regs, adir);
         if (ys_eq_lit(key, "foreach")) {
             st = emit_insn(st, F_INC_D, R_RBP, -1, 1, ioff, -1, 0, 0);
             st = emit_insn(st, F_JMP_L, yv_l(yr_get(loop, "label")), 0, 0, 0, 0, 0, 0);
@@ -7903,6 +7952,7 @@ static Yv *gen_arr_iter_method(Yv *st, Yv *node, Yv *key, Yv *at) {
         st = gen(st, yr_get(dot, "obj"));
         st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, aoff, -1);
         st = gen(st, fnode);
+        ylong adir = arr_direct_label(st, fnode);
         st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, foff, -1);
         st = gen(st, ya_get(args, 1));
         st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, acoff, -1);
@@ -7916,7 +7966,7 @@ static Yv *gen_arr_iter_method(Yv *st, Yv *node, Yv *key, Yv *at) {
         st = gen_arr_loop_head(st, at, aoff, ioff, yv_l(yr_get(done, "label")));
         st = emit_insn(st, F_MOV_R_R, R_RAX, 64, R_RCX, 64, 0, 0, 0);
         st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, acoff, -1, R_RAX, 64);
-        st = gen_closure_call(st, foff, yav(2, yv_long(R_RAX), yv_long(R_RCX)));
+        st = gen_arr_call(st, foff, yav(2, yv_long(R_RAX), yv_long(R_RCX)), adir);
         st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, acoff, -1);
         st = emit_insn(st, F_INC_D, R_RBP, -1, 1, ioff, -1, 0, 0);
         st = emit_insn(st, F_JMP_L, yv_l(yr_get(loop, "label")), 0, 0, 0, 0, 0, 0);
@@ -9893,6 +9943,7 @@ Yv *gen_func_literal(Yv *st, Yv *node) {
     st = yr_get(ru, "st");
     st = emit_one_fn(st, lbl, yv_l(yr_get(ru, "uid")), node, 0, 0, captypes,
                      ys(""));
+    lit_label = yv_l(lbl);
     ylong bci = 0;
     while (bci < yv_len(caps)) {
         Yv *bcn = ya_get(caps, bci);
@@ -11945,8 +11996,10 @@ Yv *elem_store_rdx_const(Yv *st, ylong esz, ylong base, ylong k) {
 /* The array header is {len, cap, data, front} and NEVER moves: elements
  * live in a separate block, so growth keeps every alias valid (that is
  * what makes `arr += v` in-place). front, the free slots before data, is
- * the header's fourth word: y_alloc(arr_header_size()) hands out 32
- * zeroed bytes (NATIVE.md). This is the block size for n elements. */
+ * the header's fourth word: the header is all four words (NATIVE.md), and
+ * the request must cover them, since y_alloc hands out at most the bytes
+ * asked for (the collector's 8-byte block header sits in what used to be
+ * the allocator's spare). This is the block size for n elements. */
 ylong arr_alloc_size(ylong esz, ylong n) {
     ylong b = n * esz;
     if (b < 8) {
@@ -11956,8 +12009,8 @@ ylong arr_alloc_size(ylong esz, ylong n) {
     }
 }
 
-/* Bytes to allocate for the header itself. */
-ylong arr_header_size(void) { return 24; }
+/* Bytes to allocate for the header itself: {len, cap, data, front}. */
+ylong arr_header_size(void) { return 32; }
 
 Yv *gen_dot(Yv *st, Yv *node) {
     /* dobj is read twice (infer, then gen). */
@@ -12664,7 +12717,7 @@ Yv *gen_join_conv(Yv *st, Yv *node, Yv *tostr_fn, ylong esz) {
     st = emit_insn(st, F_SHL_I_R, 3, R_RDI, 64, 0, 0, 0, 0);
     st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_alloc"))), 0, 0, 0, 0, 0, 0);
     st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
-    st = emit_insn(st, F_MOV_I_R, 24, R_RDI, 64, 0, 0, 0, 0);
+    st = emit_insn(st, F_MOV_I_R, arr_header_size(), R_RDI, 64, 0, 0, 0, 0);
     st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_alloc"))), 0, 0, 0, 0, 0, 0);
     st = emit_insn(st, F_POP_R, R_RDX, 64, 0, 0, 0, 0, 0);
     st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, doff, -1);
@@ -13097,6 +13150,11 @@ Yv *emit_one_fn(Yv *st, Yv *label, ylong fuid, Yv *func, int is_main,
         ;
     }
     if (is_main) {
+        /* The collector scans the stack for roots, so the process entry has to
+           remember where the stack began: every live value sits below it. This
+           is the first instruction, before any allocation can happen. */
+        body = ir_push(body, F_MOV_R_P, R_RSP, 64, -1, -1, 1, 0,
+                       yv_l(lbl_new(ys("y_gc_stack_top"))));
         /* The Windows syscall self-test runs BEFORE anything else: its whole
            point is that a drifted w_sysno number is caught in the first
            instruction rather than in the first wrong write. */
@@ -14652,7 +14710,203 @@ static ylong dup_y_label(Yv *deps, Yv *prog) {
     return 0;
 }
 
-Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
+/* ── the --gc decision ─────────────────────────────────────────────────
+   The collector is needed exactly when an allocation site can run more than
+   once: a loop or a recursion that can reach y_alloc. Everything here errs
+   toward keeping it -- a wrong "no" is an unbounded heap, a wrong "yes" is a
+   few KB of runtime.
+
+   A backward jump inside one body's IR (a jump to a label defined earlier in
+   the same body) is a loop. */
+static int ir_has_loop(Yv *ir) {
+    Yv *lid = yav(0);
+    Yv *lpos = yav(0);
+    ylong at = 0;
+    while (at < yv_len(ir)) {
+        if (yv_l(ya_get(ir, at)) == IR_LABEL) {
+            lid = ya_push(lid, ya_get(ir, at + 1));
+            lpos = ya_push(lpos, yv_long(at));
+        }
+        at = at + IR_W;
+    }
+    int found = 0;
+    at = 0;
+    while (at < yv_len(ir)) {
+        ylong f = yv_l(ya_get(ir, at));
+        if (f < IR_LABEL) {
+            Yv *fo = ir_form(f);
+            Yv *mn = yr_get(fo, "mn");
+            if (yv_len(mn) > 0 && ys_eq_lit(ys_slice(mn, 0, 1), "j")) {
+                Yv *kinds = yr_get(fo, "kinds");
+                ylong wp = at + 1;
+                ylong ki = 0;
+                while (ki < yv_len(kinds)) {
+                    ylong k = yv_l(ya_get(kinds, ki));
+                    if (k == O_LBL) {
+                        ylong t = yv_l(ya_get(ir, wp));
+                        ylong j = 0;
+                        while (j < yv_len(lid)) {
+                            if (yv_l(ya_get(lid, j)) == t
+                                && yv_l(ya_get(lpos, j)) < at) {
+                                found = 1;
+                            }
+                            j = j + 1;
+                        }
+                    }
+                    wp = wp + ir_kind_words(k);
+                    ki = ki + 1;
+                }
+            }
+        }
+        at = at + IR_W;
+    }
+    return found;
+}
+
+/* Every label that can reach y_alloc, over kept bodies and kept prelude
+   blocks: the reverse closure of y_alloc. */
+static Yv *gc_users(Yv *labels, Yv *refs, Yv *keep, Yv *ps) {
+    Yv *names = yav(0);
+    Yv *edges = yav(0);
+    ylong i = 0;
+    while (i < yv_len(labels)) {
+        if (yv_b(ya_get(keep, i))) {
+            names = ya_push(names, ya_get(labels, i));
+            edges = ya_push(edges, ya_get(refs, i));
+        }
+        i = i + 1;
+    }
+    Yv *bn = yr_get(ps, "bnames");
+    Yv *br = yr_get(ps, "brefs");
+    i = 0;
+    while (i < yv_len(bn)) {
+        names = ya_push(names, ya_get(bn, i));
+        edges = ya_push(edges, ya_get(br, i));
+        i = i + 1;
+    }
+    Yv *rev = yav(0);
+    i = 0;
+    while (i < yv_len(names)) {
+        rev = ya_push(rev, yav(0));
+        i = i + 1;
+    }
+    Yv *ix = namemap_build(names);
+    i = 0;
+    while (i < yv_len(names)) {
+        Yv *es = ya_get(edges, i);
+        ylong j = 0;
+        while (j < yv_len(es)) {
+            ylong k = namemap_get(ix, ya_get(es, j));
+            if (k >= 0) {
+                ya_set(rev, k, ya_push(ya_get(rev, k), ya_get(names, i)));
+            }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    Yv *out = yav(0);
+    Yv *work = yav(0);
+    if (namemap_get(ix, ys("y_alloc")) >= 0) {
+        out = ya_push(out, ys("y_alloc"));
+        work = ya_push(work, ys("y_alloc"));
+        while (yv_len(work) > 0) {
+            Yv *w = ya_get(work, 0);
+            work = ya_slice(work, 1, yv_len(work));
+            ylong j = namemap_get(ix, w);
+            if (j >= 0) {
+                Yv *rs = ya_get(rev, j);
+                ylong k = 0;
+                while (k < yv_len(rs)) {
+                    Yv *r = ya_get(rs, k);
+                    if (!name_in(out, r)) {
+                        out = ya_push(out, r);
+                        work = ya_push(work, r);
+                    }
+                    k = k + 1;
+                }
+            }
+        }
+    }
+    return out;
+}
+
+/* A body that calls back into itself, directly or through a cycle, and can
+   reach y_alloc. Only consulted when nothing has a loop, so the walk is over a
+   handful of nodes. */
+static int gc_recursive(Yv *labels, Yv *refs, Yv *keep, Yv *users) {
+    Yv *ix = namemap_build(labels);
+    int found = 0;
+    ylong i = 0;
+    while (i < yv_len(labels) && !found) {
+        if (yv_b(ya_get(keep, i))
+            && name_in(users, ya_get(labels, i))) {
+            Yv *stack = yav(0);
+            Yv *rs = ya_get(refs, i);
+            ylong j = 0;
+            while (j < yv_len(rs)) { stack = ya_push(stack, ya_get(rs, j)); j = j + 1; }
+            Yv *seen = yav(0);
+            while (yv_len(stack) > 0 && !found) {
+                Yv *w = ya_get(stack, yv_len(stack) - 1);
+                stack = ya_slice(stack, 0, yv_len(stack) - 1);
+                if (ys_eq(w, ya_get(labels, i))) {
+                    found = 1;
+                } else if (!name_in(seen, w)) {
+                    seen = ya_push(seen, w);
+                    ylong k = namemap_get(ix, w);
+                    if (k >= 0 && yv_b(ya_get(keep, k))) {
+                        Yv *ks = ya_get(refs, k);
+                        ylong m = 0;
+                        while (m < yv_len(ks)) {
+                            stack = ya_push(stack, ya_get(ks, m));
+                            m = m + 1;
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 1;
+    }
+    return found;
+}
+
+/* auto (0): link the collector only when an allocation can repeat. always (1)
+   and never (2) say so outright. */
+static int gc_decide(ylong mode, Yv *labels, Yv *refs, Yv *keep, Yv *all,
+                     Yv *allblob, Yv *ps, int threads) {
+    if (mode == 1) { return 1; }
+    if (mode == 2) { return 0; }
+    if (threads) { return 1; }
+    Yv *users = gc_users(labels, refs, keep, ps);
+    /* a kept body with a loop that can reach y_alloc */
+    int loops = 0;
+    ylong i = 0;
+    while (i < yv_len(labels) && !loops) {
+        if (yv_b(ya_get(keep, i)) && name_in(users, ya_get(labels, i))) {
+            Yv *bd = ya_get(all, i);
+            if (yv_len(bd) == 0) { bd = unpack_body(ya_get(allblob, i)); }
+            if (yv_len(bd) > 0 && ir_has_loop(bd)) { loops = 1; }
+        }
+        i = i + 1;
+    }
+    if (loops) { return 1; }
+    /* a kept prelude block other than the allocator's own that can reach
+       y_alloc: the helpers loop, and their asm is not parsed */
+    int pu = 0;
+    Yv *bn = yr_get(ps, "bnames");
+    i = 0;
+    while (i < yv_len(bn) && !pu) {
+        Yv *nm = ya_get(bn, i);
+        if (!(yv_len(nm) >= 7 && ys_eq_lit(ys_slice(nm, 0, 7), "y_alloc"))
+            && name_in(users, nm)) {
+            pu = 1;
+        }
+        i = i + 1;
+    }
+    if (pu) { return 1; }
+    return gc_recursive(labels, refs, keep, users);
+}
+
+Yv *link_units(Yv *std, Yv *deps, Yv *prog, ylong gcmode) {
     Yv *units = yav(0);
     ylong j = 0;
     while (j < yv_len(std)) {
@@ -14809,6 +15063,93 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
     int mth = uses_math(body_refs);
     Yv *pb = prelude_blocks(prelude_with(core_lines, thr, mth));
     Yv *ps = shake_prelude(pb, body_refs);
+    /* A cell no kept code reads, whose initializer only allocates, is dead:
+       dropping that range is what keeps the allocator -- and with it the whole
+       collector -- out of a program that never allocates. Every unit's cells
+       count, not just the program's (rt.y's CLK_TS is `[0; 2]`, and its
+       initializer was the only thing naming y_alloc in hello.y), and a packed
+       body's items are decoded so a cell is read only if a body really reads
+       it. The prelude is then shaken again, because the drop can remove the
+       last reference to a prelude block. */
+    Yv *reads = yav(0);
+    ylong gcri = 0;
+    while (gcri < yv_len(all)) {
+        if (yv_b(ya_get(keep, gcri))) {
+            Yv *bd = ya_get(all, gcri);
+            if (yv_len(bd) == 0) { bd = unpack_body(ya_get(allblob, gcri)); }
+            if (yv_len(bd) > 0) {
+                reads = cell_reads(bd, reads);
+            } else {
+                /* No blob: the refs are all that can be seen and they include
+                   the stores, so this body's cells look read. Conservative on
+                   purpose -- a cell dropped while a body reads it is an
+                   undefined label at assembly. */
+                Yv *rrefs = ya_get(refs, gcri);
+                ylong rj = 0;
+                while (rj < yv_len(rrefs)) {
+                    reads = ya_push(reads, ya_get(rrefs, rj));
+                    rj = rj + 1;
+                }
+            }
+        }
+        gcri = gcri + 1;
+    }
+    ylong gcprf = 0;
+    while (gcprf < yv_len(yr_get(ps, "refs"))) {
+        reads = ya_push(reads, ya_get(yr_get(ps, "refs"), gcprf));
+        gcprf = gcprf + 1;
+    }
+    Yv *gccells = yav(0);
+    ylong gccu = 0;
+    while (gccu < yv_len(units)) {
+        Yv *ug = yr_get(ya_get(units, gccu), "globals");
+        ylong gcgi = 0;
+        while (gcgi < yv_len(ug)) {
+            gccells = ya_push(gccells, ya_get(ug, gcgi));
+            gcgi = gcgi + 1;
+        }
+        gccu = gccu + 1;
+    }
+    Yv *gcpg = yr_get(prog, "globals");
+    ylong gcpi = 0;
+    while (gcpi < yv_len(gcpg)) {
+        gccells = ya_push(gccells, ya_get(gcpg, gcpi));
+        gcpi = gcpi + 1;
+    }
+    Yv *gcdead = yav(0);
+    ylong gcci = 0;
+    while (gcci < yv_len(gccells)) {
+        Yv *cell = ya_get(gccells, gcci);
+        if (!name_in(reads, cell)) { gcdead = ya_push(gcdead, cell); }
+        gcci = gcci + 1;
+    }
+    if (yv_len(gcdead) > 0) {
+        ylong gcdj = 0;
+        while (gcdj < yv_len(all)) {
+            if (yv_b(ya_get(keep, gcdj))) {
+                /* A packed body's items have to be decoded before its
+                   initializer range can be dropped; the decoded IR is kept in
+                   `all`, which the emission loop reuses. */
+                Yv *bd = ya_get(all, gcdj);
+                if (yv_len(bd) == 0) { bd = unpack_body(ya_get(allblob, gcdj)); }
+                if (yv_len(bd) > 0) {
+                    Yv *ni = ir_drop_inits(bd, gcdead);
+                    if (yv_len(ni) != yv_len(bd)) {
+                        ya_set(all, gcdj, ni);
+                        ya_set(refs, gcdj, ir_refs(ni));
+                    }
+                }
+            }
+            gcdj = gcdj + 1;
+        }
+        /* The CELLS stay: a dead cell is one `.bss` slot, which costs no file
+           bytes, and keeping it is the conservative half of this pass. */
+        shaken = prune_bodies(labels, refs, extra);
+        keep = yr_get(shaken, "keep");
+        body_refs = yr_get(shaken, "refs");
+        pb = prelude_blocks(prelude_with(core_lines, thr, mth));
+        ps = shake_prelude(pb, body_refs);
+    }
     /* A kept prelude block may call a Y helper (none does today): the
      * helper is kept too, and everything shaken again from there. */
     Yv *bmap = namemap_build(labels);
@@ -14829,6 +15170,14 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
         }
         ps = shake_prelude(pb, body_refs);
         more = unkept_refs(yr_get(ps, "refs"), bmap, keep);
+    }
+    /* --gc: when the collector cannot be needed, its three entry points become
+       stubs, so the registry, metadata arena, marker, sweeper and free lists go
+       unreachable and shake out. The allocator and heap_used() are untouched. */
+    if (!gc_decide(gcmode, labels, refs, keep, all, allblob, ps, thr)) {
+        core_lines = arch_nogc_lines(core_lines);
+        pb = prelude_blocks(prelude_with(core_lines, thr, mth));
+        ps = shake_prelude(pb, body_refs);
     }
     /* Everything the kept code can reach: the kept bodies' own references plus
        the kept prelude's. Computed before the rodata, which uses it as its
@@ -14881,59 +15230,6 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog) {
     while (pgi < yv_len(pg)) {
         gls = ya_push(gls, ya_get(pg, pgi));
         pgi = pgi + 1;
-    }
-    /* Which of the PROGRAM's globals the kept code reads. Only these: a unit
-       from the std pack carries packed bodies, whose references are not IR
-       that can be walked, so a cell whose only reader lives in one would look
-       dead. A packed unit cannot read a program global anyway -- it was
-       compiled before the program existed -- and the spliced units this is
-       for (std/math.y and friends) are the program's own. */
-    Yv *reads = yav(0);
-    ylong ri = 0;
-    while (ri < yv_len(all)) {
-        if (yv_b(ya_get(keep, ri))) {
-            Yv *bodyitems = ya_get(all, ri);
-            if (yv_len(bodyitems) > 0) {
-                reads = cell_reads(bodyitems, reads);
-            } else {
-                /* A body from the std pack carries no items: its REFS are all
-                   that can be seen, and they include the stores, so a packed
-                   unit's cells look read and are never dropped. Conservative
-                   on purpose. */
-                Yv *rrefs = ya_get(refs, ri);
-                ylong rj = 0;
-                while (rj < yv_len(rrefs)) {
-                    reads = ya_push(reads, ya_get(rrefs, rj));
-                    rj = rj + 1;
-                }
-            }
-        }
-        ri = ri + 1;
-    }
-    Yv *dead_cells = yav(0);
-    ylong di2 = 0;
-    while (di2 < yv_len(pg)) {
-        Yv *cell = ya_get(pg, di2);
-        if (!name_in(reads, cell)) { dead_cells = ya_push(dead_cells, cell); }
-        di2 = di2 + 1;
-    }
-    if (yv_len(dead_cells) > 0) {
-        ylong dj = 0;
-        while (dj < yv_len(all)) {
-            if (yv_b(ya_get(keep, dj)) && yv_len(ya_get(all, dj)) > 0) {
-                Yv *ni = ir_drop_inits(ya_get(all, dj), dead_cells);
-                if (yv_len(ni) != yv_len(ya_get(all, dj))) {
-                    ya_set(all, dj, ni);
-                    ya_set(refs, dj, ir_refs(ni));
-                }
-            }
-            dj = dj + 1;
-        }
-        /* Their CELLS stay: a dropped cell is only a `.bss` slot, which costs
-           no file bytes, and keeping it is the conservative half of this pass
-           -- if the read analysis ever misses a reader, a zero cell is a wrong
-           value rather than an undefined label at assembly. The Y twin keeps
-           them too, which is what makes the two outputs byte-identical. */
     }
     Yv *interned = rodata_intern(yav(0), allrod, const_refs);
     Yv *rodpieces = yr_get(interned, "pieces");
@@ -15970,7 +16266,7 @@ Yv *emit_program(Yv *ast, Yv *nr, int debug, ylong wlevel, Yv *std, Yv *deps) {
         dup_y_label(deps, yr_get(r, "unit"));
         ylong pt = clock_us();
         ylong ph = heap_used();
-        Yv *asm_ = link_units(std, deps, yr_get(r, "unit"));
+        Yv *asm_ = link_units(std, deps, yr_get(r, "unit"), gc_mode);
         Yv *pr = phase_end(times, ys("asm_parts"), pt, ph);
         return yr(5, "ok", yv_bool(1), "asm", asm_, "errors",
                   yr_get(r, "errors"), "warnings", yr_get(r, "warnings"),

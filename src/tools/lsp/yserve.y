@@ -402,8 +402,8 @@ def claim_reply_fd() -> long {
 //
 // ONE handler at a time: it waits for each child before reading the next frame, so
 // a burst is a queue and its wall time is the SUM of its handlers rather than their
-// maximum. Measured on src/y/asm.y, 34 ms of CPU per semanticTokens/full and 30 ms
-// per hover, all in the child, so the queue is what the editor feels. The timing
+// maximum. Measured on src/y/asm.y, 30 ms of CPU per hover, all in the child, so
+// the queue is what the editor feels. The timing
 // lines above make that visible rather than inferred: `wait` is the queue, `work` is
 // the cost.
 //

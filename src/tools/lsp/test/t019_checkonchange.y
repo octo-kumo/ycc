@@ -13,8 +13,8 @@
 //
 //   ON  (the default)  didChange publishes diagnostics, as it always has.
 //   OFF               didChange publishes NOTHING -- and the buffer is still
-//                     updated, because hover, completion, semantic tokens and
-//                     formatting all read it and answering about text the user has
+//                     updated, because hover, completion and formatting all read it
+//                     and answering about text the user has
 //                     already replaced is worse than the slow check the switch
 //                     exists for.
 //   either            didOpen and didSave publish, so an OFF user still gets

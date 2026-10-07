@@ -57,7 +57,7 @@ def ident_at(sps: [Span], src: str, off: long) -> Hit? {
 
 // ── visibility ───────────────────────────────────────────────────────────
 //
-// Positions are compared through `scope.pack`, which folds a (line, character)
+// Positions are compared through `scope.pos_key`, which folds a (line, character)
 // pair into one number: a packed position orders the same way the pair does, as
 // long as a character is under a million, which a UTF-16 offset within one line
 // cannot be. So one `<` is the whole comparison.
@@ -80,8 +80,8 @@ def ident_at(sps: [Span], src: str, off: long) -> Hit? {
 //   (that is what makes mutual recursion work), so a def may be used before it
 //   is written and must be offered there.
 def in_scope(idx: FileIdx, d: IdxDecl, line: long, ch: long) -> bool {
-    let here = scope.pack(line, ch);
-    let there = scope.pack(d.line, d.ch);
+    let here = scope.pos_key(line, ch);
+    let there = scope.pos_key(d.line, d.ch);
     let opened = true;
     if (d.scope_start >= 0) {
         // `d.scope_end` was resolved once per index (scope.y's post-pass), so this
@@ -113,7 +113,7 @@ def in_scope(idx: FileIdx, d: IdxDecl, line: long, ch: long) -> bool {
 // candidate at all (in_scope).
 def better(a: IdxDecl, b: IdxDecl, line: long, ch: long) -> bool {
     if (a.depth != b.depth) { a.depth > b.depth }
-    else { scope.pack(a.line, a.ch) > scope.pack(b.line, b.ch) }
+    else { scope.pos_key(a.line, a.ch) > scope.pos_key(b.line, b.ch) }
 };
 
 // The declaration `name` resolves to at a use at (line, ch), or none.
@@ -145,12 +145,12 @@ def candidates(idx: FileIdx, name: str) -> [IdxDecl] {
 // lookup costs the handful of declarations that share the name rather than every
 // declaration in the file.
 //
-// It was 34.5 SECONDS on `src/y/native.y` before, which is the highlighter hanging
-// on any real file: semantic tokens ask about EVERY identifier, and each ask was a
-// walk of all 3,621 declarations -- twice, once for "what does this resolve_decl to"
-// and once for "is this token some declaration's own name". `visible()` and
+// It was 34.5 SECONDS on `src/y/native.y` before, which would have hung any
+// request that asked about every identifier: each lookup was a walk of all
+// 3,621 declarations -- twice, once for "what does this resolve_decl to" and
+// once for "is this token some declaration's own name". `visible()` and
 // `find_decl` were fine because a completion asks once, which is why nothing
-// measured it until the highlighter started asking about everything.
+// measured it until the old highlighter started asking about everything.
 def by_name(idx: FileIdx) -> { str => [IdxDecl] } {
     let out: { str => [IdxDecl] } = {};
     let i = 0;

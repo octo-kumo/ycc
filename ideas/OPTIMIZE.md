@@ -286,6 +286,90 @@ in `arch_x64.y`'s prelude and every length load in the emitter.
 
 **Only after A3**, and only once the literal set is final. Medium risk, low priority.
 
+### A5. Do not link the runtime a program cannot use (done)
+
+**Problem.** Every binary carried the whole collector. `bench/y/hello.y` was **3,069 B**
+with 29 `y_gc_*` labels: `print("hello")` allocates nothing, but it linked `y_alloc` --
+and the allocator's slow path calls the collector -- because of one **global
+initializer**. `src/y/std/rt.y:336` declares `let CLK_TS: [long; 2] = [0; 2];`, and a
+fixed array is a heap cell, so the startup initializer called `y_alloc` twice. It was
+kept because the dead-global-initializer pass only looked at the *program* unit's cells
+and, for a body from the std pack (whose items were not decoded), treated every cell as
+read.
+
+**Fix.**
+* `link_units` computes cell reads from the **exact IR of every kept body**, decoding a
+  packed body's items with `unpack_body` when `all[i]` is empty.
+* `dead_cells` covers **every unit's globals**, not just `prog.globals`; a kept prelude
+  block's references join the read set.
+* `ir_drop_inits` decodes a packed body before dropping its initializer range, and the
+  decoded IR is left in `all` for the emission loop.
+* The pass moved **before** the prelude shake, which is then re-shaken: the dropped
+  range's own references (`y_alloc`, and through it the collector) are the prelude's
+  roots.
+* `ir_refs_item` records the label of **any** memory operand, not only `lea`: a
+  `mov %rsp, y_gc_stack_top(%rip)` store names a cell, and the shake must keep that cell
+  or the store is an undefined label at assembly.
+
+**Result.** `bench/y/hello.y` **3,069 → 390 B**, with no allocator call and no collector
+label; `json`, `x509` and `tls` unused-import cost `25/94/94 → 0`. A program that does
+allocate (`print(1)`, whose number formatting allocates) still carries the collector --
+that is the `--gc` work below.
+
+**Gate.** `test/sh/test_treeshake.sh` grew three checks: a hello world may not name the
+allocator or a collector block; `test/sh/deadcode.py` counts instructions that cannot
+execute (`test/treeshake/deadcode.txt` ratchet); `test/treeshake/shapes.txt` records the
+size of the shapes a runtime addition moves first. The same dead-code tool gates the
+foreach/raw-loop instruction ratio (`test/treeshake/foreach.y` vs `forloop.y`).
+
+### A6. print(<integer>) formats on the stack (done)
+
+**Problem.** `y_print_long` was `y_print_hstr(tostring(v))` (`std/rt.y:63`), so every
+`print(1)` allocated a heap string -- which meant every program that prints a number
+linked `y_alloc` and therefore the whole collector. `test/treeshake/minimal.y` was
+3,120 B.
+
+**Fix.** The digits already lived in a stack buffer in `y_long_tostr`; the new arch
+block `y_os_print_int` (`arch/prelude.s`) formats there and writes digits+newline with
+**two writes** (the same two `y_os_write` calls `y_print_hstr` made, so stdout/stderr
+interleaving is unchanged). It is reached through the checker's named layer --
+`os_call_names()` gained `y_os_print_int` and `std/rt.y`'s `y_print_long` is now
+`os_call("y_os_print_int", v)` -- which keeps the documented override: a program's own
+`y_print_long` still shadows the runtime's and intercepts `print(int)`
+(`test/sh/test_link.sh`, "a program's `y_print_long` replaces the runtime's").
+
+**Result.** `minimal.y` **3,120 → 440 B**, no `y_alloc` and no collector; `t73`'s
+`heap_used() > 0` is now `false` (printing no longer allocates) and the fixture says so.
+`test/y/native/t379_print_int_no_alloc.y` pins the heap delta across six prints at 0.
+
+### A7. `--gc`: do not link the collector a program cannot grow into (done)
+
+**Problem.** A program that allocates once -- `let a = [1, 2, 3]; print(a[0]);` --
+still linked the whole collector (3,428 B), because `y_alloc`'s slow path calls it
+and nothing asked whether an allocation could ever happen twice.
+
+**Fix.** The allocator is untouched; only the collector's three entry points become
+stubs (`arch_block_sub`/`arch_nogc_lines` in `arch_x64.y`/`.c`): `y_gc_maybe` never
+runs a cycle, `y_gc_alloc_free` never recycles a block, `y_gc_chunk_add` only
+returns the base. Every other collector block (registry, metadata arena, marker,
+sweeper, free lists) becomes unreachable and the existing shake drops it, so the
+chunk layout and `heap_used()` are bit-identical.
+
+`--gc=auto|always|never` (default `auto`) decides in `link_units`. Auto is
+conservative and sound: keep the collector if threads are used, or a kept prelude
+block other than the allocator's own can reach `y_alloc`, or a kept body with a
+**loop** (a backward jump in its IR) can reach `y_alloc`, or -- only when nothing
+loops -- a **recursive** body can reach `y_alloc`. A wrong "no" would be an
+unbounded heap; a wrong "yes" is a few KB.
+
+**Result.** `test/treeshake/alloc_once.y` **3,428 → 1,312 B** and
+`test/treeshake/dead.y` **3,667 → 1,551 B**, both with no `y_gc_collect` in the
+listing, while every `ideas/oom/` program keeps the collector and stays bounded
+under a 256 MiB cap (recursion, a `foreach` whose lambda allocates, and `s01`/`s05`/
+`s12` were checked by hand). `test/sh/test_treeshake.sh` gates all three: auto must
+omit it for a one-shot allocation, always must keep it, never must drop it, and the
+two builds must print the same thing.
+
 ---
 
 ## Part 2 — Codegen: fewer instructions
@@ -590,6 +674,7 @@ IR.
 | **E5** | **Denser pack text.** `emit` output is indented 4 spaces (~6,700 × 4 = 27 KB of the pack). | −26 to −50 KB | medium | Requires a `pack_version` bump (`native.y:9666`, currently `ycc-std-pack 5`); touches `test_link.sh`, `test_fixpoint.sh`, and the object cache in `pkg.y`. **Superseded by Part 4 Stage 3.** |
 | **E6** | **Tail calls beyond direct self-recursion.** `is_self_call` (`native.y:5188`) only matches `self` or the function's own label. Mutual recursion, tail calls to other functions, and calls through closures all grow the stack per iteration. | runtime + max stack | medium | Needs a general tail-call decision (frame shapes differ per callee). Part of the deferred register-allocation territory. |
 | **E7** | **Inline tiny functions.** Every Y-level function is `call` + `add $N,%rsp` (`gen_direct`, `native.y:4982`), even `y_heap_used` (8 instructions, `arch_x64.y:498`). | runtime | medium | Requires a cost model and a call-site budget. |
+| **E8** | **Direct calls for literal closures (done).** `a.foreach((x) => ...)` and the other array methods (`map`, `filter`, `all`, `some`, `find`, `reduce`, `sort(cmp)`) went through `gen_closure_call`: push the record, load its code pointer, `call *%r10` -- per element. A literal closure that captures nothing never reads the record, so `arr_direct_label`/`gen_arr_call` (`native.y`, `native.c`) emit a plain `call <lambda>` with the same stack layout. Capturing literals keep the indirect path. | the indirect load, the record push and the branch, per element | done | `test/sh/test_treeshake.sh` gates foreach at <= raw-loop + 20 instructions (`foreach.y` 870 vs `forloop.y` 866) and the -S listing has no `call *%r10`; the record is still built once per call (skipping that needs the body emitter split out of `gen_func_literal`). |
 
 ---
 

@@ -169,7 +169,7 @@ Yv *os_call_names(void) {
      * os_call("y_os_random") while the Y copy accepted it (t175/t176:
      * "reference exit=0, copy exit=1"). yv.h's own comment names this as the
      * reason yavs exists; the same mistake had already cost #fmt once. */
-    return yavs(ys("y_os_write"), ys("y_os_read"), ys("y_os_lseek"),
+    return yavs(ys("y_os_write"), ys("y_os_print_int"), ys("y_os_read"), ys("y_os_lseek"),
                 ys("y_os_clock_gettime"), ys("y_os_nanosleep"),
                 ys("y_os_wait4"), ys("y_os_fork"), ys("y_os_execve"),
                 ys("y_os_openat"), ys("y_os_stat"), ys("y_os_mkdir"),

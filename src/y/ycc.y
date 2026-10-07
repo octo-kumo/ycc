@@ -103,6 +103,18 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
         } else if (a == "-W") {
             wlevel = wlevel_arg(argv, i, n);
             i++;
+        } else if (a[0:5] == "--gc=") {
+            // Whether the collector is linked: auto (the default) decides from
+            // the program, always and never say so outright. The decision lives
+            // in native.y's link_units; this only records the wish.
+            let m: str = a[5:];
+            if (m == "auto") { nativelib.set_gc_mode(0) }
+            else if (m == "always") { nativelib.set_gc_mode(1) }
+            else if (m == "never") { nativelib.set_gc_mode(2) }
+            else {
+                puts("ycc: --gc wants auto, always or never, got '" + m + "'\n");
+                exit(1);
+            };
         } else if (a == "--std-src") {
             std_src = true;
         } else if (a == "--std-pack") {
@@ -153,6 +165,11 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
             puts("               the source files in place (implies -W 2), then\n");
             puts("               stop; the emitted bytes never depend on this\n");
             puts("  --no-exec    omit exec() -- the binary cannot reach a shell\n");
+            puts("  --gc=MODE    the collector: auto (the default) links it only\n");
+            puts("               when an allocation can happen in a loop or a\n");
+            puts("               recursion; always and never force it. Without the\n");
+            puts("               collector a program is smaller but its heap never\n");
+            puts("               reclaims.\n");
             puts("  --std-src    compile the std units (the runtime and std library)\n");
             puts("               from source instead of using the precompiled ones\n");
             puts("               attached to ycc; the output is the same\n");

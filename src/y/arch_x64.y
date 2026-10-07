@@ -246,7 +246,21 @@ def arch_heap_cells() -> str {
     // character of argv[0]). y_heap_used subtracts it, on the main heap only:
     // a spawned thread gets a heap of its own, and the argv copies are not in
     // it.
-    "y_heap:\n.zero 32\ny_heap_base:\n.zero 8\n"
+    //
+    // The y_gc_* cells are the collector's state (arch/prelude.s): the stack
+    // top _start records, the heap's low/high bounds, the chunk list and its
+    // hash table, the metadata bump, the free-list heads and mark stack, the
+    // live-byte and trigger counters, and the running/off guards. They are
+    // words, so a program that never allocates shakes them out with y_alloc
+    // and every other program carries a few hundred zeroed .bss bytes.
+    "y_heap:\n.zero 32\ny_heap_base:\n.zero 8\n" +
+    "y_gc_stack_top:\n.zero 8\ny_gc_lo:\n.zero 8\ny_gc_hi:\n.zero 8\n" +
+    "y_gc_all:\n.zero 8\ny_gc_tab:\n.zero 8\ny_gc_tabn:\n.zero 8\n" +
+    "y_gc_meta_cur:\n.zero 8\ny_gc_meta_end:\n.zero 8\n" +
+    "y_gc_free:\n.zero 8\ny_gc_ms_cur:\n.zero 8\ny_gc_ms_end:\n.zero 8\n" +
+    "y_gc_ms_seg:\n.zero 8\n" +
+    "y_gc_live:\n.zero 8\ny_gc_last:\n.zero 8\n" +
+    "y_gc_run:\n.zero 8\ny_gc_off:\n.zero 8\n"
 };
 
 def arch_frame(slots: long) -> long {
@@ -477,6 +491,44 @@ def arch_is_label_line(l: str) -> bool {
 
 // `lines` walked; at a label a replacing block claims, that block's lines and
 // not the prelude's. The new blocks go after the last replaced one.
+// Replace the block that starts at the column-0 label `name` (through the line
+// before the next label) with `repl`.
+def arch_block_sub(lines: [str], name: str, repl: [str]) -> [str] {
+    let out: [str] = [];
+    let i = 0;
+    while (i < len(lines)) {
+        let l = lines[i];
+        if (arch_is_label_line(l) && trim(l[0:len(l) - 1]) == name) {
+            repl.foreach((r) => {
+                out += r;
+            });
+            i++;
+            while (i < len(lines) && !(arch_is_label_line(lines[i]))) { i++; };
+        } else {
+            out += l;
+            i++;
+        };
+    };
+    out
+};
+
+// The GC-free runtime: a program whose heap cannot grow does not link the
+// collector at all (--gc, or the auto analysis). The allocator itself is
+// UNCHANGED -- only the collector's three entry points become stubs -- so the
+// chunk layout and heap_used() accounting are bit-identical, and every other
+// collector block (the registry, metadata arena, marker, sweeper, free lists)
+// becomes unreachable and is shaken out.
+//   y_gc_maybe      never runs a cycle
+//   y_gc_alloc_free never recycles a block (0 = none)
+//   y_gc_chunk_add  returns the base the allocator wants and registers nothing
+def arch_nogc_lines(lines: [str]) -> [str] {
+    let out = arch_block_sub(lines, "y_gc_maybe", ["y_gc_maybe:", "    ret"]);
+    out = arch_block_sub(out, "y_gc_alloc_free",
+        ["y_gc_alloc_free:", "    xor %eax, %eax", "    ret"]);
+    arch_block_sub(out, "y_gc_chunk_add",
+        ["y_gc_chunk_add:", "    mov %rdi, %rax", "    ret"])
+};
+
 def arch_win_sub(lines: [str], blocks: [[str]]) -> [str] {
     let out: [str] = [];
     let i = 0;

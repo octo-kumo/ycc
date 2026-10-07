@@ -97,6 +97,105 @@ for cc in "$CYCC" "$YREF"; do
     else
         fail "treeshake [$tag] dead.y compiles" "$(head -2 "$WORK/dead.$tag.err")"
     fi
+
+    # 4. Feature absence. A program that cannot need the collector must not
+    #    carry it: hello.y allocates nothing, so no allocator call and no
+    #    collector block may appear in its listing. This is the test the
+    #    runtime's CLK_TS initializer (a `[0; 2]` global that allocated) would
+    #    have failed for every binary in the tree.
+    listing() {   # listing <src> [flags...]  (the shaken -S text on stdout)
+        local src="$1"; shift
+        ( cd "$ROOT" && ulimit -v "${YPROG_MEM_KB:-3670016}"; \
+          timeout "$((30 * ${YTIMEOUT_SCALE:-1}))" "$cc" -S "$@" "$src" ) 2>/dev/null
+    }
+    HELLO="$ROOT/test/treeshake/hello.y"
+    if listing "$HELLO" | grep -qE '(call|jmp) y_alloc|y_gc_collect:|y_gc_maybe:|collector:'; then
+        fail "treeshake [$tag] hello.y carries the collector" \
+             "$(listing "$HELLO" | grep -nE '(call|jmp) y_alloc|y_gc_collect:|y_gc_maybe:|collector:' | head -3 | tr '\n' ' ')"
+    else
+        pass "treeshake [$tag] hello.y carries no allocator and no collector"
+    fi
+
+    # 4b. --gc. A program that allocates once, outside any loop, must not link
+    #     the collector under the default (auto); --gc=always is the escape
+    #     hatch and --gc=never drops it outright. The output must not change.
+    ONCE="$ROOT/test/treeshake/alloc_once.y"
+    if listing "$ONCE" | grep -q 'y_gc_collect:'; then
+        fail "treeshake [$tag] --gc=auto keeps the collector for a one-shot allocation"
+    else
+        pass "treeshake [$tag] --gc=auto omits the collector for a one-shot allocation"
+    fi
+    if listing "$ONCE" --gc=always | grep -q 'y_gc_collect:'; then
+        pass "treeshake [$tag] --gc=always keeps the collector"
+    else
+        fail "treeshake [$tag] --gc=always drops the collector"
+    fi
+    if listing "$ROOT/test/treeshake/forloop.y" --gc=never | grep -q 'y_gc_collect:'; then
+        fail "treeshake [$tag] --gc=never keeps the collector"
+    else
+        pass "treeshake [$tag] --gc=never drops the collector"
+    fi
+    if compile "$cc" "$ONCE" "$WORK/once.$tag" && ( cd "$ROOT" && "$WORK/once.$tag" ) > "$WORK/once.$tag.out" 2>&1 \
+        && ( cd "$ROOT" && ulimit -v "${YPROG_MEM_KB:-3670016}"; timeout "$((30 * ${YTIMEOUT_SCALE:-1}))" "$cc" --gc=always "$ONCE" -o "$WORK/onceal.$tag" ) 2>/dev/null \
+        && ( cd "$ROOT" && "$WORK/onceal.$tag" ) > "$WORK/onceal.$tag.out" 2>&1; then
+        if diff -q "$WORK/once.$tag.out" "$WORK/onceal.$tag.out" >/dev/null; then
+            pass "treeshake [$tag] --gc builds print the same thing"
+        else
+            fail "treeshake [$tag] --gc builds differ" "$(cat "$WORK/once.$tag.out")"
+        fi
+    else
+        fail "treeshake [$tag] --gc builds run" ""
+    fi
+
+    # 5. Dead-code ratchet (test/sh/deadcode.py): the instructions a program
+    #    cannot execute, which the label-level shake leaves behind. The
+    #    recorded number may shrink freely; growth fails.
+    while read -r name known; do
+        [ -n "$name" ] || continue
+        listing "$ROOT/test/treeshake/$name" > "$WORK/$name.$tag.s"
+        got=$(python3 "$ROOT/test/sh/deadcode.py" "$WORK/$name.$tag.s" | sed 's/.*: \([0-9]*\) unreachable.*/\1/')
+        if [ "${got:-0}" -gt "$known" ]; then
+            fail "treeshake [$tag] $name has $got unreachable instructions (was $known)" \
+                 "$(python3 "$ROOT/test/sh/deadcode.py" -v "$WORK/$name.$tag.s" | head -4 | tr '\n' ' ')"
+        elif [ "${got:-0}" -lt "$known" ]; then
+            pass "treeshake [$tag] $name $got unreachable instructions, DOWN from $known (update deadcode.txt)"
+        else
+            pass "treeshake [$tag] $name $got unreachable instructions"
+        fi
+    done < <(grep -v '^#' "$ROOT/test/treeshake/deadcode.txt")
+
+    # 6. Size ratchet: the shapes below are the ones whose size a runtime
+    #    addition moves first. Growth fails; shrinkage is reported.
+    while read -r name known; do
+        [ -n "$name" ] || continue
+        src="$ROOT/test/treeshake/$name"
+        [ -f "$src" ] || continue
+        if ! compile "$cc" "$src" "$WORK/shape.$tag"; then
+            fail "treeshake [$tag] $name compiles" "$(head -2 "$WORK/shape.$tag.err")"
+            continue
+        fi
+        got=$(size_of "$WORK/shape.$tag")
+        if [ "$got" -gt "$known" ]; then
+            fail "treeshake [$tag] $name is $got bytes (was $known)"
+        elif [ "$got" -lt "$known" ]; then
+            pass "treeshake [$tag] $name $got bytes, DOWN from $known (update shapes.txt)"
+        else
+            pass "treeshake [$tag] $name $got bytes"
+        fi
+    done < <(grep -v '^#' "$ROOT/test/treeshake/shapes.txt")
+
+    # 7. Loop parity, static half: the array methods the emitter expands
+    #    inline must not cost instructions over the raw loop they replace.
+    #    (bench/ measures the dynamic half under callgrind.)
+    listing "$ROOT/test/treeshake/forloop.y" > "$WORK/for.$tag.s"
+    listing "$ROOT/test/treeshake/foreach.y" > "$WORK/foreach.$tag.s"
+    nfor=$(grep -cE '^[ \t]+[a-z]' "$WORK/for.$tag.s")
+    nfe=$(grep -cE '^[ \t]+[a-z]' "$WORK/foreach.$tag.s")
+    if [ "$nfe" -gt "$((nfor + 20))" ]; then
+        fail "treeshake [$tag] foreach is $nfe instructions vs $nfor for the raw loop"
+    else
+        pass "treeshake [$tag] foreach $nfe instructions vs $nfor raw-loop"
+    fi
 done
 
 print_summary treeshake

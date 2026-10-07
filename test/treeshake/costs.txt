@@ -17,9 +17,9 @@
 fs 0
 struct 0
 net 0
-json 25
+json 0
 regex 0
 crypto 0
-x509 94
-tls 94
+x509 0
+tls 0
 math 0

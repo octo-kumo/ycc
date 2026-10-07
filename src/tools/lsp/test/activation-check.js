@@ -56,6 +56,15 @@ check('package.json: activates on a Y file', Array.isArray(pkg.activationEvents)
     JSON.stringify(pkg.activationEvents));
 check('package.json: contributes the y language',
     !!(pkg.contributes && pkg.contributes.languages || []).some((l) => l.id === 'y'));
+const grammars = (pkg.contributes && pkg.contributes.grammars) || [];
+const ygrammar = grammars.find((g) => g.language === 'y');
+check('package.json: contributes the y TextMate grammar',
+    !!ygrammar && ygrammar.scopeName === 'source.y' &&
+        ygrammar.path === './syntaxes/y.tmLanguage.json',
+    JSON.stringify(grammars));
+check('package.json: the TextMate grammar file exists',
+    !!ygrammar && fs.existsSync(path.join(extDir, ygrammar.path.replace(/^\.\//, ''))),
+    ygrammar ? ygrammar.path : 'no grammar');
 // A command that is registered in code but not declared in `contributes` does
 // not appear in the palette and shows no title anywhere: it works when invoked by
 // id and is invisible to the user. That is exactly the "Format Document does

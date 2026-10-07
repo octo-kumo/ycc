@@ -10,8 +10,8 @@
 // has `tokenize_lsp`, the compiler's own loop with comments kept, an f-string
 // whole, byte spans on every token, and an error token where the compiler
 // would exit. So this file holds no lexing rules at all: it maps a token to a
-// span KIND (the numeric constants below, which the semantic-token legend and
-// the formatter index by) and hands the compiler's byte span through.
+// span KIND (the numeric constants below, which the formatter and the
+// outline read) and hands the compiler's byte span through.
 //
 // WHY THIS IS NOT JUST `lexer.tokenize`: the compiler's entry point stays
 // exactly what it was -- comments dropped, f-strings desugared, a malformed
@@ -27,9 +27,8 @@
 import lexer from "../../y/lexer.y";
 
 // ── span kinds ──────────────────────────────────────────────────────────
-// Numeric so the map to an LSP semantic-token type is one table. These are
-// syntactic classes only: variable / parameter / function / method / type /
-// builtin need the checker's index (LSP.md §9.2) and are layered on later.
+// Numeric so the formatter and outline can compare kinds without string
+// comparisons. These are syntactic classes only.
 const K_comment = 1;      // // and /* */ both
 const K_string = 2;       // "..."
 const K_bstring = 3;      // b"..." b'...'
@@ -42,6 +41,7 @@ const K_contextual = 9;   // match, type, spawn, ...: words, not keywords
 const K_operator = 10;
 const K_punct = 11;       // ( ) { } [ ] , ; :
 const K_error = 12;       // a literal that is not closed, or a stray byte
+const K_doc = 13;         // /** ... */ -- a doc comment (docs/src/02-lexical.tex)
 const K_none = 0;         // whitespace and comments-of-no-account: not a span
 
 type Span = { off: long, end: long, kind: long, line: long, col: long };
@@ -85,6 +85,7 @@ def kind_of(src: str, tk: Tok) -> long {
     let t = tk.t;
     let k = K_none;
     if (t == "comment") { k = K_comment; }
+    if (t == "doc") { k = K_doc; }
     if (t == "str") { k = K_string; }
     if (t == "fstr") { k = K_fstring; }
     if (t == "bstr") { k = K_bstring; }
@@ -128,6 +129,7 @@ def scan(src: str) -> [Span] {
 def kind_name(k: long) -> str {
     let n = "?";
     if (k == K_comment) { n = "comment"; }
+    if (k == K_doc) { n = "doc"; }
     if (k == K_string) { n = "string"; }
     if (k == K_bstring) { n = "bstring"; }
     if (k == K_char) { n = "char"; }

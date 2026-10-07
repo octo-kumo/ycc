@@ -1534,15 +1534,27 @@ def asm_link(items: [AsmItem], labels: [AsmLabel], debug: bool) -> AsmOut {
         };
     };
     // A .bss label resolves like a rodata one, past the mapped image (see
-    // elf_bss_from_ro), so the fixups below only know two sections.
-    let labs: [AsmLabel] = labels;
+    // elf_bss_from_ro), so the fixups below only know two sections. The
+    // collector brackets the writable data with y_bss_lo/y_bss_hi so it can
+    // scan it for roots; `y_` is reserved, so they cannot collide with a
+    // program's own globals. They join the shift below with the .bss labels
+    // (relax_place never saw them, so their offsets are already final).
+    let labs: [AsmLabel] = [];
+    if (bss_len > 0) {
+        labs += { name: "y_bss_lo", sec: 2, off: 0, at_item: 0 };
+    };
+    labs += labels;
+    if (bss_len > 0) {
+        labs += { name: "y_bss_hi", sec: 2, off: bss_len, at_item: len(items) };
+    };
     if (bss_len > 0) {
         let bshift = asm_bss_shift(code_len, ro_len, bss_len);
-        labs = [];
-        foreach (lb in labels) {
-            if (lb.sec == 2) { labs += { name: lb.name, sec: 1, off: bshift + lb.off, at_item: lb.at_item }; }
-            else { labs += lb; };
+        let shifted: [AsmLabel] = [];
+        foreach (lb in labs) {
+            if (lb.sec == 2) { shifted += { name: lb.name, sec: 1, off: bshift + lb.off, at_item: lb.at_item }; }
+            else { shifted += lb; };
         };
+        labs = shifted;
     };
     let lm = labmap_build(labs);
     let lt1 = clock_us();

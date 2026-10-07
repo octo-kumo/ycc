@@ -187,29 +187,6 @@ def doc_request(st: State, id: json.Val, method: str, p: { str => json.Val }) ->
     let out = "";
     if (method == "textDocument/formatting") {
         out = serve.do_formatting(st, id, p);
-    } else if (method == "textDocument/semanticTokens/full") {
-        out = serve.do_semantic_tokens(st, id, p);
-    } else if (method == "textDocument/semanticTokens/range") {
-        // The OTHER half of `range: true`, and the half that actually gets used.
-        //
-        // There are TWO methods, not one with an optional argument:
-        // `semanticTokens/full` and `semanticTokens/range`. Advertising
-        // `range: true` is what makes a client send the second one -- it is how the
-        // client asks for a viewport instead of a document. This server implemented
-        // the range as an optional `range` on `/full` and did NOT route `/range`, so
-        // every viewport request came back `-32601 unsupported request` and the
-        // client fell back to the whole document: the 400KB response the range was
-        // added to avoid. A real client log reads
-        //
-        //     Request textDocument/semanticTokens/range failed.
-        //       Message: unsupported request: textDocument/semanticTokens/range
-        //
-        // on every viewport change.
-        //
-        // The handler is the same one: its parameters are `{ textDocument, range }`
-        // and it already reads `range` when present. So this is a route, not a second
-        // implementation.
-        out = serve.do_semantic_tokens(st, id, p);
     } else if (method == "textDocument/documentSymbol") {
         out = serve.do_document_symbols(st, id, p);
     } else if (method == "textDocument/definition") {

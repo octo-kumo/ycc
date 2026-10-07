@@ -84,12 +84,6 @@ function initParams() {
                 synchronization: { dynamicRegistration: false, willSave: false, didSave: true },
                 publishDiagnostics: { relatedInformation: false, versionSupport: true },
                 formatting: { dynamicRegistration: false },
-                semanticTokens: {
-                    requests: { full: true, range: false },
-                    tokenTypes: [],
-                    tokenModifiers: [],
-                    formats: ['relative'],
-                },
             },
             window: { workDoneProgress: true },
         },
@@ -207,96 +201,36 @@ function main() {
             return v !== undefined && v !== null && v !== false;
         });
         check(
-            'initialize: advertises exactly the seven capabilities it implements',
+            'initialize: advertises exactly the six capabilities it implements',
             advertised.sort().join(',') ===
                 'completionProvider,definitionProvider,documentFormattingProvider,' +
-                    'documentSymbolProvider,hoverProvider,semanticTokensProvider,textDocumentSync',
+                    'documentSymbolProvider,hoverProvider,textDocumentSync',
             'advertised: ' + advertised.sort().join(','),
         );
-        // The legend is a wire format shared with the highlighter: the client
-        // sends these names back and uses the INDICES, so a mismatch paints every
-        // token after the first difference as the wrong kind, silently.
-        const leg = init.capabilities.semanticTokensProvider && init.capabilities.semanticTokensProvider.legend;
-        check(
-            'initialize: the semantic token legend is present and ordered',
-            // The five SEMANTIC classes are in the legend now (R2.3), appended so
-            // the eight before them keep their wire indices -- an editor's theme is
-            // keyed on those. The length was 9 and the check said so literally, so
-            // the day the classes landed this read as "the legend is broken".
-            !!leg && Array.isArray(leg.tokenTypes) && leg.tokenTypes.length === 14 &&
-                leg.tokenTypes[0] === 'comment' && leg.tokenTypes[8] === 'error' &&
-                leg.tokenTypes[9] === 'parameter' && leg.tokenTypes[10] === 'function' &&
-                leg.tokenTypes[11] === 'property' && leg.tokenTypes[12] === 'type' &&
-                leg.tokenTypes[13] === 'builtin',
-            JSON.stringify(leg && leg.tokenTypes),
-        );
-        // Every advertised token type must either be one VS Code already knows how
-        // to colour, or be DECLARED in package.json with a superType.
-        //
-        // This is not a style preference. VS Code's built-in fallback covers the
-        // LSP's standard type names; anything outside that list gets NO colour from
-        // any shipped theme unless the extension declares it. `builtin` was one of
-        // four such names here, so `print`, `len` and `clock_us` rendered as plain
-        // foreground -- the user reported it as "builtins are still white", which
-        // is exactly what it was. Declaring them is theme-independent: VS Code
-        // scores a theme rule against the type's superType chain, so an exact rule
-        // still wins and the superType is only the fallback.
-        const LSP_STANDARD = new Set([
-            'namespace', 'class', 'enum', 'interface', 'struct', 'typeParameter',
-            'type', 'parameter', 'variable', 'property', 'enumMember', 'decorator',
-            'event', 'function', 'method', 'macro', 'label', 'comment', 'string',
-            'keyword', 'number', 'regexp', 'operator',
-        ]);
-        const declaredTypes = new Map(
-            (((pkgExt.contributes || {}).semanticTokenTypes) || []).map((t) => [t.id, t.superType]));
-        const undeclared = (leg && leg.tokenTypes ? leg.tokenTypes : [])
-            .filter((t) => !LSP_STANDARD.has(t) && !declaredTypes.has(t));
-        // `range: true` is the switch that makes t022_semrange's ranges happen at
-        // all, and it is the difference between shipping a 50-line viewport as 400KB
-        // of JSON and shipping it as 4KB. Asserted here because this is where a real
-        // initialize response is already in hand; t022 asserts what the range
-        // contains, which is the other half.
-        const stp0 = (init.capabilities || {}).semanticTokensProvider || {};
-        check(
-            'initialize: semantic tokens advertise range, not whole documents only',
-            stp0.full === true && stp0.range === true,
-            'full=' + stp0.full + ' range=' + stp0.range,
-        );
-        check(
-            'initialize: every token type is either standard or declared with a superType',
-            undeclared.length === 0,
-            'no colour from any theme: ' + undeclared.join(','),
-        );
-        // And a declared superType must itself be a real type, or the chain dead-ends
-        // and the token is uncoloured again -- which is the same bug wearing a
-        // different hat.
-        const badParents = [...declaredTypes.entries()].filter(
-            ([, parent]) => !LSP_STANDARD.has(parent) && !declaredTypes.has(parent));
-        check(
-            'package.json: every declared superType resolves to a real token type',
-            badParents.length === 0,
-            'dangling: ' + badParents.map(([id, p2]) => id + '->' + p2).join(','),
-        );
-        // AND a colour, so a type can never be shipped uncoloured again.
-        //
-        // superType alone was tried and did not put a colour on screen: `builtin`
-        // stayed plain foreground after the manifest shipped it, twice. The
-        // mechanism is right in the code -- VS Code scores both theme rules and its
-        // own default rules through `getTypeHierarchy(n).indexOf(o.type)`, so a
-        // superType does reach the parent -- but a manifest that can only be
-        // checked by reading is a manifest that cannot be trusted to have been
-        // applied. So the four also carry an explicit default colour, and this
-        // asserts it, which means the day one is dropped the suite says so.
-        const cfgDefaults = (pkgExt.contributes || {}).configurationDefaults || {};
-        const uncoloured = (leg && leg.tokenTypes ? leg.tokenTypes : [])
-            .filter((t) => !LSP_STANDARD.has(t)
-                && cfgDefaults['editor.semanticTokenTypes.' + t] === undefined
-                && !declaredTypes.has(t));
-        check(
-            'package.json: every token type has a colour -- a default or a superType',
-            uncoloured.length === 0,
-            'nothing paints these: ' + uncoloured.join(','),
-        );
+        // Syntax highlighting is TextMate, not semantic tokens. The extension
+        // contributes the grammar in package.json; the server must not advertise
+        // a semantic-token capability it does not implement.
+        check('initialize: no semantic-token capability is advertised',
+            init.capabilities.semanticTokensProvider === undefined,
+            JSON.stringify(init.capabilities.semanticTokensProvider));
+        const gr = ((pkgExt.contributes || {}).grammars || []).find((g) => g.language === 'y');
+        check('package.json: contributes a TextMate grammar for y',
+            !!gr && gr.scopeName === 'source.y' && gr.path === './syntaxes/y.tmLanguage.json',
+            JSON.stringify(gr));
+        const grPath = path.join(__dirname, '..', 'vscode-y-lang',
+            gr ? gr.path.replace(/^\.\//, '') : '');
+        let grJson = null;
+        try { grJson = JSON.parse(fs.readFileSync(grPath, 'utf8')); } catch (e) { grJson = null; }
+        check('TextMate grammar: a valid JSON grammar with source.y',
+            !!grJson && grJson.scopeName === 'source.y' && Array.isArray(grJson.patterns),
+            grPath + (grJson ? '' : ' (unreadable)'));
+        const pats = grJson && Array.isArray(grJson.patterns)
+            ? grJson.patterns.map((p) => p.include)
+            : [];
+        check('TextMate grammar: #strings precedes #comments',
+            pats.indexOf('#strings') >= 0 && pats.indexOf('#comments') >= 0 &&
+                pats.indexOf('#strings') < pats.indexOf('#comments'),
+            JSON.stringify(pats));
         send('initialized', {});
         await settle();
 
@@ -305,32 +239,6 @@ function main() {
             textDocument: { uri: mainUri, languageId: 'y', version: 1, text },
         });
         await settle();
-
-        // `range: true` makes a client send `textDocument/semanticTokens/range`,
-        // which is a DIFFERENT request from `/full` carrying a range. Advertising
-        // the capability without routing the method answers every viewport change
-        // with -32601, the client falls back to the whole document, and the 400KB
-        // response arrives anyway -- which reads as "the range had no effect".
-        // Asserted as a request because that is how a client learns it is refused.
-        const rangeAnswer = await request('textDocument/semanticTokens/range', {
-            textDocument: { uri: mainUri },
-            range: { start: { line: 0, character: 0 }, end: { line: 4, character: 0 } },
-        });
-        check(
-            'textDocument/semanticTokens/range is answered, not refused',
-            !!rangeAnswer && Array.isArray(rangeAnswer.data) && rangeAnswer.data.length > 0,
-            JSON.stringify(rangeAnswer).slice(0, 120),
-        );
-        const fullAnswer = await request('textDocument/semanticTokens/full', {
-            textDocument: { uri: mainUri },
-            range: { start: { line: 0, character: 0 }, end: { line: 4, character: 0 } },
-        });
-        check(
-            'the range method and /full-with-a-range give the same tokens',
-            !!rangeAnswer && !!fullAnswer && rangeAnswer.data.length === fullAnswer.data.length,
-            'range=' + (rangeAnswer ? rangeAnswer.data.length : null)
-                + ' full=' + (fullAnswer ? fullAnswer.data.length : null),
-        );
 
         const mine = diagnosticsFor(mainUri);
         check('didOpen: diagnostics arrived for the document', mine.length > 0, JSON.stringify(mine));
@@ -411,140 +319,16 @@ function main() {
                 JSON.stringify(e.newText));
         }
 
-        // 5b. SEMANTIC TOKENS: the request a highlighter makes on every visible
-        //     change, and the one place a bad delta shows up as a whole file
-        //     painted in the wrong colours rather than as an error.
-        // The lines of what is CURRENTLY open -- which is `messy`, put there by
-        // step 4's didChange, not the original `text`. Checking the tokens
-        // against the wrong document's line lengths is how this first reported
-        // five tokens "outside" a document they were all inside.
-        const lines = messy.split('\n');
-        const st = await request('textDocument/semanticTokens/full', { textDocument: { uri: mainUri } });
-        const data = st && st.data;
-        check('semanticTokens: an array of numbers', Array.isArray(data) && data.length % 5 === 0,
-            'length ' + (data ? data.length : 'none'));
-        // Decoded exactly as an editor decodes it: five numbers per token,
-        // deltaLine against the previous token's line, deltaStartChar against its
-        // start only when they share a line.
-        let pl = 0, pc = 0, pend = -1, bad = 0, outside = 0;
-        for (let i = 0; i + 4 < data.length; i += 5) {
-            const dl = data[i], dc = data[i + 1], len = data[i + 2];
-            const line = pl + dl;
-            const ch = dl === 0 ? pc + dc : dc;
-            if (len <= 0 || line < 0 || ch < 0) { bad++; }
-            if (line >= lines.length) { outside++; }
-            else if (ch + len > lines[line].length + 1) { outside++; }
-            if (pend >= 0 && line * 1000000 + ch < pend) { bad++; }
-            pend = line * 1000000 + ch + len;
-            pl = line;
-            pc = ch;
-        }
-        check('semanticTokens: every token positive-length, ordered, non-overlapping', bad === 0,
-            bad + ' bad of ' + (data.length / 5));
-        check('semanticTokens: every token inside the document', outside === 0,
-            outside + ' outside, ' + (data.length / 5) + ' tokens over ' + lines.length + ' lines');
-        check('semanticTokens: the file produced a plausible number of tokens',
-            data.length > 40, data.length + ' numbers for ' + lines.length + ' lines');
-
-        // What a name DENOTES (R2.3). The five semantic classes are resolved by the
-        // server's own index and the compiler's own builtin list -- never guessed --
-        // so each is checked by NAME through the legend, which is the only thing a
-        // client ever sees.
-        const semText = [
-            'type Pair = { a: long, b: long };',        // 0
-            'def twice(n: long) -> long {',               // 1
-            '    let inner = n * 2;',                     // 2
-            '    inner',                                  // 3
-            '}',                                          // 4
-            'let p: Pair = { a: 1, b: 2 };',              // 5
-            'let q = p.a;',                               // 6
-            'print(twice(p.a));',                         // 7
-            'let z = nosuchthing;',                       // 8
-        ].join('\n');
+        // M4's fixture is the ORIGINAL text again. Formatting above moved the
+        // buffer to `messy`; without this the hover, definition and completion
+        // cases below would ask about the wrong document.
         send('textDocument/didChange', {
-            textDocument: { uri: mainUri, version: 12 },
-            contentChanges: [{ text: semText }],
-        });
-        await settle();
-        const semToks = await request('textDocument/semanticTokens/full', { textDocument: { uri: mainUri } });
-        const semData = semToks && semToks.data;
-        const names = leg.tokenTypes;
-        const semLines = semText.split('\n');
-        // The class of the first identifier at (line, needle), by legend NAME.
-        // Decoded the way an editor decodes it. `pc` is the previous token's START
-        // and it is not optional: deltaStartChar is relative to it when two tokens
-        // share a line and absolute otherwise, so a decoder that keeps only `dc`
-        // silently reads every second token on a line from the wrong place. It is
-        // the first thing t010_sem's own decode gets right and the thing this one
-        // got wrong, which showed up as two cases answering `no-token` for a
-        // parameter and a property that are both there.
-        const classOf = (line, needle) => {
-            const at = semLines[line].indexOf(needle);
-            if (at < 0) { return 'NO-SUCH-COLUMN'; }
-            let pl = 0, pc = 0;
-            for (let i = 0; i + 4 < semData.length; i += 5) {
-                const dl = semData[i];
-                const line2 = pl + dl;
-                const ch = dl === 0 ? pc + semData[i + 1] : semData[i + 1];
-                const len = semData[i + 2];
-                if (line2 === line && at >= ch && at < ch + len) {
-                    const t = semData[i + 3];
-                    return t >= 0 && t < names.length ? names[t] : 'type' + t;
-                }
-                pl = line2;
-                pc = ch;
-            }
-            return 'no-token';
-        };
-        check('semantic classes: a type alias is a type', classOf(0, 'Pair') === 'type', classOf(0, 'Pair'));
-        check('semantic classes: a def is a function', classOf(1, 'twice') === 'function', classOf(1, 'twice'));
-        check('semantic classes: a parameter is a parameter', classOf(1, 'n:') === 'parameter', classOf(1, 'n:'));
-        check('semantic classes: a member after a dot is a property', classOf(6, 'a;') === 'property', classOf(6, 'a;'));
-        check('semantic classes: a builtin is a builtin', classOf(7, 'print') === 'builtin', classOf(7, 'print'));
-        check('semantic classes: an ordinary let stays a variable', classOf(3, 'inner') === 'variable', classOf(3, 'inner'));
-        // And the one that matters most: a name nothing declares must NOT get a
-        // class it did not earn, or an editor paints a typo as real code.
-        check('semantic classes: a name nothing declares stays a variable',
-            classOf(8, 'nosuchthing') === 'variable', classOf(8, 'nosuchthing'));
-        // A multi-line comment must be SEVERAL tokens: one token crossing a line
-        // break paints from its start to the end of the file, and the result looks
-        // like a broken theme rather than a broken server.
-        send('textDocument/didChange', {
-            textDocument: { uri: mainUri, version: 9 },
-            contentChanges: [{ text: '/* one\n   two\n   three */\nlet x = 1;\n' }],
-        });
-        await settle();
-        const stC = await request('textDocument/semanticTokens/full', { textDocument: { uri: mainUri } });
-        let commentLines = 0;
-        {
-            let l2 = 0, c2 = 0;
-            for (let i = 0; i + 4 < stC.data.length; i += 5) {
-                const line = l2 + stC.data[i];
-                const ch = stC.data[i] === 0 ? c2 + stC.data[i + 1] : stC.data[i + 1];
-                if (stC.data[i + 3] === 0) { commentLines++; }   // 0 == comment
-                l2 = line;
-                c2 = ch;
-            }
-        }
-        check('semanticTokens: a 3-line block comment is 3 tokens, not 1', commentLines === 3,
-            commentLines + ' comment tokens');
-        // A buffer that does not lex must still highlight (R2.5).
-        send('textDocument/didChange', {
-            textDocument: { uri: mainUri, version: 10 },
-            contentChanges: [{ text: 'let s = "oops\nlet y = 1;\n' }],
-        });
-        await settle();
-        const stBroken = await request('textDocument/semanticTokens/full', { textDocument: { uri: mainUri } });
-        check('semanticTokens: a buffer that does not lex still returns tokens',
-            Array.isArray(stBroken.data) && stBroken.data.length > 0,
-            'length ' + (stBroken && stBroken.data && stBroken.data.length));
-        send('textDocument/didChange', {
-            textDocument: { uri: mainUri, version: 11 },
-            contentChanges: [{ text: text }],
+            textDocument: { uri: mainUri, version: 4 },
+            contentChanges: [{ text }],
         });
         await settle();
 
-        // 5c. DOCUMENT SYMBOLS: the outline. "no symbols found in document" is
+        // 5b. DOCUMENT SYMBOLS: the outline. "no symbols found in document" is
         //     exactly what an editor says when this comes back empty.
         // ── M4: hover, definition, completion ──
         // `print(f() + helper.f());` is the LAST line, which is line 7 -- line 1
@@ -553,6 +337,7 @@ function main() {
         // name belongs to another file and this is not the compiler's scope.
         const at = (l, c) => ({ textDocument: { uri: mainUri }, position: { line: l, character: c } });
         const lineOf = (t) => text.split('\n')[t];
+        const lines = text.split('\n');
         const fCol = lineOf(7).indexOf('f(');
         check('m4: the fixture really has `f(` on line 7', fCol > 0, lineOf(7));
 
@@ -748,6 +533,8 @@ function main() {
         // each refusal is a promise it did NOT advertise.
         const claimedButAbsent = [
             ['textDocument/rangeFormatting', { textDocument: { uri: mainUri }, range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } }, options: { tabSize: 4, insertSpaces: true } }],
+            ['textDocument/semanticTokens/full', { textDocument: { uri: mainUri } }],
+            ['textDocument/semanticTokens/range', { textDocument: { uri: mainUri }, range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } } }],
             ['workspace/diagnostic', { previousResultIds: [] }],
             ['workspace/symbol', { query: 'f' }],
         ];

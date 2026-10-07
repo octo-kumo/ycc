@@ -41,3 +41,4 @@ ylong arch_frame(ylong slots);
 Yv *arch_exit(void);
 
 #endif /* ARCH_X64_H */
+Yv *arch_nogc_lines(Yv *lines);
