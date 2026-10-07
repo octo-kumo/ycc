@@ -10,8 +10,10 @@ a runtime error (Section~\ref{sec:errors}).
 \item[\ic{len(x)}] Length of a string (bytes), array (elements) or map
   (entries) as \ic{long}. Records are rejected (a record's field count
   is part of its type).
-\item[\ic{keys(m)}] The keys of map \ic{m} in insertion order, as an
-  array \ic{[K]} of its own (growing it leaves the map alone):
+\item[\ic{keys(m)}, \ic{values(m)}] The keys and the values of map \ic{m}
+  in the same insertion order, each an array of its own (\ic{[K]} and
+  \ic{[V]}; growing one leaves the map alone), so
+  \ic{keys(m)[i]} and \ic{values(m)[i]} are the same entry:
   \ic{foreach (k in keys(m)) \{ print(k, m[k]!); \};}.
 \item[\ic{range(n)}] \ic{[0, 1, ..., n-1]}.
 \item[\ic{trim(s)}] Strip leading/trailing space, tab, CR, LF.

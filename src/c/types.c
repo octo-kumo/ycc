@@ -215,6 +215,8 @@ static Yv *union_field(Yv *st, Yv *t, Yv *dkey, ylong line, ylong col);
 static Yv *dotassign_union(Yv *st, Yv *t, Yv *node);
 static Yv *typeof_sliceassign(Yv *st, Yv *node);
 static Yv *typeof_prop(Yv *st, Yv *t, Yv *key, ylong line, ylong col);
+static Yv *dotassign_map(Yv *st, Yv *t, Yv *node);
+static int map_key_is_str(Yv *t);
 static Yv *typeof_field(Yv *st, Yv *t, Yv *dkey, ylong line, ylong col);
 /* native.c owns this: the C twin of types.y's normtype. Declared here
    because the str_method table wraps a type in an option. */
@@ -3491,6 +3493,8 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                 }
             } else if (yv_l(yr_get(unfold(yr_get(got, "typ")), "k")) == K_tunion) {
                 return dotassign_union(st, unfold(yr_get(got, "typ")), node);
+            } else if (yv_l(yr_get(unfold(yr_get(got, "typ")), "k")) == K_tmap) {
+                return dotassign_map(st, unfold(yr_get(got, "typ")), node);
             } else {
                 st = fail(st,
                           ys_cat(ys_cat(ys("cannot field-assign "),
@@ -3529,6 +3533,8 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                 }
             } else if (yv_l(yr_get(yr_get(obr, "typ"), "k")) == K_tunion) {
                 return dotassign_union(st, yr_get(obr, "typ"), node);
+            } else if (yv_l(yr_get(yr_get(obr, "typ"), "k")) == K_tmap) {
+                return dotassign_map(st, yr_get(obr, "typ"), node);
             } else {
                 st = fail(st,
                           ys_cat(ys_cat(ys("cannot field-assign "),
@@ -3986,6 +3992,29 @@ static Yv *typeof_field(Yv *st, Yv *t, Yv *dkey, ylong line, ylong col) {
         }
     } else if (yv_l(yr_get(t, "k")) == K_tunion) {
         return union_field(st, t, dkey, line, col);
+    } else if (yv_l(yr_get(t, "k")) == K_tmap) {
+        /* `m.k` is the entry named "k" (TODO.md item 10). It is the VALUE,
+         * not the option a bracket read gives, and the emitter stops the
+         * program when there is no such entry -- a dot is a claim that the
+         * entry is there, so a typo must not become a silent `none`; `m["k"]`
+         * stays the probe and `m["k"]!` its answer.
+         *
+         * `m.length` is the number of entries, as it is for an array or a
+         * string, and `m.ptr` has none to give -- both go to the property
+         * arm, which is also what says so. Nothing else is reserved:
+         * `m.keys`, `m.vals` and `m.boxes` are entries like any other (the
+         * map's three fields are the emitter's own business -- `keys(m)` and
+         * `values(m)` are the program's). */
+        if (ys_eq_lit(dkey, "length") || ys_eq_lit(dkey, "ptr")) {
+            return typeof_prop(st, t, dkey, line, col);
+        } else if (map_key_is_str(t)) {
+            return yr(2, "typ", yr_get(t, "of"), "st", st);
+        } else {
+            st = fail(st,
+                      ys_cat(ys_cat(ys_cat(ys_cat(ys_cat(ys_cat(ys("cannot read field '"), dkey), ys("' of ")), tstr(t)), ys(": a dot name is a string, so the map's keys must be too (use m[\"")), dkey), ys("\"])")),
+                      line, col);
+            return yr(2, "typ", t_unk(), "st", st);
+        }
     } else if (yv_l(yr_get(t, "k")) == K_tunk) {
         return yr(2, "typ", t_unk(), "st", st);
     } else if (yv_l(yr_get(t, "k")) == K_tnone) {
@@ -4016,16 +4045,75 @@ static Yv *typeof_field(Yv *st, Yv *t, Yv *dkey, ylong line, ylong col) {
  * so it is valid for an empty array too, where &a[0] traps. A str has no
  * `.ptr`: its bytes can live in read-only .rodata, where a store through
  * the pointer would fault. */
+/* A dot name is a string, so only a map keyed by one can be read with one. */
+static int map_key_is_str(Yv *t) {
+    if (yv_l(yr_get(t, "k")) == K_tmap) {
+        return yv_l(yr_get(yr_get(t, "key"), "k")) == K_tstr;
+    }
+    return 0;
+}
+
+/* The two dot names a map keeps for itself, in the words a store needs:
+ * `.length` IS a property (the entry count), so it is a place nowhere, while
+ * `.ptr` is not one at all -- a map has no data block to point into, which is
+ * what the read says too (typeof_prop). */
+static Yv *map_dot_prop_msg(Yv *st, Yv *t, Yv *key, ylong line, ylong col) {
+    Yv *msg = ys("cannot field-assign ");
+    msg = ys_cat(msg, tstr(t));
+    if (ys_eq_lit(key, "ptr")) {
+        msg = ys_cat(msg, ys(": it has no property '"));
+        msg = ys_cat(msg, key);
+        return fail(st, ys_cat(msg, ys("' (it has '.length')")), line, col);
+    } else {
+        msg = ys_cat(msg, ys(" ('"));
+        msg = ys_cat(msg, key);
+        return fail(st, ys_cat(msg, ys("' is a property, not an entry)")), line, col);
+    }
+}
+
+/* `m.k = v` on a map: the entry named "k", exactly as `m["k"] = v` -- which is
+ * how the emitter lowers it, and there is nothing to check about a name that
+ * is not known at compile time except that it is one the key type can hold.
+ * A store ADDS the entry when it is not there, so unlike a dot read it cannot
+ * trap. */
+static Yv *dotassign_map(Yv *st, Yv *t, Yv *node) {
+    Yv *key = yr_get(node, "key");
+    if (ys_eq_lit(key, "length") || ys_eq_lit(key, "ptr")) {
+        st = map_dot_prop_msg(st, t, key,
+                              yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
+        return yr(2, "typ", t_unk(), "st", st);
+    }
+    if (!map_key_is_str(t)) {
+        Yv *msg = ys("cannot field-assign ");
+        msg = ys_cat(msg, tstr(t));
+        msg = ys_cat(msg, ys(": a dot name is a string, so the map's keys must be too (use m[\""));
+        msg = ys_cat(msg, key);
+        st = fail(st, ys_cat(msg, ys("\"] = v)")),
+                  yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
+        return yr(2, "typ", t_unk(), "st", st);
+    }
+    Yv *v = typeof_want(st, yr_get(node, "v"), yr_get(t, "of"));
+    st = yr_get(v, "st");
+    st = expect_type(st, yr_get(v, "typ"), yr_get(t, "of"),
+                     ys_cat(ys_cat(ys("map entry '"), key), ys("'")),
+                     yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
+    return yr(2, "typ", yr_get(t, "of"), "st", st);
+}
+
 static Yv *typeof_prop(Yv *st, Yv *t, Yv *key, ylong line, ylong col) {
     if (ys_eq_lit(key, "length")) {
         return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
     } else if (ys_eq_lit(key, "ptr") &&
-               yv_l(yr_get(t, "k")) != K_tstr) {
+               (yv_l(yr_get(t, "k")) == K_tarr ||
+                yv_l(yr_get(t, "k")) == K_tarrfix)) {
         return yr(2, "typ",
                   yr(2, "k", yv_long(K_tptr), "to", yr_get(t, "of")), "st", st);
     } else {
         Yv *have = ys("'.length' and '.ptr'");
         if (yv_l(yr_get(t, "k")) == K_tstr) {
+            have = ys("'.length'");
+        }
+        if (yv_l(yr_get(t, "k")) == K_tmap) {
             have = ys("'.length'");
         }
         st = fail(st,
@@ -4324,9 +4412,15 @@ static Yv *place_check(Yv *st, Yv *tgt, Yv *tt, Yv *op, ylong line, ylong col) {
         if (yv_l(yr_get(tt, "k")) != K_tunk &&
             (ys_eq_lit(key, "length") || ys_eq_lit(key, "ptr"))) {
             Yv *bt = base_type(st, yr_get(tgt, "obj"));
-            if (yv_l(yr_get(bt, "k")) == K_tarr ||
-                yv_l(yr_get(bt, "k")) == K_tarrfix ||
-                yv_l(yr_get(bt, "k")) == K_tstr) {
+            if (yv_l(yr_get(bt, "k")) == K_tmap) {
+                // a map's `.length` is its entry count and `.ptr` has no data
+                // block to give, so neither is an entry -- the same words the
+                // plain store gets (map_dot_prop_msg)
+                st = map_dot_prop_msg(st, bt, key, line, col);
+                ok = 0;
+            } else if (yv_l(yr_get(bt, "k")) == K_tarr ||
+                       yv_l(yr_get(bt, "k")) == K_tarrfix ||
+                       yv_l(yr_get(bt, "k")) == K_tstr) {
                 st = fail(st,
                           ys_cat(ys_cat(ys("cannot field-assign "), tstr(bt)),
                                  ys(" (only records)")),
@@ -5154,6 +5248,35 @@ static Yv *typeof_call_go(Yv *st, Yv *node) {
                     return yr(2, "typ", t_unk(), "st", st);
                 } else {
                     st = fail(st, ys_cat(ys("keys needs a map, got "), tstr(yr_get(r, "typ"))),
+                              yv_l(yr_get(node, "line")),
+                              yv_l(yr_get(node, "col")));
+                    return yr(2, "typ", t_unk(), "st", st);
+                }
+            }
+        } else if (ys_eq_lit(name, "values")) {
+            // values(m) -> [V]: the entries of map m, in the same insertion
+            // order as keys(m) -- so keys(m)[i] and values(m)[i] are the same
+            // entry (TODO.md item 10's answer to the reserved-names question:
+            // no reserved names, the pair is the API)
+            if (yv_len(cargs) != 1) {
+                st = fail(st, ys("values takes exactly 1 argument"),
+                          yv_l(yr_get(node, "line")),
+                          yv_l(yr_get(node, "col")));
+                return yr(2, "typ", t_unk(), "st", st);
+            } else {
+                Yv *r = typeof_expr(st, ya_get(cargs, 0));
+                st = yr_get(r, "st");
+                Yv *mt = unfold(yr_get(r, "typ"));
+                ylong mk = yv_l(yr_get(mt, "k"));
+                if (mk == K_tmap) {
+                    return yr(2, "typ",
+                              yr(2, "k", yv_long(K_tarr), "of", yr_get(mt, "of")),
+                              "st", st);
+                } else if (mk == K_tunk) {
+                    return yr(2, "typ", t_unk(), "st", st);
+                } else {
+                    st = fail(st,
+                              ys_cat(ys("values needs a map, got "), tstr(yr_get(r, "typ"))),
                               yv_l(yr_get(node, "line")),
                               yv_l(yr_get(node, "col")));
                     return yr(2, "typ", t_unk(), "st", st);
