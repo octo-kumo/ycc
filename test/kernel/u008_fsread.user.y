@@ -1,0 +1,11 @@
+let s = "/prog";
+let p: [byte] = [];
+let i = 0;
+while (i < len(s)) { p += s[i] & 255; i = i + 1; };
+p += 0;
+let f = syscall(257, -100, ptr_addr(&p[0]), 0);
+print("f=" + tostring(f) + "\n");
+let buf: [byte; 16] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+print("bufok\n");
+let n = syscall(0, f, ptr_addr(&buf[0]), 12);
+print("n=" + tostring(n) + " b0=" + tostring(buf[0]) + "\n");

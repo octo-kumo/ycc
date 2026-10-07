@@ -1,0 +1,8 @@
+fs ok=true ino=2 size=4715
+
+f=3
+
+bufok
+
+n=12 b0=127
+
