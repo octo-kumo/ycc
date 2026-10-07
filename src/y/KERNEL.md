@@ -999,3 +999,35 @@ all, but with the pointer evidence pointing the other way.
 
 Also measured and worth keeping: the -g disassembly, the received pointer, and
 the published rsp all agree, so the instrumentation itself is now trustworthy.
+
+### Round 62: IPC WORKS -- the bug is where the program points the kernel
+
+The decisive run, with the server NOT reading the array after the call:
+
+    p1=... (truncated by the log tail)
+    p2=0 len2=21        <- after ipc_recv: len is 21, which is the TAG the client sent
+    cli got 42
+    srv done            <- the exchange completed and the server exited cleanly
+
+Two conclusions, and they invert the last several rounds:
+
+* The M3 IPC path is FUNCTIONAL.  Registration, the port table, ipc_call's
+  queueing, the blocking of both sides, the scheduler switches, task_deliver,
+  task_complete, ipc_reply and the resume all work -- the client got its answer
+  (42) and the server ran to completion and exited.
+* The failure was never "the kernel corrupts the frame".  It is WHERE THE PROGRAM
+  POINTS THE KERNEL: the five message words land on the array's HEADER (len
+  became the tag, data became 0), so any read of buf[0] afterwards dereferences a
+  zero data pointer -- which is exactly the fault disassembled in rounds 54 and
+  60.  `ptr_addr(buf.ptr)` and `ptr_addr(&buf[0])` both appear to give the
+  header's address for a FIXED [long; 5], not the elements'.
+
+So M3's remaining work is: give the fixture a pointer to the ELEMENTS (or give
+the kernel a convention for it), and check whether `arr.ptr` on a fixed array is
+a compiler bug worth filing -- the manual says arr.ptr is a *T to the first
+element, and if it answers the header instead, that is a documentation or code
+mismatch, not a kernel problem.
+
+Everything the last ten rounds eliminated stays eliminated: the shake fix (real,
+committed, blessed), the scheduler save, the receiver's frame, the published rsp,
+the delivery arithmetic, vm_translate's offset, and the syscall stub's layout.
