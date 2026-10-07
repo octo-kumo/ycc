@@ -1545,3 +1545,35 @@ kernel.peek8 inside os/kernel/yfs.y sees the same bytes the fixture wrote with
 kernel.poke_va8 (physical peek plus DIRECT_BASE versus a virtual poke -- at boot
 low memory is identity-mapped, so they agree, but that is worth confirming rather
 than assuming), and string indexing in a kernel program (name[i]).
+
+### Round 91: the YFS format is right; the READER'S STATE is what fails
+
+Measured, not guessed.  First, the peek/poke question: a kernel program writes
+89,70 at a page and reads them back -- `peek_va8` and `peek8` both give 89 70, and
+a 16-bit read gives 256.  So the fixture's `poke_va8` writes ARE visible to the
+physical `peek8` the module uses (at boot low memory is identity-mapped and
+page_alloc returned 0x118000), and candidate 2 is dead.
+
+Then every value yfs_lookup depends on, printed in one run from a fixture that
+builds the image itself:
+
+    ok=true u32@4=1 u32@8=256 u32@20=1 cnt=1 blk=2 nl=2 len=2 c0=104 n0=104 look=-1
+                                                                           ^^^^^^^
+
+Magic, version, block size, root inode, entry count, entry block, name length,
+len(name), the byte in the image and the byte in the string are ALL correct --
+including string indexing in a kernel program -- and yfs_lookup still answers -1.
+
+So the format contract is not in question and the bug is in the reader's own
+state: yfs_lookup does not see what yfs_init established.  The prime candidate is
+the module's top-level `let`s (yfs_phys, yfs_ok, yfs_block_size, yfs_root) not
+being retained across calls -- or yfs_ok reading 0, which would return -1 on the
+first line -- and the way to tell it apart from everything else is to stop
+relying on them: give the reader an explicit context (pass the image address,
+block size and root inode into each call, or hold them in one record the caller
+owns) and re-run this exact probe.  If it then answers 2, module-level state
+across calls was the whole bug; if not, the next suspect is the return of
+yfs_u32(e + 4) in the match arm.
+
+The probe is the valuable artifact here: it prints every input AND the result, so
+the next attempt starts from a known-good image instead of from a guess.
