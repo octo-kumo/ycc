@@ -53,7 +53,7 @@ type LintRet = { name: str, ret: Type, line: long, col: long };
 // on a single copy, which costs what any `+` costs. Which of the first two
 // an expression sees decides whether a `+=` on a string appends in place or
 // copies; see lint_opassign.
-type LintSt = { warns: [Diag], vars: [LintVar], tops: NameIx, flags: [long], rets: [LintRet], ridx: NameIx, self: str, wlevel: long, dropnext: bool, vused: bool, loops: long, logic: long };
+type LintSt = { warns: [Diag], vars: [LintVar], tops: NameIx, flags: [long], rets: [LintRet], ridx: NameIx, self: str, wlevel: long, dropnext: bool, vused: bool, loops: long, logic: long, chain: long };
 // A shortening the compiler can apply itself (`ycc -W 2 --fix`): `rule` is
 // the section of LINT_RULES.md, `line`/`col` anchor it in the spliced
 // program, and `a`/`b` are that rule's own operands (a name, an operator, a
@@ -96,7 +96,7 @@ def lint_unit(ast: Block, ast3: Block, ofile: [long], fmods: [str], wlevel: long
     let flags: [long] = [];
     let rets: [LintRet] = [];
     lint_fixes = [];
-    let st = { warns: warns, vars: vars, tops: parser.nameix_new(256), flags: flags, rets: rets, ridx: parser.nameix_new(64), self: "", wlevel: wlevel, dropnext: false, vused: false, loops: 0, logic: 0 };
+    let st = { warns: warns, vars: vars, tops: parser.nameix_new(256), flags: flags, rets: rets, ridx: parser.nameix_new(64), self: "", wlevel: wlevel, dropnext: false, vused: false, loops: 0, logic: 0, chain: 0 };
     if (wlevel >= 1) {
         lint_rets(st, ast3.stmts)
     };
@@ -1121,15 +1121,16 @@ def lint_pure(node: Node) -> bool {
 
 // Rule 2.1: an empty `if` arm.
 def lint_short_empty_if(st: LintSt, node: If) -> long {
+    if (st.chain != 0) { return 0; };
     let te = lint_empty_arm(node.then);
     let ee = node.has_else && lint_empty_arm(node.els);
     if (te && ee) {
         lint_warn_at(st, "both branches of this 'if' are empty; it does nothing", node);
-        lint_fix(st, "2.1", node.line, node.col, "both", "");
     } else if (te) {
         lint_warn_at(st, "the 'if' branch is empty; invert the condition and drop the arm", node);
-        if (node.has_else) { lint_fix(st, "2.1", node.line, node.col, "inv", ""); }
-        else { lint_fix(st, "2.1", node.line, node.col, "del", ""); };
+        // Only the invert is safe to apply: deleting the arm (or the whole
+        // `if`) can leave the condition's names unused, a new warning.
+        if (node.has_else && node.els.k != K.kw_if) { lint_fix(st, "2.1", node.line, node.col, "", "inv"); };
     };
     0
 };
@@ -1877,17 +1878,41 @@ def fx_if_line(rule: str, b: str, ln: long, lines: [str]) -> [str] {
     let cond = fx_strip(line[o + 1:c]);
     let b1 = fx_ws(line, c + 1);
     if (b1 >= len(line) || line[b1] != 123) { return lines; };
-    let e1 = fx_match(line, b1, 123, 125);
-    if (e1 < 0) { return lines; };
-    let then = fx_strip(line[b1 + 1:e1]);
     let indent = fx_indent(line);
+    let e1 = fx_match(line, b1, 123, 125);
+    if (e1 < 0) {
+        // the then block runs on to a later line; its close must be a plain
+        // `}` (or `};`) or a plain `} else {` -- never a `} else if`
+        let j = ln + 1;
+        while (j <= len(lines)) {
+            let t = fx_strip(lines[j - 1]);
+            if (fx_indent(lines[j - 1]) == indent && t[:1] == "}") { break; };
+            j = j + 1;
+        };
+        if (j > len(lines)) { return lines; };
+        let t = fx_strip(lines[j - 1]);
+        if (rule == "2.1" && b == "inv" && t[:8] == "} else {") {
+            lines[ln - 1] = indent + "if (!(" + cond + ")) {";
+            lines = lines[:ln] + lines[j:];
+        } else if (rule == "2.1" && b == "del" && (t == "}" || t == "};")) {
+            lines = lines[:ln - 1] + lines[j:];
+        };
+        return lines;
+    };
+    let then = fx_strip(line[b1 + 1:e1]);
     let after = line[e1 + 1:];
     let el = fx_ws(after, 0);
     if (el < len(after) && fx_word(after, el, "else")) {
         let b2 = fx_ws(after, el + 4);
         if (b2 >= len(after) || after[b2] != 123) { return lines; };
         let e2 = fx_match(after, b2, 123, 125);
-        if (e2 < 0) { return lines; };
+        if (e2 < 0) {
+            // `if (C) { } else {` with the else body on the lines that follow
+            if (rule == "2.1" && b == "inv" && then == "") {
+                lines[ln - 1] = indent + "if (!(" + cond + ")) {";
+            };
+            return lines;
+        };
         let els = fx_strip(after[b2 + 1:e2]);
         let tail = fx_strip(after[e2 + 1:]);
         if (rule == "2.3") {
@@ -2153,7 +2178,12 @@ def lint_if(st: LintSt, node: If, used: bool) -> long {
     lint_node(st, node.cond, true);
     let arms = used && node.has_else;
     lint_node(st, node.then, arms);
+    // An `else if` is an arm of the chain, not an arm of its own: its empty
+    // then cannot be dropped (that would make the next `else` the head).
+    let wc = st.chain;
+    if (node.els.k == K.kw_if) { st.chain = 1; };
     lint_node(st, node.els, arms);
+    st.chain = wc;
     if (st.wlevel >= 1 && node.has_else && lint_empty_arm(node.els)) {
         lint_warn_at(st, "the 'else' branch is empty", node)
     } else { 0 };
@@ -2342,8 +2372,7 @@ def lint_seen(keys: [str], i: long) -> bool {
 def lint_vars(st: LintSt) -> long {
     let flags = st.flags;
     foreach (v in st.vars) {
-        if (v.top) {
-        } else {
+        if (!(v.top)) {
             let f = 0;
             if (v.num < len(flags)) {
                 f = flags[v.num];

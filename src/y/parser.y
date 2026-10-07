@@ -402,7 +402,7 @@ def sep_by(toks: [Tok], p: long, close: str, one: str) -> ParsedList {
             // malformed. parser.y has no error channel, so plant a node the
             // checker rejects — dropping the leftovers silently compiled
             // `print(1 zzz)` into `print(1)`.
-            if (is_punct(toks, pos, close)) { } else {
+            if (!(is_punct(toks, pos, close))) {
                 xs += { k: K.err, msg: "unexpected " + tok_desc(toks, pos) + " (expected ',' or '" + close + "')", line: tline(toks, pos), col: tcol(toks, pos) };
             };
             go = false;
@@ -1257,7 +1257,7 @@ def parse_array(toks: [Tok], p: long) -> Parsed {
             // literal, with trailing-comma tolerance
             let elems = [first.node];
             let go = true;
-            if (is_punct(toks, pos, ",")) { } else { go = false; };
+            if (!(is_punct(toks, pos, ","))) { go = false; };
             while (go) {
                 pos = pos + 1;  // skip ','
                 if (is_punct(toks, pos, "]")) {
@@ -1272,7 +1272,7 @@ def parse_array(toks: [Tok], p: long) -> Parsed {
             // Same guard as sep_by: a token that is neither ',' nor ']'
             // means the stream is malformed, and dropping it silently would
             // compile `[1, 2 zzz]` as `[1, 2]`.
-            if (is_punct(toks, pos, "]")) { } else {
+            if (!(is_punct(toks, pos, "]"))) {
                 elems += { k: K.err, msg: "unexpected " + tok_desc(toks, pos) + " (expected ',' or ']')", line: tline(toks, pos), col: tcol(toks, pos) };
             };
             res({ k: K.array, elems: elems, line: ln, col: cl }, skip_close(toks, pos, "]"))
@@ -1328,8 +1328,7 @@ def parse_map(toks: [Tok], p: long) -> Parsed {
             } else {
                 // A quoted key makes a MAP literal ({k: K.map}); identifier
                 // keys stay record fields ({k: K.rec}).
-                if (is_map) {
-                } else {
+                if (!(is_map)) {
                     is_map = tt(toks, pos) == "str";
                 };
                 // Spread `...obj` lexes as `..` + `.`; the entry is

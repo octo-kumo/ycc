@@ -794,8 +794,7 @@ def std_resolve(name: str, base_dir: str) -> str {
     cands.foreach((e) => {
         if (len(found) == 0) {
             let c: str = e;
-            if (fs.read_file(c) == none) {
-            } else {
+            if (!(fs.read_file(c) == none)) {
                 found = norm_path(c);
             };
         }
@@ -4077,7 +4076,7 @@ def box_names(func: EmitFunc) -> [str] {
     let out: [str] = [];
     reads.foreach((e) => {
         let n: str = e;
-        if (name_in(out, n)) { } else {
+        if (!(name_in(out, n))) {
             out += n;
         };
     });
@@ -4245,7 +4244,7 @@ def app_names(node: Node, deep: bool, skip: [str]) -> [str] {
     let out: [str] = [];
     seen.foreach((e) => {
         let n: str = e;
-        if (n[:1] == "&" || name_in(out, n) || name_in(skip, n) || name_in(seen, "&" + n)) { } else {
+        if (!(n[:1] == "&" || name_in(out, n) || name_in(skip, n) || name_in(seen, "&" + n))) {
             out += n;
         };
     });
@@ -4730,8 +4729,7 @@ def gen_logic(st: EmitSt, node: Bin, is_or: bool) -> EmitSt {
     if (is_or) {
         st = emit_insn(st, insn.F_JNZ_L, rT.label, 0, 0, 0, 0, 0, 0);
     }
-    if (is_or) {
-    } else {
+    if (!(is_or)) {
         st = emit_insn(st, insn.F_JZ_L, rF.label, 0, 0, 0, 0, 0, 0);
     };
     st = gen(st, node.r);
@@ -4739,12 +4737,10 @@ def gen_logic(st: EmitSt, node: Bin, is_or: bool) -> EmitSt {
     if (is_or) {
         st = emit_insn(st, insn.F_JNZ_L, rT.label, 0, 0, 0, 0, 0, 0);
     }
-    if (is_or) {
-    } else {
+    if (!(is_or)) {
         st = emit_insn(st, insn.F_JZ_L, rF.label, 0, 0, 0, 0, 0, 0);
     };
-    if (is_or) {
-    } else {
+    if (!(is_or)) {
         st = emit_insn(st, insn.F_MOV_I_R, 1, insn.R_RAX, 64, 0, 0, 0, 0);
         st = emit_insn(st, insn.F_JMP_L, rE.label, 0, 0, 0, 0, 0, 0);
     };
@@ -4754,8 +4750,7 @@ def gen_logic(st: EmitSt, node: Bin, is_or: bool) -> EmitSt {
         st = emit_label(st, rT.label);
         st = emit_insn(st, insn.F_MOV_I_R, 1, insn.R_RAX, 64, 0, 0, 0, 0);
     }
-    if (is_or) {
-    } else {
+    if (!(is_or)) {
         st = emit_label(st, rF.label);
         st = emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
     };
@@ -4963,7 +4958,7 @@ def leaf_expr(n: Node) -> bool {
 def gen_float_bin(st: EmitSt, node: Bin, lt: Type, rt: Type) -> EmitSt {
     let op = node.op;
     st = gen(st, node.l);
-    if (lt.k == K.tfloat) { } else {
+    if (!(lt.k == K.tfloat)) {
         st = emit_insn(st, insn.F_CVTSI2SD_R_R, insn.R_RAX, 64, insn.R_XMM0, 128, 0, 0, 0);
         st = emit_insn(st, insn.F_MOVQ_R_R, insn.R_XMM0, 128, insn.R_RAX, 64, 0, 0, 0);
     };
@@ -4977,7 +4972,7 @@ def gen_float_bin(st: EmitSt, node: Bin, lt: Type, rt: Type) -> EmitSt {
     } else {
         st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
         st = gen(st, node.r);
-        if (rt.k == K.tfloat) { } else {
+        if (!(rt.k == K.tfloat)) {
             st = emit_insn(st, insn.F_CVTSI2SD_R_R, insn.R_RAX, 64, insn.R_XMM0, 128, 0, 0, 0);
             st = emit_insn(st, insn.F_MOVQ_R_R, insn.R_XMM0, 128, insn.R_RAX, 64, 0, 0, 0);
         };
@@ -6759,8 +6754,7 @@ def gen_cat_arr(st: EmitSt, node: Bin, lt: Type, rt: Type) -> EmitSt {
         ety = store_elem_type(rt, esz);
     };
     let one = { k: K.array, elems: args1(node.r), line: ln, col: cl };
-    if (larr) {
-    } else {
+    if (!(larr)) {
         one = { k: K.array, elems: args1(node.l), line: ln, col: cl };
     };
     if (larr) {
@@ -8553,7 +8547,7 @@ def norm_num(s: str) -> str {
         let v = 0;
         for i in 2..len(s) {
             let c = s[i:i + 1];
-            if (c == "_") { } else {
+            if (!(c == "_")) {
                 v = v * radix + hexval_ch(c);
             };
         };
@@ -11019,7 +11013,7 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
     // binds nothing here and never touches the slot, which is what lets one
     // body serve both direct and closure calls. `_start` has no enclosing
     // frame, so it never captures.
-    if (is_main) { } else {
+    if (!(is_main)) {
         let mycaps = fn_captures(func, st.fns.ix, selfname);
         let cloff = 16 + nargs * 8;
         mycaps.foreach((e, c) => {
@@ -11377,7 +11371,7 @@ def capturing_defs(defs: [FnDef], gnames: [str]) -> [str] {
         let reads_var = false;
         while (j < len(cs)) {
             let cn: str = cs[j];
-            if (namemap_get(fnm, cn) >= 0) { } else { reads_var = true; };
+            if (!(namemap_get(fnm, cn) >= 0)) { reads_var = true; };
             j++;
         };
         if (reads_var) { out += d.name; }
@@ -11389,7 +11383,7 @@ def capturing_defs(defs: [FnDef], gnames: [str]) -> [str] {
         i = 0;
         while (i < len(defs)) {
             let d = defs[i];
-            if (name_in(out, d.name)) { } else {
+            if (!(name_in(out, d.name))) {
                 let cs = caps[i];
                 let j = 0;
                 let hit = false;
@@ -11770,7 +11764,7 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
         let i = 0;
         while (i < len(defs)) {
             let d = defs[i];
-            if (name_in(capdefs, d.name)) { } else {
+            if (!(name_in(capdefs, d.name))) {
                 hdefs += d;
                 let rl = next_uid(st);
                 st = rl.st;
@@ -13386,8 +13380,7 @@ def gen_maplit(st: EmitSt, node: RecLit) -> EmitSt {
                 found = true;
             }
         });
-        if (found) {
-        } else {
+        if (!(found)) {
             keys += mk;
             vals += mv;
         };

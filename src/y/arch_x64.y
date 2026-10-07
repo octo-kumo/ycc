@@ -318,7 +318,7 @@ def arch_windows_lines() -> [str] {
 def arch_win_check(lines: [str], blocks: [[str]]) -> long {
     blocks.foreach((e) => {
         if (e[1] == "0") {
-            if (arch_win_labeled(lines, e[0])) { } else {
+            if (!(arch_win_labeled(lines, e[0]))) {
                 puts("error: arch/wsys.s replaces '" + e[0] + "', which src/y/arch/prelude.s does not define\n");
                 exit(1);
             };

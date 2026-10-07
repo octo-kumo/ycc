@@ -672,8 +672,7 @@ def tuple_n(fs: [Field]) -> long {
 def tuple_typs(fs: [Field]) -> [Type] {
     let n = tuple_n(fs);
     let out: [Type] = [];
-    if (n < 0) {
-    } else {
+    if (!(n < 0)) {
         for i in 0..n {
             out += { k: K.tunk };
         };
@@ -1075,8 +1074,7 @@ def field_merge_dup(fields: [Field], name: str, typ: Type) -> [Field] {
         let f = fields[i];
         let fnm: str = f.name;
         if (fnm == name) {
-            if (seen) {
-            } else {
+            if (!(seen)) {
                 out += { name: name, opt: false, typ: typ };
                 seen = true;
             };
@@ -1085,8 +1083,7 @@ def field_merge_dup(fields: [Field], name: str, typ: Type) -> [Field] {
         };
         i++;
     };
-    if (seen) {
-    } else {
+    if (!(seen)) {
         out += { name: name, opt: false, typ: typ };
     };
     out
@@ -2848,11 +2845,11 @@ def typeof_sliceassign(st: TcSt, node: SliceAssign) -> TcRes {
     st = ar.st;
     let slo = node.lo;
     let shi = node.hi;
-    if (slo.k == K.void) { } else {
+    if (!(slo.k == K.void)) {
         let rl = typeof_expr(st, slo);
         st = expect_type(rl.st, rl.typ, { k: K.tlong }, "slice start", node.line, node.col);
     };
-    if (shi.k == K.void) { } else {
+    if (!(shi.k == K.void)) {
         let rh = typeof_expr(st, shi);
         st = expect_type(rh.st, rh.typ, { k: K.tlong }, "slice end", node.line, node.col);
     };
@@ -2870,7 +2867,7 @@ def typeof_sliceassign(st: TcSt, node: SliceAssign) -> TcRes {
             else { let arr: TFix = at; ae = arr.of; };
             if (vkk == K.tarr) { let arr: TOf = vt; ve = arr.of; }
             else { let arr: TFix = vt; ve = arr.of; };
-            if (teq(ve, ae)) { } else {
+            if (!(teq(ve, ae))) {
                 st = fail(st, "slice assignment: cannot store " + tstr(vt) + " into " + tstr(at), node.line, node.col);
             };
         } else if (vkk == K.tunk) {
