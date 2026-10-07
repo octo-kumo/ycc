@@ -4809,7 +4809,14 @@ def gen_in(st: EmitSt, node: Bin) -> EmitSt {
     let ln = node.line;
     let cl = node.col;
     let zero = n_num("0", ln, cl);
-    if ((unfold(infer(st, node.r))).k == K.tstr) {
+    let rt = unfold(infer(st, node.r));
+    if (rt.k == K.tmap) {
+        // `"k" in m` is the map read's own scan, in its "has" mode (TODO.md
+        // item 14): the key is on the left, so the Index node carries them
+        // swapped from what gen_map_get expects.
+        let ix: Index = { k: K.index, arr: node.r, idx: node.l, line: ln, col: cl };
+        gen_map_get(st, ix, "has")
+    } else if (rt.k == K.tstr) {
         let needle = node.l;
         if (unfold(infer(st, node.l)).k == K.tbyte) {
             needle = { k: K.call, callee: n_id("chr", ln, cl), args: [node.l], line: ln, col: cl };

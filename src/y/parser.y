@@ -412,6 +412,7 @@ def op_prec(op: str) -> long {
     else if (op == ">") { 4 }
     else if (op == "<=") { 4 }
     else if (op == ">=") { 4 }
+    else if (op == "in") { 4 }
     else if (op == "::") { 5 }
     else if (op == "|") { 6 }
     else if (op == "^") { 7 }
@@ -1077,7 +1078,11 @@ def parse_binary(toks: [Tok], p: long, min_prec: long) -> Parsed {
         let op = tv(toks, pos);
         let prec = 0;
         if (tt(toks, pos) == "op") { prec = op_prec(op); }
-        else if (is_kw(toks, pos, "in")) { prec = 3; };
+        // `in` is a KEYWORD -- `for x in xs`, `foreach (k in keys(m))` -- and
+        // here it is an operator: `"k" in m` asks a map for a key (TODO.md
+        // item 14). Both heads find their `in` before parsing an expression
+        // that starts after it, so nothing there can see this.
+        if (prec == 0 && is_kw(toks, pos, "in")) { prec = op_prec("in"); };
         // Nested ifs, not one `prec != 0 || prec < min_prec` gate: a mixed
         // long/bool gate reads worse, and `||` would type fine anyway
         // (typeof_logic takes any operand) — this is shape, not a rule.

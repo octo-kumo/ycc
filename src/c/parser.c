@@ -391,6 +391,8 @@ ylong op_prec(Yv *op) {
         return 4;
     } else if (ys_eq_lit(op, ">=")) {
         return 4;
+    } else if (ys_eq_lit(op, "in")) {
+        return 4;
     } else if (ys_eq_lit(op, "::")) {
         return 5;
     } else if (ys_eq_lit(op, "|")) {
@@ -1100,7 +1102,12 @@ Yv *parse_binary(Yv *toks, ylong p, ylong min_prec) {
             prec = op_prec(op);
             ;
         } else if (is_kw(toks, pos, ys("in"))) {
-            prec = 3;
+            /* `in` is a KEYWORD -- `for x in xs`, `foreach (k in keys(m))` --
+             * and here it is an operator: `"k" in m` asks a map for a key
+             * (TODO.md item 14). Both heads find their `in` before parsing an
+             * expression that starts after it, so nothing there can see this.
+             */
+            prec = op_prec(ys("in"));
         }
         // NOTE: nested ifs, not `||` — the operands mix long (prec flags)
         // with bools and the checker rejects the joint gate (tcompat law:

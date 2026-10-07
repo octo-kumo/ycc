@@ -6036,7 +6036,17 @@ Yv *gen_in(Yv *st, Yv *node) {
     ylong cl = yv_l(yr_get(node, "col"));
     Yv *zero = n_num(ys("0"), ln, cl);
     Yv *r = unfold(infer(st, yr_get(node, "r")));
-    if (yv_l(yr_get(r, "k")) == K_tstr) {
+    ylong rk = yv_l(yr_get(r, "k"));
+    if (rk == K_tmap) {
+        /* `"k" in m` is the map read's own scan, in its "has" mode (TODO.md
+         * item 14): the key is on the left, so the Index node carries them
+         * swapped from what gen_map_get expects. */
+        Yv *ix = yr(5, "k", yv_long(K_index), "arr", yr_get(node, "r"),
+                    "idx", yr_get(node, "l"), "line", yv_long(ln),
+                    "col", yv_long(cl));
+        return gen_map_get(st, ix, ys("has"));
+    }
+    if (rk == K_tstr) {
         Yv *needle = yr_get(node, "l");
         if (yv_l(yr_get(unfold(infer(st, yr_get(node, "l"))), "k")) == K_tbyte) {
             needle = n_call1(ys("chr"), yr_get(node, "l"), ln, cl);

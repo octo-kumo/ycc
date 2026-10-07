@@ -120,6 +120,7 @@ static int is_num_kind(Yv *t);
 static int num_eq_ok(Yv *lt, Yv *rt);
 static Yv *typeof_eq(Yv *st, Yv *op, Yv *lt, Yv *rt, ylong line, ylong col);
 static Yv *typeof_in(Yv *st, Yv *lt, Yv *rt, ylong line, ylong col);
+static Yv *typeof_in_map(Yv *st, Yv *op, Yv *lt, Yv *rt, ylong line, ylong col);
 static Yv *typeof_logic(Yv *st, Yv *op, Yv *lt, Yv *rt, ylong line, ylong col);
 static int tcompat(Yv *got, Yv *want);
 static int arr_lit_adopts(Yv *got, Yv *want, Yv *n);
@@ -2167,6 +2168,28 @@ static int in_int_ok(Yv *lt, Yv *of) {
     return 0;
 }
 
+/* `"k" in m` -- is that key in the map (TODO.md item 14). A boolean, and the
+ * scan a map read is (native.y gen_map_get's "has" mode), so it costs what a
+ * read costs. Poison quietly on an unknown operand: whatever made it unknown
+ * has already reported. */
+static Yv *typeof_in_map(Yv *st, Yv *op __attribute__((unused)), Yv *lt,
+                          Yv *rt, ylong line, ylong col) {
+    Yv *ru = unfold(rt);
+    ylong ruk = yv_l(yr_get(ru, "k"));
+    if (ruk == K_tmap || ruk == K_tunk ||
+        yv_l(yr_get(rt, "k")) == K_tnone) {
+        if (ruk == K_tmap) {
+            Yv *map = ru;
+            st = expect_type(st, lt, yr_get(map, "key"),
+                             ys("'in' left operand"), line, col);
+        }
+        return tc_res(type_node(yr(1, "k", yv_long(K_tbool))), st);
+    }
+    return tc_res(t_unk(),
+                  fail(st, ys_cat(ys("'in' needs a map on the right, got "),
+                                  tstr(rt)), line, col));
+}
+
 static Yv *typeof_in(Yv *st, Yv *lt, Yv *rt, ylong line, ylong col) {
     Yv *r = unfold(rt);
     ylong rk = yv_l(yr_get(r, "k"));
@@ -2189,7 +2212,7 @@ static Yv *typeof_in(Yv *st, Yv *lt, Yv *rt, ylong line, ylong col) {
                                       tstr(lt)), line, col));
     }
     return tc_res(t_unk(),
-                  fail(st, ys_cat(ys("'in' needs a str or an array on the right, got "),
+                  fail(st, ys_cat(ys("'in' needs a str, an array or a map on the right, got "),
                                   tstr(rt)), line, col));
 }
 
@@ -2797,6 +2820,12 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                               yv_l(yr_get(node, "line")),
                               yv_l(yr_get(node, "col")));
         } else if (ys_eq_lit(op, "in")) {
+            if (yv_l(yr_get(unfold(yr_get(r, "typ")), "k")) == K_tmap) {
+                return typeof_in_map(st, op, yr_get(l, "typ"),
+                                     yr_get(r, "typ"),
+                                     yv_l(yr_get(node, "line")),
+                                     yv_l(yr_get(node, "col")));
+            }
             return typeof_in(st, yr_get(l, "typ"), yr_get(r, "typ"),
                              yv_l(yr_get(node, "line")),
                              yv_l(yr_get(node, "col")));

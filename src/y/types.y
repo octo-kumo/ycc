@@ -1665,6 +1665,24 @@ def in_int_ok(lt: Type, of: Type) -> bool {
     else { false }
 };
 
+// `"k" in m` -- is that key in the map (TODO.md item 14). A boolean, and the
+// scan a map read is (native.y gen_map_get's "has" mode), so it costs what a
+// read costs. Poison quietly on an unknown operand: whatever made it unknown
+// has already reported.
+def typeof_in_map(st: TcSt, op: str, lt: Type, rt: Type, line: long, col: long) -> TcRes {
+    let ru = unfold(rt);
+    if (ru.k == K.tmap || ru.k == K.tunk || rt.k == K.tnone) {
+        if (ru.k == K.tmap) {
+            let map: TMap = ru;
+            st = expect_type(st, lt, map.key, "'in' left operand", line, col);
+        };
+        tc_res(type_node({ k: K.tbool }), st)
+    } else {
+        st = fail(st, "'in' needs a map on the right, got " + tstr(rt), line, col);
+        tc_res(t_unk(), st)
+    }
+};
+
 def typeof_in(st: TcSt, lt: Type, rt: Type, line: long, col: long) -> TcRes {
     let r = unfold(rt);
     if (r.k == K.tstr) {
@@ -1688,7 +1706,7 @@ def typeof_in(st: TcSt, lt: Type, rt: Type, line: long, col: long) -> TcRes {
             tc_res(t_unk(), fail(st, "'in' on an array needs one of its elements on the left, got " + tstr(lt), line, col))
         }
     } else {
-        tc_res(t_unk(), fail(st, "'in' needs a str or an array on the right, got " + tstr(rt), line, col))
+        tc_res(t_unk(), fail(st, "'in' needs a str, an array or a map on the right, got " + tstr(rt), line, col))
     }
 };
 
@@ -2165,7 +2183,13 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
         else if (op == ">") { typeof_cmp(st, op, l.typ, r.typ, bin.line, bin.col) }
         else if (op == "<=") { typeof_cmp(st, op, l.typ, r.typ, bin.line, bin.col) }
         else if (op == ">=") { typeof_cmp(st, op, l.typ, r.typ, bin.line, bin.col) }
-        else if (op == "in") { typeof_in(st, l.typ, r.typ, bin.line, bin.col) }
+        else if (op == "in") {
+            if (unfold(r.typ).k == K.tmap) {
+                typeof_in_map(st, op, l.typ, r.typ, bin.line, bin.col)
+            } else {
+                typeof_in(st, l.typ, r.typ, bin.line, bin.col)
+            }
+        }
         else if (op == "==") { typeof_eq(st, op, l.typ, r.typ, bin.line, bin.col) }
         else if (op == "!=") { typeof_eq(st, op, l.typ, r.typ, bin.line, bin.col) }
         else if (op == "&&") { typeof_logic(st, op, l.typ, r.typ, bin.line, bin.col) }
