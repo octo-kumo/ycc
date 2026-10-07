@@ -2060,7 +2060,7 @@ found by running something rather than by reading it.
    and the 5 missing were exactly the last line's. In an editor it reads as the
    highlighter going blank on the current line. Every fixture here ended with a
    newline, which is why it survived; a round trip cannot see a token that was
-   never produced. `t010_sem` pins both shapes now.
+   never produced. That layer and its fixture are now removed; the scanner shapes it found are covered by `t003_scan`.
 2. **The buffer's own lines were mapped to the spliced program one line late.**
    `Prepared.mine` filtered `origin.file == 0` and counted, but the import
    STATEMENT's line is *replaced* by the imported module's lines, so the origin map
@@ -2088,7 +2088,7 @@ found by running something rather than by reading it.
    a name the program does not bind, so the index has nothing to find. So hovering
    `p.a` showed nothing at all even though the checker had the answer. The type
    answers on its own and the declaration, when there is one, goes underneath.
-5. **`classify` — later `semantic_overrides` — cost 34.5 seconds on the largest file in the tree.** Two causes,
+5. **The old semantic classifier cost 34.5 seconds on the largest file in the tree.** Two causes,
    both invisible until something asked about *every* identifier rather than one
    position: the per-identifier position lookup counted newlines from byte 0, which
    is quadratic in the file, and `scope_end` walked all ~7,000 scope pairs for
