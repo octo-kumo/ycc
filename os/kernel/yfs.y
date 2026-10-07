@@ -78,10 +78,13 @@ def yfs_read(ino: long, off: long, buf: long, len: long) -> long {
     done
 };
 
+// `addr` is an offset INTO THE IMAGE, like the offsets yfs_u16/yfs_u32 take:
+// the image address is added here.  (It was missed once, and the symptom was a
+// name compare that read physical 520 instead of image+520.)
 def yfs_name_at(addr: long, name: str) -> bool {
     let i = 0;
     while (i < len(name)) {
-        if (kernel.peek8(addr + i) != name[i]) { return false; };
+        if (kernel.peek8(yfs_phys + addr + i) != name[i]) { return false; };
         i = i + 1;
     };
     true
