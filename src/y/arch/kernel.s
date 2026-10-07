@@ -364,6 +364,10 @@ y_heap_limit_get:
 # %rax is the frame's scratch, and the number belongs just ABOVE %rdi, where
 # the seventh pop finds it.
 #
+# The frame pointer is published BEFORE the dispatcher runs, not after: a
+# handler that has to copy the caller's frame (fork) or complete a suspended
+# syscall later (wait4) reaches it through y_cur_task_rsp.
+#
 # A task switch is a stack switch at the marked point: every task that is
 # switched out is suspended there with %rsp saved into one fixed word, and
 # resuming one loads its %rsp and pops ITS registers and frame.  Nothing else
@@ -392,9 +396,9 @@ y_syscall_entry:
     push %r10
     push %r8
     push %r9
+    mov %rsp, y_cur_task_rsp(%rip)
     call y_sys_dispatch
     mov %rax, 48(%rsp)
-    mov %rsp, y_cur_task_rsp(%rip)
     call y_sched_pick
     test %rax, %rax
     jz y_se_same

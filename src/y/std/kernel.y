@@ -63,6 +63,10 @@ def init() -> void {
     phys_init();
     gdt_init();
     syscall_init(y_kernel_stack_top_get());
+    // Task 0 is whatever is running here: the kernel's own context, which the
+    // first switch saves.  Having it from the start means a program that never
+    // creates a task still has one.
+    sched_init(vm_current(), y_kernel_stack_top_get());
     y_serial_init();
     y_pic_remap();
     y_kernel_irq_init();
@@ -348,6 +352,16 @@ def reserved_end() -> long {
         i = i + 1;
     };
     end
+};
+
+// Kernel stacks and other kernel-internal memory: a DIRECT-MAP address, not
+// the physical one.  The stubs load these into %rsp, so they have to stay
+// reachable while a process's CR3 is loaded -- and the kernel's identity map
+// is one 2 MB page, so a physical address above it is not.
+def pages_alloc_va(n: long) -> long {
+    let p = pages_alloc(n);
+    if (p == 0) { return 0; };
+    DIRECT_BASE + p
 };
 
 // A bump allocator over that region: the honest first version (no free yet).
@@ -761,8 +775,10 @@ def gdt_init() -> void {
 const TASK_RUNNING = 1;
 const TASK_READY = 2;
 const TASK_DEAD = 3;
+const TASK_BLOCKED = 4;
+const TASK_FREE = 5;
 
-type Task = { rsp: long, cr3: long, kstack: long, pid: long, state: long, name: str };
+type Task = { rsp: long, cr3: long, kstack: long, pid: long, parent: long, exit_status: long, wait_pid: long, wait_statusp: long, state: long, name: str };
 
 let tasks: [Task] = [];
 let cur_task = 0;
@@ -816,6 +832,9 @@ def syscall_init(stack_top: long) -> void {
 const SYS_READ = 0;
 const SYS_WRITE = 1;
 const SYS_MMAP = 9;
+const SYS_GETPID = 39;
+const SYS_FORK = 57;
+const SYS_WAIT4 = 61;
 const SYS_EXIT_GROUP = 231;
 const E_NOSYS = 0 - 38;
 const E_FAULT = 0 - 14;
@@ -900,10 +919,11 @@ def mmap_bytes() -> long { mmap_next - MMAP_BASE };
 // nothing to run, so the verdict goes to the test harness through kexit; with
 // others, the exit path switches away and this one never returns.
 def sys_exit_group(status: long) -> long {
+    tasks[cur_task].exit_status = status & 255;
+    task_exit();
     if (len(tasks) <= 1) {
         y_kexit(status & 255);
     };
-    task_exit();
     status
 };
 
@@ -912,6 +932,9 @@ def sys_exit_group(status: long) -> long {
 // a kept prelude block references.
 def y_sys_dispatch(nr: long, a1: long, a2: long, a3: long, a4: long, a5: long, a6: long) -> long {
     if (nr == SYS_MMAP) { return sys_mmap(a1, a2, a3, a4, a5, a6); };
+    if (nr == SYS_FORK) { return sys_fork(); };
+    if (nr == SYS_WAIT4) { return sys_wait4(a1, a2, a3, a4); };
+    if (nr == SYS_GETPID) { return tasks[cur_task].pid; };
     if (nr == SYS_WRITE) { return sys_write(a1, a2, a3); };
     if (nr == SYS_EXIT_GROUP) { return sys_exit_group(a1); };
     if (nr == SYS_READ) { return 0; };
@@ -933,13 +956,13 @@ def sched_ready() -> void { need_resched = true; };
 // needs no fabricated frame: the first switch saves it.
 def sched_init(cr3: long, kstack: long) -> void {
     if (len(tasks) == 0) {
-        tasks += { rsp: 0, cr3: cr3, kstack: kstack, pid: 0, state: TASK_RUNNING, name: "kernel" };
+        tasks += { rsp: 0, cr3: cr3, kstack: kstack, pid: 0, parent: 0 - 1, exit_status: 0, wait_pid: 0, wait_statusp: 0, state: TASK_RUNNING, name: "kernel" };
         y_cur_kstack_set(kstack);
     };
 };
 
 def sched_add(cr3: long, kstack: long, frame: long, name: str) -> long {
-    let t: Task = { rsp: frame, cr3: cr3, kstack: kstack, pid: next_pid, state: TASK_READY, name: name };
+    let t: Task = { rsp: frame, cr3: cr3, kstack: kstack, pid: next_pid, parent: 0 - 1, exit_status: 0, wait_pid: 0, wait_statusp: 0, state: TASK_READY, name: name };
     next_pid = next_pid + 1;
     tasks += t;
     len(tasks) - 1
@@ -1033,7 +1056,150 @@ def y_sched_pick() -> long {
 // A task that is done: mark it, and let the exit path switch away.  M2's
 // teardown is the whole of it -- freeing the address space and waking a parent
 // is the next step.
+def task_exit_status(i: long) -> long { tasks[i].exit_status };
+def task_parent(i: long) -> long { tasks[i].parent };
+def task_state_of(i: long) -> long { tasks[i].state };
+
+// Hand a task its syscall's answer and make it runnable again: the frame's
+// %rax slot is where the entry stub writes the dispatcher's value (48 above
+// the frame pointer), so completing a suspended call is one poke.
+def task_complete(i: long, value: long) -> void {
+    if (tasks[i].rsp != 0) { poke_va64(tasks[i].rsp + 48, value); };
+    if (tasks[i].state == TASK_BLOCKED) { tasks[i].state = TASK_READY; };
+};
+
 def task_exit() -> void {
     tasks[cur_task].state = TASK_DEAD;
+    // The parent (if it is waiting for this task, or for any child) gets the
+    // status the way a suspended syscall is completed: the value is written
+    // into its saved frame.
+    let p = tasks[cur_task].parent;
+    if (p >= 0) {
+        if (tasks[p].state == TASK_BLOCKED) {
+            let want = tasks[p].wait_pid;
+            if (want <= 0 || want == tasks[cur_task].pid) {
+                // The parent resumed at its syscall exit, so the status word
+                // has to be written here: the handler it blocked inside is
+                // never re-entered.
+                // Through the PARENT's page tables, not the current ones: we
+                // are running on the exiting child's CR3, and fork copied the
+                // address space, so the parent's own copy of that buffer is a
+                // different physical page.  Translating with the parent's
+                // directory and writing through the direct map is the fix.
+                let sp = tasks[p].wait_statusp;
+                if (sp != 0 && user_ok(sp, 4)) {
+                    let phys = vm_translate(tasks[p].cr3, sp & (0 - 8));
+                    if (phys != 0) {
+                        poke_va32(DIRECT_BASE + phys + (sp & 7), (tasks[cur_task].exit_status & 255) << 8);
+                    };
+                };
+                tasks[p].wait_pid = 0 - 1;
+                tasks[p].wait_statusp = 0;
+                task_complete(p, tasks[cur_task].pid);
+            };
+        };
+    };
     need_resched = true;
+};
+
+// Find a dead child of `me` (any pid when `want` <= 0) and answer its index.
+def find_zombie(me: long, want: long) -> long {
+    let i = 0;
+    let out = 0 - 1;
+    while (i < len(tasks)) {
+        if (out < 0 && tasks[i].state == TASK_DEAD && tasks[i].parent == me) {
+            if (want <= 0 || tasks[i].pid == want) { out = i; };
+        };
+        i = i + 1;
+    };
+    out
+};
+
+// Copy the user half of one address space into another.  M2 copies whole
+// pages: copy-on-write is a page-fault refinement, and without one this is the
+// honest version.  Only PML4[0] is walked -- that is where user space lives;
+// the kernel's own page and the direct map are seeded by vm_new_dir.
+def vm_copy_user(src: long, dst: long) -> bool {
+    let e4 = peek64(src);
+    if ((e4 & PTE_P) == 0) { return true; };
+    let pdpt = e4 & PHYS_MASK;
+    let pi = 0;
+    while (pi < 512) {
+        let e3 = peek64(pdpt + pi * 8);
+        if ((e3 & PTE_P) != 0 && (e3 & PTE_PS) == 0) {
+            let pd = e3 & PHYS_MASK;
+            let di = 0;
+            while (di < 512) {
+                let e2 = peek64(pd + di * 8);
+                if ((e2 & PTE_P) != 0 && (e2 & PTE_PS) == 0) {
+                    let pt = e2 & PHYS_MASK;
+                    let ti = 0;
+                    while (ti < 512) {
+                        let e1 = peek64(pt + ti * 8);
+                        if ((e1 & PTE_P) != 0 && (e1 & PTE_U) != 0) {
+                            let va = pi * 1073741824 + di * 2097152 + ti * 4096;
+                            let from = e1 & PHYS_MASK;
+                            let to = page_alloc();
+                            if (to == 0) { return false; };
+                            let k = 0;
+                            while (k < 4096) {
+                                poke64(to + k, peek64(from + k));
+                                k = k + 8;
+                            };
+                            if (!vm_map(dst, va, to, e1 & 4095)) { return false; };
+                        };
+                        ti = ti + 1;
+                    };
+                };
+                di = di + 1;
+            };
+        };
+        pi = pi + 1;
+    };
+    true
+};
+
+// fork: a copy of this address space and a frame that is a copy of this one,
+// with %rax 0 -- which is what the child's fork() returns.
+def sys_fork() -> long {
+    let me = cur_task;
+    let dir = vm_new_dir();
+    if (dir == 0) { return E_FAULT; };
+    let kstack = pages_alloc_va(65536);
+    if (kstack == 0) { return E_FAULT; };
+    if (!vm_copy_user(tasks[me].cr3, dir)) { return E_FAULT; };
+    let ktop = kstack + 65536;
+    let src = y_cur_task_rsp_get();
+    if (src == 0) { return E_FAULT; };
+    let dst = ktop - 14 * 8;
+    let i = 0;
+    while (i < 14) {
+        poke_va64(dst + i * 8, peek_va64(src + i * 8));
+        i = i + 1;
+    };
+    poke_va64(dst + 48, 0);
+    let t: Task = { rsp: dst, cr3: dir, kstack: ktop, pid: next_pid, parent: me, exit_status: 0, wait_pid: 0, wait_statusp: 0, state: TASK_READY, name: "fork" };
+    next_pid = next_pid + 1;
+    tasks += t;
+    t.pid
+};
+
+// wait4(pid, status, options, rusage): reap a dead child, or suspend this task
+// until one is.  The suspended case needs no kernel continuation: the caller's
+// frame is already saved at the syscall entry, so the child's exit writes the
+// answer into it and the scheduler resumes it there.
+def sys_wait4(pid: long, statusp: long, options: long, rusage: long) -> long {
+    let z = find_zombie(cur_task, pid);
+    if (z >= 0) {
+        let w = (tasks[z].exit_status & 255) << 8;
+        if (statusp != 0 && user_ok(statusp, 4)) { poke_va32(statusp, w); };
+        tasks[z].state = TASK_FREE;
+        return tasks[z].pid;
+    };
+    if ((options & 1) != 0) { return 0; };
+    tasks[cur_task].wait_pid = pid;
+    tasks[cur_task].wait_statusp = statusp;
+    tasks[cur_task].state = TASK_BLOCKED;
+    need_resched = true;
+    0
 };
