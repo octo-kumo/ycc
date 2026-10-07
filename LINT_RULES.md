@@ -21,8 +21,8 @@ The shortening rules are off by default and reported by `ycc -W 2`
 are the default level 0.
 
 Implemented so far (level 2): 1.1-1.7, 1.9 (2.7 is its condition form),
-2.1-2.6, 2.8, 2.11, 3.1, 3.5, 3.6, 5.1, plus level 1's dropped-value
-checks as a `-> void` fix. The rest is the plan.
+1.8, 2.1-2.6, 2.8, 2.11, 3.1, 3.5, 3.6, 5.1, plus level 1's
+dropped-value checks as a `-> void` fix. The rest is the plan.
 
 ## 1. Expressions
 

@@ -1198,7 +1198,48 @@ def lint_short_if_ternary(st: LintSt, node: If) -> long {
 def lint_short_if(st: LintSt, node: If) -> void {
     lint_short_empty_if(st, node);
     lint_short_if_ternary(st, node);
+    lint_short_if_chain(st, node);
     0
+};
+
+// Rule 1.8: `if (x == A) { v } else if (x == B) { v } ... else { !v }` is
+// one membership test, `x in [A, B, C]` (or the range of 1.7).
+def lint_short_if_chain(st: LintSt, node: If) -> long {
+    if (st.chain != 0) { return 0; };
+    let x = lint_eq_name(node.cond);
+    if (x == "") { return 0; };
+    let v0 = lint_bool_lit(lint_single_stmt(node.then));
+    if (v0 < 0) { return 0; };
+    let n = 1;
+    let cur = node;
+    while (cur.has_else && cur.els.k == K.kw_if) {
+        let nx: If = cur.els;
+        if (lint_eq_name(nx.cond) != x) { return 0; };
+        if (lint_bool_lit(lint_single_stmt(nx.then)) != v0) { return 0; };
+        cur = nx;
+        n = n + 1;
+    };
+    if (n < 2) { return 0; };
+    if (cur.has_else) {
+        if (lint_bool_lit(lint_single_stmt(cur.els)) == v0) { return 0; };
+    };
+    lint_warn_at(st, "this 'if' chain tests one value against a set; write one membership test", node);
+    0
+};
+
+// The name `L == <literal>` (either order), or "".
+def lint_eq_name(cond: Node) -> str {
+    if (cond.k != K.bin) { return ""; };
+    let b: Bin = cond;
+    if (b.op != "==") { return ""; };
+    if (b.r.k == K.id && lint_is_lit(b.l)) { let r: Leaf = b.r; return r.v; };
+    if (b.l.k == K.id && lint_is_lit(b.r)) { let l: Leaf = b.l; return l.v; };
+    ""
+};
+
+def lint_is_lit(node: Node) -> bool {
+    let k: long = node.k;
+    k == K.num || k == K.str || k == K.char || k == K.bool
 };
 
 // A name set once after its `let`, under a condition (rule 2.2), or a
