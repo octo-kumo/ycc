@@ -191,12 +191,20 @@ or died).
    live registry memory was overwritten (not a dangling pointer: both nodes are
    40 bytes apart in one arena segment, and the arena is rooted through
    `y_gc_meta_cur`). Nothing in the tree writes that pattern, so it is stale
-   data from a bump write into the collector's metadata. The suspicious half is
-   the arena's shared `cur`/`end` (`y_gc_meta_cur`/`y_gc_meta_end`) and the
-   per-cycle `y_gc_ms_*` stream: everything that touches them must hold
-   `y_gc_mlk`, and a path that does not would do exactly this under four
-   threads and a cycle per allocation. Removing the fork section from t160 does
-   not change the failure; removing the threads does.
+   data from a bump write into the collector's metadata.
+
+   What makes it fatal is the next observation: in a run where the trap fires,
+   gdb can no longer read the program's own globals (`x/gx &y_gc_all` is
+   "Cannot access memory at address 0x804080"), while an earlier run read them
+   fine. The process has unmapped a range that covers its own `.bss`. The
+   collector's only unmap is `ygc_sweep_big`, which trusts a dedicated flag in
+   a block header, so it was handed a `{base, end}` that was never a dedicated
+   mapping -- the corruption and the unmap are one failure seen twice.
+
+   So the shape to chase is: a writer of descriptor or arena memory that can
+   run while another thread sweeps, or a dedicated-block header that outlives
+   the mapping it describes. Removing t160's fork section does not change the
+   failure; removing the threads does.
 
 2. **Performance.** The byte buffers are pointer-free (`y_str_cat`,
    `y_str_app`, the join buffer, `ylts_mk`, `ycs_mk`, `y_bytes_to_str`): 61.9M

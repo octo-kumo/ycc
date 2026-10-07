@@ -45,3 +45,4 @@ Yv *intrinsic_names(void);
 #endif /* NATIVE_H */
 /* --gc: 0 auto, 1 always, 2 never (native.y's set_gc_mode). */
 void set_gc_mode(ylong m);
+void set_gc_stress(int v);
