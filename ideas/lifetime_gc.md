@@ -300,3 +300,35 @@ plants a heap-block `end` in the middle of a live chunk. The program then
 produced no output at all, so the handoff is load-bearing and cannot simply be
 bypassed: understanding it -- what `y_spawn` stores in the new tcb's words 0/8
 from the spare entry -- is part of the fix, not an alternative to it.
+
+## Round 22: the root cause -- y_join_done writes a chunk end into a live tail
+
+Reading `y_join_done` (threads.s) explains the exact word the round-20 trap
+prints. When a joined thread ends, the joining thread takes the finished
+thread's unused chunk tail for its next spawn, and the old code recorded that
+spare *in the tail itself*:
+
+    mov %rax, 0(%rdi)      # rax = the finished thread's end, rdi = its cur
+    mov %rdx, 8(%rdi)      # next spare
+    mov %rdi, 40(%rcx)     # push the entry
+
+`%rdi` is the tail's start -- a block boundary in the middle of a live chunk --
+and the word written there is the chunk's **end**. pass1 stops a chunk at a
+*zero* header, which is why an untouched tail is invisible; after a join the
+first word is a pointer, so pass1 reads it as a header whose size runs past the
+chunk and traps. That is the reported shape: block = `base+0x2d9b8`,
+"header" = the chunk end. `y_spawn` later cleared those two words when it
+claimed the spare, which is why the window is between a join and the next
+spawn -- and why `--gc-stress`, with a cycle at every allocation, finds it.
+
+The fix is to keep the spare bookkeeping out of the heap: put {tail start, tail
+end} in the joining thread's tcb (it needs two more words, so a 128-byte tcb)
+and write nothing into the chunk at all, leaving the zero header pass1 stops
+at. A first attempt at exactly that regressed t160's *normal* run, and the two
+reasons are worth writing down before retrying:
+
+- a fresh tcb is 128 bytes now, so the spawn path must zero words 14/15 as well
+  (the round-18 fix zeroes 0, 8, 88, 96, 104 only);
+- the main thread's tcb is `y_heap`, a fixed bss block; if it is smaller than
+  128 bytes, words 14/15 alias other globals, so the main thread needs either a
+  larger `y_heap` or a separate side location for its spare.
