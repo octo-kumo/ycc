@@ -356,3 +356,26 @@ is reverted again. The next attempt should make the trap print the *previous*
 block's header too (the word at block-8), which distinguishes "the walk is
 misaligned" from "one block's header was overwritten", and should run the trap
 under four threads only (no mutex, no fork) to shrink the search.
+
+## Round 25: the walk is aligned -- a header was overwritten
+
+The trap now prints the block's two neighbours as well, and on the smallest
+failing case (four threads, one mutex, no fork: t160's first two sections) they
+read:
+
+    chunk base    139800239669248
+    chunk end     139800243863552   (base + 4 MiB)
+    block         base + 159920    (16-byte aligned)
+    word there    the chunk END    <-- where a header belongs
+    word at -8    4200060          (0x40167c: a CODE address)
+    word at +8    0
+
+The word before the block is a closure record's code pointer, so pass1's walk
+is *aligned* (it stepped block to block through the 16-byte closure records) and
+the header slot of one block was overwritten with a thread's chunk end. That
+retires the "misaligned walk" reading and puts the writers of a chunk `end` back
+at the centre: `y_alloc_more`'s new-chunk words 0/1 and `y_join_done`'s spare
+bookkeeping (round 22), both of which write [start, end) or `end` at a block
+boundary. The round-24 attempt removed the join's write and still trapped (a
+different address), so either a second writer of the same shape exists or the
+live bump tail (round 19) is the second one -- both fixes are needed.

@@ -468,10 +468,10 @@ def arch_block_sub(lines: [str], name: str, repl: [str]) -> [str] {
 // the strongest check the threaded stop-the-world has.
 def arch_gc_stress_lines(lines: [str]) -> [str] {
     let out = arch_block_sub(lines, "y_gc_maybe", ["y_gc_maybe:", "    call y_gc_collect", "    ret"]);
-    // The invariant trap reports the walking state in the fields a reader needs
-    // -- chunk base, chunk end, block, its header word, then the map/block
-    // register and its word -- because a bare "bad block header" says nothing
-    // about which chunk or which writer's signature is in the wrong place.
+    // The invariant trap reports the walking state in the fields a reader needs:
+    // chunk base, chunk end, the block, the word there, its two neighbours, then
+    // the map/block register and its word. The neighbours are what separate "the
+    // walk is misaligned" from "one block's header was overwritten".
     arch_block_sub(out, "y_bad_trap", [
         "y_bad_trap:",
         "    push %rbx",
@@ -485,14 +485,24 @@ def arch_gc_stress_lines(lines: [str]) -> [str] {
         "    push %rax",
         "    call y_os_print_int",
         "    add $8, %rsp",
-        "    push %r12",
+        "    mov %r12, %rax",
+        "    push %rax",
         "    call y_os_print_int",
         "    add $8, %rsp",
         "    mov 0(%r12), %rax",
         "    push %rax",
         "    call y_os_print_int",
         "    add $8, %rsp",
-        "    push %r13",
+        "    mov -8(%r12), %rax",
+        "    push %rax",
+        "    call y_os_print_int",
+        "    add $8, %rsp",
+        "    mov 8(%r12), %rax",
+        "    push %rax",
+        "    call y_os_print_int",
+        "    add $8, %rsp",
+        "    mov %r13, %rax",
+        "    push %rax",
         "    call y_os_print_int",
         "    add $8, %rsp",
         "    mov 0(%r13), %rax",
