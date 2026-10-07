@@ -15,6 +15,7 @@
 // Not checked: revocation, name constraints, policies, key usage.
 import crypto;
 import fs;
+import struct;
 
 // ── DER (X.690) ──────────────────────────────────────────────────────────
 
@@ -61,36 +62,10 @@ def element(b: [byte], e: Tlv) -> [byte] { b[e.start:e.end] };
 
 // ── base64 and PEM ───────────────────────────────────────────────────────
 
-def b64_value(c: byte) -> long {
-    if (c >= 'A' && c <= 'Z') { c - 'A' }
-    else if (c >= 'a' && c <= 'z') { c - 'a' + 26 }
-    else if (c >= '0' && c <= '9') { c - '0' + 52 }
-    else if (c == '+') { 62 }
-    else if (c == '/') { 63 }
-    else { -1 }
-};
-
-// The bytes base64 text s encodes (other characters are skipped; `=`
-// ends it).
-def b64_decode(s: str) -> [byte] {
-    let out: [byte] = [];
-    let acc = 0;
-    let bits = 0;
-    let i = 0;
-    while (i < len(s) && s[i] != '=') {
-        let v = b64_value(s[i]);
-        if (v >= 0) {
-            acc = ((acc << 6) | v) & 0xffffff;
-            bits = bits + 6;
-            if (bits >= 8) {
-                bits = bits - 8;
-                out += (acc >> bits) & 255;
-            };
-        };
-        i = i + 1;
-    };
-    out
-};
+// The decoder lives in std/struct.y, with the encoder beside it: base64 is a
+// byte utility, not a certificate one. This stays as a name because it is
+// exported and PEM is what people reach it through.
+def b64_decode(s: str) -> [byte] { struct.b64_decode(s) };
 
 // The DER of every CERTIFICATE block in PEM text.
 def pem_certs(text: str) -> [[byte]] {

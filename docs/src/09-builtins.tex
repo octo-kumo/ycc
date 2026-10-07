@@ -302,6 +302,19 @@ print(struct.get_u8(hdr, 9));                  // 65 -- the fill's byte, by offs
 \end{lstlisting}
 \end{description}
 
+\noindent base64 is here too, both directions (RFC 4648, standard alphabet,
+padded):
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{struct.b64\_encode(b)}] The base64 text of \ty{b}. Three bytes
+  become four characters; a tail of one byte is padded \ic{==} and of two
+  \ic{=} (\ic{struct.b64\_encode(b"foob")} is \ic{"Zm9vYg=="}).
+\item[\ic{struct.b64\_decode(s)}] The bytes \ty{s} encodes, skipping every
+  character outside the alphabet and stopping at \ic{=} --- so a PEM block's
+  line breaks cost nothing. \ic{std/x509}'s \ic{b64\_decode} is the same
+  function under the name PEM users reach it through.
+\end{description}
+
 \subsection{Mathematics (the math module)}
 \label{sec:builtin-math}
 

@@ -331,10 +331,81 @@ def unpack(fmt: str, b: [byte]) -> [long] {
     out
 };
 
+// ── base64 (RFC 4648, with padding) ────────────────────────────────────
+// The alphabet's byte offset, or -1 for anything that is not one (so a
+// decoder skips whitespace and stray characters the way PEM needs it to).
+def b64_value(c: byte) -> long {
+    if (c >= 'A' && c <= 'Z') { c - 'A' }
+    else if (c >= 'a' && c <= 'z') { c - 'a' + 26 }
+    else if (c >= '0' && c <= '9') { c - '0' + 52 }
+    else if (c == '+') { 62 }
+    else if (c == '/') { 63 }
+    else { -1 }
+};
+
+// The alphabet's one character at offset v.
+def b64_char(v: long) -> str {
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"[v:v + 1]
+};
+
+// The bytes b encodes: three in, four characters out, the tail padded with
+// "=" to a multiple of four. One byte -> two characters and "==", two -> three
+// and "=".
+def b64_encode(b: [byte]) -> str {
+    let out = "";
+    let i = 0;
+    let full = len(b) - len(b) % 3;
+    while (i < full) {
+        let n = (b[i] * 65536) + (b[i + 1] * 256) + b[i + 2];
+        out = out + b64_char((n >> 18) & 63) + b64_char((n >> 12) & 63)
+                  + b64_char((n >> 6) & 63) + b64_char(n & 63);
+        i = i + 3;
+    };
+    if (full < len(b)) {
+        // The tail is the last 16 bits of an 18-bit group: one byte leaves its
+        // low 8 bits in the top byte and the group's low two characters are
+        // padding, two bytes fill 16 bits and leave one character.
+        let rem = len(b) - full;
+        let n = b[full] * 65536;
+        let third = "=";
+        if (rem == 2) {
+            n = n + b[full + 1] * 256;
+            third = b64_char((n >> 6) & 63);
+        };
+        out = out + b64_char((n >> 18) & 63) + b64_char((n >> 12) & 63)
+                  + third + "=";
+    };
+    out
+};
+
+// The bytes text s encodes: other characters are skipped, and "=" ends it
+// (so a PEM block's line breaks are free and its trailing padding is not
+// read as data).
+def b64_decode(s: str) -> [byte] {
+    let out: [byte] = [];
+    let acc = 0;
+    let bits = 0;
+    let i = 0;
+    while (i < len(s) && s[i] != '=') {
+        let v = b64_value(s[i]);
+        if (v >= 0) {
+            acc = ((acc << 6) | v) & 0xffffff;
+            bits = bits + 6;
+            if (bits >= 8) {
+                bits = bits - 8;
+                out += (acc >> bits) & 255;
+            };
+        };
+        i = i + 1;
+    };
+    out
+};
+
 export { u8, u16le, u16be, u32le, u32be, u64le, u64be,
     i8, i16le, i16be, i32le, i32be, i64le, i64be,
     pad, fill,
     get_u8, get_i8, get_u16le, get_u16be, get_i16le, get_i16be,
     get_u32le, get_u32be, get_i32le, get_i32be,
     get_u64le, get_u64be, get_i64le, get_i64be,
+    b64_encode, b64_decode,
     pack, unpack };
