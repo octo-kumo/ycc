@@ -737,3 +737,33 @@ any surviving reader sees an array header of {len 0, cap 0, data 0, front 0} and
 is exactly the shape of a read at 0.  The question to answer is whether
 clock_us/CLK_TS is genuinely dead in a kernel image or merely looks dead to a
 shake whose roots were computed for a hosted program (a kernel has no _start).
+
+### Round 50: 24 initializer ranges dropped, including the kernel's own globals
+
+Ran both control images (round 48's comparison was only listings, never runs):
+cycc_pre -> "minimal"; cycc_n (control + merged native.c) -> err=5 cr2=0.  So
+native.c ALONE is sufficient, with the same std, the same arch asm and the same
+driver -- and the two ELFs differ by exactly 438 bytes of text, same entry, same
+segment layout.
+
+Round 48 filtered the ygiS_ range labels out of the set difference, which hid
+the answer.  Counted properly, the merged emitter DROPS 24 initializer ranges
+that the pre-merge one emits, and they are not all dead constants:
+
+    kernel.PHYS_MASK_2M, kernel.PHYS_MASK_1G, CLK_TS,
+    kernel.TASK_READY/DEAD/BLOCKED/FREE,
+    kernel.cur_task, kernel.need_resched, kernel.next_pid,
+    kernel.SYS_READ/WRITE/MMAP/GETPID, kernel.IPC_CALL/RECV/REPLY,
+    kernel.SYS_FORK/WAIT4/EXIT_GROUP, ...
+
+`cur_task`, `need_resched` and `next_pid` are MUTABLE globals of the kernel's own
+scheduler, and their ranges are deleted as if the cells were dead.  That is the
+round-49 hypothesis confirmed in the shape of the data: a shake whose roots were
+computed for a HOSTED program, deleting initializer ranges in a KERNEL image
+that has no _start.  Dropping a range also drops whatever only that range
+referenced (which is why y_clock_us disappears with CLK_TS).
+
+Next: print those globals from a probe in both builds (next_pid is declared 1,
+so if its range is gone it reads 0) and, more directly, find where the shake
+decides liveness for a kernel target -- that predicate is the thing to fix, and
+it is one place in the merged native.c, not a hunt.
