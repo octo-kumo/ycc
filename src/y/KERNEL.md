@@ -785,3 +785,29 @@ ipc_recv returns -- and it then faults with err=5 cr2=0 in the reply/resume
 path, which is the round-7 signature.  That is M3 FUNCTIONAL work, not the
 shake bug, and it is parked in _ktmp/wip/ until fixed rather than committed as
 a failing case.
+
+### Round 54: the IPC fault, instruction by instruction
+
+qemu on the plain two-process program: `v=0e e=0005 cpl=3 IP=0x401542 CR2=0`,
+and the -g build (same addresses) disassembles exactly there:
+
+    40153e:  48 8b 40 10        mov 0x10(%rax),%rax     # rax = header->data
+    401542:  48 8b 04 c8        mov (%rax,%rcx,8),%rax  # rax = data[0]  <-- FAULT
+
+So the program read `buf[0]` on a `[long; 5]` local whose header's `data`
+pointer is 0 -- the array's element block was never allocated (or never
+recorded).  The SAME source compiled by the SAME compiler and run NATIVELY
+prints `buf0 0 len 5`, so the program's logic and the emitter's handling of a
+zero-initialized fixed array are both correct; what differs is the KERNEL.
+
+That narrows M3's blocker to the guest side of allocation: the program's first
+y_alloc -> y_alloc_map -> an mmap SYSCALL into this kernel (sys_mmap), and the
+array header's data field never being filled in.  Next measurement, and it is
+the round-7 technique: have the kernel print sys_mmap's arguments and result for
+the program's first mmap, or have the user program print ptr_addr of its own
+array to see whether the allocation happened at all.
+
+Also worth a fixture of its own: a -g USER program produces NO serial output in
+this kernel (round 21 saw "load failed" for the sibling case), so the -g build
+cannot be booted for a RIP measurement -- the plain build is used to run and the
+-g build only to symbolise the same addresses.
