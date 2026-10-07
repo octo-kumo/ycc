@@ -172,8 +172,11 @@ or died).
    on 600 live 30 KB arrays), and for 8-byte elements the emitter marks the data
    block at a literal, a slice, `array + element`, `array + array` and
    `arr += other` when the element type is long/bool/float/byte (146.0M ->
-   100.7M on 200 arrays of 12288 longs). Unmarked still: `arr += x` for one
-   element, `map`/`filter` results and `range()` (`ideas/OPTIMIZE.md` A8).
+   100.7M on 200 arrays of 12288 longs), and `range()` is marked (400 ranges of
+   4000 longs: 127.1M -> 105.4M). `arr += x` is deliberately NOT marked -- five
+   instructions per pushed element costs more than the scan it saves -- and
+   `map`/`filter` results are left, because filter's closure returns bool while
+   its result holds the source elements (`ideas/OPTIMIZE.md` A8).
    
 3. Optional knobs: `--gc-stress` (collect on every slow path) and `--no-gc`,
    plus a `test/sh/test_gc.sh` suite that runs the corpus under a small cap.

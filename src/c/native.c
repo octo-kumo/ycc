@@ -5608,7 +5608,9 @@ Yv *gen_make_closure(Yv *st, Yv *label, Yv *caps) {
 Yv *gen_range(Yv *st, Yv *node) {
     st = gen_push_args(st, yr_get(node, "args"));
     st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_range"))), 0, 0, 0, 0, 0, 0);
-    return emit_insn(st, F_ADD_I_R, 8, R_RSP, 64, 0, 0, 0, 0);
+    st = emit_insn(st, F_ADD_I_R, 8, R_RSP, 64, 0, 0, 0, 0);
+    /* range() is [long]: one mark per array (see ideas/OPTIMIZE.md A8). */
+    return mark_pf_arr(st, yr(1, "k", yv_long(K_tlong)));
 }
 
 /* arr[lo:hi] — half-open, clamped, always a NEW heap array (the operands

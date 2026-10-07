@@ -4392,7 +4392,11 @@ def gen_make_closure(st: EmitSt, label: long, caps: [str]) -> EmitSt {
 def gen_range(st: EmitSt, node: Call) -> EmitSt {
     st = gen_push_args(st, node.args);
     st = emit_insn(st, insn.F_CALL_L, lbl_new("y_range"), 0, 0, 0, 0, 0, 0);
-    emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0)
+    st = emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0);
+    // range() is [long]: one mark per array, which pays for itself the first
+    // time a cycle walks past it (unlike marking per PUSH, which costs five
+    // instructions per element -- see ideas/OPTIMIZE.md A8).
+    mark_pf_arr(st, type_node({ k: K.tlong }))
 };
 
 // arr[lo:hi] — half-open, clamped, always a NEW heap array (the operands

@@ -393,9 +393,22 @@ the flag on the block the header's data pointer names when the element type is
 (`gen_push_all`). 200 arrays of 12288 longs: **146.0M -> 100.7M** callgrind
 instructions, same output.
 
-**Left.** The paths not yet marked: `arr += x` (one element), `map`/`filter`
-result arrays, and `range()` (whose data is built inside std/rt.y). Each needs
-the same one-line `mark_pf_arr` at its site.
+**`range()` (done).** `gen_range` marks the result, which is always `[long]`:
+400 ranges of 4000 longs, **127.1M -> 105.4M** callgrind instructions, same
+output and peak RSS.
+
+**Deliberately not marked: `arr += x`.** The mark costs five instructions *per
+pushed element*, while the saving is one skipped word per eight bytes *per cycle
+the array survives*. An array built by pushing N elements would have to live
+through many cycles to pay that back. Marking a whole array once -- a literal, a
+slice, a cat, an extend, a range -- pays for itself at roughly twenty elements,
+which is why those are the sites that carry it.
+
+**Left.** `map`/`filter` result arrays. They cannot share one rule: `map`'s
+result holds the closure's return type, but `filter`'s closure returns `bool`
+while its result holds the *source* elements, so marking from the closure's type
+would mark a pointer-holding array pointer-free. Each needs its own (for filter,
+source-derived) element type.
 
 ### A7. `--gc`: do not link the collector a program cannot grow into (done)
 
