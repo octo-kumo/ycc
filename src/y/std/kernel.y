@@ -945,15 +945,6 @@ def sched_add(cr3: long, kstack: long, frame: long, name: str) -> long {
     len(tasks) - 1
 };
 
-// OPEN (M2): a task entered through this frame runs, but the first allocation
-// its program makes reaches the kernel's mmap with a garbage length
-// (0x3007ff701000, and the check that rejects it is what reports "out of
-// memory"), while the SAME program entered through enter_user+iretq (M1's
-// u001, the boot address space) allocates normally.  So the frame's register
-// slots and the stub's pop order agree with each other and not yet with what
-// the program expects on the way in -- the next thing to bisect is %rsi as the
-// program's first syscall sees it.
-//
 // A kernel stack with the frame that enters `entry` at ring 3 on `ustack`.
 // The shape is the entry stub's: seven register slots (popped first, rax
 // highest) above an IRETQ frame whose lowest word is RIP -- the convention a
@@ -988,6 +979,7 @@ def tss_set_rsp0(top: long) -> void {
 // Start a task for the first time: its frame is already its state, so this is
 // the address-space switch plus the resume.
 def task_start(i: long) -> void {
+    if (cur_task != i && tasks[cur_task].state == TASK_RUNNING) { tasks[cur_task].state = TASK_READY; };
     cur_task = i;
     tasks[i].state = TASK_RUNNING;
     y_cr3_set(tasks[i].cr3);
@@ -1008,10 +1000,18 @@ def y_sched_pick() -> long {
     let i = 1;
     while (i <= n) {
         let k = (cur_task + i) % n;
-        if (found < 0 && (tasks[k].state == TASK_READY || tasks[k].state == TASK_RUNNING)) { found = k; };
+        // Pickable = READY with a frame to resume.  A task that has never been
+        // suspended (the kernel's own context before task_start, rsp 0) has no
+        // frame, and resuming it would iretq into nothing.
+        if (found < 0 && tasks[k].state == TASK_READY && tasks[k].rsp != 0) { found = k; };
         i = i + 1;
     };
     if (found < 0) {
+        // Nothing else can run.  If the current task is also done, the machine
+        // has no work left: the verdict goes to the test harness and the frame
+        // below is never resumed (returning 0 here would iretq a dead task
+        // back into ring 3, which is a page fault a few instructions later).
+        if (tasks[cur_task].state == TASK_DEAD) { y_kexit(0); };
         need_resched = false;
         return 0;
     };

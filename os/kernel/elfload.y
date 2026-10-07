@@ -62,6 +62,13 @@ def elf_stack(top: long, arg: str) -> long {
     };
     kernel.poke_va8(sp + n, 0);
     let argv0 = sp;
+    // The word writes need 8-byte alignment: poke_va64 moves in whole 8-byte
+    // words (the primitive is `*(p + k)`, i.e. p + 8k), so an unaligned store
+    // lands at the NEXT multiple of 8 and the word it was meant for keeps
+    // whatever the page held.  That is how a program that calls argv() saw an
+    // argc with a right low half and a stale high half -- and then handed the
+    // allocator a size derived from it.
+    sp = sp - (sp & 7);
     sp = sp - 8;
     kernel.poke_va64(sp, 0);            // envp = NULL
     sp = sp - 8;
