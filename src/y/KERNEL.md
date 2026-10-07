@@ -2049,3 +2049,37 @@ and a round.  Re-create it with "name=1091151030" in the guard.
 
 test/kernel is 59 passed, 0 failed / 59 total (the fixture files are gone; nothing
 else changed).
+
+## The M4 command set, mapped to what it needs
+
+Written down so each command is a small, testable step rather than a project.  All
+of these run in ring 3 on the syscalls already verified there (openat 257, read 0,
+lseek 8, close 3, getdents64 217), and each wants a copy of the two-file image the
+cat and ls fixtures build:
+
+    echo ARGS...      write(1) of its arguments plus a newline   -- no file needed
+    pwd               write(1) of the current directory path     -- needs a cwd
+    ls [PATH]         openat + getdents64 + the record walk      -- u009/u013 have it
+    cat FILE          openat + read in a loop + write(1)         -- u008/u012 have it
+    wc FILE           the cat loop, counting bytes               -- u011 has it
+    head -n N FILE    the cat loop, stopping after N             -- a bound on u011
+    mkdir/rm/rmdir    WRITE support in the filesystem            -- MISSING, see below
+    mv/cp             read + create + write                      -- as above
+    ps                the kernel's task list (getpid exists)     -- needs a syscall
+    halt              exit_group, or a halt syscall              -- exit_group exists
+
+TWO GAPS the table makes explicit, both real work rather than detail:
+
+ 1. WRITE.  YFS1 and the broker are read-only: there is no fd with a writable mode,
+    no block allocator on the image and no directory-entry append.  mkdir, rm, mv
+    and cp all need them, and so does the editor in the plan's userland.
+ 2. EXEC.  There is no way for a program to say "run THAT file": fork duplicates the
+    current process and there is no execve.  A shell therefore cannot launch /bin/ls
+    today, which is the single most important thing M4 is missing.  The pieces
+    exist -- yfs_lookup_path finds the file, elf_map builds the image, task_frame
+    and sched_add make the task -- so execve is mostly assembling them, plus the
+    fd-inheritance question (which descriptors survive).
+
+Neither gap is a surprise: the milestone order put the read side first so that the
+loader, the broker and the syscall layer could be proven with fixtures (they are,
+from ring 3), and write support is what the fs server will need anyway.
