@@ -270,6 +270,17 @@ Implemented so far (level 2): 1.1-1.7, 1.9 (2.7 is its condition form),
 - **Skip** `a` is not known to be an array (see 3.1); `a` is resized in
   the body.
 
+### 3.6 Element parameter that is not used
+- **Instead** `a.foreach((e, i) => { let x = a[i]; })` — the closure was
+  handed the element and indexes the array again for it.
+- **Write** `a.foreach((e2) => { let x = e2; })`, or
+  `a.foreach((e2, i) => { ... })` when the index is used for something else.
+- **Detect** a `Call` `X.foreach(F)` whose `F` has two or more parameters,
+  whose first parameter is never read, and whose body indexes `X`.
+- **Skip** the first parameter is read (the element is used); the receiver
+  is not a plain name. When the body does not index `X` the parameter is
+  merely unused, which is not this rule.
+
 ## 4. Closures
 
 ### 4.1 Anonymous `def` literal to arrow

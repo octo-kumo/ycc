@@ -237,8 +237,8 @@ def elf_debug(code_off: long, codesz: long, ro_len: long, filesz: long, bss_vadd
         blob = push_shdr(blob, n_sym, 2, 0, 0, symtab_off, len(symtab), symtab_idx + 1, nlocal, 8, 24);
         blob = push_shdr(blob, n_str, 3, 0, 0, strtab_off, len(strtab), 0, 0, 1, 0);
         blob = push_shdr(blob, n_shs, 3, 0, 0, shstr_off, len(shstr), 0, 0, 1, 0);
-        dsecs.foreach((_el, di) => {
-            let ds = dsecs[di];
+        dsecs.foreach((e, di) => {
+            let ds = e;
             let dd = ds.data;
             blob = push_shdr(blob, dnames[di], 1, 0, 0, doffs[di], len(dd), 0, 0, 1, 0);
         });
@@ -301,8 +301,8 @@ def push_zeros(out: [byte], n: long) -> [byte] {
 def push_bytes(out: [byte], bytes: [byte]) -> [byte] {
     // NOTE: annotated `[byte]`, not a bare hole: a hole takes its element
     // type from the call site, and these buffers are always packed bytes.
-    bytes.foreach((_el, i) => {
-        out += bytes[i];
+    bytes.foreach((e) => {
+        out += e;
     });
     out
 };

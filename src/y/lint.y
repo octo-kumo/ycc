@@ -115,8 +115,8 @@ def lint_unit(ast: Block, ast3: Block, ofile: [long], fmods: [str], wlevel: long
 // (indexed by the statement's line) says which lines those are. Anything else
 // is a statement with side effects the reader cannot see running twice.
 def lint_meta_top(st: LintSt, stmts: [Node], ogen: [bool]) -> long {
-    stmts.foreach((_el, i) => {
-        let s = stmts[i];
+    stmts.foreach((e) => {
+        let s = e;
         if (s.k != K.decl && s.k != K.void && !meta_gen(s, ogen)) {
             lint_warn_start(st, "a top-level statement runs once in the meta generator and once in the program, so with a meta block in the file it must be a declaration (a def, type, const or let) -- keep a top-level let initializer pure", s);
         };
@@ -148,8 +148,8 @@ def meta_gen(s: Node, ogen: [bool]) -> bool {
 
 // Every `def` in the tree, by its renamed name.
 def lint_rets(st: LintSt, stmts: [Node]) -> long {
-    stmts.foreach((_el, i) => {
-        lint_rets_node(st, stmts[i]);
+    stmts.foreach((e) => {
+        lint_rets_node(st, e);
     });
     0
 };
@@ -712,8 +712,8 @@ def lint_unused_expr(st: LintSt, node: Node, used: bool) -> long {
 };
 
 def lint_list(st: LintSt, nodes: [Node]) -> long {
-    nodes.foreach((_el, i) => {
-        lint_node(st, nodes[i], true);
+    nodes.foreach((e) => {
+        lint_node(st, e, true);
     });
     0
 };
@@ -985,6 +985,9 @@ def lint_short_foreach_elem(st: LintSt, call: Call) -> long {
     let ix = f.params[1];
     if (lint_find(f.body, el, 0)) { return 0; };
     if (!lint_find(f.body, arr.v, 64)) { return 0; };
+    // the element is not `a[i]` if the body writes a[i]: a store must keep
+    // the index
+    if (lint_find(f.body, arr.v, 128)) { return 0; };
     lint_warn_at(st, "the element parameter of this 'foreach' is unused; use it instead of indexing '" + lint_disp(arr.v) + "' again", call);
     lint_fix(st, "3.6", call.line, call.col, lint_disp(arr.v), lint_disp(ix));
     0
@@ -1052,9 +1055,9 @@ def lint_short_chain(st: LintSt, node: Bin) -> long {
     if (allint) {
         let lo = vals[0];
         let hi = vals[0];
-        vals.foreach((_el, j) => {
-            if (vals[j] < lo) { lo = vals[j]; };
-            if (vals[j] > hi) { hi = vals[j]; };
+        vals.foreach((e) => {
+            if (e < lo) { lo = e; };
+            if (e > hi) { hi = e; };
         });
         if (hi - lo + 1 == len(vals)) {
             lint_warn_at(st, "these equalities are a consecutive range; write a range comparison", node);
@@ -1235,8 +1238,13 @@ def lint_find(node: Node, name: str, mask: long) -> bool {
     if (k == K.kw_break && mask & 2 != 0) { return true; };
     if (k == K.kw_continue && mask & 4 != 0) { return true; };
     if (mask & 8 != 0 && lint_resizes(node, name)) { return true; };
+    if (mask & 64 != 0 && k == K.index) {
+        let mx: Index = node;
+        if (mx.arr.k == K.id) { let ma: Leaf = mx.arr; if (ma.v == name) { return true; }; };
+    };
+    if (mask & 128 != 0 && lint_stores_index(node, name)) { return true; };
     if (k == K.id) {
-        if (name == "" || mask & 8 != 0) { return false; };
+        if (name == "" || mask & 8 != 0 || mask & 64 != 0 || mask & 128 != 0) { return false; };
         let l: Leaf = node;
         l.v == name
     } else if (k == K.bin) {
@@ -1328,6 +1336,33 @@ def lint_find_list(nodes: [Node], name: str, mask: long) -> bool {
         if (lint_find(nodes[i], name, mask)) { return true; };
     };
     false
+};
+
+// Whether this node stores through `name[...]` (a written element). The
+// element form of 3.6 is wrong there: the closure's parameter is a copy
+// while the store writes the array.
+def lint_stores_index(node: Node, name: str) -> bool {
+    let k: long = node.k;
+    if (k == K.idxassign) {
+        let a: IdxAssign = node;
+        if (a.arr.k != K.id) { return false; };
+        let al: Leaf = a.arr;
+        al.v == name
+    } else if (k == K.opassign) {
+        let o: OpAssign = node;
+        lint_index_of(o.tgt, name)
+    } else if (k == K.incdec) {
+        let o: IncDec = node;
+        lint_index_of(o.tgt, name)
+    } else { false }
+};
+
+def lint_index_of(tgt: Node, name: str) -> bool {
+    if (tgt.k != K.index) { return false; };
+    let ix: Index = tgt;
+    if (ix.arr.k != K.id) { return false; };
+    let al: Leaf = ix.arr;
+    al.v == name
 };
 
 // Whether this node changes what `name` holds as a whole (mask bit 8): a
@@ -1885,8 +1920,6 @@ def fx_if_line(rule: str, b: str, ln: long, lines: [str]) -> [str] {
 def fx_foreach_elem(arr: str, idx: str, ln: long, col: long, lines: [str]) -> [str] {
     if (ln < 1 || ln > len(lines)) { return lines; };
     let line = lines[ln - 1];
-    let ht = fx_strip(line);
-    if (len(ht) == 0 || ht[len(ht) - 1:len(ht)] != "{") { return lines; };
     let i = fx_find(line, "foreach", 0);
     if (i < 0) { return lines; };
     let o = fx_ws(line, i + 7);
@@ -1897,6 +1930,24 @@ def fx_foreach_elem(arr: str, idx: str, ln: long, col: long, lines: [str]) -> [s
     if (p >= len(line) || line[p] != 40) { return lines; };
     let c = fx_match(line, p, 40, 41);
     if (c < 0) { return lines; };
+    let ht = fx_strip(line);
+    if (len(ht) == 0 || ht[len(ht) - 1:len(ht)] != "{") {
+        // a one-line `X.foreach((_el, i) => { B });`: rewrite text in place
+        let ob = index_of(line[c:], "{");
+        let cb = last_index_of(line, "}");
+        if (ob < 0 || cb < 0 || cb <= c + ob) { return lines; };
+        ob = c + ob;
+        let body = line[ob + 1:cb];
+        let el = "e";
+        if (fx_find(body, "e", 0) >= 0) { el = "el"; };
+        let nb = fx_sub_index(body, arr, idx, el);
+        if (nb == body) { return lines; };
+        let keep = fx_find(nb, idx, 0) >= 0;
+        let params = "(" + el + ")";
+        if (keep) { params = "(" + el + ", " + idx + ")"; };
+        lines[ln - 1] = line[:p] + params + line[c + 1:ob + 1] + nb + line[cb:];
+        return lines;
+    };
     let indent = fx_indent(line);
     let close = -1;
     let j = ln + 1;
@@ -2266,8 +2317,8 @@ def lint_opassign(st: LintSt, node: OpAssign, used: bool) -> long {
 def lint_lit(st: LintSt, node: RecLit, what: str, kind: str) -> long {
     let keys: [str] = node.keys;
     lint_list(st, node.vals);
-    keys.foreach((_el, i) => {
-        let key = keys[i];
+    keys.foreach((e, i) => {
+        let key = e;
         if (key != "..." && lint_seen(keys, i)) {
             lint_warn_at(st, "duplicate " + what + " '" + key + "' in a " + kind + " literal; the last one wins", node);
         };
@@ -2373,8 +2424,8 @@ def lint_types(st: LintSt, stmts: [Node]) -> long {
 };
 
 def lint_tw_list(t: LintTy, nodes: [Node]) -> long {
-    nodes.foreach((_el, i) => {
-        lint_tw(t, nodes[i]);
+    nodes.foreach((e) => {
+        lint_tw(t, e);
     });
     0
 };
@@ -2511,8 +2562,8 @@ def lint_tw_func(t: LintTy, node: Func) -> long {
     let line: long = node.line;
     let col: long = node.col;
     let ps = node.ptypes;
-    ps.foreach((_el, i) => {
-        lint_root(t, ps[i], line, col, "");
+    ps.foreach((e) => {
+        lint_root(t, e, line, col, "");
     });
     lint_root(t, node.ret, line, col, "");
     lint_tw(t, node.body)
@@ -2591,8 +2642,8 @@ def lint_tk(t: LintTy, ty: Type, rec: bool, parent: long) -> str {
 
 def lint_tk_list(t: LintTy, ts: [Type], rec: bool, parent: long) -> str {
     let parts: [str] = [];
-    ts.foreach((_el, i) => {
-        parts += lint_tk(t, ts[i], rec, parent);
+    ts.foreach((e) => {
+        parts += lint_tk(t, e, rec, parent);
     });
     join(parts, ",")
 };
@@ -2660,8 +2711,8 @@ def lint_tk_union(t: LintTy, ty: TList, rec: bool, parent: long) -> str {
 
 def lint_tk_members(t: LintTy, u: TList, rec: bool, me: long, parts: [str]) -> long {
     let ts = u.ts;
-    ts.foreach((_el, i) => {
-        let m = ts[i];
+    ts.foreach((e) => {
+        let m = e;
         let ai = lint_union_alias(t, m);
         if (ai >= 0) {
             let union: TList = t.atyps[ai];
@@ -2712,8 +2763,8 @@ def lint_occ_key(t: LintTy, i: long, key: str) -> long {
 
 def lint_sort_uniq(xs: [str]) -> [str] {
     let out: [str] = [];
-    xs.foreach((_el, i) => {
-        let x = xs[i];
+    xs.foreach((e) => {
+        let x = e;
         let j = len(out);
         out += x;
         while (j > 0 && x < out[j - 1]) {
@@ -2723,9 +2774,9 @@ def lint_sort_uniq(xs: [str]) -> [str] {
         out[j] = x;
     });
     let res: [str] = [];
-    out.foreach((_el, k) => {
-        if (k == 0 || out[k] != out[k - 1]) {
-            res += out[k];
+    out.foreach((e, k) => {
+        if (k == 0 || e != out[k - 1]) {
+            res += e;
         };
     });
     res
@@ -2813,8 +2864,8 @@ def lint_rep(occs: [LintOcc], i: long) -> bool {
 def lint_sorted(ws: [Diag]) -> [Diag] {
     let all = lint_msort(ws);
     let out: [Diag] = [];
-    all.foreach((_el, i) => {
-        let w = all[i];
+    all.foreach((e) => {
+        let w = e;
         let n = len(out);
         if (n == 0 || lint_before(out[n - 1], w)) {
             out += w;

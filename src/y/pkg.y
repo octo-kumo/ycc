@@ -74,8 +74,8 @@ def pk_clean(path: str) -> str {
     let abs = path[:1] == "/";
     let parts = split(path, "/");
     let out: [str] = [];
-    parts.foreach((_el, i) => {
-        let s: str = parts[i];
+    parts.foreach((e) => {
+        let s: str = e;
         if (s == "" || s == ".") {
         } else if (s == "..") {
             let n = len(out);
@@ -313,8 +313,8 @@ def pk_itable(cur: Cursor, at: str) -> { keys: [str], vals: [str] } {
 
 def pk_count(xs: [str], s: str) -> long {
     let n = 0;
-    xs.foreach((_el, i) => {
-        let x: str = xs[i];
+    xs.foreach((e) => {
+        let x: str = e;
         if (x == s) { n++; }
     });
     n
@@ -329,10 +329,10 @@ def pk_toml(text: str, path: str) -> [PkEnt] {
     let arrs: [str] = [];
     let tabs: [str] = [];
     let seen: [str] = [];
-    lines.foreach((_el, i) => {
+    lines.foreach((el, i) => {
         let ln = i + 1;
         let at = path + ":" + tostring(ln) + ": ";
-        let line = trim(pk_uncomment(lines[i]));
+        let line = trim(pk_uncomment(el));
         let e = { tab: tab, n: n, key: "", line: ln, k: K.h, s: "", keys: pk_nostrs(), items: pk_nostrs() };
         if (len(line) == 0) {
         } else if (line[:1] == "[") {
@@ -411,8 +411,8 @@ def pk_manifest(dir: str) -> PkMan {
     let bins: [PkBin] = [];
     let deps: [PkDep] = [];
     let m = { file: file, name: "", lib: "", roots: pk_nostrs(), bins: bins, deps: deps };
-    ents.foreach((_el, i) => {
-        let e = ents[i];
+    ents.foreach((el) => {
+        let e = el;
         let at = file + ":" + tostring(e.line) + ": ";
         let tab = e.tab;
         if (e.n >= 0) {
@@ -465,8 +465,8 @@ def pk_man_dep(e: PkEnt, at: str) -> PkDep {
     let d = { name: nm, path: "", git: "", rev: "" };
     let ks = e.keys;
     let vs = e.items;
-    ks.foreach((_el, i) => {
-        let k: str = ks[i];
+    ks.foreach((e, i) => {
+        let k: str = e;
         let v: str = vs[i];
         if (k == "path") {
             d.path = v;
@@ -505,8 +505,8 @@ def pk_src(d: PkDep, fdir: str) -> str {
 
 def pk_dep_names(ds: [PkDep]) -> [str] {
     let out: [str] = [];
-    ds.foreach((_el, i) => {
-        let d = ds[i];
+    ds.foreach((e) => {
+        let d = e;
         out += d.name;
     });
     out
@@ -514,8 +514,8 @@ def pk_dep_names(ds: [PkDep]) -> [str] {
 
 def pk_roots(dir: str, roots: [str]) -> [str] {
     let out: [str] = [];
-    roots.foreach((_el, i) => {
-        out += pk_join(dir, roots[i]);
+    roots.foreach((e) => {
+        out += pk_join(dir, e);
     });
     out
 };
@@ -598,8 +598,8 @@ def pk_visit(st: PkSt, d0: PkDep, by: str, fdir0: str) -> long {
         }
         st.stack += d.name;
         let mds = m.deps;
-        mds.foreach((_el, i) => {
-            pk_visit(st, mds[i], m.name, at.dir);
+        mds.foreach((e) => {
+            pk_visit(st, e, m.name, at.dir);
         });
         let stk = st.stack;
         st.stack = stk[:len(stk) - 1];
@@ -691,8 +691,8 @@ def pk_lock_read(dir: str) -> [PkLock] {
     let txt = fs.read_file(file);
     if (txt != none) {
         let ents = pk_toml(unwrap(txt), file);
-        ents.foreach((_el, i) => {
-            let e = ents[i];
+        ents.foreach((el) => {
+            let e = el;
             if (e.tab == "package" && e.n >= 0) {
                 while (len(out) <= e.n) {
                     out += { name: "", git: "", rev: "", commit: "" };
@@ -719,8 +719,8 @@ def pk_lock_read(dir: str) -> [PkLock] {
 // match its git and rev too).
 def pk_lock_find(locks: [PkLock], d: PkDep) -> str {
     let out = "";
-    locks.foreach((_el, i) => {
-        let lk = locks[i];
+    locks.foreach((e) => {
+        let lk = e;
         if (lk.name == d.name && lk.git == d.git && lk.rev == d.rev) { out = lk.commit; }
     });
     out
@@ -733,8 +733,8 @@ def pk_lock_write(dir: str, nodes: [PkNode]) -> long {
     out += "# y.lock -- written by `ycc build`: the commit each git dependency\n";
     out += "# resolved to. Delete an entry to move it to its rev again.\n";
     let any = false;
-    nodes.foreach((_el, i) => {
-        let p = nodes[i];
+    nodes.foreach((e) => {
+        let p = e;
         if (len(p.git) > 0 && len(p.commit) > 0) {
             out += "\n[[package]]\nname = " + pk_tq(p.name) + "\ngit = " + pk_tq(p.git) + "\nrev = " + pk_tq(p.rev) + "\ncommit = " + pk_tq(p.commit) + "\n";
             any = true;
@@ -757,8 +757,8 @@ def pk_vendor(dir: str) -> long {
     let g = pk_load(dir);
     let ps = g.pkgs;
     let n = 0;
-    ps.foreach((_el, i) => {
-        let p = ps[i];
+    ps.foreach((e) => {
+        let p = e;
         if (len(p.git) > 0) {
             let vd = pk_join(dir, "vendor/" + p.name);
             if (p.dir != vd) {

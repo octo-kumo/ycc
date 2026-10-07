@@ -718,8 +718,8 @@ def asm_assemble(parts: [LinkPart], debug: bool) -> AsmOutI {
               { name: "a:relax", us: tr1 - tr0, heap: hr1 - hr0 },
               { name: "a:link", us: t3 - tr1, heap: h3 - hr1 } ];
         let lsub = lk.times;
-        lsub.foreach((_el, k) => {
-            let le = lsub[k];
+        lsub.foreach((e) => {
+            let le = e;
             tl += le;
         });
         { ok: lk.ok, bytes: lk.bytes, error: lk.error, items: len(items),
@@ -1221,9 +1221,9 @@ def ir_enc_item(ir: [long], at: long, sec: long, offs: [long], where: str) -> As
     let kinds = fo.kinds;
     let ops: [Operand] = [];
     let wp = at + 1;
-    kinds.foreach((_el, i) => {
-        ops += ir_operand(ir, wp, kinds[i]);
-        wp = wp + insn.ir_kind_words(kinds[i]);
+    kinds.foreach((e) => {
+        ops += ir_operand(ir, wp, e);
+        wp = wp + insn.ir_kind_words(e);
     });
     // The encoder writes into the same scratch the text path uses, and a
     // branch is asked for in the short form: asm_relax grows the ones that
@@ -1349,10 +1349,10 @@ def asm_relax(items: [AsmItem], labels: [AsmLabel], debug: bool) -> long {
     let lens: [long] = [];
     let secs: [long] = [];
     let brs: [long] = [];
-    items.foreach((_el, i) => {
-        lens += items[i].len;
-        secs += items[i].sec;
-        if (items[i].br >= 0 && items[i].sec == 0) { brs += i; };
+    items.foreach((e, i) => {
+        lens += e.len;
+        secs += e.sec;
+        if (e.br >= 0 && e.sec == 0) { brs += i; };
     });
     let cum: [long] = [];
     let rlmap = relax_map(labels);
@@ -1396,9 +1396,9 @@ def relax_round(items: [AsmItem], labels: [AsmLabel], rlmap: [AsmLabel], lens: [
         // cum[k] is where item k starts in .text at the current lengths; the
         // label before item `at_item` is therefore at cum[at_item].
         let at = 0;
-        lens.foreach((_el, i) => {
+        lens.foreach((e, i) => {
             if (i < len(cum)) { cum[i] = at; } else { cum += at; };
-            if (secs[i] == 0) { at += lens[i]; };
+            if (secs[i] == 0) { at += e; };
         });
         for j in 0..len(labels) {
             let lb = labels[j];
@@ -1414,8 +1414,8 @@ def relax_round(items: [AsmItem], labels: [AsmLabel], rlmap: [AsmLabel], lens: [
     // one round that way, against 6,673 with the frozen layout, and 140 short
     // branches at the end instead of 8,047).
     let grew = false;
-    brs.foreach((_el, k) => {
-        let i = brs[k];
+    brs.foreach((e) => {
+        let i = e;
         // len 2 is the short form; a grower is already long.
         if (lens[i] == 2) {
             let it = items[i];
@@ -1461,9 +1461,9 @@ def relax_grow(items: [AsmItem], i: long, lens: [long], lbl: str) -> long {
 // The bound case: every branch long, which is the pre-relaxation encoding.
 def relax_all_long(items: [AsmItem], labels: [AsmLabel], lens: [long]) -> long {
     let n = 0;
-    lens.foreach((_el, i) => {
+    lens.foreach((e, i) => {
         let it = items[i];
-        if (it.sec == 0 && it.br >= 0 && lens[i] != 2) {
+        if (it.sec == 0 && it.br >= 0 && e != 2) {
             relax_grow(items, i, lens, it.fix[0].lbl);
             n++;
         };
@@ -1652,8 +1652,8 @@ def pe_image(code: [byte], ro: [byte], entry_off: long, bss_len: long, syms: [El
     let un = pe_unwind(items, labels);
     let dsecs2: [PeSecHdr] = [];
     let ddata: [[byte]] = [];
-    dsecs.foreach((_el, i) => {
-        let ds = dsecs[i];
+    dsecs.foreach((e) => {
+        let ds = e;
         dsecs2 += pe.pe_sec(ds.name, len(ds.data), 0, 0, 1073741888);
         ddata += ds.data;
     });
@@ -2002,8 +2002,8 @@ def pe_prologue_push(reg: long, done: long, fp: bool, fp_off: long, alloc: long,
 def pe_unwind_bytes(frames: [PeFrame], xbase: long) -> PeUnwind {
     let pdata: [byte] = [];
     let xdata: [byte] = [];
-    frames.foreach((_el, i) => {
-        let f = frames[i];
+    frames.foreach((e) => {
+        let f = e;
         pdata = push_le32(pdata, f.start);
         pdata = push_le32(pdata, f.end);
         pdata = push_le32(pdata, xbase + len(xdata));
@@ -2066,8 +2066,8 @@ def pe_codes_sorted(g: [[long]], i: long) -> [long] {
         out[j] = cur;
     };
     let slots: [long] = [];
-    out.foreach((_el, k) => {
-        for q in 0..len(out[k]) { slots += out[k][q]; };
+    out.foreach((e) => {
+        for q in 0..len(e) { slots += e[q]; };
     });
     slots
 };
@@ -2103,8 +2103,8 @@ def pe_unwind_info(xdata: [byte], f: PeFrame) -> [byte] {
 def pe_coff_syms(syms: [ElfSym]) -> [byte] {
     let out: [byte] = [];
     let strtab: [byte] = [];
-    syms.foreach((_el, i) => {
-        let s = syms[i];
+    syms.foreach((e) => {
+        let s = e;
         out = pe_coff_sym(out, s.name, s.off, pe_coff_secnum(s.sec));
     });
     let tail: [byte] = [];

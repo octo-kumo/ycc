@@ -196,8 +196,8 @@ def rn_bind(st: RnSt, orig: str, line: long, col: long) -> { st: RnSt, uniq: str
 
 def rn_list(nodes: [Node], st: RnSt) -> { st: RnSt, nodes: [Node] } {
     let out: [Node] = [];
-    nodes.foreach((_el, i) => {
-        let r = rn_node(nodes[i], st);
+    nodes.foreach((e) => {
+        let r = rn_node(e, st);
         st = r.st;
         out += r.node;
     });
@@ -217,8 +217,8 @@ def rn_prepass(stmts: [Node], st: RnSt) -> RnSt {
     // NOTE: stmts elements are bare {k}-holes at the boundary (like res);
     // pass each element as a BARE value (rn_prepass_one takes unannotated
     // s) so field reads resolve via the tcompat law, not merged shapes.
-    stmts.foreach((_el, i) => {
-        st = rn_prepass_one(stmts[i], st);
+    stmts.foreach((e) => {
+        st = rn_prepass_one(e, st);
     });
     st
 };
@@ -281,8 +281,8 @@ def rn_note_defaults(st: RnSt, uniq: str, func: Func) -> RnSt {
 def rn_find_defaults(st: RnSt, name: str) -> [Node] {
     let out: [Node] = [];
     let ds = st.dfl;
-    ds.foreach((_el, i) => {
-        let d = ds[i];
+    ds.foreach((e) => {
+        let d = e;
         if (d.name == name) { out = d.vals; };
     });
     out
@@ -406,8 +406,8 @@ def rn_types(st: RnSt, ts: [Type]) -> [Type] {
         ts
     } else {
         let out: [Type] = [];
-        ts.foreach((_el, i) => {
-            out += rn_type(st, ts[i]);
+        ts.foreach((e) => {
+            out += rn_type(st, e);
         });
         out
     }
@@ -581,8 +581,8 @@ def rn_reaches_go(st: RnSt, t: Type, id: long, seen: [long], bare: bool) -> bool
 
 def rn_type_list(st: RnSt, ts: [Type], depth: long) -> [Type] {
     let out: [Type] = [];
-    ts.foreach((_el, i) => {
-        out += rn_type_go(st, ts[i], depth);
+    ts.foreach((e) => {
+        out += rn_type_go(st, e, depth);
     });
     out
 };
@@ -598,8 +598,8 @@ def rn_type_fields(st: RnSt, fs: [Field], depth: long) -> [Field] {
 
 def rn_union_flat(ts: [Type]) -> [Type] {
     let out: [Type] = [];
-    ts.foreach((_el, i) => {
-        let t = ts[i];
+    ts.foreach((e) => {
+        let t = e;
         let tk: long = t.k;
         if (tk == K.tunion) {
             let list: TList = t;
@@ -614,8 +614,8 @@ def rn_union_flat(ts: [Type]) -> [Type] {
 
 def rn_drop_typedefs(stmts: [Node], st: RnSt) -> [Node] {
     let out: [Node] = [];
-    stmts.foreach((_el, i) => {
-        let s = stmts[i];
+    stmts.foreach((e) => {
+        let s = e;
         let sk: long = s.k;
         if (sk == K.typedef) {
             // Dropped -- unless its type names something undefined.
@@ -715,11 +715,11 @@ def rn_shadow_dups(stmts: [Node]) -> [Node] {
     } else {
         let later = rn_later(names);
         let out: [Node] = [];
-        stmts.foreach((_el, i) => {
+        stmts.foreach((e, i) => {
             if (later[i]) {
-                let decl: Decl = stmts[i];
+                let decl: Decl = e;
                 out += rn_rebuild_decl(decl, names[i] + "$shadow" + tostring(i));
-            } else { out += stmts[i]; };
+            } else { out += e; };
         });
         out
     }

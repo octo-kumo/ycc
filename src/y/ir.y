@@ -278,9 +278,9 @@ def ir_init() {
     t += { id: F_JMP_IND, mn: "jmp", kinds: [O_IND] };
     // The ids above are positions in this list; a form added in the wrong
     // place would decode and print as a different instruction, so check it.
-    t.foreach((_el, i) => {
-        if (t[i].id != i) {
-            eputs("INTERNAL: ir form table: " + tostring(t[i].id) + " at " + tostring(i) + "\n");
+    t.foreach((e, i) => {
+        if (e.id != i) {
+            eputs("INTERNAL: ir form table: " + tostring(e.id) + " at " + tostring(i) + "\n");
             exit(1);
         };
     });

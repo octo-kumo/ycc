@@ -299,8 +299,8 @@ def print_phase_rows(times: [Timing]) -> long {
     // copies today; the binding stays only because the compiled compiler
     // is byte-gated against refs/ycc.ref.
     let all = times;
-    all.foreach((_el, i) => {
-        let e = all[i];
+    all.foreach((el) => {
+        let e = el;
         eputs("  " + padr(e.name, 12) + padl(fmt_ms(e.us), 12) + " ms" + padl(fmt_kb(e.heap), 12) + " KB\n");
     });
     0
@@ -324,8 +324,8 @@ def print_native_errors(errors: [Diag], origin: Origin, bare: bool) -> long {
     // construct it broke, then the statement it ended), and the second
     // message only repeats the first.
     let seen: [str] = [];
-    all.foreach((_el, i) => {
-        let e = all[i];
+    all.foreach((el) => {
+        let e = el;
         let at = nativelib.origin_at(origin, e.line, bare) + ":" + tostring(e.col);
         let dup = false;
         foreach (s in seen) {
@@ -348,8 +348,8 @@ def print_native_errors(errors: [Diag], origin: Origin, bare: bool) -> long {
 // which child finished first.
 def warning_text(warnings: [Diag], origin: Origin, bare: bool) -> str {
     let out = "";
-    warnings.foreach((_el, i) => {
-        let w = warnings[i];
+    warnings.foreach((e) => {
+        let w = e;
         out = out + nativelib.origin_at(origin, w.line, bare) + ":" + tostring(w.col) + ": warning: " + w.msg + "\n";
     });
     out
@@ -423,8 +423,8 @@ def build_resolve(path: str, allow_exec: bool, pkgs: [str], roots: [str]) -> Res
 def std_order(names: [str]) -> [str] {
     let all = nativelib.std_unit_names();
     let out: [str] = [];
-    all.foreach((_el, i) => {
-        let nm: str = all[i];
+    all.foreach((e) => {
+        let nm: str = e;
         if (pkg.pk_has(names, nm)) { out += nm; }
     });
     out
@@ -432,8 +432,8 @@ def std_order(names: [str]) -> [str] {
 
 def longs_text(xs: [long]) -> str {
     let out: [str] = [];
-    xs.foreach((_el, i) => {
-        out += tostring(xs[i]);
+    xs.foreach((e) => {
+        out += tostring(e);
     });
     join(out, ",")
 };
@@ -466,8 +466,8 @@ def build_key(cid: str, name: str, base: long, allow_exec: bool, nr: Resolved, u
     pkg.pk_hash_str(h, join(nr.std, ","));
     let ps = nr.pkgs;
     pkg.pk_hash_str(h, join(ps, ","));
-    units.foreach((_el, i) => {
-        let u = units[i];
+    units.foreach((e) => {
+        let u = e;
         if (pkg.pk_has(ps, u.name)) { pkg.pk_hash_str(h, nativelib.unit_iface(u)); }
     });
     pkg.pk_hash_text(h)
@@ -601,8 +601,8 @@ def build_child_flags(debug: bool, nowarn: bool, wlevel: long, allow_exec: bool)
 // Where `name` sits in the package order, or -1.
 def pkg_index(pkgs: [PkNode], name: str) -> long {
     let at = -1;
-    pkgs.foreach((_el, i) => {
-        if (pkgs[i].name == name) { at = i; };
+    pkgs.foreach((e, i) => {
+        if (e.name == name) { at = i; };
     });
     at
 };
@@ -873,8 +873,8 @@ def build_project(dir: str, debug: bool, nowarn: bool, wlevel: long, allow_exec:
 def dump_source(src: str, origin: Origin) -> long {
     let lines = split(src, "\n");
     let prev = "\x01none";
-    lines.foreach((_el, i) => {
-        let l = lines[i];
+    lines.foreach((e, i) => {
+        let l = e;
         let at = nativelib.origin_at(origin, i + 1, false);
         if (at == prev) {
             puts(l + "\n");
@@ -993,8 +993,8 @@ def main(cmdline: [str]) -> long {
             // emit_program reports its own sub-phases (strip_ns, rename,
             // typecheck, lint, emit_fns, emit_start, asm_text); splice them in.
             let sub = r.times;
-            sub.foreach((_el, si) => {
-                let se = sub[si];
+            sub.foreach((e) => {
+                let se = e;
                 dt += se;
             });
             if (r.ok && !pargs.nowarn) {
@@ -1070,8 +1070,8 @@ def main(cmdline: [str]) -> long {
                 // ycc_assemble reports its own sub-phases: a:split,
                 // a:encode, a:link, then l:labmap, l:patch, l:elf.
                 let asub = ab.times;
-                asub.foreach((_el, ai) => {
-                    let ae = asub[ai];
+                asub.foreach((e) => {
+                    let ae = e;
                     dt += ae;
                 });
                 let abok = ab.ok;

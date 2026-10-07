@@ -126,8 +126,8 @@ def p_bin_hint(op: str, other: Node) -> Type {
 };
 def p_str_in(xs: [str], s: str) -> bool {
     let found = false;
-    xs.foreach((_el, i) => {
-        if (xs[i] == s) { found = true; };
+    xs.foreach((e) => {
+        if (e == s) { found = true; };
     });
     found
 };
@@ -160,9 +160,9 @@ def p_call_note(callee: Node, args: [Node]) -> long {
 };
 
 def p_infer_finish() -> long {
-    pcall_names.foreach((_el, c) => {
-        pfunc_names.foreach((_el, fi) => {
-            if (pfunc_names[fi] == pcall_names[c]) {
+    pcall_names.foreach((el, c) => {
+        pfunc_names.foreach((e, fi) => {
+            if (e == el) {
                 let f = pfunc_nodes[fi];
                 let ix = pcall_idxs[c];
                 if (ix < len(f.ptypes) && f.ptypes[ix].k == K.tnone) {
@@ -1520,8 +1520,8 @@ def type_err_then(first: Node, t: Type) -> Node {
 
 def type_err_list(ts: [Type]) -> Node {
     let out: Node = { k: K.void, line: 1, col: 1 };
-    ts.foreach((_el, i) => {
-        if (out.k == K.void) { out = type_err(ts[i]); }
+    ts.foreach((e) => {
+        if (out.k == K.void) { out = type_err(e); }
     });
     out
 };
@@ -1721,8 +1721,8 @@ def parse_type_tparams(toks: [Tok], apos: long, tlist: [Type]) -> PType {
         // with positional field names. The old tparams result was rejected
         // by the checker everywhere; tuples give it a meaning.
         let fields: [Field] = [];
-        ts0.foreach((_el, ti) => {
-            fields += { name: tuple_key(ti), opt: false, typ: ts0[ti] };
+        ts0.foreach((e, ti) => {
+            fields += { name: tuple_key(ti), opt: false, typ: e };
         });
         tres({ k: K.trec, fields: fields }, apos)
     }
@@ -2822,8 +2822,8 @@ def parse_value_pattern(toks: [Tok], node: Node, pos: long, tmp: str, ln: long, 
         let vals: [Node] = rec.vals;
         let ty: Type = { k: K.tpat, names: keys };
         let test: Node = { k: K.rectest, e: subj, typ: ty, line: ln, col: cl };
-        keys.foreach((_el, i) => {
-            let key = keys[i];
+        keys.foreach((el, i) => {
+            let key = el;
             if (key == "...") {
                 test = { k: K.err, msg: "'...' is not allowed in a match pattern", line: ln, col: cl };
             } else {
@@ -2871,13 +2871,13 @@ def parse_program(toks: [Tok]) -> Block {
     // that can see it: renaming makes every name unique, so by the time the
     // checker runs the two would look like different names.
     let clash: [Node] = [];
-    stmts.foreach((_el, ci) => {
-        let cs: Node = stmts[ci];
+    stmts.foreach((el, ci) => {
+        let cs: Node = el;
         if (cs.k == K.decl) {
             let cdec: Decl = cs;
             if (cdec.kind == "native") {
-                stmts.foreach((_el, co) => {
-                    let os: Node = stmts[co];
+                stmts.foreach((e, co) => {
+                    let os: Node = e;
                     if (os.k == K.decl) {
                         let odec: Decl = os;
                         if (co != ci && odec.name == cdec.name) {
@@ -2934,8 +2934,8 @@ def nameix_put(m: NameIx, k: str, v: long) -> void {
         let big = nameix_new(len(ok) * 2);
         let bk = big.keys;
         let bv = big.vals;
-        ok.foreach((_el, i) => {
-            let e: str = ok[i];
+        ok.foreach((el, i) => {
+            let e: str = el;
             if (e != "") {
                 let s = nameix_slot(bk, e);
                 bk[s] = e;

@@ -109,7 +109,7 @@ def pe_sections(textlen: long, bss_len: long, pdata: [byte], xdata: [byte], dsec
     if (len(xdata) > 0) {
         out += pe_sec(".xdata", len(xdata), 0, 0, PE_CH_R);
     };
-    dsecs.foreach((_el, i) => { out += dsecs[i]; });
+    dsecs.foreach((e) => { out += e; });
     pe_place(out)
 };
 
@@ -313,7 +313,7 @@ def pe_build(code: [byte], rodata: [byte], entry_off: long, bss_len: long, pdata
     // be built (an RVA is only known after pe_place) and rebuilt after it.
     let dsecs2: [PeSecHdr] = [];
     let ddata2: [[byte]] = [];
-    dsecs.foreach((_el, di) => { dsecs2 += dsecs[di]; ddata2 += ddata[di]; });
+    dsecs.foreach((e, di) => { dsecs2 += e; ddata2 += ddata[di]; });
     let imp_sz = 0;
     if (len(imp) > 0) {
         imp_sz = len(pe_import_bytes(imp, 0, 0));
@@ -331,8 +331,8 @@ def pe_build(code: [byte], rodata: [byte], entry_off: long, bss_len: long, pdata
     if (imp_sz > 0) {
         let idr = pe_find(secs, ".idata").rva;
         let bss_rva = pe_find(secs, ".bss").rva;
-        dsecs2.foreach((_el, dj) => {
-            if (dsecs2[dj].name == ".idata") {
+        dsecs2.foreach((e, dj) => {
+            if (e.name == ".idata") {
                 ddata2[dj] = pe_import_bytes(imp, idr, bss_rva);
             };
         });
@@ -420,8 +420,8 @@ def pe_fix_pdata(pdata: [byte], rva: long) -> [byte] {
 // table and its string table are in the file only -- nothing maps them.
 def pe_symptr(secs: [PeSecHdr]) -> long {
     let raw = pe_align(pe_headers_size(secs), PE_FILE_ALIGN);
-    secs.foreach((_el, i) => {
-        raw = raw + secs[i].rawsz;
+    secs.foreach((e) => {
+        raw = raw + e.rawsz;
     });
     raw
 };

@@ -1040,8 +1040,8 @@ def sg_drop() -> long {
 def sg_splice(slot: long, at: long) -> long {
     let lines = mg_lines(mg_piece[slot]);
     let last = len(lines) - 1;
-    lines.foreach((_el, i) => {
-        sg_mbuf += lines[i];
+    lines.foreach((e, i) => {
+        sg_mbuf += e;
         if (i < last) {
             sg_mol += at;
             sg_mbuf += "\n";
@@ -1212,8 +1212,8 @@ def sg_fail(msg: str, line: long, col: long) -> long {
 // question and the header question separately.
 def sg_in_body() -> bool {
     let hit = false;
-    sg_bkind.foreach((_el, i) => {
-        let k = sg_bkind[i];
+    sg_bkind.foreach((e) => {
+        let k = e;
         if (k == 1 || k == 2) { hit = true };
     });
     hit
@@ -2273,8 +2273,8 @@ def mg_set(on: bool) -> long {
 
 def mg_in(xs: [str], s: str) -> bool {
     let hit = false;
-    xs.foreach((_el, i) => {
-        if (xs[i] == s) { hit = true; };
+    xs.foreach((e) => {
+        if (e == s) { hit = true; };
     });
     hit
 };
@@ -2339,11 +2339,11 @@ def mg_helpers() -> [str] {
 def meta_gtext() -> str {
     let out: [str] = [];
     let hs = mg_helpers();
-    hs.foreach((_el, i) => {
-        out += hs[i];
+    hs.foreach((e) => {
+        out += e;
     });
-    mg_imp.foreach((_el, k) => {
-        out += mg_imp[k];
+    mg_imp.foreach((e) => {
+        out += e;
     });
     join(out + mg_g, "\n") + "\n"
 };
@@ -2573,8 +2573,8 @@ def mg_probe(src: str, dir: str) -> bool {
 def mg_norm_path(p: str) -> str {
     let parts = split(p, "/");
     let out: [str] = [];
-    parts.foreach((_el, i) => {
-        let seg = parts[i];
+    parts.foreach((e) => {
+        let seg = e;
         if (seg != ".") { out += seg; };
     });
     join(out, "/")
@@ -2617,13 +2617,13 @@ def mg_emit(segs: [str], sego: [long], segp: [bool], fid: long, nl: [str],
     let cur = "";
     let curo = 0;
     let cgen = true;
-    segs.foreach((_el, s) => {
-        let text = segs[s];
+    segs.foreach((el, s) => {
+        let text = el;
         let o = sego[s];
         let p = false;
         if (s < len(segp)) { p = segp[s] };
         let parts = mg_lines(text);
-        parts.foreach((_el, k) => {
+        parts.foreach((e, k) => {
             if (k == 0) {
                 // this part joins the line being built: it is that line's
                 // first text if it is empty, and joins the rest otherwise
@@ -2637,7 +2637,7 @@ def mg_emit(segs: [str], sego: [long], segp: [bool], fid: long, nl: [str],
                 curo = o;
                 cgen = p;
             };
-            cur += parts[k];
+            cur += e;
         });
     });
     nl += cur;
@@ -2658,8 +2658,8 @@ def mg_splice(lo: long, hi: long) -> long {
         let nf: [long] = [];
         let nll: [long] = [];
         let ngen: [bool] = [];
-        lines.foreach((_el, i) => {
-            mg_splice_line(lines[i], ols[i], i, lo, hi, nl, nf, nll, ngen);
+        lines.foreach((e, i) => {
+            mg_splice_line(e, ols[i], i, lo, hi, nl, nf, nll, ngen);
         });
         sg_p = nl;
         sg_pf = nf;

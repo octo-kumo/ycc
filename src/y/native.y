@@ -409,8 +409,8 @@ def words_scan(code: str, lo: long, n: long, names: [str], seen: [long]) -> long
                     };
                     i = w.end;
                 } else {
-                    names.foreach((_el, m) => {
-                        let nm: str = names[m];
+                    names.foreach((e, m) => {
+                        let nm: str = e;
                         if (len(nm) == j - i && word_at(code, i, nm)) {
                             if (seen[m] == 0) { seen[m] = 1; }
                             if (prev == '.') { pend = m; }
@@ -472,8 +472,8 @@ def seen_any(seen: [long], lo: long, hi: long, level: long) -> bool {
 def norm_path(p: str) -> str {
     let parts = split(p, "/");
     let out: [str] = [];
-    parts.foreach((_el, i) => {
-        let seg = parts[i];
+    parts.foreach((e) => {
+        let seg = e;
         let n = len(out);
         if (seg == ".") {
         } else if (seg == ".." && n > 0 && out[n - 1] != "..") {
@@ -708,8 +708,8 @@ def meta_compile_gen() -> [byte] {
 
 def dup_at(seen: [str], at: str) -> bool {
     let hit = false;
-    seen.foreach((_el, i) => {
-        if (seen[i] == at) { hit = true; };
+    seen.foreach((e) => {
+        if (e == at) { hit = true; };
     });
     hit
 };
@@ -778,8 +778,8 @@ def std_resolve(name: str, base_dir: str) -> str {
     cands += base_dir + "/" + name + ".y";
     cands += base_dir + "/std/" + name + ".y";
     // a package's source roots (native_resolve_pk)
-    res_roots.foreach((_el, ri) => {
-        let rr: str = res_roots[ri];
+    res_roots.foreach((e) => {
+        let rr: str = e;
         cands += rr + "/" + name + ".y";
     });
     cands += "std/" + name + ".y";
@@ -791,9 +791,9 @@ def std_resolve(name: str, base_dir: str) -> str {
         cands += d + "/../src/y/std/" + name + ".y";
     }
     let found = "";
-    cands.foreach((_el, i) => {
+    cands.foreach((e) => {
         if (len(found) == 0) {
-            let c: str = cands[i];
+            let c: str = e;
             if (fs.read_file(c) == none) {
             } else {
                 found = norm_path(c);
@@ -966,8 +966,8 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str], smods
                         ofile += sub.ofile;
                         oline += sub.oline;
                         ogen += sub.ogen;
-                        subns.foreach((_el, m) => {
-                            imports += subns[m];
+                        subns.foreach((e) => {
+                            imports += e;
                         });
                         // a module imported by name keeps its namespace
                         // (rename.y), one imported by path is flattened
@@ -1332,8 +1332,8 @@ def ir_refs_item(ir: [long], at: long, out: [str]) -> [str] {
     let f = ir[at];
     let kinds = insn.ir_form(f).kinds;
     let wp = at + 1;
-    kinds.foreach((_el, i) => {
-        let k = kinds[i];
+    kinds.foreach((e) => {
+        let k = e;
         if (k == insn.O_LBL) {
             out = ir_refs_push(out, lname(ir[wp]));
         } else if (k == insn.O_DIFF) {
@@ -1372,8 +1372,8 @@ def cell_reads(ir: [long], out: [str]) -> [str] {
             let form = insn.ir_form(f);
             let kinds = form.kinds;
             let wp = at + 1;
-            kinds.foreach((_el, i) => {
-                let k = kinds[i];
+            kinds.foreach((e, i) => {
+                let k = e;
                 if (k == insn.O_MEM || k == insn.O_MEM0) {
                     let last = i == len(kinds) - 1;
                     if (!(last && form.mn == "mov")) {
@@ -1516,8 +1516,8 @@ def ir_relabel(ir: [long], m: [AsmLabel], dup_new: [str]) -> [long] {
         if (f < insn.IR_LABEL) {
             let kinds = insn.ir_form(f).kinds;
             let wp = at + 1;
-            kinds.foreach((_el, i) => {
-                let k = kinds[i];
+            kinds.foreach((e) => {
+                let k = e;
                 if (k == insn.O_LBL) {
                     ir[wp] = ir_relabel_one(ir[wp], m, dup_new);
                 } else if (k == insn.O_DIFF) {
@@ -1636,8 +1636,8 @@ def block_falls_b(text: str, b: [byte], lo: long, hi: long) -> bool {
 
 def namemap_build(names: [str]) -> [AsmLabel] {
     let m = asm.labmap_new(len(names) * 2 + 16);
-    names.foreach((_el, i) => {
-        let nm: str = names[i];
+    names.foreach((e, i) => {
+        let nm: str = e;
         if (len(nm) > 0) {
             // First insert wins, as a scan for the first match did.
             let r = asm.labmap_put(m, nm, i, 0);
@@ -1686,8 +1686,8 @@ def fntab_of(syms: [Sym], ids: [long]) -> FnTab {
 // `ids` for a Sym list: intern each label, in order.
 def fntab_ids(syms: [Sym]) -> [long] {
     let ids: [long] = [];
-    syms.foreach((_el, i) => {
-        let e = syms[i];
+    syms.foreach((el) => {
+        let e = el;
         ids += lbl_new(e.label);
     });
     ids
@@ -1699,8 +1699,8 @@ def fntab_ids(syms: [Sym]) -> [long] {
 def shake_keep(names: [str], refs: [[str]], falls: [bool], keep: [bool], roots: [str]) -> [bool] {
     let n = len(names);
     let map = namemap_build(names);
-    roots.foreach((_el, r) => {
-        let idx = namemap_get(map, roots[r]);
+    roots.foreach((e) => {
+        let idx = namemap_get(map, e);
         if (idx >= 0) { keep[idx] = true; }
     });
     let scanned: [bool] = [];
@@ -1721,8 +1721,8 @@ def shake_keep(names: [str], refs: [[str]], falls: [bool], keep: [bool], roots: 
                         }
                     }
                     let rs = refs[b];
-                    rs.foreach((_el, j) => {
-                        let idx = namemap_get(map, rs[j]);
+                    rs.foreach((e) => {
+                        let idx = namemap_get(map, e);
                         if (idx >= 0) {
                             if (!(keep[idx])) { keep[idx] = true; }
                         }
@@ -1855,18 +1855,18 @@ type PShake = { text: str, refs: [str] };
 // says it must, so it is here twice now.
 def check_os_call_names(lines: [str]) -> [str] {
     let labels: [str] = [];
-    lines.foreach((_el, j) => {
-        let nm = arch_label_name(lines[j]);
+    lines.foreach((e) => {
+        let nm = arch_label_name(e);
         if (nm != "") { labels += nm; };
     });
     let names = types.os_call_names();
-    names.foreach((_el, i) => {
+    names.foreach((e) => {
         let found = false;
         for k in 0..len(labels) {
-            if (labels[k] == names[i]) { found = true; };
+            if (labels[k] == e) { found = true; };
         };
         if (!found) {
-            puts("error: os_call_names lists '" + names[i]
+            puts("error: os_call_names lists '" + e
                 + "', which the arch lines do not define ("
                 + (if (target_is_windows()) { "src/y/arch/wsys.s" } else { "src/y/arch/prelude.s" })
                 + ")\n");
@@ -1899,8 +1899,8 @@ def arch_label_name(l: str) -> str {
 def prelude_blocks(lines: [str]) -> PBlocks {
     let starts: [long] = [];
     let names: [str] = [];
-    lines.foreach((_el, i) => {
-        let l: str = lines[i];
+    lines.foreach((e, i) => {
+        let l: str = e;
         let lab = "";
         if (len(l) > 0 && l[0] != 32) {
             let lb = bytes(l);
@@ -1977,8 +1977,8 @@ def shake_prelude(pb: PBlocks, roots: [str]) -> PShake {
         brefs += [none];
         k++;
     };
-    roots.foreach((_el, r) => {
-        let idx = namemap_get(pb.ix, roots[r]);
+    roots.foreach((e) => {
+        let idx = namemap_get(pb.ix, e);
         if (idx >= 0) { keep[idx] = true; };
     });
     let more = true;
@@ -1994,8 +1994,8 @@ def shake_prelude(pb: PBlocks, roots: [str]) -> PShake {
                 let rs = lines_refs(lines, lo, hi);
                 brefs[b] = rs;
                 if (b + 1 < nb && lines_fall(lines, lo, hi)) { keep[b + 1] = true; };
-                rs.foreach((_el, j) => {
-                    let idx = namemap_get(pb.ix, rs[j]);
+                rs.foreach((e) => {
+                    let idx = namemap_get(pb.ix, e);
                     if (idx >= 0) { keep[idx] = true; };
                 });
             };
@@ -2037,10 +2037,10 @@ def prelude_with(core: [str], threads: bool, mathasm: bool) -> [str] {
 // The references (a kept prelude's) that name a body not kept.
 def unkept_refs(refs: [str], bmap: [AsmLabel], keep: [bool]) -> [str] {
     let out: [str] = [];
-    refs.foreach((_el, i) => {
-        let idx = namemap_get(bmap, refs[i]);
+    refs.foreach((e) => {
+        let idx = namemap_get(bmap, e);
         if (idx >= 0) {
-            if (!(keep[idx])) { out += refs[i]; };
+            if (!(keep[idx])) { out += e; };
         };
     });
     out
@@ -2076,8 +2076,8 @@ def prune_bodies(labels: [str], refs: [[str]], extra_roots: [str]) -> { refs: [s
     while (i < nb) {
         if (keep[i]) {
             let rs = refs[i];
-            rs.foreach((_el, j) => {
-                outrefs += rs[j];
+            rs.foreach((e) => {
+                outrefs += e;
             });
         }
         i++;
@@ -2255,16 +2255,16 @@ def strip_type(t: Type, imports: [str]) -> Type {
 
 def strip_type_list(ts: [Type], imports: [str]) -> [Type] {
     let out: [Type] = [];
-    ts.foreach((_el, i) => {
-        out += strip_type(ts[i], imports);
+    ts.foreach((e) => {
+        out += strip_type(e, imports);
     });
     out
 }
 
 def strip_list(nodes: [Node], imports: [str]) -> [Node] {
     let out: [Node] = [];
-    nodes.foreach((_el, i) => {
-        out += strip_ns(nodes[i], imports);
+    nodes.foreach((e) => {
+        out += strip_ns(e, imports);
     });
     out
 };
@@ -2926,16 +2926,16 @@ def infer_go(st: EmitSt, node: Node) -> Type {
             // union: first appearance keeps the position, later wins the
             // value) -- the same rule as types.y's rec arm.
             let mfields: [Field] = [];
-            melems.foreach((_el, mi) => {
-                let mf = infer(st, melems[mi]);
+            melems.foreach((el, mi) => {
+                let mf = infer(st, el);
                 // mk is read twice: the `...` test, then the merge.
                 let mk = mkeys[mi];
                 if (mk == "...") {
                     if (mf.k == K.trec) {
                         let rec: TRec = mf;
                         let msfs: [Field] = rec.fields;
-                        msfs.foreach((_el, msi) => {
-                            let msf = msfs[msi];
+                        msfs.foreach((e) => {
+                            let msf = e;
                             mfields = types.field_merge(mfields, msf.name, msf.typ);
                         });
                     }
@@ -2965,8 +2965,8 @@ def infer_go(st: EmitSt, node: Node) -> Type {
             let ftyp: Type = normtype({ k: K.tunk });
             let rec: TRec = dt;
             let dfs: [Field] = rec.fields;
-            dfs.foreach((_el, di) => {
-                let df = dfs[di];
+            dfs.foreach((e) => {
+                let df = e;
                 // NOTE: :str binding (see teq note in types.y): df flows
                 // from bare values (tunk), so a direct `==` would compare
                 // string POINTERS; annotated let forces content compare.
@@ -3207,8 +3207,8 @@ def infer_block(st: EmitSt, node: Block) -> Type {
         // (print then reads a str option as a raw number, and a match arm's
         // `v.f` as one). Only these: every other name is in scope after its
         // own statement, which gen has run by the time anything asks.
-        stmts.foreach((_el, i) => {
-            let s = stmts[i];
+        stmts.foreach((e) => {
+            let s = e;
             if (s.k == K.decl) {
                 let d: Decl = s;
                 if (d.kind == "let" && env_find(st, d.name).kind == "none") {
@@ -3251,8 +3251,8 @@ def infer_decl(st: EmitSt, node: Decl) -> Type {
 // positive costs the prologue (a few hundred bytes), a false negative crashes.
 def uses_argv(stmts: [Node]) -> bool {
     let reads: [str] = [];
-    stmts.foreach((_el, i) => {
-        reads = fv_walk(stmts[i], reads, true);
+    stmts.foreach((e) => {
+        reads = fv_walk(e, reads, true);
     });
     name_in(reads, "argv")
 };
@@ -3264,8 +3264,8 @@ def uses_argv(stmts: [Node]) -> bool {
 type FnDef = { name: str, func: Func };
 
 def collect_from_block(stmts: [Node], out: [FnDef]) -> [FnDef] {
-    stmts.foreach((_el, i) => {
-        out = collect_from_node(stmts[i], out);
+    stmts.foreach((e) => {
+        out = collect_from_node(e, out);
     });
     out
 };
@@ -3537,8 +3537,8 @@ def fv_walk(node: Node, out: [str], collect: bool) -> [str] {
 };
 
 def fv_walk_list(nodes: [Node], out: [str], collect: bool) -> [str] {
-    nodes.foreach((_el, i) => {
-        out = fv_walk(nodes[i], out, collect);
+    nodes.foreach((e) => {
+        out = fv_walk(e, out, collect);
     });
     out
 };
@@ -3671,8 +3671,8 @@ def fv_binds(node: Node, out: [str]) -> [str] {
 };
 
 def fv_binds_list(nodes: [Node], out: [str]) -> [str] {
-    nodes.foreach((_el, i) => {
-        out = fv_binds(nodes[i], out);
+    nodes.foreach((e) => {
+        out = fv_binds(e, out);
     });
     out
 };
@@ -3688,8 +3688,8 @@ def fn_captures(func: EmitFunc, ex: [AsmLabel], extra: str) -> [str] {
     let bound = fv_bind_params(func.params, fv_binds(func.body, []));
     let reads = fv_ids(func.body, []);
     let caps: [str] = [];
-    reads.foreach((_el, i) => {
-        let n: str = reads[i];
+    reads.foreach((e) => {
+        let n: str = e;
         if (name_in(bound, n)) { }
         else if (n == extra || namemap_get(ex, n) >= 0) { }
         else if (is_intrinsic_name(n)) { }
@@ -3702,8 +3702,8 @@ def fn_captures(func: EmitFunc, ex: [AsmLabel], extra: str) -> [str] {
 };
 
 def fv_bind_params(ps: [str], out: [str]) -> [str] {
-    ps.foreach((_el, i) => {
-        let p: str = ps[i];
+    ps.foreach((e) => {
+        let p: str = e;
         out += p;
     });
     out
@@ -3711,8 +3711,8 @@ def fv_bind_params(ps: [str], out: [str]) -> [str] {
 
 def fn_names_of(fns: [Sym]) -> [str] {
     let out: [str] = [];
-    fns.foreach((_el, i) => {
-        let e = fns[i];
+    fns.foreach((el) => {
+        let e = el;
         out += e.name;
     });
     out
@@ -4075,8 +4075,8 @@ def box_capture(st: EmitSt, name: str) -> EmitSt {
 def box_names(func: EmitFunc) -> [str] {
     let reads = fv_walk(func.body, [], false);
     let out: [str] = [];
-    reads.foreach((_el, i) => {
-        let n: str = reads[i];
+    reads.foreach((e) => {
+        let n: str = e;
         if (name_in(out, n)) { } else {
             out += n;
         };
@@ -4231,8 +4231,8 @@ def app_walk(node: Node, out: [str], deep: bool) -> [str] {
 };
 
 def app_walk_list(nodes: [Node], out: [str], deep: bool) -> [str] {
-    nodes.foreach((_el, i) => {
-        out = app_walk(nodes[i], out, deep);
+    nodes.foreach((e) => {
+        out = app_walk(e, out, deep);
     });
     out
 };
@@ -4243,8 +4243,8 @@ def app_walk_list(nodes: [Node], out: [str], deep: bool) -> [str] {
 def app_names(node: Node, deep: bool, skip: [str]) -> [str] {
     let seen = app_walk(node, [], deep);
     let out: [str] = [];
-    seen.foreach((_el, i) => {
-        let n: str = seen[i];
+    seen.foreach((e) => {
+        let n: str = e;
         if (n[:1] == "&" || name_in(out, n) || name_in(skip, n) || name_in(seen, "&" + n)) { } else {
             out += n;
         };
@@ -4379,16 +4379,16 @@ def gen_discard(st: EmitSt, node: Node) -> EmitSt {
 // only when it has a str global at all.
 def app_cells(gl: [Sym], stmts: [Node]) -> [Sym] {
     let anystr = false;
-    gl.foreach((_el, i) => {
-        let ge = gl[i];
+    gl.foreach((e) => {
+        let ge = e;
         if (ge.typ.k == K.tstr) { anystr = true; }
     });
     if (anystr) {
         let names = app_names({ k: K.block, stmts: stmts, line: 1, col: 1 }, true, []);
         let out: [Sym] = [];
         out += gl;
-        gl.foreach((_el, j) => {
-            let g2 = gl[j];
+        gl.foreach((e) => {
+            let g2 = e;
             if (g2.typ.k == K.tstr && name_in(names, g2.name)) {
                 out += { name: g2.name + "#o", label: "ygo_" + g2.label[3:], typ: normtype({ k: K.tnone }) };
             }
@@ -4552,8 +4552,8 @@ def gen_tag_in(st: EmitSt, ts: [Type], inu: Type) -> EmitSt {
     st = emit_insn(st, insn.F_MOV_D_R, insn.R_RAX, -1, 1, -8, -1, insn.R_RCX, 64);
     let yes = next_loc(st);
     st = yes.st;
-    ts.foreach((_el, i) => {
-        let dr = ty_desc_in(st, ts[i], inu);
+    ts.foreach((e) => {
+        let dr = ty_desc_in(st, e, inu);
         st = dr.st;
         st = emit_insn(st, insn.F_LEA_P_R, -1, -1, 1, 0, dr.label, insn.R_RDX, 64);
         st = emit_insn(st, insn.F_CMP_R_R, insn.R_RDX, 64, insn.R_RCX, 64, 0, 0, 0);
@@ -4574,10 +4574,10 @@ def gen_union_str_rax(st: EmitSt, t: Type, path: [Type]) -> EmitSt {
     let rdone = next_loc(st);
     st = rdone.st;
     st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
-    ms.foreach((_el, m) => {
+    ms.foreach((e) => {
         let rnext = next_loc(st);
         st = rnext.st;
-        let mt = ms[m];
+        let mt = e;
         let one: [Type] = [];
         one += mt;
         st = emit_insn(st, insn.F_MOV_0_R, insn.R_RSP, -1, 1, -1, -1, insn.R_RAX, 64);
@@ -5668,8 +5668,8 @@ def cast_members(s: Type, t: Type) -> [Type] {
     } else {
         ts += t;
     };
-    ts.foreach((_el, i) => {
-        let m = types.union_member(su, ts[i]);
+    ts.foreach((e) => {
+        let m = types.union_member(su, e);
         if (m.k != K.tnone) { out += m; };
     });
     out
@@ -5681,8 +5681,8 @@ def gen_cast_check(st: EmitSt, ts: [Type], u: Type) -> EmitSt {
     let ok = next_loc(st);
     st = ok.st;
     st = emit_insn(st, insn.F_MOV_D_R, insn.R_RAX, -1, 1, -8, -1, insn.R_RCX, 64);
-    ts.foreach((_el, i) => {
-        let dr = ty_desc_in(st, ts[i], u);
+    ts.foreach((e) => {
+        let dr = ty_desc_in(st, e, u);
         st = dr.st;
         st = emit_insn(st, insn.F_LEA_P_R, -1, -1, 1, 0, dr.label, insn.R_RDX, 64);
         st = emit_insn(st, insn.F_CMP_R_R, insn.R_RDX, 64, insn.R_RCX, 64, 0, 0, 0);
@@ -5953,8 +5953,8 @@ def gen_call(st: EmitSt, node: Call) -> EmitSt {
 def gen_closure_call(st: EmitSt, foff: long, arg_regs: [long]) -> EmitSt {
     st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, foff, -1, insn.R_R10, 64);
     st = emit_insn(st, insn.F_PUSH_R, insn.R_R10, 64, 0, 0, 0, 0, 0);
-    arg_regs.foreach((_el, i) => {
-        st = emit_insn(st, insn.F_PUSH_R, arg_regs[i], 64, 0, 0, 0, 0, 0);
+    arg_regs.foreach((e) => {
+        st = emit_insn(st, insn.F_PUSH_R, e, 64, 0, 0, 0, 0, 0);
     });
     st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, foff, -1, insn.R_R10, 64);
     st = emit_insn(st, insn.F_MOV_0_R, insn.R_R10, -1, 1, -1, -1, insn.R_R10, 64);
@@ -6532,8 +6532,8 @@ def gen_method(st: EmitSt, node: Call) -> EmitSt {
     let margs: [Node] = node.args;
     let args: [Node] = [];
     if (!sm.last) { args += mobj; };
-    margs.foreach((_el, i) => {
-        args += margs[i];
+    margs.foreach((e) => {
+        args += e;
     });
     if (len(margs) < len(sm.params)) {
         // The left-out optional argument's default: the table carries its
@@ -7578,8 +7578,8 @@ def gen_loc_loop(st: EmitSt, node: Node) -> EmitSt {
 // file, N = its index + 1.
 def file_dirs(files: [str]) -> str {
     let pieces: [str] = [];
-    files.foreach((_el, i) => {
-        let fname: str = files[i];
+    files.foreach((e, i) => {
+        let fname: str = e;
         pieces += ".file " + tostring(i + 1) + " \"" + esc_asm(fname) + "\"\n";
     });
     join(pieces, "")
@@ -7691,8 +7691,8 @@ def tyset_grow() -> long {
     ty_seen = fresh;
     ty_forms = freshf;
     ty_count = 0;
-    old.foreach((_el, j) => {
-        let lb: str = old[j];
+    old.foreach((e, j) => {
+        let lb: str = e;
         if (len(lb) > 0) { tyset_add(lb, oldf[j]); };
     });
     0
@@ -7940,8 +7940,8 @@ def gen_copy_rec(st: EmitSt, from: [str], to: [str], tag: long) -> EmitSt {
     st = emit_insn(st, insn.F_LEA_P_R, -1, -1, 1, 0, tag, insn.R_RCX, 64);
     st = emit_insn(st, insn.F_MOV_R_D, insn.R_RCX, 64, insn.R_RAX, -1, 1, 0, -1);
     st = emit_insn(st, insn.F_POP_R, insn.R_RSI, 64, 0, 0, 0, 0, 0);
-    to.foreach((_el, i) => {
-        let s = mfield_idx(from, to[i]);
+    to.foreach((e, i) => {
+        let s = mfield_idx(from, e);
         st = emit_insn(st, insn.F_MOV_D_R, insn.R_RSI, -1, 1, 8 * s, -1, insn.R_RCX, 64);
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RCX, 64, insn.R_RAX, -1, 1, 8 + 8 * i, -1);
     });
@@ -8131,8 +8131,8 @@ def gen_reclit(st: EmitSt, node: RecLit, want: Type) -> EmitSt {
             if (srec.k == K.trec) {
                 let spread: TRec = srec;
                 let sfs: [Field] = spread.fields;
-                sfs.foreach((_el, si) => {
-                    let sf = sfs[si];
+                sfs.foreach((e) => {
+                    let sf = e;
                     if (mfield_idx(names, sf.name) < 0) {
                         names += sf.name;
                     }
@@ -8184,8 +8184,8 @@ def gen_reclit(st: EmitSt, node: RecLit, want: Type) -> EmitSt {
             if (srec2.k == K.trec) {
                 let spread: TRec = srec2;
                 let sfs2: [Field] = spread.fields;
-                sfs2.foreach((_el, sj) => {
-                    let sf2 = sfs2[sj];
+                sfs2.foreach((e) => {
+                    let sf2 = e;
                     let mi2 = mfield_idx(slots, sf2.name);
                     // %rdx is the source's record VALUE (slot 0 at +0);
                     // %rcx is the fresh record's ALLOC base (slots at +8).
@@ -8240,8 +8240,8 @@ def lit_wraps(st: EmitSt, mv: Node, rtu: Type, mk: str, ft: Type) -> bool {
 def gen_func_literal(st: EmitSt, node: Func) -> EmitSt {
     let caps = fn_captures(node, st.fns.ix, "");
     let captypes: [Type] = [];
-    caps.foreach((_el, ci) => {
-        let cn: str = caps[ci];
+    caps.foreach((e) => {
+        let cn: str = e;
         let ce = env_find(st, cn);
         captypes += ce.typ;
     });
@@ -8251,8 +8251,8 @@ def gen_func_literal(st: EmitSt, node: Func) -> EmitSt {
     let ru = next_uid(st);
     st = ru.st;
     st = emit_one_fn(st, lbl, ru.uid, node, false, false, captypes, "");
-    caps.foreach((_el, bci) => {
-        let bcn: str = caps[bci];
+    caps.foreach((e) => {
+        let bcn: str = e;
         st = box_capture(st, bcn);
     });
     gen_make_closure(st, lbl, caps)
@@ -8265,8 +8265,8 @@ def gen_func_literal(st: EmitSt, node: Func) -> EmitSt {
 // gets its label here; its body knows its own name (emit_one_fn).
 def gen_closure_binding(st: EmitSt, name: str, func: Func, caps: [str]) -> EmitSt {
     let captypes: [Type] = [];
-    caps.foreach((_el, ci) => {
-        let cn2: str = caps[ci];
+    caps.foreach((e) => {
+        let cn2: str = e;
         let ce = env_find(st, cn2);
         captypes += ce.typ;
     });
@@ -8276,8 +8276,8 @@ def gen_closure_binding(st: EmitSt, name: str, func: Func, caps: [str]) -> EmitS
     let ru = next_uid(st);
     st = ru.st;
     st = emit_one_fn(st, lbl, ru.uid, func, false, false, captypes, name);
-    caps.foreach((_el, bci) => {
-        let bcn: str = caps[bci];
+    caps.foreach((e) => {
+        let bcn: str = e;
         st = box_capture(st, bcn);
     });
     st = gen_make_closure(st, lbl, caps);
@@ -9258,8 +9258,8 @@ def block_bind(first: Node, rest: [Node], ln: long, cl: long) -> Block {
     } else {
         st += [first];
     };
-    rest.foreach((_el, j) => {
-        st += [rest[j]];
+    rest.foreach((e) => {
+        st += [e];
     });
     { k: K.block, stmts: st, line: ln, col: cl }
 };
@@ -10120,9 +10120,9 @@ def gen_narrow_field(st: EmitSt, nar: Narrow, s: Type, dkey: str) -> EmitSt {
             let l = next_loc(st);
             st = l.st;
             lbls += l.label;
-            ms.foreach((_el, j) => {
+            ms.foreach((e, j) => {
                 if (slots[j] == ds[d]) {
-                    let dr = ty_desc_in(st, ms[j], s);
+                    let dr = ty_desc_in(st, e, s);
                     st = dr.st;
                     st = emit_insn(st, insn.F_LEA_P_R, -1, -1, 1, 0, dr.label, insn.R_RSI, 64);
                     st = emit_insn(st, insn.F_CMP_R_R, insn.R_RSI, 64, insn.R_RCX, 64, 0, 0, 0);
@@ -10132,8 +10132,8 @@ def gen_narrow_field(st: EmitSt, nar: Narrow, s: Type, dkey: str) -> EmitSt {
         };
         st = gen_slot_move(st, ds[len(ds) - 1], false);
         st = emit_insn(st, insn.F_JMP_L, done.label, 0, 0, 0, 0, 0, 0);
-        lbls.foreach((_el, e) => {
-            st = emit_label(st, lbls[e]);
+        lbls.foreach((el, e) => {
+            st = emit_label(st, el);
             st = gen_slot_move(st, ds[e], false);
             // not on the last arm: that one falls through into `done:`
             if (e < len(lbls) - 1) { st = emit_insn(st, insn.F_JMP_L, done.label, 0, 0, 0, 0, 0, 0); };
@@ -10223,8 +10223,8 @@ def gen_array(st: EmitSt, node: ArrLit) -> EmitSt {
 // `ety` the element type each value converts to (store_elem_type).
 def gen_array_esz(st: EmitSt, node: ArrLit, esz: long, ety: Type) -> EmitSt {
     let elems: [Node] = node.elems;
-    elems.foreach((_el, gi) => {
-        st = gen_as(st, elems[gi], ety);
+    elems.foreach((e) => {
+        st = gen_as(st, e, ety);
         st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     });
     let n = len(elems);
@@ -10988,14 +10988,14 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
     let ftype: Type = type_node({ k: K.tfunc, args: func.ptypes, ret: fn_ret(func) });
     f = env_define(f, "", "fnty", 0, -1, "", ftype);
     let bnames = box_names(func);
-    bnames.foreach((_el, bi) => {
-        let bnm: str = bnames[bi];
+    bnames.foreach((e) => {
+        let bnm: str = e;
         f = env_define(f, "", "boxmark", 0, -1, bnm, type_node({ k: K.tnone }));
     });
     // The names this body appends to (see own_wanted), the same way.
     let anames = app_names(func.body, false, bnames);
-    anames.foreach((_el, ai) => {
-        let anm: str = anames[ai];
+    anames.foreach((e) => {
+        let anm: str = e;
         f = env_define(f, "", "appmark", 0, -1, anm, type_node({ k: K.tnone }));
     });
     // A capturing named function is not in that table (see
@@ -11022,8 +11022,8 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
     if (is_main) { } else {
         let mycaps = fn_captures(func, st.fns.ix, selfname);
         let cloff = 16 + nargs * 8;
-        mycaps.foreach((_el, c) => {
-            let cn: str = mycaps[c];
+        mycaps.foreach((e, c) => {
+            let cn: str = e;
             // Capture types come from the creation site (the enclosing env
             // knows them); without one the emitter would pick long for a
             // captured string in print/puts and in `+`.
@@ -11202,8 +11202,8 @@ def find_dup(stmts: [Node], origin: Origin) -> [Diag] {
     let fids: [long] = [];
     let lines: [long] = [];
     let cols: [long] = [];
-    stmts.foreach((_el, i) => {
-        let s: Node = stmts[i];
+    stmts.foreach((e) => {
+        let s: Node = e;
         let nm = top_name_in(s, origin);
         if (len(nm) > 0) {
             let ln: long = s.line;
@@ -11227,8 +11227,8 @@ def find_dup(stmts: [Node], origin: Origin) -> [Diag] {
     let ppos: [long] = [];
     let pnext: [long] = [];
     let errs: [Diag] = [];
-    names.foreach((_el, j) => {
-        let nj = names[j];
+    names.foreach((e, j) => {
+        let nj = e;
         let fj = fids[j];
         let slot = -1;
         let g = asm.labmap_get(ix, nj);
@@ -11302,8 +11302,8 @@ def top_def_name_go(s: Decl) -> str {
 // bindings are defs, not variables).
 def global_decls(stmts: [Node]) -> [Node] {
     let out: [Node] = [];
-    stmts.foreach((_el, i) => {
-        let s: Node = stmts[i];
+    stmts.foreach((e) => {
+        let s: Node = e;
         if (s.k == K.decl) {
             let decl: Decl = s;
             if (decl.kind == "def") { }
@@ -11329,8 +11329,8 @@ def global_entries(st: EmitSt, gdecls: [Node], gbase: long) -> [Sym] {
       self_label: -1, end_label: -1, fns: st.fns, bodies: st.bodies,
       btext: st.btext, blabels: st.blabels };
     let out: [Sym] = [];
-    gdecls.foreach((_el, i) => {
-        let d: Decl = gdecls[i];
+    gdecls.foreach((e, i) => {
+        let d: Decl = e;
         let gn = decl_name(d);
         let t: Type = decl_type(d);
         if (t.k == K.tnone) {
@@ -11416,8 +11416,8 @@ def capturing_defs(defs: [FnDef], gnames: [str]) -> [str] {
 def fix_fn_types(st: EmitSt, hdefs: [FnDef], only: [str]) -> [Sym] {
     let out: [Sym] = [];
     let ftab = st.fns.syms;
-    hdefs.foreach((_el, fx) => {
-        let d = hdefs[fx];
+    hdefs.foreach((e, fx) => {
+        let d = e;
         let fe0 = ftab[fx];
         let redo = ret_omitted(d.func);
         if (redo && len(only) > 0) {
@@ -11584,12 +11584,12 @@ def std_units(names: [str], pack: str) -> [Unit] {
         out = std_unpack(pack, names);
     }
     if (len(out) == 0) {
-        names.foreach((_el, i) => {
-            let nm: str = names[i];
+        names.foreach((el) => {
+            let nm: str = el;
             let ext: [Sym] = [];
             if (nm == "exec") {
-                out.foreach((_el, j) => {
-                    let u = out[j];
+                out.foreach((e) => {
+                    let u = e;
                     if (u.name == "prelude") { ext += u.exports; }
                 });
             }
@@ -11624,8 +11624,8 @@ def std_compile(name: str, ext: [Sym]) -> Unit {
     let r = compile_unit(ast, noimports, { files: [path], nuser: 1, file: nolines, line: nolines, mods: [""] }, true, 0, name, std_unit_base(name), xt, []);
     if (!r.ok) {
         let errs = r.errors;
-        errs.foreach((_el, k) => {
-            let e = errs[k];
+        errs.foreach((el) => {
+            let e = el;
             puts("ycc: internal error: " + path + ":" + tostring(e.line) + ":" + tostring(e.col) + ": " + e.msg + "\n");
         });
         exit(1);
@@ -11656,8 +11656,8 @@ def export_name(n: str) -> str {
 def unit_exports(stmts: [Node], hdefs: [FnDef], fns: [Sym]) -> [Sym] {
     let out: [Sym] = [];
     let h = 0;
-    stmts.foreach((_el, i) => {
-        let nm = top_def_name(stmts[i]);
+    stmts.foreach((e) => {
+        let nm = top_def_name(e);
         if (len(nm) > 0) {
             let h0 = h;
             let found = false;
@@ -11733,8 +11733,8 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
         };
         let gdecls = global_decls(ast3.stmts);
         let gnames: [str] = [];
-        gdecls.foreach((_el, gi) => {
-            let gdecl: Decl = gdecls[gi];
+        gdecls.foreach((e) => {
+            let gdecl: Decl = e;
             gnames += decl_name(gdecl);
         });
         // The externs, and the init functions `_start` calls (by their
@@ -11743,8 +11743,8 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
         let xfns: [Sym] = [];
         xfns += ext;
         let xids = fntab_ids(ext);
-        inits.foreach((_el, ii) => {
-            let il: str = inits[ii];
+        inits.foreach((e) => {
+            let il: str = e;
             xfns += { name: il, label: il, typ: { k: K.tfunc, args: [], ret: { k: K.tvoid } } };
             xids += lbl_new(il);
         });
@@ -11863,14 +11863,14 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
         // read globals and functions, so none does.
         let main_stmts: [Node] = [];
         let noargs: [Node] = [];
-        inits.foreach((_el, ci) => {
-            let cl: str = inits[ci];
+        inits.foreach((e) => {
+            let cl: str = e;
             let call: Call = { k: K.call, callee: { k: K.id, v: cl, line: 0, col: 0 }, args: noargs, line: 0, col: 0 };
             main_stmts += call;
         });
         let pstmts: [Node] = ast3.stmts;
-        pstmts.foreach((_el, i) => {
-            let s: Node = pstmts[i];
+        pstmts.foreach((e) => {
+            let s: Node = e;
             if (s.k == K.decl) {
                 let decl: Decl = s;
                 if (decl.kind == "def") {
@@ -11907,8 +11907,8 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
         pr = phase_end(times, "emit_start", pt, ph);
         times = pr.times; pt = pr.t; ph = pr.h;
         let glabels: [str] = [];
-        gl.foreach((_el, gk) => {
-            let ge = gl[gk];
+        gl.foreach((e) => {
+            let ge = e;
             glabels += ge.label;
         });
         // Each body's label and the labels it references: what linking
@@ -11920,8 +11920,8 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
         let ubtext: [[str]] = st.btext;
         let blabels: [str] = st.blabels;
         let brefs: [[str]] = [];
-        ubodies.foreach((_el, bk) => {
-            let ub: [long] = ubodies[bk];
+        ubodies.foreach((e) => {
+            let ub: [long] = e;
             brefs += [ir_refs(ub)];
         });
         let unit: Unit = { name: name, files: origin.files, exports: exports,
@@ -11944,8 +11944,8 @@ def pkg_base(base: long) -> bool {
 def pkg_exports(xs: [Sym], gl: [Sym]) -> [Sym] {
     let all: [Sym] = [];
     all += xs;
-    gl.foreach((_el, i) => {
-        let ge = gl[i];
+    gl.foreach((e) => {
+        let ge = e;
         let gn: str = ge.name;
         let xn = "";
         if (gn[len(gn) - 2:] == "#o") {
@@ -11957,8 +11957,8 @@ def pkg_exports(xs: [Sym], gl: [Sym]) -> [Sym] {
         if (len(xn) > 0) { all += { name: xn, label: ge.label, typ: ge.typ }; }
     });
     let out: [Sym] = [];
-    all.foreach((_el, j) => {
-        let e = all[j];
+    all.foreach((el, j) => {
+        let e = el;
         let later = false;
         let m = j + 1;
         while (!later && m < len(all)) {
@@ -11976,14 +11976,14 @@ def pkg_exports(xs: [Sym], gl: [Sym]) -> [Sym] {
 // earlier one's.
 def unit_dfl(stmts: [Node], origin: Origin) -> [DflCode] {
     let out: [DflCode] = [];
-    stmts.foreach((_el, i) => {
-        let s: Node = stmts[i];
+    stmts.foreach((el) => {
+        let s: Node = el;
         let nm = top_name_in(s, origin);
         // (not an imported module's: see export_name)
         if (len(nm) > 0 && index_of(nm, ".") < 0) {
             let keep: [DflCode] = [];
-            out.foreach((_el, j) => {
-                let d = out[j];
+            out.foreach((e) => {
+                let d = e;
                 if (d.name != nm) { keep += d; }
             });
             let decl: Decl = s;
@@ -12002,8 +12002,8 @@ def dfl_codes(func: Func) -> [str] {
     let dv: [Node] = func.defs;
     let out: [str] = [];
     let any = false;
-    dv.foreach((_el, i) => {
-        let d = dv[i];
+    dv.foreach((e) => {
+        let d = e;
         let dk: long = d.k;
         if (dk != K.void) { any = true; }
         out += lit_code(d);
@@ -12101,8 +12101,8 @@ def link_locs(b: str, off: long) -> str {
 // builds of a 40,000-entry set at load factor 1 cost 4% of a self-compile.
 def rodata_intern(pieces: [str], allrod: [[str]], refs: [str]) -> { pieces: [str], dup_old: [str], dup_new: [str] } {
     let m = asm.labmap_new(len(refs) * 2 + 64);
-    refs.foreach((_el, ri) => {
-        let r = asm.labmap_put(m, refs[ri], 1, 0);
+    refs.foreach((e) => {
+        let r = asm.labmap_put(m, e, 1, 0);
         m = r.map;
     });
     let nall = len(allrod);
@@ -12255,8 +12255,8 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
     for ou in len(std)..nu + 1 {
         let olab: [str] = [];
         if (ou < nu) { let du = units[ou]; olab = du.labels; } else { olab = prog.labels; };
-        olab.foreach((_el, pi) => {
-            let pl: str = olab[pi];
+        olab.foreach((e) => {
+            let pl: str = e;
             if (pl[:2] == "y_") { plabels += pl; }
         });
     };
@@ -12279,8 +12279,8 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
         let ubl = u.blob;
         let ul = u.labels;
         let ur = u.refs;
-        ul.foreach((_el, b) => {
-            let lb: str = ul[b];
+        ul.foreach((e, b) => {
+            let lb: str = e;
             let drop = false;
             if (j < len(std) && len(plabels) > 0) {
                 if (lb[:2] == "y_") { drop = name_in(plabels, lb); }
@@ -12303,8 +12303,8 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
     let plab = prog.labels;
     let pbodies = prog.bodies;
     let prefs = prog.refs;
-    pbodies.foreach((_el, pb2) => {
-        all += [pbodies[pb2]];
+    pbodies.foreach((e, pb2) => {
+        all += [e];
         allblob += "";
         alltxt += [prog.btext[pb2]];
         labels += plab[pb2];
@@ -12349,8 +12349,8 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
     // its reachability set.
     let const_refs: [str] = [];
     const_refs += ps.refs;
-    body_refs.foreach((_el, ci) => {
-        const_refs += [body_refs[ci]];
+    body_refs.foreach((e) => {
+        const_refs += [e];
     });
     // The rodata first, because it decides the labels the bodies use: one
     // block per distinct literal text, the losers recorded.
@@ -12370,10 +12370,10 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
     // before the program existed -- and the spliced units this is for
     // (std/math.y and friends) are the program's own.
     let reads: [str] = [];
-    all.foreach((_el, ri) => {
+    all.foreach((e, ri) => {
         if (keep[ri]) {
-            if (len(all[ri]) > 0) {
-                reads = cell_reads(all[ri], reads)
+            if (len(e) > 0) {
+                reads = cell_reads(e, reads)
             } else {
                 // A body from the std pack carries no items: its REFS are all
                 // that can be seen, and they include the stores, so a packed
@@ -12404,8 +12404,8 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
         // undefined label at assembly, or worse). What this pass is for is the
         // INSTRUCTIONS, and those are gone.
         let live: [str] = [];
-        gls.foreach((_el, lv) => {
-            live += gls[lv];
+        gls.foreach((e) => {
+            live += e;
         });
         gls = live;
     };
@@ -12417,8 +12417,8 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
     // loser label -> index into dup_new, so a body's refs can be relabelled
     // in one probe each.
     let dupmap = asm.labmap_new(len(dup_old) * 2 + 64);
-    dup_old.foreach((_el, di) => {
-        let dr = asm.labmap_put(dupmap, dup_old[di], 1, di);
+    dup_old.foreach((e, di) => {
+        let dr = asm.labmap_put(dupmap, e, 1, di);
         dupmap = dr.map;
     });
     // Piece-list + single join: `asm = asm + piece` per iteration is
@@ -12436,9 +12436,9 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
     // The bodies, kept, as parts: their items, with the `.loc` markers moved
     // to the unit's place in the program's file table. Every body is items
     // now -- a unit read from a pack came with them (pack_body).
-    all.foreach((_el, ab) => {
+    all.foreach((e, ab) => {
         if (keep[ab]) {
-            let kb: [long] = all[ab];
+            let kb: [long] = e;
             if (len(kb) == 0) { kb = unpack_body(allblob[ab]); };
             let kf = fno[ab];
             if (len(dup_old) > 0) {
@@ -12470,8 +12470,8 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
             for wj in 0..len(wl) { gpieces += wl[wj]; };
         };
         gpieces += heap_text;
-        gls.foreach((_el, gk) => {
-            gpieces += arch.arch_global_cell(gls[gk]);
+        gls.foreach((e) => {
+            gpieces += arch.arch_global_cell(e);
         });
         parts += [part_text(join(gpieces, ""))];
     }
@@ -12482,8 +12482,8 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit) -> [LinkPart] {
 // text they replace (ir_render_all), the text parts as they are.
 def link_text(parts: [LinkPart]) -> str {
     let pieces: [str] = [];
-    parts.foreach((_el, i) => {
-        let p = parts[i];
+    parts.foreach((e) => {
+        let p = e;
         if (len(p.ir) > 0) {
             // the render has no newline of its own, so the line is closed here
             pieces += insn.ir_render_all(p.ir, p.txt, p.loc, p.fno);
@@ -12529,8 +12529,8 @@ def pack_put(out: [str], s: str) -> [str] {
 
 def pack_strs(out: [str], xs: [str]) -> [str] {
     out = pack_put(out, tostring(len(xs)));
-    xs.foreach((_el, i) => {
-        out = pack_put(out, xs[i]);
+    xs.foreach((e) => {
+        out = pack_put(out, e);
     });
     out
 };
@@ -12539,8 +12539,8 @@ def pack_strs(out: [str], xs: [str]) -> [str] {
 // own items, so a reader walks one body's lines without another's.
 def pack_strss(out: [str], xss: [[str]]) -> [str] {
     out = pack_put(out, tostring(len(xss)));
-    xss.foreach((_el, i) => {
-        out = pack_strs(out, xss[i]);
+    xss.foreach((e) => {
+        out = pack_strs(out, e);
     });
     out
 };
@@ -12854,8 +12854,8 @@ def tcode_go(out: [str], t: Type) -> [str] {
 
 def tcode_list(out: [str], ts: [Type]) -> [str] {
     out = pack_put(out, tostring(len(ts)));
-    ts.foreach((_el, i) => {
-        out = tcode_go(out, ts[i]);
+    ts.foreach((e) => {
+        out = tcode_go(out, e);
     });
     out
 };
@@ -12997,8 +12997,8 @@ def std_pack(units: [Unit]) -> str {
     let out: [str] = [];
     out += pack_version();
     out = pack_put(out, tostring(len(units)));
-    units.foreach((_el, i) => {
-        let u = units[i];
+    units.foreach((e) => {
+        let u = e;
         out = pack_put(out, u.name);
         out = pack_put(out, pack_unit_fields(u));
     });
@@ -13113,10 +13113,10 @@ def std_unpack(pack: str, names: [str]) -> [Unit] {
             if (name_in(names, nm)) { got += unit_read(cur, nm, std_unit_bound(nm)); }
             cur.p = at + ul;
         };
-        names.foreach((_el, k) => {
-            let want: str = names[k];
-            got.foreach((_el, a) => {
-                let u = got[a];
+        names.foreach((el) => {
+            let want: str = el;
+            got.foreach((e) => {
+                let u = e;
                 if (u.name == want) { out += u; }
             });
         });
@@ -13225,8 +13225,8 @@ def unit_externs(std: [Unit], snames: [str], deps: [Unit], pkgs: [str]) -> Exter
                 let d = ds[j];
                 let dv = d.vals;
                 let vals: [Node] = [];
-                dv.foreach((_el, m) => {
-                    vals += lit_decode(dv[m]);
+                dv.foreach((e) => {
+                    vals += lit_decode(e);
                 });
                 dfl += { name: u.name + "." + d.name, vals: vals };
                 j++;
@@ -13375,12 +13375,12 @@ def gen_maplit(st: EmitSt, node: RecLit) -> EmitSt {
     let mvals: [Node] = node.vals;
     let keys: [str] = [];
     let vals: [Node] = [];
-    mkeys.foreach((_el, mi) => {
-        let mk: str = mkeys[mi];
+    mkeys.foreach((el, mi) => {
+        let mk: str = el;
         let mv = mvals[mi];
         let found = false;
-        keys.foreach((_el, fi) => {
-            let kk: str = keys[fi];
+        keys.foreach((e, fi) => {
+            let kk: str = e;
             if (kk == mk) {
                 vals[fi] = mv;
                 found = true;
@@ -13394,8 +13394,8 @@ def gen_maplit(st: EmitSt, node: RecLit) -> EmitSt {
     });
     let knodes: [Node] = [];
     let bnodes: [Node] = [];
-    keys.foreach((_el, ki) => {
-        let ks: str = keys[ki];
+    keys.foreach((e) => {
+        let ks: str = e;
         knodes += n_str(ks, ln, cl);
         bnodes += n_id("none", ln, cl);
     });
