@@ -1647,6 +1647,39 @@ ypi_nl:
     pop %rbx
     pop %rbp
     ret
+# y_print_lit(ptr, len): write len bytes at ptr, then a newline -- what
+# print("literal") reaches, so a program that only prints literals links this
+# instead of the string helpers (y_put_hstr/y_print_hstr). Args on the stack,
+# left to right: the last pushed is lowest, so 16(%rbp) is the length and
+# 24(%rbp) the pointer.
+y_print_lit:
+    push %rbp
+    mov %rsp, %rbp
+    push %rbx
+    sub $8, %rsp
+    mov 24(%rbp), %rbx
+    mov 16(%rbp), %rsi
+    mov $1, %rax
+    push %rax
+    push %rbx
+    push %rsi
+    call y_os_write
+    add $24, %rsp
+    movb $10, -16(%rbp)
+    lea -16(%rbp), %rsi
+    mov $1, %rax
+    push %rax
+    push %rsi
+    mov $1, %rax
+    push %rax
+    call y_os_write
+    add $24, %rsp
+    xor %eax, %eax
+    add $8, %rsp
+    pop %rbx
+    pop %rbp
+    ret
+
 # print(f) / tostring(f): the float's IEEE-754 bits, as y_fmt_f takes
 # them, formatted at the 6 places this has always printed. It USED to
 # be the double arithmetic below -- int part by cvttsd2si, fraction

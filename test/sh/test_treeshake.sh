@@ -115,6 +115,21 @@ for cc in "$CYCC" "$YREF"; do
     else
         pass "treeshake [$tag] hello.y carries no allocator and no collector"
     fi
+    # print("literal") writes the bytes itself (y_print_lit), so the string
+    # helpers a runtime value needs must not be linked for a literal-only
+    # program -- and must still be there when the value is not a literal.
+    if listing "$HELLO" | grep -qE 'y_put_hstr|y_print_hstr'; then
+        fail "treeshake [$tag] hello.y links the string helpers for a literal" \
+             "$(listing "$HELLO" | grep -nE 'y_put_hstr|y_print_hstr' | head -3 | tr '\n' ' ')"
+    else
+        pass "treeshake [$tag] hello.y prints a literal without the string helpers"
+    fi
+    PRINTV="$ROOT/test/treeshake/print_var.y"
+    if listing "$PRINTV" | grep -q 'y_print_hstr'; then
+        pass "treeshake [$tag] print(variable) still links the string helper"
+    else
+        fail "treeshake [$tag] print(variable) lost the string helper"
+    fi
 
     # 4b. --gc. A program that allocates once, outside any loop, must not link
     #     the collector under the default (auto); --gc=always is the escape

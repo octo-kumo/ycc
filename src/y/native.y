@@ -6655,8 +6655,23 @@ def gen_print_scalar(st: EmitSt, arg: Node, t: Type) -> EmitSt {
         st = gen_helper1(st, "y_bigint_print");
         emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0)
     } else if (t.k == K.tstr) {
-        st = gen_helper1(st, "y_print_hstr");
-        emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0)
+        if (arg.k == K.str) {
+            // print("literal"): one helper call writes the literal's own bytes
+            // and the newline, so a program that only prints literals links
+            // y_print_lit and not the string helpers. gen(st, arg) already put
+            // the length HEADER in %rax; its bytes start eight bytes in.
+            let lit: Leaf = arg;
+            st = emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RAX, 64, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_MOV_I_R, len(lit.v), insn.R_RAX, 64, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_CALL_L, lbl_new("y_print_lit"), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_ADD_I_R, 16, insn.R_RSP, 64, 0, 0, 0, 0);
+            emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0)
+        } else {
+            st = gen_helper1(st, "y_print_hstr");
+            emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0)
+        }
     } else if (t.k == K.tfloat) {
         st = gen_helper1(st, "y_print_float");
         emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0)

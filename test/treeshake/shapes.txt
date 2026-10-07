@@ -9,7 +9,7 @@
 # fell from 3120 to 440.
 # forloop/foreach are the loop-parity pair. alloc_once.y allocates once, outside
 # any loop, so --gc=auto leaves the collector out of it (1312 B).
-hello.y 390
+hello.y 381
 minimal.y 440
 forloop.y 3497
 foreach.y 3384

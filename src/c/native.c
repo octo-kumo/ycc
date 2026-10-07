@@ -8063,6 +8063,21 @@ Yv *gen_print_scalar(Yv *st, Yv *arg, Yv *t) {
         st = gen_helper1(st, ys("y_bigint_print"));
         return emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
     } else if (yv_l(yr_get(t, "k")) == K_tstr) {
+        if (yv_l(yr_get(arg, "k")) == K_str) {
+            /* print("literal"): one helper call writes the literal's own bytes
+             * and the newline, so a program that only prints literals links
+             * y_print_lit and not the string helpers. gen(st, arg) already put
+             * the length HEADER in %rax; its bytes start eight bytes in. */
+            st = emit_insn(st, F_ADD_I_R, 8, R_RAX, 64, 0, 0, 0, 0);
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_MOV_I_R, yv_len(yr_get(arg, "v")), R_RAX, 64,
+                           0, 0, 0, 0);
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_print_lit"))),
+                           0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_ADD_I_R, 16, R_RSP, 64, 0, 0, 0, 0);
+            return emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
+        }
         st = gen_helper1(st, ys("y_print_hstr"));
         return emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
     } else if (yv_l(yr_get(t, "k")) == K_tfloat) {
