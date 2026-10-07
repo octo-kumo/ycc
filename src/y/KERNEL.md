@@ -1577,3 +1577,35 @@ yfs_u32(e + 4) in the match arm.
 
 The probe is the valuable artifact here: it prints every input AND the result, so
 the next attempt starts from a known-good image instead of from a guess.
+
+### Round 92: three lines left, and the module is not losing state
+
+The discriminator: the SAME lookup logic, written inline in the fixture, against
+the same image, in the same run as the module's call.
+
+    inline=2 mod=-1 base=1
+
+* `inline=2` -- the logic is right: entry count, entry block, name length, the
+  two name bytes and the inode field, masked and strided exactly as the module
+  does, produce inode 2.
+* `base=1` -- yfs_size(1) (the root inode's entry count) reads the right memory,
+  which needs yfs_phys AND yfs_block_size to be set and RETAINED across calls.
+  So module-level state is NOT the bug, and yfs_ok is presumably set too.
+* `mod=-1` -- and yfs_lookup still fails.
+
+That leaves exactly three lines inside yfs_lookup/yfs_name_at that the outside
+cannot see:
+
+  1. `if (yfs_ok == 0) { return 0 - 1; };`  -- the only early return that does
+     not depend on the image, and the only difference between yfs_size (works)
+     and yfs_lookup (fails) that is visible from outside;
+  2. `if (nl == len(name) && ...)`  -- len() applied to a STRING PARAMETER (the
+     probe only ever measured len("hi") on a literal);
+  3. `yfs_name_at`'s `kernel.peek8(addr + i) != name[i]`  -- indexing a string
+     PARAMETER (again, only a literal was measured).
+
+The next step is instrumenting the module itself, because external probes cannot
+see inside it: a temporary yfs_debug() returning yfs_ok, and a print inside
+yfs_name_at's loop showing i, the byte and the compared character.  That is a
+five-minute change and it ends the guessing; the alternative -- porting these
+three lines into the fixture one at a time -- costs three round trips.
