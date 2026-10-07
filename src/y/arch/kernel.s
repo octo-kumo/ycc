@@ -429,15 +429,9 @@ y_syscall_entry:
     mov $35, %rax
     push %rax
     push %rcx
-    push %r15
-    push %r14
-    push %r13
-    push %r12
-    push %rbp
-    push %rbx
     push %rcx
     push %r11
-    mov 104(%rsp), %rax
+    mov 56(%rsp), %rax
     push %rax
     push %rdi
     push %rsi
@@ -462,12 +456,6 @@ y_se_same:
     pop %rax
     pop %r11
     pop %rcx
-    pop %rbx
-    pop %rbp
-    pop %r12
-    pop %r13
-    pop %r14
-    pop %r15
     iretq
 
 #=== add: y_syscall_entry_addr ===
@@ -510,12 +498,6 @@ y_enter_frame:
     pop %rax
     pop %r11
     pop %rcx
-    pop %rbx
-    pop %rbp
-    pop %r12
-    pop %r13
-    pop %r14
-    pop %r15
     iretq
 
 #=== add: y_enter_user ===
