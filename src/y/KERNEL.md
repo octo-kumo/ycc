@@ -1973,3 +1973,33 @@ total and the syscall is compile-checked (a kernel program that imports the kern
 builds clean) but not yet exercised.  The fixture that runs `ls` from ring 3 --
 openat("/"), getdents64, then decoding the records -- is the next step, and it is
 also the first thing M4's command set needs.
+
+### Round 118: a file over one block is truncated -- the WRITER is at fault
+
+The wc-style fixture (read a whole file in a 512-byte loop until read answers 0)
+gave the sharpest result of this run so far:
+
+    fs ok=true ino=2 size=4900
+    wc /prog bytes=4096
+
+The loop stopped after exactly ONE BLOCK, and 4096 is the block size.  The kernel's
+reader is not at fault: t014_yfsblocks already pins that yfs_block_of walks direct
+slots (its 300-byte file spans two 256-byte blocks).  The IMAGE is at fault -- it
+records only direct[0], so a file longer than one block reads as one block and then
+stops.  Two writers have that bug:
+
+ * os/tools/mkfs.y allocates each file's data contiguously but writes only
+   direct[0] (and never the indirect block), so any file over one block is
+   truncated in every image it builds -- and nothing noticed until now because
+   every program the fixtures use is either small or read only a few bytes;
+ * the drivers' hand-built images do the same (u007_fsexec's driver writes one
+   direct slot), which is why u011_wc saw 4096 of 4900 bytes.
+
+So the fix is in the writers, not the reader: mkfs must write direct[i] for each
+block a file occupies and use the indirect block past twelve, and the drivers that
+build images by hand must do the same or use mkfs's logic.  Worth noting as well
+that this ALSO explains the round-111 two-file attempt, where the second file's
+data and the first file's tail competed for the same single recorded block.
+
+The fixture is parked (not committed): its expected would have pinned a truncated
+read.  test/kernel is 55 passed, 0 failed / 55 total.
