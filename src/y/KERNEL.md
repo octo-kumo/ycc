@@ -1665,3 +1665,30 @@ to the driver, and the shape matches this branch's first bug (exit_group returni
 somewhere unexpected).  Both fixtures keep transcript checks, which is what
 protects their paths meanwhile; the exit path is the next thing to fix, and it
 should be fixed for BOTH cases at once.
+
+### Round 99: the exit path, read rather than guessed -- two defects
+
+Reading `task_start` and `y_sched_pick` settled it, after several rounds of
+inferring:
+
+1. `y_sched_pick` RETURNS 0 when no task is runnable (`if (found < 0) {
+   need_resched = false; return 0; }`) and BOTH switch sites do `mov %rax, %rsp`.
+   A zero stack is a triple fault -- qemu's status 1, exactly what u005_ipc and
+   u007_fsexec have shown all along.  After the last user program exits there is
+   nothing to resume, so this is the path every one of those runs took.
+2. `task_start(i)` calls `y_enter_frame(tasks[i].rsp)` with no save of the
+   caller's context, so task 0 -- the boot context that `sched_init` registered
+   and that the driver's `kernel.kexit(9)` line lives in -- is never resumable:
+   its saved rsp is a plain kernel stack, not a canonical frame, so the pops and
+   iretq would land anywhere.
+
+Fixed here: (1).  The pick now idles when nothing is runnable, which is what a
+scheduler should do and turns a triple fault into an honest idle -- the harness
+kills the machine on its timeout instead, and the transcript checks (what both
+fixtures assert) are unaffected.  (2) is the real reason a driver never reaches
+its kexit after starting a task, and it needs a design decision rather than a line
+change: either give the boot context a canonical frame at sched_init so the
+switch can resume it, or have task_start save a resumable kernel context and
+switch through the scheduler like everything else.  Until then, no fixture whose
+driver calls task_start can assert an .exit -- which is why u005_ipc and
+u007_fsexec have none, and that is a property of the design, not an oversight.
