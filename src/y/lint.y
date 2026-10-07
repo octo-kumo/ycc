@@ -2303,10 +2303,15 @@ def fx_void(ln: long, lines: [str]) -> [str] {
         let ri = fx_find(code, "return", 0);
         if (ri >= 0) {
             let st = fx_strip(code);
+            // a `return` not at the start of its line is one we cannot
+            // rewrite here (an if-arm, say), so leave the whole def alone
             if (!fx_word(st, 0, "return")) { return lines; };
             if (st != "return;") {
                 if (!fx_endswith(st, ";")) { return lines; };
-                lines[k - 1] = code[:ri] + "return;";
+                let ex = fx_strip(code[ri + 6:]);
+                if (fx_endswith(ex, ";")) { ex = fx_strip(ex[:len(ex) - 1]); };
+                if (ex == "") { lines[k - 1] = code[:ri] + "return;"; }
+                else { lines[k - 1] = code[:ri] + ex + "; return;"; };
             };
         };
     };
