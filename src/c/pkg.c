@@ -2,6 +2,9 @@
 #include "ylong.h"
 #include "pkg.h"
 #include "tags.h"
+/* For nameix_new/nameix_put/nameix_get, the name index the dependency
+ * graph looks names up in (src/y/pkg.y). */
+#include "parser.h"
 
 #include <fcntl.h>
 #include <stdarg.h>
@@ -51,7 +54,6 @@ static Yv *pk_src(PkDep d, Yv *fdir);
 static Yv *pk_dep_names(Yv *ds);
 static Yv *pk_roots(Yv *dir, Yv *roots);
 static ylong pk_visit(PkSt st, PkDep d0, Yv *by, Yv *fdir0);
-static Yv *pk_decl_name(PkDecl e);
 static PkGit pk_git_dir(PkSt st, PkDep d);
 static Yv *pk_q(Yv *s);
 static Yv *pk_env(void);
@@ -765,8 +767,9 @@ Yv *pk_load(Yv *dir) {
     PkMan m = pk_manifest(dir);
     Yv *decls = yav(0);
     Yv *nodes = yav(0);
-    PkSt st = yr(7, "root", yr_get(m, "name"), "rdir", dir,
-                 "decls", decls, "done", pk_nostrs(),
+    PkSt st = yr(8, "root", yr_get(m, "name"), "rdir", dir,
+                 "decls", decls, "didx", nameix_new(yv_len(decls) * 4 + 16),
+                 "done", nameix_new(64),
                  "stack", yav(1, yr_get(m, "name")), "nodes", nodes,
                  "lock", pk_lock_read(dir));
     Yv *ds = yr_get(m, "deps");
@@ -777,6 +780,8 @@ Yv *pk_load(Yv *dir) {
                          "src", pk_src(d, dir), "by", yr_get(m, "name"),
                          "dep", d, "fdir", dir);
         (void)ya_push(yr_get(st, "decls"), decl);
+        nameix_put(yr_get(st, "didx"), yr_get(d, "name"),
+                   yv_len(yr_get(st, "decls")) - 1);
         i = i + 1;
     }
     i = 0;
@@ -816,12 +821,8 @@ static ylong pk_visit(PkSt st, PkDep d0, Yv *by, Yv *fdir0) {
     Yv *fdir = fdir0;
     Yv *src = pk_src(d, fdir);
     Yv *ds = yr_get(st, "decls");
-    ylong k = 0;
-    while (k < yv_len(ds) &&
-           !ys_eq(pk_decl_name(ya_get(ds, k)), yr_get(d, "name"))) {
-        k = k + 1;
-    }
-    if (k < yv_len(ds)) {
+    ylong k = nameix_get(yr_get(st, "didx"), yr_get(d, "name"));
+    if (k >= 0) {
         PkDecl e = ya_get(ds, k);
         if (!ys_eq(yr_get(e, "src"), src)) {
             if (ys_eq(yr_get(e, "by"), yr_get(st, "root"))) {
@@ -840,18 +841,25 @@ static ylong pk_visit(PkSt st, PkDep d0, Yv *by, Yv *fdir0) {
         }
         ;
     } else {
+        /* The new decl's index is the length BEFORE the push. Reading it
+         * after would be one too many, and the next lookup would index past
+         * the end. */
+        ylong at = yv_len(ds);
         PkDecl decl = yr(5, "name", yr_get(d, "name"), "src", src,
                          "by", by, "dep", d, "fdir", fdir);
         (void)ya_push(yr_get(st, "decls"), decl);
+        nameix_put(yr_get(st, "didx"), yr_get(d, "name"), at);
         ;
     }
+    /* `stack` is the chain being visited, so its scan IS the cycle check, and
+     * its length is the depth -- small, and it is what the message prints. */
     if (pk_has(yr_get(st, "stack"), yr_get(d, "name"))) {
         (void)pk_die(pk_cat(
             3, ys("dependency cycle: "),
             ys_join(yr_get(st, "stack"), ys(" -> ")),
             ys_cat(ys(" -> "), yr_get(d, "name"))));
         ;
-    } else if (!pk_has(yr_get(st, "done"), yr_get(d, "name"))) {
+    } else if (nameix_get(yr_get(st, "done"), yr_get(d, "name")) < 0) {
         Yv *at = yr(2, "dir", ys(""), "commit", ys(""));
         if (yv_len(yr_get(d, "git")) > 0) {
             at = pk_git_dir(st, d);
@@ -884,7 +892,7 @@ static ylong pk_visit(PkSt st, PkDep d0, Yv *by, Yv *fdir0) {
         }
         Yv *stk = yr_get(st, "stack");
         (void)yr_set(st, "stack", ya_slice(stk, 0, yv_len(stk) - 1));
-        (void)ya_push(yr_get(st, "done"), yr_get(d, "name"));
+        nameix_put(yr_get(st, "done"), yr_get(d, "name"), 1);
         PkNode node = yr(8, "name", yr_get(m, "name"), "dir",
                          yr_get(at, "dir"), "lib",
                          pk_join(yr_get(at, "dir"), yr_get(m, "lib")),
@@ -896,10 +904,6 @@ static ylong pk_visit(PkSt st, PkDep d0, Yv *by, Yv *fdir0) {
         ;
     }
     return 0;
-}
-
-static Yv *pk_decl_name(PkDecl e) {
-    return yr_get(e, "name");
 }
 
 /* ── git dependencies ────────────────────────────────────────────────── */
