@@ -1176,3 +1176,25 @@ So the shake fix -- the guarded `ir_drop_inits` for kernel targets -- is
 validated by the whole gate, not just by test/kernel: the port gate at 151/151
 (both halves) says the two engines still agree byte for byte on the entire
 corpus, and the ratchets say the tree shake's costs did not move.
+
+### Round 75: the ycc suite's one failure, named
+
+Round 74's log grep missed the suite's summary line; run directly, `test_ycc.sh`
+is **56 passed, 1 failed / 57**, and the failure is one case:
+
+    FAIL ysh eval compiles and runs through ycc
+      got: 1:5: error: undefined function 'exec'
+    PASS ysh eval compiles with --no-exec
+
+So `exec` (the builtin std/exec.y provides) is missing for a plain compile while
+the --no-exec variant passes.  That is NOT the shake fix: the guard is
+`target_is_kernel()`-scoped, hosted compiles are untouched, and the port gate at
+151/151 in both halves -- which recompiles the whole corpus with both engines and
+compares bytes -- says hosted codegen did not move.  It is either pre-existing on
+this branch or something the upstream merges brought; the way to tell is the
+control that has settled every such question here: build and run the same suite
+against the MAIN tree's compiler.
+
+Everything else in the full gate is green (port 151/151, pe-port 151/151, native
+229/229, kernel 33/33, treeshake 54/54, std-suites 5/5), with lsp and coverage
+the documented pre-existing failures.
