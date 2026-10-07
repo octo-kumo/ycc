@@ -1211,6 +1211,7 @@ def lint_short_pair(st: LintSt, stmts: [Node], i: long) -> long {
         lint_short_index_loop(st, stmts, i);
         lint_short_flag(st, stmts, i);
     } else if (d.k == K.decl && n.k == K.kw_if) {
+        lint_short_none(st, stmts, i);
         let decl: Decl = d;
         let iff: If = n;
         if (decl.kind == "let" && decl.typ.k == K.tnone && lint_pure(decl.v) && !iff.has_else && iff.cond.k == K.id) {
@@ -1283,6 +1284,7 @@ def lint_find(node: Node, name: str, mask: long) -> bool {
         if (mx.arr.k == K.id) { let ma: Leaf = mx.arr; if (ma.v == name) { return true; }; };
     };
     if (mask & 128 != 0 && lint_stores_index(node, name)) { return true; };
+    if (mask & 16 != 0 && lint_unwraps(node, name)) { return true; };
     if (k == K.id) {
         if (name == "" || mask & 8 != 0 || mask & 64 != 0 || mask & 128 != 0) { return false; };
         let l: Leaf = node;
@@ -1295,6 +1297,8 @@ def lint_find(node: Node, name: str, mask: long) -> bool {
         lint_find(u.e, name, mask)
     } else if (k == K.call) {
         let c: Call = node;
+        // `x!` is `unwrap(x)`: with mask 32 the argument is not a bare read
+        if (mask & 32 != 0 && lint_unwraps(node, name)) { return false; };
         lint_find(c.callee, name, mask) || lint_find_list(c.args, name, mask)
     } else if (k == K.dot) {
         let d: Dot = node;
@@ -1376,6 +1380,18 @@ def lint_find_list(nodes: [Node], name: str, mask: long) -> bool {
         if (lint_find(nodes[i], name, mask)) { return true; };
     };
     false
+};
+
+// `x!` is `unwrap(x)`.
+def lint_unwraps(node: Node, name: str) -> bool {
+    if (node.k != K.call) { return false; };
+    let c: Call = node;
+    if (c.callee.k != K.id || len(c.args) != 1) { return false; };
+    let cid: Leaf = c.callee;
+    if (cid.v != "unwrap") { return false; };
+    if (c.args[0].k != K.id) { return false; };
+    let a: Leaf = c.args[0];
+    a.v == name
 };
 
 // Whether this node stores through `name[...]` (a written element). The
@@ -1476,6 +1492,44 @@ def lint_len_of(node: Node) -> str {
 };
 
 // Rules 2.8/3.1: an index loop that is a `for` range or an array method.
+// Rule 2.11: `let x = E; if (x == none) { A } else { B(x!) }` is
+// `if let some(x) = E { B } else { A }`.
+def lint_short_none(st: LintSt, stmts: [Node], i: long) -> long {
+    let d = stmts[i];
+    let n = stmts[i + 1];
+    let decl: Decl = d;
+    if (decl.kind != "let" || decl.typ.k != K.tnone) { return 0; };
+    let iff: If = n;
+    if (!iff.has_else) { return 0; };
+    let x = lint_none_test(iff.cond);
+    if (x == "" || x != decl.name) { return 0; };
+    let tw = lint_find(iff.then, x, 16);
+    let ew = lint_find(iff.els, x, 16);
+    if (tw == ew) { return 0; };
+    let some_arm = iff.then;
+    let none_arm = iff.els;
+    if (ew) { some_arm = iff.els; none_arm = iff.then; };
+    if (lint_find(some_arm, x, 32)) { return 0; };
+    if (lint_find(none_arm, x, 0)) { return 0; };
+    if (lint_find_from(stmts, i + 2, x, 0)) { return 0; };
+    lint_warn_at(st, "'" + lint_disp(x) + "' is tested for 'none' and unwrapped; write 'if let some(" + lint_disp(x) + ") = <expr> { ... } else { ... }'", d);
+    0
+};
+
+// The name compared against `none`, or "".
+def lint_none_test(cond: Node) -> str {
+    if (cond.k != K.bin) { return ""; };
+    let b: Bin = cond;
+    if (b.op != "==" && b.op != "!=") { return ""; };
+    if (b.l.k == K.id && b.r.k == K.id) {
+        let r: Leaf = b.r;
+        if (r.v == "none") { let l: Leaf = b.l; return l.v; };
+        let l2: Leaf = b.l;
+        if (l2.v == "none") { let r2: Leaf = b.r; return r2.v; };
+    };
+    ""
+};
+
 // Rule 2.5: a bool local that exists only to stop the loop.
 //   `let f = true; while (f) { ...; f = false; ... };`
 // is `while (true) { ...; break; ... };`. The flag must be written inside
