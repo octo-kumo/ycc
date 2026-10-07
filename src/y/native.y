@@ -2751,7 +2751,23 @@ def infer_go(st: EmitSt, node: Node) -> Type {
         if (op in ["+", "-", "*", "/", "%", "::"]) {
             let bl = infer(st, bin.l);
             let br = infer(st, bin.r);
-            if (op == "+" && (bl.k == K.tarr || bl.k == K.tarrfix)) {
+            let blu = unfold(bl);
+            let bru = unfold(br);
+            if ((op == "+" || op == "-") && (blu.k == K.tptr || bru.k == K.tptr)) {
+                // Pointer arithmetic: p +/- long keeps the pointer type,
+                // p - q is an element count (long). Invalid combinations
+                // are already checker errors; infer_go still has to pick
+                // some type for the emitter's width decisions.
+                if (op == "+" && blu.k == K.tptr && (bru.k == K.tlong || bru.k == K.tbyte)) {
+                    blu
+                } else if (op == "+" && bru.k == K.tptr && (blu.k == K.tlong || blu.k == K.tbyte)) {
+                    bru
+                } else if (op == "-" && blu.k == K.tptr && (bru.k == K.tlong || bru.k == K.tbyte)) {
+                    blu
+                } else {
+                    normtype({ k: K.tlong })
+                }
+            } else if (op == "+" && (bl.k == K.tarr || bl.k == K.tarrfix)) {
                 // array `+` builds a NEW heap array (types.y
                 // typeof_arith_arr) -- the element type survives, except
                 // that `[T] + [[T]]` prepends the left one as an element.
@@ -5156,6 +5172,78 @@ def gen_eq_arr_deep(st: EmitSt, et: Type) -> EmitSt {
     emit_label(st, ldone.label)
 };
 
+// Pointer arithmetic emission (types.y is the law). A pointer moves by
+// whole elements: `p + n` scales n by the pointee width, and `p - q`
+// subtracts the addresses and divides by that width. byte pointers scale by
+// one; every other pointee is an 8-byte slot, which is elem_bytes' rule.
+def ptr_math_kind(op: str, lt: Type, rt: Type) -> str {
+    let lu = unfold(lt);
+    let ru = unfold(rt);
+    if (op == "+") {
+        if (lu.k == K.tptr && (ru.k == K.tlong || ru.k == K.tbyte)) { "ptr_int" }
+        else if (ru.k == K.tptr && (lu.k == K.tlong || lu.k == K.tbyte)) { "int_ptr" }
+        else { "" }
+    } else if (op == "-") {
+        if (lu.k == K.tptr && (ru.k == K.tlong || ru.k == K.tbyte)) { "ptr_int" }
+        else if (lu.k == K.tptr && ru.k == K.tptr) { "ptr_ptr" }
+        else { "" }
+    } else { "" }
+};
+
+def ptr_elem_width(t: Type) -> long {
+    let p: TPtr = unfold(t);
+    elem_bytes(p.to)
+};
+
+def ptr_scale_rax(st: EmitSt, esz: long) -> EmitSt {
+    if (esz == 8) {
+        emit_insn(st, insn.F_SHL_I_R, 3, insn.R_RAX, 64, 0, 0, 0, 0)
+    } else {
+        st
+    }
+};
+
+def gen_ptr_arith(st: EmitSt, node: Bin, lt: Type, rt: Type) -> EmitSt {
+    let op = node.op;
+    let kind = ptr_math_kind(op, lt, rt);
+    if (kind == "ptr_int") {
+        let esz = ptr_elem_width(lt);
+        st = gen(st, node.l);
+        st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+        st = gen(st, node.r);
+        st = ptr_scale_rax(st, esz);
+        st = emit_insn(st, insn.F_MOV_R_R, insn.R_RAX, 64, insn.R_RCX, 64, 0, 0, 0);
+        st = emit_insn(st, insn.F_POP_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+        if (op == "+") {
+            emit_insn(st, insn.F_ADD_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0)
+        } else {
+            emit_insn(st, insn.F_SUB_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0)
+        }
+    } else if (kind == "int_ptr") {
+        let esz = ptr_elem_width(rt);
+        st = gen(st, node.l);
+        st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+        st = gen(st, node.r);
+        st = emit_insn(st, insn.F_MOV_R_R, insn.R_RAX, 64, insn.R_RCX, 64, 0, 0, 0);
+        st = emit_insn(st, insn.F_POP_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+        st = ptr_scale_rax(st, esz);
+        emit_insn(st, insn.F_ADD_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0)
+    } else {
+        let esz = ptr_elem_width(lt);
+        st = gen(st, node.l);
+        st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+        st = gen(st, node.r);
+        st = emit_insn(st, insn.F_MOV_R_R, insn.R_RAX, 64, insn.R_RCX, 64, 0, 0, 0);
+        st = emit_insn(st, insn.F_POP_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_SUB_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0);
+        if (esz == 8) {
+            emit_insn(st, insn.F_SAR_I_R, 3, insn.R_RAX, 64, 0, 0, 0, 0)
+        } else {
+            st
+        }
+    }
+};
+
 def gen_bin_rest(st: EmitSt, node: Bin) -> EmitSt {
     let op = node.op;
     let lt = infer(st, node.l);
@@ -5166,6 +5254,8 @@ def gen_bin_rest(st: EmitSt, node: Bin) -> EmitSt {
         // array `+` is the copy-concat form (gen_cat splits off the array
         // case first), not numeric add on the header pointers.
         gen_cat(st, node, lt, rt)
+    } else if ((op == "+" || op == "-") && ptr_math_kind(op, lt, rt) != "") {
+        gen_ptr_arith(st, node, lt, rt)
     } else if (op == "::") {
         gen_cons(st, node)
     } else if (op in ["<<", ">>", ">>>"]) {
@@ -9299,7 +9389,12 @@ def gen_opassign_end(st: EmitSt, bind: Node, asg: Node, read: Node, dropped: boo
 
 def gen_opassign(st: EmitSt, node: OpAssign, dropped: bool) -> EmitSt {
     let t = infer(st, node.tgt);
-    if (t.k == K.tarr || t.k == K.tarrfix) {
+    if (unfold(t).k == K.tptr) {
+        // The arithmetic fast path adds a slot immediate directly; a pointer
+        // offset must be scaled by the element width, which the desugar's
+        // `p = p + n` gets from gen_bin.
+        gen_opassign_desugar(st, node, dropped)
+    } else if (t.k == K.tarr || t.k == K.tarrfix) {
         gen_opassign_arr(st, node, dropped)
     } else {
         gen_opassign_arith(st, node, dropped)
