@@ -1212,7 +1212,7 @@ def size_lit(s: str) -> long {
     if (radix == 0) { radix = 10; } else { i = 2; };
     let v = 0;
     while (i < len(s) && v >= 0) {
-        let o = ord(s[i:i + 1]);
+        let o = s[i];
         // the digit's value: `.`, `e` (and a hex digit in a decimal) are
         // past the radix
         let d = 99;

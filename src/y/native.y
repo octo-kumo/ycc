@@ -1402,8 +1402,7 @@ def cell_reads(ir: [long], out: [str]) -> [str] {
 // The cell an initializer mark names, or "" for a label that is not a mark.
 // `start` picks the opening one.
 def mark_cell(nm: str, start: bool) -> str {
-    let pre = "ygiE_";
-    if (start) { pre = "ygiS_"; };
+    let pre = start ? "ygiS_" : "ygiE_";
     if (len(nm) > len(pre) && nm[:len(pre)] == pre) { nm[len(pre):] } else { "" }
 };
 
@@ -3915,7 +3914,7 @@ def gen_bstr(st: EmitSt, node: Leaf) -> EmitSt {
     let bi = 0;
     let bn = len(bv);
     while (bi < bn) {
-        let bnum: Leaf = { k: K.num, v: tostring(ord(bv[bi:bi + 1])), line: node.line, col: node.col };
+        let bnum: Leaf = { k: K.num, v: tostring(bv[bi]), line: node.line, col: node.col };
         elems += bnum;
         bi++;
     };
@@ -8958,7 +8957,7 @@ def num_i64(s: str) -> long {
     let v = 0;
     let neg = false;
     for i in 0..len(s) {
-        let c = ord(s[i:i + 1]);
+        let c = s[i];
         if (c >= '0' && c <= '9') {
             v = v * 10 + c - '0';
         } else {
@@ -9278,8 +9277,7 @@ def int_imm(r: Node) -> AsmNum {
 // become one: `inc -8(%rbp)` where the desugar wrote a bind, a read, a copy
 // in, an immediate, a copy back and a store -- and took a frame slot for it.
 def gen_incdec(st: EmitSt, node: IncDec, dropped: bool) -> EmitSt {
-    let slot = 0;
-    if (dropped) { slot = inplace_slot(st, node.tgt); };
+    let slot = dropped ? inplace_slot(st, node.tgt) : 0;
     if (slot != 0) {
         let f = insn.F_INC_D;
         if (node.op == "--") { f = insn.F_DEC_D; };

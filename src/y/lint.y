@@ -1020,6 +1020,8 @@ def lint_short_ord(st: LintSt, call: Call) -> bool {
 def lint_short_slice(st: LintSt, slice: Slice) -> long {
     if (lint_slice_one(slice.lo, slice.hi) && lint_str_expr(st, slice.arr)) {
         lint_warn_at(st, "a one-character slice can be written as an index (a byte)", slice);
+        // Not offered as a fix: the byte is not the 1-char string, and the
+        // consumer (a comparison, a concat) must change too.
     };
     0
 };
@@ -1183,6 +1185,7 @@ def lint_short_pair(st: LintSt, stmts: [Node], i: long) -> long {
                 let as: Assign = body;
                 if (as.name == decl.name) {
                     lint_warn_at(st, "'" + lint_disp(decl.name) + "' is set once under a condition; write 'let " + lint_disp(decl.name) + " = <cond> ? <then> : <initial>'", d);
+                    lint_fix(st, "2.2", d.line, d.col, "", "");
                 };
             };
         };
@@ -2093,6 +2096,91 @@ def fx_foreach_elem(arr: str, idx: str, ln: long, col: long, lines: [str]) -> [s
     lines
 };
 
+def fx_let_name(line: str) -> str {
+    let i = fx_find(line, "let", 0);
+    if (i < 0) { return ""; };
+    let j = fx_ws(line, i + 3);
+    let k = j;
+    while (k < len(line) && fx_ident(line[k])) { k = k + 1; };
+    if (k == j) { return ""; };
+    let name = line[j:k];
+    if (!fx_is_name(name)) { return ""; };
+    name
+};
+
+def fx_let_init(line: str) -> str {
+    let i = fx_find(line, "let", 0);
+    if (i < 0) { return ""; };
+    let e = index_of(line[i:], "=");
+    if (e < 0) { return ""; };
+    e = i + e;
+    let s = fx_ws(line, e + 1);
+    let c = index_of(line, ";");
+    if (c < 0 || c < s) { return ""; };
+    fx_strip(line[s:c])
+};
+
+// 2.2: `let x = a; if (c) { x = b; };` -> `let x = c ? b : a;`.
+def fx_let_cond(ln: long, lines: [str]) -> [str] {
+    if (ln < 1 || ln >= len(lines)) { return lines; };
+    let dline = lines[ln - 1];
+    let name = fx_let_name(dline);
+    let init = fx_let_init(dline);
+    if (name == "" || init == "") { return lines; };
+    let ifline = lines[ln];
+    let i = fx_find(ifline, "if", 0);
+    if (i < 0) { return lines; };
+    let o = fx_ws(ifline, i + 2);
+    if (o >= len(ifline) || ifline[o] != 40) { return lines; };
+    let c = fx_match(ifline, o, 40, 41);
+    if (c < 0) { return lines; };
+    let cond = fx_strip(ifline[o + 1:c]);
+    let indent = fx_indent(dline);
+    let b1 = fx_ws(ifline, c + 1);
+    if (b1 >= len(ifline) || ifline[b1] != 123) { return lines; };
+    if (!fx_scan(lines, ln + 1, b1, 123, 125)) { return lines; };
+    let l1 = fx_sline;
+    let c1 = fx_scol;
+    let av = fx_assign(fx_text(lines, ln + 1, b1, l1, c1));
+    if (av == "" || fx_pipe_name(av) != name) { return lines; };
+    let tail = fx_strip(lines[l1 - 1][c1 + 1:]);
+    if (tail != "" && tail != ";") { return lines; };
+    lines = lines[:ln - 1] + [indent + "let " + name + " = " + cond + " ? " + fx_pipe_val(av) + " : " + init + ";"] + lines[l1:];
+    lines
+};
+
+// 1.4: `s[E:E + 1]` -> `s[E]`; the `[` is at (ln, col).
+def fx_slice_index(line: str, col: long) -> str {
+    let i = col - 1;
+    if (i < 0 || i >= len(line) || line[i] != 91) { return line; };
+    let c = fx_match(line, i, 91, 93);
+    if (c < 0) { return line; };
+    let inner = line[i + 1:c];
+    let k = index_of(inner, ":");
+    if (k < 0) { return line; };
+    let lo = fx_strip(inner[:k]);
+    if (lo == "") { return line; };
+    line[:i] + "[" + lo + "]" + line[c + 1:]
+};
+
+// 1.5: `ord(s[E:E + 1])` -> `s[E]`; the `ord` is at (ln, col).
+def fx_ord_index(line: str, col: long) -> str {
+    let i = col - 1;
+    if (!fx_word(line, i, "ord")) { return line; };
+    let o = fx_ws(line, i + 3);
+    if (o >= len(line) || line[o] != 40) { return line; };
+    let c = fx_match(line, o, 40, 41);
+    if (c < 0) { return line; };
+    let inner = line[o + 1:c];
+    let br = index_of(inner, "[");
+    if (br < 0 || inner[len(inner) - 1:len(inner)] != "]") { return line; };
+    let k = index_of(inner, ":");
+    if (k < 0) { return line; };
+    let lo = fx_strip(inner[br + 1:k]);
+    if (lo == "") { return line; };
+    line[:i] + inner[:br] + "[" + lo + "]" + line[c + 1:]
+};
+
 // The fixers, by rule. A rule with no case here stays a warning.
 def fx_one(rule: str, a: str, b: str, ln: long, col: long, lines: [str]) -> [str] {
     if (ln < 1 || ln > len(lines)) { return lines; };
@@ -2100,11 +2188,14 @@ def fx_one(rule: str, a: str, b: str, ln: long, col: long, lines: [str]) -> [str
     else if (rule == "1.2") { lines[ln - 1] = fx_incdec(lines[ln - 1], a, b, col); }
     else if (rule == "1.3") { lines[ln - 1] = fx_byte_at(lines[ln - 1], col); }
     else if (rule == "1.9") { lines[ln - 1] = fx_bool(lines[ln - 1], a, b, col); }
+    else if (rule == "1.4") { lines[ln - 1] = fx_slice_index(lines[ln - 1], col); }
+    else if (rule == "1.5") { lines[ln - 1] = fx_ord_index(lines[ln - 1], col); }
     else if (rule == "2.8") { lines = fx_loop(rule, b, a, ln, lines); }
     else if (rule == "3.1") { lines = fx_loop(rule, b, a, ln, lines); }
     else if (rule == "3.5") { lines = fx_range(a, ln, lines); }
     else if (rule == "2.1") { lines = fx_if_line(rule, b, ln, lines); }
     else if (rule == "2.3") { lines = fx_if_line(rule, b, ln, lines); }
+    else if (rule == "2.2") { lines = fx_let_cond(ln, lines); }
     else if (rule == "3.6") { lines = fx_foreach_elem(a, b, ln, col, lines); };
     lines
 };
@@ -2814,10 +2905,7 @@ def lint_tk_rec(t: LintTy, ty: TRec, rec: bool, parent: long) -> str {
 // A union's key lists its members sorted, without repeats, an alias of a
 // union replaced by its members: `A | B`, `B | A` and `AB | A` agree.
 def lint_tk_union(t: LintTy, ty: TList, rec: bool, parent: long) -> str {
-    let me = parent;
-    if (rec) {
-        me = lint_occ(t, ty, parent);
-    };
+    let me = rec ? lint_occ(t, ty, parent) : parent;
     let parts: [str] = [];
     lint_tk_members(t, ty, rec, me, parts);
     let key = "(" + join(lint_sort_uniq(parts), "|") + ")";

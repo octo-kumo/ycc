@@ -1624,8 +1624,7 @@ def sg_open(i: long, n: long) -> long {
             // its output is a stand-in to be thrown away (sg_bok), because the
             // enclosing block cannot produce its real text until the nested one
             // has. The round after, the nested block splices.
-            let helper = "ycc_meta_expr";
-            if (stmt) { helper = "ycc_meta_stmt" };
+            let helper = stmt ? "ycc_meta_stmt" : "ycc_meta_expr";
             sg_gadd(helper + "(" + tostring(slot) + ", tostring({", sg_mmid);
             sg_col += 2;
         };
@@ -1671,10 +1670,8 @@ def sg_top_close(k: long) -> long {
     let slot = sg_bslot[k];
     let stmt = sg_bstmt[k];
     if (sg_bok[k]) {
-        let helper = "ycc_meta_expr";
-        if (stmt) { helper = "ycc_meta_stmt" };
-        let post = "}))";
-        if (stmt) { post = "}));" };
+        let helper = stmt ? "ycc_meta_stmt" : "ycc_meta_expr";
+        let post = stmt ? "}));" : "}))";
         sg_restore(helper + "(" + tostring(slot) + ", tostring({", post)
     } else {
         // the stand-in: the held text is what cannot be compiled, so it goes
@@ -2498,8 +2495,7 @@ def mg_commit() -> long {
 // around it still compiles and still type-checks exactly as it did. Its piece is
 // "0", and mg_commit throws that away with everything else.
 def mg_stub(slot: long, stmt: bool) -> str {
-    let helper = "ycc_meta_expr";
-    if (stmt) { helper = "ycc_meta_stmt" };
+    let helper = stmt ? "ycc_meta_stmt" : "ycc_meta_expr";
     let s = helper + "(" + tostring(slot) + ", tostring({ 0 }))";
     if (stmt) { s += ";" };
     s

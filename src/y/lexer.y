@@ -160,10 +160,7 @@ def lex_quoted(src: str, i: long, line: long, col: long, what: str) -> LitScan {
     let raw = src[start:i];
     i++;  // skip closing quote
     col++;
-    let buf = raw;
-    if (hasesc) {
-        buf = unescape(raw, false);
-    };
+    let buf = hasesc ? unescape(raw, false) : raw;
     let err = "";
     if (!closed) {
         err = "unterminated " + what;
@@ -205,8 +202,7 @@ def lex_triple(src: str, i: long, line: long, col: long, what: str) -> LitScan {
     let raw = src[start:i];
     i += 3;
     col += 3;
-    let buf = raw;
-    if (hasesc) { buf = unescape(raw, false); };
+    let buf = hasesc ? unescape(raw, false) : raw;
     let err = "";
     if (!closed) { err = "unterminated " + what; };
     { text: buf, end: i, line: line, col: col, err: err }
