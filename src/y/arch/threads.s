@@ -212,11 +212,23 @@ y_join_wait:
     test %rdx, %rdx
     je y_join_done
     call y_gc_block_begin
+# A 100us timeout, not forever: a blocked thread must come back often enough to
+# see the stop-the-world flag and park (y_gc_block_end does exactly that), or a
+# cycle would wait for it until it gives up. State 3 alone is NOT accepted by
+# the walk -- sweeping under a merely-blocked thread corrupts the heap
+# (--gc-stress on t160_threads) -- so the park is what makes the cycle happen.
+    sub $16, %rsp
+    xor %eax, %eax
+    mov %rax, (%rsp)
+    mov $100000, %rax
+    mov %rax, 8(%rsp)
     mov $202, %rax
     lea 48(%rbx), %rdi
     xor %esi, %esi
-    xor %r10d, %r10d
+    mov $2, %rdx
+    mov %rsp, %r10
     syscall
+    add $16, %rsp
     call y_gc_block_end
     jmp y_join_wait
 y_join_done:
@@ -288,12 +300,19 @@ y_mutex_wait:
     test %rcx, %rcx
     je y_mutex_got
     call y_gc_block_begin
+# A 100us timeout so the wait comes back to park (see y_join_wait).
+    sub $16, %rsp
+    xor %eax, %eax
+    mov %rax, (%rsp)
+    mov $100000, %rax
+    mov %rax, 8(%rsp)
     mov $202, %rax
     mov %rbx, %rdi
     mov $128, %rsi
     mov $2, %rdx
-    xor %r10d, %r10d
+    mov %rsp, %r10
     syscall
+    add $16, %rsp
     call y_gc_block_end
     jmp y_mutex_wait
 y_mutex_got:
@@ -376,12 +395,19 @@ y_sem_sleep:
     lea 8(%rbx), %rax
     call y_mutex_unlock
     call y_gc_block_begin
+# A 100us timeout so the wait comes back to park (see y_join_wait).
+    sub $16, %rsp
+    xor %eax, %eax
+    mov %rax, (%rsp)
+    mov $100000, %rax
+    mov %rax, 8(%rsp)
     mov $202, %rax
     mov %rbx, %rdi
     mov $128, %rsi
     xor %edx, %edx
-    xor %r10d, %r10d
+    mov %rsp, %r10
     syscall
+    add $16, %rsp
     call y_gc_block_end
     jmp y_sem_again
 y_sem_post:
@@ -444,6 +470,9 @@ y_gc_safepoint:
     mov %rsp, %rbp
     push %rbx
     push %r12
+    push %r13
+    push %r14
+    push %r15
     mov y_gc_stw(%rip), %rax
     test %rax, %rax
     jz ygsp_done
@@ -458,6 +487,9 @@ ygsp_spin:
     mov $0, %rax
     mov %rax, 96(%rbx)
 ygsp_done:
+    pop %r15
+    pop %r14
+    pop %r13
     pop %r12
     pop %rbx
     pop %rbp

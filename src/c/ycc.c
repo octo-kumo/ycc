@@ -105,6 +105,14 @@ Yv *parse_cli_args(Yv *argv) {
             wlevel = wlevel_arg(argv, i, n);
             i = i + 1;
             ;
+        } else if (ys_eq_lit(a, "--gc-stress")) {
+            /* A cycle at every allocating slow path: the collector's strongest
+               test (native.c set_gc_stress). It implies the collector. */
+            set_gc_stress(1);
+            ;
+        } else if (ys_eq_lit(a, "--no-gc")) {
+            set_gc_mode(2);
+            ;
         } else if (yv_len(a) >= 5 && ys_eq_lit(ys_slice(a, 0, 5), "--gc=")) {
             /* Whether the collector is linked: auto (the default) decides from
                the program, always and never say so outright. The decision lives
@@ -178,6 +186,9 @@ puts_(ys("               status; everything after `--` is the program's argv\n")
             puts_(ys("               an else branch that does nothing; 2 adds the\n"));
             puts_(ys("               shortening suggestions of LINT_RULES.md\n"));
             puts_(ys("  --no-exec    omit exec() -- the binary cannot reach a shell\n"));
+            puts_(ys("  --gc-stress  run a collection at every allocating slow path: the\n"));
+            puts_(ys("               collector's own test, and a very slow build. It\n"));
+            puts_(ys("               implies the collector. --no-gc is --gc=never.\n"));
             puts_(ys("  --gc=MODE    the collector: auto (the default) links it only\n"));
             puts_(ys("               when an allocation can happen in a loop or a\n"));
             puts_(ys("               recursion; always and never force it. Without the\n"));

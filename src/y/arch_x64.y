@@ -462,6 +462,14 @@ def arch_block_sub(lines: [str], name: str, repl: [str]) -> [str] {
 //   y_gc_maybe      never runs a cycle
 //   y_gc_alloc_free never recycles a block (0 = none)
 //   y_gc_chunk_add  returns the base the allocator wants and registers nothing
+// --gc-stress: a cycle at every allocating slow path. The collector is correct
+// either way, so this is the tool for finding where it is not: a missed root
+// shows up as a crash or a wrong answer in minutes instead of days. It is also
+// the strongest check the threaded stop-the-world has.
+def arch_gc_stress_lines(lines: [str]) -> [str] {
+    arch_block_sub(lines, "y_gc_maybe", ["y_gc_maybe:", "    call y_gc_collect", "    ret"])
+};
+
 def arch_nogc_lines(lines: [str]) -> [str] {
     let out = arch_block_sub(lines, "y_gc_maybe", ["y_gc_maybe:", "    ret"]);
     out = arch_block_sub(out, "y_gc_alloc_free",

@@ -98,6 +98,12 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
         } else if (a == "-W") {
             wlevel = wlevel_arg(argv, i, n);
             i++;
+        } else if (a == "--gc-stress") {
+            // A cycle at every allocating slow path: the collector's strongest
+            // test (native.y set_gc_stress). It implies the collector.
+            nativelib.set_gc_stress(true);
+        } else if (a == "--no-gc") {
+            nativelib.set_gc_mode(2);
         } else if (a[0:5] == "--gc=") {
             // Whether the collector is linked: auto (the default) decides from
             // the program, always and never say so outright. The decision lives
@@ -156,6 +162,9 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
             puts("               the source files in place (implies -W 2), then\n");
             puts("               stop; the emitted bytes never depend on this\n");
             puts("  --no-exec    omit exec() -- the binary cannot reach a shell\n");
+            puts("  --gc-stress  run a collection at every allocating slow path: the\n");
+            puts("               collector's own test, and a very slow build. It\n");
+            puts("               implies the collector. --no-gc is --gc=never.\n");
             puts("  --gc=MODE    the collector: auto (the default) links it only\n");
             puts("               when an allocation can happen in a loop or a\n");
             puts("               recursion; always and never force it. Without the\n");

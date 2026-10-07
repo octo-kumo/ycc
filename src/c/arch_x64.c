@@ -559,6 +559,12 @@ static Yv *arch_block_sub(Yv *lines, Yv *name, Yv *repl) {
      y_gc_maybe      never runs a cycle
      y_gc_alloc_free never recycles a block (0 = none)
      y_gc_chunk_add  returns the base the allocator wants, registers nothing */
+/* --gc-stress: a cycle at every allocating slow path (native.y). */
+Yv *arch_gc_stress_lines(Yv *lines) {
+    return arch_block_sub(lines, ys("y_gc_maybe"),
+        yav(3, ys("y_gc_maybe:"), ys("    call y_gc_collect"), ys("    ret")));
+}
+
 Yv *arch_nogc_lines(Yv *lines) {
     Yv *out = arch_block_sub(lines, ys("y_gc_maybe"),
                              yavs(ys("y_gc_maybe:"), ys("    ret"), NULL));

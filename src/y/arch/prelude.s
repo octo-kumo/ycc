@@ -988,17 +988,24 @@ ygd_done:
     pop %rbp
     ret
 
-# y_gc_block_begin / y_gc_block_end: a thread about to wait on a futex is one
-# the collector can do without. Its stack is stable -- every live value is in a
-# frame slot or a pushed callee-saved register, because caller-saved registers
-# are dead across a call -- so it publishes %rsp and state 3 ("blocked")
-# instead of parking. The end half clears that and parks if a cycle started
-# meanwhile, so a waking thread runs no user code while the world is
-# supposedly stopped.
+# y_gc_block_begin / y_gc_block_end: a thread about to wait on a futex
+# publishes state 3 ("blocked") and the %rsp the collector should scan from.
+# NOTE: state 3 does NOT satisfy the stop-the-world walk (see y_gc_stw_begin):
+# --gc-stress on t160_threads showed that sweeping while a mutex-waiting thread
+# was "blocked" corrupts the heap, so a cycle now waits for a real park. The
+# scan below still handles state 3, because that is the shape the fix wants.
+#
+# That %rsp is the CALLER's, not this function's (lea 8(%rsp) -- the return
+# address sits at (%rsp)): this frame is gone by the time the futex syscall
+# runs, and the values that matter are the ones the caller has already pushed
+# -- a mutex's address in a saved %rbx, say. The contract for callers is
+# therefore: a value live across this call must be in a frame slot or a pushed
+# callee-saved register, because caller-saved registers are dead across a call
+# (and the Y emitter keeps every live value in a slot). --gc-stress on
+# t160_threads caught the first version, which published this function's own
+# frame: the saved %rbx was popped before the syscall, so a mutex-waiting
+# thread's only root was swept.
 y_gc_block_begin:
-    push %rbp
-    mov %rsp, %rbp
-    push %rbx
     lea y_heap(%rip), %rcx
     mov 24(%rcx), %rcx
     test %rcx, %rcx
@@ -1006,37 +1013,32 @@ y_gc_block_begin:
     mov y_gc_stw(%rip), %rax
     test %rax, %rax
     jnz ygbb_park
-    mov %fs:24, %rbx
-    mov %rsp, 88(%rbx)
+    mov %fs:24, %rcx
+    lea 8(%rsp), %rax
+    mov %rax, 88(%rcx)
     mov $3, %rax
-    mov %rax, 96(%rbx)
+    mov %rax, 96(%rcx)
 ygbb_done:
-    pop %rbx
-    pop %rbp
     ret
 ygbb_park:
-    pop %rbx
-    pop %rbp
     jmp y_gc_safepoint
 
+# The end half clears the state and parks if a cycle started meanwhile, so a
+# waking thread runs no user code while the world is supposedly stopped (the
+# safepoint spills every callee-saved register, so a park from here is safe).
 y_gc_block_end:
-    push %rbp
-    mov %rsp, %rbp
-    push %rbx
     lea y_heap(%rip), %rcx
     mov 24(%rcx), %rcx
     test %rcx, %rcx
     jz ygbe_done
-    mov %fs:24, %rbx
+    mov %fs:24, %rcx
     xor %eax, %eax
-    mov %rax, 96(%rbx)
+    mov %rax, 96(%rcx)
     mov y_gc_stw(%rip), %rax
     test %rax, %rax
     jz ygbe_done
-    call y_gc_safepoint
+    jmp y_gc_safepoint
 ygbe_done:
-    pop %rbx
-    pop %rbp
     ret
 
 # y_gc_stw_begin: ask every other registered thread to park at the safepoint,
@@ -1072,8 +1074,6 @@ ygsb_walk:
     je ygsb_walk_next
     mov 96(%rbx), %rax
     cmp $1, %rax
-    je ygsb_walk_next
-    cmp $3, %rax
     je ygsb_walk_next
     add $1, %r12
 ygsb_walk_next:

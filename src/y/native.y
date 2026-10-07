@@ -12420,6 +12420,12 @@ let gc_mode: long = 0;
 
 def set_gc_mode(m: long) -> void { gc_mode = m; };
 
+// --gc-stress: link the collector and run a cycle at every allocating slow
+// path (arch_gc_stress_lines). A debugging switch, not a mode to ship.
+let gc_stress: bool = false;
+
+def set_gc_stress(v: bool) -> void { gc_stress = v; };
+
 // ── the --gc decision ───────────────────────────────────────────────────
 // The collector is needed exactly when an allocation site can run more than
 // once: a loop or a recursion that can reach y_alloc. Everything here errs
@@ -12569,7 +12575,8 @@ def gc_recursive(labels: [str], refs: [[str]], keep: [bool], users: [str]) -> bo
 // auto (0): link the collector only when an allocation can repeat. always (1)
 // and never (2) say so outright.
 def gc_decide(mode: long, labels: [str], refs: [[str]], keep: [bool], all: [[long]], allblob: [str], ps: PShake, threads: bool) -> bool {
-    if (mode == 1) { true }
+    if (gc_stress) { true }
+    else if (mode == 1) { true }
     else if (mode == 2) { false }
     else if (threads) { true }
     else {
@@ -12780,6 +12787,12 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit, gcmode: long) -> [LinkPart
     // unreachable and shake out. The allocator and heap_used() are untouched.
     if (!(gc_decide(gcmode, labels, refs, keep, all, allblob, ps, thr))) {
         core_lines = arch.arch_nogc_lines(core_lines);
+        pb = prelude_blocks(prelude_with(core_lines, thr, mth));
+        ps = shake_prelude(pb, body_refs);
+    };
+    // --gc-stress: every slow-path allocation runs a cycle.
+    if (gc_stress) {
+        core_lines = arch.arch_gc_stress_lines(core_lines);
         pb = prelude_blocks(prelude_with(core_lines, thr, mth));
         ps = shake_prelude(pb, body_refs);
     };

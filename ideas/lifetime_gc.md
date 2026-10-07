@@ -165,6 +165,26 @@ or died).
    `max(live, 8 MiB)`) plus a chunk each, so four threads of 250k want ~96 MiB;
    tightening that is a tuning question, not a leak.
 
+   One case the mode found is still open: `test/y/native/t160_threads.y` built
+   with `--gc-stress` prints all of its output and *then* trips the collector's
+   own `collector: bad block header` trap, so something a mutex-waiting thread
+   holds is still reachable only from a register when a cycle sweeps. It
+   reproduces in a second:
+
+       ./ynew --gc-stress test/y/native/t160_threads.y -o /tmp/t && /tmp/t
+       ./ynew -g --gc-stress test/y/native/t160_threads.y -o /tmp/tg
+       gdb -batch -ex 'break y_bad_trap' -ex run -ex bt --args /tmp/tg
+
+   The fixes already in: every blocking wait publishes the CALLER's `%rsp`
+   (so the callee-saved registers its wrapper pushed are what the collector
+   scans), the safepoint spills all six callee-saved registers, the futex
+   waits carry a 100us timeout so a blocked thread comes back, sees the
+   stop-the-world flag and PARKS, and the stop-the-world walk accepts only a
+   real park (state 1) -- which is what `--gc-stress` showed was necessary.
+   Everything else passes under stress: t341/t342/t343, the two-thread
+   allocation shapes, and the cap test (two threads of 2,000,000 allocations
+   in 64 MiB).
+
 2. **Performance.** The byte buffers are pointer-free (`y_str_cat`,
    `y_str_app`, the join buffer, `ylts_mk`, `ycs_mk`, `y_bytes_to_str`): 61.9M
    -> 49.3M instructions on 120 live ~108 KB strings. Packed `[byte]` array data
@@ -178,6 +198,8 @@ or died).
    `map`/`filter` results are left, because filter's closure returns bool while
    its result holds the source elements (`ideas/OPTIMIZE.md` A8).
    
-3. Optional knobs: `--gc-stress` (collect on every slow path) and `--no-gc`,
+3. Optional knobs: `--gc-stress` (collect on every slow path) is DONE, with
+   `--no-gc` as an alias for `--gc=never`; both are checked by the `gc` suite.
+   What is left of this item is nothing; and `--no-gc`,
    plus a `test/sh/test_gc.sh` suite that runs the corpus under a small cap.
 

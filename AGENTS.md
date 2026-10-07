@@ -74,7 +74,10 @@ moved with the callgrind table, `perf`, or `ycc --time`.
 - `./ycc f.y -o /tmp/b && /tmp/b`; the same through `./cycc`; `./ycc -S f.y`.
 - `--gc=auto|always|never` (default `auto`): whether the collector is linked.
   Auto omits it when no loop or recursion can reach the allocator, so a program
-  that allocates once carries neither; `always` is the escape hatch.
+  that allocates once carries neither; `always` is the escape hatch and
+  `--no-gc` is `--gc=never`. `--gc-stress` runs a cycle at *every* allocating
+  slow path — the collector's own test (a missed root shows up as a crash in
+  minutes, not days), used by the `gc` suite, and a very slow build.
 - `ycc run f.y` compiles and runs in one step; `ycc -E f.y` dumps the source the
   pass saw (meta blocks expanded); `ycc build` / `ycc vendor` for `y.toml`
   projects.
@@ -111,7 +114,7 @@ moved with the callgrind table, `perf`, or `ycc --time`.
 | lsp | the server's fixtures under both compilers, `check-refs.py`, `check-names.py`, formatter idempotence |
 | math | `test/math/ulp_table.txt` within 1 ulp, plus the kernel and threshold audits |
 | coverage | every diagnostic and manual section has a checked test (`test/COVERAGE.md`) |
-| gc | the collector under a cap: two threads of 300k allocations must run in 64 MiB (`test/y/native/t385_gc_threads_alloc.y`), with `--gc=never` as the control that does not fit |
+| gc | the collector under a cap: two threads of 300k allocations must run in 64 MiB (`test/y/native/t385_gc_threads_alloc.y`), with `--gc=never` as the control that does not fit, and two threads of 20k under `--gc-stress` (a cycle at every allocation, `test/y/native/t389_gc_stress_threads.y`) |
 | treeshake, std-suites | the unused-code cost ratchets, plus four checks a runtime addition must pass: a program that allocates nothing names no `y_alloc` and no collector block, `--gc=auto` omits the collector for a one-shot allocation while `always` keeps and `never` drops it (same output), `test/sh/deadcode.py` counts instructions the shake leaves unreachable (`test/treeshake/deadcode.txt`), and `test/treeshake/shapes.txt` records the size of the shapes a runtime change moves first; the `test/std/` self-test suites |
 
 Run by hand (not in `make test`): `test/sh/cycc-win.sh` (wine),

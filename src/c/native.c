@@ -3422,6 +3422,12 @@ static ylong frame_max = 0;
 static ylong gc_mode = 0;
 
 void set_gc_mode(ylong m) { gc_mode = m; }
+
+/* --gc-stress: link the collector and run a cycle at every allocating slow
+   path (arch_gc_stress_lines). A debugging switch, not a mode to ship. */
+static int gc_stress = 0;
+
+void set_gc_stress(int v) { gc_stress = v; }
 /* The label of the last literal closure gen_func_literal emitted. The array
  * methods read it right after gen(st, fnode) to call the body DIRECTLY when
  * the closure captures nothing -- the callee never looks at the record, so
@@ -14978,6 +14984,7 @@ static int gc_recursive(Yv *labels, Yv *refs, Yv *keep, Yv *users) {
    and never (2) say so outright. */
 static int gc_decide(ylong mode, Yv *labels, Yv *refs, Yv *keep, Yv *all,
                      Yv *allblob, Yv *ps, int threads) {
+    if (gc_stress) { return 1; }
     if (mode == 1) { return 1; }
     if (mode == 2) { return 0; }
     if (threads) { return 1; }
@@ -15265,6 +15272,12 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog, ylong gcmode) {
        unreachable and shake out. The allocator and heap_used() are untouched. */
     if (!gc_decide(gcmode, labels, refs, keep, all, allblob, ps, thr)) {
         core_lines = arch_nogc_lines(core_lines);
+        pb = prelude_blocks(prelude_with(core_lines, thr, mth));
+        ps = shake_prelude(pb, body_refs);
+    }
+    /* --gc-stress: every slow-path allocation runs a cycle. */
+    if (gc_stress) {
+        core_lines = arch_gc_stress_lines(core_lines);
         pb = prelude_blocks(prelude_with(core_lines, thr, mth));
         ps = shake_prelude(pb, body_refs);
     }

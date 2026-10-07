@@ -40,3 +40,4 @@ Yv *arch_exit(void);
 
 #endif /* ARCH_X64_H */
 Yv *arch_nogc_lines(Yv *lines);
+Yv *arch_gc_stress_lines(Yv *lines);

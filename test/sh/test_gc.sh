@@ -43,6 +43,22 @@ for spec in "cycc:${CYCC:-$ROOT/cycc}" "ynew:${YREF:-$ROOT/ynew}"; do
     else
         fail "gc [$tag] threaded allocation under the cap" "$(echo "$got" | tr '\n' ' ')"
     fi
+    # --gc-stress: a cycle at EVERY allocating slow path, two threads. If a
+    # root is missed or the stop-the-world is unsound, this is where it shows.
+    STR="$ROOT/test/y/native/t389_gc_stress_threads.y"
+    if ( cd "$ROOT" && ulimit -v "${YPROG_MEM_KB:-3670016}"; \
+         timeout "$((120 * ${YTIMEOUT_SCALE:-1}))" "$cc" --gc-stress "$STR" -o "$b.st" ) 2>/dev/null; then
+        got3=$( ( cd "$ROOT" && ulimit -v "$CAP"; \
+                  timeout "$((300 * ${YTIMEOUT_SCALE:-1}))" "$b.st" </dev/null ) 2>&1 )
+        want3=$(cat "$ROOT/test/y/native/t389_gc_stress_threads.expected")
+        if [ "$got3" = "$want3" ]; then
+            pass "gc [$tag] two threads survive a cycle at every allocation (--gc-stress)"
+        else
+            fail "gc [$tag] --gc-stress threads" "$(echo "$got3" | tr '\n' ' ')"
+        fi
+    else
+        fail "gc [$tag] compiles the --gc-stress fixture" ""
+    fi
     if ( cd "$ROOT" && ulimit -v "${YPROG_MEM_KB:-3670016}"; \
          timeout "$((60 * ${YTIMEOUT_SCALE:-1}))" "$cc" --gc=never "$THR" -o "$b.ng" ) 2>/dev/null; then
         got2=$( ( cd "$ROOT" && ulimit -v "$CAP"; \
