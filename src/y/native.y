@@ -238,8 +238,15 @@ def resolve_unit(src: str, base_dir: str, depth: long, allow_exec: bool, root: s
         }
     }
     let std: [str] = [];
-    if (want_prelude) { std += "prelude"; }
-    if (want_exec) { std += "exec"; }
+    // A kernel gets neither: std/prelude.y is readline and the stdin sync
+    // (y_os_read/y_os_lseek on a Linux descriptor) and std/exec.y is fork,
+    // pipe and dup2 -- the two units whose whole job is the process model a
+    // freestanding payload does not have.  `import` of either is refused
+    // below as well; this is the auto-link half, which no import reaches.
+    if (!target_is_kernel()) {
+        if (want_prelude) { std += "prelude"; }
+        if (want_exec) { std += "exec"; }
+    };
     // str is linked into EVERY program too, for the same reason rt is:
     // y_float_tostr (the runtime's float printer, arch_x64.y) calls std's
     // y_fmt_f, which writes a double's exact decimal value and rounds half to
@@ -803,6 +810,47 @@ def std_resolve(name: str, base_dir: str) -> str {
 // has added lines.
 type SrcLines = { lines: [str], imports: [str], seen: [str], smods: [str], ofile: [long], oline: [long], ogen: [bool] };
 
+// ── what a kernel cannot import ─────────────────────────────────────────
+// The std units that reach the OS in a way a freestanding payload has no
+// answer for, checked in native_resolve_seen the moment a bare `import` names
+// one.  A DENY list, not an allow list: a std unit that is plain computation
+// (json, regex, math, struct, utf8) is available in a kernel the day it
+// lands, and only one that calls a syscall has to be added here.  The unit is
+// not missing -- its file is right there and would splice and compile; what
+// it would do is call a Linux syscall from a machine that has no Linux.
+// Is `full` the std module `name` (as opposed to a file of the same name
+// beside the program)?  std_resolve's candidates end in exactly
+// "std/<name>.y" -- "std/fs.y", "src/y/std/fs.y", "<self_dir>/std/fs.y" --
+// so the suffix is the test.
+def kernel_is_std_path(full: str, name: str) -> bool {
+    let want = "std/" + name + ".y";
+    if (len(full) >= len(want) && full[len(full) - len(want):] == want) { true } else { false }
+};
+
+def kernel_std_denied() -> [str] {
+    ["fs", "net", "exec", "prelude", "crypto", "x509", "tls", "http", "tui",
+        "args", "random", "test"]
+};
+
+// Why, for the diagnostic.  One line each, because "not available in kernel
+// mode" without a reason reads like a compiler limitation rather than a fact
+// about the module.
+def kernel_std_why(name: str) -> str {
+    if (name == "fs") { "it is openat/read/write/stat on a Linux descriptor" }
+    else if (name == "net") { "it is raw socket syscalls" }
+    else if (name == "exec") { "it is fork/execve/pipe/dup2" }
+    else if (name == "prelude") { "it is readline and the stdin sync" }
+    else if (name == "crypto") { "it takes its randomness from getrandom" }
+    else if (name == "random") { "it takes its randomness from getrandom" }
+    else if (name == "x509") { "it is built on crypto and tls" }
+    else if (name == "tls") { "it is a socket client" }
+    else if (name == "http") { "it is a socket client" }
+    else if (name == "tui") { "it is termios ioctls" }
+    else if (name == "args") { "it reads the process's argv from the OS" }
+    else if (name == "test") { "it is a test harness, which is a process" }
+    else { "it uses the OS" }
+};
+
 // The program text `src` of file `fid` (its index in the origin map's
 // files: 0 for the program itself, k for seen[k - 1]) with its imports
 // spliced in, as lines; ofile/oline map each one back (see the origin map
@@ -892,6 +940,28 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str], smods
                         if (!name_in(res_used, name)) { res_used += name; }
                     } else {
                         full = std_resolve(name, base_dir);
+                        // The resolved module is the STD one (and not a
+                        // program's own kernel.y / fs.y next to it, which
+                        // shadows std and is its own business).  Two rules
+                        // live here, one per direction:
+                        //   - kernel mode refuses the units that are a Linux
+                        //     syscall away from working.  The file is right
+                        //     there and would splice and compile; what it
+                        //     would do is call the syscall.
+                        //   - a hosted compile refuses std/kernel, which is
+                        //     `ndef`s into assembly that only a kernel image
+                        //     has.
+                        if (kernel_is_std_path(full, name)) {
+                            if (target_is_kernel()) {
+                                if (name_in(kernel_std_denied(), name)) {
+                                    puts("error: std/" + name + " is not available in kernel mode: " + kernel_std_why(name) + "\n");
+                                    exit(1);
+                                };
+                            } else if (name == "kernel") {
+                                puts("error: std/kernel is only available in kernel mode (ycc --kernel)\n");
+                                exit(1);
+                            };
+                        };
                     };
                 };
                 if (is_pkg) {
