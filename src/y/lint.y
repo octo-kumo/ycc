@@ -1209,6 +1209,7 @@ def lint_short_pair(st: LintSt, stmts: [Node], i: long) -> long {
     let n = stmts[i + 1];
     if (d.k == K.decl && n.k == K.kw_while) {
         lint_short_index_loop(st, stmts, i);
+        lint_short_flag(st, stmts, i);
     } else if (d.k == K.decl && n.k == K.kw_if) {
         let decl: Decl = d;
         let iff: If = n;
@@ -1475,6 +1476,45 @@ def lint_len_of(node: Node) -> str {
 };
 
 // Rules 2.8/3.1: an index loop that is a `for` range or an array method.
+// Rule 2.5: a bool local that exists only to stop the loop.
+//   `let f = true; while (f) { ...; f = false; ... };`
+// is `while (true) { ...; break; ... };`. The flag must be written inside
+// the loop, never read there (a read makes it real state), and never
+// written after it.
+def lint_short_flag(st: LintSt, stmts: [Node], i: long) -> long {
+    let d = stmts[i];
+    let n = stmts[i + 1];
+    let decl: Decl = d;
+    if (decl.kind != "let" || decl.typ.k != K.tnone) { return 0; };
+    if (lint_bool_lit(decl.v) < 0) { return 0; };
+    let loop: While = n;
+    let f = decl.name;
+    if (!lint_flag_cond(loop.cond, f)) { return 0; };
+    if (lint_find(loop.body, f, 0)) { return 0; };
+    if (!lint_find(loop.body, f, 8)) { return 0; };
+    if (lint_find_from(stmts, i + 2, f, 8)) { return 0; };
+    lint_warn_at(st, "'" + lint_disp(f) + "' only stops this loop; write 'while (true)' and 'break' where it is set", d);
+    0
+};
+
+// The loop condition is `f`, `f == <bool>` or `f != <bool>`.
+def lint_flag_cond(cond: Node, name: str) -> bool {
+    if (cond.k == K.id) { let l: Leaf = cond; return l.v == name; };
+    if (cond.k == K.un) {
+        let u: Un = cond;
+        if (u.op == "!") { return lint_flag_cond(u.e, name); };
+        return false;
+    };
+    if (cond.k == K.bin) {
+        let b: Bin = cond;
+        if (b.op == "==" || b.op == "!=") {
+            if (b.l.k == K.id) { let l: Leaf = b.l; if (l.v == name) { return lint_bool_lit(b.r) >= 0; }; };
+            if (b.r.k == K.id) { let r: Leaf = b.r; if (r.v == name) { return lint_bool_lit(b.l) >= 0; }; };
+        };
+    };
+    false
+};
+
 def lint_short_index_loop(st: LintSt, stmts: [Node], i: long) -> long {
     if (i + 1 >= len(stmts)) { return 0; };
     let d = stmts[i];
@@ -2318,6 +2358,16 @@ def fx_void(ln: long, lines: [str]) -> [str] {
     lines[ln - 1] = line[:pc + 1] + " -> void " + after[j:];
     lines
 };
+
+// `name = <bool>;` -> `break;` (a flag's exit).
+
+
+// 2.5: `let f = <bool>; while (f) { B(f = <bool>) };` -> `while (true) {
+// B(break) };`.
+
+
+// Is this line still writing `name` (a `name =` that is not `==`)?
+
 
 // The end of the literal starting at `s` (its first char), or -1.
 def fx_lit_end(line: str, s: long) -> long {
