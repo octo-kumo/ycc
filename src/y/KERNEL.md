@@ -767,3 +767,21 @@ Next: print those globals from a probe in both builds (next_pid is declared 1,
 so if its range is gone it reads 0) and, more directly, find where the shake
 decides liveness for a kernel target -- that predicate is the thing to fix, and
 it is one place in the merged native.c, not a hunt.
+
+## The shake fix, and what it unblocks
+
+Fixed and blessed: `ir_drop_inits` no longer deletes a dead cell's initializer
+range for a kernel target (src/c/native.c and src/y/native.y, mirrored), because
+the shake's liveness roots are computed for a HOSTED program while a kernel
+image has no _start.  24 ranges were being deleted from every kernel image,
+including cur_task, need_resched and next_pid.
+
+    test/kernel: 33 passed, 0 failed, 33 total   (merged compiler)
+    refs/ycc.ref bb1bd590dd3f461e
+
+M3's first case, re-run with the fix in place, gets FURTHER than it ever did:
+"starting the server", S1, C1, S2 -- so delivery works and the server's
+ipc_recv returns -- and it then faults with err=5 cr2=0 in the reply/resume
+path, which is the round-7 signature.  That is M3 FUNCTIONAL work, not the
+shake bug, and it is parked in _ktmp/wip/ until fixed rather than committed as
+a failing case.
