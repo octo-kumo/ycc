@@ -2271,9 +2271,11 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
         let elt: Type = t_unk();
         if (fe.typ.k == K.tarr) { let arr: TOf = fe.typ; elt = arr.of; }
         else if (fe.typ.k == K.tarrfix) { let arr: TFix = fe.typ; elt = arr.of; }
+        else if (fe.typ.k == K.tmap) { let mp: TMap = fe.typ; elt = mp.key; }
+        else if (fe.typ.k == K.tstr) { elt = type_node({ k: K.tbyte }); }
         else if (fe.typ.k == K.tunk) { }
         else {
-            st = fail(st, "'foreach' needs an array, got " + tstr(fe.typ), loop.line, loop.col);
+            st = fail(st, "'foreach' needs an array, a map or a string, got " + tstr(fe.typ), loop.line, loop.col);
         };
         st = st_bind(st, loop.name, elt, "local", loop.line, loop.col);
         let saved_loops = st.loops;

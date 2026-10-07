@@ -7646,6 +7646,13 @@ def gen_foreach(st: EmitSt, node: Foreach) -> EmitSt {
         let arr: TFix = elt;
         eltyp = arr.of;
     }
+    if (elt.k == K.tmap) {
+        // keys: the map record is {boxes@0, keys@8, vals@16} (gen_maplit),
+        // and a key is a str -- one word, like every other unboxed value.
+        let mp: TMap = elt;
+        eltyp = mp.key;
+    }
+    if (elt.k == K.tstr) { eltyp = normtype({ k: K.tbyte }); }
     st = gen(st, node.iter);
     st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, aoff, -1);
     st = emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
@@ -7656,17 +7663,43 @@ def gen_foreach(st: EmitSt, node: Foreach) -> EmitSt {
     let r2 = next_loc(st);
     st = r2.st;
     st = emit_label(st, r1.label);
-    // i < len(arr) — the heap header keeps the length in slot 0. The length
-    // is re-read on every iteration, not hoisted into a fourth slot: a body
-    // that appends to the array it walks goes on seeing what it appended
+    // i < len(it) — a heap array and a string both keep their length in the
+    // first word of the header, and a map keeps it in its keys array. The
+    // length is re-read on every iteration, not hoisted into a fourth slot: a
+    // body that appends to the array it walks goes on seeing what it appended
     // (`foreach (x in a) { a += x }` never ends), which hoisting would change.
+    // The same goes for a map: `foreach (k in m) { m["k2"] = 1 }` reaches the
+    // key it added, exactly as the array form reaches its element.
+    let is_map = (elt.k == K.tmap);
+    let is_str = (elt.k == K.tstr);
     st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, aoff, -1, insn.R_RDX, 64);
-    st = emit_insn(st, insn.F_MOV_0_R, insn.R_RDX, -1, 1, -1, -1, insn.R_RCX, 64);
+    if (is_map) {
+        // A map keeps no length of its own: %rdx is the record, and its keys
+        // array (at +8) is the thing with the length in its first word.
+        st = emit_insn(st, insn.F_MOV_M_R, insn.R_RDX, -1, 1, 8, -1, insn.R_R11, 64);
+        st = emit_insn(st, insn.F_MOV_0_R, insn.R_R11, -1, 1, -1, -1, insn.R_RCX, 64);
+    } else {
+        // an array header and a string header both start with the length
+        st = emit_insn(st, insn.F_MOV_0_R, insn.R_RDX, -1, 1, -1, -1, insn.R_RCX, 64);
+    };
     st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, ioff, -1, insn.R_RAX, 64);
     st = emit_insn(st, insn.F_CMP_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0);
     st = emit_insn(st, insn.F_JGE_L, r2.label, 0, 0, 0, 0, 0, 0);
-    // x = arr[i]
-    st = elem_load(st, arr_elem_bytes(elt), insn.R_RDX, insn.R_RAX, insn.R_RCX);
+    // x = it[i]
+    if (is_map) {
+        // The key out of the keys array: %r11 is its header (still there from
+        // the length's load -- %rax holds the counter by now), and its data
+        // pointer is 16 bytes into it.
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_R11, -1, 1, 16, -1, insn.R_R11, 64);
+        st = emit_insn(st, insn.F_MOV_M_R, insn.R_R11, insn.R_RAX, 8, 0, -1, insn.R_RCX, 64);
+    } else if (is_str) {
+        // A string's bytes follow its length, in place: 8(%rdx,%rax,1), with
+        // no data pointer to load first (a heap array has one, a string does
+        // not -- which is why an owned string can append into its own buffer).
+        st = emit_insn(st, insn.F_MOVZBQ_M_R, insn.R_RDX, insn.R_RAX, 1, 8, -1, insn.R_RCX, 64);
+    } else {
+        st = elem_load(st, arr_elem_bytes(elt), insn.R_RDX, insn.R_RAX, insn.R_RCX);
+    };
     st = emit_insn(st, insn.F_MOV_R_D, insn.R_RCX, 64, insn.R_RBP, -1, 1, voff, -1);
     // continue -> just before the increment, for the reason in gen_forrange
     let r3 = next_loc(st);

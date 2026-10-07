@@ -9062,6 +9062,16 @@ Yv *gen_foreach(Yv *st, Yv *node) {
         eltyp = yr_get(elt, "of");
         ;
     }
+    if (yv_l(yr_get(elt, "k")) == K_tmap) {
+        /* keys: the map record is {boxes@0, keys@8, vals@16} (gen_maplit),
+         * and a key is a str -- one word, like every other unboxed value. */
+        eltyp = yr_get(elt, "key");
+        ;
+    }
+    if (yv_l(yr_get(elt, "k")) == K_tstr) {
+        eltyp = yr(1, "k", yv_long(K_tbyte));
+        ;
+    }
     st = gen(st, yr_get(node, "iter"));
     st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, aoff, -1);
     st = emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
@@ -9073,18 +9083,45 @@ Yv *gen_foreach(Yv *st, Yv *node) {
     Yv *r2 = next_loc(st);
     st = yr_get(r2, "st");
     st = emit_label(st, yv_l(yr_get(r1, "label")));
-    /* i < len(arr) — the heap header keeps the length in slot 0. The length
-     * is re-read on every iteration, not hoisted into a fourth slot: a body
-     * that appends to the array it walks goes on seeing what it appended
+    /* i < len(it) — a heap array and a string both keep their length in the
+     * first word of the header, and a map keeps it in its keys array. The
+     * length is re-read on every iteration, not hoisted into a fourth slot: a
+     * body that appends to the array it walks goes on seeing what it appended
      * (`foreach (x in a) { a += x }` never ends), which hoisting would
-     * change. */
+     * change. The same goes for a map: `foreach (k in m) { m["k2"] = 1 }`
+     * reaches the key it added, exactly as the array form reaches its
+     * element. */
+    int is_map = yv_l(yr_get(elt, "k")) == K_tmap;
+    int is_str = yv_l(yr_get(elt, "k")) == K_tstr;
     st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, aoff, -1, R_RDX, 64);
-    st = emit_insn(st, F_MOV_0_R, R_RDX, -1, 1, -1, -1, R_RCX, 64);
+    if (is_map) {
+        /* A map keeps no length of its own: %rdx is the record, and its keys
+         * array (at +8) is the thing with the length in its first word. */
+        st = emit_insn(st, F_MOV_M_R, R_RDX, -1, 1, 8, -1, R_R11, 64);
+        st = emit_insn(st, F_MOV_0_R, R_R11, -1, 1, -1, -1, R_RCX, 64);
+    } else {
+        /* an array header and a string header both start with the length */
+        st = emit_insn(st, F_MOV_0_R, R_RDX, -1, 1, -1, -1, R_RCX, 64);
+    }
     st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, ioff, -1, R_RAX, 64);
     st = emit_insn(st, F_CMP_R_R, R_RCX, 64, R_RAX, 64, 0, 0, 0);
     st = emit_insn(st, F_JGE_L, yv_l(yr_get(r2, "label")), 0, 0, 0, 0, 0, 0);
-    /* x = arr[i] */
-    st = elem_load(st, arr_elem_bytes(elt), R_RDX, R_RAX, R_RCX);
+    /* x = it[i] */
+    if (is_map) {
+        /* The key out of the keys array: %r11 is its header (still there from
+         * the length's load -- %rax holds the counter by now), and its data
+         * pointer is 16 bytes into it. */
+        st = emit_insn(st, F_MOV_D_R, R_R11, -1, 1, 16, -1, R_R11, 64);
+        st = emit_insn(st, F_MOV_M_R, R_R11, R_RAX, 8, 0, -1, R_RCX, 64);
+    } else if (is_str) {
+        /* A string's bytes follow its length, in place: 8(%rdx,%rax,1), with
+         * no data pointer to load first (a heap array has one, a string does
+         * not -- which is why an owned string can append into its own
+         * buffer). */
+        st = emit_insn(st, F_MOVZBQ_M_R, R_RDX, R_RAX, 1, 8, -1, R_RCX, 64);
+    } else {
+        st = elem_load(st, arr_elem_bytes(elt), R_RDX, R_RAX, R_RCX);
+    }
     st = emit_insn(st, F_MOV_R_D, R_RCX, 64, R_RBP, -1, 1, voff, -1);
     /* continue -> just before the increment, for the reason in gen_forrange */
     Yv *r3 = next_loc(st);

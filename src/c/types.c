@@ -2955,11 +2955,17 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
         } else if (yv_l(yr_get(yr_get(fe, "typ"), "k")) == K_tarrfix) {
             elt = yr_get(yr_get(fe, "typ"), "of");
             ;
+        } else if (yv_l(yr_get(yr_get(fe, "typ"), "k")) == K_tmap) {
+            elt = yr_get(yr_get(fe, "typ"), "key");
+            ;
+        } else if (yv_l(yr_get(yr_get(fe, "typ"), "k")) == K_tstr) {
+            elt = yr(1, "k", yv_long(K_tbyte));
+            ;
         } else if (yv_l(yr_get(yr_get(fe, "typ"), "k")) == K_tunk) {
             ;
         } else {
             st = fail(st,
-                      ys_cat(ys("'foreach' needs an array, got "),
+                      ys_cat(ys("'foreach' needs an array, a map or a string, got "),
                              tstr(yr_get(fe, "typ"))),
                       yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
             ;

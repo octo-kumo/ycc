@@ -321,7 +321,8 @@ def area(s: Shape) -> float { ... };
   |~& \ic{while}~\ic{(}~\ty{expr}~\ic{)}~\ty{block} \\
   |~& \ic{for}~\ic{(}~[\ty{stmt}]~\ic{;}~[\ty{expr}]~\ic{;}~[\ty{stmt}]~\ic{)}~\ty{block} \\
   |~& \ic{for}~\ty{name}~\ic{in}~\ty{expr}~\ic{..}~\ty{expr}~\ty{block} \\
-  |~& \ic{foreach}~\ic{(}~\ty{name}~\ic{in}~\ty{expr}~\ic{)}~\ty{block} \\
+  |~& \ic{foreach}~\ic{(}~\ty{name}~\ic{in}~\ic{expr}~\ic{)}~\ty{block}
+       && \text{(array, map, string)} \\
   |~& \ty{block}
 \end{align*}
 
@@ -345,7 +346,9 @@ left out only after a statement that ends in \ic{\}} (an \ic{if},
 loop, \ic{def} or block) or before the \ic{\}} closing the block:
 \ic{f() g()} is an error, and so is any token the grammar does not
 expect --- nothing is skipped silently. \ic{foreach} iterates
-the elements of an array; the \ic{for} range form iterates \ic{lo..hi}
+the elements of an array, the \emph{keys} of a map and the \emph{bytes}
+of a string --- so \ic{foreach (c in s) \{ print(c); \}} walks \ty{s}
+without copying it; the \ic{for} range form iterates \ic{lo..hi}
 with the low bound inclusive and the high bound exclusive. A C-style
 \ic{for} without a condition loops until a \ic{return} leaves it, as in
 C. A C-style \ic{for} binds its head like a \ic{let}, so the names it
