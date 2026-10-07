@@ -168,10 +168,12 @@ or died).
 2. **Performance.** The byte buffers are pointer-free now (`y_str_cat`,
    `y_str_app`, the join buffer, `ylts_mk`, `ycs_mk`, `y_bytes_to_str`):
    61.9M -> 49.3M instructions on 120 live ~108 KB strings at the same peak
-   RSS. What is left is the same for the *array* data blocks: `[byte]` is
-   provably bytes, and `[long]`/`[float]` cannot hold pointers either, but the
-   array helpers only know `esz`, so the emitter has to pass the element's
-   pointer-freeness down (`ideas/OPTIMIZE.md` A8).
+   RSS. Packed `[byte]` array data is pointer-free too (`esz == 1` in the five
+   data allocations a byte array grows through): 90.9M -> 36.7M instructions on
+   600 live 30 KB arrays, same peak RSS. What is left is the same for the
+   8-byte element types that cannot hold pointers (`[long]`/`[float]`): `esz`
+   alone cannot say, so the emitter has to pass it down (`ideas/OPTIMIZE.md`
+   A8).
 3. Optional knobs: `--gc-stress` (collect on every slow path) and `--no-gc`,
    plus a `test/sh/test_gc.sh` suite that runs the corpus under a small cap.
 

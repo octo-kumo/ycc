@@ -1720,7 +1720,13 @@ yas_n:
     mov $8, %rdi
 yas_sz:
     push %r9
+    cmp $1, %r9
+    jne yas_plain
+    call y_alloc_pf
+    jmp yas_ok
+yas_plain:
     call y_alloc
+yas_ok:
     pop %r9
     mov %rax, %r15
     push %r15
@@ -2505,7 +2511,13 @@ y_arr_cat:
     mov $8, %rdi
 ycat_sz:
     push %r13
+    cmp $1, %r9
+    jne ycat_plain
+    call y_alloc_pf
+    jmp ycat_ok
+ycat_plain:
     call y_alloc
+ycat_ok:
     pop %r13
     mov %rax, %r14
     push %r14
@@ -2616,7 +2628,13 @@ yapd_room:
     imul %r9, %rdi
     push %rcx
     push %r9
+    cmp $1, %r9
+    jne yapd_plain
+    call y_alloc_pf
+    jmp yapd_ok
+yapd_plain:
     call y_alloc
+yapd_ok:
     pop %r9
     pop %rcx
     mov 16(%rbx), %r15
@@ -2721,7 +2739,13 @@ yap_cap:
     imul %r9, %rdi
     push %rcx
     push %r9
+    cmp $1, %r9
+    jne yap_plain
+    call y_alloc_pf
+    jmp yap_ok
+yap_plain:
     call y_alloc
+yap_ok:
     pop %r9
     pop %rcx
     mov %rax, %r14
@@ -2857,7 +2881,13 @@ yax_cap1:
     imul %r9, %rdi
     push %r9
     push %rdx
+    cmp $1, %r9
+    jne yax_plain
+    call y_alloc_pf
+    jmp yax_ok
+yax_plain:
     call y_alloc
+yax_ok:
     pop %rdx
     pop %r9
     mov %rdx, 8(%rbx)

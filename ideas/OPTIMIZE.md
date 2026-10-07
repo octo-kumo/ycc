@@ -378,10 +378,16 @@ cap: **61,934,562 -> 49,296,546** instructions (callgrind, -20.4%) at the same
 peak RSS (24.8 MB), same output. Short-string workloads are unchanged (the
 per-block drain overhead dominates there).
 
-**Left.** `[byte]`/`[long]`/`[float]` array *data* blocks: the array helpers
-(`yas_sz`, `yapd_room`, `yap_cap`, `yax_cap1`, `yai_sz`) do know `esz` (1 for
-packed `[byte]`), but an 8-byte element may or may not be a pointer, so the
-emitter would have to pass that down per element type.
+**Packed `[byte]` data (done).** The array helpers already know `esz`, and
+`esz == 1` means the payload is bytes: the five data allocations a packed array
+can grow through (`y_arr_slice`, `y_arr_cat`, `y_arr_push`'s room, the capacity
+doubling, and the extend path) branch on `%r9 == 1` and allocate with
+`y_alloc_pf`. 600 live 30 KB byte arrays: **90.9M -> 36.7M** callgrind
+instructions, same peak RSS and output.
+
+**Left.** The same for 8-byte elements that cannot hold a pointer (`[long]`,
+`[float]`, and `[int]`/`[bool]` arrays if they are unpacked): `esz` alone cannot
+say, so the emitter has to pass pointer-freeness down per element type.
 
 ### A7. `--gc`: do not link the collector a program cannot grow into (done)
 
