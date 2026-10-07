@@ -6020,12 +6020,34 @@ def arr_can_inline(st: EmitSt, fnode: Node) -> bool {
         false
     } else {
         let f: Func = fnode;
-        if (len(fn_captures(f, st.fns.ix, "")) > 0) { false }
-        else if (name_in(fv_ids(f.body, []), "self")) { false }
+        if (name_in(fv_ids(f.body, []), "self")) { false }
         else if (len(box_names(f)) > 0) { false }
         else if (param_appended(f.params, app_names(f.body, false, []))) { false }
         else { true }
     }
+};
+
+// Captures of a literal that will be inlined: box each enclosing binding (the
+// shared cell every closure sees, see box_capture). The record itself is built
+// at the inline point, where the live temporaries have been promoted to block
+// slots -- building it here would hand out slots in the temporaries' range,
+// which is exactly the collision gen_lambda_inline's promotion exists to
+// avoid.
+def arr_box_caps(st: EmitSt, fnode: Node) -> EmitSt {
+    let f: Func = fnode;
+    let caps = fn_captures(f, st.fns.ix, "");
+    caps.foreach((e) => {
+        let cn: str = e;
+        st = box_capture(st, cn);
+    });
+    st
+};
+
+def st_env(st: EmitSt, e: [Slot]) -> EmitSt {
+    { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid, fuid: st.fuid,
+        loc: st.loc, env: e, slots: st.slots, temp: st.temp,
+        self_label: st.self_label, end_label: st.end_label, fns: st.fns,
+        bodies: st.bodies, btext: st.btext, blabels: st.blabels }
 };
 
 def param_appended(ps: [str], ap: [str]) -> bool {
@@ -6060,10 +6082,12 @@ def gen_lambda_inline(st: EmitSt, fnode: Node, arg_regs: [long]) -> EmitSt {
     // st.slots, which would otherwise land on top of them.
     st = st_slots(st, st.slots + st.temp);
     st = st_temp(st, 0);
+    // The parameters first: the record below clobbers %rax/%rcx, which is
+    // where the loop has the element and the index.
     let n = len(f.params);
     if (n > len(arg_regs)) { n = len(arg_regs); };
     let base = st.slots;
-    st = st_slots(st, st.slots + n);
+    st = st_slots(st, base + n);
     let rl = next_loc(st);
     st = rl.st;
     for i in 0..n {
@@ -6071,9 +6095,54 @@ def gen_lambda_inline(st: EmitSt, fnode: Node, arg_regs: [long]) -> EmitSt {
         st = emit_insn(st, insn.F_MOV_R_D, arg_regs[i], 64, insn.R_RBP, -1, 1, off, -1);
         st = env_define(st, f.params[i], "param", off, -1, "", f.ptypes[i]);
     };
+    // The stack closure record the captures read through: word j+1 is capture
+    // j's cell pointer (word 0 is the code pointer, which an inlined body never
+    // reads, so it is only reserved). Rebuilt each iteration, so a capture
+    // whose cell was refreshed -- a loop variable -- is picked up.
+    let caps = fn_captures(f, st.fns.ix, "");
+    let m = len(caps);
+    let origs: [Slot] = [];
+    if (m > 0) {
+        let rbase = st.slots;
+        let rptr = (rbase + m + 1) * -8;
+        let rsoff = (rbase + m + 2) * -8;
+        st = st_slots(st, rbase + m + 2);
+        st = emit_insn(st, insn.F_LEA_D_R, insn.R_RBP, -1, 1, rptr, -1, insn.R_RAX, 64);
+        st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, rsoff, -1);
+        let ci = 0;
+        while (ci < m) {
+            st = gen_cap_ptr(st, caps[ci]);
+            st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, rptr + 8 * (ci + 1), -1);
+            ci++;
+        };
+        // The enclosing bindings, so they can be put back after the body:
+        // env_define APPENDS to the env array in place (arrays are
+        // references), so saving and restoring the array itself would restore
+        // the capture entries too and let every later read of the name go
+        // through a record that no longer exists.
+        let cj = 0;
+        while (cj < m) {
+            let cn: str = caps[cj];
+            let oe = env_find(st, cn);
+            origs += oe;
+            st = env_define(st, cn, "capture", rsoff, -1, tostring(cj), oe.typ);
+            cj++;
+        };
+    };
     st = st_end_label(st, rl.label);
     st = gen_block(st, f.body);
     st = emit_label(st, rl.label);
+    // Put the enclosing bindings back: env_define APPENDS to the env array in
+    // place (arrays are references), so a saved copy of the array would carry
+    // the capture entries with it, and every later read of the name would go
+    // through a record that is gone by then.
+    let ck = 0;
+    while (ck < m) {
+        let cn: str = caps[ck];
+        let oe: Slot = origs[ck];
+        st = env_define(st, cn, oe.kind, oe.off, oe.label, oe.mark, oe.typ);
+        ck++;
+    };
     st = st_end_label(st, save_end);
     st = st_slots(st, save_slots);
     st_temp(st, save_temp)
@@ -6299,7 +6368,9 @@ def gen_arr_sort(st: EmitSt, node: Call, sorted: bool) -> EmitSt {
     };
     let inl = arr_can_inline(st, args[0]);
     let adir = 0 - 1;
-    if (!inl) {
+    if (inl) {
+        st = arr_box_caps(st, args[0]);
+    } else {
         st = gen(st, args[0]);
         adir = arr_direct_label(st, args[0]);
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, foff, -1);
@@ -6426,7 +6497,9 @@ def gen_arr_iter_method(st: EmitSt, node: Call, key: str, at: Type) -> EmitSt {
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, aoff, -1);
         let inl = arr_can_inline(st, fnode);
         let adir = 0 - 1;
-        if (!inl) {
+        if (inl) {
+            st = arr_box_caps(st, fnode);
+        } else {
             st = gen(st, fnode);
             adir = arr_direct_label(st, fnode);
             st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, foff, -1);
@@ -6475,7 +6548,9 @@ def gen_arr_iter_method(st: EmitSt, node: Call, key: str, at: Type) -> EmitSt {
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, aoff, -1);
         let inl = arr_can_inline(st, fnode);
         let adir = 0 - 1;
-        if (!inl) {
+        if (inl) {
+            st = arr_box_caps(st, fnode);
+        } else {
             st = gen(st, fnode);
             adir = arr_direct_label(st, fnode);
             st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, foff, -1);
@@ -6550,7 +6625,9 @@ def gen_arr_iter_method(st: EmitSt, node: Call, key: str, at: Type) -> EmitSt {
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, aoff, -1);
         let inl = arr_can_inline(st, fnode);
         let adir = 0 - 1;
-        if (!inl) {
+        if (inl) {
+            st = arr_box_caps(st, fnode);
+        } else {
             st = gen(st, fnode);
             adir = arr_direct_label(st, fnode);
             st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, foff, -1);

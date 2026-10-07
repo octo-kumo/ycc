@@ -7,7 +7,8 @@
 # minimal.y prints a number; print(<integer>) now formats into a stack buffer
 # (rt.y y_print_long -> arch y_os_print_int), so it allocates nothing either and
 # fell from 3120 to 440.
-# forloop/foreach are the loop-parity pair. alloc_once.y allocates once, outside
+# foreach_local/foreach_capture are the captured shapes (inlined via a stack
+# record). forloop/foreach are the loop-parity pair. alloc_once.y allocates once, outside
 # any loop, so --gc=auto leaves the collector out of it (1312 B).
 hello.y 381
 minimal.y 440
@@ -15,3 +16,5 @@ forloop.y 3497
 foreach.y 3333
 dead.y 1551
 alloc_once.y 1312
+foreach_local.y 3319
+foreach_capture.y 3957

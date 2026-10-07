@@ -7384,9 +7384,6 @@ static int param_appended(Yv *ps, Yv *ap) {
 
 static int arr_can_inline(Yv *st, Yv *fnode) {
     if (yv_l(yr_get(fnode, "k")) != K_func) { return 0; }
-    if (yv_len(fn_captures(fnode, yr_get(yr_get(st, "fns"), "ix"), ys(""))) > 0) {
-        return 0;
-    }
     if (name_in(fv_ids(yr_get(fnode, "body"), yav(0)), ys("self"))) { return 0; }
     if (yv_len(box_names(fnode)) > 0) { return 0; }
     if (param_appended(yr_get(fnode, "params"),
@@ -7394,6 +7391,22 @@ static int arr_can_inline(Yv *st, Yv *fnode) {
         return 0;
     }
     return 1;
+}
+
+/* Captures of a literal that will be inlined: box each enclosing binding (the
+ * shared cell every closure sees, see box_capture). The record itself is built
+ * at the inline point, where the live temporaries have been promoted to block
+ * slots -- building it here would hand out slots in the temporaries' range,
+ * which is exactly the collision gen_lambda_inline's promotion exists to
+ * avoid. */
+static Yv *arr_box_caps(Yv *st, Yv *fnode) {
+    Yv *caps = fn_captures(fnode, yr_get(yr_get(st, "fns"), "ix"), ys(""));
+    ylong i = 0;
+    while (i < yv_len(caps)) {
+        st = box_capture(st, ya_get(caps, i));
+        i = i + 1;
+    }
+    return st;
 }
 
 /* `return` inside an inlined body lands on this state's end_label. */
@@ -7424,6 +7437,8 @@ static Yv *gen_lambda_inline(Yv *st, Yv *fnode, Yv *arg_regs) {
     st = st_slots(st, save_slots + save_temp);
     st = st_temp(st, 0);
     Yv *params = yr_get(fnode, "params");
+    /* The parameters first: the record below clobbers %rax/%rcx, which is
+     * where the loop has the element and the index. */
     ylong n = yv_len(params);
     if (n > yv_len(arg_regs)) { n = yv_len(arg_regs); }
     ylong base = yv_l(yr_get(st, "slots"));
@@ -7440,9 +7455,55 @@ static Yv *gen_lambda_inline(Yv *st, Yv *fnode, Yv *arg_regs) {
                         ys(""), ya_get(yr_get(fnode, "ptypes"), i));
         i = i + 1;
     }
+    /* The stack closure record the captures read through: word j+1 is capture
+     * j's cell pointer (word 0 is the code pointer, which an inlined body
+     * never reads, so it is only reserved). Rebuilt each iteration, so a
+     * capture whose cell was refreshed -- a loop variable -- is picked up. */
+    Yv *caps = fn_captures(fnode, yr_get(yr_get(st, "fns"), "ix"), ys(""));
+    ylong m = yv_len(caps);
+    Yv *origs = yav(0);
+    if (m > 0) {
+        ylong rbase = yv_l(yr_get(st, "slots"));
+        ylong rptr = (rbase + m + 1) * -8;
+        ylong rsoff = (rbase + m + 2) * -8;
+        st = st_slots(st, rbase + m + 2);
+        st = emit_insn(st, F_LEA_D_R, R_RBP, -1, 1, rptr, -1, R_RAX, 64);
+        st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, rsoff, -1);
+        ylong ci = 0;
+        while (ci < m) {
+            st = gen_cap_ptr(st, ya_get(caps, ci));
+            st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1,
+                           rptr + 8 * (ci + 1), -1);
+            ci = ci + 1;
+        }
+        /* The enclosing bindings, so they can be put back after the body:
+         * env_define APPENDS to the env array in place (arrays are
+         * references), so saving and restoring the array itself would restore
+         * the capture entries too and let every later read of the name go
+         * through a record that no longer exists. */
+        ylong cj = 0;
+        while (cj < m) {
+            Yv *cn = ya_get(caps, cj);
+            Yv *oe = env_find(st, cn);
+            origs = ya_push(origs, oe);
+            st = env_define(st, cn, ys("capture"), rsoff, yv_long(-1),
+                            ys_tostring(yv_long(cj)), yr_get(oe, "typ"));
+            cj = cj + 1;
+        }
+    }
     st = st_end_label(st, lbl);
     st = gen_block(st, yr_get(fnode, "body"));
     st = emit_label(st, lbl);
+    /* Put the enclosing bindings back (see the note above). */
+    ylong ck = 0;
+    while (ck < m) {
+        Yv *cn = ya_get(caps, ck);
+        Yv *oe = ya_get(origs, ck);
+        st = env_define(st, cn, yr_get(oe, "kind"), yv_l(yr_get(oe, "off")),
+                        yr_get(oe, "label"), yr_get(oe, "mark"),
+                        yr_get(oe, "typ"));
+        ck = ck + 1;
+    }
     st = st_end_label(st, save_end);
     st = st_slots(st, save_slots);
     return st_temp(st, save_temp);
@@ -7709,7 +7770,9 @@ static Yv *gen_arr_sort(Yv *st, Yv *node, int sorted) {
     }
     int inl = arr_can_inline(st, ya_get(args, 0));
     ylong adir = -1;
-    if (!inl) {
+    if (inl) {
+        st = arr_box_caps(st, ya_get(args, 0));
+    } else {
         st = gen(st, ya_get(args, 0));
         adir = arr_direct_label(st, ya_get(args, 0));
         st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, foff, -1);
@@ -7833,7 +7896,9 @@ static Yv *gen_arr_iter_method(Yv *st, Yv *node, Yv *key, Yv *at) {
         st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, aoff, -1);
         int inl = arr_can_inline(st, fnode);
         ylong adir = -1;
-        if (!inl) {
+        if (inl) {
+            st = arr_box_caps(st, fnode);
+        } else {
             st = gen(st, fnode);
             adir = arr_direct_label(st, fnode);
             st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, foff, -1);
@@ -7885,7 +7950,9 @@ static Yv *gen_arr_iter_method(Yv *st, Yv *node, Yv *key, Yv *at) {
         st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, aoff, -1);
         int inl = arr_can_inline(st, fnode);
         ylong adir = -1;
-        if (!inl) {
+        if (inl) {
+            st = arr_box_caps(st, fnode);
+        } else {
             st = gen(st, fnode);
             adir = arr_direct_label(st, fnode);
             st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, foff, -1);
@@ -7962,7 +8029,9 @@ static Yv *gen_arr_iter_method(Yv *st, Yv *node, Yv *key, Yv *at) {
         st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, aoff, -1);
         int inl = arr_can_inline(st, fnode);
         ylong adir = -1;
-        if (!inl) {
+        if (inl) {
+            st = arr_box_caps(st, fnode);
+        } else {
             st = gen(st, fnode);
             adir = arr_direct_label(st, fnode);
             st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, foff, -1);

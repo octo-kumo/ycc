@@ -129,11 +129,21 @@ for cc in "$CYCC" "$YREF"; do
     #     record path).
     FC="$ROOT/test/treeshake/foreach_capture.y"
     if compile "$cc" "$FC" "$WORK/fc.$tag" && ( cd "$ROOT" && "$WORK/fc.$tag" ) > "$WORK/fc.$tag.out" 2>&1 \
-        && [ "$(cat "$WORK/fc.$tag.out")" = "6
+        && [ "$(cat "$WORK/fc.$tag.out")" = "5
+6
 9" ]; then
         pass "treeshake [$tag] capturing and nested literal closures still work"
     else
         fail "treeshake [$tag] capturing and nested literal closures" "$(cat "$WORK/fc.$tag.out" 2>/dev/null | tr '\n' ' ')"
+    fi
+    # A captured local accumulator is inlined too (the record lives on the
+    # stack for the loop): no indirect call, and the size of the shape.
+    FL="$ROOT/test/treeshake/foreach_local.y"
+    if listing "$FL" | grep -q 'call \*%r10'; then
+        fail "treeshake [$tag] foreach_local.y still calls through the record" \
+             "$(listing "$FL" | grep -n 'call \*%r10' | head -2 | tr '\n' ' ')"
+    else
+        pass "treeshake [$tag] foreach_local.y inlines its captured literal"
     fi
     PRINTV="$ROOT/test/treeshake/print_var.y"
     if listing "$PRINTV" | grep -q 'y_print_hstr'; then
