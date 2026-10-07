@@ -349,6 +349,7 @@ Yv *arch_kernel_bss(void) {
               "y_user_rsp:\n.zero 8\n"
               /* The running task: its kernel stack top, and the %rsp of its
                  suspended frame (the frame IS the state). */
+              "y_irq_scratch:\n.zero 8\n"
               "y_cur_kstack:\n.zero 8\n"
               "y_cur_task_rsp:\n.zero 8\n"
               /* The Y heap's region: a physical address and direct-map
@@ -740,30 +741,28 @@ Yv *kernel_irq_text(int has_trap) {
         out = ys_cat(out, ys_cat(ys_cat(ys("y_irq_stub_"),
                                         ys_long(yv_l(yr_get(e, "line")))),
                                  ys(":\n")));
-        out = ys_cat(out, ys("    push %rbp\n"));
-        out = ys_cat(out, ys("    push %rax\n"));
+        /* An interrupt stub is the syscall entry's shape: nine saved
+         * registers -- rax, rdi, rsi, rdx, r10, r8, r9 and then rcx, r11 --
+         * above the frame the CPU pushed, which is what makes a task switch
+         * possible from here (a suspended task's %rsp always points at the
+         * lowest of those nine, from either path).  The switch itself only
+         * happens for a USER frame: a ring-0 one has no RSP/SS words. */
         out = ys_cat(out, ys("    push %rcx\n"));
-        out = ys_cat(out, ys("    push %rdx\n"));
-        out = ys_cat(out, ys("    push %rsi\n"));
+        out = ys_cat(out, ys("    push %r11\n"));
+        out = ys_cat(out, ys("    push %rax\n"));
         out = ys_cat(out, ys("    push %rdi\n"));
+        out = ys_cat(out, ys("    push %rsi\n"));
+        out = ys_cat(out, ys("    push %rdx\n"));
+        out = ys_cat(out, ys("    push %r10\n"));
         out = ys_cat(out, ys("    push %r8\n"));
         out = ys_cat(out, ys("    push %r9\n"));
-        out = ys_cat(out, ys("    push %r10\n"));
-        out = ys_cat(out, ys("    push %r11\n"));
-        out = ys_cat(out, ys("    mov %rsp, %rbp\n"));
+        /* The stack is aligned for the handler's call, and the value to
+         * restore parks in a GLOBAL rather than %rbp: the interrupt may have
+         * arrived in the middle of the kernel's own frame-pointer code. */
+        out = ys_cat(out, ys("    mov %rsp, y_irq_scratch(%rip)\n"));
         out = ys_cat(out, ys("    and $-16, %rsp\n"));
         out = ys_cat(out, ys_cat(ys_cat(ys("    call "), yr_get(e, "label")), ys("\n")));
-        out = ys_cat(out, ys("    mov %rbp, %rsp\n"));
-        out = ys_cat(out, ys("    pop %r11\n"));
-        out = ys_cat(out, ys("    pop %r10\n"));
-        out = ys_cat(out, ys("    pop %r9\n"));
-        out = ys_cat(out, ys("    pop %r8\n"));
-        out = ys_cat(out, ys("    pop %rdi\n"));
-        out = ys_cat(out, ys("    pop %rsi\n"));
-        out = ys_cat(out, ys("    pop %rdx\n"));
-        out = ys_cat(out, ys("    pop %rcx\n"));
-        out = ys_cat(out, ys("    pop %rax\n"));
-        out = ys_cat(out, ys("    pop %rbp\n"));
+        out = ys_cat(out, ys("    mov y_irq_scratch(%rip), %rsp\n"));
         if (yv_l(yr_get(e, "line")) >= 8) {
             out = ys_cat(out, ys("    mov $160, %edx\n"));
             out = ys_cat(out, ys("    mov $32, %eax\n"));
@@ -772,6 +771,38 @@ Yv *kernel_irq_text(int has_trap) {
         out = ys_cat(out, ys("    mov $32, %edx\n"));
         out = ys_cat(out, ys("    mov $32, %eax\n"));
         out = ys_cat(out, ys("    outb %al, %dx\n"));
+        /* The switch point: CS is nine words above the frame's RIP. */
+        out = ys_cat(out, ys("    mov 80(%rsp), %rax\n"));
+        out = ys_cat(out, ys("    and $3, %rax\n"));
+        out = ys_cat(out, ys_cat(ys("    jz y_irq_same_"), ys_long(yv_l(yr_get(e, "line")))));
+        out = ys_cat(out, ys("\n"));
+        out = ys_cat(out, ys("    mov %rsp, y_cur_task_rsp(%rip)\n"));
+        /* The scheduler is Y code and may use SSE, which faults on a
+         * misaligned stack: align the call and keep the canonical %rsp in the
+         * scratch word for the "stay" case. */
+        out = ys_cat(out, ys("    mov %rsp, y_irq_scratch(%rip)\n"));
+        out = ys_cat(out, ys("    and $-16, %rsp\n"));
+        out = ys_cat(out, ys("    call y_sched_pick\n"));
+        out = ys_cat(out, ys("    test %rax, %rax\n"));
+        out = ys_cat(out, ys_cat(ys("    jz y_irq_stay_"), ys_long(yv_l(yr_get(e, "line")))));
+        out = ys_cat(out, ys("\n"));
+        out = ys_cat(out, ys("    mov %rax, %rsp\n"));
+        out = ys_cat(out, ys_cat(ys("    jmp y_irq_same_"), ys_long(yv_l(yr_get(e, "line")))));
+        out = ys_cat(out, ys("\n"));
+        out = ys_cat(out, ys_cat(ys("y_irq_stay_"), ys_long(yv_l(yr_get(e, "line")))));
+        out = ys_cat(out, ys(":\n"));
+        out = ys_cat(out, ys("    mov y_irq_scratch(%rip), %rsp\n"));
+        out = ys_cat(out, ys_cat(ys("y_irq_same_"), ys_long(yv_l(yr_get(e, "line")))));
+        out = ys_cat(out, ys(":\n"));
+        out = ys_cat(out, ys("    pop %r9\n"));
+        out = ys_cat(out, ys("    pop %r8\n"));
+        out = ys_cat(out, ys("    pop %r10\n"));
+        out = ys_cat(out, ys("    pop %rdx\n"));
+        out = ys_cat(out, ys("    pop %rsi\n"));
+        out = ys_cat(out, ys("    pop %rdi\n"));
+        out = ys_cat(out, ys("    pop %rax\n"));
+        out = ys_cat(out, ys("    pop %r11\n"));
+        out = ys_cat(out, ys("    pop %rcx\n"));
         out = ys_cat(out, ys("    iretq\n"));
         i = i + 1;
     };

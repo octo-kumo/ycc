@@ -946,9 +946,12 @@ def sched_add(cr3: long, kstack: long, frame: long, name: str) -> long {
 };
 
 // A kernel stack with the frame that enters `entry` at ring 3 on `ustack`.
-// The shape is the entry stub's: seven register slots (popped first, rax
-// highest) above an IRETQ frame whose lowest word is RIP -- the convention a
-// suspended task's %rsp follows.
+// The shape is the entry stubs' contract: nine register slots above an IRETQ
+// frame whose lowest word is RIP -- [r9][r8][r10][rdx][rsi][rdi][rax][r11]
+// [rcx][RIP][CS][RFLAGS][RSP][SS] -- which is the convention a suspended
+// task's %rsp follows in BOTH paths.  Get this wrong and a task that has
+// never run is resumed with the frame shifted by two words, which is an IRETQ
+// with a garbage CS.
 def task_frame(kstack_top: long, entry: long, ustack: long) -> long {
     let p = kstack_top;
     // Written from the top down, which is the order the entry stub pushes it:
@@ -958,6 +961,8 @@ def task_frame(kstack_top: long, entry: long, ustack: long) -> long {
     p = p - 8; poke_va64(p, 514);        // RFLAGS (IF and the reserved bit 1)
     p = p - 8; poke_va64(p, 35);         // CS (user code | 3)
     p = p - 8; poke_va64(p, entry);      // RIP
+    p = p - 8; poke_va64(p, 0);          // rcx (a rescue slot)
+    p = p - 8; poke_va64(p, 0);          // r11 (ditto)
     p = p - 8; poke_va64(p, 0);          // rax
     p = p - 8; poke_va64(p, 0);          // rdi
     p = p - 8; poke_va64(p, 0);          // rsi

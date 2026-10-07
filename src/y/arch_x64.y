@@ -291,6 +291,7 @@ def arch_kernel_bss() -> str {
     // The running task: its kernel stack top (where SYSCALL lands and where the
     // TSS RSP0 points) and the %rsp of its suspended frame (the scheduler's
     // only view of a task's registers, because the frame IS the state).
+    "y_irq_scratch:\n.zero 8\n" +
     "y_cur_kstack:\n.zero 8\n" +
     "y_cur_task_rsp:\n.zero 8\n" +
     "y_heap_start:\n.zero 8\n" +
@@ -656,32 +657,39 @@ def kernel_irq_text(has_trap: bool) -> str {
         out += "y_kernel_trap:\n";
         out += "    jmp y_kernel_halt\n";
     };
+    // An interrupt stub is the syscall entry's shape, and that is the whole
+    // contract between the two paths: [r9][r8][r10][rdx][rsi][rdi][rax][r11]
+    // [rcx][RIP][CS][RFLAGS][RSP][SS], lowest first, so a task suspended in
+    // one is resumed in the other.  That is what makes a TASK SWITCH possible from here: a
+    // suspended task's %rsp always points at the lowest of those nine, whether
+    // it was suspended on the way out of a syscall or on the way out of an
+    // interrupt, so the scheduler can resume either.
+    //
+    // The switch only happens when the interrupted context was USER (CS's RPL
+    // is 3): a ring-0 frame carries no RSP/SS words, so resuming one with the
+    // user exit path would iretq the wrong stack.  The kernel is not
+    // preemptible -- the plan's design -- so a ring-0 interrupt just returns.
     res_irq_stubs.foreach((e) => {
         out += "y_irq_stub_" + tostring(e.line) + ":\n";
-        out += "    push %rbp\n";
-        out += "    push %rax\n";
         out += "    push %rcx\n";
-        out += "    push %rdx\n";
-        out += "    push %rsi\n";
+        out += "    push %r11\n";
+        out += "    push %rax\n";
         out += "    push %rdi\n";
+        out += "    push %rsi\n";
+        out += "    push %rdx\n";
+        out += "    push %r10\n";
         out += "    push %r8\n";
         out += "    push %r9\n";
-        out += "    push %r10\n";
-        out += "    push %r11\n";
-        out += "    mov %rsp, %rbp\n";
+        // The stack is aligned for the handler's call, and the value to
+        // restore is parked in a GLOBAL rather than in %rbp: the interrupt may
+        // have arrived in the middle of the kernel's own frame-pointer code,
+        // and clobbering %rbp there is a #GP a few instructions later with
+        // nothing to connect it to the interrupt.  One word is enough -- an
+        // interrupt gate clears IF, so an interrupt cannot interrupt one.
+        out += "    mov %rsp, y_irq_scratch(%rip)\n";
         out += "    and $-16, %rsp\n";
         out += "    call " + e.label + "\n";
-        out += "    mov %rbp, %rsp\n";
-        out += "    pop %r11\n";
-        out += "    pop %r10\n";
-        out += "    pop %r9\n";
-        out += "    pop %r8\n";
-        out += "    pop %rdi\n";
-        out += "    pop %rsi\n";
-        out += "    pop %rdx\n";
-        out += "    pop %rcx\n";
-        out += "    pop %rax\n";
-        out += "    pop %rbp\n";
+        out += "    mov y_irq_scratch(%rip), %rsp\n";
         if (e.line >= 8) {
             out += "    mov $160, %edx\n";
             out += "    mov $32, %eax\n";
@@ -690,6 +698,36 @@ def kernel_irq_text(has_trap: bool) -> str {
         out += "    mov $32, %edx\n";
         out += "    mov $32, %eax\n";
         out += "    outb %al, %dx\n";
+        // The switch point.  CS sits nine words above the frame's RIP: the
+        // nine saved registers, then RIP, then CS.
+        out += "    mov 80(%rsp), %rax\n";
+        out += "    and $3, %rax\n";
+        out += "    jz y_irq_same_" + tostring(e.line) + "\n";
+        out += "    mov %rsp, y_cur_task_rsp(%rip)\n";
+        // The scheduler is Y code and may use SSE, which faults on a
+        // misaligned stack: the interrupt arrived with whatever alignment the
+        // interrupted code had, so the call is aligned and the canonical %rsp
+        // is kept in the scratch word for the "stay" case.  (The syscall path
+        // needs no such thing: its stack top is page-aligned.)
+        out += "    mov %rsp, y_irq_scratch(%rip)\n";
+        out += "    and $-16, %rsp\n";
+        out += "    call y_sched_pick\n";
+        out += "    test %rax, %rax\n";
+        out += "    jz y_irq_stay_" + tostring(e.line) + "\n";
+        out += "    mov %rax, %rsp\n";
+        out += "    jmp y_irq_same_" + tostring(e.line) + "\n";
+        out += "y_irq_stay_" + tostring(e.line) + ":\n";
+        out += "    mov y_irq_scratch(%rip), %rsp\n";
+        out += "y_irq_same_" + tostring(e.line) + ":\n";
+        out += "    pop %r9\n";
+        out += "    pop %r8\n";
+        out += "    pop %r10\n";
+        out += "    pop %rdx\n";
+        out += "    pop %rsi\n";
+        out += "    pop %rdi\n";
+        out += "    pop %rax\n";
+        out += "    pop %r11\n";
+        out += "    pop %rcx\n";
         out += "    iretq\n";
     });
     // %rax = a handler's address -> %rax = the first 8 bytes of its IDT

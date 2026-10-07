@@ -349,9 +349,20 @@ y_heap_limit_get:
 # return to address 6 -- so the last pop IS the return value.  IRETQ restores only
 # RIP/CS/RFLAGS/RSP/SS, which is why the registers are popped by hand.
 #
+# The layout at the switch point -- and this is the WHOLE contract between the
+# two entry paths, because a task suspended in one is resumed in the other:
+#
+#   [r9][r8][r10][rdx][rsi][rdi][rax][r11][rcx][RIP][CS][RFLAGS][RSP][SS]
+#
+# The first seven are the dispatcher's arguments.  r11 and rcx sit above them
+# so that an INTERRUPT stub, which has to save those two by hand, can produce
+# the same shape; the syscall path needs the slots only for that reason, since
+# its IRETQ restores both from the frame.
+#
 # The syscall number is pushed above the frame first and read back into place
-# five words later (40(%rsp) from the RIP): %rax is the frame's scratch, and
-# the number belongs just ABOVE %rdi, where the seventh pop finds it.
+# seven words later (56(%rsp) from the RIP, with rcx and r11 in between):
+# %rax is the frame's scratch, and the number belongs just ABOVE %rdi, where
+# the seventh pop finds it.
 #
 # A task switch is a stack switch at the marked point: every task that is
 # switched out is suspended there with %rsp saved into one fixed word, and
@@ -371,7 +382,9 @@ y_syscall_entry:
     mov $35, %rax
     push %rax
     push %rcx
-    mov 40(%rsp), %rax
+    push %rcx
+    push %r11
+    mov 56(%rsp), %rax
     push %rax
     push %rdi
     push %rsi
@@ -394,6 +407,8 @@ y_se_same:
     pop %rsi
     pop %rdi
     pop %rax
+    pop %r11
+    pop %rcx
     iretq
 
 #=== add: y_syscall_entry_addr ===
@@ -419,10 +434,12 @@ y_cur_task_rsp_get:
     ret
 
 #=== add: y_enter_frame ===
-# y_enter_frame(rsp): resume a suspended frame.  The syscall entry's tail, and
-# the way a task is started for the first time -- a switch *inside* the
-# scheduler needs no such thing, because every suspended task is suspended at
-# exactly this shape.
+# y_enter_frame(rsp): resume a suspended frame.  The syscall entry's tail, nine
+# register slots and an IRETQ, and the way a task is started for the first time
+# -- a switch *inside* the scheduler needs no such thing, because every
+# suspended task is suspended at exactly this shape.  It has to be the SAME
+# tail as the stubs': popping seven here and nine there is an IRETQ with the
+# wrong frame.
 y_enter_frame:
     mov 8(%rsp), %rsp
     pop %r9
@@ -432,6 +449,8 @@ y_enter_frame:
     pop %rsi
     pop %rdi
     pop %rax
+    pop %r11
+    pop %rcx
     iretq
 
 #=== add: y_enter_user ===
