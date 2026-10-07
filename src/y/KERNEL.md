@@ -1851,3 +1851,26 @@ the branch that currently idles or exits -- because that is precisely "nothing e
 can run", which is when the driver's next line should execute.  With that, u005's
 exchange proceeds to "server done" and only then does the driver's kexit run, and
 every fixture's .exit becomes the driver's own status (19) instead of 1.
+
+### Round 107: the broker syscalls compile -- but importing os/ from std/ duplicates modules
+
+Added sys_openat (257), sys_close (3) and sys_lseek (8) to std/kernel.y, a
+user_path() helper that copies a NUL-terminated path out of the CALLER's address
+space (a [byte] array, then from_bytes), and made sys_read serve fd 0 from the
+console and every other fd from the broker.  Both probes compile, which settles
+two unknowns at once: std/kernel.y CAN import through the repo layout
+("../../../os/kernel/fd.y") and from_bytes is available there.
+
+But test/kernel fell from 49/0/49 to 37/6/43, and the shape of that failure is the
+diagnosis: the total dropped as well as failing, and the most likely reason is
+that EVERY kernel program now pulls in os/kernel/fd.y -> os/kernel/yfs.y while the
+t013-t017 fixtures import those same modules separately, so the link sees two
+copies of their module globals.  Reverted, suite back to 49/0/49.
+
+The fix is structural rather than a tweak: make the filesystem and the broker part
+of the STD dependency set -- src/y/std/yfs.y and src/y/std/fd.y -- so there is
+exactly one copy and std/kernel.y imports them by a same-directory path
+("./yfs.y").  The fixtures then import the same std units instead of reaching into
+os/, and the os/ copies go away.  That is the next change to make, and it is also
+the right shape for the plan: the kernel's own syscall layer should not depend on
+where a program's files happen to live.
