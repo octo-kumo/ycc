@@ -315,6 +315,34 @@ padded):
   function under the name PEM users reach it through.
 \end{description}
 
+\subsection{Ordering (the sort module)}
+\label{sec:builtin-sort}
+
+\ic{import sort;} sorts arrays. Y has no generics, so each element type has
+its own pair: \ty{long}, \ty{str} and \ty{float}, each with a plain
+\ic{sort} and a \ic{sort\_by} that takes your own comparison. Every one is a
+merge sort --- stable (equal elements keep their order) and O($n \log n$).
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{sort.sort(a)}, \ic{sort.sort\_desc(a)}] The elements of a
+  \ic{[long]} in order, and the other way round.
+\item[\ic{sort.sort\_str(a)}, \ic{sort.sort\_str\_desc(a)}] The same for a
+  \ic{[str]}, compared by bytes.
+\item[\ic{sort.sort\_f(a)}] The same for a \ic{[float]}. A NaN compares
+  false both ways, so it keeps its place among its equals rather than sinking
+  to an end --- stable is observable there.
+\item[\ic{sort.sort\_by(a, less)}, \ic{sort.sort\_str\_by(a, less)},
+  \ic{sort.sort\_f\_by(a, less)}] Sorted by \ty{less}, a function of two
+  elements answering whether the first comes before the second. It must be a
+  strict order --- never true of equal elements --- or the merge's choice
+  between two equal runs stops meaning anything:
+  \ic{sort.sort\_by([5, -1, 9], def (a, b) -> bool \{ abs(a) < abs(b) \})}.
+\end{description}
+
+\noindent A sort returns a new array; the one you passed is not touched.
+\ic{fs.list\_dir} and \ic{json}'s sorted printer use this module, so their
+output is the order it gives.
+
 \subsection{Mathematics (the math module)}
 \label{sec:builtin-math}
 

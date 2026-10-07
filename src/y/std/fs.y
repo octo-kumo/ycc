@@ -29,6 +29,9 @@
 const FS_LISTBUF = 32768;
 let y_fs_listbuf: [byte] = [];
 
+// list_dir's own sort now lives in std/sort.y.
+import sort;
+
 // openat's dirfd for a path relative to the working directory.
 def fs_at_cwd() -> long { -100 };
 
@@ -293,24 +296,9 @@ def list_dir(path: str) -> [str]? {
             };
         };
         close_file(fd);
-        some(sort_names(names))
-    }
-};
-
-// xs sorted (a merge sort).
-def sort_names(xs: [str]) -> [str] {
-    if (len(xs) < 2) { xs } else {
-        let mid = len(xs) / 2;
-        let a = sort_names(xs[0:mid]);
-        let b = sort_names(xs[mid:]);
-        let out: [str] = [];
-        let i = 0;
-        let j = 0;
-        while (i < len(a) || j < len(b)) {
-            if (j >= len(b) || (i < len(a) && a[i] <= b[j])) { out += a[i]; i++; }
-            else { out += b[j]; j++; };
-        };
-        out
+        // list_dir sorts its names, and std/sort.y is where that sort lives now
+        // (it had one copy here of its own).
+        some(sort.sort_str(names))
     }
 };
 

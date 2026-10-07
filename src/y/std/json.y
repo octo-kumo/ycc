@@ -42,6 +42,9 @@
 const json_depth_max = 200;
 const json_depth_error = "<json: too deep>";
 
+// pretty's canonical member order.
+import sort;
+
 // Every member needs its OWN shape. A record type is its set of fields, so
 // `Num = { v: str }` and `Str = { v: str }` would be one type: `if let Str` would
 // match a number, and the two arms would overwrite each other. Distinct field
@@ -910,29 +913,7 @@ def max_depth(v: Val) -> long {
 // canonical form, and JSON member order is not significant, so an unsorted
 // printer's output depends on map iteration order.
 //
-// There is no sort in the language (SUGGESTIONS.md #17), so this is an
-// insertion sort over the key list: O(n^2), which is right for the object
-// sizes a config file or an API response actually has and wrong for a large
-// one.  Each insertion rebuilds the list rather than splicing, because there is
-// no insert-in-place and `+=` would copy the tail on every step.
-def sort_keys(ks: [str]) -> [str] {
-    let out: [str] = [];
-    let i = 0;
-    while (i < ks.length) {
-        let k = ks[i];
-        let j = out.length;
-        while (j > 0 && out[j - 1] > k) { j = j - 1 };
-        let nxt: [str] = [];
-        let m = 0;
-        while (m < j) { nxt += out[m]; m = m + 1 };
-        nxt += k;
-        m = j;
-        while (m < out.length) { nxt += out[m]; m = m + 1 };
-        out = nxt;
-        i = i + 1
-    };
-    out
-}
+def sort_keys(ks: [str]) -> [str] { sort.sort_str(ks) }
 
 def indent_of(depth: long, width: long) -> str {
     let s = "";
