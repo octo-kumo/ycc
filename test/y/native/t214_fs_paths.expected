@@ -1,0 +1,23 @@
+/a/b c
+. a
+/ /
+. 
+/a b
+a b
+. a
+txt c
+ .bashrc
+ noext
+gz a.tar
+ a
+ .
+ /
+a/b a/b /b
+b a 
+/a a/b/c/d
+/a/b/c/ ./x
+true true
+true /tmp/ynative_t214_dir/sub
+data.tar.gz gz
+data.tar [data.tar.gz]
+true false

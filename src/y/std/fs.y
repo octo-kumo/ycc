@@ -323,4 +323,59 @@ def cwd() -> str {
 
 def chdir(path: str) -> bool { os_call("y_os_chdir", path, len(path)) == 0 };
 
-export { open_file, close_file, read_some, read_all, read_all_bytes, write_text, write_data, seek, read_file, read_bytes, read_lines, write_file, write_bytes, append_file, append_bytes, copy_file, set_mode, exists, is_file, is_dir, file_size, rename, remove_file, remove_dir, remove_all, make_dir, make_dirs, list_dir, cwd, chdir };
+// ── paths ───────────────────────────────────────────────────────────────
+// String work on a path, touching no file: the other half of this module is
+// all syscalls, and every program that walks a tree needs these first.
+// Trailing slashes do not count (POSIX: "/a/b/" is "/a/b"), `.` and `..` are
+// NOT resolved, and a path that is only a root stays a root.
+
+// "/a/b/c" -> "/a/b", "a" -> ".", "/" -> "/", "" -> "."
+def path_dirname(p: str) -> str {
+    let q = p;
+    while (len(q) > 1 && q[len(q) - 1:len(q)] == "/") { q = q[0:len(q) - 1]; };
+    if (q == "/" || q == "") { if (q == "") { "." } else { "/" } } else {
+        let cut = last_index_of(q, "/");
+        if (cut < 0) { "." }
+        else if (cut == 0) { "/" }
+        else { q[0:cut] }
+    }
+};
+
+// "/a/b/c" -> "c", "a" -> "a", "/" -> "/", "" -> ""
+def path_basename(p: str) -> str {
+    let q = p;
+    while (len(q) > 1 && q[len(q) - 1:len(q)] == "/") { q = q[0:len(q) - 1]; };
+    if (q == "/" || q == "") { q } else {
+        let cut = last_index_of(q, "/");
+        if (cut < 0) { q } else { q[cut + 1:len(q)] }
+    }
+};
+
+// The last ".name" of the base name, without the dot; "" when there is none.
+// A leading dot is part of the name, not an extension: ".bashrc" has none.
+def path_extension(p: str) -> str {
+    let b = path_basename(p);
+    let dot = last_index_of(b, ".");
+    if (dot <= 0) { "" } else { b[dot + 1:len(b)] }
+};
+
+// The base name without its extension: "a.tar.gz" -> "a.tar".
+def path_stem(p: str) -> str {
+    let b = path_basename(p);
+    let dot = last_index_of(b, ".");
+    if (dot <= 0) { b } else { b[0:dot] }
+};
+
+// Two paths, one: an empty side is the other, and an absolute `b` replaces
+// `a` outright (so path_join("a", "/b") is "/b"). Otherwise exactly one "/"
+// goes between them. A relative path is left relative -- joining is not
+// resolving, and the caller may want to see what it wrote.
+def path_join(a: str, b: str) -> str {
+    if (len(a) == 0) { b }
+    else if (len(b) == 0) { a }
+    else if (b[0:1] == "/") { b }
+    else if (a[len(a) - 1:len(a)] == "/") { a + b }
+    else { a + "/" + b }
+};
+
+export { open_file, close_file, read_some, read_all, read_all_bytes, write_text, write_data, seek, read_file, read_bytes, read_lines, write_file, write_bytes, append_file, append_bytes, copy_file, set_mode, exists, is_file, is_dir, file_size, rename, remove_file, remove_dir, remove_all, make_dir, make_dirs, list_dir, cwd, chdir, path_dirname, path_basename, path_extension, path_stem, path_join };

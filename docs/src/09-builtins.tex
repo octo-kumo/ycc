@@ -1104,6 +1104,21 @@ octal permission number, written as one (\ic{0o644}, \ic{0o755});
 \item[\ic{fs.seek(fd, off, whence)}] Move: from the start (0), the current
   position (1) or the end (2); the new position, or \ic{-1}.
 \item[\ic{fs.close\_file(fd)}] \ic{bool}.
+\item[\ic{fs.path\_dirname(path)}] The directory part: \ic{"/a/b/c"} is
+  \ic{"/a/b"}, a name with no \ic{/} is \ic{"."}, the root is \ic{"/"}, and
+  a trailing \ic{/} does not count. Pure string work --- no file is
+  touched, and \ic{.} and \ic{..} are left as they are.
+\item[\ic{fs.path\_basename(path)}] The last piece: \ic{"/a/b/c"} is
+  \ic{"c"}, the root is \ic{"/"}, the empty path is \ic{""}.
+\item[\ic{fs.path\_extension(path)}] The base name's last
+  \ic{.name} without the dot, or \ic{""}: \ic{"c.txt"} is \ic{"txt"}, and a
+  leading dot is part of the name, so \ic{".bashrc"} has none.
+\item[\ic{fs.path\_stem(path)}] The base name without that extension:
+  \ic{"a.tar.gz"} is \ic{"a.tar"}.
+\item[\ic{fs.path\_join(a, b)}] Two paths as one: an empty side is the
+  other, an absolute \ty{b} replaces \ty{a} outright, and otherwise exactly
+  one \ic{/} goes between. Joining is not resolving --- what you write is
+  what you get.
 \end{description}
 
 \subsection{Text and Unicode (the utf8 module)}
