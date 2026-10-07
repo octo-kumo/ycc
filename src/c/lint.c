@@ -81,6 +81,8 @@ static int lint_find_from(Yv *nodes, ylong from, Yv *name, ylong mask);
 static int lint_step_one(Yv *body, Yv *iv);
 static Yv *lint_len_of(Yv *node);
 static ylong lint_short_index_loop(LintSt st, Yv *stmts, ylong i);
+static ylong lint_short_range(LintSt st, Yv *fe);
+static int lint_range_len(Yv *node);
 static ylong lint_loop_body(LintSt st, Yv *body);
 static ylong lint_stmts(LintSt st, Yv *stmts, int used, int top);
 static ylong lint_warn_at(LintSt st, Yv *msg, Yv *node);
@@ -650,6 +652,9 @@ static ylong lint_node(LintSt st, Yv *node, int used) {
         return lint_for(st, node);
     } else if (yv_l(k) == K_kw_foreach) {
         (void)lint_node(st, yr_get(node, "iter"), 1);
+        if (yv_l(yr_get(st, "wlevel")) >= 2) {
+            (void)lint_short_range(st, node);
+        }
         return lint_loop_body(st, yr_get(node, "body"));
     } else if (yv_l(k) == K_forrange) {
         (void)lint_two(st, yr_get(node, "lo"), yr_get(node, "hi"));
@@ -1137,7 +1142,8 @@ static ylong lint_short_chain(LintSt st, Yv *node) {
     (void)lint_chain_leaves(node, leaves);
     if (yv_len(leaves) < 3) { return 0; }
     Yv *first = ya_get(leaves, 0);
-    if (!ys_eq_lit(yr_get(first, "op"), "==") ||
+    if (yv_l(yr_get(first, "k")) != K_bin ||
+        !ys_eq_lit(yr_get(first, "op"), "==") ||
         !lint_pure(yr_get(first, "l"))) {
         return 0;
     }
@@ -1148,7 +1154,8 @@ static ylong lint_short_chain(LintSt st, Yv *node) {
     ylong i = 0;
     while (i < yv_len(leaves)) {
         Yv *b = ya_get(leaves, i);
-        if (!ys_eq_lit(yr_get(b, "op"), "==") ||
+        if (yv_l(yr_get(b, "k")) != K_bin ||
+            !ys_eq_lit(yr_get(b, "op"), "==") ||
             !lint_same_node(l0, yr_get(b, "l"))) {
             return 0;
         }
@@ -1491,6 +1498,30 @@ static int lint_find_from(Yv *nodes, ylong from, Yv *name, ylong mask) {
         i = i + 1;
     }
     return 0;
+}
+
+/* Rule 3.5: `foreach (i in range(len(a)))` can iterate the array directly. */
+static ylong lint_short_range(LintSt st, Yv *fe) {
+    if (!lint_range_len(yr_get(fe, "iter"))) { return 0; }
+    if (lint_find(yr_get(fe, "body"), ys(""), 7)) { return 0; }
+    (void)lint_warn_at(
+        st,
+        ys("this range loop over an array's indices can be '<a>.foreach((e, i) "
+           "=> { ... })'"),
+        fe);
+    return 0;
+}
+
+/* Whether the node is `range(len(a))`. */
+static int lint_range_len(Yv *node) {
+    if (yv_l(yr_get(node, "k")) != K_call) { return 0; }
+    Yv *args = yr_get(node, "args");
+    if (yv_l(yr_get(yr_get(node, "callee"), "k")) != K_id ||
+        yv_len(args) != 1) {
+        return 0;
+    }
+    if (!ys_eq_lit(yr_get(yr_get(node, "callee"), "v"), "range")) { return 0; }
+    return !ys_eq_lit(lint_len_of(ya_get(args, 0)), "");
 }
 
 /* Whether the last real statement of a loop body is `iv = iv + 1` (also

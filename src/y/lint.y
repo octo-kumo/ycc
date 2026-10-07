@@ -608,6 +608,7 @@ def lint_node(st: LintSt, node: Node, used: bool) -> long {
     } else if (k == K.kw_foreach) {
         let loop: Foreach = node;
         lint_node(st, loop.iter, true);
+        if (st.wlevel >= 2) { lint_short_range(st, loop); };
         lint_loop_body(st, loop.body)
     } else if (k == K.forrange) {
         let loop: ForRange = node;
@@ -955,15 +956,19 @@ def lint_short_chain(st: LintSt, node: Bin) -> long {
     let leaves: [Node] = [];
     lint_chain_leaves(node, leaves);
     if (len(leaves) < 3) { return 0; };
-    let first: Bin = leaves[0];
-    if (first.op != "==" || !lint_pure(first.l)) { return 0; };
-    let l0 = first.l;
+    let first = leaves[0];
+    if (first.k != K.bin) { return 0; };
+    let fb: Bin = first;
+    if (fb.op != "==" || !lint_pure(fb.l)) { return 0; };
+    let l0 = fb.l;
     let vals: [long] = [];
     let allint = true;
     let allstr = true;
     let i = 0;
     while (i < len(leaves)) {
-        let b: Bin = leaves[i];
+        let leaf = leaves[i];
+        if (leaf.k != K.bin) { return 0; };
+        let b: Bin = leaf;
         if (b.op != "==" || !lint_same_node(l0, b.l)) { return 0; };
         if (b.r.k == K.str) {
             allint = false;
@@ -1217,9 +1222,12 @@ def lint_find(node: Node, name: str, mask: long) -> bool {
     } else if (k == K.rectest || k == K.narrow) {
         let n: Narrow = node;
         lint_find(n.e, name, mask)
-    } else if (k == K.ret || k == K.matchend) {
+    } else if (k == K.ret) {
         let w: Wrap = node;
         lint_find(w.e, name, mask)
+    } else if (k == K.matchend) {
+        let m: MatchEnd = node;
+        lint_find(m.e, name, mask)
     } else if (k == K.block) {
         let b: Block = node;
         lint_find_list(b.stmts, name, mask)
@@ -1325,6 +1333,24 @@ def lint_short_index_loop(st: LintSt, stmts: [Node], i: long) -> long {
         lint_warn_at(st, "this index loop can be 'for " + lint_disp(iv) + " in <lo>..<hi> { ... }'", d);
     };
     0
+};
+
+// Rule 3.5: `foreach (i in range(len(a)))` can iterate the array directly.
+def lint_short_range(st: LintSt, fe: Foreach) -> long {
+    if (!lint_range_len(fe.iter)) { return 0; };
+    if (lint_find(fe.body, "", 7)) { return 0; };
+    lint_warn_at(st, "this range loop over an array's indices can be '<a>.foreach((e, i) => { ... })'", fe);
+    0
+};
+
+// Whether the node is `range(len(a))`.
+def lint_range_len(node: Node) -> bool {
+    if (node.k != K.call) { return false; };
+    let c: Call = node;
+    if (c.callee.k != K.id || len(c.args) != 1) { return false; };
+    let id: Leaf = c.callee;
+    if (id.v != "range") { return false; };
+    lint_len_of(c.args[0]) != ""
 };
 
 // The statements from index `from` on, walked without copying the list.
