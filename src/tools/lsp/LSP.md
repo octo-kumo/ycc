@@ -2,10 +2,10 @@
 
 **Status: built and running; §11's milestone table is the authority.** `yserve`
 exists, is driven by a VS Code extension in `vscode-y-lang/`, and is tested as a
-real process. M1 (R1, errors and warnings), M2 (R2, semantic tokens) and M3 (R3,
-formatting) are done; **M4's Stage A is done** (R4, R5, R6 — hover, go-to-
-definition, completion, from the open buffer's own declarations), measured at §11.3
-and costed at §9.2.
+real process. M1 (R1, errors and warnings), M2 (R2, TextMate syntax
+highlighting) and M3 (R3, formatting) are done; **M4 is done** (R4, R5, R6 —
+hover, go-to-definition, completion, from the open buffer's own declarations),
+measured at §11.3 and costed at §9.2.
 
 This line used to read "proposed, not implemented … nothing here has been built
 yet", which was wrong from the moment M1 shipped and stayed wrong through four
@@ -27,21 +27,16 @@ claim:
   this list used to deny exists; what does not exist is a *published* listing.
   `package.json` carries a `publisher` and no `repository`, which is what
   publishing needs and this document cannot honestly claim.
-- **A user switch for the semantic layer** — and it is deliberately absent rather
-  than missing. The grammar is unregistered (§10.3a), so semantic tokens are the
-  only highlighter and a switch for them would reintroduce the exact
-  "no syntax highlighting" report §10.3a records. R2.3 used to promise one; the
-  promise was written before the grammar was unregistered and is withdrawn.
+- **A user switch for syntax highlighting** — deliberately absent rather than
+  missing. The TextMate grammar is the highlighter, so there is no server-side
+  layer to disable and no "no syntax highlighting" state to fall back from.
 
 Everything else in the milestone table is delivered and marked as such: M-json,
 M1, M2, M3, M4 and M5 done, M0 dropped. Each row names the checks that make its
 claim checkable, and none of them is a number nothing compares.
 
 The requirement text below is unchanged and still the target; where a
-requirement is partly delivered the status note at its head says which part. The
-one standing deviation is R2.3's `method` class: nothing in the language
-distinguishes a method from a function called through a field, and §R2.3 says so
-where it happens rather than shipping a class that guesses.
+requirement is partly delivered the status note at its head says which part.
 
 **On citations.** Compiler internals are named by **symbol** — `types.check_program`,
 `native.origin_file`, `rename.rn_reaches_go` — and never by line number. `src/y`
@@ -91,7 +86,7 @@ Six features, in the order they are built:
 | 0 | `std/json.y`, a JSON module for Y programs | M-json |
 | 0b | JSON **literal syntax** in the language, so the module needs no `json.num` / `json.obj()` | M-sugar |
 | 1 | Errors and warnings | M1 |
-| 2 | Highlighting (LSP semantic tokens) | M2 |
+| 2 | Syntax highlighting (TextMate grammar) | M2 |
 | 3 | Formatting | M3 |
 | 4 | Type information (hover) | M4 |
 | 5 | Go-to-definition | M4 |
@@ -277,8 +272,7 @@ src/tools/lsp/json.y          JSON value, parser, emitter       §7
 src/tools/lsp/rpc.y           Content-Length framing, dispatch    §7
 src/tools/lsp/pos.y           line tables, byte ↔ UTF-16, ranges  §8
 src/tools/lsp/scan.y          span view of lexer.tokenize_lsp    §5.1, R2, R3
-src/tools/lsp/sem.y           semantic tokens (M2)                R2
-src/tools/lsp/sym.y           documentSymbol / the outline        R2
+src/tools/lsp/sym.y           documentSymbol / the outline        M4
 src/tools/lsp/scope.y         declarations, visibility            R4, R5, R6
 src/tools/lsp/nav.y           the word at the cursor, and its declaration  R4-R6
 src/tools/lsp/strm.y          the string methods, from types.str_method    R6
@@ -461,7 +455,7 @@ remembering:
 
 What "off" means is the other half, and it is **not** "ignore changes": `note_change`
 runs in the parent as always, so the buffer is current, and only the *publish* is
-skipped. The alternative reading would leave hover, completion, semantic tokens and
+skipped. The alternative reading would leave hover, completion and
 formatting answering about text the user has already replaced — worse than the slow
 check the switch exists for. `didOpen` and `didSave` still check either way, so an
 OFF user is not left without errors.
@@ -484,76 +478,40 @@ like any other.
 
 ### R2 — Highlighting (M2)
 
-**R2.1** Semantic tokens are the **only** highlighter. The TextMate grammar
-is removed from `package.json`'s `contributes`. The grammar file stays in the
-repository, unregistered, so re-enabling it is a one-line revert.
+**R2.1** The TextMate grammar is the **only** highlighter. The extension
+contributes it from `package.json` as `source.y`; the server does **not** advertise
+`semanticTokensProvider` and does **not** route
+`textDocument/semanticTokens/full` or `/range`. A client that sends either gets
+the protocol's normal `MethodNotFound`, not a partial answer.
 
-**R2.2** Spans come from `scan.y` (which is `lexer.tokenize_lsp` named), never
-from `tokenize`. f-strings are
-desugared *inside the lexer* (`lexer.lex_fstring`): `f"a{x}b"` is emitted as
-`(" " + #fmt(x, "") + "b")`, with positions rebased onto the original text
-(the position rebasing inside `lex_fstring`) so they stay in range — but several synthesized tokens
-share one position and none has an extent. The token stream cannot yield
-source spans for an f-string.
+**R2.2** The grammar lives at
+`src/tools/lsp/vscode-y-lang/syntaxes/y.tmLanguage.json` and is registered by
+the `grammars` contribution. The file is shipped inside the `.vsix`; there is no
+build step that copies it separately.
 
-**R2.3** The legend covers, at minimum: comment, string, number, keyword,
-`self`/`none`, variable, parameter, function, method, type, builtin,
-operator, punctuation. **Delivered**, with one honest deviation: `method` is not a
-class, because nothing in the language distinguishes one — a method *is* a function
-called through a record field, and a name after a `.` is classified `property`
-whether or not what it names is callable. 
+**R2.3** The grammar gives the language's lexical classes their own scopes:
+comments, strings (including `b"..."`, `b'...'`, `c'...'` and `f"..."`), numbers
+(hex, binary, digit grouping and exponents), keywords, contextual words
+(`self`, `none`, `true`, `false`), operators and punctuation. `def` names, call
+names, language type names and the predeclared builtins get their own function,
+type and builtin scopes so a theme can colour them without a server round trip.
 
-> **There is no `y.lsp.semantic` setting, and this paragraph used to claim there
-> was.** It is not implemented, and it should not be: the grammar is unregistered
-> (§10.3a), so semantic tokens are the **only** highlighter, and a switch that turns
-> them off would leave the user with no colours at all — which is the exact defect
-> §10.3a records having been reported. A user who wants fewer colours has a theme.
-> The claim was written before the grammar was unregistered, when the two layers
-> really did both paint every identifier.
+Ordering is part of the requirement, not a preference: `#strings` precedes
+`#comments` in the top-level `patterns`, because TextMate takes the match that
+starts *earliest*. With the other order, the `//` inside a string literal wins
+and half a string is painted as a comment. `t018_reported` and
+`client-check.js` both assert the order on the grammar file.
 
-The legend is 14 entries, the eight syntactic ones at their existing indices and
-the five semantic ones **appended** — an editor's theme is keyed on those numbers,
-so renumbering repaints every file in the user's project. `t009_proto` asserts the
-advertised list against `sem.token_types()` rather than against a literal, and
-`t010_sem` asserts each constant against `legend[index]` by name.
+**R2.4** Highlighting does not depend on `yserve`. It is available before the
+server starts, after it stops, on a buffer that does not lex, and on a file that
+imports a missing module. That is the property the server-side semantic-token
+layer could not provide for a stopped or failed server.
 
-Every class is resolved, none is inferred:
-
-| class | decided by |
-|---|---|
-| `builtin` | `native.intrinsic_names()` — the compiler's own list |
-| `type` on a **language type name** — `long`, `str`, `float`, `void`, `mutex`, `sem`, `int` | `parser.type_word_names()` — **the list the parser parses with**, exported for this (§9.2 A8). A mirrored copy here would drift the first time a primitive is added, which is the same argument as the builtins above and the same hazard |
-| `parameter` / `function` / `type` | `scope`'s declaration kinds (`D_PARAM`, `D_DEF`, `D_TYPE`) |
-| `function` on a `let` | the text after the name: `: (long) -> long` is a function type, `= def (` is a function literal |
-
-The type-name row has a second half, and only one is obvious: a user name that
-**happens** to be a type name stays `variable`, so a `let long = 1` is a variable
-called `long`. Both halves are pinned, because the other direction is wrong too.
-
-A type name used to be painted as an ordinary variable, which is the plainest way
-for a highlighter to say nothing: every type in the language looked like a name
-(§11.6).
-| `property` | the name is after a `.` — a fact about the text |
-| `variable` | everything else, **including every name that resolves to nothing** |
-
-Two limits, both pinned by `t017_sem` rather than left to be discovered. A record
-LITERAL's field name is `variable`, not `property`: `a` in `{ a: 1 }` is followed
-by `:` exactly as `x` in `let x: T = 1` is, and what tells them apart — that the
-brace opens a record and not a block — is not something a span knows. And a
-declaration's own token is asked about differently from a *use* of it, because a
-parameter is not in scope at its own declaration (`in_scope` compares against the
-body's `{`, still to the right), so `nav.find_decl` answers nothing there;
-`nav.decl_at` asks the separate question "is this token some declaration's own
-name", which is what an editor wants painted.
-
-**R2.4** Tokens are emitted as an LSP delta against the previous document
-state, and must survive the round trip: for every fixture, re-deriving
-absolute positions from the delta must reproduce the server's own token list
-byte for byte.
-
-**R2.5** A buffer that does not tokenize still highlights. `tokenize_lsp` is
-tolerant, so an unterminated string highlights as a string with an error
-marker rather than blanking the file.
+**R2.5** The grammar is tested as shipped: valid JSON with
+`scopeName: source.y`, a `grammars` contribution that points at it, and the
+`#strings` / `#comments` order above. `client-check.js` checks all three through
+the extension's own manifest and grammar file; no test imports a server-side
+highlighting module, because none exists.
 
 ### R3 — Formatting (M3)
 
@@ -1043,7 +1001,7 @@ rename.rn_bind    (st, orig) -> { st, uniq }                 ← the def site dr
 | **A6** `Func.ppos` | each parameter NAME's position, parallel to `params` | the type table, `rename` |
 | **A4** a `Decl`'s type at its NAME's column | where a reader puts the cursor | hover |
 | **A7** a call's type at its CALLEE's column | a builtin and an imported function | hover |
-| **A8** `parser.type_word_names()` | the language's own type names, as the parser decides them | semantic tokens — so `long` is not a variable |
+| **A8** `parser.type_word_names()` | the language's own type names, as the parser decides them | kept for callers that still want them; the LSP now gets its type scopes from the TextMate grammar |
 
 **A5 — the name's position, which `line`/`col` cannot be.** `Decl.line/col` is the
 KEYWORD's, because that is where a diagnostic points and where the reader looks. A
@@ -1262,33 +1220,30 @@ the same shape as every other fixture suite.
 `make lsp-e2e` builds `yserve` and runs `test-e2e.sh`. It is a separate target
 because it needs a process per case.
 
-### 10.3a What "no syntax highlighting" turned out to be
+### 10.3a TextMate is the highlighter
 
-The grammar was unregistered from `package.json` on the strength of R2.1, which
-assumes M2 lands next. It did not, so between the two the extension had **no
-highlighter at all** and VS Code fell back to bracket matching — which is exactly
-what was reported. The sequencing was wrong, not the decision: R2.1 is right, and
-`sem.y` now exists, so semantic tokens are the only highlighter as specified. Had
-M2 not been reachable, the honest move would have been to put the one-line
-revert back rather than leave the user with nothing.
+The grammar was removed from `package.json` while R2.1 planned semantic tokens as
+the only highlighter. That plan is now retired: the server advertises no
+semantic-token capability and routes no semantic-token request, and the grammar is
+registered again. The lesson from the "no syntax highlighting" report is kept as
+the reason: a highlighter that depends on a server process cannot colour the file
+when the server is starting, stopped or failed. TextMate can.
 
-### 10.4 The extension — **done**
+### 10.4 The extension — **done**### 10.4 The extension — **done**
 
 `src/tools/lsp/vscode-y-lang/`, extended rather than replaced:
 
 | | |
 |---|---|
-| `package.json` | `main`, `activationEvents: ["onLanguage:y"]`, the three `y.lsp.*` settings, and **no grammar** (R2.1) |
+| `package.json` | `main`, `activationEvents: ["onLanguage:y"]`, the `y.lsp.*` settings, and the `grammars` contribution (R2.1) |
 | `src/extension.ts` | activation: find the server, start it, report its death, gate the unimplemented features on the server's advertised capabilities |
 | `package.json` → `contributes.commands` | `y.formatDocument`, `y.restartLanguageServer`, `y.showServerOutput` |
 
-**Almost none of the extension is code.** Diagnostics, formatting, semantic tokens
-and the outline are all registered by `vscode-languageclient` from the
-capabilities the server advertises, so four of the six features cost **no
-TypeScript at all**. The one thing that looks like it must be kept in sync and is
-not: the semantic token legend. The library builds the VS Code legend *from the
-server's* (`asSemanticTokensLegend(options.legend)`), so the two cannot disagree —
-a client-side copy would be wrong, not merely redundant.
+**Almost none of the extension is code.** Diagnostics, formatting and the outline
+are all registered by `vscode-languageclient` from the capabilities the server
+advertises, so those features cost **no TypeScript at all**. Syntax highlighting
+is the TextMate grammar, registered by VS Code directly from `package.json`; it
+does not go through the language client and does not depend on the server.
 
 `y.formatDocument` exists because "Format Document" is registered automatically
 and can still be undiscoverable. A command registered in code but **not declared**
@@ -1413,7 +1368,7 @@ Each ends green on `make test`.
 | **M-json** | `src/y/std/json.y` (§15) | **Done.** All four acceptance criteria are met and each is checkable: parses and emits every shape (`test/y/native/t204_std_json.y`, plus `lsp/test/t001_json_shapes.y` and `t002_json_parse.y`), round-trips losslessly (the same fixtures assert `parse(stringify(v)) == v`), compiles warning-free (`test_fixpoint.sh` builds every `src/y/std` file), and the manual section (`docs/src/09-builtins.tex`, "JSON (the json module)"), the `COVERAGE.md` row and the fixtures all exist. It blocked M1, which is done — M1 could not have landed without it, because `yserve` needs a parser and an emitter and Y programs at large need the same. **Not extended:** §16's `json{ }` / `json[ ]` sugar is M-sugar's C5, not this. |
 | ~~**M0**~~ | ~~C1: the two exports~~ | **Dropped** — M1 does not need them (§9.1). Nothing was blocked on this, so no reblessing was needed. |
 | **M1** | R1 — errors and warnings | **Done, end to end.** `yserve` answers errors *and* warnings together, live, on an unsaved buffer, for the file **and each import** (one `publishDiagnostics` per file); survives an unterminated literal, a missing import and a 4000-line file; the VS Code extension activates, spawns it and reaches `Running` (`activation-check.js` **26/26**), and the same server is driven by the JSON-RPC library VS Code uses (`client-check.js` **78/78**, and `activation-check.js` **26/26** against a stubbed VS Code). Registered in `make test` as the `lsp` suite. |
-| **M2** | R2 — semantic tokens | **Done.** `sem.y` turns `scan.y`'s spans into the protocol's delta encoding; `textDocument/semanticTokens/full` is advertised and answered. The grammar is unregistered from `package.json`, so this IS the only highlighter. `t010_sem` pins the round trip (R2.4) over the whole corpus; `client-check.js` decodes the delta the way an editor does. The **semantic half of the legend is now delivered** (R2.3, M4): parameter / function / type / property / builtin are all resolved, and the language's own type names come from `parser.type_word_names()` so the list cannot drift (§11.6). An **f-string is no longer one token** — each `{...}` is scanned as code, which is what a reader is actually looking at (§11.6). **Nothing is left undone in this row.** There is deliberately no setting to turn the layer off: the grammar is unregistered (§10.3a), so this layer is the only highlighter, and a switch for it would reintroduce the "no syntax highlighting" report. |
+| **M2** | R2 — syntax highlighting | **Done.** The TextMate grammar in `vscode-y-lang/syntaxes/y.tmLanguage.json` is contributed by `package.json` as `source.y`; the server advertises no `semanticTokensProvider` and answers `textDocument/semanticTokens/*` with `MethodNotFound`. `client-check.js` asserts the grammar is contributed, is valid JSON with the right scope, and keeps `#strings` before `#comments`; `t018_reported` asserts the ordering from a fixture. The old server-side semantic-token module and its fixtures are removed. **Nothing is left undone in this row.** There is deliberately no setting to turn highlighting off: TextMate is editor-side and a theme is the user's control. |
 | **M3** | R3 — formatting | **Done** (idempotent over every `.y` file in
 the tree — `test-fmt.sh` compares the number of files that are NOT idempotent,
 which must be zero, and only *prints* the total, so the total moves as `src/y`

@@ -903,6 +903,9 @@ def tokenize_go(src: str, lsp: bool) -> [Tok] {
                 // walks `line` to its last one
                 i += 2;
                 col += 2;
+                // `/** ... */` is a DOC comment: the server paints it as
+                // documentation and hover shows it. `/**/` is just empty.
+                let isdoc = src[i:i + 1] == "*" && src[i + 1:i + 2] != "/";
                 let open = true;
                 let closed = false;
                 while (open) {
@@ -931,8 +934,10 @@ def tokenize_go(src: str, lsp: bool) -> [Tok] {
                 // An unterminated block comment is an ERROR to the server: it
                 // has no end, so nothing can be painted or formatted around it.
                 if (lsp) {
-                    if (closed) { toks += mktok("comment", src[cstart:i], cline, ccol, cstart, i); }
-                    else { toks += mktok("ferr", "unterminated block comment", cline, ccol, cstart, i); };
+                    let ty = "comment";
+                    if (isdoc) { ty = "doc"; };
+                    if (!closed) { ty = "ferr"; };
+                    toks += mktok(ty, src[cstart:i], cline, ccol, cstart, i);
                 };
             } else {
                 // division operator or `/=` (not a comment opener). The

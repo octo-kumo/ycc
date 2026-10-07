@@ -104,7 +104,7 @@ def token_types() -> [str] {
 // share one scan kind, so only the word itself says which one it is.
 def type_of(src: str, s: Span) -> long {
     let t = T_variable;
-    if (s.kind == scan.K_comment) { t = T_comment; }
+    if (s.kind == scan.K_comment || s.kind == scan.K_doc) { t = T_comment; }
     else if (s.kind == scan.K_string || s.kind == scan.K_bstring || s.kind == scan.K_char || s.kind == scan.K_fstring) { t = T_string; }
     else if (s.kind == scan.K_number) { t = T_number; }
     else if (s.kind == scan.K_keyword) { t = T_keyword; }

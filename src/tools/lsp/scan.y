@@ -42,6 +42,7 @@ const K_contextual = 9;   // match, type, spawn, ...: words, not keywords
 const K_operator = 10;
 const K_punct = 11;       // ( ) { } [ ] , ; :
 const K_error = 12;       // a literal that is not closed, or a stray byte
+const K_doc = 13;         // /** ... */ -- a doc comment (docs/src/02-lexical.tex)
 const K_none = 0;         // whitespace and comments-of-no-account: not a span
 
 type Span = { off: long, end: long, kind: long, line: long, col: long };
@@ -85,6 +86,7 @@ def kind_of(src: str, tk: Tok) -> long {
     let t = tk.t;
     let k = K_none;
     if (t == "comment") { k = K_comment; }
+    if (t == "doc") { k = K_doc; }
     if (t == "str") { k = K_string; }
     if (t == "fstr") { k = K_fstring; }
     if (t == "bstr") { k = K_bstring; }
@@ -128,6 +130,7 @@ def scan(src: str) -> [Span] {
 def kind_name(k: long) -> str {
     let n = "?";
     if (k == K_comment) { n = "comment"; }
+    if (k == K_doc) { n = "doc"; }
     if (k == K_string) { n = "string"; }
     if (k == K_bstring) { n = "bstring"; }
     if (k == K_char) { n = "char"; }

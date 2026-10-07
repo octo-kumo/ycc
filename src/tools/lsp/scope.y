@@ -145,10 +145,18 @@ def doc_above(src: str, line: long, d: SrcDoc) -> str {
     // `line` is 0-based; the comment lines are at line-1, line-2, ...
     let k = line - 1;
     let blanks = 0;
+    // Walking up through a block comment. The test for a continuation line has
+    // to run on the RAW line: `trim_both` eats the leading space, so ` * foo`
+    // becomes `* foo` and can never match ` *` -- which is why a multi-line
+    // `/** ... */` contributed an empty doc until this walked the raw text.
+    let inblock = false;
     let go = true;
     while (go && k >= 0) {
         let text = pos.doc_line(d, k + 1);
         let t = trim_both(text);
+        let star = first_is_star(text);
+        let closes = t[:2] == "/*" || t[:len(t)] == "*/" ||
+            (len(t) >= 2 && t[len(t) - 2:len(t)] == "*/");
         if (t == "") {
             blanks = blanks + 1;
             if (blanks > 1) { go = false; }
@@ -163,13 +171,18 @@ def doc_above(src: str, line: long, d: SrcDoc) -> str {
             else if (dash > 0 && dash < 24 && is_nameish(body[:dash])) { cut = dash + 3; }
             let piece = trim_both(body[cut:]);
             out += piece;
-        } else if (t[:2] == "/*" || t[:2] == " *") {
-            // a block comment's continuation line
+        } else if (inblock || t[:2] == "/*" || (star && closes)) {
+            // a block comment: the opus line, a continuation, or the closer. The
+            // FIRST line above the declaration has to look like the end of one
+            // (`*/`), so a `*p = 1;` statement above a def is not mistaken for a
+            // doc line.
+            let opens = t[:2] == "/*";
             let body = t;
             if (body[:2] == "/*") { body = body[2:]; }
             if (body[:1] == "*") { body = body[1:]; }
             if (body[:1] == " ") { body = body[1:]; }
             out += trim_both(trim_end_star(body));
+            if (opens) { go = false; } else { inblock = true; };
         } else {
             go = false;
         }
@@ -182,6 +195,14 @@ def doc_above(src: str, line: long, d: SrcDoc) -> str {
     let text = join(rev, "\n");
     trim_both(text)
 }
+
+// Is the first non-blank byte of a raw line `*`? A block comment's continuation
+// lines have one, and `trim_both` would have removed the space that says so.
+def first_is_star(text: str) -> bool {
+    let i = 0;
+    while (i < len(text) && (byte_at(text, i) == 32 || byte_at(text, i) == 9)) { i = i + 1; };
+    i < len(text) && byte_at(text, i) == 42
+};
 
 // Whether `s` looks like a bare name, so "f --" is a label and "the thing --" is
 // prose.
@@ -214,11 +235,21 @@ def trim_both(s: str) -> str {
     s[a:b]
 }
 
+// Drop the `*/` (or a lone `/`) a block comment's last line ends with, then a
+// trailing `*` left by a ` */` line: a one-line `/** doc */` must read as
+// `doc`, not `doc *`.
 def trim_end_star(s: str) -> str {
     let t = s;
     let n = len(t);
-    if (n > 0 && byte_at(t, n - 1) == 47) { t = t[0:n - 1]; }
-    trim_both(t)
+    if (n >= 2 && byte_at(t, n - 2) == 42 && byte_at(t, n - 1) == 47) {
+        t = t[0:n - 2];
+    } else if (n > 0 && byte_at(t, n - 1) == 47) {
+        t = t[0:n - 1];
+    };
+    t = trim_both(t);
+    let m = len(t);
+    if (m > 0 && byte_at(t, m - 1) == 42) { t = trim_both(t[0:m - 1]); };
+    t
 }
 
 // ── the pass ────────────────────────────────────────────────────────────
