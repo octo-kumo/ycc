@@ -413,3 +413,20 @@ third thing: with both in place the failure is no longer a bad header read but
 a straight fault, i.e. something now dereferences memory that was freed or
 handed out twice. The next attempt should keep the pair and find that third
 piece with the reporting trap plus `--gc-stress`, which reproduces in seconds.
+
+## Round 29: the third piece's signature
+
+With the round-27 pair applied, `t160_threads` under `--gc-stress` faults in
+
+    #0 y_alloc_go ()      (+36: the fast path's header write at `mov %r11,(%rdx)`)
+    #1 y_spawn ()
+    #2 _start ()         at t160_threads.y:25 -- the FIRST spawn
+
+so a heap block's `cur` (`%rcx` -> `mov %rdi,(%rcx)`) was already nonsense by
+the time the first thread was spawned, and the fast path wrote a block header
+through it. That is the third piece: not a bad header read this time but a
+clobbered bump pointer, i.e. the collector (or the pair's own bookkeeping) hands
+out or frees a region that a live `cur` still points at. Chasing it wants the
+clamp to be checked against *every* writer of a heap block's words 0/8 --
+`y_alloc_go`, `y_alloc_more`, the pair's spare stores in the tcb -- rather than
+against the sweep alone, and the fault reproduces in one run.
