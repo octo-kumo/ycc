@@ -274,6 +274,36 @@ done
 [ "$oom_seen" -eq 2 ] && pass "OOM report identical from both copies"
 rm -rf "$OOM_DIR"
 
+# Errors are printed one per position, and the positions already printed go
+# into a name index so a file with a mistake on every line does not make
+# printing quadratic. What must not change is *which* errors are printed: a
+# file with 300 distinct undefined variables answers with 300 lines, one each,
+# in position order, from both compilers (the dedup is keyed by position, so a
+# regression that dropped or repeated one shows up as a count or a first line).
+MANY_DIR=$(mktemp -d /tmp/ycc_many.XXXXXX)
+{
+    for i in $(seq 0 299); do
+        echo "def f$i() -> long { missing$i }"
+    done
+} > "$MANY_DIR/many.y"
+for compiler in "$YCC_BIN" "$CYCC"; do
+    many_out=$(timeout $(( 120 * YTIMEOUT_SCALE )) "$compiler" -o "$MANY_DIR/many.bin" \
+        "$MANY_DIR/many.y" </dev/null 2>&1)
+    many_ec=$?
+    many_lines=$(printf '%s\n' "$many_out" | grep -c "undefined variable 'missing")
+    many_first=$(printf '%s\n' "$many_out" | head -1)
+    many_last=$(printf '%s\n' "$many_out" | tail -1)
+    if [ "$many_ec" -eq 1 ] && [ "$many_lines" -eq 300 ] \
+        && [ "$many_first" = "1:20: error: undefined variable 'missing0'" ] \
+        && [ "$many_last" = "300:22: error: undefined variable 'missing299'" ]; then
+        pass "300 errors, one per position (${compiler##*/})"
+    else
+        fail "300 errors, one per position (${compiler##*/})" \
+            "exit=$many_ec, lines=$many_lines, first='$many_first', last='$many_last'"
+    fi
+done
+rm -rf "$MANY_DIR"
+
 # A fifo is not seekable: there is no size to ask for, so the whole-file path
 # (fseek/ftell) cannot be used and the stream has to be read to its end. The Y
 # copy always managed `ycc <(cat prog.y)`; the C copy's ftell answered -1 and it

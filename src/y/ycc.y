@@ -330,16 +330,16 @@ def print_native_errors(all: [Diag], origin: Origin, bare: bool) -> void {
     // `ycc build` names every file), `path:line:col` in any other.
     // One error per position: a malformed token can trip two checks (the
     // construct it broke, then the statement it ended), and the second
-    // message only repeats the first.
-    let seen: [str] = [];
+    // message only repeats the first. The positions go in a name index, not
+    // an array: a linear scan of what has been printed makes printing n
+    // errors O(n^2), and a file with a mistake on every line is exactly when
+    // the messages matter most (measured: 2000 errors 10 ms, 4000 20, 8000
+    // 80, 16000 250 -- a name index makes each one a hash probe).
+    let seen = parser.nameix_new(64);
     all.foreach((e) => {
         let at = nativelib.origin_at(origin, e.line, bare) + ":" + tostring(e.col);
-        let dup = false;
-        foreach (s in seen) {
-            if (s == at) { dup = true; }
-        };
-        if (!dup) {
-            seen += at;
+        if (parser.nameix_get(seen, at) < 0) {
+            parser.nameix_put(seen, at, 1);
             puts(at + ": error: " + e.msg + "\n");
         }
     });
