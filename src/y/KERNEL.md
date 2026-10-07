@@ -889,3 +889,28 @@ the obvious defence (consume the scratch, and set it to 0 so a stale value can
 never be saved) and it was not sufficient on its own; with the shake fix now in
 place and the frame contents visible, that fix plus the freshness guard is the
 next thing to apply and test against this same case.
+
+### Round 58: the scheduler SAVE is not the bug
+
+Applied round 9's defence in full: y_cur_task_rsp_set in arch/kernel.s, and the
+pick now saves only a FRESH frame pointer (consume it and zero it, so a stale
+value can never be attributed to a task).  Built, ran the two-process case: the
+same fault, the same missing "after recv" line.  So the save is not what is
+wrong.
+
+What that leaves, and it is now a narrow statement: at the moment
+task_complete writes the answer, tasks[server].rsp points at a frame whose RIP
+slot (+72) holds a STACK address.  The save is fresh and correct, so the FRAME
+ITSELF is wrong at that point -- i.e. the server's canonical point is not where
+this code thinks it is, or something wrote over it between the syscall entry
+and the completion.  The three candidates, in order of how easy they are to
+distinguish:
+  1. the stub's published rsp is not the frame the completion writes into (the
+     stub publishes BEFORE the dispatcher runs, and the dispatcher's own calls
+     use that same stack);
+  2. the fabricated task frame and the first syscall's frame collide at the same
+     address (both are kstack_top - 112: measured in round 9's analysis), so the
+     first syscall overwrites the frame the task was started with;
+  3. the receiver's kernel stack is not the one its rsp points into.
+Next: print, at syscall entry for the receiver and again at completion, the
+published rsp AND the stack top, so 1/2/3 separate in one run.
