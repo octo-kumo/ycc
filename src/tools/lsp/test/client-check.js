@@ -319,6 +319,15 @@ function main() {
                 JSON.stringify(e.newText));
         }
 
+        // M4's fixture is the ORIGINAL text again. Formatting above moved the
+        // buffer to `messy`; without this the hover, definition and completion
+        // cases below would ask about the wrong document.
+        send('textDocument/didChange', {
+            textDocument: { uri: mainUri, version: 4 },
+            contentChanges: [{ text }],
+        });
+        await settle();
+
         // 5b. DOCUMENT SYMBOLS: the outline. "no symbols found in document" is
         //     exactly what an editor says when this comes back empty.
         // ── M4: hover, definition, completion ──
@@ -328,6 +337,7 @@ function main() {
         // name belongs to another file and this is not the compiler's scope.
         const at = (l, c) => ({ textDocument: { uri: mainUri }, position: { line: l, character: c } });
         const lineOf = (t) => text.split('\n')[t];
+        const lines = text.split('\n');
         const fCol = lineOf(7).indexOf('f(');
         check('m4: the fixture really has `f(` on line 7', fCol > 0, lineOf(7));
 
