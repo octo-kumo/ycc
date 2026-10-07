@@ -293,7 +293,11 @@ Yv *arch_heap_cells(void) {
               "y_gc_free:\n.zero 8\ny_gc_ms_cur:\n.zero 8\ny_gc_ms_end:\n.zero 8\n"
               "y_gc_ms_seg:\n.zero 8\n"
               "y_gc_live:\n.zero 8\ny_gc_last:\n.zero 8\n"
-              "y_gc_run:\n.zero 8\ny_gc_off:\n.zero 8\n");
+              "y_gc_run:\n.zero 8\ny_gc_off:\n.zero 8\n"
+        "y_gc_threads:\n.zero 8\ny_gc_nthr:\n.zero 8\n"
+        "y_gc_parked:\n.zero 8\ny_gc_stw:\n.zero 8\n"
+        "y_gc_lk:\n.zero 8\ny_gc_mlk:\n.zero 8\n"
+        "y_gc_safe_fn:\n.zero 8\n");
 }
 
 ylong arch_frame(ylong slots) {

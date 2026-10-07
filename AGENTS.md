@@ -93,7 +93,7 @@ moved with the callgrind table, `perf`, or `ycc --time`.
 
 ## Tests
 
-`make test` runs all 21 suites (`test/sh/run_all.sh`; `-j N`, `YSHARD=k/n`,
+`make test` runs all 22 suites (`test/sh/run_all.sh`; `-j N`, `YSHARD=k/n`,
 `./run_all.sh -j4 port native` for a subset). They take `CYCC`, `YREF`, `YCC`,
 `YSELF`, `YQUIET` and `YPORT_SELF` from the environment.
 
@@ -111,6 +111,7 @@ moved with the callgrind table, `perf`, or `ycc --time`.
 | lsp | the server's fixtures under both compilers, `check-refs.py`, `check-names.py`, formatter idempotence |
 | math | `test/math/ulp_table.txt` within 1 ulp, plus the kernel and threshold audits |
 | coverage | every diagnostic and manual section has a checked test (`test/COVERAGE.md`) |
+| gc | the collector under a cap: two threads of 300k allocations must run in 64 MiB (`test/y/native/t385_gc_threads_alloc.y`), with `--gc=never` as the control that does not fit |
 | treeshake, std-suites | the unused-code cost ratchets, plus four checks a runtime addition must pass: a program that allocates nothing names no `y_alloc` and no collector block, `--gc=auto` omits the collector for a one-shot allocation while `always` keeps and `never` drops it (same output), `test/sh/deadcode.py` counts instructions the shake leaves unreachable (`test/treeshake/deadcode.txt`), and `test/treeshake/shapes.txt` records the size of the shapes a runtime change moves first; the `test/std/` self-test suites |
 
 Run by hand (not in `make test`): `test/sh/cycc-win.sh` (wine),

@@ -246,7 +246,20 @@ def arch_heap_cells() -> str {
     "y_gc_free:\n.zero 8\ny_gc_ms_cur:\n.zero 8\ny_gc_ms_end:\n.zero 8\n" +
     "y_gc_ms_seg:\n.zero 8\n" +
     "y_gc_live:\n.zero 8\ny_gc_last:\n.zero 8\n" +
-    "y_gc_run:\n.zero 8\ny_gc_off:\n.zero 8\n"
+    "y_gc_run:\n.zero 8\ny_gc_off:\n.zero 8\n" +
+    // The thread registry and the stop-the-world protocol (arch/threads.s
+    // registers, arch/prelude.s's collector stops): the tcb list head, how
+    // many threads are registered, how many are parked at the allocator's
+    // slow path, and the flag that asks them to park.
+    "y_gc_threads:\n.zero 8\ny_gc_nthr:\n.zero 8\n" +
+    "y_gc_parked:\n.zero 8\ny_gc_stw:\n.zero 8\n" +
+    // The two locks the allocation side needs once threads allocate at once:
+    // the free lists and the chunk registry (y_gc_lk), then the metadata arena
+    // (y_gc_mlk). Always taken in that order, and never while parked.
+    "y_gc_lk:\n.zero 8\ny_gc_mlk:\n.zero 8\n" +
+    // The allocator's safepoint, as a pointer: only the thread runtime
+    // installs one, so a program that never spawns carries no parking code.
+    "y_gc_safe_fn:\n.zero 8\n"
 };
 
 def arch_frame(slots: long) -> long {

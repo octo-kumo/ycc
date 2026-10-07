@@ -388,11 +388,21 @@ y_alloc_more:
     sub $8, %rsp
     mov %rax, %rbx
     mov %rcx, %r12
+# The allocator's slow path is the safepoint: it is the one place a thread can
+# be stopped, because every register that can hold a live value is already
+# pushed above %rsp. The parking code itself lives in the thread runtime
+# (arch/threads.s, which installs y_gc_safe_fn when the first thread spawns),
+# so a program that never spawns carries none of it.
+    mov y_gc_safe_fn(%rip), %rax
+    test %rax, %rax
+    jz yam_nostw
+    call *%rax
+yam_nostw:
 # The heap is full: collect when the bytes handed out since the last cycle
 # reach the threshold, then take a recycled block if one fits before mapping.
     call y_gc_maybe
     mov %rbx, %rdi
-    call y_gc_alloc_free
+    call y_gc_alloc_free_locked
     test %rax, %rax
     jnz y_alloc_free_hit
     mov $262144, %rsi
@@ -403,7 +413,7 @@ y_alloc_more:
     mov %rax, %rdi
     mov $4194304, %rsi
     xor %edx, %edx
-    call y_gc_chunk_add
+    call y_gc_chunk_add_locked
     mov %rax, %rdx
     add %rbx, %rdx
     mov %rdx, 0(%r12)
@@ -418,7 +428,7 @@ y_alloc_big:
     call y_alloc_map
     mov %rax, %rdi
     mov $1, %edx
-    call y_gc_chunk_add
+    call y_gc_chunk_add_locked
     jmp y_alloc_out
 y_alloc_free_hit:
     mov 16(%r12), %rdx
@@ -485,7 +495,25 @@ y_alloc_map:
 
 # y_gc_meta_alloc(n) -> n zeroed bytes the collector owns. These mappings
 # are never collected and never counted by heap_used.
+# y_gc_meta_alloc: the metadata arena, under its own lock. Every thread can
+# reach it (a chunk registration, a free-list table, the collector's own bit
+# maps), so the raw bump it wraps is serialized.
 y_gc_meta_alloc:
+    push %rbp
+    mov %rsp, %rbp
+    push %rdi
+    lea y_gc_mlk(%rip), %rdi
+    call y_gc_lock
+    pop %rdi
+    call y_gc_meta_alloc_raw
+    push %rax
+    lea y_gc_mlk(%rip), %rdi
+    call y_gc_unlock
+    pop %rax
+    pop %rbp
+    ret
+
+y_gc_meta_alloc_raw:
     push %rbp
     mov %rsp, %rbp
     push %rbx
@@ -780,8 +808,26 @@ y_gc_roots:
     push %rbp
     mov %rsp, %rbp
     mov %rsp, %rdi
+# The top is THIS thread's: y_gc_stack_top is where _start recorded the main
+# thread's stack, and a spawned thread runs on an 8 MiB mapping of its own
+# (word 4 of its tcb; 0 for the main thread).
+    lea y_heap(%rip), %rax
+    mov 24(%rax), %rax
+    test %rax, %rax
+    jz ygr_main
+    mov %fs:24, %rax
+    mov 32(%rax), %rsi
+    test %rsi, %rsi
+    jz ygr_main
+    add $8392704, %rsi
+    jmp ygr_scan
+ygr_main:
     mov y_gc_stack_top(%rip), %rsi
+ygr_scan:
+    cmp %rsi, %rdi
+    jae ygr_bss
     call y_gc_scan_words
+ygr_bss:
     lea y_bss_lo(%rip), %rdi
     lea y_bss_hi(%rip), %rsi
     call y_gc_scan_words
@@ -898,6 +944,245 @@ ygd_done:
     pop %rbp
     ret
 
+# y_gc_lock(lk) / y_gc_unlock(lk): a spin lock on the word at %rdi. The
+# collector's allocation-side state is shared by every thread; the collector's
+# own cycle runs with the world stopped, so it never contends for these.
+y_gc_lock:
+    mov $1, %rax
+ygl_try:
+    xchg %rax, (%rdi)
+    test %rax, %rax
+    jz ygl_done
+    mov $1, %rax
+    jmp ygl_try
+ygl_done:
+    ret
+
+y_gc_unlock:
+    xor %eax, %eax
+    mov %rax, (%rdi)
+    ret
+
+# y_gc_alloc_free_locked(p) / y_gc_chunk_add_locked(base, size, dedicated): the
+# shared-memory halves of the slow path, with y_gc_lk held. Ordering is always
+# y_gc_lk then y_gc_meta_alloc's own lock (never the reverse).
+y_gc_alloc_free_locked:
+    push %rbp
+    mov %rsp, %rbp
+    push %rdi
+    lea y_gc_lk(%rip), %rdi
+    call y_gc_lock
+    pop %rdi
+    call y_gc_alloc_free
+    push %rax
+    lea y_gc_lk(%rip), %rdi
+    call y_gc_unlock
+    pop %rax
+    pop %rbp
+    ret
+
+y_gc_chunk_add_locked:
+    push %rbp
+    mov %rsp, %rbp
+    push %rdi
+    push %rsi
+    push %rdx
+    lea y_gc_lk(%rip), %rdi
+    call y_gc_lock
+    pop %rdx
+    pop %rsi
+    pop %rdi
+    call y_gc_chunk_add
+    push %rax
+    lea y_gc_lk(%rip), %rdi
+    call y_gc_unlock
+    pop %rax
+    pop %rbp
+    ret
+
+# y_gc_block_begin / y_gc_block_end: a thread about to wait on a futex is one
+# the collector can do without. Its stack is stable -- every live value is in a
+# frame slot or a pushed callee-saved register, because caller-saved registers
+# are dead across a call -- so it publishes %rsp and state 3 ("blocked")
+# instead of parking. The end half clears that and parks if a cycle started
+# meanwhile, so a waking thread runs no user code while the world is
+# supposedly stopped.
+y_gc_block_begin:
+    push %rbp
+    mov %rsp, %rbp
+    push %rbx
+    lea y_heap(%rip), %rcx
+    mov 24(%rcx), %rcx
+    test %rcx, %rcx
+    jz ygbb_done
+    mov y_gc_stw(%rip), %rax
+    test %rax, %rax
+    jnz ygbb_park
+    mov %fs:24, %rbx
+    mov %rsp, 88(%rbx)
+    mov $3, %rax
+    mov %rax, 96(%rbx)
+ygbb_done:
+    pop %rbx
+    pop %rbp
+    ret
+ygbb_park:
+    pop %rbx
+    pop %rbp
+    jmp y_gc_safepoint
+
+y_gc_block_end:
+    push %rbp
+    mov %rsp, %rbp
+    push %rbx
+    lea y_heap(%rip), %rcx
+    mov 24(%rcx), %rcx
+    test %rcx, %rcx
+    jz ygbe_done
+    mov %fs:24, %rbx
+    xor %eax, %eax
+    mov %rax, 96(%rbx)
+    mov y_gc_stw(%rip), %rax
+    test %rax, %rax
+    jz ygbe_done
+    call y_gc_safepoint
+ygbe_done:
+    pop %rbx
+    pop %rbp
+    ret
+
+# y_gc_stw_begin: ask every other registered thread to park at the safepoint,
+# and wait until they all have. Returns 1 when the world is stopped (the
+# caller owns it and must call y_gc_stw_end) and 0 when it could not be
+# stopped in time -- the cycle is then SKIPPED. A running thread may hold the
+# only pointer to a live object in a register that is not on its stack, so
+# collecting is only safe with every thread parked; a thread blocked on a
+# mutex never reaches the safepoint, and waiting forever would be worse than a
+# skipped cycle. There is no counter to keep atomic: the wait walks the tcb
+# list and asks whether every entry but this thread is parked. Registration
+# goes through the safepoint and deregistration takes this flag, so the list
+# cannot change while a cycle owns it.
+y_gc_stw_begin:
+    push %rbp
+    mov %rsp, %rbp
+    push %rbx
+    push %r12
+    push %r13
+    mov $1, %rax
+    xchg %rax, y_gc_stw(%rip)
+    test %rax, %rax
+    jnz ygsb_lose
+    mov $16777216, %r13
+ygsb_wait:
+    xor %r12d, %r12d
+    mov y_gc_threads(%rip), %rbx
+ygsb_walk:
+    test %rbx, %rbx
+    jz ygsb_counted
+    mov %fs:24, %rax
+    cmp %rax, %rbx
+    je ygsb_walk_next
+    mov 96(%rbx), %rax
+    cmp $1, %rax
+    je ygsb_walk_next
+    cmp $3, %rax
+    je ygsb_walk_next
+    add $1, %r12
+ygsb_walk_next:
+    mov 80(%rbx), %rbx
+    jmp ygsb_walk
+ygsb_counted:
+    test %r12, %r12
+    jz ygsb_ok
+    sub $1, %r13
+    jz ygsb_lose
+    jmp ygsb_wait
+ygsb_ok:
+    mov $1, %rax
+    pop %r13
+    pop %r12
+    pop %rbx
+    pop %rbp
+    ret
+ygsb_lose:
+    mov $0, %rax
+    mov %rax, y_gc_stw(%rip)
+    xor %eax, %eax
+    pop %r13
+    pop %r12
+    pop %rbx
+    pop %rbp
+    ret
+
+# y_gc_stw_end: let the parked threads go.
+y_gc_stw_end:
+    xor %eax, %eax
+    mov %rax, y_gc_stw(%rip)
+    ret
+
+# y_gc_mark_threads: after a cycle, remember where each thread had got to, so
+# its own next trigger measures from here. Every thread is parked (the cycle
+# owns the world), so word 2 of each tcb -- its `used` -- is stable.
+y_gc_mark_threads:
+    push %rbp
+    mov %rsp, %rbp
+    push %rbx
+    mov y_gc_threads(%rip), %rbx
+ygmt_loop:
+    test %rbx, %rbx
+    jz ygmt_done
+    mov 16(%rbx), %rax
+    mov %rax, 104(%rbx)
+    mov 80(%rbx), %rbx
+    jmp ygmt_loop
+ygmt_done:
+    pop %rbx
+    pop %rbp
+    ret
+
+# y_gc_thread_roots: the OTHER threads' stacks. Every parked thread published
+# its %rsp (word 11) and its registers are above it, so [rsp, stack top) is its
+# root set. The main thread's block has no mapping of its own (word 4 is 0);
+# its top is the y_gc_stack_top _start recorded.
+y_gc_thread_roots:
+    push %rbp
+    mov %rsp, %rbp
+    push %rbx
+    mov y_gc_threads(%rip), %rbx
+ygtr_loop:
+    test %rbx, %rbx
+    jz ygtr_done
+    mov %fs:24, %rax
+    cmp %rax, %rbx
+    je ygtr_next
+    mov 96(%rbx), %rax
+    cmp $1, %rax
+    je ygtr_scan_go
+    cmp $3, %rax
+    jne ygtr_next
+ygtr_scan_go:
+    mov 88(%rbx), %rdi
+    test %rdi, %rdi
+    jz ygtr_next
+    mov 32(%rbx), %rsi
+    test %rsi, %rsi
+    jz ygtr_main
+    add $8392704, %rsi
+    jmp ygtr_scan
+ygtr_main:
+    mov y_gc_stack_top(%rip), %rsi
+ygtr_scan:
+    cmp %rsi, %rdi
+    jae ygtr_next
+    call y_gc_scan_words
+ygtr_next:
+    mov 80(%rbx), %rbx
+    jmp ygtr_loop
+ygtr_done:
+    pop %rbx
+    pop %rbp
+    ret
+
 # y_gc_collect: the whole cycle. Callers are the allocator's slow path, so
 # every live value is on the stack or in a saved register.
 y_gc_collect:
@@ -918,13 +1203,23 @@ y_gc_collect:
     lea y_heap(%rip), %rax
     mov 24(%rax), %rax
     test %rax, %rax
-    jnz ygc_out
+    jz ygc_run
+    call y_gc_stw_begin
+    test %rax, %rax
+    jz ygc_out
+ygc_run:
     mov $1, %rax
     mov %rax, y_gc_run(%rip)
     mov y_gc_ms_seg(%rip), %rax
     mov %rax, y_gc_ms_cur(%rip)
     call y_gc_pass1
     call y_gc_roots
+    lea y_heap(%rip), %rax
+    mov 24(%rax), %rax
+    test %rax, %rax
+    jz ygc_drain
+    call y_gc_thread_roots
+ygc_drain:
     call y_gc_drain
 # The free lists are rebuilt from the walk below, so drop last cycle's:
 # a run that was on a list and is now coalesced into a bigger one would
@@ -1016,6 +1311,12 @@ ygc_sweep_done:
     mov %rax, y_gc_last(%rip)
     xor %eax, %eax
     mov %rax, y_gc_run(%rip)
+    lea y_heap(%rip), %rax
+    mov 24(%rax), %rax
+    test %rax, %rax
+    jz ygc_out
+    call y_gc_mark_threads
+    call y_gc_stw_end
 ygc_out:
     add $8, %rsp
     pop %r15
@@ -1067,10 +1368,21 @@ ygfr_done:
 # y_gc_maybe: collect when the bytes handed out since the last cycle reach
 # max(live, 8 MB). Called from the allocator's slow path.
 y_gc_maybe:
+# With threads on the global block is empty (y_threads_on moved its state into
+# the main thread's tcb), so the bytes handed out are the CO thread's: word 2
+# of its tcb is `used`, word 13 the mark the last cycle left there.
     lea y_heap(%rip), %rax
-    mov 16(%rax), %rax
-    mov %rax, %rdx
+    mov 24(%rax), %rcx
+    test %rcx, %rcx
+    jz ygmb_main
+    mov %fs:24, %rax
+    mov 16(%rax), %rdx
+    mov 104(%rax), %rcx
+    jmp ygmb_have
+ygmb_main:
+    mov 16(%rax), %rdx
     mov y_gc_last(%rip), %rcx
+ygmb_have:
     sub %rcx, %rdx
     mov y_gc_live(%rip), %rcx
     cmp $8388608, %rcx

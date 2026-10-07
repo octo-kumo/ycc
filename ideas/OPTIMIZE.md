@@ -342,6 +342,21 @@ interleaving is unchanged). It is reached through the checker's named layer --
 `heap_used() > 0` is now `false` (printing no longer allocates) and the fixture says so.
 `test/y/native/t379_print_int_no_alloc.y` pins the heap delta across six prints at 0.
 
+### A9. The collector's thread support, and who pays for it (open)
+
+Stopping the world for threads (`ideas/lifetime_gc.md` item 1) put a safepoint
+and two locks into the allocation path. The safepoint is now a pointer the
+thread runtime installs (`y_gc_safe_fn`, set by `y_threads_on`), so a program
+that never spawns carries no parking code and one that never allocates carries
+nothing at all. What is left is the free-list/metadata lock pair: it is called
+from the plain allocation path, so `test/treeshake/alloc_once.y` -- which
+`--gc=auto` leaves collector-free -- grew 1312 -> 1443 bytes, and a
+collector-carrying program (`forloop.y`) 3497 -> 4077. Both are recorded in
+`test/treeshake/shapes.txt`. The fix is the trick the safepoint already uses:
+route `y_gc_alloc_free` and `y_gc_chunk_add` through pointers that
+`y_threads_on` replaces with the locked variants, so the locks and their call
+sites belong to the thread runtime too.
+
 ### A8. Pointer-free payloads: do not scan bytes (partly done)
 
 **Problem.** The collector treats a marked block's payload as candidate pointers.
