@@ -2003,3 +2003,26 @@ data and the first file's tail competed for the same single recorded block.
 
 The fixture is parked (not committed): its expected would have pinned a truncated
 read.  test/kernel is 55 passed, 0 failed / 55 total.
+
+### Round 123: getdents64 fills the buffer -- ls must walk the records inside it
+
+Measured while building a two-entry ls: ONE getdents64 call returned BOTH records
+(the buffer was 256 bytes and each record is 24), so a program that decodes one
+record per call prints a single entry and then sees 0.  The kernel is right -- it
+fills as much as fits, like Linux -- and the fix belongs in ls:
+
+  * walk the records INSIDE the returned buffer using d_reclen as the stride,
+    starting at offset 0 and stopping at the returned length;
+  * only call getdents64 again when the buffer is exhausted;
+  * the loop ends when the call answers 0.
+
+That gives, for the two-entry image the cat fixture builds:
+
+    ls open=3
+    entry ino=2 reclen=24 name=112114111103     "prog"
+    entry ino=3 reclen=24 name=109115103103     "msg" (+ its NUL)
+
+u009_ls pins one record's layout; the walk is what the fixture still needs, and the
+first version of it is what proved the buffer behaviour in the first place.  The
+fixture is parked (guard removed it: only the first name matched), and test/kernel
+is 59 passed, 0 failed / 59 total.
