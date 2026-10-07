@@ -120,8 +120,7 @@ def isspace(c: byte) -> bool {
 // is c one of the single-char punctuation symbols?
 // One of the nine punctuation characters Y uses.
 def ispunct(c: byte) -> bool {
-    c == '(' || c == ')' || c == '{' || c == '}' || c == '[' ||
-    c == ']' || c == ',' || c == ';' || c == ':'
+    c in ['(', ')', '{', '}', '[', ']', ',', ';', ':']
 };
 
 
@@ -554,21 +553,13 @@ def multicharop(src: str, i: long, c: str) -> str {
 // Try to read a two-char operator at position i. Returns the operator or "".
 def twocharop(src: str, i: long) -> str {
     let two = src[i:i + 2];
-    if (two == "==" || two == "!=" || two == "<=" || two == ">=" ||
-        two == "&&" || two == "||" || two == "::" || two == ".." ||
-        two == "->" || two == "=>" || two == "++" || two == "--" ||
-        two == "?." ||
-        two == "+=" || two == "-=" || two == "*=" || two == "/=" ||
-        two == "%=" || two == "&=" || two == "|=" || two == "^=" ||
-        two == "<<" || two == ">>") { two }
+    if (two in ["==", "!=", "<=", ">=", "&&", "||", "::", "..", "->", "=>", "++", "--", "?.", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<", ">>"]) { two }
     else { "" }
 };
 
 // A one-character operator.
 def issingleop(c: byte) -> bool {
-    c == '+' || c == '-' || c == '*' || c == '/' || c == '%' ||
-    c == '<' || c == '>' || c == '=' || c == '.' || c == '!' ||
-    c == '&' || c == '?' || c == '|' || c == '^' || c == '~'
+    c in ['+', '-', '*', '/', '%', '<', '>', '=', '.', '!', '&', '?', '|', '^', '~']
 };
 
 // The slash character, in one place: this file's own source contains no bare

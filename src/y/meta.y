@@ -1226,8 +1226,7 @@ def sg_in_body() -> bool {
 // (`name(`) or a DEF (`def name`) is refused, so a generator may still use the
 // word as a variable or a field.
 def mg_thread(w: str) -> bool {
-    w == "spawn" || w == "fork" || w == "join" || w == "mutex" || w == "lock" ||
-    w == "try_lock" || w == "sem" || w == "post" || w == "wait"
+    w in ["spawn", "fork", "join", "mutex", "lock", "try_lock", "sem", "post", "wait"]
 };
 
 // The names the pass injects into G. `y_`-prefixed, so a module imported into
@@ -1456,8 +1455,7 @@ def sg_region_word(w: str) -> void {
 // whole-line directives (`import`, `export`, `embed`), which are consumed by the
 // resolve and never reach the lexer.
 def mg_directive(w: str) -> bool {
-    w == "def" || w == "type" || w == "let" || w == "const" ||
-    w == "import" || w == "export" || w == "embed"
+    w in ["def", "type", "let", "const", "import", "export", "embed"]
 };
 
 // The region is over. Drop it whole unless it is a declaration or holds a block:

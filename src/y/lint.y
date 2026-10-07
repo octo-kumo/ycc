@@ -896,8 +896,7 @@ def lint_int_val(node: Node) -> long {
 
 // The operator set that has a compound assignment.
 def lint_compound_op(op: str) -> void {
-    op == "+" || op == "-" || op == "*" || op == "/" || op == "%" ||
-    op == "&" || op == "|" || op == "^" || op == "<<" || op == ">>" || op == ">>>"
+    op in ["+", "-", "*", "/", "%", "&", "|", "^", "<<", ">>", ">>>"]
 };
 
 // Whether two written expressions are the same one. Only the shapes a
@@ -1538,8 +1537,7 @@ def lint_resizes(node: Node, name: str) -> bool {
 };
 
 def lint_resize_method(key: str) -> bool {
-    key == "push" || key == "pop" || key == "remove" || key == "insert" ||
-    key == "shift" || key == "unshift" || key == "sort"
+    key in ["push", "pop", "remove", "insert", "shift", "unshift", "sort"]
 };
 
 // Whether the last real statement of a loop body is `iv = iv + 1` (also
@@ -2875,25 +2873,47 @@ def fx_if_chain(name: str, ln: long, col: long, lines: [str]) -> [str] {
 // literals); 1.7 reads the first and last literals as written.
 def fx_chain(rule: str, name: str, kind: str, ln: long, col: long, lines: [str]) -> [str] {
     if (ln < 1 || ln > len(lines)) { return lines; };
-    let line = lines[ln - 1];
-    let i = fx_find(line, name, col - 1);
+    let i = fx_find(lines[ln - 1], name, col - 1);
     if (i < 0) { return lines; };
     let lits: [str] = [];
+    let k = ln;
     let j = i + len(name);
-    let end = j;
+    let endline = ln;
+    let endcol = j;
+    let first = true;
     while (true) {
-        let eq = fx_ws(line, j);
-        if (eq + 1 >= len(line) || line[eq] != 61 || line[eq + 1] != 61) { return lines; };
-        let st = fx_ws(line, eq + 2);
-        let e = fx_lit_end(line, st);
+        // whitespace to the next token, on this line or a later one (a
+        // chain is often wrapped)
+        let L = fx_nocomment(lines[k - 1]);
+        let w = fx_ws(L, j);
+        while (w >= len(L)) {
+            k = k + 1;
+            if (k > len(lines)) { return lines; };
+            L = fx_nocomment(lines[k - 1]);
+            w = fx_ws(L, 0);
+        };
+        j = w;
+        if (!first) {
+            if (!fx_word(L, j, name)) { return lines; };
+            j = fx_ws(L, j + len(name));
+            if (j >= len(L)) {
+                k = k + 1;
+                if (k > len(lines)) { return lines; };
+                L = fx_nocomment(lines[k - 1]);
+                j = fx_ws(L, 0);
+            };
+        };
+        first = false;
+        if (j + 1 >= len(L) || L[j] != 61 || L[j + 1] != 61) { return lines; };
+        let st = fx_ws(L, j + 2);
+        let e = fx_lit_end(L, st);
         if (e < 0) { return lines; };
-        lits += line[st:e];
-        end = e;
-        j = fx_ws(line, e);
-        if (j + 1 < len(line) && line[j] == 124 && line[j + 1] == 124) {
-            let nx = fx_ws(line, j + 2);
-            if (!fx_word(line, nx, name)) { return lines; };
-            j = nx + len(name);
+        lits += L[st:e];
+        endline = k;
+        endcol = e;
+        j = fx_ws(L, e);
+        if (j + 1 < len(L) && L[j] == 124 && L[j + 1] == 124) {
+            j = j + 2;
         } else {
             break;
         };
@@ -2905,14 +2925,15 @@ def fx_chain(rule: str, name: str, kind: str, ln: long, col: long, lines: [str])
     } else if (kind == "str" && fx_all_short(lits)) {
         // `x in "abc"` (index_of) beats building a one-char-string array
         let chars = "";
-        for k in 0..len(lits) { chars += lits[k][1:2]; };
+        for q in 0..len(lits) { chars += lits[q][1:2]; };
         rep = name + " in \"" + chars + "\"";
     } else {
         // numbers, chars, or strings: `in` on an array compares strings
         // by content (arr.index), so a set of any strings works
         rep = name + " in [" + fx_commas(lits) + "]";
     };
-    lines[ln - 1] = line[:i] + rep + line[end:];
+    lines[ln - 1] = lines[ln - 1][:i] + rep + lines[endline - 1][endcol:];
+    lines = lines[:ln] + lines[endline:];
     lines
 };
 
