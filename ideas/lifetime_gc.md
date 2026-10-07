@@ -282,3 +282,21 @@ bookkeeping: something wrote a heap-block `end` field into the middle of this
 chunk. The chunk is one a thread is bump-allocating in (its `end` is this
 chunk's end), which keeps the tail hypothesis alive as the place to look next,
 with the reporting trap now in place to say which object is hit.
+
+## Round 21: the map is not a map, and the spare-tail handoff is load-bearing
+
+The reporting trap added in round 20 prints one more thing worth reading: the
+word at pass1's map pointer (`%r13`, descriptor word 2) is
+`6148914691236517205` = `0x5555555555555555`. pass1 *zeroes* that map at the
+start of every chunk before setting a bit per block start (`ygp1_zmap`), so a
+map that is all alternating bits is not a map this cycle wrote -- the
+descriptor's map pointer does not point at a map it owns. Combined with the
+"header" being the chunk's `end`, both fields of this descriptor disagree with
+their own contents.
+
+Also tried, and reverted: disabling the spare-tail handoff in `y_spawn` (the
+`40(%rcx)` spare list that `y_join_code` fills) to see whether the tail is what
+plants a heap-block `end` in the middle of a live chunk. The program then
+produced no output at all, so the handoff is load-bearing and cannot simply be
+bypassed: understanding it -- what `y_spawn` stores in the new tcb's words 0/8
+from the spare entry -- is part of the fix, not an alternative to it.
