@@ -49,6 +49,18 @@ Working, booted by `test/sh/test_kernel.sh` under qemu:
   `vm_translate`, `vm_new_dir`, `vm_switch` — all in Y (t006 checks 16
   facts, including address-space isolation and 2 MB-page translation).
 
+Three things the language turned out to give a kernel that are not
+obvious from outside, and all three are load-bearing:
+
+* **function values** (see limit 1 below): a dispatch table is an array of
+  records holding defs, built as a literal and called through the field.
+  A syscall table, an IRQ table and a driver table all work today;
+* **pointer arithmetic on a global anchor**: raw memory access, and so the
+  whole page-table walker, is Y;
+* **closures with shared captures**: a handler and its state can travel
+  together (`let d = [{name: "ata", state: c, go: ata_irq}]`), as long as
+  every entry has one shape.
+
 ## 2. Where the assembly is, and why it cannot move
 
 Every assembly instruction in the kernel is one of six things.  None is
@@ -79,16 +91,39 @@ is ordinary Y.
 
 These are the real limits, in the order they will bite.
 
-1. **There is no function type.**  `def() -> void` is not a type
-   (`type Slot = { go: def() -> void }` is refused: "expected '}' in a
-   type, got 'def'"), so a closure can be bound and called
-   (`let inc = () => { counter = counter + 1; }; inc();` works) but it
-   cannot be stored in a record or an array, passed to a function, or
-   returned.  **This is the biggest gap for OS work**: no dispatch table of
-   handlers, no driver table, no task entry point, no callback on a
-   completion.  Today's workarounds are `irq N def` (a declaration form the
-   compiler understands) and the `y_`-prefix override (a fixed label the
-   generated code calls).  Both are patches over this one hole.
+1. **A function type cannot be WRITTEN.**  (The values are first-class;
+   only the type syntax is missing, and the difference matters a lot.)
+   All of these work today, measured:
+
+       def twice(n: long) -> long { n * 2 };
+       let f = twice;                    // bind a def
+       let t = [h1]; t += h2; t[0]();    // a growable array of functions
+       let tb = [{n: 1, f: sys3}, {n: 2, f: sys4}];   // a dispatch table
+       print(tb[0].f(1, 2, 3));          // call through the field
+       let cl = [{name: "c", go: () => { c + 1 }}];   // a closure in a table
+       def pick(n: long) { if (n == 0) { h1 } else { h2 } };  // returned
+       pick(1)();
+
+   What is refused is the *annotation*: `def() -> void` is not a type
+   ("expected '}' in a type, got 'def'"), so
+   * a parameter cannot be annotated with one -- no `sort(cmp)`, no generic
+     `map`, no callback parameter;
+   * `type Handler = () -> void` cannot be declared, so a record TYPE with a
+     function field cannot be written: only a record LITERAL, with an
+     inferred type, and an array of them must agree in signature.  The
+     checker prints the very type the parser will not read --
+     `array element: expected { name: str, go: () -> void }, got
+     { name: str, go: (long, long) -> long }`;
+   * an empty array cannot be given a function element type, so a table
+     starts from a one-element literal (`let t = [h1]; t += h2;`).
+
+   **For OS work this is much smaller than it looks**: a syscall table, an
+   IRQ dispatch table and a driver table all have ONE signature by
+   construction, so each is a literal of records with a function field and
+   works today.  `irq N def` and the `y_`-prefix override are not
+   workarounds for this -- they are ergonomics and type checking.  The gap
+   is the general case: a callback handed *in*, a comparator, a table whose
+   entries disagree in shape.
 2. **No integer-to-pointer conversion.**  A `*T` comes only from `&x` or
    `arr.ptr`, so reaching a physical address means taking the address of a
    global and moving it with pointer arithmetic (std/kernel.y's `mem_word`
@@ -146,10 +181,10 @@ Missing, and where it goes:
 * **User pages.**  `vm_map` already takes flags; `PTE_U` is defined.  A user
   program's pages are `PTE_U|PTE_W` mappings of freshly allocated physical
   pages.
-* **A syscall table in Y.**  This is where limit 1 bites: without function
-  values the dispatcher is a `match`/`if` ladder over the syscall number.
-  That is *fine* (and what the compiler's own opcode dispatchers do) — it
-  just means a syscall costs a comparison chain instead of an indirect call.
+* **A syscall table in Y.**  `let syscalls = [{n: 0, f: sys_read}, ...]` as a
+  top-level literal, indexed by number and called through the field.  That
+  is an indirect call, not a comparison chain (limit 1 costs nothing here:
+  every entry has the same signature).
 
 Estimate: **~80 lines of assembly, ~250 lines of Y** for a ring-3 "hello,
 world" that makes one syscall.
@@ -248,8 +283,9 @@ Missing, and it is small:
   one), calls Y, and reloads `%rsp` from the current task — the same
   `y_switch` machinery, ~40 lines.
 
-Limit 1 bites here too: a task's entry point wants to be a function value.
-The workaround is a `match` on a task kind, or one `y_`-named def per kind.
+A task table can hold its entry points directly -- `let tasks = [{stack: 0,
+go: thread_a}, ...]` -- because every entry has the same `() -> void`
+signature, so the scheduler is an ordinary Y loop that calls `task.go()`.
 
 ## 5. The trade: design freedom given up
 
@@ -264,7 +300,9 @@ The goal says "at the cost of some design freedom".  Concretely:
   exists.
 * **Records are exact and name-laid-out**, so hardware structures are
   hand-poked rather than typed (limit 3).
-* **No function values**, so dispatch is a `match` ladder (limit 1).
+* **No writable function type**, so a callback cannot be passed in and a
+  function-typed record cannot be declared (limit 1) -- tables work, generic
+  higher-order code does not.
 * **Allocation failure traps** (limit 4).
 * **One program per compile**: a kernel and its user programs are separate
   compilations with different targets.  That is the intended shape anyway.
@@ -292,9 +330,11 @@ Each step is useful on its own and none needs the next.
 | 9 | Multiboot modules + an initrd (read-only FS) | 150 | — | loading user programs |
 | 10 | ATA PIO block driver | 200 | 20 | a real filesystem |
 | 11 | higher-half kernel | — | — | real isolation, no PDPT copying |
-| 12 | function values in the language | — | — | indirect dispatch everywhere |
+| 12 | a writable function type (annotations, `type` aliases) | — | — | callbacks, comparators, generic tables |
 
 Steps 3 and 12 are compiler work; 0 is a compiler bug fix; the rest are a
-kernel.  The sum is roughly **1,100 lines of Y and 200 of assembly** for
+kernel.  Step 12 is smaller than "function values" sounds: the values exist,
+the type printer prints them, and what is missing is teaching the type
+parser to read `(...) -> T` so it can be written.  The sum is roughly **1,100 lines of Y and 200 of assembly** for
 everything in the goal list except the filesystem, which is another few
 hundred of Y.
