@@ -213,13 +213,12 @@ def dw_le(out: [byte], v: long, n: long) -> [byte] {
 // byte but the last (v >= 0).
 def dw_uleb(out: [byte], v: long) -> [byte] {
     let x = v;
-    let more = true;
-    while (more) {
+    while (true) {
         let lo = x % 128;
         x = x / 128;
         if (x == 0) {
             out += lo;
-            more = false;
+            break;
         } else {
             out += lo + 128;
         };
@@ -232,15 +231,14 @@ def dw_uleb(out: [byte], v: long) -> [byte] {
 // a negative x steps down by one to shift right arithmetically.
 def dw_sleb(out: [byte], v: long) -> [byte] {
     let x = v;
-    let more = true;
-    while (more) {
+    while (true) {
         let q = x / 128;
         if (x < 0 && q * 128 != x) { q = q - 1; };
         let lo = x - q * 128;
         x = q;
         if ((x == 0 && lo < 64) || (x == -1 && lo >= 64)) {
             out += lo;
-            more = false;
+            break;
         } else {
             out += lo + 128;
         };

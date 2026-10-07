@@ -1111,15 +1111,14 @@ def is_id_b(c: long) -> bool {
 // indents with spaces) or end of range.
 def skip_sp(b: [byte], i: long, hi: long) -> long {
     let p = i;
-    let go = true;
-    while (go) {
+    while (true) {
         if (p >= hi) {
-            go = false;
+            break;
         } else {
             if (b[p] == ' ') {
                 p = p + 1;
             } else {
-                go = false;
+                break;
             };
         };
     };
@@ -1133,15 +1132,14 @@ def tok_end_b(b: [byte], i: long, hi: long) -> long {
     if (p < hi) {
         if (b[p] == '$') { p = p + 1; }
     }
-    let go = true;
-    while (go) {
+    while (true) {
         if (p >= hi) {
-            go = false;
+            break;
         } else {
             if (is_id_b(b[p])) {
                 p = p + 1;
             } else {
-                go = false;
+                break;
             };
         };
     };
@@ -1201,13 +1199,12 @@ def line_refs_b(text: str, b: [byte], lo: long, hi: long, out: [str], want_jumps
             out = tok_push(out, tok_at_b(text, b, op, hi));
         } else if (w == "mov" || sse_mnemonic(w)) {
             let q = p;
-            let go = true;
-            while (go) {
+            while (true) {
                 if (q >= hi) {
-                    go = false;
+                    break;
                 } else {
                     if (b[q] == '$') {
-                        go = false;
+                        break;
                     } else {
                         q = q + 1;
                     };
@@ -7620,18 +7617,17 @@ def tyset_add(lbl: str, form: str) -> long {
     let mask = len(ty_seen) - 1;
     let i = fnv64(lbl) & mask;
     let out = 1;
-    let looking = true;
-    while (looking) {
+    while (true) {
         let cur: str = ty_seen[i];
         if (len(cur) == 0) {
             ty_seen[i] = lbl;
             ty_forms[i] = form;
             ty_count++;
-            looking = false;
+            break;
         } else if (cur == lbl) {
             let had: str = ty_forms[i];
             out = had == form ? 0 : -1;
-            looking = false;
+            break;
         } else {
             i = (i + 1) & mask;
         };

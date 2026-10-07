@@ -241,12 +241,11 @@ def pk_qstr(cur: Cursor, at: str) -> str {
 def pk_array(cur: Cursor, at: str) -> [str] {
     cur.p = cur.p + 1;
     let out: [str] = [];
-    let go = true;
-    while (go) {
+    while (true) {
         pk_skip(cur);
         if (pk_peek(cur) == "]") {
             cur.p = cur.p + 1;
-            go = false;
+            break;
         } else {
             out += pk_qstr(cur, at);
             pk_skip(cur);
@@ -255,10 +254,10 @@ def pk_array(cur: Cursor, at: str) -> [str] {
                 cur.p = cur.p + 1;
             } else if (c == "]") {
                 cur.p = cur.p + 1;
-                go = false;
+                break;
             } else {
                 pk_die(at + "expected ',' or ']' in an array");
-                go = false;
+                break;
             };
         };
     };

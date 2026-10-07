@@ -1621,6 +1621,43 @@ def lint_none_test(cond: Node) -> str {
     ""
 };
 
+// Every write of the flag must be the last thing that runs on its path: a
+// `break` in its place must exit exactly when the write did. An arm with no
+// write is fine (that path just continues), which is the common
+// `if (done) { f = true; } else { ...more... }`.
+def lint_flag_tail(s: Node, name: str) -> bool {
+    if (!lint_find(s, name, 8)) { return true; };
+    let k: long = s.k;
+    if (k == K.assign) {
+        let a: Assign = s;
+        a.name == name
+    } else if (k == K.block) {
+        let b: Block = s;
+        let li = -1;
+        for i in 0..len(b.stmts) {
+            if (b.stmts[i].k != K.void) { li = i; };
+        };
+        if (li < 0) { return false; };
+        for i in 0..li {
+            if (lint_find(b.stmts[i], name, 8)) { return false; };
+        };
+        lint_flag_tail(b.stmts[li], name)
+    } else if (k == K.kw_if) {
+        let f: If = s;
+        let ok = true;
+        if (lint_find(f.then, name, 8) && !lint_flag_tail(f.then, name)) { ok = false; };
+        if (ok && f.has_else && lint_find(f.els, name, 8) && !lint_flag_tail(f.els, name)) { ok = false; };
+        ok
+    } else {
+        false
+    }
+};
+
+// The fixer may only run when every write of the flag is at its path's tail.
+def lint_flag_fixable(body: Node, name: str) -> bool {
+    lint_flag_tail(body, name)
+};
+
 // Rule 2.5: a bool local that exists only to stop the loop.
 //   `let f = true; while (f) { ...; f = false; ... };`
 // is `while (true) { ...; break; ... };`. The flag must be written inside
@@ -1639,6 +1676,9 @@ def lint_short_flag(st: LintSt, stmts: [Node], i: long) -> long {
     if (!lint_find(loop.body, f, 8)) { return 0; };
     if (lint_find_from(stmts, i + 2, f, 8)) { return 0; };
     lint_warn_at(st, "'" + lint_disp(f) + "' only stops this loop; write 'while (true)' and 'break' where it is set", d);
+    if (!lint_find_from(stmts, i + 2, f, 0) && lint_flag_fixable(loop.body, f)) {
+        lint_fix(st, "2.5", d.line, d.col, lint_disp(f), "");
+    };
     0
 };
 
@@ -2542,6 +2582,74 @@ def fx_commas(a: [str]) -> str {
     out
 };
 
+// `name = <bool>;` -> `break;` (a flag's exit).
+def fx_flag_breaks(line: str, name: str) -> str {
+    let i = fx_find(line, name, 0);
+    while (i >= 0) {
+        let e = fx_ws(line, i + len(name));
+        if (e + 1 < len(line) && line[e] == 61 && line[e + 1] != 61) {
+            let s = fx_ws(line, e + 1);
+            if (s < len(line) && (line[s] == 116 || line[s] == 102)) {
+                let sc = index_of(line[s:], ";");
+                if (sc >= 0) {
+                    sc = s + sc;
+                    line = line[:i] + "break;" + line[sc + 1:];
+                    i = fx_find(line, name, i + 6);
+                    continue;
+                };
+            };
+        };
+        i = fx_find(line, name, i + len(name));
+    };
+    line
+};
+
+// Is this line still writing `name` (a `name =` that is not `==`)?
+def fx_flag_write(line: str, name: str) -> bool {
+    let i = fx_find(line, name, 0);
+    while (i >= 0) {
+        let e = fx_ws(line, i + len(name));
+        if (e < len(line) && line[e] == 61 && (e + 1 >= len(line) || line[e + 1] != 61)) { return true; };
+        i = fx_find(line, name, i + len(name));
+    };
+    false
+};
+
+// 2.5: `let f = <bool>; while (f) { B(f = <bool>) };` -> `while (true) {
+// B(break) };`. All or nothing: a write or any other mention of `f` left in
+// the body (an if-arm value with no `;`, a read) leaves the whole def alone.
+def fx_flag(name: str, ln: long, col: long, lines: [str]) -> [str] {
+    if (ln < 1 || ln >= len(lines)) { return lines; };
+    let wline = lines[ln];
+    let wi = fx_find(wline, "while", 0);
+    if (wi < 0) { return lines; };
+    let o = fx_ws(wline, wi + 5);
+    if (o >= len(wline) || wline[o] != 40) { return lines; };
+    let c = fx_match(wline, o, 40, 41);
+    if (c < 0) { return lines; };
+    let b1 = fx_ws(wline, c + 1);
+    if (b1 >= len(wline) || wline[b1] != 123) { return lines; };
+    if (!fx_scan(lines, ln + 1, b1, 123, 125)) { return lines; };
+    let l2 = fx_sline;
+    // the body is what lies after the `while` line; a one-line body is not
+    // handled (the write shares the line with the condition)
+    if (l2 <= ln + 1) { return lines; };
+    let nb: [str] = [];
+    for k in ln + 2..l2 + 1 {
+        nb += fx_flag_breaks(lines[k - 1], name);
+    };
+    for k in 0..len(nb) {
+        if (fx_flag_write(nb[k], name)) { return lines; };
+        if (fx_find(fx_nocomment(nb[k]), name, 0) >= 0) { return lines; };
+    };
+    lines[ln] = wline[:o + 1] + "true" + wline[c:];
+    for k in ln + 2..l2 + 1 {
+        lines[k - 1] = nb[k - ln - 2];
+    };
+    lines = lines[:ln - 1] + lines[ln:];
+    lines
+};
+
 // Are all of these 1-char string literals?
 def fx_all_short(lits: [str]) -> bool {
     for k in 0..len(lits) {
@@ -2575,8 +2683,7 @@ def fx_if_chain(name: str, ln: long, col: long, lines: [str]) -> [str] {
     let pos = i;
     let endline = ln;
     let endcol = 0;
-    let go = true;
-    while (go) {
+    while (true) {
         let L = lines[k - 1];
         let o = fx_ws(L, pos + 2);
         if (o >= len(L) || L[o] != 40) { return lines; };
@@ -2609,7 +2716,7 @@ def fx_if_chain(name: str, ln: long, col: long, lines: [str]) -> [str] {
         if (eidx < 0) {
             endline = l2;
             endcol = c2 + 1;
-            go = false;
+            break;
         } else {
             let after = fx_ws(lines[eline - 1], eidx + 4);
             if (after < len(lines[eline - 1]) && lines[eline - 1][after] == 105) {
@@ -2620,7 +2727,7 @@ def fx_if_chain(name: str, ln: long, col: long, lines: [str]) -> [str] {
                 if (!fx_scan(lines, eline, after, 123, 125)) { return lines; };
                 endline = fx_sline;
                 endcol = fx_scol + 1;
-                go = false;
+                break;
             };
         };
     };
@@ -2645,8 +2752,7 @@ def fx_chain(rule: str, name: str, kind: str, ln: long, col: long, lines: [str])
     let lits: [str] = [];
     let j = i + len(name);
     let end = j;
-    let go = true;
-    while (go) {
+    while (true) {
         let eq = fx_ws(line, j);
         if (eq + 1 >= len(line) || line[eq] != 61 || line[eq + 1] != 61) { return lines; };
         let st = fx_ws(line, eq + 2);
@@ -2660,7 +2766,7 @@ def fx_chain(rule: str, name: str, kind: str, ln: long, col: long, lines: [str])
             if (!fx_word(line, nx, name)) { return lines; };
             j = nx + len(name);
         } else {
-            go = false;
+            break;
         };
     };
     if (len(lits) < 3) { return lines; };
@@ -2696,6 +2802,7 @@ def fx_one(rule: str, a: str, b: str, ln: long, col: long, lines: [str]) -> [str
     else if (rule == "2.1") { lines = fx_if_line(rule, b, ln, lines); }
     else if (rule == "2.3") { lines = fx_if_line(rule, b, ln, lines); }
     else if (rule == "2.2") { lines = fx_let_cond(ln, lines); }
+    else if (rule == "2.5") { lines = fx_flag(a, ln, col, lines); }
     else if (rule == "3.6") { lines = fx_foreach_elem(a, b, ln, col, lines); }
     else if (rule == "void") { lines = fx_void(ln, lines); }
     else if (rule == "1.8") { lines = fx_if_chain(a, ln, col, lines); }
@@ -2765,10 +2872,24 @@ def fx_file(fid: long, fixes: [LintFix], src: str, nmap: long, fmap: [long], lma
         i++;
     };
     fx_sort(mine, nmap, lmap);
+    // A fix that deletes lines (2.5 drops the flag's `let`) moves every line
+    // below it up. The order is by priority first, so a later fix can sit
+    // BELOW an earlier one and still be off: shift it by the removals above.
+    let gone: [long] = [];
     i = 0;
     while (i < len(mine)) {
         let f = mine[i];
-        lines = fx_one(f.rule, f.a, f.b, fx_local(f.line, nmap, lmap), f.col, lines);
+        let at = fx_local(f.line, nmap, lmap);
+        let shift = 0;
+        for g in 0..len(gone) {
+            if (gone[g] < at) { shift++; };
+        };
+        let before = len(lines);
+        lines = fx_one(f.rule, f.a, f.b, at - shift, f.col, lines);
+        let d = before - len(lines);
+        for q in 0..d {
+            gone += at;
+        };
         i++;
     };
     let out = "\n".join(lines);

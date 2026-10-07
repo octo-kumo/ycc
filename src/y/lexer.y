@@ -359,11 +359,10 @@ def fstr_walk(src: str, q: long) -> { end: long, err: str, at: long, fields: [lo
     let err = "";
     let at = q;
     let i = q + 1;
-    let open = true;
-    while (open) {
+    while (true) {
         if (i >= n) {
             err = "unterminated f-string";
-            open = false;
+            break;
         } else {
             let c = src[i];
             if (c == '\\') {
@@ -372,13 +371,13 @@ def fstr_walk(src: str, q: long) -> { end: long, err: str, at: long, fields: [lo
                 // the closing delimiter is as long as the opening one: a
                 // single `"` inside a `"""` f-string does not end it
                 if (qlen == 3 && src[i:i + 3] != "\"\"\"") { i = i + 1; }
-                else { i = i + qlen; open = false; };
+                else { i = i + qlen; break; };
             } else if ((c == '{' || c == '}') && i + 1 < n && src[i + 1] == c) {
                 i = i + 2;
             } else if (c == '}') {
                 err = "single '}' in an f-string (a literal brace is '}}')";
                 at = i;
-                open = false;
+                break;
             } else if (c == '{') {
                 let lo = i + 1;
                 let hi = fstr_expr_end(src, lo);
@@ -392,11 +391,11 @@ def fstr_walk(src: str, q: long) -> { end: long, err: str, at: long, fields: [lo
                         err = "an f-string field is one expression, got '" + src[hi:hi + 1] + "'";
                         at = hi;
                     };
-                    open = false;
+                    break;
                 } else if (fstr_blank(src, lo, hi)) {
                     err = "empty f-string field";
                     at = i;
-                    open = false;
+                    break;
                 } else if (hc == '}') {
                     fields += lo;
                     fields += hi;
@@ -423,7 +422,7 @@ def fstr_walk(src: str, q: long) -> { end: long, err: str, at: long, fields: [lo
                             err = "unterminated f-string field";
                             at = i;
                         };
-                        open = false;
+                        break;
                     };
                 };
             } else {
@@ -616,16 +615,15 @@ def tokenize(src: str) -> [Tok] {
                 i += 2;
                 col += 2;
                 let digits = false;
-                let rdone = false;
-                while (!rdone) {
+                while (true) {
                     if (i < n) {
                         let rc = src[i];
                         if (is_radix_ch(rc, radix)) {
                             if (rc != '_') { digits = true; };
                             i++;
                             col++;
-                        } else { rdone = true; };
-                    } else { rdone = true; };
+                        } else { break; };
+                    } else { break; };
                 };
                 if (!digits) {
                     // A prefix without a digit (`0x`, `0b_`, `0b2`) is no
@@ -665,26 +663,24 @@ def tokenize(src: str) -> [Tok] {
             // exponent) `_` may separate digits: 1_000_000, 0.000_1.
             i++;
             col++;
-            let ind = false;
-            while (!ind) {
+            while (true) {
                 if (i < n) {
                     let dc = src[i];
                     if (isdigit(dc) || dc == '_') { i++; col++; }
-                    else { ind = true; };
-                } else { ind = true; };
+                    else { break; };
+                } else { break; };
             };
             // optional fractional part (but not '..' range).
             if (src[i:i + 1] == "." && src[i + 1:i + 2] != ".") {
                 i++;
                 col++;
                 let fs = i;
-                let frd = false;
-                while (!frd) {
+                while (true) {
                     if (i < n) {
                         let fc = src[i];
                         if (isdigit(fc) || (fc == '_' && i > fs)) { i++; col++; }
-                        else { frd = true; };
-                    } else { frd = true; };
+                        else { break; };
+                    } else { break; };
                 };
             };
             // optional exponent: e / E, an optional sign, then digits. Only
@@ -700,13 +696,12 @@ def tokenize(src: str) -> [Tok] {
                 if (i + 1 + esign < n && isdigit(src[i + 1 + esign])) {
                     i = i + 1 + esign;
                     col = col + 1 + esign;
-                    let exd = false;
-                    while (!exd) {
+                    while (true) {
                         if (i < n) {
                             let xc = src[i];
                             if (isdigit(xc) || xc == '_') { i++; col++; }
-                            else { exd = true; };
-                        } else { exd = true; };
+                            else { break; };
+                        } else { break; };
                     };
                 };
             };
@@ -756,12 +751,11 @@ def tokenize(src: str) -> [Tok] {
             // The first character is already known to be a word character.
             i++;
             col++;
-            let inw = false;
-            while (!inw) {
+            while (true) {
                 if (i < n) {
                     if (isalnum(src[i])) { i++; col++; }
-                    else { inw = true; };
-                } else { inw = true; };
+                    else { break; };
+                } else { break; };
             };
             let word = src[start:i];
             let ty = "id";
@@ -866,12 +860,11 @@ def tokenize(src: str) -> [Tok] {
                 // line comment
                 i += 2;
                 col += 2;
-                let done = false;
-                while (!done) {
+                while (true) {
                     if (i < n) {
                         if (src[i:i + 1] != "\n") { i++; col++; }
-                        else { done = true; };
-                    } else { done = true; };
+                        else { break; };
+                    } else { break; };
                 };
             } else if (src[i + 1:i + 2] == "*") {
                 i += 2;

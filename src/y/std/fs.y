@@ -80,10 +80,9 @@ def read_some(fd: long, n: long) -> [byte] {
 def read_all_bytes(fd: long) -> [byte] {
     let out: [byte] = [];
     let chunk: [byte; 65536] = [0; 65536];
-    let go = true;
-    while (go) {
+    while (true) {
         let k = os_call("y_os_read", fd, &chunk[0], 65536);
-        if (k <= 0) { go = false; } else { out += chunk[0:k]; };
+        if (k <= 0) { break; } else { out += chunk[0:k]; };
     };
     out
 };

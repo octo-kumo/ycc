@@ -532,17 +532,16 @@ def parse_json_object(toks: [Tok], p: long) -> Parsed {
     let vals: [Node] = [];
     let pos = p + 1;  // skip '{'
     let bad: Node = { k: K.void, line: ln, col: cl };
-    let go = true;
-    while (go) {
+    while (true) {
         if (is_punct(toks, pos, "}")) {
             pos = pos + 1;
-            go = false;
+            break;
         } else if (tt(toks, pos) == "str") {
             let key = tv(toks, pos);
             pos = pos + 1;
             if (!is_punct(toks, pos, ":")) {
                 bad = json_err("expected ':' after JSON object key", tline(toks, pos), tcol(toks, pos));
-                go = false;
+                break;
             } else {
                 pos = pos + 1;
                 let v = parse_json_value(toks, pos, false);
@@ -553,10 +552,10 @@ def parse_json_object(toks: [Tok], p: long) -> Parsed {
                     pos = pos + 1;
                 } else if (is_punct(toks, pos, "}")) {
                     pos = pos + 1;
-                    go = false;
+                    break;
                 } else {
                     bad = json_err("expected ',' or '}' in JSON object", tline(toks, pos), tcol(toks, pos));
-                    go = false;
+                    break;
                 };
             };
         } else {
@@ -564,7 +563,7 @@ def parse_json_object(toks: [Tok], p: long) -> Parsed {
             // (unless it is a closer) so the caller can make progress.
             bad = json_err("expected a string key in JSON object, got " + tok_desc(toks, pos), tline(toks, pos), tcol(toks, pos));
             if (!is_punct(toks, pos, "}") && tt(toks, pos) != "eof") { pos = pos + 1; };
-            go = false;
+            break;
         };
     };
     if (bad.k == K.err) {
@@ -584,11 +583,10 @@ def parse_json_array(toks: [Tok], p: long) -> Parsed {
     let elems: [Node] = [];
     let pos = p + 1;  // skip '['
     let bad: Node = { k: K.void, line: ln, col: cl };
-    let go = true;
-    while (go) {
+    while (true) {
         if (is_punct(toks, pos, "]")) {
             pos = pos + 1;
-            go = false;
+            break;
         } else {
             let v = parse_json_value(toks, pos, false);
             elems += v.node;
@@ -597,10 +595,10 @@ def parse_json_array(toks: [Tok], p: long) -> Parsed {
                 pos = pos + 1;
             } else if (is_punct(toks, pos, "]")) {
                 pos = pos + 1;
-                go = false;
+                break;
             } else {
                 bad = json_err("expected ',' or ']' in JSON array", tline(toks, pos), tcol(toks, pos));
-                go = false;
+                break;
             };
         };
     };
@@ -657,15 +655,14 @@ def arrow_params_at(toks: [Tok], p: long) -> bool {
                     if (is_punct(toks, pos, ":")) {
                         pos = pos + 1;
                         let depth = 0;
-                        let tdone = false;
-                        while (!tdone) {
+                        while (true) {
                             let tk = tt(toks, pos);
-                            if (tk == "eof") { ok = false; tdone = true; }
+                            if (tk == "eof") { ok = false; break; }
                             else if (tk == "punct" && (tv(toks, pos) == "(" || tv(toks, pos) == "[" || tv(toks, pos) == "{")) { depth++; pos = pos + 1; }
                             else if (tk == "punct" && (tv(toks, pos) == ")" || tv(toks, pos) == "]" || tv(toks, pos) == "}")) {
-                                if (depth == 0) { tdone = true; } else { depth--; pos = pos + 1; };
+                                if (depth == 0) { break; } else { depth--; pos = pos + 1; };
                             }
-                            else if (tk == "punct" && tv(toks, pos) == "," && depth == 0) { tdone = true; }
+                            else if (tk == "punct" && tv(toks, pos) == "," && depth == 0) { break; }
                             else { pos = pos + 1; };
                         };
                     };
@@ -692,9 +689,8 @@ def parse_arrow_func(toks: [Tok], p: long) -> Parsed {
     if (is_punct(toks, p, "(")) {
         pos = p + 1;
         if (!is_punct(toks, pos, ")")) {
-            let go = true;
-            while (go) {
-                if (tt(toks, pos) != "id") { go = false; }
+            while (true) {
+                if (tt(toks, pos) != "id") { break; }
                 else {
                     names += tv(toks, pos);
                     ppos += tline(toks, pos) * 65536 + tcol(toks, pos);
@@ -707,7 +703,7 @@ def parse_arrow_func(toks: [Tok], p: long) -> Parsed {
                     };
                     ptypes += ty;
                     if (is_punct(toks, pos, ",")) { pos = pos + 1; }
-                    else { go = false; };
+                    else { break; };
                 };
             };
         };
@@ -817,11 +813,10 @@ def parse_primary(toks: [Tok], p: long) -> Parsed {
                 keys += tuple_key(0);
                 vals += inner.node;
                 let pos = inner.pos;
-                let go = true;
-                while (go) {
+                while (true) {
                     pos = pos + 1;  // skip ','
                     if (is_punct(toks, pos, ")")) {
-                        go = false;
+                        break;
                     } else {
                         let e = parse_expr(toks, pos);
                         keys += tuple_key(len(vals));
@@ -829,7 +824,7 @@ def parse_primary(toks: [Tok], p: long) -> Parsed {
                         pos = e.pos;
                         if (is_punct(toks, pos, ",")) {
                         } else {
-                            go = false;
+                            break;
                         };
                     };
                 };
@@ -1093,8 +1088,7 @@ def parse_binary(toks: [Tok], p: long, min_prec: long) -> Parsed {
     let left_r = parse_unary(toks, p);
     let left = left_r.node;
     let pos = left_r.pos;
-    let go = true;
-    while (go) {
+    while (true) {
         let op = tv(toks, pos);
         let prec = 0;
         if (tt(toks, pos) == "op") { prec = op_prec(op); }
@@ -1105,9 +1099,9 @@ def parse_binary(toks: [Tok], p: long, min_prec: long) -> Parsed {
         // The explicit else arms end in long-valued `0`s, keeping their
         // types aligned; the terminating `;` discards the value.
         if (prec == 0) {
-            go = false;
+            break;
         } else if (prec < min_prec) {
-            go = false;
+            break;
         } else {
             // `::` is right-associative: 1 :: 2 :: [3] is 1 :: (2 :: [3])
             // = [1, 2, 3]. Everything else is left-associative.
@@ -1319,13 +1313,12 @@ def parse_map(toks: [Tok], p: long) -> Parsed {
     if (is_punct(toks, pos, "}")) {
         res(maplit_node(is_map, keys, vals, ln, cl), pos + 1)
     } else {
-        let go = true;
-        while (go) {
+        while (true) {
             // trailing comma: '}' right after ',' ends the map
             // NOTE: statement-form + `0;` tails — the while body must be
             // void-typed (see parse_binary note).
             if (is_punct(toks, pos, "}")) {
-                go = false;
+                break;
             } else {
                 // A quoted key makes a MAP literal ({k: K.map}); identifier
                 // keys stay record fields ({k: K.rec}).
@@ -1357,13 +1350,13 @@ def parse_map(toks: [Tok], p: long) -> Parsed {
                     bad = true;
                 };
                 if (bad) {
-                    go = false;
+                    break;
                 } else {
                     let e = parse_expr(toks, pos);
                     keys += key;
                     vals += e.node;
                     pos = e.pos;
-                    if (is_punct(toks, pos, ",")) { pos = pos + 1; } else { go = false; };
+                    if (is_punct(toks, pos, ",")) { pos = pos + 1; } else { break; };
                 };
             };
         };
@@ -1542,15 +1535,14 @@ def parse_type_params(toks: [Tok], p: long) -> PType {
     let ts: [Type] = [];
     let pos = p + 1;  // skip '('
     if (!is_punct(toks, pos, ")")) {
-        let go = true;
-        while (go) {
+        while (true) {
             if (is_punct(toks, pos, ")")) {
-                go = false;
+                break;
             } else {
                 let t = parse_type_node(toks, pos);
                 ts += t.node;
                 pos = t.pos;
-                if (is_punct(toks, pos, ",")) { pos = pos + 1; } else { go = false; };
+                if (is_punct(toks, pos, ",")) { pos = pos + 1; } else { break; };
             };
         };
     };
@@ -1579,10 +1571,9 @@ def parse_type_record(toks: [Tok], p: long) -> PType {
     let fields: [Field] = [];
     let pos = p + 1;  // skip '{'
     if (!is_punct(toks, pos, "}")) {
-        let go = true;
-        while (go) {
+        while (true) {
             if (is_punct(toks, pos, "}")) {
-                go = false;
+                break;
             } else {
                 let fname = tv(toks, pos);
                 if (!is_name_tok(toks, pos)) {
@@ -1608,7 +1599,7 @@ def parse_type_record(toks: [Tok], p: long) -> PType {
                 fields += { name: fname, opt: fopt, typ: fty };
                 pos = ft.pos;
                 // fields are separated by `,` or `;` (a trailing one is fine)
-                if (is_punct(toks, pos, ",") || is_punct(toks, pos, ";")) { pos = pos + 1; } else { go = false; };
+                if (is_punct(toks, pos, ",") || is_punct(toks, pos, ";")) { pos = pos + 1; } else { break; };
             };
         };
     };
@@ -1864,12 +1855,11 @@ def parse_func(toks: [Tok], p: long, isnat: bool) -> Parsed {
     let defs: [Node] = [];
     let optname = "";
     if (!hbad && !is_punct(toks, pos, ")")) {
-        let go = true;
-        while (go) {
+        while (true) {
             if (tt(toks, pos) != "id") {
                 derrs += expect_err(toks, pos, "a parameter name");
                 hbad = true;
-                go = false;
+                break;
             } else {
                 let nm = tv(toks, pos);
                 names += nm;
@@ -1924,7 +1914,7 @@ def parse_func(toks: [Tok], p: long, isnat: bool) -> Parsed {
                 if (is_punct(toks, pos, ",")) {
                     pos = pos + 1;
                 } else {
-                    go = false;
+                    break;
                 };
             };
         };
@@ -2358,15 +2348,14 @@ def parse_decl(toks: [Tok], p: long) -> Parsed {
 def sync_stmt(toks: [Tok], p: long) -> long {
     let pos = p;
     let depth = 0;
-    let go = true;
-    while (go) {
+    while (true) {
         let t = tt(toks, pos);
         if (t == "eof") {
-            go = false;
+            break;
         } else if (t == "punct") {
             let v = tv(toks, pos);
             if (depth == 0 && (v == ";" || v == "}")) {
-                go = false;
+                break;
             } else {
                 if (index_of("([{", v) >= 0) {
                     depth++;
@@ -2919,10 +2908,9 @@ def nameix_slot(keys: [str], k: str) -> long {
         h = (h * 31 + k[i]) & 1073741823;
     };
     let s = (h ^ (h >> 15)) & mask;
-    let go = true;
-    while (go) {
+    while (true) {
         let e: str = keys[s];
-        if (e == "" || e == k) { go = false; } else { s = (s + 1) & mask; };
+        if (e == "" || e == k) { break; } else { s = (s + 1) & mask; };
     };
     s
 };

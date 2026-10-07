@@ -744,11 +744,10 @@ def rn_later(names: [str]) -> [bool] {
         let nm = names[i];
         if (nm != "") {
             let h = rn_hash(nm) & (size - 1);
-            let go = true;
-            while (go) {
+            while (true) {
                 let e = slots[h];
-                if (e == "") { slots[h] = nm; go = false; }
-                else if (e == nm) { out[i] = true; go = false; }
+                if (e == "") { slots[h] = nm; break; }
+                else if (e == nm) { out[i] = true; break; }
                 else { h = (h + 1) & (size - 1); };
             };
         };
