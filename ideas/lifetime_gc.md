@@ -240,3 +240,21 @@ or died).
    What is left of this item is nothing; and `--no-gc`,
    plus a `test/sh/test_gc.sh` suite that runs the corpus under a small cap.
 
+
+## Round 19: two attempts on the --gc-stress trap, and where it actually is
+
+Clamping the sweep's per-chunk walk to the lowest registered thread `cur` inside
+that chunk (so a live bump tail is never free-listed) was implemented, measured
+and reverted: it is principled, but `test/y/native/t160_threads.y` still traps
+under `--gc-stress`, so it went back out rather than ship unproven.
+
+The registers then say the trap is not in the sweep at all. At `y_bad_trap`,
+`%r13` equals descriptor word 2, which is pass1's *map* pointer (`mov
+16(%rbx),%r13`), and the word pass1 read as a header is a heap POINTER in the
+chunk base/end range, not a size. A pointer sitting at a block boundary is what
+a previously swept block looks like once the sweep's free-run bookkeeping has
+been written into it. The likeliest reading is therefore a MISSED ROOT: the
+sweep freed a block that was still live, and the next cycle's pass1 read the
+bookkeeping as a header. The bump-tail hazard (free space with no header that
+the owner still bumps into) is a second, separate thing, still open, and the
+clamp above is the shape its fix should take.
