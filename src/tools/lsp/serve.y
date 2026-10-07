@@ -43,6 +43,7 @@ import rpc from "./rpc.y";
 import diag from "./diag.y";
 import pos from "./pos.y";
 import fmt from "./fmt.y";
+import sem from "./sem.y";
 import sym from "./sym.y";
 // scan and index for the M4 handlers: the spans and the declarations they
 // resolve against. nav is the lookup itself, kept separate so it can be tested
@@ -482,7 +483,7 @@ def on_did_open(st: State, p: { str => json.Val }) -> [str] {
 // `doc_notification` does the state and this does the reply -- so with R1.8 off
 // this publishes nothing and the buffer stays current. That split is the whole
 // point: the other reading of the setting ("ignore changes") would leave hover,
-// completion and formatting answering about text the user has
+// completion, semantic tokens and formatting answering about text the user has
 // already replaced, which is worse than the slow check the switch exists for.
 def on_did_change(st: State, p: { str => json.Val }) -> [str] {
     let out: [str] = [];
@@ -567,6 +568,28 @@ def do_initialize(st: State, id: json.Val) -> str {
     let caps = json.obj();
     caps["textDocumentSync"] = json.jobj(sync);
     caps["documentFormattingProvider"] = json.boolean(true);
+
+    // Semantic tokens (M2). The legend's tokenTypes list IS the wire format --
+    // the client sends the same names back and uses the INDICES -- so it is built
+    // from sem.token_types() rather than written out here, where the two could
+    // drift apart silently and every token after the first difference would be
+    // painted as the wrong kind.
+    let legend = json.obj();
+    let types: [json.Val] = [];
+    foreach (t in sem.token_types()) { types += json.str(t); }
+    legend["tokenTypes"] = json.jarr(types);
+    legend["tokenModifiers"] = json.jarr([]);
+    let stp = json.obj();
+    stp["legend"] = json.jobj(legend);
+    stp["full"] = json.boolean(true);
+    // `range` is what keeps a big file from costing a megabyte of JSON per viewport
+    // change: with it, the client asks for the lines it is showing rather than the
+    // whole document. src/y/types.y is 40,410 tokens, so a whole-file reply is
+    // 202,050 integers, and the SERVER answers that in 3ms -- which is why the cost
+    // never appeared in the server's own timings and read as the server doing
+    // nothing at all. sem.sem_range_in computes the visible slice.
+    stp["range"] = json.boolean(true);
+    caps["semanticTokensProvider"] = json.jobj(stp);
 
     // The outline. documentSymbolProvider with `true` means "hierarchical", which
     // is what this server returns (a DocumentSymbol[] with children), so the
@@ -657,6 +680,217 @@ def do_formatting(st: State, id: json.Val, p: { str => json.Val }) -> str {
     }
     let r = json.obj();
     r["edits"] = json.jarr(edits);
+    result_msg(id, json.jobj(r))
+}
+
+// ── what a name DENOTES (R2.3's semantic classes) ─────────────────────────
+//
+// One entry per scan span, 0 for "no opinion", consumed by sem.tokens_in. The
+// classification is the server's own resolution and the compiler's own lists, and
+// never a guess:
+//
+//   property  -- the token is after a `.`. That is a TEXT fact and it is all a
+//                member name is: whether the member exists is the checker's
+//                business, and `p.nosuchfield` is still a property.
+//   parameter -- resolves to a declaration the index marks D_PARAM.
+//   function  -- resolves to a `def`/`ndef`, or to a `let`/`const` whose
+//                declared type is a function type, which is how a closure is
+//                written in Y.
+//   type      -- resolves to a `type` alias.
+//   builtin   -- is in `intrinsic_names()`: the compiler's own list, so a builtin
+//                added to the compiler appears here with nothing updated on this
+//                side. Checked BEFORE the declaration lookup, because a builtin is
+//                a builtin whatever the file also calls it.
+//
+// Anything else stays `variable`, which is the honest answer: the lexer really
+// does not know. A name that resolves to nothing -- used before its `let`, or
+// after a `.`, or a typo -- is `variable`, never a class it did not earn.
+//
+// The cost is one `nav.find_decl` per identifier, which is the same lookup
+// go-to-definition does, so this is the price of one extra pass over the names.
+// request-cost.y measures it.
+def semantic_classes_of(d: Doc) -> [long] { semantic_overrides(d.text, d.path) }
+
+// The same over a bare text and path, which is what a test wants: a `Doc` is the
+// server's document record and a fixture that only has a buffer should not have to
+// invent one to ask what its identifiers mean.
+def semantic_overrides(text: str, path: str) -> [long] {
+    let out: [long] = [];
+    let sps = scan.scan_full(text).spans;
+    let idx = scope.index_src(text, path);
+    // Once per buffer, not once per identifier: `nav.by_name` buckets the
+    // declarations so each lookup walks only the few that share the name. Walking
+    // all of them per identifier was 34.5 s on `src/y/native.y` -- the highlighter
+    // hanging on any real file. `nav.resolve_decl` is `nav.find_decl`'s rule over one
+    // bucket, so the ANSWER is unchanged; only the walk is shorter.
+    let byname = nav.by_name(idx);
+    // A MAP, not an array: `index_of` finds a substring in a string, and a linear
+    // scan of the builtin list once per identifier would make the highlight cost
+    // proportional to the product of two lengths.
+    let builtins: { str => long } = {};
+    let bn = intrinsic_names();
+    let bi = 0;
+    while (bi < len(bn)) { builtins[bn[bi]] = 1; bi = bi + 1; };
+    // The language's own TYPE NAMES, from the parser's own list. Without these a
+    // `long` in `def f(a: long)` painted as an ordinary variable, which is the
+    // plainest way for a highlighter to say nothing: every type in the language
+    // looked like a name.
+    let tnames: { str => long } = {};
+    let tn = type_word_names();
+    let ti = 0;
+    while (ti < len(tn)) { tnames[tn[ti]] = 1; ti = ti + 1; };
+    // ONE forward pass for the positions, not one per identifier.
+    //
+    // `scan.scan_full` returns spans in source order, so the line and the line's
+    // start can be carried forward. They were not: each identifier asked for its
+    // own position by counting newlines from byte 0, which on a 500 KB file is
+    // ~250,000 steps for a name near the end, times ~17,000 names -- and that
+    // quadratic, not the declaration lookup, is what made `semantic_classes_of` take 34
+    // seconds on `src/y/native.y`.
+    let i = 0;
+    let cur_line = 0;
+    let cur_start = 0;
+    let cur_next = index_of_char(text, 10, 0);
+    while (i < len(sps)) {
+        let s = sps[i];
+        while (cur_next >= 0 && cur_next < s.off) {
+            cur_line = cur_line + 1;
+            cur_start = cur_next + 1;
+            cur_next = index_of_char(text, 10, cur_start);
+        };
+        let t = 0;
+        if (s.kind == scan.K_ident && s.end > s.off && s.end <= len(text)) {
+            t = class_of_span(text, s, idx, byname, builtins, tnames, cur_line, s.off - cur_start, s.end);
+        };
+        out += t;
+        i = i + 1;
+    };
+    out
+}
+
+// The byte offset of the next `ch` at or after `from`, or -1.
+def index_of_char(text: str, ch: long, from: long) -> long {
+    let out = 0 - 1;
+    let i = from;
+    while (i < len(text)) {
+        if (text[i] == ch) { out = i; i = len(text); } else { i = i + 1; };
+    };
+    out
+}
+
+// `sp` is the span; `ln`/`ch` are its 0-based (line, character), carried in from
+// the single forward pass in semantic_overrides rather than recomputed per identifier,
+// and `after` is the byte offset just past the name -- which is where a
+// declaration's tail text starts.
+def class_of_span(text: str, sp: Span, idx: FileIdx, byname: { str => [IdxDecl] }, builtins: { str => long }, tnames: { str => long }, ln: long, ch: long, after: long) -> long {
+    let out = 0;
+    let s = sp;
+    let w = text[s.off:s.end];
+    if (after_dot(text, s.off)) {
+        out = sem.T_property;
+    } else if (is_some(builtins[w])) {
+        out = sem.T_builtin;
+    } else if (is_some(tnames[w]) && !is_some(nav.resolve_decl(byname, idx, w, ln, ch))) {
+        // A type name that is not ALSO a binding of the user's. The second half
+        // matters: a `let long = 1` is a variable named `long`, and painting it as a
+        // type would be wrong in the other direction.
+        out = sem.T_type;
+    } else {
+        // A token that IS a declaration is asked about differently from a USE of
+        // one, and it has to be: `nav.find_decl` answers "what does this name
+        // resolve to HERE", and a parameter is not in scope at its own
+        // declaration -- `in_scope` compares against the body's `{`, which is
+        // still to the right. So asking it about `n` in `def f(n: long)` returns
+        // nothing, and the declaration an editor most wants painted as a parameter
+        // is the one that came out blank.
+        let mine = nav.decl_at(byname, w, ln, ch, s.end - s.off);
+        if (is_some(mine)) { out = decl_class(mine !, text, after); }
+        else {
+            let found = nav.resolve_decl(byname, idx, w, ln, ch);
+            if is_some(found) { out = decl_class(found !, text, after); };
+        };
+    };
+    out
+}
+
+// A declaration's class, from what the index recorded about it.
+//
+// D_LET and D_CONST need one more question asked, because a `let` is not a kind of
+// name -- `let mul = def (...)` is a function and `let n = 1` is a value, and the
+// index cannot tell them apart without being told. It can be told from the text
+// immediately after the name, which is a fact rather than a guess: `: (long) -> long`
+// is a function type and `= def (` is a function literal, and neither spelling can
+// mean anything else.
+def decl_class(dc: IdxDecl, text: str, after: long) -> long {
+    let out = 0;
+    if (dc.kind == scope.D_PARAM) { out = sem.T_parameter; }
+    else if (dc.kind == scope.D_DEF) { out = sem.T_function; }
+    else if (dc.kind == scope.D_TYPE) { out = sem.T_type; }
+    else if (is_function_let(dc, text, after)) { out = sem.T_function; };
+    out
+}
+
+def is_function_let(dc: IdxDecl, text: str, after: long) -> bool {
+    let out = false;
+    // The recorded detail first: it is what go-to-definition shows, so the two
+    // agree on what a signature is.
+    if (dc.detail != "" && index_of(dc.detail, ") -> ") > 0) { out = true; }
+    else {
+        let tail = text_from(text, after, 12);
+        let t = scope.trim_both(tail);
+        if (t[:1] == "=") { t = scope.trim_both(t[1:]) };
+        if (t[:4] == "def ") { out = true; }
+        else if (t[:1] == ":") {
+            let ann = scope.trim_both(t[1:]);
+            if (ann[:1] == "(" || ann[:1] == "def") { out = true; };
+        };
+    };
+    out
+}
+
+// Up to `n` characters of `text` from a byte offset.
+def text_from(text: str, start: long, n: long) -> str {
+    let out = "";
+    let stop = start + n;
+    if (stop > len(text)) { stop = len(text) };
+    if (start < stop) { out = text[start:stop] };
+    out
+}
+
+// textDocument/semanticTokens/full: the whole buffer, delta encoded (M2, R2).
+//
+// `full: true` in the capabilities, so no `previousResultId` and no delta against
+// a cached result -- the client asks for everything and gets it. R2.4's round
+// trip is checked by t010_sem.
+def do_semantic_tokens(st: State, id: json.Val, p: { str => json.Val }) -> str {
+    let uri = str_field(field_of(p, "textDocument"), "uri");
+    let got = doc_get(st, uri);
+    let data: [long] = [];
+    if is_some(got) {
+        let d: Doc = got !;
+        // `semantic_classes_of` first: it is the expensive half and a buffer with no
+        // identifiers in it must not pay for the pass that would have found none.
+        let doc = pos.doc_of(d.text);
+        let over = semantic_classes_of(d);
+        // The client's range, when it sends one. Absent means the whole document,
+        // which is what every client sent until `range` was advertised -- so both
+        // paths have to work and both are exercised: the fixtures ask without a
+        // range, the editor with one.
+        let rng = field_of(p, "range");
+        if (len(members_of(rng)) == 0) {
+            data = sem.sem_full_in(doc, over).data;
+        } else {
+            // 1-based here, 0-based on the wire.
+            // `field_of` wants a map and `range` is a json.Val, so members_of first --
+            // the same widening every params read in this file does.
+            let rm = members_of(rng);
+            let from_l = long_field(field_of(rm, "start"), "line") + 1;
+            let to_l = long_field(field_of(rm, "end"), "line") + 1;
+            data = sem.sem_range_in(doc, over, from_l, to_l).data;
+        };
+    }
+    let r = json.obj();
+    r["data"] = json.jarr(numbers(data));
     result_msg(id, json.jobj(r))
 }
 
@@ -1880,8 +2114,8 @@ export {
     note_open, note_change, note_close,
     on_did_open, on_did_change, on_did_save, on_did_close, on_exit,
     do_initialize, read_check_on_change, read_timing, do_shutdown, do_formatting,
-    do_document_symbols, numbers, symbols_json,
+    do_semantic_tokens, do_document_symbols, numbers, symbols_json,
     end_position, count_lines,
     field_of, members_of, str_field, long_field, params_of,
-    change_count, change_at, inferred_at, type_at, none_type, before_dot_col, object_col, record_fields, field_item, field_name, field_type
+    change_count, change_at, semantic_classes_of, semantic_overrides, class_of_span, decl_class, is_function_let, text_from, inferred_at, type_at, none_type, before_dot_col, object_col, record_fields, field_item, field_name, field_type, index_of_char
 };

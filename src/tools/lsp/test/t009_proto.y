@@ -9,6 +9,7 @@
 import json;
 import pos from "../pos.y";
 import diag from "../diag.y";
+import sem from "../sem.y";
 import serve from "../serve.y";
 import dispatch from "../dispatch.y";
 import yserve from "../yserve.y";
@@ -30,6 +31,15 @@ def field(v: json.Val, k: str) -> json.Val {
 
 def members_has(v: json.Val, k: str) -> bool {
     is_some(serve.members_of(v)[k])
+}
+
+def legend_field(v: json.Val) -> json.Val {
+    let t = items_own(field(v, "tokenTypes"));
+    if (len(t) > 0) { t[0] } else { json.nul() }
+}
+
+def legend_len(v: json.Val) -> long {
+    len(items_own(field(v, "tokenTypes")))
 }
 
 def sfield(v: json.Val, k: str) -> str { json.as_str(field(v, k))! }
@@ -120,19 +130,39 @@ print("documentFormattingProvider = " + tostring(bfield(tcaps, "documentFormatti
 // did not implement, so the test passed while the editor pulled, got -32601 and
 // showed no diagnostics at all (LSP.md 7.0).
 // Count plus membership, because Y has no array sort and building a sorted copy
-// by hand here would be noise: six members, and each of the six expected.
+// by hand here would be noise: seven members, and each of the seven expected.
 // The count is the assertion that matters -- it is what catches a capability
 // being advertised without a handler, which is the mistake LSP.md keeps calling
 // out (a client changes what it offers the user because of a flag). M4 added
 // definitionProvider, hoverProvider and completionProvider; each is answered in
 // serve.do_* and pinned by t013_m4.
-let want: [str] = ["documentFormattingProvider", "documentSymbolProvider",
+let want: [str] = ["documentFormattingProvider", "documentSymbolProvider", "semanticTokensProvider",
                    "textDocumentSync", "definitionProvider", "hoverProvider", "completionProvider"];
 let seen: [str] = [];
 foreach (w in want) { if (members_has(tcaps, w)) { seen += w; } }
 print("advertised: " + join(seen, ", "));
-print("exactly the six it implements: " + tostring(
-    len(seen) == 6 && len(serve.members_of(tcaps)) == 6));
+print("exactly the seven it implements: " + tostring(
+    len(seen) == 7 && len(serve.members_of(tcaps)) == 7));
+
+// And each is answered, which the deny-list could not say.
+let lg = field(field(tcaps, "semanticTokensProvider"), "legend");
+let types = items_own(field(lg, "tokenTypes"));
+print("legend types: " + tostring(len(types)));
+// A bare string Val, not an object, so it needs as_str rather than a field read.
+def as_text(v: json.Val) -> str {
+    let t = json.as_str(v);
+    if is_some(t) { t! } else { "(not a string)" }
+}
+// The advertised legend is `sem.token_types()`, so its LENGTH is compared against
+// that rather than a literal. These two lines used to say `len(types) == 9 && ...`
+// and the moment the legend grew -- five semantic classes, R2.3 -- both went false
+// and read as "the legend is broken" rather than "the legend changed". t010_sem
+// pins the order and the indices; this pins that the ADVERTISED list is the same
+// one, which is the part a client sees.
+let sem_legend = sem.token_types();
+print("legend matches sem.token_types() in length: " + tostring(len(types) == len(sem_legend)));
+print("legend[0] is a comment: " + tostring(as_text(types[0]) == "comment"));
+print("legend[8] is an error: " + tostring(as_text(types[8]) == "error"));
 
 // A string id must come back as a string, not a number: an id is an opaque
 // token, and coercing it makes the reply unmatchable.

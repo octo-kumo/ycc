@@ -29,6 +29,9 @@
 
 import fs;
 import json;
+import sem from "../sem.y";
+import pos from "../pos.y";
+import scan from "../scan.y";
 import serve from "../serve.y";
 import dispatch from "../dispatch.y";
 
@@ -267,6 +270,63 @@ def split_commas(csv: str) -> [str] {
 let st = fresh();
 serve.note_open(st, did_open());
 
+let legend = sem.token_types();
+let toks = sem.tokens_in(pos.doc_of(SRC), serve.semantic_overrides(SRC, ""));
+
+// The legend's NAME, never its number: a number would let a reordering pass
+// unnoticed, which is what t010_sem is for.
+def class_at(line: long, ch: long) -> str {
+    let out = "none";
+    let i = 0;
+    while (i < len(toks)) {
+        let t = toks[i];
+        if (t.line == line && ch >= t.ch && ch < t.ch + t.len) {
+            if (t.typ >= 0 && t.typ < len(legend)) { out = legend[t.typ]; } else { out = "type" + tostring(t.typ); };
+        };
+        i = i + 1;
+    };
+    out
+}
+
+// How many tokens carry a class that is not in the legend. Zero is the point:
+// an index the client cannot resolve paints nothing at all, and it looks like the
+// server not answering rather than like a numbering that moved.
+def outside_legend() -> long {
+    let out = 0;
+    let i = 0;
+    while (i < len(toks)) {
+        if (toks[i].typ < 0 || toks[i].typ >= len(legend)) { out = out + 1; };
+        i = i + 1;
+    };
+    out
+}
+
+def cls(line: long, needle: str, at: long) -> str {
+    let c = col_of(line, needle, at);
+    if (c < 0) { "NO-SUCH-COLUMN" } else { class_at(line, c) }
+}
+
+let spans = scan.scan_full(SRC).spans;
+
+// How many scanner spans and how many semantic tokens line `line` carries. The two
+// differ exactly when a span was sub-tokenized, which is the only reason to ask:
+// "the whole f-string is one string token" was the report.
+def counts(line: long) -> str {
+    let ns = 0;
+    let i = 0;
+    while (i < len(spans)) {
+        if (spans[i].line == line + 1) { ns = ns + 1; };
+        i = i + 1;
+    };
+    let nt = 0;
+    let j = 0;
+    while (j < len(toks)) {
+        if (toks[j].line == line) { nt = nt + 1; };
+        j = j + 1;
+    };
+    tostring(ns) + " spans, " + tostring(nt) + " tokens"
+}
+
 print("-- 1. a DECLARATION's own name answers, not only a use of it");
 print("b, at `let b`: " + hover1(st, 1, 3, col_of(3, "b =", 0)));
 print("b, at its use on line 12: " + hover1(st, 2, 12, col_of(12, "b", 0)));
@@ -292,13 +352,60 @@ print("clock_us: " + hover1(st, 10, 6, col_of(6, "clock_us()", 0)));
 print("clock_us, in the subtraction: " + hover1(st, 11, 8, col_of(8, "clock_us()", 0)));
 print("len: " + hover1(st, 12, 16, col_of(16, "len(", 0)));
 print("print: " + hover1(st, 13, 15, col_of(15, "print(", 0)));
+print("clock_us, painted as a builtin: " + cls(6, "clock_us()", 0));
+print("len, painted as a builtin: " + cls(16, "len(", 0));
 
-print("-- 5. the TextMate grammar orders strings before comments");
-// TextMate takes the match that starts EARLIEST, so the order of the top-level
-// `patterns` is the semantics rather than a preference: with `#comments` first,
-// the `//` inside the string literal on line 19 starts before the string's own
-// quote and wins, and half a string is painted as a comment. Asserted on the
-// file's text because the property is the ORDER.
+print("-- 3. an f-string is sub-tokenized, not one blob");
+// `scan` emits an f-string as ONE span, so before this the whole of
+// `f"{name:<14}: ..."` was a single `string` token and every name inside it was
+// part of one blob -- worse than not highlighting the interpolation at all,
+// because the interpolation is the part a reader is looking at. The interior is
+// now scanned as CODE by the same scanner over the same text, which is why the
+// classes below are the same ones the same code gets outside a string.
+print("line 15: " + counts(15));
+print("name inside the interpolation: " + cls(15, "name:<", 0));
+print("its format spec `:`, `<`: " + cls(15, ":<", 0) + "/" + cls(15, ":<", 1));
+print("its width `14`: " + cls(15, "14", 0));
+print("us, the second interpolation: " + cls(15, "us *", 0));
+print("the literal ` ns/call` stays a string: " + cls(15, " ns/call", 0));
+print("the opening f\": " + cls(15, "f\"", 0));
+print("a brace: " + cls(15, "{name", 0) + "/" + cls(15, "name:<14}", 11));
+print("print, outside the string: " + cls(15, "print(", 0));
+// A plain string is still ONE token: the sub-tokenization is for interpolations
+// only, and a multi-line f-string is one token per line the same way a plain one
+// is (t010_sem pins the rule).
+print("line 20, a plain string: " + counts(20));
+print("line 18, a comment: " + counts(18));
+
+print("-- 4. the language's TYPE NAMES are painted as types");
+// These are not declarations and were painted as ordinary variables, so every type
+// in the language looked like a name. The list is `parser.type_word_names()` --
+// the one the parser parses with. A mirrored copy here would drift the first time
+// a primitive is added, which is the argument `native.intrinsic_names()` makes for
+// the builtins above.
+print("long, a return type: " + cls(2, "long {", 0));
+print("str, a parameter type: " + cls(14, "str,", 0));
+print("float, a parameter type: " + cls(14, "float,", 0));
+print("P, an alias: " + cls(1, "P =", 0));
+// The rule has two halves and only one is obvious: a user name that HAPPENS to be
+// a type name is a variable. Pinned because the other direction is wrong too.
+print("a `long` that is a variable: " + cls(27, "long =", 0));
+// A record TYPE's field name is not a binding and not a property: it is the only
+// name in the language that is both, and it stays plain.
+print("a field of a record type: " + cls(1, "a: long", 0));
+
+print("-- 5. a comment is ONE token, so nothing inside it is highlighted");
+print("the comment's span: " + cls(18, "//", 0));
+print("a bracket inside it: " + cls(18, "[", 0));
+print("its closing bracket agrees: " + cls(18, "]", 0));
+print("a paren inside it agrees too: " + cls(18, "(", 0) + "/" + cls(18, ")", 0));
+// The grammar half, which is the part that WAS wrong. TextMate takes the match
+// that starts EARLIEST, so the order of the top-level `patterns` is the semantics
+// rather than a preference: with `#comments` first, the `//` inside the string
+// literal on line 19 starts before the string's own quote and wins, and half a
+// string is painted as a comment. Asserted on the file's text because the property
+// is the ORDER, and the order is two numbers -- reparsing the JSON would only make
+// the same comparison harder to read.
 let gtext = fs.read_file(GRAMMAR);
 if (is_some(gtext)) {
     let gi = where(gtext!, "\"#strings\"");
@@ -308,6 +415,8 @@ if (is_some(gtext)) {
 } else {
     print("grammar not readable at " + GRAMMAR + " -- run from the repo root");
 };
+print("the `//` in line 19's string scans as a string: " + cls(19, "\"// still", 0));
+
 print("-- 6. an IMPORTED name answers");
 // `diag.xref_for`, the path that builds the type index, linked NO std units: it
 // passed `externs_none()` while `diag.diagnose` had always passed the real
@@ -353,5 +462,6 @@ print("-- and the NON-answers, which are the other half of the rule");
 print("hovering inside a string literal: \"" + hover1(st, 30, 19, col_of(19, "still a string", 0)) + "\"");
 print("hovering a line that is not there: " + tostring(is_null(ask(st, 31, "textDocument/hover", at(999, 0)))));
 print("hovering an import's own name: \"" + hover1(st, 32, 0, col_of(0, "import math;", 0)) + "\"");
+print("tokens outside the legend: " + tostring(outside_legend()) + " of " + tostring(len(toks)));
 
 print("done");

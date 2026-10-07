@@ -1,7 +1,7 @@
 {
     "name": "y-lang",
     "displayName": "Y Language Support",
-    "description": "Language server for the Y programming language (ycc): diagnostics, TextMate highlighting, formatting",
+    "description": "Language server for the Y programming language (ycc): diagnostics, semantic highlighting, formatting",
     "version": "0.2.0",
     "publisher": "yun",
     "license": "MIT",
@@ -29,10 +29,36 @@
                 "configuration": "./language-configuration.json"
             }
         ],
+        "semanticTokenTypes": [
+            {
+                "id": "selfNone",
+                "superType": "keyword",
+                "description": "`self` and `none` -- the two contextual words the language spells like keywords."
+            },
+            {
+                "id": "punctuation",
+                "superType": "operator",
+                "description": "Brackets, commas and semicolons. Falls back to the operator colour because no theme styles punctuation."
+            },
+            {
+                "id": "error",
+                "superType": "keyword",
+                "description": "A span the scanner could not classify -- an unterminated literal, or a byte that is not a token. Coloured like a keyword so it is at least coloured; a theme can give it a red through editor.semanticTokenTypes.error."
+            },
+            {
+                "id": "builtin",
+                "superType": "function",
+                "description": "A builtin: print, len, clock_us, heap_used. Falls back to the function colour, which is what a builtin is."
+            }
+        ],
         "configurationDefaults": {
             "[y]": {
                 "editor.bracketPairColorization.enabled": false
-            }
+            },
+            "editor.semanticTokenTypes.builtin": "#DCDCAA",
+            "editor.semanticTokenTypes.punctuation": "#D4D4D4",
+            "editor.semanticTokenTypes.selfNone": "#569CD6",
+            "editor.semanticTokenTypes.error": "#F44747"
         },
         "configuration": {
             "title": "Y",
@@ -50,7 +76,7 @@
                 "y.lsp.checkOnChange": {
                     "type": "boolean",
                     "default": true,
-                    "markdownDescription": "Run the checker and the linter on every keystroke. Off checks on `didOpen` and `didSave` only, which is much cheaper on a large file and costs you live errors. **The other features are unaffected**: hover, completion and formatting still read your unsaved buffer, so they are never a keystroke behind."
+                    "markdownDescription": "Run the checker and the linter on every keystroke. Off checks on `didOpen` and `didSave` only, which is much cheaper on a large file and costs you live errors. **The other features are unaffected**: hover, completion, semantic tokens and formatting still read your unsaved buffer, so they are never a keystroke behind."
                 },
                 "y.lsp.warnings": {
                     "type": "boolean",
@@ -89,13 +115,6 @@
                 "command": "y.showServerOutput",
                 "title": "Y: Show Server Output",
                 "category": "Y"
-            }
-        ],
-        "grammars": [
-            {
-                "language": "y",
-                "scopeName": "source.y",
-                "path": "./syntaxes/y.tmLanguage.json"
             }
         ]
     },
