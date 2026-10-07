@@ -64,6 +64,8 @@ static ylong lint_short_bin(LintSt st, Yv *node);
 static ylong lint_short_call(LintSt st, Yv *call);
 static int lint_short_ord(LintSt st, Yv *call);
 static ylong lint_short_slice(LintSt st, Yv *node);
+static ylong lint_short_chain(LintSt st, Yv *node);
+static ylong lint_chain_leaves(Yv *node, Yv *out);
 static Yv *lint_single_stmt(Yv *block);
 static Yv *lint_first_stmt(Yv *block);
 static ylong lint_bool_lit(Yv *node);
@@ -184,11 +186,11 @@ Yv *lint_unit(Yv *ast, Yv *ast3, Yv *ofile, Yv *fmods, ylong wlevel, Yv *ogen) {
     Yv *vars = yav(0);
     Yv *flags = yav(0);
     Yv *rets = yav(0);
-    LintSt st = yr(11, "warns", warns, "vars", vars, "tops",
+    LintSt st = yr(12, "warns", warns, "vars", vars, "tops",
                    nameix_new(256), "flags", flags, "rets",
                    rets, "ridx", nameix_new(64), "self", ys(""), "wlevel",
                    yv_long(wlevel), "dropnext", yv_bool(0), "vused",
-                   yv_bool(0), "loops", yv_long(0));
+                   yv_bool(0), "loops", yv_long(0), "logic", yv_long(0));
     if (wlevel >= 1) {
         (void)lint_rets(st, yr_get(ast3, "stmts"));
     }
@@ -864,12 +866,22 @@ static ylong lint_un(LintSt st, Yv *node, int used) {
  * Any other operator's dropped value is a mistake. */
 static ylong lint_bin(LintSt st, Yv *node, int used) {
     Yv *op = yr_get(node, "op");
+    /* The chain check runs once, at the top of the `||` tree, and the flag
+     * stays set while the operands are walked so a nested `||` does not
+     * report the same chain again. */
+    ylong was = yv_l(yr_get(st, "logic"));
+    if (yv_l(yr_get(st, "wlevel")) >= 2 && ys_eq_lit(op, "||") && was == 0) {
+        (void)yr_set(st, "logic", yv_long(1));
+        (void)lint_short_chain(st, node);
+    }
     Yv *l = yr_get(node, "l");
     Yv *r = yr_get(node, "r");
     if ((ys_eq_lit(op, "&&") || ys_eq_lit(op, "||")) && !used &&
         lint_effect(r)) {
         (void)lint_node(st, l, 1);
-        return lint_node(st, r, 0);
+        ylong res = lint_node(st, r, 0);
+        (void)yr_set(st, "logic", yv_long(was));
+        return res;
     } else {
         (void)lint_two(st, l, r);
         if (!used) {
@@ -894,6 +906,7 @@ static ylong lint_bin(LintSt st, Yv *node, int used) {
         if (yv_l(yr_get(st, "wlevel")) >= 2) {
             (void)lint_short_bin(st, node);
         }
+        (void)yr_set(st, "logic", yv_long(was));
         return 0;
     }
 }
@@ -914,9 +927,11 @@ static int lint_same_id(Yv *l, Yv *r) {
  * Advice about form, never about meaning: every check here fires only when
  * the rewrite it names is exactly the same program. */
 
-/* The value of an integer literal, or -1 when the node is not one. */
+/* The value of an integer literal, or -1 when the node is not one. A char
+ * literal carries its byte as decimal text, so it reads here too. */
 static ylong lint_int_val(Yv *node) {
-    if (yv_l(yr_get(node, "k")) != K_num) { return -1; }
+    ylong k = yv_l(yr_get(node, "k"));
+    if (k != K_num && k != K_char) { return -1; }
     Yv *s = yr_get(node, "v");
     if (yv_len(s) > 0 && ys_byte_at(s, yv_len(s) - 1) == 'n') {
         s = ys_slice(s, 0, yv_len(s) - 1);
@@ -1112,6 +1127,84 @@ static ylong lint_short_slice(LintSt st, Yv *node) {
             st, ys("a one-character slice can be written as an index (a byte)"),
             node);
     }
+    return 0;
+}
+
+/* Rules 1.6/1.7: a `||` chain of equalities against the same value is one
+ * range or one membership test. Called once per chain, from its top node. */
+static ylong lint_short_chain(LintSt st, Yv *node) {
+    Yv *leaves = yav(0);
+    (void)lint_chain_leaves(node, leaves);
+    if (yv_len(leaves) < 3) { return 0; }
+    Yv *first = ya_get(leaves, 0);
+    if (!ys_eq_lit(yr_get(first, "op"), "==") ||
+        !lint_pure(yr_get(first, "l"))) {
+        return 0;
+    }
+    Yv *l0 = yr_get(first, "l");
+    Yv *vals = yav(0);
+    int allint = 1;
+    int allstr = 1;
+    ylong i = 0;
+    while (i < yv_len(leaves)) {
+        Yv *b = ya_get(leaves, i);
+        if (!ys_eq_lit(yr_get(b, "op"), "==") ||
+            !lint_same_node(l0, yr_get(b, "l"))) {
+            return 0;
+        }
+        Yv *r = yr_get(b, "r");
+        if (yv_l(yr_get(r, "k")) == K_str) {
+            allint = 0;
+        } else {
+            ylong v = lint_int_val(r);
+            if (v < 0) { return 0; }
+            (void)ya_push(vals, yv_long(v));
+            allstr = 0;
+        }
+        i = i + 1;
+    }
+    if (allint) {
+        ylong lo = yv_l(ya_get(vals, 0));
+        ylong hi = lo;
+        ylong j = 0;
+        while (j < yv_len(vals)) {
+            ylong v = yv_l(ya_get(vals, j));
+            if (v < lo) { lo = v; }
+            if (v > hi) { hi = v; }
+            j = j + 1;
+        }
+        if (hi - lo + 1 == yv_len(vals)) {
+            (void)lint_warn_at(
+                st,
+                ys("these equalities are a consecutive range; write a range "
+                   "comparison"),
+                node);
+        } else {
+            (void)lint_warn_at(
+                st,
+                ys("these equalities test one value against a set; write one "
+                   "membership test"),
+                node);
+        }
+    } else if (allstr) {
+        (void)lint_warn_at(
+            st,
+            ys("these equalities test one value against a set of strings; "
+               "write one membership test"),
+            node);
+    }
+    return 0;
+}
+
+/* The `==` comparisons of a `||` chain, in order. */
+static ylong lint_chain_leaves(Yv *node, Yv *out) {
+    if (yv_l(yr_get(node, "k")) == K_bin &&
+        ys_eq_lit(yr_get(node, "op"), "||")) {
+        (void)lint_chain_leaves(yr_get(node, "l"), out);
+        (void)lint_chain_leaves(yr_get(node, "r"), out);
+        return 0;
+    }
+    (void)ya_push(out, node);
     return 0;
 }
 

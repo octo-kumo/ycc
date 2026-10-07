@@ -53,7 +53,7 @@ type LintRet = { name: str, ret: Type, line: long, col: long };
 // on a single copy, which costs what any `+` costs. Which of the first two
 // an expression sees decides whether a `+=` on a string appends in place or
 // copies; see lint_opassign.
-type LintSt = { warns: [Diag], vars: [LintVar], tops: NameIx, flags: [long], rets: [LintRet], ridx: NameIx, self: str, wlevel: long, dropnext: bool, vused: bool, loops: long };
+type LintSt = { warns: [Diag], vars: [LintVar], tops: NameIx, flags: [long], rets: [LintRet], ridx: NameIx, self: str, wlevel: long, dropnext: bool, vused: bool, loops: long, logic: long };
 type LintRoot = { typ: Type, line: long, col: long, alias: str, mod: str };
 type LintOcc = { key: str, typ: Type, line: long, col: long, parent: long, decl: bool, alias: str, rep: bool };
 type LintTy = { roots: [LintRoot], atyps: [Type], amods: [str], amap: NameIx, amemo: [str], abusy: [bool], occs: [LintOcc], line: long, col: long, mod: str };
@@ -74,7 +74,7 @@ def lint_unit(ast: Block, ast3: Block, ofile: [long], fmods: [str], wlevel: long
     let vars: [LintVar] = [];
     let flags: [long] = [];
     let rets: [LintRet] = [];
-    let st = { warns: warns, vars: vars, tops: parser.nameix_new(256), flags: flags, rets: rets, ridx: parser.nameix_new(64), self: "", wlevel: wlevel, dropnext: false, vused: false, loops: 0 };
+    let st = { warns: warns, vars: vars, tops: parser.nameix_new(256), flags: flags, rets: rets, ridx: parser.nameix_new(64), self: "", wlevel: wlevel, dropnext: false, vused: false, loops: 0, logic: 0 };
     if (wlevel >= 1) {
         lint_rets(st, ast3.stmts)
     };
@@ -715,11 +715,21 @@ def lint_un(st: LintSt, node: Un, used: bool) -> long {
 // Any other operator's dropped value is a mistake.
 def lint_bin(st: LintSt, node: Bin, used: bool) -> long {
     let op: str = node.op;
+    // The chain check runs once, at the top of the `||` tree, and the flag
+    // stays set while the operands are walked so a nested `||` does not
+    // report the same chain again.
+    let was = st.logic;
+    if (st.wlevel >= 2 && op == "||" && was == 0) {
+        st.logic = 1;
+        lint_short_chain(st, node);
+    };
     let l = node.l;
     let r = node.r;
     if ((op == "&&" || op == "||") && !used && lint_effect(r)) {
         lint_node(st, l, true);
-        lint_node(st, r, false)
+        let res = lint_node(st, r, false);
+        st.logic = was;
+        res
     } else {
         lint_two(st, l, r);
         if (!used) {
@@ -738,6 +748,7 @@ def lint_bin(st: LintSt, node: Bin, used: bool) -> long {
             lint_warn_at(st, "division by zero", node);
         };
         if (st.wlevel >= 2) { lint_short_bin(st, node); };
+        st.logic = was;
         0
     }
 };
@@ -759,9 +770,10 @@ def lint_same_id(l: Node, r: Node) -> bool {
 // the rewrite it names is exactly the same program. They run above level 1
 // because a dropped value can be a bug while a longer spelling is a habit.
 
-// The value of an integer literal, or -1 when the node is not one.
+// The value of an integer literal, or -1 when the node is not one. A char
+// literal carries its byte as decimal text, so it reads here too.
 def lint_int_val(node: Node) -> long {
-    if (node.k != K.num) { return -1; };
+    if (node.k != K.num && node.k != K.char) { return -1; };
     let num: Leaf = node;
     let s = num.v;
     if (len(s) > 0 && s[len(s) - 1:len(s)] == "n") { s = s[:len(s) - 1]; };
@@ -934,6 +946,66 @@ def lint_short_slice(st: LintSt, slice: Slice) -> long {
     if (lint_slice_one(slice.lo, slice.hi) && lint_str_expr(st, slice.arr)) {
         lint_warn_at(st, "a one-character slice can be written as an index (a byte)", slice);
     };
+    0
+};
+
+// Rules 1.6/1.7: a `||` chain of equalities against the same value is one
+// range or one membership test. Called once per chain, from its top node.
+def lint_short_chain(st: LintSt, node: Bin) -> long {
+    let leaves: [Node] = [];
+    lint_chain_leaves(node, leaves);
+    if (len(leaves) < 3) { return 0; };
+    let first: Bin = leaves[0];
+    if (first.op != "==" || !lint_pure(first.l)) { return 0; };
+    let l0 = first.l;
+    let vals: [long] = [];
+    let allint = true;
+    let allstr = true;
+    let i = 0;
+    while (i < len(leaves)) {
+        let b: Bin = leaves[i];
+        if (b.op != "==" || !lint_same_node(l0, b.l)) { return 0; };
+        if (b.r.k == K.str) {
+            allint = false;
+        } else {
+            let v = lint_int_val(b.r);
+            if (v < 0) { return 0; };
+            vals += v;
+            allstr = false;
+        };
+        i = i + 1;
+    };
+    if (allint) {
+        let lo = vals[0];
+        let hi = vals[0];
+        let j = 0;
+        while (j < len(vals)) {
+            if (vals[j] < lo) { lo = vals[j]; };
+            if (vals[j] > hi) { hi = vals[j]; };
+            j = j + 1;
+        };
+        if (hi - lo + 1 == len(vals)) {
+            lint_warn_at(st, "these equalities are a consecutive range; write a range comparison", node);
+        } else {
+            lint_warn_at(st, "these equalities test one value against a set; write one membership test", node);
+        };
+    } else if (allstr) {
+        lint_warn_at(st, "these equalities test one value against a set of strings; write one membership test", node);
+    };
+    0
+};
+
+// The `==` comparisons of a `||` chain, in order.
+def lint_chain_leaves(node: Node, out: [Node]) -> long {
+    if (node.k == K.bin) {
+        let b: Bin = node;
+        if (b.op == "||") {
+            lint_chain_leaves(b.l, out);
+            lint_chain_leaves(b.r, out);
+            return 0;
+        };
+    };
+    out += node;
     0
 };
 
