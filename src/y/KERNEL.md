@@ -866,3 +866,26 @@ itself.
 Next: instrument task_deliver/task_complete for this path (the receiver's saved
 rsp, the value written, and what the switch restores), which is the same shape of
 measurement that localized every fault in this file before.
+
+### Round 57: the receiver's frame is wrong, and its RIP slot is a stack address
+
+Instrumented task_complete (khx prints of the target's saved rsp, the word at
++48 and the word at +72) and ran the two-process case:
+
+    C1 ffff888000142f88 ffff888000142fb8 ffff888000142fd0
+
+so task_complete(1, ...) writes the answer at 0xffff888000142fb8 (rsp+48) and
+the RIP slot at rsp+72 holds 0xffff888000142fd0 -- a STACK address, not code.
+A task resumed from that frame iretqs into its own stack, which is exactly the
+"did not resume correctly" the previous round measured from the other side, and
+it reproduces round 22's observation that this task's rsp read differently at
+the switch (0x...16af90) than at the completion (0x...142f88): two different
+kernel stacks for one task.
+
+So the remaining M3 blocker is ONE bug, now with three independent sightings:
+the scheduler's save of the outgoing task's frame pointer, which is
+`tasks[cur_task].rsp = y_cur_task_rsp_get()` -- a GLOBAL scratch.  Round 9 tried
+the obvious defence (consume the scratch, and set it to 0 so a stale value can
+never be saved) and it was not sufficient on its own; with the shake fix now in
+place and the frame contents visible, that fix plus the freshness guard is the
+next thing to apply and test against this same case.
