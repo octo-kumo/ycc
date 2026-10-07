@@ -329,3 +329,33 @@ running test/kernel after each.  The first that turns the kernel image red names
 the culprit.  Note that master's tree cannot simply be taken wholesale: `--kernel`
 is this branch's, so master has no such flag at all (a wholesale checkout of
 src/y or src/c answers "unknown flag '--kernel'").
+
+### Round 42: every partial combination breaks at a different coupling
+
+Cherry-picking the candidates onto the green base:
+
+* ee66a02 (pointer arithmetic) CONFLICTS -- because it is ALREADY in the base
+  (cherry-picked early in this work), so it is out of the running;
+* 51c36a5 (the collector) also conflicts, and doing it surgically -- that
+  commit's emitter files plus just its y_gc_* cells in arch_heap_cells -- fails
+  differently: `error: assemble: duplicate label '_start'`.
+
+Add round 41's attempt (`undefined label 'y_gc_stack_top'` when only the emitter
+files were taken) and the picture is unambiguous: the emitter, the arch prelude
+and the writer were changed together upstream, and ANY partial combination fails
+at some coupling -- a missing cell, or a label emitted twice.  There is no
+smaller consistent unit than the upstream tree, which is exactly why the merges
+existed in the first place.
+
+So "one at a time" has to be done as MERGES of master at increasing points, not
+as file or commit substitutions:
+
+    git merge 51c36a5   -> build, run test/kernel, record
+    git merge 64f7556   -> build, run test/kernel, record
+    git merge 9078372   -> build, run test/kernel, record
+
+Each brings a consistent tree; the conflicts are the same regions each time and
+are resolved in favour of THIS branch's kernel files (the kernel sections of
+arch_x64.*, arch/kernel.s, std/kernel.y, os/, test/kernel/).  The first merge
+that turns the kernel image red names the culprit.  The base is restored and
+verified green ("minimal") after every experiment in this round.
