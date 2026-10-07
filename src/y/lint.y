@@ -1217,13 +1217,14 @@ def lint_short_if_chain(st: LintSt, node: If) -> long {
         if (lint_eq_name(nx.cond) != x) { return 0; };
         if (lint_bool_lit(lint_single_stmt(nx.then)) != v0) { return 0; };
         cur = nx;
-        n = n + 1;
+        n++;
     };
     if (n < 2) { return 0; };
     if (cur.has_else) {
         if (lint_bool_lit(lint_single_stmt(cur.els)) == v0) { return 0; };
     };
     lint_warn_at(st, "this 'if' chain tests one value against a set; write one membership test", node);
+    lint_fix(st, "1.8", node.line, node.col, lint_disp(x), "");
     0
 };
 
@@ -2492,6 +2493,89 @@ def fx_commas(a: [str]) -> str {
     out
 };
 
+// The literal of `name == <lit>` (either order), or "".
+def fx_eq_lit(cond: str, name: str) -> str {
+    let i = fx_find(cond, name, 0);
+    if (i < 0) { return ""; };
+    let e = fx_ws(cond, i + len(name));
+    if (e + 1 >= len(cond) || cond[e] != 61 || cond[e + 1] != 61) { return ""; };
+    let s = fx_ws(cond, e + 2);
+    let end = fx_lit_end(cond, s);
+    if (end < 0) { return ""; };
+    cond[s:end]
+};
+
+// 1.8: the whole `if`/`else if` chain becomes one `x in [A, B, C]`. A set of
+// strings is left alone: `[...].index(s)` would compare string pointers.
+def fx_if_chain(name: str, ln: long, col: long, lines: [str]) -> [str] {
+    if (ln < 1 || ln > len(lines)) { return lines; };
+    let line = lines[ln - 1];
+    let i = fx_find(line, "if", col - 1);
+    if (i < 0) { return lines; };
+    let lits: [str] = [];
+    let k = ln;
+    let pos = i;
+    let endline = ln;
+    let endcol = 0;
+    let go = true;
+    while (go) {
+        let L = lines[k - 1];
+        let o = fx_ws(L, pos + 2);
+        if (o >= len(L) || L[o] != 40) { return lines; };
+        let c = fx_match(L, o, 40, 41);
+        if (c < 0) { return lines; };
+        let lit = fx_eq_lit(fx_strip(L[o + 1:c]), name);
+        if (lit == "") { return lines; };
+        lits += lit;
+        let b1 = fx_ws(L, c + 1);
+        if (b1 >= len(L) || L[b1] != 123) { return lines; };
+        if (!fx_scan(lines, k, b1, 123, 125)) { return lines; };
+        let l2 = fx_sline;
+        let c2 = fx_scol;
+        let tail = fx_strip(fx_nocomment(lines[l2 - 1][c2 + 1:]));
+        let eline = l2;
+        let eidx = -1;
+        if (fx_word(tail, 0, "else")) {
+            eidx = index_of(lines[l2 - 1], "else");
+        } else if (tail == "" || tail == ";") {
+            // the `else` is on the next non-empty line
+            let m = l2 + 1;
+            while (m <= len(lines) && fx_strip(lines[m - 1]) == "") { m = m + 1; };
+            if (m <= len(lines) && fx_word(fx_strip(lines[m - 1]), 0, "else")) {
+                eline = m;
+                eidx = index_of(lines[m - 1], "else");
+            };
+        } else {
+            return lines;
+        };
+        if (eidx < 0) {
+            endline = l2;
+            endcol = c2 + 1;
+            go = false;
+        } else {
+            let after = fx_ws(lines[eline - 1], eidx + 4);
+            if (after < len(lines[eline - 1]) && lines[eline - 1][after] == 105) {
+                k = eline;
+                pos = after;
+            } else {
+                if (after >= len(lines[eline - 1]) || lines[eline - 1][after] != 123) { return lines; };
+                if (!fx_scan(lines, eline, after, 123, 125)) { return lines; };
+                endline = fx_sline;
+                endcol = fx_scol + 1;
+                go = false;
+            };
+        };
+    };
+    if (len(lits) < 2) { return lines; };
+    for li in 0..len(lits) {
+        if (lits[li][0:1] == "\"") { return lines; };
+    };
+    let rep = name + " in [" + fx_commas(lits) + "]";
+    lines[ln - 1] = lines[ln - 1][:i] + rep + lines[endline - 1][endcol:];
+    lines = lines[:ln] + lines[endline:];
+    lines
+};
+
 // 1.6/1.7: `x == A || x == B || x == C` (3+) is one range or one membership
 // test. `kind` is "set" (numbers or char literals) or "str" (1-char str
 // literals); 1.7 reads the first and last literals as written.
@@ -2557,6 +2641,7 @@ def fx_one(rule: str, a: str, b: str, ln: long, col: long, lines: [str]) -> [str
     else if (rule == "2.2") { lines = fx_let_cond(ln, lines); }
     else if (rule == "3.6") { lines = fx_foreach_elem(a, b, ln, col, lines); }
     else if (rule == "void") { lines = fx_void(ln, lines); }
+    else if (rule == "1.8") { lines = fx_if_chain(a, ln, col, lines); }
     else if (rule == "1.6") { lines = fx_chain(rule, a, b, ln, col, lines); }
     else if (rule == "1.7") { lines = fx_chain(rule, a, b, ln, col, lines); };
     lines

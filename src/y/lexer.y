@@ -581,16 +581,7 @@ def slash() -> str { "/" };
 
 def isdigitch(c: byte) -> bool {
     // single-char predicate on a 1-char string (native-safe: no ord()).
-    if ( c == '0') { true }
-    else if ( c == '1') { true }
-    else if ( c == '2') { true }
-    else if ( c == '3') { true }
-    else if ( c == '4') { true }
-    else if ( c == '5') { true }
-    else if ( c == '6') { true }
-    else if ( c == '7') { true }
-    else if ( c == '8') { true }
-    else { c == '9' }
+    c in ['0', '1', '2', '3', '4', '5', '6', '7', '8']
 };
 
 def tokenize(src: str) -> [Tok] {
