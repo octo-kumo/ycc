@@ -132,6 +132,69 @@ for src in "$KDIR"/[tx]*.y; do
     fi
 done
 
+# ── the userland cases: a real ycc-compiled Linux program in ring 3 ─────
+# One driver (uland.y, compiled with --kernel) and one program per case
+# (`u*.user.y`, compiled by the ORDINARY target, which is the point: the
+# kernel implements the ABI the program already speaks, so the fixture is also
+# a program that runs on Linux).
+for usrc in "$KDIR"/u*.user.y; do
+    [ -e "$usrc" ] || continue
+    base=$(basename "$usrc" .user.y)
+    kimg="$WORK/$base.elf"
+    pimg="$WORK/$base.prog"
+    if ! ( cd "$ROOT" && timeout "$((60 * YTIMEOUT_SCALE))" "$YCC" --kernel "$KDIR/uland.y" -o "$kimg" ) >"$WORK/$base.k.log" 2>&1; then
+        kfail "$base: the driver failed to compile"
+        sed 's/^/    /' "$WORK/$base.k.log"
+        continue
+    fi
+    if ! ( cd "$ROOT" && timeout "$((60 * YTIMEOUT_SCALE))" "$YCC" "$usrc" -o "$pimg" ) >"$WORK/$base.p.log" 2>&1; then
+        kfail "$base: the program failed to compile (ordinary target)"
+        sed 's/^/    /' "$WORK/$base.p.log"
+        continue
+    fi
+    if [ "$C_OK" = 1 ]; then
+        cimg="$WORK/$base.c.elf"
+        cprog="$WORK/$base.c.prog"
+        ( cd "$ROOT" && timeout "$((60 * YTIMEOUT_SCALE))" "$CYCC" --kernel "$KDIR/uland.y" -o "$cimg" ) >/dev/null 2>&1
+        ( cd "$ROOT" && timeout "$((60 * YTIMEOUT_SCALE))" "$CYCC" "$usrc" -o "$cprog" ) >/dev/null 2>&1
+        if ! cmp -s "$kimg" "$cimg"; then
+            kfail "$base: the driver's images differ between the compilers"
+            continue
+        fi
+        if ! cmp -s "$pimg" "$cprog"; then
+            kfail "$base: the programs differ between the compilers"
+            continue
+        fi
+    fi
+    exp="$KDIR/$base.expected"
+    [ -f "$exp" ] || { kfail "$base: no .expected"; continue; }
+    if [ "$(wc -c <"$kimg")" -gt 262144 ]; then
+        kfail "$base: the driver's image is over budget"
+        continue
+    fi
+    timeout "$QTIME" "$QEMU" -kernel "$kimg" -initrd "$pimg" -serial stdio \
+        -display none -no-reboot -device isa-debug-exit -monitor none </dev/null >"$WORK/$base.out" 2>/dev/null
+    qrc=$?
+    n=$(wc -c <"$exp")
+    head -c "$n" "$WORK/$base.out" >"$WORK/$base.head"
+    if cmp -s "$WORK/$base.head" "$exp"; then
+        pass "$base: the program runs in ring 3"
+    else
+        kfail "$base: serial output differs"
+        echo "    expected:"; sed 's/^/      /' "$exp"
+        echo "    got:"; sed 's/^/      /' "$WORK/$base.head"
+        continue
+    fi
+    if [ -f "$KDIR/$base.exit" ]; then
+        want=$(cat "$KDIR/$base.exit")
+        if [ "$qrc" = "$want" ]; then
+            pass "$base: kexit -> qemu status $qrc"
+        else
+            kfail "$base: qemu status $qrc, wanted $want"
+        fi
+    fi
+done
+
 # ── the rejected cases ──────────────────────────────────────────────────
 check_reject() {
     local src=$1 base=$2 mode=$3
