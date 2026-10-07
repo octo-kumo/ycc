@@ -649,6 +649,32 @@ def kernel_irq_text() -> str {
         out += "    mov %rax, " + tostring(v * 16) + "(%rdi)\n";
         out += "    mov $0, " + tostring(v * 16 + 8) + "(%rdi)\n";
     });
+    // Unmask the declared lines.  The compiler knows which they are and the
+    // program does not have to: y_pic_remap leaves every line masked, so a
+    // handler installed without this would never fire and nothing would say
+    // why.  One byte per 8259, computed here: a slave line also opens the
+    // master's cascade (IRQ2), or the slave's request never reaches the CPU.
+    let mm = 255;
+    let sm = 255;
+    let ii = 0;
+    while (ii < len(res_irq_stubs)) {
+        let ln = res_irq_stubs[ii].line;
+        if (ln < 8) {
+            mm = mm & ~(1 << ln);
+        } else {
+            sm = sm & ~(1 << (ln - 8));
+            mm = mm & ~4;
+        };
+        ii++;
+    };
+    if (len(res_irq_stubs) > 0) {
+        out += "    mov $33, %edx\n";
+        out += "    mov $" + tostring(mm) + ", %eax\n";
+        out += "    outb %al, %dx\n";
+        out += "    mov $161, %edx\n";
+        out += "    mov $" + tostring(sm) + ", %eax\n";
+        out += "    outb %al, %dx\n";
+    };
     out += "    lea y_kernel_idtr(%rip), %rdi\n";
     out += "    lea y_kernel_idt(%rip), %rax\n";
     out += "    shl $16, %rax\n";
