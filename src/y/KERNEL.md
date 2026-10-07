@@ -1031,3 +1031,34 @@ mismatch, not a kernel problem.
 Everything the last ten rounds eliminated stays eliminated: the shake fix (real,
 committed, blessed), the scheduler save, the receiver's frame, the published rsp,
 the delivery arithmetic, vm_translate's offset, and the syscall stub's layout.
+
+### Round 63: the CALLEE-SAVED registers are not preserved across a suspension
+
+Native control (the same source, no kernel):
+
+    amp=139985179115528 ptr=139985179115528      <- &buf[0] and buf.ptr are the SAME, element address
+    after *p=99: buf0=99 len=5                   <- writing through it reaches buf[0]
+    after *q=7: buf0=7                           <- and so does &buf[0]
+
+So the pointer convention is right and the emitter is right: buf.ptr and &buf[0]
+both give the ELEMENTS, and a write through them lands in buf[0].
+
+Now put that beside round 62's kernel run: p2=0 and len2=21 after the receive,
+where 21 is the TAG the syscall returned.  A local's header pointer reading 0,
+and a length expression reading the syscall's return value, is not memory
+corruption at a wrong address -- it is the program's LIVE VALUES being clobbered
+across the suspension, by exactly the values the kernel was holding.
+
+That is the one thing the syscall frame never saved.  The canonical frame holds
+nine slots (r9, r8, r10, rdx, rsi, rdi, rax, r11, rcx) -- the SYSCALL ABI's
+caller-saved set -- while the Y ABI also promises rbx, rbp, r12, r13, r14 and r15
+across a call.  A syscall that merely traps and returns happens to leave them
+alone often enough that wait4 and the preemption fixtures pass; a syscall that
+SUSPENDS the task hands the CPU to other code, which uses them freely, and the
+resumed program then reads garbage.
+
+THE FIX (four places, one contract): add six slots to the canonical frame --
+rbx, rbp, r12-r15 -- pushed by y_syscall_entry and the IRQ stub, popped by both
+tails and by y_enter_frame, and initialised by task_frame.  The frame layout is
+this branch's own documented contract, so the change is self-contained; the C
+twin of the IRQ stub (src/c/arch_x64.c) needs the same six pushes.
