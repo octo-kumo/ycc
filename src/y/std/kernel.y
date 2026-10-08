@@ -1516,7 +1516,7 @@ def sys_execve(pathp: long, argvp: long) -> long {
     let old = tasks[cur_task].cr3;
     vm_switch(dir);
     tasks[cur_task].cr3 = dir;
-    if (old != dir) { vm_free_dir(old); };
+    if (old != dir && !dir_in_use(old, cur_task)) { vm_free_dir(old); };
     let fr = y_cur_task_rsp_get();
     if (fr == 0) { return E_FAULT; };
     poke_va64(fr + 120, entry);
@@ -1651,6 +1651,19 @@ def sys_ipc_reply(value: long) -> long {
 // until one is.  The suspended case needs no kernel continuation: the caller's
 // frame is already saved at the syscall entry, so the child's exit writes the
 // answer into it and the scheduler resumes it there.
+/** Does a task other than `me` still use page directory `dir`? Task 0 is the
+ *  kernel's own boot context (it runs on the boot directory), and a directory
+ *  is only given back when nothing else that is not free or reaped holds it. */
+def dir_in_use(dir: long, me: long) -> bool {
+    let i = 0;
+    let used = false;
+    while (i < len(tasks)) {
+        if (i != me && tasks[i].cr3 == dir && tasks[i].state != TASK_FREE && tasks[i].state != TASK_REAPED) { used = true; };
+        i = i + 1;
+    };
+    used
+};
+
 /** Give back what reaped tasks held: the address space and, for a forked task,
  *  its 64 KB kernel stack. A reaped task that is still the one running keeps
  *  both until the next sweep. */
@@ -1658,7 +1671,7 @@ def task_sweep() -> void {
     let i = 0;
     while (i < len(tasks)) {
         if (tasks[i].state == TASK_REAPED && i != cur_task) {
-            if (tasks[i].cr3 != tasks[cur_task].cr3) { vm_free_dir(tasks[i].cr3); };
+            if (tasks[i].cr3 != tasks[cur_task].cr3 && !dir_in_use(tasks[i].cr3, i)) { vm_free_dir(tasks[i].cr3); };
             if (tasks[i].name == "fork") {
                 let kb = tasks[i].kstack - 65536 - DIRECT_BASE;
                 let ki = 0;

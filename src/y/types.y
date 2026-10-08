@@ -1345,6 +1345,29 @@ def expect_arg(st: TcSt, got: Type, want: Type, arg: Node, what: str, line: long
     }
 };
 
+/** `ptr_from(n)` written directly, as an operand? */
+def is_ptr_from_call(n: Node) -> bool {
+    if (n.k == K.call) {
+        let call: Call = n;
+        let c = call.callee;
+        if (c.k == K.id) {
+            let id: Leaf = c;
+            id.v == "ptr_from"
+        } else { false }
+    } else {
+        false
+    }
+};
+
+/** ptr_from makes a pointer with no pointee type, which anything accepts; read
+ *  or written through directly it would be silently unchecked. The type has to
+ *  be written first, on a binding. */
+def no_direct_ptr_from(st: TcSt, e: Node, line: long, col: long) -> TcSt {
+    if (is_ptr_from_call(e)) {
+        fail(st, "ptr_from has no pointee type to read or write through; bind it first: let p: *T = ptr_from(n)", line, col)
+    } else { st }
+};
+
 def is_some_call(n: Node) -> bool {
     if (n.k == K.call) {
         let call: Call = n;
@@ -2161,6 +2184,7 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
         }
     } else if (k == K.deref) {
         let deref: Wrap = node;
+        st = no_direct_ptr_from(st, deref.e, deref.line, deref.col);
         let r = typeof_expr(st, deref.e);
         st = r.st;
         if (r.typ.k == K.tptr) {
@@ -2362,6 +2386,7 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
         opassign_check(st, assign, pc.typ, v.typ)
     } else if (k == K.store) {
         let store: Store = node;
+        st = no_direct_ptr_from(st, store.p, store.line, store.col);
         let p = typeof_expr(st, store.p);
         let pt: Type = p.typ;
         let pw: Type = type_node({ k: K.tnone });

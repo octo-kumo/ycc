@@ -1917,6 +1917,11 @@ show("{\"id\": 1} x");    // refused at 10: trailing 'x'
   \ic{str} is accepted as well as a \ic{*T} --- a string value is a byte
   address --- so the address of a string's bytes is one call away
   (Section~\ref{sec:pointers}).
+\item[\ic{ptr\_from(n)}] The pointer whose address is the integer \ic{n}, the
+  inverse of \ic{ptr\_addr}. Its pointee type comes from the context:
+  \ic{let p: *long = ptr\_from(a)}. A bare \ic{let p = ptr\_from(a)}, a
+  non-integer argument, and a dereference or store written directly through the
+  call are compile errors (Section~\ref{sec:pointers}).
 \end{description}
 
 \noindent Mutating and keying are symbolic, not functional: arrays use

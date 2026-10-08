@@ -124,7 +124,9 @@ These are the real limits, in the order they will bite.
    workarounds for this -- they are ergonomics and type checking.  The gap
    is the general case: a callback handed *in*, a comparator, a table whose
    entries disagree in shape.
-2. **No integer-to-pointer conversion.**  A `*T` comes only from `&x` or
+2. **No integer-to-pointer conversion.**  *(Resolved: `ptr_from(n)`, with `ptr_addr(p)`
+   its inverse; std/kmem.y no longer has the anchor. What follows is the problem as it
+   was.)*  A `*T` comes only from `&x` or
    `arr.ptr`, so reaching a physical address means taking the address of a
    global and moving it with pointer arithmetic (std/kernel.y's `mem_word`
    anchor).  It works, but it is a hack: it needs pointer arithmetic to be

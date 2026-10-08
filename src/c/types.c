@@ -1727,6 +1727,30 @@ static Yv *expect_arg(Yv *st, Yv *got, Yv *want, Yv *arg, Yv *what,
     }
 }
 
+/* `ptr_from(n)` written directly, as an operand? */
+static int is_ptr_from_call(Yv *n) {
+    if (yv_l(yr_get(n, "k")) == K_call) {
+        Yv *c = yr_get(n, "callee");
+        return yv_l(yr_get(c, "k")) == K_id &&
+               ys_eq_lit(yr_get(c, "v"), "ptr_from");
+    } else {
+        return 0;
+    }
+}
+
+/* ptr_from makes a pointer with no pointee type, which anything accepts; read
+ * or written through directly it would be silently unchecked. The type has to
+ * be written first, on a binding. */
+static Yv *no_direct_ptr_from(Yv *st, Yv *e, Yv *line, Yv *col) {
+    if (is_ptr_from_call(e)) {
+        return fail(st,
+                    ys("ptr_from has no pointee type to read or write through; bind it first: let p: *T = ptr_from(n)"),
+                    yv_l(line), yv_l(col));
+    } else {
+        return st;
+    }
+}
+
 static int is_some_call(Yv *n) {
     if (yv_l(yr_get(n, "k")) == K_call) {
         Yv *c = yr_get(n, "callee");
@@ -2761,6 +2785,7 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
             return yr(2, "typ", t_unk(), "st", st);
         }
     } else if (yv_l(k) == K_deref) {
+        st = no_direct_ptr_from(st, yr_get(node, "e"), yr_get(node, "line"), yr_get(node, "col"));
         Yv *r = typeof_expr(st, yr_get(node, "e"));
         st = yr_get(r, "st");
         if (yv_l(yr_get(yr_get(r, "typ"), "k")) == K_tptr) {
@@ -3089,6 +3114,7 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                          yv_l(yr_get(node, "col")));
         return opassign_check(st, node, yr_get(pc, "typ"), yr_get(v, "typ"));
     } else if (yv_l(k) == K_store) {
+        st = no_direct_ptr_from(st, yr_get(node, "p"), yr_get(node, "line"), yr_get(node, "col"));
         Yv *p = typeof_expr(st, yr_get(node, "p"));
         Yv *pt = yr_get(p, "typ");
         Yv *pw = yr(1, "k", yv_long(K_tnone));

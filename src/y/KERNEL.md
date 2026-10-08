@@ -50,9 +50,8 @@ is the chronological log (round by round); **this file is the summary you want f
 | | |
 |---|---|
 | worktree | `.worktrees/kernel`, branch `kernel` |
-| HEAD at handover | see `git log -1` (the last commit is "u021_rm -- rm from ring 3") |
-| kernel suite | **86 passed, 0 failed / 86 total** with `./ycc` and `./cycc`, after the merge of master |
-| blessed compiler | `refs/ycc.ref` = `495c8127b96579aa` (re-run `make rebless` after any `src/y/std/*.y` or `arch/*.s` change) |
+| kernel suite | **86 passed, 0 failed / 86 total** with `./ycc` and `./cycc`; the system itself is suite `os` (`os/README.md`) |
+| blessed compiler | `refs/ycc.ref` (re-run `make rebless` after any `src/y/std/*.y` or `arch/*.s` change; `kmem`, `yfs`, `fd` and `kernel` are std-pack units, so an edit to them needs it too) |
 | merged into master | master's pack model: `arch.kernel` is one of the pack's six arch block sets, `fs`/`net`/... denial happens for pack library units too (native.y import walk) |
 | pre-merge fallback | `git tag pre-unmerge` (the pre-merge 33/33 line) |
 
@@ -212,8 +211,7 @@ bytes with `byte_at(s, i)`, never `s[i]`.
 
 ### 7. Open work, in the order that unblocks the most
 
-1. **`mv`** — `unlinkat` + `openat(O_CREAT)` + read/write, all present; a shell command.
-2. **`echo`, `pwd`, `halt`** — trivial; `halt` is `exit_group`.
+1. ~~`mv`, `echo`, `pwd`, `halt`~~ — done; they are programs in `os/uland/` (`os/README.md`).
 3. **The elided-syscall compiler fixture** (owed since the growth investigation): a program
    that calls a syscall for its EFFECT and ignores the result must not have the call
    removed. Five rounds were spent on a read-back that failed for exactly this reason.
@@ -226,7 +224,7 @@ bytes with `byte_at(s, i)`, never `s[i]`.
    hands the byte over an IPC port.  That is a design decision, not a line change.
 5. **The fs and tty servers** — the architectural step M3 is missing; the filesystem is in
    the kernel today and needs a raw device path to move out.
-6. **`/init` and the M4 command set**, then **M5** (`/bin/ycc`, `/bin/std`,
+6. **Directories and `cd`, redirection and pipes** for the shell, then **M5** (`/bin/ycc`, `/bin/std`,
    `/proc/self/exe`), then **M6**.
 7. **The qemu status-0 anomaly** in `u020_cp`: three `y_kexit` call sites, none reachable in
    that run — so the number is probably not a kexit at all. Needs a qemu trace, not another
@@ -270,10 +268,11 @@ delete-on-failure guards destroyed fixtures that the next step needed.
     src/y/arch/kernel.s      the kernel prelude, a block set of the std pack (`arch.kernel`:
                              prelude.s with the blocks kernel.s replaces/adds); a change needs
                              `make rebless`
-    src/y/std/kernel.y, yfs.y, fd.y
-                             NOT pack units (yet): `import kernel` splices them from disk, so
-                             a --kernel compile needs a checkout (src/y/std or std/ beside
-                             the binary). Making them units is the open step.
+    src/y/std/kernel.y, kmem.y, yfs.y, fd.y
+                             std-pack units like every other std source: a lone `ycc --kernel`
+                             in an empty directory builds a bootable kernel. kmem.y is the raw
+                             memory access (peek/poke over `ptr_from`), split out so yfs does
+                             not import kernel; kernel.y keeps forwarders under the old names.
     os/kernel/elfload.y      the program-side loader still lives here (wired through kernel)
     os/tools/mkfs.y          the host-side image builder (direct slots + indirect block)
     test/kernel/             the fixtures, .expected/.exit/.stdin
@@ -314,9 +313,9 @@ it is 151/151.
   that to happen again whenever codegen moves; the number is the user ELF's length.
 * `test/sh/test_fixpoint.sh` skips `kernel.y`/`yfs.y`/`fd.y` in the hosted std loop and compiles
   two kernel fixtures with `--kernel` instead.
-* Not done: `kernel`, `yfs`, `fd` as std-pack units, which would make a packed `ycc` build a
-  kernel with no checkout. They are `ndef`/asm-bound, so the pack's unit compile needs a
-  kernel mode first.
+* Done since: `kmem`, `yfs`, `fd` and `kernel` are std-pack units (24 in all), and
+  `ycc --kernel` needs no checkout. The hosted std loop of `test_fixpoint.sh` skips the four;
+  two kernel fixtures compiled with `--kernel` stand in for them.
 
 
 ---
@@ -471,9 +470,9 @@ provokes a page fault and checks the report.
   on its `CR3` — what a syscall's user copy needs).  The Y heap's own
   pointers are direct-map virtual addresses, set up that way by
   `y_heap_init`.
-* **raw access** is pointer arithmetic on one global anchor (`mem_word`).
-  Y has no address-to-pointer conversion (`KERNEL-ROADMAP.md` §3, item 2),
-  so this is the workaround until a cast exists.  Two alignment facts are
+* **raw access** is `ptr_from(addr)` and one dereference (std/kmem.y).  It used to be
+  pointer arithmetic on a global anchor (`mem_word`), because Y had no integer-to-pointer
+  conversion (`KERNEL-ROADMAP.md` §3, item 2).  Two alignment facts are
   load-bearing and commented in the file: the physical-address mask is bits
   12..51 (NOT `2^52-1`, which keeps the low twelve flag bits and makes the
   walk read a misaligned word), and the Multiboot memory map's `u64` fields
