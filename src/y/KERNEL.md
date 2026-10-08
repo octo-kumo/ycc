@@ -2680,3 +2680,26 @@ every fixture uses for the path itself.
 That is a fixture-side fix, not a kernel change: the kernel's walk is right, given bytes.
 And it is worth recording as a language note for anyone writing a server or a shell in Y
 on this system: a `[str]` is not a C string array.
+
+### Round 164: read the REFERENCE -- elf_stack shows the two differences
+
+elf_setup_stack delegates to elf_stack(top, args), and reading it (which I should have done
+two rounds ago) shows exactly why my execve-built argv came out as one-letter arguments:
+
+ 1. IT COPIES STRING BYTES WITH byte_at(s, j), not s[j].  My build did
+    `poke8(..., arg[c] & 255)`, and indexing a Y str gives the LENGTH-PREFIXED value, not
+    the character -- so byte 0 was the count (4 for "prog", 5 for "hello", exactly what the
+    instrumentation printed) and every byte after it was zero.  byte_at is the reader the
+    compiler itself uses; the kernel's own copy loop must use it too.
+ 2. IT ALIGNS sp AND WRITES TWO NULLS.  The layout is: sp aligned to 8, then argv[argc]=0,
+    then envp=0, then the argv pointers downward, then argc -- so from the returned RSP the
+    order is argc, argv[0..argc-1], NULL, NULL.  Mine aligned a value that was already 8
+    too low (sp % 8 on a non-aligned sp) and wrote only one NULL, which shifts everything
+    the runtime reads.
+
+Both are read from the working implementation rather than inferred, which is the method
+that has settled every one of these paths -- and the one I skipped here, twice.
+
+The fix is therefore small and known: use byte_at for the string copy, and mirror elf_stack's
+alignment and two-NULL layout.  The fixture stays parked until then; test/kernel is 77
+passed, 0 failed / 77 total.
