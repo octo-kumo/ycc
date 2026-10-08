@@ -2199,3 +2199,30 @@ candidates are worth listing because the next run should print them:
 Reverted rather than committed (the working tree is back to the last green state, 67
 passed, 0 failed / 67 total); the measurement above is the round's result, and it
 narrows a whole subsystem to three candidates that one print each will settle.
+
+### Round 138: the write never reaches the broker -- measured, and it reorders the suspects
+
+Instrumented fd_write (printing ino/off/size on entry and n/size after) AND
+yfs_append (base, size, len, next, stored), re-applied the append wiring, and ran the
+same append-then-read program.  Result:
+
+    P seek=12 nw=0 n=0 b0=0
+
+and NOT ONE of the FW/YA prints appeared.  Two conclusions, and they matter more than
+the original symptom:
+
+ 1. sys_write returned 0 for a file descriptor WITHOUT reaching fd_write.  So the
+    fault is upstream of the append entirely -- in sys_write's own dispatch or in the
+    arguments -- and rounds 134/137's three candidates (the size field, the offset,
+    yfs_store's clamp) were all looking in the wrong place.  That is the third time
+    this run that inferring a cause from a symptom sent the search the wrong way, and
+    the third time that printing inside the code found the truth immediately.
+ 2. nw=0 with n=0 after it is consistent with the write being REJECTED, not with a
+    successful append that the reader cannot see.
+
+The next print belongs at the TOP of sys_write -- the fd it was given and which
+branch it takes -- because the question is now simply whether fd >= 3 arrives there
+at all.  (One easy confound to rule out first: the image is /tmp/u16.img, built
+before some of this work; rebuild it and re-run before believing anything.)
+
+Reverted; test/kernel is 67 passed, 0 failed / 67 total.
