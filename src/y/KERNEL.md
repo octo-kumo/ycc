@@ -2371,3 +2371,28 @@ call removed.  The fix in this program is trivial (use sk2, or print it), and it
 the last piece before the growth fixture can be committed.
 
 Reverted; test/kernel is 67 passed, 0 failed / 67 total.
+
+### Round 144: growth works from ring 3 -- and a third wrong guard string
+
+Re-applied fd_write's append wiring (a write exactly at the end calls yfs_append; a
+write past the end leaving a gap stays unsupported and is caught by yfs_store's clamp)
+and ran the fixture with every syscall result USED -- the elision that cost five rounds:
+
+    grow f=3 seek=12 nw=4 back=0 n=16 text=hi from yfs
+    XYZ
+
+That is exactly right: the file grew to 16 bytes, the original twelve bytes are
+intact, and the four appended ones follow.  The write path is therefore proven from
+ring 3 end to end, and fd_write's wiring is committed on the strength of this
+transcript.
+
+The fixture itself was DELETED, for the third time by a guard string that was wrong
+about the bytes: it looked for "nw=4 n=16" while the line reads "nw=4 back=0 n=16".
+The first two were u006's "read -14" and ls's "name=109115103103"; this is the third,
+and the pattern is now unmistakable -- the guard is an assertion about output and must
+be written from the OUTPUT, not from what the code is expected to print.  The simplest
+correct guard here is the text alone ("text=hi from yfs"), which is what the fixture
+exists to show.
+
+test/kernel is 67 passed, 0 failed / 67 total; recreating the fixture is a copy of
+this note's transcript into an .expected file.

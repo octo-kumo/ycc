@@ -87,7 +87,16 @@ def fd_seek_set(fd: long, off: long) -> long {
 def fd_write(fd: long, buf: long, len: long) -> long {
     if (!fd_valid(fd)) { return 0 - 14; };
     let i = fd - 3;
-    let n = yfs.yfs_store(fd_inode[i], fd_off[i], buf, len);
+    let ino = fd_inode[i];
+    let off = fd_off[i];
+    let n = 0;
+    if (off == yfs.yfs_size(ino)) {
+        // A write AT THE END grows the file; a write past the end leaving a gap is
+        // not supported yet and is caught by yfs_store's clamp.
+        n = yfs.yfs_append(ino, buf, len);
+    } else {
+        n = yfs.yfs_store(ino, off, buf, len);
+    };
     if (n > 0) { fd_off[i] = fd_off[i] + n; };
     n
 };
