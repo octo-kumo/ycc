@@ -4243,6 +4243,10 @@ def intrinsic_names() -> [str] {
 // Every identifier READ in a subtree (callee names included: calling a
 // captured closure needs the name captured too). With `collect` false,
 // only the reads inside nested functions count (see box_names).
+// The nested functions fv_walk passes, noted while fv_note is set (box_names).
+let fv_note = false;
+let fv_funcs: [Node] = [];
+
 def fv_walk(node: Node, out: [str], collect: bool) -> [str] {
     let k = node.k;
     if (k == K.id) {
@@ -4350,6 +4354,7 @@ def fv_walk(node: Node, out: [str], collect: bool) -> [str] {
         out = fv_walk_list(block.stmts, out, collect);
     } else if (k == K.func) {
         let func: Func = node;
+        if (fv_note) { fv_funcs += node; };
         out = fv_walk(func.body, out, true);
     } else if (k == K.sliceassign) {
         let assign: SliceAssign = node;
@@ -4978,15 +4983,27 @@ def box_capture(st: EmitSt, name: str) -> EmitSt {
 // the nested functions' own locals, globals, defs — are never bound
 // here). emit_one_fn records them as "boxmark" entries past a "frame"
 // entry, named "" so no lookup can hit them, the marked name in `label`.
+//
+// Only a name free in a nested function -- read there, bound outside it -- is
+// one: a lambda's own locals stay in the frame when the lambda is inlined into
+// this body (gen_lambda_inline), where boxing them cost an allocation per
+// loop iteration (check_os_call_names: 8,282 in a hello.y compile).
 def box_names(func: EmitFunc) -> [str] {
+    let none: [Node] = [];
+    fv_funcs = none;
+    fv_note = true;
     let reads = fv_walk(func.body, [], false);
+    fv_note = false;
     let out: [str] = [];
-    reads.foreach((e) => {
-        let n: str = e;
-        if (!(name_in(out, n))) {
-            out += n;
+    if (len(reads) == 0) { return out; };
+    let funcs = fv_funcs;
+    foreach (f in funcs) {
+        let fnode: Func = f;
+        let binds = fv_binds(f, []);
+        foreach (n in fv_walk(fnode.body, [], true)) {
+            if (!name_in(binds, n) && !name_in(out, n)) { out += n; };
         };
-    });
+    };
     out
 };
 

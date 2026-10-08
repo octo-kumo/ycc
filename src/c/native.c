@@ -5421,6 +5421,10 @@ Yv *intrinsic_names(void) { return intrinsics(); }
 /* Every identifier READ in a subtree (callee names included: calling a
  * captured closure needs the name captured too). With `collect` false,
  * only the reads inside nested functions count (see box_names). */
+/* The nested functions fv_walk passes, noted while fv_note is set (box_names). */
+static int fv_note;
+static Yv *fv_funcs;
+
 Yv *fv_walk(Yv *node, Yv *out, int collect) {
     Yv *k = yr_get(node, "k");
     if (yv_l(k) == K_id) {
@@ -5528,6 +5532,7 @@ Yv *fv_walk(Yv *node, Yv *out, int collect) {
         out = fv_walk_list(yr_get(node, "stmts"), out, collect);
         ;
     } else if (yv_l(k) == K_func) {
+        if (fv_note) { fv_funcs = ya_push(fv_funcs, node); }
         out = fv_walk(yr_get(node, "body"), out, 1);
         ;
     } else if (yv_l(k) == K_sliceassign) {
@@ -6168,19 +6173,25 @@ Yv *box_capture(Yv *st, Yv *name) {
  * the nested functions' own locals, globals, defs — are never bound
  * here). emit_one_fn records them as "boxmark" entries past a "frame"
  * entry, named "" so no lookup can hit them, the marked name in `label`. */
+/* Only a name free in a nested function -- read there, bound outside it --
+ * is one (native.y box_names): a lambda inlined into this body keeps its own
+ * locals in the frame. */
 Yv *box_names(Yv *func) {
+    fv_funcs = yav(0);
+    fv_note = 1;
     Yv *reads = fv_walk(yr_get(func, "body"), yav(0), 0);
+    fv_note = 0;
     Yv *out = yav(0);
-    ylong i = 0;
-    while (i < yv_len(reads)) {
-        Yv *n = ya_get(reads, i);
-        if (name_in(out, n)) {
-            ;
-        } else {
-            out = ya_push(out, n);
-            ;
+    if (yv_len(reads) == 0) { return out; }
+    Yv *funcs = fv_funcs;
+    for (ylong i = 0; i < yv_len(funcs); i++) {
+        Yv *f = ya_get(funcs, i);
+        Yv *binds = fv_binds(f, yav(0));
+        Yv *rs = fv_walk(yr_get(f, "body"), yav(0), 1);
+        for (ylong j = 0; j < yv_len(rs); j++) {
+            Yv *n = ya_get(rs, j);
+            if (!name_in(binds, n) && !name_in(out, n)) { out = ya_push(out, n); }
         }
-        i = i + 1;
     }
     return out;
 }
