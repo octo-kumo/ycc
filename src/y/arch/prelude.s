@@ -3004,6 +3004,40 @@ yax_copy:
     pop %rbx
     pop %rbp
     ret
+# y_copy_fwd(dst, src, n), the stack convention (n at 8(%rsp), src at 16, dst
+# at 24; the caller pops): n bytes front to back. When the destination starts
+# less than eight bytes after the source the copy goes a byte at a time, so it
+# repeats what it has just written (an lz match, native.y lz_fill); otherwise
+# eight at a time, which reads only bytes already in place.
+y_copy_fwd:
+    mov 24(%rsp), %rdi
+    mov 16(%rsp), %rsi
+    mov 8(%rsp), %rcx
+    mov %rdi, %rax
+    sub %rsi, %rax
+    cmp $8, %rax
+    jb ycf_bytes
+ycf_words:
+    cmp $8, %rcx
+    jl ycf_bytes
+    mov (%rsi), %rax
+    mov %rax, (%rdi)
+    add $8, %rsi
+    add $8, %rdi
+    sub $8, %rcx
+    jmp ycf_words
+ycf_bytes:
+    test %rcx, %rcx
+    jle ycf_done
+    movzbq (%rsi), %rax
+    movb %al, (%rdi)
+    inc %rsi
+    inc %rdi
+    dec %rcx
+    jmp ycf_bytes
+ycf_done:
+    xor %eax, %eax
+    ret
 # y_mem_copy: %rcx bytes from %rsi to %rdi (apart), eight at a time,
 # then the rest one by one: nothing read or written past either end.
 # Clobbers %rax, %rdx and %r8.

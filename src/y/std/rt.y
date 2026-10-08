@@ -96,22 +96,18 @@ def y_setslice_check(n: long, lo: long, hi: long, m: long) -> long {
         0
     } else { 0 }
 };
+// n bytes front to back (prelude.s): the order an element-by-element loop
+// takes, so a source that overlaps the destination reads what that loop would.
+ndef y_copy_fwd(dst: *byte, src: *byte, n: long) -> long = "y_copy_fwd";
+ndef y_copy_fwd8(dst: *long, src: *long, n: long) -> long = "y_copy_fwd";
 def y_arr_setslice8(dst: [long], lo: long, hi: long, src: [long]) -> long {
     y_setslice_check(len(dst), lo, hi, len(src));
-    let i = 0;
-    while (i < hi - lo) {
-        dst[lo + i] = src[i];
-        i = i + 1;
-    };
+    if (hi > lo) { y_copy_fwd8(dst.ptr + lo, src.ptr, (hi - lo) * 8); };
     0
 };
 def y_arr_setslice1(dst: [byte], lo: long, hi: long, src: [byte]) -> long {
     y_setslice_check(len(dst), lo, hi, len(src));
-    let i = 0;
-    while (i < hi - lo) {
-        dst[lo + i] = src[i];
-        i = i + 1;
-    };
+    if (hi > lo) { y_copy_fwd(dst.ptr + lo, src.ptr, hi - lo); };
     0
 };
 
