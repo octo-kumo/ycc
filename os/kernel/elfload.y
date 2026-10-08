@@ -8,6 +8,7 @@
 // difference (src/y/NATIVE.md), so the loader honours p_vaddr and does not
 // have to relocate: the image is linked at 0x400000, which is why the kernel
 // maps itself into one 2 MB page and keeps the rest of the low half free.
+import kernel;
 
 const ELF_MAGIC = 1179403647;         // 0x464C457F, little-endian "\x7fELF"
 const PT_LOAD = 1;

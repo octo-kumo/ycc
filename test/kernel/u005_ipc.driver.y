@@ -2,6 +2,7 @@
 // argv carries the server's pid -- which is the port -- because there is no
 // name service yet.
 import kernel;
+import elf from "../../os/kernel/elfload.y";
 
 kernel.init();
 let phys = kernel.mb_mod_start(0);
@@ -11,8 +12,8 @@ kernel.sched_init(kernel.vm_current(), kernel.kernel_stack_top());
 def spawn(args: [str]) -> long {
     let dir = kernel.vm_new_dir();
     kernel.vm_switch(dir);
-    let entry = elf_map(phys, size);
-    let sp = elf_setup_stack(args);
+    let entry = elf.elf_map(phys, size);
+    let sp = elf.elf_setup_stack(args);
     let kstack = kernel.pages_alloc_va(65536);
     let ktop = kstack + 65536;
     let frame = kernel.task_frame(ktop, entry, sp);

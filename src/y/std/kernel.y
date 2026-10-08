@@ -37,7 +37,6 @@ const IRQ_ATA2 = 15;
 
 // ── the machine primitives (src/y/arch/kernel.s) ────────────────────────
 import fd from "./fd.y";
-import elf from "./elfload.y";
 
 ndef y_serial_init() -> long = "y_serial_init";
 ndef y_serial_irq_on() -> long = "y_serial_irq_on";
