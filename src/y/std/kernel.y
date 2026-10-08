@@ -851,6 +851,7 @@ const SYS_OPENAT = 257;
 const SYS_EXECVE = 59;
 const SYS_UNLINKAT = 263;
 const SYS_RENAMEAT = 264;
+const SYS_REBOOT = 169;
 const SYS_GETDENTS64 = 217;
 const SYS_GETPID = 39;
 // The kernel's own calls, above the Linux numbers so they can never collide
@@ -973,6 +974,7 @@ def y_sys_dispatch(nr: long, a1: long, a2: long, a3: long, a4: long, a5: long, a
     if (nr == SYS_EXECVE) { return sys_execve(a1, a2); };
     if (nr == SYS_UNLINKAT) { return sys_unlinkat(a1, a2, a3); };
     if (nr == SYS_RENAMEAT) { return sys_renameat(a1, a2, a3, a4); };
+    if (nr == SYS_REBOOT) { return sys_reboot(a1); };
     if (nr == SYS_GETDENTS64) { return sys_getdents64(a1, a2, a3); };
     E_NOSYS
 };
@@ -1306,6 +1308,12 @@ def sys_close(fdno: long) -> long { fd.fd_close(fdno) };
 def sys_unlinkat(dirfd: long, pathp: long, flags: long) -> long {
     if (pathp == 0) { return E_FAULT; };
     yfs_unlink(user_path(pathp))
+};
+
+// reboot(cmd): leave the machine.  A ring-3 program saying "halt" has to be able to,
+// and y_kexit does not return, so nothing below it runs.
+def sys_reboot(cmd: long) -> long {
+    y_kexit(0)
 };
 
 // renameat(olddirfd, oldpath, newdirfd, newpath) -- mv.  Both directories are ignored

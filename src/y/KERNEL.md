@@ -2855,3 +2855,27 @@ the suspect, not the fixture.
 mv is now complete at the kernel level: rename is link + unlink, and the file's blocks never
 move, so it is O(entries) and correct for any file size.  Its ring-3 fixture (renameat from a
 program) is the next step, and `echo`, `pwd` and `halt` are trivial after it.
+
+### Round 175: reboot(169) -- halt from ring 3, and the end of M4's kernel-side needs
+
+sys_reboot(cmd) calls y_kexit(0), which does not return, so a ring-3 program can now leave
+the machine.  That was the last of M4's commands that needed anything from the kernel:
+
+    ls cat wc head    pinned, ring 3
+    cp                pinned (O_CREAT)
+    rm                pinned (unlinkat)
+    mv                pinned (renameat)
+    sh + arguments    pinned (execve + argv)
+    halt              THIS ROUND (reboot 169)
+    pwd, echo         pure programs -- the root is "/" and echo joins argv, so neither needs
+                      a syscall at all
+    the editor        needs a terminal loop, which is blocking console input, not a syscall
+
+So from here, M4's remaining work is PROGRAMS: pwd, echo, and whatever else the command set
+wants, built from syscalls that are already pinned from ring 3.  The two architectural pieces
+left in M3 are blocking console input (a PIC unmask plus an irq 4 handler) and moving the
+filesystem into a user-space server, the latter needing a raw device path.
+
+Additive: nothing calls reboot yet, so test/kernel is unchanged at 84 passed, 0 failed / 84
+total.  (The suite check this round stripped the colour codes before grepping, which is the
+lesson from the previous commit's skipped one.)
