@@ -25,7 +25,7 @@ let out = kernel.page_alloc();
 p8(img, 89); p8(img + 1, 70); p8(img + 2, 83); p8(img + 3, 49);
 p32(img + 4, 1);
 p32(img + 8, 256);
-p32(img + 16, 8);
+p32(img + 16, 4);
 p32(img + 20, 1);
 p32(img + 24, 2);
 // inode 1 (root) at 256 + 1*64: a directory with one entry in block 2
