@@ -10,7 +10,7 @@ is the chronological log (round by round); **this file is the summary you want f
 |---|---|
 | worktree | `.worktrees/kernel`, branch `kernel` |
 | HEAD at handover | see `git log -1` (the last commit is "u021_rm -- rm from ring 3") |
-| kernel suite | **82 passed, 0 failed / 82 total** with the shipped `./ycc` and `./cycc` |
+| kernel suite | **84 passed, 0 failed / 84 total** with the shipped `./ycc` and `./cycc` |
 | blessed compiler | `refs/ycc.ref` = `495c8127b96579aa` (re-run `make rebless` after any `src/y/std/*.y` or `arch/*.s` change) |
 | pre-merge fallback | `git tag pre-unmerge` (the pre-merge 33/33 line) |
 
@@ -66,12 +66,14 @@ mechanism that lets a driver run on after the tasks it started.
 | blocking console input (IRQ 4) | **not done** — needs a PIC unmask helper and an `irq 4 def` handler |
 | YFS1 format + host `mkfs` | **works**, byte-verified with `od`; multi-block files and the indirect block |
 | YFS1 read side | **pinned** by `t013`–`t016` |
-| fd broker + syscalls | **works**: `openat` (257, with `O_CREAT`), `read` (0), `write` (1), `lseek` (8), `close` (3), `getdents64` (217), `execve` (59, with argv), `unlinkat` (263) |
+| fd broker + syscalls | **works**: `openat` (257, with `O_CREAT`), `read` (0), `write` (1), `lseek` (8), `close` (3), `getdents64` (217), `execve` (59, with argv), `unlinkat` (263), `renameat` (264), `reboot` (169 = halt) |
 | **fs and tty servers** | **not done** — and honestly: the filesystem currently lives *in the kernel*; moving it into a user-space server needs raw device access, which is a design step |
 
-**M4 — userland: WELL UNDERWAY.** A **shell runs programs with arguments**, and every
-filesystem operation is reachable from ring 3. The plan's command set is mostly compositions
-of what exists (see §6).
+**M4 — userland: THE KERNEL SIDE IS COMPLETE.** A **shell runs programs with arguments**,
+and every operation the command set needs is reachable from ring 3: `ls`, `cat`, `wc`, `head`,
+`cp`, `rm`, `mv`, `sh` — plus `halt` (`reboot` 169). `pwd` and `echo` are pure programs (the
+root is "/", echo joins argv), so no syscall is missing for them; the editor needs a terminal
+loop, which is blocking console input.
 
 **M5 — `ycc` on target: NOT STARTED.** Storage is no longer the blocker (`mkfs` handles any
 file size); what remains is `/bin/ycc` + `/bin/std` in the image, `/proc/self/exe`, and
@@ -110,6 +112,7 @@ works **only** for the `t*` cases (the `u*` loop runs qemu with `</dev/null`).
 | `u019_args` | **a word crosses `execve`**: `sh n=2 a1=hello` |
 | `u020_cp` | `cp` end to end: read + `openat(O_CREAT)` + write; the first userland create |
 | `u021_rm` | `rm` from ring 3: `first=3 unlink=0 again=-2` |
+| `u022_mv` | `mv` from ring 3: `old=3 ren=0 gone=-2 new=4` |
 
 ## 5. The two fixes that mattered, and the invariants they produced
 
@@ -170,8 +173,13 @@ bytes with `byte_at(s, i)`, never `s[i]`.
 3. **The elided-syscall compiler fixture** (owed since the growth investigation): a program
    that calls a syscall for its EFFECT and ignores the result must not have the call
    removed. Five rounds were spent on a read-back that failed for exactly this reason.
-4. **Blocking console input** — a PIC unmask helper plus an `irq 4 def` handler that buffers
-   the byte and completes the blocked reader.
+4. **Blocking console input** — a PIC unmask helper plus an IRQ 4 handler that buffers the
+   byte and completes the blocked reader.  Worth knowing before starting: `irq N def` is a
+   PROGRAM-level declaration collected by `kernel_irq_text`, and `std/kernel.y` is a library,
+   so the kernel cannot declare one there -- the IRQ dispatch path
+   (`y_kernel_irq_init` / the routine at the "Called by the stubs the compiler generates"
+   comment) must be extended, or the handler must be installed by a kernel program that then
+   hands the byte over an IPC port.  That is a design decision, not a line change.
 5. **The fs and tty servers** — the architectural step M3 is missing; the filesystem is in
    the kernel today and needs a raw device path to move out.
 6. **`/init` and the M4 command set**, then **M5** (`/bin/ycc`, `/bin/std`,
