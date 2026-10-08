@@ -222,3 +222,29 @@ delete-on-failure guards destroyed fixtures that the next step needed.
     test/sh/test_kernel.sh   the harness
     src/y/KERNEL.md          the round-by-round log and every elimination
     BUGS.md (main tree)      compiler bugs found and filed
+
+## 11. The full project gate, run at handover
+
+`JOBS=8 make test` with every kernel change in place:
+
+    port        151 passed, 0 failed      (and 150/150 in the other shard)
+    pe-port     151 passed, 0 failed      (and 150/150)
+    native      229 passed, 0 failed      (and 228/228)
+    kernel       82 passed, 0 failed      <- the work in this file
+    pkg         164 passed, 0 failed
+    test_net     31 passed, 0 failed
+    treeshake    54 passed, 0 failed
+    std-suites    5 passed, 0 failed
+
+`make test` still exits non-zero, and the only failures are the three PRE-EXISTING ones,
+each established by measurement rather than assumption:
+
+* `lsp` and `coverage` -- documented as pre-existing in master's own commit message
+  ("make check green except the pre-existing lsp/coverage environment failures");
+* `ycc` -- one case, "ysh eval compiles and runs through ycc", which the MAIN TREE's
+  compiler fails IDENTICALLY: ysh.y passes --no-exec for every eval while the prelude it
+  splices calls exec.
+
+So nothing in the microkernel work moved a hosted program's bytes or behaviour: the port
+gate recompiles the entire corpus with both engines and compares bytes, in every shard, and
+it is 151/151.
