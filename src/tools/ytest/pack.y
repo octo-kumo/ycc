@@ -8,7 +8,8 @@
 //     "ycc-std-pack N\n"     the version line, a literal
 //     count:...              how many units
 //     per unit: name:...     then fields:..., stored on its own from pack 9
-//                            (method byte 1 = compressed)
+//                            (method byte 1 = compressed; from pack 11, 2 = compressed
+//                            with the decoded length in four bytes after it)
 //
 // Inside, in order (native.y pack_unit_fields): files (strs), iface (count, then
 // name/label/tcode each, then count, then name and strs per default), init (one
@@ -235,6 +236,7 @@ def stats(path: str, ok: [bool]) -> str {
         unit_stored += body.length;
         let st = body.length;
         if (vnum >= 9 && body.length > 0 && body[0] == 1) { body = lz_decode(body[1:]); };
+        if (vnum >= 11 && body.length > 4 && body[0] == 2) { body = lz_decode(body[5:]); };
         if (name.starts_with("arch.")) {
             let a = arch_set(body);
             arch += name.pad_right(16) + " stored " + tostring(st).pad_left(7) + "  decoded " + tostring(body.length).pad_left(7)
@@ -301,7 +303,7 @@ def units_compressed(pack: [byte]) -> str {
     for i in 0..cnt {
         nstr(p);
         let body = nstr(p);
-        if (body.length > 0 && body[0] == 1) { z += 1; };
+        if (body.length > 0 && (body[0] == 1 || body[0] == 2)) { z += 1; };
     };
     if (BAD != "" || P != p.length) { return ""; };
     tostring(z) + " of " + tostring(cnt)

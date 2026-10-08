@@ -112,8 +112,9 @@ moved with the callgrind table, `perf`, or `ycc --time`.
   `addr2line` name things.
 - Always feed `</dev/null` in scripts.
 - **A built `ycc` is self-contained.** All twenty-four std units travel precompiled
-  in the std pack attached to the binary (pack 9: each unit stored and
-  compressed on its own, so a compile decodes only the units it links), so a
+  in the std pack attached to the binary (pack 11: each unit stored and
+  compressed on its own with its decoded length, so a compile decodes only the
+  units it links, each in one pass), so a
   copy in an empty directory compiles `import fs`/`net`/`args`-style programs
   with no source anywhere. A lone `ycc --std-src` has nothing to compile from and
   says so.

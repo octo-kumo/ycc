@@ -14596,7 +14596,7 @@ def link_text(parts: [LinkPart]) -> str {
 // unit's fields the same way.
 
 def pack_version() -> str {
-    "ycc-std-pack 10\n"
+    "ycc-std-pack 11\n"
 };
 
 def pack_put(out: [str], s: str) -> [str] {
@@ -15161,8 +15161,21 @@ def pack_unit_fields(u: Unit) -> str {
 // A payload that does not shrink is stored plain, and a stream that does not
 // decode -- truncated, corrupted, mismatched -- answers "" so the reader falls
 // back to compiling the std units from source (std_unpack).
+// A stored payload as its plain fields: decoded when compressed, "" when its
+// first byte names a method this reader does not know (plain fields start with
+// a digit), which makes the caller fall back to source.
+def pack_plain(raw: str) -> str {
+    if (len(raw) == 0 || raw[0] >= 48) { raw } else if (raw[0] == 2) { lz_decode(raw) } else { "" }
+};
+
+// Method 2: lz, the decoded length in the four bytes after this one.
 def lz_method() -> str {
-    chr(1)
+    chr(2)
+};
+
+// n as four bytes, least significant first.
+def le32_str(n: long) -> str {
+    chr(n & 255) + chr((n >> 8) & 255) + chr((n >> 16) & 255) + chr((n >> 24) & 255)
 };
 
 // 12 bits of a Knuth multiplier over four bytes: 4096 slots, first match wins,
@@ -15251,14 +15264,24 @@ def lz_encode(s: str) -> str {
     join(out, "")
 };
 
-// The inverse; "" for anything that does not decode (the caller falls back to
-// source). Every step is bounds-checked: the pack is read from the compiler's
-// own tail, but a truncated or edited binary must not crash the compiler.
+// The inverse, given the payload as pack_store wrote it (the method byte and
+// the decoded length first); "" for anything that does not decode, and the
+// caller falls back to source. The pack is read from the compiler's own tail,
+// so every step is checked against both ends: a truncated or edited binary
+// must not crash the compiler. Each literal run and each match is one
+// y_copy_fwd into a buffer of the stored length -- a byte at a time through
+// pushes was a fifth of a small compile (hello.y).
 def lz_decode(s: str) -> str {
     let b = bytes(s);
     let n = len(b);
-    let out: [byte] = [];
-    let at = 0;
+    if (n < 5) { return ""; };
+    let tot = b[1] + b[2] * 256 + b[3] * 65536 + b[4] * 16777216;
+    if (tot > 16777216) { return ""; };
+    let out = zero_bytes(tot);
+    let sp = b.ptr;
+    let dp = out.ptr;
+    let at = 5;
+    let w = 0;
     let ok = true;
     while (ok && at < n) {
         let t = b[at];
@@ -15278,26 +15301,11 @@ def lz_decode(s: str) -> str {
                 };
             };
         };
+        if (ok && (at + ll > n || w + ll > tot)) { ok = false; };
         if (ok) {
-            if (at + ll > n) {
-                ok = false;
-            } else {
-                // A run of 8 or more appended whole: a push a byte was half of
-                // a small compile (lz_decode and y_arr_push, hello.y). A
-                // shorter one is pushed: a slice is a temporary array, and with
-                // every piece sliced the garbage cost tmath.y a collection
-                // cycle (+10%); measured at 8, 16 and 32, 8 is best throughout.
-                if (ll >= 8) {
-                    out += b[at:at + ll];
-                } else {
-                    let q = 0;
-                    while (q < ll) {
-                        out += b[at + q];
-                        q = q + 1;
-                    };
-                };
-                at = at + ll;
-            };
+            y_copy_fwd(dp + w, sp + at, ll);
+            at = at + ll;
+            w = w + ll;
         };
         // A match follows unless this was the final literal run.
         if (ok && at < n) {
@@ -15320,41 +15328,38 @@ def lz_decode(s: str) -> str {
                         };
                     };
                 };
-                if (ok && (moff == 0 || moff > len(out) || len(out) + mlen > 16777216)) {
-                    ok = false;
-                };
+                if (ok && (moff == 0 || moff > w || w + mlen > tot)) { ok = false; };
                 if (ok) {
-                    // A copy may overlap what it produces (moff < mlen repeats
-                    // the last moff bytes), so it goes a chunk of at most moff
-                    // bytes at a time, each one already there.
-                    let left = mlen;
-                    while (left > 0) {
-                        let src = len(out) - moff;
-                        let take = if (left < moff) { left } else { moff };
-                        if (take >= 8) {
-                            out += out[src:src + take];
-                        } else {
-                            let k = 0;
-                            while (k < take) {
-                                out += out[src + k];
-                                k = k + 1;
-                            };
-                        };
-                        left = left - take;
-                    };
+                    y_copy_fwd(dp + w, dp + (w - moff), mlen);
+                    w = w + mlen;
                 };
             };
         };
     };
-    if (ok) { from_bytes(out) } else { "" }
+    if (ok && w == tot) { from_bytes(out) } else { "" }
 };
+
+// n zero bytes: a block of eight doubled until it covers n, then cut.
+def zero_bytes(n: long) -> [byte] {
+    let out: [byte] = [0, 0, 0, 0, 0, 0, 0, 0];
+    while (len(out) < n) {
+        let k = if (len(out) < n - len(out)) { len(out) } else { n - len(out) };
+        out += out[0:k];
+    };
+    if (n < len(out)) { out[0:n] } else { out }
+};
+
+// n bytes front to back (prelude.s): a source that starts less than n bytes
+// before the destination repeats what was just written, which is what an lz
+// match with an offset shorter than its length means.
+ndef y_copy_fwd(dst: *byte, src: *byte, n: long) -> long = "y_copy_fwd";
 
 // The payload as it is stored: compressed when that is smaller, method byte
 // first. A plain pack starts with the version line's `y`, so the two cannot be
 // confused and an older reader sees a pack it does not know (and falls back).
 def pack_store(s: str) -> str {
     let z = lz_encode(s);
-    if (len(z) + 1 < len(s)) { lz_method() + z } else { s }
+    if (len(z) + 5 < len(s)) { lz_method() + le32_str(len(s)) + z } else { s }
 };
 
 // The pack of `units`. Each unit's fields are stored on their own
@@ -15470,7 +15475,7 @@ def arch_unpack(pack: str, entry: str) -> ArchGot {
             let at = cur.p;
             if (nm == entry) {
                 let raw = pack[at:at + ul];
-                if (len(raw) > 0 && raw[0] == 1) { raw = lz_decode(raw[1:]); };
+                raw = pack_plain(raw);
                 if (len(raw) > 0) {
                     let c = { s: raw, p: 0 };
                     let nb = pack_num(c);
@@ -15621,7 +15626,7 @@ def std_unpack(pack: str, names: [str]) -> [Unit] {
                 // the pack is then not used -- the caller compiles from source
                 // rather than reading a corrupt stream.
                 let raw = pack[at:at + ul];
-                if (len(raw) > 0 && raw[0] == 1) { raw = lz_decode(raw[1:]); };
+                raw = pack_plain(raw);
                 if (len(raw) == 0) {
                     bad = true;
                 } else {

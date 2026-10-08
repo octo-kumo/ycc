@@ -17188,7 +17188,7 @@ Yv *link_text(Yv *parts) {
  * reuse the same unit-field encoding. */
 
 Yv *pack_version(void) {
-    return ys("ycc-std-pack 10\n");
+    return ys("ycc-std-pack 11\n");
 }
 
 Yv *obj_version(void) {
@@ -17840,8 +17840,19 @@ Yv *pack_unit_fields(Yv *unit) {
  * offsets <= 65535. Determinism is the point: the bytes depend on the input
  * alone, so the C copy's pack compares equal to the Y compiler's. A stream
  * that does not decode answers "" and std_unpack falls back to source. */
+static Yv *lz_decode(Yv *s);
+
+/* A stored payload as its plain fields (native.y pack_plain): decoded when
+ * compressed, "" when its first byte names a method this reader does not know. */
+static Yv *pack_plain(Yv *raw) {
+    if (yv_len(raw) == 0 || ys_byte_at(raw, 0) >= 48) { return raw; }
+    if (ys_byte_at(raw, 0) == 2) { return lz_decode(raw); }
+    return ys("");
+}
+
+/* Method 2: lz, the decoded length in the four bytes after this one. */
 static Yv *lz_method(void) {
-    return ys_chr(1);
+    return ys_chr(2);
 }
 
 static ylong lz_hash(Yv *b, ylong at) {
@@ -17928,11 +17939,21 @@ static Yv *lz_encode(Yv *s) {
     return ys_join(out, ys(""));
 }
 
+static Yv *zero_bytes(ylong n);
+
+/* The inverse, given the payload as pack_store wrote it (method byte, decoded
+ * length, then the stream); "" for anything that does not decode (native.y
+ * lz_decode). */
 static Yv *lz_decode(Yv *s) {
     Yv *b = bytes_of(s);
     ylong n = yv_len(b);
-    Yv *out = yav(0);
-    ylong at = 0;
+    if (n < 5) { return ys(""); }
+    ylong tot = yv_l(ya_get(b, 1)) + yv_l(ya_get(b, 2)) * 256 + yv_l(ya_get(b, 3)) * 65536
+        + yv_l(ya_get(b, 4)) * 16777216;
+    if (tot > 16777216) { return ys(""); }
+    Yv *out = zero_bytes(tot);
+    ylong at = 5;
+    ylong w = 0;
     int ok = 1;
     while (ok && at < n) {
         ylong t = yv_l(ya_get(b, at));
@@ -17952,16 +17973,11 @@ static Yv *lz_decode(Yv *s) {
                 }
             }
         }
+        if (ok && (at + ll > n || w + ll > tot)) { ok = 0; }
         if (ok) {
-            if (at + ll > n) {
-                ok = 0;
-            } else {
-                /* the run appended whole (native.y): a push a byte was half
-                   of a small compile there */
-                Yv *run = ya_slice(b, at, at + ll);
-                for (ylong q = 0; q < yv_len(run); q++) { out = ya_push(out, ya_get(run, q)); }
-                at = at + ll;
-            }
+            for (ylong q = 0; q < ll; q++) { ya_set(out, w + q, ya_get(b, at + q)); }
+            at = at + ll;
+            w = w + ll;
         }
         /* A match follows unless this was the final literal run. */
         if (ok && at < n) {
@@ -17984,36 +18000,37 @@ static Yv *lz_decode(Yv *s) {
                         }
                     }
                 }
-                if (ok && (moff == 0 || moff > yv_len(out)
-                           || yv_len(out) + mlen > 16777216)) {
-                    ok = 0;
-                }
+                if (ok && (moff == 0 || moff > w || w + mlen > tot)) { ok = 0; }
                 if (ok) {
-                    /* A copy may overlap what it produces (moff < mlen repeats
-                       the last moff bytes), so it goes a chunk of at most moff
-                       bytes at a time, each one already there. */
-                    ylong left = mlen;
-                    while (left > 0) {
-                        ylong src = yv_len(out) - moff;
-                        ylong take = left < moff ? left : moff;
-                        Yv *chunk = ya_slice(out, src, src + take);
-                        for (ylong q = 0; q < take; q++) { out = ya_push(out, ya_get(chunk, q)); }
-                        left = left - take;
-                    }
+                    /* front to back: a match shorter-offset than long repeats */
+                    for (ylong q = 0; q < mlen; q++) { ya_set(out, w + q, ya_get(out, w - moff + q)); }
+                    w = w + mlen;
                 }
             }
         }
     }
-    if (ok) { return from_bytes(out); }
+    if (ok && w == tot) { return from_bytes(out); }
     return ys("");
+}
+
+/* n zero bytes (native.y zero_bytes). */
+static Yv *zero_bytes(ylong n) {
+    Yv *out = yav(0);
+    for (ylong i = 0; i < n; i++) { out = ya_push(out, yv_long(0)); }
+    return out;
 }
 
 /* The payload as it is stored: compressed when that is smaller, method byte
  * first (native.y pack_store). A plain pack starts with the version line's
  * `y`, so the two cannot be confused. */
+/* n as four bytes, least significant first (native.y le32_str). */
+static Yv *le32_str(ylong n) {
+    return ys_cat(ys_cat(ys_chr(n & 255), ys_chr((n >> 8) & 255)), ys_cat(ys_chr((n >> 16) & 255), ys_chr((n >> 24) & 255)));
+}
+
 static Yv *pack_store(Yv *s) {
     Yv *z = lz_encode(s);
-    if (yv_len(z) + 1 < yv_len(s)) { return ys_cat(lz_method(), z); }
+    if (yv_len(z) + 5 < yv_len(s)) { return ys_cat(ys_cat(lz_method(), le32_str(yv_len(s))), z); }
     return s;
 }
 
@@ -18128,9 +18145,7 @@ Yv *arch_unpack(Yv *pack, Yv *entry) {
             ylong at = yv_l(yr_get(cur, "p"));
             if (ys_eq(nm, entry)) {
                 Yv *raw = ys_slice(pack, at, at + ul);
-                if (yv_len(raw) > 0 && ys_byte_at(raw, 0) == 1) {
-                    raw = lz_decode(ys_slice(raw, 1, yv_len(raw)));
-                }
+                raw = pack_plain(raw);
                 if (yv_len(raw) > 0) {
                     Yv *c = yr(2, "s", raw, "p", yv_long(0));
                     ylong nb = pack_num(c);
@@ -18293,9 +18308,7 @@ Yv *std_unpack(Yv *pack, Yv *names) {
                 /* stored compressed? the method byte says so; a failed decode
                  * leaves "" and the pack is not used (native.y) */
                 Yv *raw = ys_slice(pack, at, at + ul);
-                if (yv_len(raw) > 0 && ys_byte_at(raw, 0) == 1) {
-                    raw = lz_decode(ys_slice(raw, 1, yv_len(raw)));
-                }
+                raw = pack_plain(raw);
                 if (yv_len(raw) == 0) {
                     bad = 1;
                 } else {

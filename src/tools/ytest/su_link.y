@@ -79,7 +79,7 @@ def framing() {
         if (l.contains("=")) { nfields += 1; };
     };
     yt.check("the pack decodes and parses field by field, 24 units (" + tostring(nfields) + " field totals)",
-        ok[0] && st.contains("version ycc-std-pack 10") && st.contains("24 units, 6 arch sets"), yt.clip(st, 160));
+        ok[0] && st.contains("version ycc-std-pack 11") && st.contains("24 units, 6 arch sets"), yt.clip(st, 160));
 };
 
 // 3. linking from the pack == compiling std from source
@@ -108,10 +108,14 @@ def fallback() {
     let junk = ver + bytes("1:12:rt2:") + [1, 255];
     let jl = tostring(junk.length);
     fs.write_bytes(D + "/junk", d[0:i] + junk + bytes("0".repeat(8 - jl.length) + jl) + tail);
+    // lz: rt compressed (method 2), its stored length one the stream never reaches
+    let lz = ver + bytes("1:12:rt7:") + [2, 9, 0, 0, 0, 16, 65];
+    let ll = tostring(lz.length);
+    fs.write_bytes(D + "/lz", d[0:i] + lz + bytes("0".repeat(8 - ll.length) + ll) + tail);
     // bare: no pack at all
     fs.write_bytes(D + "/bare", d[0:i]);
     let want = cc([ycc_bin(), "-o", D + "/all", D + "/all.y"]);
-    foreach (alt in ["stale", "junk", "bare"]) {
+    foreach (alt in ["stale", "junk", "lz", "bare"]) {
         fs.set_mode(D + "/" + alt, 0o755);
         let r = cc([D + "/" + alt, "-o", D + "/alt.bin", D + "/all.y"]);
         yt.check("a " + alt + " ycc compiles std from source, same bytes",
