@@ -2618,3 +2618,38 @@ and the byte at each, in the same run.
 
 The fixture is kept as _u019_args.*.keep (outside the harness's [txu]* glob) and
 test/kernel is 77 passed, 0 failed / 77 total.
+
+### Round 162: the argv strings are ONE byte each -- so user_path is reading short
+
+Instrumented the build and read the pointers back physically:
+
+    EX argc=2 top=4076 sp=4048
+    EX ptr=100667374 b0=0
+    EX ptr=100667372 b0=0
+
+Three things in three lines, and together they say where the fault is.  argc is 2, so the
+array crossed.  The pointers are EXEC_STACK+4078 and EXEC_STACK+4076, and since the build
+subtracts (len+1) per string from 4080, that means len was 1 for the first and 1 for the
+second -- "prog" and "hello" arrived as ONE-character strings.  And the byte at each
+pointer reads 0 in the destination page, so the single byte that was copied is not even
+the first letter.
+
+One cause fits all of it: user_path(up) -- the kernel's copy of a NUL-terminated string
+out of the caller's space -- is stopping after one byte.  Its loop is `while (i < 256) {
+let c = peek_va8(ptr + i); if (c == 0) { i = 256; } else { b += c; i = i + 1; } }`, and the
+suspicious part is `peek_va8(ptr + i)`: if the READ is what is wrong rather than the
+string, the first byte is right and every later one reads 0, which truncates the copy at
+one character and stores a zero byte at the end.  That matches all three observations.
+
+So the next measurement is narrow and cheap: print, inside user_path, the pointer it was
+given and the first four bytes it reads.  If byte 1 is 0 where the string has a letter,
+the reader is the bug -- and user_path is used by openat as well, which has only ever been
+tested with paths that are... single-character?  No: "/prog" worked, which is five, so the
+reader is NOT obviously broken -- which is exactly why this needs the print and not a
+theory.  (A second candidate, worth checking in the same run: whether the second call sees
+a `[str]` array of POINTERS at all, since Y strings are immutable and an array of them is
+an array of pointers -- if the walk is one level off, the "string pointer" is really a
+byte pattern, and one byte of it would survive the NUL test.)
+
+Reverted; test/kernel is 77 passed, 0 failed / 77 total, and the argv fixture stays parked
+as _u019_args.*.keep.
