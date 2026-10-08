@@ -2338,3 +2338,36 @@ That single line is the next step, and it is the last unknown in a path that has
 been measured from both ends.
 
 Reverted; test/kernel is 67 passed, 0 failed / 67 total.
+
+### Round 143: the write path was CORRECT -- the program's second lseek was elided
+
+Both entry prints in one run, which no earlier round had managed:
+
+    SW fd=3 len=4
+    FW ino=3 off=12 size=12 len=4
+    FW n=4 size_now=16 off_now=12
+    P seek=12 nw=4 n=0 b0=0
+
+The whole write path is right: sys_write routed fd=3 to the broker, fd_write saw
+off=12 and size=12 (so it took the APPEND branch), yfs_append stored 4 bytes and the
+size reads back as 16.  nw=4 confirms it.  And the read-back is 0 because THE SECOND
+LSEEK NEVER RAN -- which round 141 had already hinted at by its missing print.
+
+The program is:
+
+    let sk2 = syscall(8, f, 0, 0);
+    let n = syscall(0, f, ptr_addr(&buf[0]), 16);
+
+`sk2` is never used, and the statement has no effect the compiler can see, so the
+lseek is gone and the fd's offset stays at 16 -- exactly where the append left it.
+The read then starts at EOF and answers 0, which is what yfs_read does when
+off >= size.
+
+So this is not a kernel bug at all: it is an unused-result syscall being eliminated,
+which is either dead-code elimination doing its job on a call it does not know is
+observable, or a genuinely bad elision -- worth its own small fixture, because a
+program that calls a syscall for its EFFECT and ignores its result must not have the
+call removed.  The fix in this program is trivial (use sk2, or print it), and it is
+the last piece before the growth fixture can be committed.
+
+Reverted; test/kernel is 67 passed, 0 failed / 67 total.
