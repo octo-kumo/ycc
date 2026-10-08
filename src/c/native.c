@@ -3942,9 +3942,114 @@ static int is_reload(Yv *ir, ylong a, ylong b, ylong c, ylong d, ylong e, ylong 
         && yv_l(ya_get(ir, p + 3)) == a && yv_l(ya_get(ir, p + 4)) == b && yv_l(ya_get(ir, p + 5)) == c && yv_l(ya_get(ir, p + 6)) == d && yv_l(ya_get(ir, p + 7)) == e;
 }
 
+/* `pop %rcx; <store through %rcx>; push %rcx`, the push about to be emitted
+ * (native.y repush_fold): the pop becomes `mov (%rsp), %rcx` and the push
+ * goes. */
+static int repush_fold(Yv *ir) {
+    ylong w = IR_W;
+    ylong s = yv_len(ir) - w;
+    while (s >= 0 && yv_l(ya_get(ir, s)) == IR_LOC) { s = s - w; }
+    ylong p = s - w;
+    while (p >= 0 && yv_l(ya_get(ir, p)) == IR_LOC) { p = p - w; }
+    if (p < 0) { return 0; }
+    ylong f = yv_l(ya_get(ir, s));
+    int store = f == F_MOV_R_D || f == F_MOV_R_0 || f == F_MOVB_R_D || f == F_MOVB_R_0;
+    if (store && yv_l(ya_get(ir, s + 3)) == R_RCX && yv_l(ya_get(ir, s + 4)) != R_RSP
+        && yv_l(ya_get(ir, p)) == F_POP_R && yv_l(ya_get(ir, p + 1)) == R_RCX && yv_l(ya_get(ir, p + 2)) == 64) {
+        ya_set(ir, p, yv_long(F_MOV_0_R));
+        ya_set(ir, p + 1, yv_long(R_RSP));
+        ya_set(ir, p + 2, yv_long(-1));
+        ya_set(ir, p + 3, yv_long(1));
+        ya_set(ir, p + 4, yv_long(0));
+        ya_set(ir, p + 5, yv_long(-1));
+        ya_set(ir, p + 6, yv_long(R_RCX));
+        ya_set(ir, p + 7, yv_long(64));
+        return 1;
+    }
+    return 0;
+}
+
+/* A load into %rax (native.y rax_load): `mov` from memory or an immediate,
+ * `lea`, `movzbq`. `first`: it must not read %rax either, and no operand may
+ * be %rsp-relative. */
+static int rax_load(Yv *ir, ylong p, int first) {
+    ylong f = yv_l(ya_get(ir, p));
+    if (f == F_MOV_I_R) {
+        return yv_l(ya_get(ir, p + 2)) == R_RAX && yv_l(ya_get(ir, p + 3)) == 64;
+    } else if (f == F_MOV_D_R || f == F_MOV_0_R || f == F_MOV_P_R || f == F_MOV_M_R
+               || f == F_LEA_D_R || f == F_LEA_M_R || f == F_LEA_P_R
+               || f == F_MOVZBQ_D_R || f == F_MOVZBQ_0_R || f == F_MOVZBQ_M_R) {
+        ylong bs = yv_l(ya_get(ir, p + 1));
+        ylong ix = yv_l(ya_get(ir, p + 2));
+        return yv_l(ya_get(ir, p + 6)) == R_RAX && yv_l(ya_get(ir, p + 7)) == 64 && bs != R_RSP && ix != R_RSP
+            && !(first && (bs == R_RAX || ix == R_RAX));
+    } else {
+        return 0;
+    }
+}
+
+/* `push %rax; L1..Lk; mov %rax, %rcx; pop %rax`, the pop about to be emitted
+ * (native.y pop_fold): the loads write %rcx instead and the save around them
+ * goes. `.loc` markers stay where they are; a label ends the window. */
+static int pop_fold(Yv *ir) {
+    ylong w = IR_W;
+    ylong pos[5];
+    ylong np = 0;
+    ylong p = yv_len(ir) - w;
+    while (p >= 0 && np < 5) {
+        if (yv_l(ya_get(ir, p)) != IR_LOC) { pos[np] = p; np = np + 1; }
+        p = p - w;
+    }
+    ylong m = np >= 3 ? pos[0] : -1;
+    if (m < 0 || yv_l(ya_get(ir, m)) != F_MOV_R_R || yv_l(ya_get(ir, m + 1)) != R_RAX
+        || yv_l(ya_get(ir, m + 2)) != 64 || yv_l(ya_get(ir, m + 3)) != R_RCX || yv_l(ya_get(ir, m + 4)) != 64) {
+        return 0;
+    }
+    ylong k = 0;
+    ylong n = 1;
+    int go = 1;
+    while (go && n <= 3 && n + 1 < np) {
+        ylong q = pos[n + 1];
+        if (!rax_load(ir, pos[n], 0)) {
+            go = 0;
+        } else if (yv_l(ya_get(ir, q)) == F_PUSH_R && yv_l(ya_get(ir, q + 1)) == R_RAX && yv_l(ya_get(ir, q + 2)) == 64) {
+            if (rax_load(ir, pos[n], 1)) { k = n; }
+            go = 0;
+        } else {
+            n = n + 1;
+        }
+    }
+    if (k == 0) { return 0; }
+    ylong start = pos[k + 1];
+    Yv *tail = ya_slice(ir, start, yv_len(ir));
+    ir->u.a.len = (size_t)start;
+    ylong at = w;
+    while (at < yv_len(tail)) {
+        if (start + at != m) {
+            ylong f = yv_l(ya_get(tail, at));
+            if (f != IR_LOC) {
+                if (f == F_MOV_I_R) {
+                    ya_set(tail, at + 2, yv_long(R_RCX));
+                } else {
+                    if (yv_l(ya_get(tail, at + 1)) == R_RAX) { ya_set(tail, at + 1, yv_long(R_RCX)); }
+                    if (yv_l(ya_get(tail, at + 2)) == R_RAX) { ya_set(tail, at + 2, yv_long(R_RCX)); }
+                    ya_set(tail, at + 6, yv_long(R_RCX));
+                }
+            }
+            for (ylong i = 0; i < w; i++) { ir = ya_push(ir, ya_get(tail, at + i)); }
+        }
+        at = at + w;
+    }
+    return 1;
+}
+
 static Yv *emit_insn(Yv *st, ylong f, ylong a, ylong b, ylong c, ylong d, ylong e,
                      ylong g, ylong h) {
     if (f == F_MOV_D_R && is_reload(yr_get(st, "ir"), a, b, c, d, e, g, h)) {
+        return st;
+    } else if (f == F_POP_R && a == R_RAX && b == 64 && pop_fold(yr_get(st, "ir"))) {
+        return st;
+    } else if (f == F_PUSH_R && a == R_RCX && b == 64 && repush_fold(yr_get(st, "ir"))) {
         return st;
     } else {
         return st_ir(st, ir_push(yr_get(st, "ir"), f, a, b, c, d, e, g, h));

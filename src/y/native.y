@@ -2871,9 +2871,124 @@ def st_temp(st: EmitSt, n: long) -> EmitSt {
 def emit_insn(st: EmitSt, f: long, a: long, b: long, c: long, d: long, e: long, g: long, h: long) -> EmitSt {
     if (f == insn.F_MOV_D_R && is_reload(st.ir, a, b, c, d, e, g, h)) {
         st
+    } else if (f == insn.F_POP_R && a == insn.R_RAX && b == 64 && pop_fold(st.ir)) {
+        st
+    } else if (f == insn.F_PUSH_R && a == insn.R_RCX && b == 64 && repush_fold(st.ir)) {
+        st
     } else {
         st_ir(st, insn.ir_push(st.ir, f, a, b, c, d, e, g, h))
     }
+};
+
+// `pop %rcx; <store through %rcx>; push %rcx`, the push about to be emitted:
+// a record or array literal storing a field through the pointer it keeps on the
+// stack. The pop becomes `mov (%rsp), %rcx` and the push goes -- the same value
+// in %rcx and on the stack, one instruction fewer. 7,434 sites in ycc's own
+// output. A `.loc` may sit in between; anything else ends the match.
+def repush_fold(ir: [long]) -> bool {
+    let w = insn.IR_W;
+    let s = len(ir) - w;
+    while (s >= 0 && ir[s] == insn.IR_LOC) { s = s - w; };
+    let p = s - w;
+    while (p >= 0 && ir[p] == insn.IR_LOC) { p = p - w; };
+    if (p < 0) { return false; };
+    let f = ir[s];
+    let store = f == insn.F_MOV_R_D || f == insn.F_MOV_R_0 || f == insn.F_MOVB_R_D || f == insn.F_MOVB_R_0;
+    if (store && ir[s + 3] == insn.R_RCX && ir[s + 4] != insn.R_RSP && ir[p] == insn.F_POP_R && ir[p + 1] == insn.R_RCX
+        && ir[p + 2] == 64) {
+        ir[p] = insn.F_MOV_0_R;
+        ir[p + 1] = insn.R_RSP;
+        ir[p + 2] = -1;
+        ir[p + 3] = 1;
+        ir[p + 4] = 0;
+        ir[p + 5] = -1;
+        ir[p + 6] = insn.R_RCX;
+        ir[p + 7] = 64;
+        true
+    } else {
+        false
+    }
+};
+
+// A load into %rax: `mov` from memory or an immediate, `lea`, `movzbq` --
+// one instruction that writes %rax and reads nothing but memory. `first`: it
+// must not read %rax either (the value the push saved is still in it), and no
+// operand may be %rsp-relative (the push moved %rsp).
+def rax_load(ir: [long], p: long, first: bool) -> bool {
+    let f = ir[p];
+    if (f == insn.F_MOV_I_R) {
+        ir[p + 2] == insn.R_RAX && ir[p + 3] == 64
+    } else if (f == insn.F_MOV_D_R || f == insn.F_MOV_0_R || f == insn.F_MOV_P_R || f == insn.F_MOV_M_R
+            || f == insn.F_LEA_D_R || f == insn.F_LEA_M_R || f == insn.F_LEA_P_R
+            || f == insn.F_MOVZBQ_D_R || f == insn.F_MOVZBQ_0_R || f == insn.F_MOVZBQ_M_R) {
+        let bs = ir[p + 1];
+        let ix = ir[p + 2];
+        ir[p + 6] == insn.R_RAX && ir[p + 7] == 64 && bs != insn.R_RSP && ix != insn.R_RSP
+            && !(first && (bs == insn.R_RAX || ix == insn.R_RAX))
+    } else {
+        false
+    }
+};
+
+// `push %rax; L1..Lk; mov %rax, %rcx; pop %rax`, the pop about to be emitted:
+// the stack machine's binary operator when its right operand is one to three
+// loads (a local, a constant, a field of one). The loads write %rcx instead,
+// and the save around them goes: four instructions, two of them memory, for
+// one. A `.loc` marker may sit anywhere in the window and stays where it is
+// (-g leaves the code as it was); a label ends it, since control can arrive
+// there with another %rax.
+def pop_fold(ir: [long]) -> bool {
+    let w = insn.IR_W;
+    let pos: [long] = [];
+    let p = len(ir) - w;
+    while (p >= 0 && len(pos) < 5) {
+        if (ir[p] != insn.IR_LOC) { pos += p; };
+        p = p - w;
+    };
+    let m = if (len(pos) >= 3) { pos[0] } else { -1 };
+    if (m < 0 || ir[m] != insn.F_MOV_R_R || ir[m + 1] != insn.R_RAX || ir[m + 2] != 64 || ir[m + 3] != insn.R_RCX
+        || ir[m + 4] != 64) {
+        return false;
+    };
+    // pos[1..k] the loads, pos[k] the first of them; pos[k + 1] the push
+    let k = 0;
+    let n = 1;
+    let go = true;
+    while (go && n <= 3 && n + 1 < len(pos)) {
+        let q = pos[n + 1];
+        if (!rax_load(ir, pos[n], false)) {
+            go = false;
+        } else if (ir[q] == insn.F_PUSH_R && ir[q + 1] == insn.R_RAX && ir[q + 2] == 64) {
+            if (rax_load(ir, pos[n], true)) { k = n; };
+            go = false;
+        } else {
+            n = n + 1;
+        };
+    };
+    if (k == 0) { return false; };
+    let start = pos[k + 1];
+    let tail = ir[start:len(ir)];
+    while (len(ir) > start) { ir.pop(); };
+    let at = w;
+    while (at < len(tail)) {
+        if (start + at != m) {
+            let f = tail[at];
+            if (f != insn.IR_LOC) {
+                // the load, into %rcx; a %rax it reads is the one the load
+                // before it wrote, now in %rcx too
+                if (f == insn.F_MOV_I_R) {
+                    tail[at + 2] = insn.R_RCX;
+                } else {
+                    if (tail[at + 1] == insn.R_RAX) { tail[at + 1] = insn.R_RCX; };
+                    if (tail[at + 2] == insn.R_RAX) { tail[at + 2] = insn.R_RCX; };
+                    tail[at + 6] = insn.R_RCX;
+                };
+            };
+            for i in 0..w { ir += tail[at + i]; };
+        };
+        at = at + w;
+    };
+    true
 };
 
 // The load `mov mem, %rax` (64-bit) when the item before it stores %rax to the
