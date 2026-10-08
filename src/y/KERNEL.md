@@ -2420,3 +2420,27 @@ failure option beats delete-on-failure when the artifact is expensive, and a sta
 binary makes a run say anything.
 
 test/kernel is 69 passed, 0 failed / 69 total.
+
+### Round 148: the zeroing loop did NOT fix it -- the same cr2, so the theory was wrong
+
+Recreated the create fixture WHOLE, with the image cleared before the metadata is laid
+down, and it faulted with EXACTLY the same address as before:
+
+    trap vector=14 err=0 cr2=-130947386953472
+
+Identical cr2 means the same wild pointer, so "a dirty page makes every inode look
+used" was wrong -- or at least not the cause.  The fixture is kept (renamed
+_t018_create.y.keep, outside the harness's [tx]* glob, so it neither runs nor is lost)
+and the next step is to instrument IT rather than theorise: print `made` (the inode
+yfs_create returns), `yfs_size(made)` and the block yfs_block_of(made, 0) gives, which
+together say whether the inode is real and whether the block number is sane.  A
+negative cr2 that large points at a pointer formed from a SIGN-EXTENDED read -- peek32
+returns a long, and if the 32-bit value has its high bit set the result is negative --
+so the first print to trust is the block number.
+
+Two process notes from this round, both improvements: the guard now KEEPS the artifact
+on failure (the three earlier delete-on-failure incidents cost a fixture each), and a
+failed fixture is moved aside rather than committed, so the suite stays green while the
+work continues.
+
+test/kernel is 69 passed, 0 failed / 69 total.
