@@ -3,15 +3,19 @@
 # units", "the std pack"; ycc.y self_pack).
 #
 # A program is linked from units: its own and the std units it needs
-# (prelude, exec, str, rt), each compiled separately. The built ycc carries
-# its std units precompiled (the Makefile's PACK appends `ycc --std-pack`
-# to the binary), and `--std-src` compiles them from the embedded sources
-# instead. Checks: the pack is there and well framed; it is exactly what
+# (prelude, exec, str, rt, and the library units it imports), each compiled
+# separately. The built ycc carries every std unit precompiled (the Makefile's
+# PACK appends `ycc --std-pack` to the binary), and `--std-src` compiles them
+# from source instead: their files under src/y/std (no std source is embedded
+# in the compiler). Checks: the pack is there and well framed; it is exactly what
 # --std-pack writes, and what the C copy writes; linking from it gives the
 # same bytes as compiling from source, plain and -g, for programs that
 # pull in every unit; a pack this ycc cannot read, or none at all, falls
 # back to source; a program's own y_ helper or readline replaces std's;
-# --no-exec leaves exec out; std's line markers appear only under -g.
+# --no-exec leaves exec out; std's line markers appear only under -g; and a
+# compiler with no std/ beside it still resolves a library import, because the
+# pack carries every library unit (fails on a build made before that), while
+# --std-src there says plainly that it has no source to compile one from.
 
 source "$(dirname "$0")/lib.sh"
 
@@ -46,10 +50,30 @@ if [ "$(tail -c 8 "$YCC")" = "YCCPACK1" ] && [[ "$plen" =~ ^[0-9]{8}$ ]] \
     pass "ycc carries a std pack ($((10#$plen)) bytes)"
     plen=$((10#$plen))
     tail -c $((plen + 16)) "$YCC" >"$TMPD/attached.pack"
-    if [ "$(head -c 15 "$TMPD/attached.pack" | tr '\n' '|')" = "ycc-std-pack 6|" ]; then
-        pass "the pack opens with its version line"
+    # pack 9: a plain frame (the version line first) whose units are each
+    # stored compressed (method byte 1), so a compile decodes only what it links
+    if units_z=$(python3 - "$TMPD/attached.pack" <<'EOF'
+import sys
+d = open(sys.argv[1], "rb").read()
+p = d[:-16]
+nl = p.index(b"\n") + 1
+def ns(at):
+    c = p.index(b":", at)
+    n = int(p[at:c])
+    return p[c + 1:c + 1 + n], c + 1 + n
+cnt, at = ns(nl)
+z = 0
+for _ in range(int(cnt)):
+    _, at = ns(at)
+    body, at = ns(at)
+    z += body[:1] == b"\x01"
+print("%d of %d" % (z, int(cnt)))
+sys.exit(0 if p[:13] == b"ycc-std-pack " and z == int(cnt) and at == len(p) else 1)
+EOF
+); then
+        pass "the attached pack's units are each stored compressed ($units_z)"
     else
-        fail "the pack opens with its version line" "$(head -c 20 "$TMPD/attached.pack" | od -c | head -2)"
+        fail "the attached pack's units are each stored compressed" "$units_z: $(head -c 20 "$TMPD/attached.pack" | od -c | head -2)"
     fi
 else
     fail "ycc carries a std pack" "trailer: $(tail -c 16 "$YCC" | od -c | head -1)"
@@ -85,7 +109,11 @@ same_both_ways() { # same_both_ways <name> <file.y> [flags...]
         fail "pack == source: $name $*" "$(head -c 200 "$TMPD/err")"
     fi
 }
+# Programs that use a LIBRARY module are units of the pack now, not spliced text:
+# math (no imports), sort (math's importer), crypto (the unit whose Hash type an
+# importer names -- tls does, which is why packing tls needs types to travel).
 for f in test/y/examples/helloworld.y test/y/native/t35_readline.y test/y/native/t38_exec.y \
+         test/y/native/t300_math_int.y test/y/native/t217_sort.y test/y/native/t158_crypto.y \
          test/y/examples/ysh.y "$TMPD/all.y"; do
     case "$f" in /*) p="$f" ;; *) p="$ROOT/$f" ;; esac
     same_both_ways "$(basename "$f")" "$p"
@@ -100,18 +128,25 @@ else
 fi
 
 # 4. a pack ycc cannot read, or none: the std units compile from source
-python3 - "$YCC" "$TMPD/stale" "$TMPD/bare" <<'EOF'
+python3 - "$YCC" "$TMPD/stale" "$TMPD/junk" "$TMPD/bare" <<'EOF'
 import sys
 d = open(sys.argv[1], "rb").read()
 n = int(d[-16:-8])
 i = len(d) - 16 - n
-v = b"ycc-std-pack 6\n"
-assert d[i:i + len(v)] == v
-open(sys.argv[2], "wb").write(d[:i] + b"ycc-std-pack 0\n" + d[i + len(v):])
-open(sys.argv[3], "wb").write(d[:i])
+ver = d[i:d.index(b"\n", i) + 1]
+assert ver.startswith(b"ycc-std-pack "), ver
+tail = d[len(d) - 16:]
+# stale: the frame says a length that is not there
+open(sys.argv[2], "wb").write(d[:i] + b"99999999" + tail[8:])
+# junk: a pack of this version whose one unit, rt (every program links it), is a
+# stream the decoder must refuse (a length byte with nothing behind it)
+junk = ver + b"1:1" + b"2:rt" + b"2:\x01\xff"
+open(sys.argv[3], "wb").write(d[:i] + junk + b"%08d" % len(junk) + tail[8:])
+# bare: no pack at all
+open(sys.argv[4], "wb").write(d[:i])
 EOF
-chmod 755 "$TMPD/stale" "$TMPD/bare" 2>/dev/null
-for alt in stale bare; do
+chmod 755 "$TMPD/stale" "$TMPD/junk" "$TMPD/bare" 2>/dev/null
+for alt in stale junk bare; do
     if [ -x "$TMPD/$alt" ] \
         && timeout "$CTO" "$TMPD/$alt" -o "$TMPD/alt.bin" "$TMPD/all.y" </dev/null >"$TMPD/err" 2>&1 \
         && timeout "$CTO" "$YCC" -o "$TMPD/all" "$TMPD/all.y" </dev/null >>"$TMPD/err" 2>&1 \
@@ -217,6 +252,78 @@ if [ $e1 -eq 1 ] && grep -q -- "--std-pack needs an argument" "$TMPD/e1" \
     pass "--std-pack: missing argument, unwritable path"
 else
     fail "--std-pack: missing argument, unwritable path" "$e1: $(head -c 100 "$TMPD/e1") / $e2: $(head -c 100 "$TMPD/e2")"
+fi
+
+# A ycc with no std/ beside it must still compile std imports: the attached pack
+# carries every library unit (AGENTS.md, Build); before library modules were
+# embedded, then packed, a lone binary answered "cannot find module 'math'".
+# Copy the compiler into an empty directory, run it from another empty one, and
+# ask for a library module.
+mkdir -p "$TMPD/lone/bin" "$TMPD/lone/run"
+cp "$YCC" "$TMPD/lone/bin/ycc"
+printf 'import math;\nprint(math.pi);\n' > "$TMPD/lone/run/m.y"
+lone_out=$( ( cd "$TMPD/lone/run" && timeout "$CTO" "$TMPD/lone/bin/ycc" m.y -o m && \
+              timeout "$CTO" ./m </dev/null ) 2>&1 )
+if [ "$lone_out" = "3.141593" ]; then
+    pass "lone ycc: a std import resolves with no std/ on disk"
+else
+    fail "lone ycc: a std import resolves with no std/ on disk" "$(echo "$lone_out" | head -c 120)"
+fi
+# A meta block's generator is compiled and run during the resolve, and it links
+# the std units like any program -- from the compiler's own pack. It used to ask
+# for them from source, which only worked while sources were embedded: a lone
+# ycc then failed on every program with a block.
+printf 'let n = 6 * 7;\n#{ "print(\\"" + tostring(n) + " from a block\\");\\n" }#\n' > "$TMPD/lone/run/mb.y"
+mb_out=$( ( cd "$TMPD/lone/run" && timeout "$CTO" "$TMPD/lone/bin/ycc" mb.y -o mb && \
+            timeout "$CTO" ./mb </dev/null ) 2>&1 )
+if [ "$mb_out" = "42 from a block" ]; then
+    pass "lone ycc: a meta block's generator links the std from the pack"
+else
+    fail "lone ycc: a meta block's generator links the std from the pack" "$(echo "$mb_out" | head -c 160)"
+fi
+# No std source is embedded, so a lone ycc asked to compile the std from source
+# (--std-src) has nothing to compile from: a diagnostic naming the first unit it
+# needs, exit 1 -- never a crash or a silent fallback.
+lone_err=$( ( cd "$TMPD/lone/run" && timeout "$CTO" "$TMPD/lone/bin/ycc" --std-src m.y -o m2 </dev/null ) 2>&1 ); lone_ec=$?
+if [ "$lone_ec" -eq 1 ] && echo "$lone_err" | grep -qE "^error: std module '[a-z]+': not in this compiler's std pack, and no src/y/std/[a-z]+\.y beside it or in the working directory$"; then
+    pass "lone ycc --std-src: a std unit with no source on disk is a diagnostic"
+else
+    fail "lone ycc --std-src: a std unit with no source on disk is a diagnostic" "exit $lone_ec: $(echo "$lone_err" | head -c 160)"
+fi
+
+# A compiler with no pack (cycc) builds the arch runtime's blocks from
+# src/y/arch at run time -- nothing is embedded -- so one that finds the std
+# sources but no arch files must say which file it lacks, not crash or emit a
+# program without its runtime. The std sources are copied in so the std units
+# compile and the arch lookup is what fails.
+if [ -x "${CYCC:-}" ]; then
+    # its own copy: the one in the checkout finds src/y/arch beside itself
+    mkdir -p "$TMPD/noarch/src/y" "$TMPD/noarch/bin"
+    cp -R "$ROOT/src/y/std" "$TMPD/noarch/src/y/std"
+    cp "$CYCC" "$TMPD/noarch/bin/cycc"
+    printf 'print(1);\n' > "$TMPD/noarch/p.y"
+    na_err=$( ( cd "$TMPD/noarch" && timeout "$CTO" "$TMPD/noarch/bin/cycc" -o p p.y </dev/null ) 2>&1 ); na_ec=$?
+    if [ "$na_ec" -eq 1 ] && echo "$na_err" | grep -qF "error: the arch runtime 'prelude.s': not in this compiler's std pack, and no src/y/arch/prelude.s beside it or in the working directory"; then
+        pass "a pack-less compiler with no src/y/arch names the missing runtime file"
+    else
+        fail "a pack-less compiler with no src/y/arch names the missing runtime file" "exit $na_ec: $(echo "$na_err" | head -c 160)"
+    fi
+else
+    skip "a pack-less compiler with no src/y/arch" "CYCC not set"
+fi
+
+# The pack's framing must stay walkable field by field. pack_stats.py knows
+# every field's shape (native.y pack_unit_fields: almost all are "count, then
+# items", with only `init` a single netstring) and fails unless each unit
+# consumes its fields exactly and the cursor ends at the pack's end — a desync
+# is how an earlier hand parse misread the shapes. It also prints the per-field
+# byte split, the measurement the pack work is planned from.
+if python3 "$ROOT/test/sh/pack_stats.py" "$TMPD/y.pack" >"$TMPD/pstats" 2>&1 \
+    && grep -q "version ycc-std-pack 10" "$TMPD/pstats" \
+    && grep -q "20 units, 6 arch sets" "$TMPD/pstats"; then
+    pass "the pack decodes and parses field by field, $(grep -o '[0-9]* units' "$TMPD/pstats" | head -1) ($(grep -c '=' "$TMPD/pstats") field totals)"
+else
+    fail "the pack parses field by field" "$(head -c 160 "$TMPD/pstats")"
 fi
 
 print_summary "link"

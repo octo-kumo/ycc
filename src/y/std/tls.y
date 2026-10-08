@@ -21,9 +21,14 @@ import x509;
 import net;
 
 // A connection. Records are references, so the functions below update
-// one in place: its keys, sequence numbers and buffers.
+// one in place: its keys, sequence numbers and buffers. `alpn` is the
+// protocol the server chose by ALPN (RFC 7301) and `alpn_matched` whether
+// that is the one `Opts.alpn` asked for -- RFC 7301 3.2 has the client
+// check it, so a caller that offered one and needs it tests that flag
+// rather than reading `alpn` itself.
 type Conn = {
-    fd: long, err: str, host: str, suite: long, alpn: str, eof: bool,
+    fd: long, err: str, host: str, suite: long, alpn: str,
+    alpn_matched: bool, eof: bool,
     wkey: [byte], wiv: [byte], wseq: long, wsecret: [byte],
     rkey: [byte], riv: [byte], rseq: long, rsecret: [byte],
     inbuf: [byte], hs: [byte]
@@ -406,7 +411,7 @@ def verify_content(thash: [byte]) -> [byte] {
 
 def blank(fd: long, host: str) -> Conn {
     {
-        fd: fd, err: "", host: host, suite: 0, alpn: "", eof: false,
+        fd: fd, err: "", host: host, suite: 0, alpn: "", alpn_matched: false, eof: false,
         wkey: [], wiv: [], wseq: 0, wsecret: [], rkey: [], riv: [], rseq: 0, rsecret: [],
         inbuf: [], hs: []
     }
@@ -465,6 +470,13 @@ def handshake(c: Conn, o: Opts, alpn: str) -> bool {
         if (m.typ < 0) { return false; };
         if (m.typ == 8) {
             c.alpn = ee_alpn(m.body);
+            // RFC 7301 3.2: the client must check that the server chose a
+            // protocol it offered, and abort if it did not. `alpn` is what
+            // came back -- the value is reported either way, so a caller can
+            // see what a server answered -- and `alpn_matched` says whether
+            // that was the one asked for. An offer of none leaves it false
+            // whatever the server sends.
+            c.alpn_matched = (alpn != "" && c.alpn == alpn);
         } else if (m.typ == 13) {
             asked = true;
         } else if (m.typ == 11) {

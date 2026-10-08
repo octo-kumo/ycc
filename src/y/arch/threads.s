@@ -7,7 +7,7 @@ y_threads_on:
     mov 24(%rcx), %rdx
     test %rdx, %rdx
     jne y_threads_on_done
-    mov $48, %rdi
+    mov $128, %rdi
     call y_alloc
     lea y_heap(%rip), %rcx
     mov (%rcx), %rdx
@@ -17,6 +17,18 @@ y_threads_on:
     mov 16(%rcx), %rdx
     mov %rdx, 16(%rax)
     mov %rax, 24(%rax)
+# The main thread is a registered thread too (tcb words 10-13 are next, rsp,
+# state and the gc mark; word 4 stays 0: it has no stack mapping of its own, so
+# the collector reads y_gc_stack_top for it).
+    mov %rax, y_gc_threads(%rip)
+# From here on the allocator's slow path parks. This is the only thing that
+# puts code there: a program that never spawns keeps y_alloc_more lean.
+    lea y_gc_safepoint(%rip), %rdx
+    mov %rdx, y_gc_safe_fn(%rip)
+    lea y_gc_alloc_free_locked(%rip), %rdx
+    mov %rdx, y_gc_free_fn(%rip)
+    lea y_gc_chunk_add_locked(%rip), %rdx
+    mov %rdx, y_gc_chunk_fn(%rip)
     xor %edx, %edx
     mov %rdx, (%rcx)
     mov %rdx, 8(%rcx)
@@ -43,21 +55,49 @@ y_spawn:
     push %r12
     mov %rax, %rbx
     call y_threads_on
-    mov $80, %rdi
+# Park here if a cycle owns the world: registration must not race with the
+# walk that decides every thread is stopped. The closure is already in %rbx,
+# which this prologue pushed, so a parked thread's roots are complete.
+    call y_gc_safepoint
+    mov $128, %rdi
     call y_alloc
     mov %rax, %r12
     mov %r12, 24(%r12)
+# y_alloc does not zero a payload, and a recycled tcb is full of whatever the
+# previous block held. Every field the collector reads must be defined BEFORE
+# the tcb is linked into y_gc_threads: the state word (word 12) or the walk
+# below would read a stale 1 ("parked") or 3 ("blocked") and sweep while this
+# thread runs -- --gc-stress with four mutex threads hit exactly that -- and
+# the bump ends (words 0/8) would start the child's allocator at a random
+# address.
+    xor %eax, %eax
+    mov %rax, 0(%r12)
+    mov %rax, 8(%r12)
+    mov %rax, 88(%r12)
+    mov %rax, 96(%r12)
+    mov %rax, 104(%r12)
+    mov %rax, 112(%r12)
+    mov %rax, 120(%r12)
+# Register before clone: the child starts out a registered, running thread
+# (state 0), so a cycle either waits for it or scans it -- never skips it.
+    mov y_gc_threads(%rip), %rdx
+    mov %rdx, 80(%r12)
+    mov %r12, y_gc_threads(%rip)
     mov %rbx, 64(%r12)
+# The spare is the unused tail of a chunk some joined thread left behind, kept
+# in the tcb (words 14/15), never in the tail itself: the old chain wrote the
+# tail's END into its first word (y_join_done), and pass1 -- which stops a chunk
+# at a ZERO header -- then read that pointer as a block header whose size runs
+# past the chunk (--gc-stress on t160_threads).
     mov %fs:24, %rcx
-    mov 40(%rcx), %rax
+    mov 112(%rcx), %rax
     test %rax, %rax
     je y_spawn_stack
-    mov 8(%rax), %rdx
-    mov %rdx, 40(%rcx)
-    mov 0(%rax), %rdx
+    mov 120(%rcx), %rdx
+    mov %rcx, %r9
     xor %ecx, %ecx
-    mov %rcx, 0(%rax)
-    mov %rcx, 8(%rax)
+    mov %rcx, 112(%r9)
+    mov %rcx, 120(%r9)
     mov %rax, 0(%r12)
     mov %rdx, 8(%r12)
 y_spawn_stack:
@@ -118,6 +158,35 @@ y_thread_start:
     mov 0(%rax), %rax
     call *%rax
     mov %rax, 56(%r12)
+# Deregister before the stack goes: the collector walks the tcb list and must
+# not scan a mapping that is already unmapped. Taking the stop-the-world flag
+# is what makes that safe -- a cycle holds it while it runs, and one that
+# starts while this thread holds it gives up (y_gc_stw_begin).
+    mov $1, %rax
+yts_unlink_try:
+    xchg %rax, y_gc_stw(%rip)
+    test %rax, %rax
+    jz yts_unlink_own
+    mov $1, %rax
+    jmp yts_unlink_try
+yts_unlink_own:
+    mov $2, %rax
+    mov %rax, 96(%r12)
+    lea y_gc_threads(%rip), %rcx
+yts_unlink_loop:
+    mov (%rcx), %rdx
+    test %rdx, %rdx
+    jz yts_unlink_done
+    cmp %r12, %rdx
+    je yts_unlink_hit
+    lea 80(%rdx), %rcx
+    jmp yts_unlink_loop
+yts_unlink_hit:
+    mov 80(%rdx), %rax
+    mov %rax, (%rcx)
+yts_unlink_done:
+    xor %eax, %eax
+    mov %rax, y_gc_stw(%rip)
     mov 32(%r12), %rdi
     mov $8392704, %rsi
     mov $11, %rax
@@ -162,11 +231,25 @@ y_join_wait:
     mov 48(%rbx), %rdx
     test %rdx, %rdx
     je y_join_done
+    call y_gc_block_begin
+# A 100us timeout, not forever: a blocked thread must come back often enough to
+# see the stop-the-world flag and park (y_gc_block_end does exactly that), or a
+# cycle would wait for it until it gives up. State 3 alone is NOT accepted by
+# the walk -- sweeping under a merely-blocked thread corrupts the heap
+# (--gc-stress on t160_threads) -- so the park is what makes the cycle happen.
+    sub $16, %rsp
+    xor %eax, %eax
+    mov %rax, (%rsp)
+    mov $100000, %rax
+    mov %rax, 8(%rsp)
     mov $202, %rax
     lea 48(%rbx), %rdi
     xor %esi, %esi
-    xor %r10d, %r10d
+    mov $2, %rdx
+    mov %rsp, %r10
     syscall
+    add $16, %rsp
+    call y_gc_block_end
     jmp y_join_wait
 y_join_done:
     xor %eax, %eax
@@ -176,11 +259,12 @@ y_join_done:
     sub %rdi, %rsi
     cmp $4096, %rsi
     jl y_join_value
+# Record the unused tail in the JOINING thread's tcb (words 14/15), writing
+# nothing into the chunk: the collector still finds the zero header its walk
+# stops at.
     mov %fs:24, %rcx
-    mov %rax, 0(%rdi)
-    mov 40(%rcx), %rdx
-    mov %rdx, 8(%rdi)
-    mov %rdi, 40(%rcx)
+    mov %rdi, 112(%rcx)
+    mov %rax, 120(%rcx)
 y_join_value:
     mov 56(%rbx), %rax
     pop %rbx
@@ -236,12 +320,21 @@ y_mutex_wait:
     xchg %rcx, 0(%rbx)
     test %rcx, %rcx
     je y_mutex_got
+    call y_gc_block_begin
+# A 100us timeout so the wait comes back to park (see y_join_wait).
+    sub $16, %rsp
+    xor %eax, %eax
+    mov %rax, (%rsp)
+    mov $100000, %rax
+    mov %rax, 8(%rsp)
     mov $202, %rax
     mov %rbx, %rdi
     mov $128, %rsi
     mov $2, %rdx
-    xor %r10d, %r10d
+    mov %rsp, %r10
     syscall
+    add $16, %rsp
+    call y_gc_block_end
     jmp y_mutex_wait
 y_mutex_got:
     mov $39, %rax
@@ -322,12 +415,21 @@ y_sem_again:
 y_sem_sleep:
     lea 8(%rbx), %rax
     call y_mutex_unlock
+    call y_gc_block_begin
+# A 100us timeout so the wait comes back to park (see y_join_wait).
+    sub $16, %rsp
+    xor %eax, %eax
+    mov %rax, (%rsp)
+    mov $100000, %rax
+    mov %rax, 8(%rsp)
     mov $202, %rax
     mov %rbx, %rdi
     mov $128, %rsi
     xor %edx, %edx
-    xor %r10d, %r10d
+    mov %rsp, %r10
     syscall
+    add $16, %rsp
+    call y_gc_block_end
     jmp y_sem_again
 y_sem_post:
     push %rbx
@@ -359,8 +461,95 @@ y_fork:
     ret
 y_fork_child:
     push %rbx
+# The child has one thread: the registry must name only it, or a cycle here
+# would wait for the parent's threads, which do not exist in this process.
+    mov y_gc_threads(%rip), %rax
+    test %rax, %rax
+    jz y_fork_child_go
+    mov %fs:24, %rax
+    xor %ecx, %ecx
+    mov %rcx, 80(%rax)
+    mov %rcx, 88(%rax)
+    mov %rcx, 96(%rax)
+    mov %rax, y_gc_threads(%rip)
+    mov %rcx, y_gc_parked(%rip)
+    mov %rcx, y_gc_stw(%rip)
+y_fork_child_go:
     mov 0(%rbx), %rax
     call *%rax
     mov $231, %rax
     xor %edi, %edi
     syscall
+
+# y_gc_safepoint: park while a cycle owns the world. Called through
+# y_gc_safe_fn from the allocator's slow path (every register is already pushed
+# there, so publishing %rsp publishes the roots), and from spawn before a
+# thread is registered. Word 11 of the tcb is the published %rsp, word 12 the
+# state (0 running, 1 parked, 2 gone).
+y_gc_safepoint:
+    push %rbp
+    mov %rsp, %rbp
+    push %rbx
+    push %r12
+    push %r13
+    push %r14
+    push %r15
+    mov y_gc_stw(%rip), %rax
+    test %rax, %rax
+    jz ygsp_done
+    mov %fs:24, %rbx
+    mov %rsp, 88(%rbx)
+    mov $1, %rax
+    mov %rax, 96(%rbx)
+ygsp_spin:
+    mov y_gc_stw(%rip), %rax
+    test %rax, %rax
+    jnz ygsp_spin
+    mov $0, %rax
+    mov %rax, 96(%rbx)
+ygsp_done:
+    pop %r15
+    pop %r14
+    pop %r13
+    pop %r12
+    pop %rbx
+    pop %rbp
+    ret
+
+# y_gc_alloc_free_locked(p) / y_gc_chunk_add_locked(base, size, dedicated): the
+# shared-memory halves of the slow path, with y_gc_lk held. Ordering is always
+# y_gc_lk then y_gc_meta_alloc's own lock (never the reverse).
+y_gc_alloc_free_locked:
+    push %rbp
+    mov %rsp, %rbp
+    push %rdi
+    lea y_gc_lk(%rip), %rdi
+    call y_gc_lock
+    pop %rdi
+    call y_gc_alloc_free
+    push %rax
+    lea y_gc_lk(%rip), %rdi
+    call y_gc_unlock
+    pop %rax
+    pop %rbp
+    ret
+
+y_gc_chunk_add_locked:
+    push %rbp
+    mov %rsp, %rbp
+    push %rdi
+    push %rsi
+    push %rdx
+    lea y_gc_lk(%rip), %rdi
+    call y_gc_lock
+    pop %rdx
+    pop %rsi
+    pop %rdi
+    call y_gc_chunk_add
+    push %rax
+    lea y_gc_lk(%rip), %rdi
+    call y_gc_unlock
+    pop %rax
+    pop %rbp
+    ret
+

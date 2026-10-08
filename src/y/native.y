@@ -49,14 +49,11 @@ import lint from "./lint.y";
 import meta from "./meta.y";
 import fs;
 
-// The std units' sources (see std_units). `embed` (see embed_decl) makes
-// each file a str const when the compiler is BUILT: the shipped ycc is a
-// standalone static ELF and cannot read support files at run time. The C
-// copy embeds the same files (Y_EMBED in src/c/yv.h).
-embed RT_SRC from "./std/rt.y";
-embed PRELUDE_SRC from "./std/prelude.y";
-embed EXEC_SRC from "./std/exec.y";
-embed STR_SRC from "./std/str.y";
+// No std source is embedded in the compiler. Every std unit -- the four core
+// units and the library modules alike -- travels compiled in the std pack
+// attached to ycc (std_pack); a source is read from disk (std_lib_src) only to
+// build that pack, under --std-src, and by a compiler with no pack attached
+// (cycc, a bootstrap generation), all of which run in a checkout.
 
 // `ycc -g` line markers, set by compile_unit for each unit. With
 // dbg_lines on, the text opens with a `.file N "path"` per origin file
@@ -77,6 +74,13 @@ let dbg_line: [long] = [];
 let res_pkgs: [str] = [];
 let res_roots: [str] = [];
 let res_used: [str] = [];
+// std library units the resolver saw imported BY NAME (math, args, ...):
+// they are linked units now, not spliced text, so native_resolve_x appends
+// them to the program's `std` (see std_lib_names).
+let res_std_lib: [str] = [];
+// True while std_compile resolves a std unit's own imports: those always
+// bind units, so the project-local lookup (res_local_mod) is skipped.
+let res_in_std = false;
 // The packages the unit being compiled imports (compile_unit): strip_ns
 // turns `json.parse` into the QUALIFIED name `json.parse` -- an id no Y
 // source can spell, bound to the package's export -- not into `parse`.
@@ -260,6 +264,41 @@ def resolve_unit(src: str, base_dir: str, depth: long, allow_exec: bool, root: s
     // so there is no name to test for. Unused helpers cost nothing in the
     // output -- prune_bodies drops them at link time.
     std += "rt";
+    // The library units the resolver saw imported by name -- but only the ones
+    // the program MENTIONS, a `name.` reference, exactly as prelude and exec are
+    // linked only when one of their names is seen: `import math;` and nothing
+    // else must cost nothing, and with no reference there is no name for
+    // unit_externs to bind either (treeshake: unused import). A comment or a
+    // string holding `math.` links the unit anyway, which costs bytes but never
+    // changes what the program prints.
+    let want: [str] = [];
+    let li = 0;
+    while (li < len(res_std_lib)) {
+        if (index_of(rsrc, res_std_lib[li] + ".") >= 0 && !name_in(want, res_std_lib[li])) {
+            want += res_std_lib[li];
+        };
+        li = li + 1;
+    };
+    // ...and the units those import (std_lib_deps), all in std_lib_names order,
+    // dependency first: every caller of std_units -- ycc, the language server's
+    // diagnostics, native_compile -- compiles a unit against the ones before it,
+    // so `std` must be closed and ordered here, not by each caller.
+    let wi = 0;
+    while (wi < len(want)) {
+        let ds = std_lib_deps(want[wi]);
+        let di = 0;
+        while (di < len(ds)) {
+            if (!name_in(want, ds[di])) { want += ds[di]; };
+            di = di + 1;
+        };
+        wi = wi + 1;
+    };
+    let libs = std_lib_names();
+    let lj = 0;
+    while (lj < len(libs)) {
+        if (name_in(want, libs[lj])) { std += libs[lj]; };
+        lj = lj + 1;
+    };
     // ogen is EMPTY for a unit with no blocks, which is what tells lint there is
     // no generator whose top level is this one (see lint_meta_top): a file with
     // blocks whose pieces happen to add no lines is still such a file.
@@ -318,7 +357,7 @@ def str_names() -> [str] {
         "upper", "lower", "repeat", "lines"]
 };
 
-// An embedded std file, newline-terminated (as every source file the
+// A std source, newline-terminated (as every source file the
 // compiler reads should be).
 def std_text(s: str) -> str {
     if (s[len(s) - 1:] == "\n") { s } else { s + "\n" }
@@ -652,6 +691,14 @@ def meta_run_generator(src: str, base_dir: str, allow_exec: bool, root: str,
     0
 };
 
+// The pack the driver read from its own binary (ycc.y self_pack), or "" under
+// --std-src: what a meta generator's std units come from.
+let meta_pack = "";
+
+def set_meta_pack(p: str) -> void {
+    meta_pack = p;
+};
+
 // Compile G the way ycc compiles a program, with the pass OFF, and hand back
 // its image. G's errors are reported with G's own origin map, so they read
 // `<file>.meta:<source line>` -- visibly about the synthesized text and not
@@ -665,7 +712,10 @@ def meta_compile_gen() -> [byte] {
     if (meta.mg_probe(nr.src, meta.mg_gbase)) {
         meta.mg_report("a meta block cannot appear in a module imported into the meta generator: the generator's text is compiled with the pass off, so nothing in it is scanned");
     };
-    let su = std_units(nr.std, "");
+    // the std units from the compiler's own pack, as the program's are: no std
+    // or arch source is embedded, so "" here (from source) failed in any ycc
+    // without src/y beside it
+    let su = std_units(nr.std, meta_pack);
     // nr.src, not gt: the hoisted imports were spliced in by the resolve above,
     // and tokenizing gt would hand the parser a literal `import` line
     let ast = parser.parse_program(lexer.tokenize(nr.src));
@@ -772,6 +822,19 @@ def self_dir() -> str {
         let d = dir_of(from_bytes(buf[0:n]));
         if (len(d) > 0) { d } else { by_argv }
     } else { by_argv }
+};
+
+// A project-local module `name` -- next to the importer or in a package's
+// source root, never a std directory -- shadows the std library unit of that
+// name, as it did when every std module was spliced from source.
+def res_local_mod(name: str, base_dir: str) -> bool {
+    let found = !res_in_std && !(fs.read_file(base_dir + "/" + name + ".y") == none);
+    let ri = 0;
+    while (!found && !res_in_std && ri < len(res_roots)) {
+        found = !(fs.read_file(res_roots[ri] + "/" + name + ".y") == none);
+        ri = ri + 1;
+    };
+    found
 };
 
 def std_resolve(name: str, base_dir: str) -> str {
@@ -933,11 +996,25 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str], smods
                         name = trim(name[:len(name) - 1]);
                     };
                     path = name;
-                    if (name_in(res_pkgs, name)) {
+                    let is_lib = !name_in(res_pkgs, name) && std_lib_index(name) >= 0 && !res_local_mod(name, base_dir);
+                    if (name_in(res_pkgs, name) || is_lib) {
                         // a dependency (ycc build): a unit of its own,
-                        // linked -- strip_ns qualifies its names
+                        // linked -- strip_ns qualifies its names. A std
+                        // library module takes the same path: the pack
+                        // carries its unit (std_lib_names), so nothing is
+                        // spliced and its `import`s are the pack's problem.
                         is_pkg = true;
+                        // kernel mode refuses a std library unit that is a
+                        // Linux syscall away from working (the same rule
+                        // as for a spliced std source, below)
+                        if (is_lib && target_is_kernel() && name_in(kernel_std_denied(), name)) {
+                            puts("error: std/" + name + " is not available in kernel mode: " + kernel_std_why(name) + "\n");
+                            exit(1);
+                        };
                         if (!name_in(res_used, name)) { res_used += name; }
+                        if (is_lib && !name_in(res_std_lib, name)) {
+                            res_std_lib += name;
+                        }
                     } else {
                         full = std_resolve(name, base_dir);
                         // The resolved module is the STD one (and not a
@@ -1873,18 +1950,26 @@ def shake_refs(text: str, root_refs: [str]) -> str {
     }
 };
 
-// ── the arch prelude, shaken by lines ────────────────────────────────────
-// The prelude is ~1.7k lines of which a program keeps a few dozen, and
-// shaking it as text scanned all of it on every compile: two thirds of a
-// small program's compile. It comes as its lines (arch_prelude_lines):
-// labels alone at column 0, everything else indented, so its blocks are
-// found by each line's first byte, and only the blocks a program reaches
-// are scanned for references. Blocks and rules are shake_refs'.
-type PBlocks = { lines: [str], starts: [long], names: [str], ix: [AsmLabel] };
-// The kept text, and every reference the kept blocks make.
-// The kept prelude: its text, every reference the kept blocks make, and the
-// per-block [name, direct refs] the --gc analysis closes over.
-type PShake = { text: str, refs: [str], bnames: [str], brefs: [[str]] };
+// ── the arch prelude, shaken by blocks ──────────────────────────────────
+// The runtime assembly (src/y/arch/*.s) is ~5,600 lines of which a program
+// keeps a few dozen. It is cut into BLOCKS -- one per column-0 label, a local
+// label included, so a block that runs into the next says so (`falls`) -- and
+// each block is built once: its references and whether it falls through
+// (lines_refs/lines_fall, the rules the text shaker always used), and its
+// lines as IR items (asm.ir_parse_line; a line no form reproduces exactly is
+// an IR_TEXT item). The std pack carries the blocks built (arch_pack_set), so a
+// compile neither splits nor lexes the assembly; a compiler with no pack
+// builds them from the text (arch_blocks). Only the blocks a program reaches
+// are emitted (shake_prelude).
+// `blob`: a block read from the pack keeps its items packed (pack_ir) until the
+// shake keeps it -- a small program keeps a few dozen of ~350, and decoding
+// every one cost hello.y 7% of its compile. `ir` is then empty.
+type PBlk = { name: str, falls: bool, refs: [str], ir: [long], blob: str, txt: [str] };
+type PBlocks = { blks: [PBlk], ix: [AsmLabel] };
+// The kept prelude: its items (and the raw lines their IR_TEXT items index),
+// every reference the kept blocks make, and the per-block [name, direct refs]
+// the --gc analysis closes over.
+type PShake = { ir: [long], txt: [str], refs: [str], bnames: [str], brefs: [[str]] };
 
 // Every name in types.y's os_call_names must be a label in the arch lines
 // that were actually emitted. This runs on both targets, and it is here rather
@@ -1904,11 +1989,11 @@ type PShake = { text: str, refs: [str], bnames: [str], brefs: [[str]] };
 // ~1900-line prelude it cost 2.59% of a small compile (bench-ir, hello.y) for a
 // check that runs once. The C copy did not have the check at all; PORTING.md
 // says it must, so it is here twice now.
-def check_os_call_names(lines: [str]) -> [str] {
+def check_os_call_names(blks: [PBlk]) -> [PBlk] {
     let labels: [str] = [];
-    lines.foreach((e) => {
-        let nm = arch_label_name(e);
-        if (nm != "") { labels += nm; };
+    blks.foreach((e) => {
+        let bk: PBlk = e;
+        if (bk.name != "") { labels += bk.name; };
     });
     types.os_call_names().foreach((e) => {
         let found = false;
@@ -1923,7 +2008,7 @@ def check_os_call_names(lines: [str]) -> [str] {
             exit(1);
         };
     });
-    lines
+    blks
 };
 
 // The name of a column-0 `label:` line and NOTHING else, or "" -- an indented
@@ -1946,7 +2031,8 @@ def arch_label_name(l: str) -> str {
     }
 };
 
-def prelude_blocks(lines: [str]) -> PBlocks {
+// `lines` (one per element, labels at column 0) as blocks.
+def arch_blocks(lines: [str]) -> [PBlk] {
     let starts: [long] = [];
     let names: [str] = [];
     lines.foreach((e, i) => {
@@ -1964,7 +2050,62 @@ def prelude_blocks(lines: [str]) -> PBlocks {
             starts += 0;
         };
     });
-    { lines: lines, starts: starts, names: names, ix: namemap_build(names) }
+    let out: [PBlk] = [];
+    let nb = len(starts);
+    for b in 0..nb {
+        let lo = starts[b];
+        let hi = len(lines);
+        if (b + 1 < nb) { hi = starts[b + 1]; };
+        let nm: str = names[b];
+        let ir: [long] = [];
+        let txt: [str] = [];
+        for i in lo..hi {
+            let l: str = lines[i];
+            if (i == lo && nm != "" && arch_label_name(l) == nm) {
+                ir = insn.ir_push(ir, insn.IR_LABEL, labels.lbl_new(nm), 0, 0, 0, 0, 0, 0);
+            } else {
+                let it = asm.ir_parse_line(l);
+                if (len(it) > 0) {
+                    ir += it;
+                } else {
+                    txt += l;
+                    ir = insn.ir_push(ir, insn.IR_TEXT, len(txt) - 1, 0, 0, 0, 0, 0, 0);
+                };
+            };
+        };
+        out += { name: nm, falls: lines_fall(lines, lo, hi), refs: lines_refs(lines, lo, hi), ir: ir, blob: "", txt: txt };
+    };
+    out
+};
+
+def arch_index(blks: [PBlk]) -> PBlocks {
+    let names: [str] = [];
+    blks.foreach((e) => {
+        let bk: PBlk = e;
+        names += bk.name;
+    });
+    { blks: blks, ix: namemap_build(names) }
+};
+
+// `blks` with each block a substitution names replaced by the blocks of its
+// lines (`subs`: [name, line, line, ...] each) -- the --gc stubs and the
+// --gc-stress cycle (arch_x64.y).
+def arch_blocks_sub(blks: [PBlk], subs: [[str]]) -> [PBlk] {
+    let out: [PBlk] = [];
+    blks.foreach((e) => {
+        let bk: PBlk = e;
+        let at = -1;
+        subs.foreach((sb, si) => {
+            if (sb[0] == bk.name) { at = si; };
+        });
+        if (at < 0) {
+            out += bk;
+        } else {
+            let sl = subs[at];
+            out += arch_blocks(sl[1:len(sl)]);
+        };
+    });
+    out
 };
 
 // Every reference the lines [lo, hi) make.
@@ -2010,20 +2151,15 @@ def lines_fall(lines: [str], lo: long, hi: long) -> bool {
 // Keep the blocks `roots` (the kept bodies' references) or a kept block
 // reaches, as shake_keep does, scanning only those.
 def shake_prelude(pb: PBlocks, roots: [str]) -> PShake {
-    let lines = pb.lines;
-    let starts = pb.starts;
-    let names = pb.names;
-    let nb = len(starts);
+    let blks = pb.blks;
+    let nb = len(blks);
     let keep: [bool] = [];
     let scanned: [bool] = [];
-    let brefs: [[str]] = [];
     let k = 0;
     while (k < nb) {
-        let nm: str = names[k];
-        keep += len(nm) == 0;
+        let bk: PBlk = blks[k];
+        keep += len(bk.name) == 0;
         scanned += false;
-        let none: [str] = [];
-        brefs += [none];
         k++;
     };
     roots.foreach((e) => {
@@ -2037,40 +2173,47 @@ def shake_prelude(pb: PBlocks, roots: [str]) -> PShake {
             if (keep[b] && !(scanned[b])) {
                 scanned[b] = true;
                 more = true;
-                let lo = starts[b];
-                let hi = len(lines);
-                if (b + 1 < nb) { hi = starts[b + 1]; };
-                let rs = lines_refs(lines, lo, hi);
-                brefs[b] = rs;
-                if (b + 1 < nb && lines_fall(lines, lo, hi)) { keep[b + 1] = true; };
-                rs.foreach((e) => {
+                let bk: PBlk = blks[b];
+                if (b + 1 < nb && bk.falls) { keep[b + 1] = true; };
+                bk.refs.foreach((e) => {
                     let idx = namemap_get(pb.ix, e);
                     if (idx >= 0) { keep[idx] = true; };
                 });
             };
         };
     };
-    let pieces: [str] = [];
+    let ir: [long] = [];
+    let txt: [str] = [];
     let out: [str] = [];
     let knames: [str] = [];
     let krefs: [[str]] = [];
     k = 0;
     while (k < nb) {
         if (keep[k]) {
-            let lo = starts[k];
-            let hi = len(lines);
-            if (k + 1 < nb) { hi = starts[k + 1]; };
-            for i in lo..hi {
-                pieces += lines[i];
-                pieces += "\n";
+            let bk: PBlk = blks[k];
+            // the block's IR_TEXT items index its own lines: moved past the
+            // lines already taken
+            let base = len(txt);
+            txt += bk.txt;
+            let bir = bk.ir;
+            if (len(bir) == 0 && len(bk.blob) > 0) { bir = unpack_body(bk.blob); };
+            let at = 0;
+            while (at < len(bir)) {
+                let f = bir[at];
+                if (f == insn.IR_TEXT) {
+                    ir = insn.ir_push(ir, f, bir[at + 1] + base, 0, 0, 0, 0, 0, 0);
+                } else {
+                    ir = insn.ir_push(ir, f, bir[at + 1], bir[at + 2], bir[at + 3], bir[at + 4], bir[at + 5], bir[at + 6], bir[at + 7]);
+                };
+                at += insn.IR_W;
             };
-            out += brefs[k];
-            knames += names[k];
-            krefs += brefs[k];
+            out += bk.refs;
+            knames += bk.name;
+            krefs += [bk.refs];
         };
         k++;
     };
-    { text: join(pieces, ""), refs: out, bnames: knames, brefs: krefs }
+    { ir: ir, txt: txt, refs: out, bnames: knames, brefs: krefs }
 };
 
 // The prelude's lines, then the thread runtime's and the float primitives'
@@ -2080,11 +2223,93 @@ def shake_prelude(pb: PBlocks, roots: [str]) -> PShake {
 // so concatenating unconditionally copied the prelude's ~1500 lines for every
 // compile that wanted neither -- 52K instructions on hello.y, which is 99.9%
 // of what this module cost before the branches (callgrind, bench/compile_ir.sh).
-def prelude_with(core: [str], threads: bool, mathasm: bool) -> [str] {
-    let out: [str] = core;
-    if (threads) { out = out + arch.arch_prelude_threads_lines(); };
-    if (mathasm) { out = out + arch.arch_math_lines(); };
+def prelude_with(core: [PBlk], threads: bool, mathasm: bool) -> PBlocks {
+    let out: [PBlk] = core;
+    if (threads) { out = out + arch_set("threads"); };
+    if (mathasm) { out = out + arch_set("math"); };
+    arch_index(out)
+};
+
+// The block set `which` -- "linux", "windows" or "kernel" (the prelude for that
+// target), "wselftest", "threads", "math" -- from the std pack when this
+// compile read one (arch_pack), else built from the assembly text. Built once
+// per process either way.
+let arch_pack = "";
+let arch_cache_names: [str] = [];
+let arch_cache_sets: [[PBlk]] = [];
+
+def arch_set(which: str) -> [PBlk] {
+    let at = -1;
+    let i = 0;
+    while (i < len(arch_cache_names)) {
+        if (arch_cache_names[i] == which) { at = i; };
+        i++;
+    };
+    if (at >= 0) {
+        arch_cache_sets[at]
+    } else {
+        let got = arch_unpack(arch_pack, "arch." + which);
+        let blks: [PBlk] = [];
+        if (got.ok) { blks = got.blks; } else { blks = arch_blocks(arch_lines_of(which)); };
+        arch_cache_names += which;
+        arch_cache_sets += [blks];
+        blks
+    }
+};
+
+// The lines of block set `which`, from its files on disk (arch_src): only a
+// compile with no std pack, or the one writing the pack, reads them.
+def arch_lines_of(which: str) -> [str] {
+    let texts: [str] = [];
+    arch.arch_set_files(which).foreach((f) => {
+        texts += arch_src(f);
+    });
+    arch.arch_set_lines(which, texts)
+};
+
+// src/y/arch/<name>.s, searched like a std source (std_lib_path): in the
+// working directory's checkout, then beside the compiler. None is a hard
+// error: no program links without the runtime.
+def arch_src(name: str) -> str {
+    let cands: [str] = [];
+    cands += "src/y/arch/" + name + ".s";
+    let d = self_dir();
+    if (len(d) > 0) {
+        cands += d + "/arch/" + name + ".s";
+        cands += d + "/src/y/arch/" + name + ".s";
+        cands += d + "/../src/y/arch/" + name + ".s";
+    };
+    let out = "";
+    let found = false;
+    let i = 0;
+    while (!found && i < len(cands)) {
+        let t = fs.read_file(cands[i]);
+        if (!(t == none)) {
+            out = unwrap(t);
+            found = true;
+        };
+        i = i + 1;
+    };
+    if (!found) {
+        puts("error: the arch runtime '" + name + ".s': not in this compiler's std pack, and no src/y/arch/" + name + ".s beside it or in the working directory\n");
+        exit(1);
+    };
     out
+};
+
+// This target's prelude, its os_call names checked.
+def arch_core() -> [PBlk] {
+    let core: [PBlk] = [];
+    if (target_is_windows()) {
+        core = check_os_call_names(arch_set("windows"));
+        // the NT syscall self-test (arch/wselftest.s), which _start calls
+        core = core + arch_set("wselftest");
+    } else if (target_is_kernel()) {
+        core = check_os_call_names(arch_set("kernel"));
+    } else {
+        core = check_os_call_names(arch_set("linux"));
+    };
+    core
 };
 
 // The references (a kept prelude's) that name a body not kept.
@@ -3043,11 +3268,12 @@ def infer_go(st: EmitSt, node: Node) -> Type {
             if (uft.k == K.tnone) { normtype({ k: K.tunk }) } else { uft }
         } else if (unfold(dt).k == K.tmap) {
             let map: TMap = dt;
-            // the map lowering reads its {keys, vals, boxes} shape directly
-            if (dot.key == "keys") { normtype({ k: K.tarr, of: map.key }) }
-            else if (dot.key == "vals") { normtype({ k: K.tarr, of: map.of }) }
-            else if (dot.key == "boxes") { normtype({ k: K.tarr, of: normtype({ k: K.topt, of: map.of }) }) }
-            else { normtype({ k: K.tunk }) }
+            // `m.k` is the entry (types.y typeof_dot, TODO.md item 10);
+            // `m.length` is the count, as for an array or a string. The map's
+            // own three fields are NOT reachable by dot -- `map$field` reads
+            // those (see map_field).
+            if (dot.key == "length") { normtype({ k: K.tlong }) }
+            else { normtype(map.of) }
         } else if (dt.k == K.tarr || dt.k == K.tarrfix) {
             // built-in properties (types.y typeof_prop; gen_prop)
             if (dot.key == "length") { normtype({ k: K.tlong }) }
@@ -3219,6 +3445,23 @@ def infer_call(st: EmitSt, node: Call) -> Type {
                 let km: TMap = kt;
                 normtype({ k: K.tarr, of: km.key })
             } else { normtype({ k: K.tarr, of: normtype({ k: K.tunk }) }) }
+        } else if (name == "map$keys" || name == "map$vals" || name == "map$boxes") {
+            // the emitter's own three fields (see map_field): [K], [V], [V?]
+            let margs: [Node] = node.args;
+            let mt2 = infer(st, margs[0]);
+            if (mt2.k == K.tmap) {
+                let map: TMap = mt2;
+                if (name == "map$keys") { normtype({ k: K.tarr, of: map.key }) }
+                else if (name == "map$vals") { normtype({ k: K.tarr, of: map.of }) }
+                else { normtype({ k: K.tarr, of: normtype({ k: K.topt, of: map.of }) }) }
+            } else { normtype({ k: K.tunk }) }
+        } else if (name == "values") {
+            let vargs: [Node] = node.args;
+            let kt = infer(st, vargs[0]);
+            if (kt.k == K.tmap) {
+                let map: TMap = kt;
+                normtype({ k: K.tarr, of: map.of })
+            } else { normtype({ k: K.tunk }) }
         } else if (name == "sleep") {
             normtype({ k: K.tvoid })
         } else if (name == "split" || name == "argv") {
@@ -3316,60 +3559,155 @@ def uses_argv(stmts: [Node]) -> bool {
 };
 
 // ── def collection (incl. hoisting) ────────────────────────────────────
-// Walk blocks/ifs/whiles/func-bodies; every named def and every let-bound
-// anonymous def becomes a top-level function (they capture nothing — the
-// checker proved it). Returns [FnDef].
+// Every named def and every let-bound anonymous def becomes a top-level
+// function (the capture-free ones — the checker proved the rest capture).
+// Returns [FnDef].
+//
+// The walk below covers EVERY node kind, in the same order and shape as
+// fv_walk's (see "free variables" below), because a `def` is a statement and
+// a statement can live in a block, and a block is an expression: the two
+// walks disagreeing is what let `if ({ def g() -> bool { true }; g() })`
+// and a def in a call argument, an array element, a record value, an
+// operand, an index or a loop head reach the assembler unhoisted, which
+// then failed with `undefined label 'y_missing_...'`. Keep the two in step:
+// one is free variables, the other definitions, and both need every arm.
 type FnDef = { name: str, func: Func };
 
-def collect_from_block(stmts: [Node], out: [FnDef]) -> [FnDef] {
-    stmts.foreach((e) => {
+def collect_from_list(nodes: [Node], out: [FnDef]) -> [FnDef] {
+    nodes.foreach((e) => {
         out = collect_from_node(e, out);
     });
     out
+};
+
+def collect_from_block(stmts: [Node], out: [FnDef]) -> [FnDef] {
+    collect_from_list(stmts, out)
+};
+
+// A `def` declaration, and a `let` bound to a function literal: both are a
+// name a call can resolve, so both are collected here and both recurse into
+// the function body (a def nested in it is hoisted the same way).
+def collect_decl(decl: Decl, out: [FnDef]) -> [FnDef] {
+    if (decl.v.k == K.func) {
+        let func: Func = decl.v;
+        out += { name: decl.name, func: func };
+    };
+    collect_from_node(decl.v, out)
 };
 
 def collect_from_node(node: Node, out: [FnDef]) -> [FnDef] {
     let k = node.k;
     if (k == K.decl) {
         let decl: Decl = node;
-        if (decl.kind == "def") {
-            let func: Func = decl.v;
-            out += { name: decl.name, func: func };
-            out = collect_from_node(decl.v, out);
-        } else {
-            if (decl.v.k == K.func) {
-                let func: Func = decl.v;
-                out += { name: decl.name, func: func };
-            }
-            out = collect_from_node(decl.v, out);
-        }
-    } else if (k == K.func) {
-        let func: Func = node;
-        let body: Block = func.body;
-        out = collect_from_block(body.stmts, out);
+        out = collect_decl(decl, out);
+    } else if (k == K.un) {
+        let child: NodeE = node;
+        out = collect_from_node(child.e, out);
+    } else if (k == K.addr) {
+        let child: NodeE = node;
+        out = collect_from_node(child.e, out);
+    } else if (k == K.deref) {
+        let child: NodeE = node;
+        out = collect_from_node(child.e, out);
+    } else if (k == K.ret) {
+        let child: NodeE = node;
+        out = collect_from_node(child.e, out);
+    } else if (k == K.bin) {
+        let bin: Bin = node;
+        out = collect_from_node(bin.l, out);
+        out = collect_from_node(bin.r, out);
+    } else if (k == K.array) {
+        let array: ArrLit = node;
+        out = collect_from_list(array.elems, out);
+    } else if (k == K.rec) {
+        let rec: RecLit = node;
+        out = collect_from_list(rec.vals, out);
+    } else if (k == K.map) {
+        let map: RecLit = node;
+        out = collect_from_list(map.vals, out);
+    } else if (k == K.arrrep) {
+        let rep: ArrRep = node;
+        out = collect_from_node(rep.v, out);
+    } else if (k == K.call) {
+        let call: Call = node;
+        out = collect_from_node(call.callee, out);
+        out = collect_from_list(call.args, out);
+    } else if (k == K.index) {
+        let index: Index = node;
+        out = collect_from_node(index.arr, out);
+        out = collect_from_node(index.idx, out);
+    } else if (k == K.slice) {
+        let slice: Slice = node;
+        out = collect_from_node(slice.arr, out);
+        out = collect_from_node(slice.lo, out);
+        out = collect_from_node(slice.hi, out);
+    } else if (k == K.idxassign) {
+        let assign: IdxAssign = node;
+        out = collect_from_node(assign.arr, out);
+        out = collect_from_node(assign.idx, out);
+        out = collect_from_node(assign.v, out);
+    } else if (k == K.dot) {
+        let dot: Dot = node;
+        out = collect_from_node(dot.obj, out);
+    } else if (k == K.dotassign) {
+        let assign: DotAssign = node;
+        out = collect_from_node(assign.obj, out);
+        out = collect_from_node(assign.v, out);
+    } else if (k == K.store) {
+        let store: Store = node;
+        out = collect_from_node(store.p, out);
+        out = collect_from_node(store.v, out);
+    } else if (k == K.assign) {
+        let assign: Assign = node;
+        out = collect_from_node(assign.v, out);
+    } else if (k == K.incdec) {
+        let incdec: IncDec = node;
+        out = collect_from_node(incdec.tgt, out);
+    } else if (k == K.opassign) {
+        let assign: OpAssign = node;
+        out = collect_from_node(assign.tgt, out);
+        out = collect_from_node(assign.v, out);
     } else if (k == K.kw_if) {
         let branch: If = node;
+        out = collect_from_node(branch.cond, out);
         out = collect_from_node(branch.then, out);
         if (branch.has_else) {
             out = collect_from_node(branch.els, out);
         }
     } else if (k == K.kw_while) {
         let loop: While = node;
+        out = collect_from_node(loop.cond, out);
         out = collect_from_node(loop.body, out);
     } else if (k == K.kw_for) {
         let loop: For = node;
         out = collect_from_node(loop.init, out);
-        out = collect_from_node(loop.body, out);
+        out = collect_from_node(loop.cond, out);
         out = collect_from_node(loop.step, out);
+        out = collect_from_node(loop.body, out);
     } else if (k == K.kw_foreach) {
         let loop: Foreach = node;
+        out = collect_from_node(loop.iter, out);
         out = collect_from_node(loop.body, out);
     } else if (k == K.forrange) {
         let loop: ForRange = node;
+        out = collect_from_node(loop.lo, out);
+        out = collect_from_node(loop.hi, out);
         out = collect_from_node(loop.body, out);
     } else if (k == K.block) {
         let block: Block = node;
         out = collect_from_block(block.stmts, out);
+    } else if (k == K.func) {
+        let func: Func = node;
+        out = collect_from_node(func.body, out);
+    } else if (k == K.sliceassign) {
+        let assign: SliceAssign = node;
+        out = collect_from_node(assign.arr, out);
+        out = collect_from_node(assign.lo, out);
+        out = collect_from_node(assign.hi, out);
+        out = collect_from_node(assign.v, out);
+    } else if (k == K.rectest || k == K.narrow || k == K.matchend) {
+        let child: NodeE = node;
+        out = collect_from_node(child.e, out);
     }
     out
 };
@@ -3449,7 +3787,8 @@ def name_in(xs: [str], n: str) -> bool {
 // option operators and the `#fmt` builtin -- internal, but they are what
 // is_intrinsic_name tests, so they are in the list.
 let INTRINSICS: [str] = ["print", "syscall", "len", "push", "some", "is_some", "unwrap",
-    "opt$test", "opt$val",
+    "opt$test", "opt$val", "values",
+    "map$keys", "map$vals", "map$boxes",
     "trim", "ord", "byte_at", "chr", "tolong", "tofloat", "tostring", "index_of",
     "mod",
     "prepend",
@@ -3893,7 +4232,17 @@ def gen_go(st: EmitSt, node: Node) -> EmitSt {
         let narrow: Narrow = node;
         let src = infer(st, narrow.e);
         st = gen(st, narrow.e);
-        gen_convert(st, src, types.narrow_type(src, narrow.typ), false)
+        let dst = types.narrow_type(src, narrow.typ);
+        if (src.k == K.topt && dst.k != K.topt) {
+            // `if let long n = v`: the binding is the option's payload -- the
+            // deref `unwrap` does, trap and all (rectest proved it is there).
+            // The box holds the payload in the destination type's own layout,
+            // so there is no conversion to do afterwards.
+            st = emit_insn(st, insn.F_JZ_L, lbl_new("y_opt_unwrap"), 0, 0, 0, 0, 0, 0);
+            emit_insn(st, insn.F_MOV_0_R, insn.R_RAX, -1, 1, -1, -1, insn.R_RAX, 64)
+        } else {
+            gen_convert(st, src, dst, false)
+        }
     } else if (k == K.matchend) {
         // unreachable when the checker accepted the match
         st = emit_insn(st, insn.F_CALL_L, lbl_new("y_match_fail"), 0, 0, 0, 0, 0, 0);
@@ -4470,7 +4819,11 @@ def gen_make_closure(st: EmitSt, label: long, caps: [str]) -> EmitSt {
 def gen_range(st: EmitSt, node: Call) -> EmitSt {
     st = gen_push_args(st, node.args);
     st = emit_insn(st, insn.F_CALL_L, lbl_new("y_range"), 0, 0, 0, 0, 0, 0);
-    emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0)
+    st = emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0);
+    // range() is [long]: one mark per array, which pays for itself the first
+    // time a cycle walks past it (unlike marking per PUSH, which costs five
+    // instructions per element -- see ideas/OPTIMIZE.md A8).
+    mark_pf_arr(st, type_node({ k: K.tlong }))
 };
 
 // arr[lo:hi] — half-open, clamped, always a NEW heap array (the operands
@@ -4495,7 +4848,8 @@ def gen_slice(st: EmitSt, node: Slice) -> EmitSt {
     st = emit_insn(st, insn.F_MOV_I_R, slesz, insn.R_RAX, 64, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_CALL_L, lbl_new("y_arr_slice"), 0, 0, 0, 0, 0, 0);
-    emit_insn(st, insn.F_ADD_I_R, 32, insn.R_RSP, 64, 0, 0, 0, 0)
+    st = emit_insn(st, insn.F_ADD_I_R, 32, insn.R_RSP, 64, 0, 0, 0, 0);
+    mark_pf_arr(st, arr_elem_of(infer(st, node.arr)))
 };
 
 // s[lo:hi] -- the substring, half-open and clamped like an array slice;
@@ -4554,8 +4908,16 @@ def gen_rectest(st: EmitSt, node: Narrow) -> EmitSt {
     st = gen(st, node.e);
     if (sk == K.tunion) {
         gen_tag_in(st, rectest_members(s, node.typ), s)
+    } else if (sk == K.topt) {
+        // `if let long n = v` where v is an option (TODO.md item 13; `some(m)`
+        // lowers to exactly this). The checker only lets a scalar pattern
+        // reach here, so the test is the option's own: %rax is 0 for none.
+        st = emit_insn(st, insn.F_TEST_R_R, insn.R_RAX, 64, insn.R_RAX, 64, 0, 0, 0);
+        st = emit_insn(st, insn.F_SETNE_R, insn.R_RAX, 8, 0, 0, 0, 0, 0);
+        emit_insn(st, insn.F_MOVZBQ_R_R, insn.R_RAX, 8, insn.R_RAX, 64, 0, 0, 0)
     } else {
-        // a record: the checker took the pattern as its own type
+        // a record, or the scalar itself: the checker took the pattern as its
+        // own type, so it always matches
         emit_insn(st, insn.F_MOV_I_R, 1, insn.R_RAX, 64, 0, 0, 0, 0)
     }
 };
@@ -4755,7 +5117,14 @@ def gen_in(st: EmitSt, node: Bin) -> EmitSt {
     let ln = node.line;
     let cl = node.col;
     let zero = n_num("0", ln, cl);
-    if ((unfold(infer(st, node.r))).k == K.tstr) {
+    let rt = unfold(infer(st, node.r));
+    if (rt.k == K.tmap) {
+        // `"k" in m` is the map read's own scan, in its "has" mode (TODO.md
+        // item 14): the key is on the left, so the Index node carries them
+        // swapped from what gen_map_get expects.
+        let ix: Index = { k: K.index, arr: node.r, idx: node.l, line: ln, col: cl };
+        gen_map_get(st, ix, "has")
+    } else if (rt.k == K.tstr) {
         let needle = node.l;
         if (unfold(infer(st, node.l)).k == K.tbyte) {
             needle = { k: K.call, callee: n_id("chr", ln, cl), args: [node.l], line: ln, col: cl };
@@ -5992,8 +6361,17 @@ def gen_call(st: EmitSt, node: Call) -> EmitSt {
             let kargs: [Node] = node.args;
             let ln = node.line;
             let cl = node.col;
-            let whole: Slice = { k: K.slice, arr: n_dot(kargs[0], "keys", ln, cl), lo: { k: K.void, line: ln, col: cl }, hi: { k: K.void, line: ln, col: cl }, line: ln, col: cl };
+            let whole: Slice = { k: K.slice, arr: map_field(kargs[0], "keys", ln, cl), lo: { k: K.void, line: ln, col: cl }, hi: { k: K.void, line: ln, col: cl }, line: ln, col: cl };
             gen_slice(st, whole)
+        } else if (name == "values") {
+            // a copy of the map's values array, in the same order as keys(m)
+            let vargs: [Node] = node.args;
+            let ln = node.line;
+            let cl = node.col;
+            let whole: Slice = { k: K.slice, arr: map_field(vargs[0], "vals", ln, cl), lo: { k: K.void, line: ln, col: cl }, hi: { k: K.void, line: ln, col: cl }, line: ln, col: cl };
+            gen_slice(st, whole)
+        } else if (name == "map$keys" || name == "map$vals" || name == "map$boxes") {
+            gen_map_field(st, node, name)
         } else if (name == "sleep") {
             gen_sleep(st, node)
         } else if (name == "heap_used") {
@@ -6023,7 +6401,7 @@ def gen_call(st: EmitSt, node: Call) -> EmitSt {
             // value. The NAME is a literal the checker already matched against
             // os_call_names (types.y), so it is emitted as a plain `call` to a
             // label: the same instruction on every target, which is what makes
-            // the four embedded std units target-independent even though they
+            // the std units target-independent even though they
             // are compiled once and serialized into one pack.
             //
             // The arguments go on the stack left to right, so inside the block
@@ -6079,9 +6457,13 @@ def arr_direct_label(st: EmitSt, fnode: Node) -> long {
     }
 };
 
-// The per-element call for an array method.
-def gen_arr_call(st: EmitSt, foff: long, arg_regs: [long], direct: long) -> EmitSt {
-    if (direct < 0) {
+// The per-element call for an array method: the body inlined when the literal
+// allows it (arr_can_inline), a direct call when it captures nothing, and the
+// closure record otherwise.
+def gen_arr_call(st: EmitSt, foff: long, arg_regs: [long], direct: long, fnode: Node, inl: bool) -> EmitSt {
+    if (inl) {
+        gen_lambda_inline(st, fnode, arg_regs)
+    } else if (direct < 0) {
         gen_closure_call(st, foff, arg_regs)
     } else {
         arg_regs.foreach((e) => {
@@ -6090,6 +6472,143 @@ def gen_arr_call(st: EmitSt, foff: long, arg_regs: [long], direct: long) -> Emit
         st = emit_insn(st, insn.F_CALL_L, direct, 0, 0, 0, 0, 0, 0);
         emit_insn(st, insn.F_ADD_I_R, 8 * len(arg_regs), insn.R_RSP, 64, 0, 0, 0, 0)
     }
+};
+
+// Whether a literal closure's body can be emitted INSIDE the loop. It must not
+// need anything a separate frame gives it: no captures, no `self`, no nested
+// function literal, and no append to one of its own parameters (those move
+// into an own copy at a function boundary, see bind_own).
+def arr_can_inline(st: EmitSt, fnode: Node) -> bool {
+    if (fnode.k != K.func) {
+        false
+    } else {
+        let f: Func = fnode;
+        if (name_in(fv_ids(f.body, []), "self")) { false }
+        else if (len(box_names(f)) > 0) { false }
+        else if (param_appended(f.params, app_names(f.body, false, []))) { false }
+        else { true }
+    }
+};
+
+// Captures of a literal that will be inlined: box each enclosing binding (the
+// shared cell every closure sees, see box_capture). The record itself is built
+// at the inline point, where the live temporaries have been promoted to block
+// slots -- building it here would hand out slots in the temporaries' range,
+// which is exactly the collision gen_lambda_inline's promotion exists to
+// avoid.
+def arr_box_caps(st: EmitSt, fnode: Node) -> EmitSt {
+    let f: Func = fnode;
+    let caps = fn_captures(f, st.fns.ix, "");
+    caps.foreach((e) => {
+        let cn: str = e;
+        st = box_capture(st, cn);
+    });
+    st
+};
+
+def st_env(st: EmitSt, e: [Slot]) -> EmitSt {
+    { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid, fuid: st.fuid,
+        loc: st.loc, env: e, slots: st.slots, temp: st.temp,
+        self_label: st.self_label, end_label: st.end_label, fns: st.fns,
+        bodies: st.bodies, btext: st.btext, blabels: st.blabels }
+};
+
+def param_appended(ps: [str], ap: [str]) -> bool {
+    let out = false;
+    ps.foreach((e) => {
+        if (name_in(ap, e)) { out = true; };
+    });
+    out
+};
+
+// `return` inside an inlined body lands on this state's end_label.
+def st_end_label(st: EmitSt, l: long) -> EmitSt {
+    { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid, fuid: st.fuid,
+        loc: st.loc, env: st.env, slots: st.slots, temp: st.temp,
+        self_label: st.self_label, end_label: l, fns: st.fns,
+        bodies: st.bodies, btext: st.btext, blabels: st.blabels }
+};
+
+// Emit a literal closure's body inside the caller's loop, its parameters bound
+// to the values the loop has in arg_regs. This is what makes
+// `a.foreach((x) => ...)` cost what the raw loop costs: no record, no separate
+// body, no call/ret and no frame per element. The body's value ends in %rax,
+// exactly like the call it replaces.
+def gen_lambda_inline(st: EmitSt, fnode: Node, arg_regs: [long]) -> EmitSt {
+    let f: Func = fnode;
+    let save_slots = st.slots;
+    let save_temp = st.temp;
+    let save_end = st.end_label;
+    // The caller's live temporaries (the method's own slots) become block
+    // slots first: the body's statements declare locals -- a compound
+    // assignment's synthetic `let`, for one -- and those are allocated from
+    // st.slots, which would otherwise land on top of them.
+    st = st_slots(st, st.slots + st.temp);
+    st = st_temp(st, 0);
+    // The parameters first: the record below clobbers %rax/%rcx, which is
+    // where the loop has the element and the index.
+    let n = len(f.params);
+    if (n > len(arg_regs)) { n = len(arg_regs); };
+    let base = st.slots;
+    st = st_slots(st, base + n);
+    let rl = next_loc(st);
+    st = rl.st;
+    for i in 0..n {
+        let off = (base + 1 + i) * -8;
+        st = emit_insn(st, insn.F_MOV_R_D, arg_regs[i], 64, insn.R_RBP, -1, 1, off, -1);
+        st = env_define(st, f.params[i], "param", off, -1, "", f.ptypes[i]);
+    };
+    // The stack closure record the captures read through: word j+1 is capture
+    // j's cell pointer (word 0 is the code pointer, which an inlined body never
+    // reads, so it is only reserved). Rebuilt each iteration, so a capture
+    // whose cell was refreshed -- a loop variable -- is picked up.
+    let caps = fn_captures(f, st.fns.ix, "");
+    let m = len(caps);
+    let origs: [Slot] = [];
+    if (m > 0) {
+        let rbase = st.slots;
+        let rptr = (rbase + m + 1) * -8;
+        let rsoff = (rbase + m + 2) * -8;
+        st = st_slots(st, rbase + m + 2);
+        st = emit_insn(st, insn.F_LEA_D_R, insn.R_RBP, -1, 1, rptr, -1, insn.R_RAX, 64);
+        st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, rsoff, -1);
+        let ci = 0;
+        while (ci < m) {
+            st = gen_cap_ptr(st, caps[ci]);
+            st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, rptr + 8 * (ci + 1), -1);
+            ci++;
+        };
+        // The enclosing bindings, so they can be put back after the body:
+        // env_define APPENDS to the env array in place (arrays are
+        // references), so saving and restoring the array itself would restore
+        // the capture entries too and let every later read of the name go
+        // through a record that no longer exists.
+        let cj = 0;
+        while (cj < m) {
+            let cn: str = caps[cj];
+            let oe = env_find(st, cn);
+            origs += oe;
+            st = env_define(st, cn, "capture", rsoff, -1, tostring(cj), oe.typ);
+            cj++;
+        };
+    };
+    st = st_end_label(st, rl.label);
+    st = gen_block(st, f.body);
+    st = emit_label(st, rl.label);
+    // Put the enclosing bindings back: env_define APPENDS to the env array in
+    // place (arrays are references), so a saved copy of the array would carry
+    // the capture entries with it, and every later read of the name would go
+    // through a record that is gone by then.
+    let ck = 0;
+    while (ck < m) {
+        let cn: str = caps[ck];
+        let oe: Slot = origs[ck];
+        st = env_define(st, cn, oe.kind, oe.off, oe.label, oe.mark, oe.typ);
+        ck++;
+    };
+    st = st_end_label(st, save_end);
+    st = st_slots(st, save_slots);
+    st_temp(st, save_temp)
 };
 
 def gen_closure_call(st: EmitSt, foff: long, arg_regs: [long]) -> EmitSt {
@@ -6112,6 +6631,29 @@ def gen_arr_new_empty(st: EmitSt) -> EmitSt {
     st = emit_insn(st, insn.F_MOV_R_D, insn.R_RCX, 64, insn.R_RAX, -1, 1, 8, -1);
     st = emit_insn(st, insn.F_MOV_R_D, insn.R_RCX, 64, insn.R_RAX, -1, 1, 16, -1);
     emit_insn(st, insn.F_MOV_R_D, insn.R_RCX, 64, insn.R_RAX, -1, 1, 24, -1)
+};
+
+// Whether an array of this element type can hold a reference. A long, int,
+// bool or float element cannot, and neither can a packed [byte], so the
+// collector may skip the data block's payload (y_alloc_pf's bit 2).
+def elem_pf(t: Type) -> bool {
+    t.k == K.tlong || t.k == K.tbool || t.k == K.tfloat || t.k == K.tbyte
+};
+
+// The array header is in %rax: mark the block its data pointer names as
+// pointer-free. The header keeps the data pointer in word 2, and that block's
+// own header word (the one before its payload) carries the flags, so bit 2 is
+// where y_gc_drain looks. Only for element types that cannot hold a reference.
+def mark_pf_arr(st: EmitSt, t: Type) -> EmitSt {
+    if (elem_pf(t)) {
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RAX, -1, 1, 16, -1, insn.R_RDX, 64);
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_RDX, -1, 1, -8, -1, insn.R_RCX, 64);
+        st = emit_insn(st, insn.F_MOV_I_R, 4, insn.R_R8, 64, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_OR_R_R, insn.R_R8, 64, insn.R_RCX, 64, 0, 0, 0);
+        emit_insn(st, insn.F_MOV_R_D, insn.R_RCX, 64, insn.R_RDX, -1, 1, -8, -1)
+    } else {
+        st
+    }
 };
 
 // Append the value in %rax to the array whose header is in slot `roff`.
@@ -6310,9 +6852,15 @@ def gen_arr_sort(st: EmitSt, node: Call, sorted: bool) -> EmitSt {
         st = emit_insn(st, insn.F_ADD_I_R, 32, insn.R_RSP, 64, 0, 0, 0, 0);
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, aoff, -1);
     };
-    st = gen(st, args[0]);
-    let adir = arr_direct_label(st, args[0]);
-    st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, foff, -1);
+    let inl = arr_can_inline(st, args[0]);
+    let adir = 0 - 1;
+    if (inl) {
+        st = arr_box_caps(st, args[0]);
+    } else {
+        st = gen(st, args[0]);
+        adir = arr_direct_label(st, args[0]);
+        st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, foff, -1);
+    };
     st = emit_insn(st, insn.F_MOV_I_R, 1, insn.R_RAX, 64, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, ioff, -1);
     let loop_i = next_loc(st);
@@ -6353,7 +6901,7 @@ def gen_arr_sort(st: EmitSt, node: Call, sorted: bool) -> EmitSt {
     let regs: [long] = [];
     regs += insn.R_RAX;
     regs += insn.R_RCX;
-    st = gen_arr_call(st, foff, regs, adir);
+    st = gen_arr_call(st, foff, regs, adir, args[0], inl);
     st = emit_insn(st, insn.F_CMP_I_R, 0, insn.R_RAX, 64, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_JLE_L, shift_done.label, 0, 0, 0, 0, 0, 0);
     // a[j+1] = a_j
@@ -6433,9 +6981,15 @@ def gen_arr_iter_method(st: EmitSt, node: Call, key: str, at: Type) -> EmitSt {
         st = st_temp(st, st.temp + 5);
         st = gen(st, dot.obj);
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, aoff, -1);
-        st = gen(st, fnode);
-        let adir = arr_direct_label(st, fnode);
-        st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, foff, -1);
+        let inl = arr_can_inline(st, fnode);
+        let adir = 0 - 1;
+        if (inl) {
+            st = arr_box_caps(st, fnode);
+        } else {
+            st = gen(st, fnode);
+            adir = arr_direct_label(st, fnode);
+            st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, foff, -1);
+        };
         st = gen_arr_new_empty(st);
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, roff, -1);
         st = emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
@@ -6452,7 +7006,7 @@ def gen_arr_iter_method(st: EmitSt, node: Call, key: str, at: Type) -> EmitSt {
         let regs: [long] = [];
         if (nargs >= 1) { regs += insn.R_RAX; };
         if (nargs >= 2) { regs += insn.R_RCX; };
-        st = gen_arr_call(st, foff, regs, adir);
+        st = gen_arr_call(st, foff, regs, adir, fnode, inl);
         if (key == "map") {
             st = gen_arr_push_slot(st, roff, resesz);
         } else {
@@ -6478,9 +7032,15 @@ def gen_arr_iter_method(st: EmitSt, node: Call, key: str, at: Type) -> EmitSt {
         st = st_temp(st, st.temp + 4);
         st = gen(st, dot.obj);
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, aoff, -1);
-        st = gen(st, fnode);
-        let adir = arr_direct_label(st, fnode);
-        st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, foff, -1);
+        let inl = arr_can_inline(st, fnode);
+        let adir = 0 - 1;
+        if (inl) {
+            st = arr_box_caps(st, fnode);
+        } else {
+            st = gen(st, fnode);
+            adir = arr_direct_label(st, fnode);
+            st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, foff, -1);
+        };
         st = emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, ioff, -1);
         let loop = next_loc(st);
@@ -6497,7 +7057,7 @@ def gen_arr_iter_method(st: EmitSt, node: Call, key: str, at: Type) -> EmitSt {
         let regs: [long] = [];
         if (nargs >= 1) { regs += insn.R_RAX; };
         if (nargs >= 2) { regs += insn.R_RCX; };
-        st = gen_arr_call(st, foff, regs, adir);
+        st = gen_arr_call(st, foff, regs, adir, fnode, inl);
         if (key == "foreach") {
             st = emit_insn(st, insn.F_INC_D, insn.R_RBP, -1, 1, ioff, -1, 0, 0);
             st = emit_insn(st, insn.F_JMP_L, loop.label, 0, 0, 0, 0, 0, 0);
@@ -6549,9 +7109,15 @@ def gen_arr_iter_method(st: EmitSt, node: Call, key: str, at: Type) -> EmitSt {
         st = st_temp(st, st.temp + 4);
         st = gen(st, dot.obj);
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, aoff, -1);
-        st = gen(st, fnode);
-        let adir = arr_direct_label(st, fnode);
-        st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, foff, -1);
+        let inl = arr_can_inline(st, fnode);
+        let adir = 0 - 1;
+        if (inl) {
+            st = arr_box_caps(st, fnode);
+        } else {
+            st = gen(st, fnode);
+            adir = arr_direct_label(st, fnode);
+            st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, foff, -1);
+        };
         st = gen(st, args[1]);
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, acoff, -1);
         st = emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
@@ -6567,7 +7133,7 @@ def gen_arr_iter_method(st: EmitSt, node: Call, key: str, at: Type) -> EmitSt {
         let regs: [long] = [];
         regs += insn.R_RAX;
         regs += insn.R_RCX;
-        st = gen_arr_call(st, foff, regs, adir);
+        st = gen_arr_call(st, foff, regs, adir, fnode, inl);
         st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, acoff, -1);
         st = emit_insn(st, insn.F_INC_D, insn.R_RBP, -1, 1, ioff, -1, 0, 0);
         st = emit_insn(st, insn.F_JMP_L, loop.label, 0, 0, 0, 0, 0, 0);
@@ -6740,8 +7306,23 @@ def gen_print_scalar(st: EmitSt, arg: Node, t: Type) -> EmitSt {
         st = gen_helper1(st, "y_bigint_print");
         emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0)
     } else if (t.k == K.tstr) {
-        st = gen_helper1(st, "y_print_hstr");
-        emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0)
+        if (arg.k == K.str) {
+            // print("literal"): one helper call writes the literal's own bytes
+            // and the newline, so a program that only prints literals links
+            // y_print_lit and not the string helpers. gen(st, arg) already put
+            // the length HEADER in %rax; its bytes start eight bytes in.
+            let lit: Leaf = arg;
+            st = emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RAX, 64, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_MOV_I_R, len(lit.v), insn.R_RAX, 64, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_CALL_L, lbl_new("y_print_lit"), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_ADD_I_R, 16, insn.R_RSP, 64, 0, 0, 0, 0);
+            emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0)
+        } else {
+            st = gen_helper1(st, "y_print_hstr");
+            emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0)
+        }
     } else if (t.k == K.tfloat) {
         st = gen_helper1(st, "y_print_float");
         emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0)
@@ -6823,7 +7404,8 @@ def gen_cons(st: EmitSt, node: Bin) -> EmitSt {
     st = emit_insn(st, insn.F_MOV_I_R, cesz, insn.R_RAX, 64, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_CALL_L, lbl_new("y_arr_cat"), 0, 0, 0, 0, 0, 0);
-    emit_insn(st, insn.F_ADD_I_R, 24, insn.R_RSP, 64, 0, 0, 0, 0)
+    st = emit_insn(st, insn.F_ADD_I_R, 24, insn.R_RSP, 64, 0, 0, 0, 0);
+    mark_pf_arr(st, crt)
 };
 
 // `l + r` on two arrays whose element types differ by an implicit numeric
@@ -6897,7 +7479,8 @@ def gen_cat_arr(st: EmitSt, node: Bin, lt: Type, rt: Type) -> EmitSt {
     st = emit_insn(st, insn.F_MOV_I_R, esz, insn.R_RAX, 64, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_CALL_L, lbl_new("y_arr_cat"), 0, 0, 0, 0, 0, 0);
-    emit_insn(st, insn.F_ADD_I_R, 24, insn.R_RSP, 64, 0, 0, 0, 0)
+    st = emit_insn(st, insn.F_ADD_I_R, 24, insn.R_RSP, 64, 0, 0, 0, 0);
+    mark_pf_arr(st, ety)
 };
 
 // acc = acc + <constant>, with the layout above still in place.
@@ -7403,6 +7986,13 @@ def gen_foreach(st: EmitSt, node: Foreach) -> EmitSt {
         let arr: TFix = elt;
         eltyp = arr.of;
     }
+    if (elt.k == K.tmap) {
+        // keys: the map record is {boxes@0, keys@8, vals@16} (gen_maplit),
+        // and a key is a str -- one word, like every other unboxed value.
+        let mp: TMap = elt;
+        eltyp = mp.key;
+    }
+    if (elt.k == K.tstr) { eltyp = normtype({ k: K.tbyte }); }
     st = gen(st, node.iter);
     st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, aoff, -1);
     st = emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
@@ -7413,17 +8003,43 @@ def gen_foreach(st: EmitSt, node: Foreach) -> EmitSt {
     let r2 = next_loc(st);
     st = r2.st;
     st = emit_label(st, r1.label);
-    // i < len(arr) — the heap header keeps the length in slot 0. The length
-    // is re-read on every iteration, not hoisted into a fourth slot: a body
-    // that appends to the array it walks goes on seeing what it appended
+    // i < len(it) — a heap array and a string both keep their length in the
+    // first word of the header, and a map keeps it in its keys array. The
+    // length is re-read on every iteration, not hoisted into a fourth slot: a
+    // body that appends to the array it walks goes on seeing what it appended
     // (`foreach (x in a) { a += x }` never ends), which hoisting would change.
+    // The same goes for a map: `foreach (k in m) { m["k2"] = 1 }` reaches the
+    // key it added, exactly as the array form reaches its element.
+    let is_map = (elt.k == K.tmap);
+    let is_str = (elt.k == K.tstr);
     st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, aoff, -1, insn.R_RDX, 64);
-    st = emit_insn(st, insn.F_MOV_0_R, insn.R_RDX, -1, 1, -1, -1, insn.R_RCX, 64);
+    if (is_map) {
+        // A map keeps no length of its own: %rdx is the record, and its keys
+        // array (at +8) is the thing with the length in its first word.
+        st = emit_insn(st, insn.F_MOV_M_R, insn.R_RDX, -1, 1, 8, -1, insn.R_R11, 64);
+        st = emit_insn(st, insn.F_MOV_0_R, insn.R_R11, -1, 1, -1, -1, insn.R_RCX, 64);
+    } else {
+        // an array header and a string header both start with the length
+        st = emit_insn(st, insn.F_MOV_0_R, insn.R_RDX, -1, 1, -1, -1, insn.R_RCX, 64);
+    };
     st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, ioff, -1, insn.R_RAX, 64);
     st = emit_insn(st, insn.F_CMP_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0);
     st = emit_insn(st, insn.F_JGE_L, r2.label, 0, 0, 0, 0, 0, 0);
-    // x = arr[i]
-    st = elem_load(st, arr_elem_bytes(elt), insn.R_RDX, insn.R_RAX, insn.R_RCX);
+    // x = it[i]
+    if (is_map) {
+        // The key out of the keys array: %r11 is its header (still there from
+        // the length's load -- %rax holds the counter by now), and its data
+        // pointer is 16 bytes into it.
+        st = emit_insn(st, insn.F_MOV_D_R, insn.R_R11, -1, 1, 16, -1, insn.R_R11, 64);
+        st = emit_insn(st, insn.F_MOV_M_R, insn.R_R11, insn.R_RAX, 8, 0, -1, insn.R_RCX, 64);
+    } else if (is_str) {
+        // A string's bytes follow its length, in place: 8(%rdx,%rax,1), with
+        // no data pointer to load first (a heap array has one, a string does
+        // not -- which is why an owned string can append into its own buffer).
+        st = emit_insn(st, insn.F_MOVZBQ_M_R, insn.R_RDX, insn.R_RAX, 1, 8, -1, insn.R_RCX, 64);
+    } else {
+        st = elem_load(st, arr_elem_bytes(elt), insn.R_RDX, insn.R_RAX, insn.R_RCX);
+    };
     st = emit_insn(st, insn.F_MOV_R_D, insn.R_RCX, 64, insn.R_RBP, -1, 1, voff, -1);
     // continue -> just before the increment, for the reason in gen_forrange
     let r3 = next_loc(st);
@@ -9251,6 +9867,19 @@ def gen_dotassign(st: EmitSt, node: DotAssign) -> EmitSt {
     let dobj = node.obj;
     let dkey = node.key;
     let dt = infer(st, dobj);
+    if (dt.k == K.tmap) {
+        // `m.k = v` is the entry, exactly as `m["k"] = v` (types.y
+        // dotassign_map, TODO.md item 10) -- the store creates or replaces it
+        // and never traps.
+        if (dkey == "length" || dkey == "ptr") {
+            // the checker has already said this is not a place; trap rather
+            // than emit a store somewhere wrong
+            st = emit_insn(st, insn.F_CALL_L, lbl_new("y_match_fail"), 0, 0, 0, 0, 0, 0);
+            return emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0)
+        };
+        let asg: IdxAssign = { k: K.idxassign, arr: dobj, idx: n_str(dkey, node.line, node.col), v: node.v, line: node.line, col: node.col };
+        return gen_map_set(st, asg)
+    };
     let idx = rec_field_idx(dt, dkey);
     st = gen(st, dobj);
     st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
@@ -10164,9 +10793,27 @@ def gen_dot(st: EmitSt, node: Dot) -> EmitSt {
     } else if (tk == K.tunion) {
         st = gen(st, dobj);
         gen_union_slot(st, t, dkey, false)
+    } else if (tk == K.tmap) {
+        // `m.k` is the entry (types.y typeof_dot, TODO.md item 10): `m.length`
+        // is the property, any other name is the entry, the program stops
+        // when it is not there. The emitter's own three fields come through
+        // map$keys/map$vals/map$boxes (map_field), never by dot.
+        if (dkey == "length") {
+            gen_prop(st, dobj, dkey, node.line, node.col)
+        } else {
+            st = gen_dot_map(st, dobj, dkey, node.line, node.col)
+        }
     } else {
         gen_dot_rec(st, dobj, dkey, t)
     }
+};
+
+// `m.k`: the entry named "k", or the program stops with the key in the
+// message (a typo must not read as a missing entry). The checker typed the
+// value; the scan code is gen_map_get's.
+def gen_dot_map(st: EmitSt, obj: Node, dkey: str, ln: long, cl: long) -> EmitSt {
+    let idx: Node = { k: K.index, arr: obj, idx: n_str(dkey, ln, cl), line: ln, col: cl };
+    gen_map_get(st, idx, "dot")
 };
 
 // Field `dkey` of a union value (types.y union_field: every member has
@@ -10276,6 +10923,17 @@ def rec_field_idx(t: Type, key: str) -> long {
     idx
 };
 
+// map$keys / map$vals / map$boxes: the slot read `m.keys` used to be, now
+// that a dot on a map is an entry (see map_field). The map is a record of
+// boxes, keys, vals in that order.
+def gen_map_field(st: EmitSt, node: Call, name: str) -> EmitSt {
+    let args: [Node] = node.args;
+    st = gen(st, args[0]);
+    let slot = 0;
+    if (name == "map$keys") { slot = 1 } else if (name == "map$vals") { slot = 2 };
+    gen_slot_move(st, slot, false)
+};
+
 // Static type of field `key` in trec type t (tnone when there is none);
 // in a union, the type the field has in every member (types.y
 // union_field).
@@ -10333,7 +10991,8 @@ def gen_array_esz(st: EmitSt, node: ArrLit, esz: long, ety: Type) -> EmitSt {
         st = elem_store_rdx_const(st, esz, insn.R_R10, k);
         k = k - 1;
     };
-    emit_insn(st, insn.F_MOV_R_R, insn.R_R10, 64, insn.R_RAX, 64, 0, 0, 0)
+    st = emit_insn(st, insn.F_MOV_R_R, insn.R_R10, 64, insn.R_RAX, 64, 0, 0, 0);
+    mark_pf_arr(st, ety)
 };
 
 def gen_len(st: EmitSt, node: Call) -> EmitSt {
@@ -10346,7 +11005,7 @@ def gen_len(st: EmitSt, node: Call) -> EmitSt {
     let at = infer(st, args[0]);
     if (at.k == K.tmap) {
         // len(m) = len(m.keys): the entry count
-        gen(st, n_call1("len", n_dot(args[0], "keys", node.line, node.col), node.line, node.col))
+        gen(st, n_call1("len", map_field(args[0], "keys", node.line, node.col), node.line, node.col))
     } else if (at.k == K.tstr) {
         st = gen(st, args[0]);
         emit_insn(st, insn.F_MOV_0_R, insn.R_RAX, -1, 1, -1, -1, insn.R_RAX, 64)
@@ -10382,7 +11041,8 @@ def gen_push_all(st: EmitSt, node: Call) -> EmitSt {
     st = emit_insn(st, insn.F_MOV_I_R, pesz, insn.R_RAX, 64, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_CALL_L, lbl_new("y_arr_extend"), 0, 0, 0, 0, 0, 0);
-    emit_insn(st, insn.F_ADD_I_R, 24, insn.R_RSP, 64, 0, 0, 0, 0)
+    st = emit_insn(st, insn.F_ADD_I_R, 24, insn.R_RSP, 64, 0, 0, 0, 0);
+    mark_pf_arr(st, arr_elem_of(infer(st, pargs[0])))
 };
 
 // some(v): box v in 8 heap bytes; the box address (nonzero) is the value.
@@ -11583,13 +12243,13 @@ type DflCode = { name: str, vals: [str] };
 // items index. A unit read from the std pack or an object cache carries them
 // PACKED instead: `blob` one blob per body (pack_body) and `btext` the lines,
 // and link_units decodes the bodies it keeps (unpack_body).
-type Unit = { name: str, files: [str], exports: [Sym], init: str, bodies: [[long]], btext: [[str]], blob: [str], labels: [str], refs: [[str]], rodata: [[str]], globals: [str], dfl: [DflCode] };
+type Unit = { name: str, files: [str], exports: [Sym], init: str, bodies: [[long]], btext: [[str]], blob: [str], labels: [str], refs: [[str]], rodata: [[str]], globals: [str], dfl: [DflCode], tys: [str] };
 // What compile_unit binds besides the unit's own names: the externs
 // (`ext`) and their parameter defaults (`dfl`, as rename.y takes them),
 // the package namespaces the unit imports (`pkgs`, see pkg_ns), the
 // init labels `_start` calls first (`inits`), and whether a linked unit
 // reads argv() (`argv`: `_start` must materialize it then).
-type Externs = { ext: [Sym], dfl: [Dfl], pkgs: [str], inits: [str], argv: bool };
+type Externs = { ext: [Sym], dfl: [Dfl], pkgs: [str], inits: [str], argv: bool, tys: [str] };
 
 def unit_empty(name: str) -> Unit {
     let fs: [str] = [];
@@ -11602,7 +12262,7 @@ def unit_empty(name: str) -> Unit {
     let gs: [str] = [];
     let ds: [DflCode] = [];
     { name: name, files: fs, exports: xs, init: "", bodies: bs, btext: bt,
-        blob: [], labels: ls, refs: fr, rodata: rs, globals: gs, dfl: ds }
+        blob: [], labels: ls, refs: fr, rodata: rs, globals: gs, dfl: ds, tys: [] }
 };
 
 // No externs at all (a std unit compiled on its own).
@@ -11611,19 +12271,135 @@ def externs_none() -> Externs {
     let ds: [Dfl] = [];
     let ps: [str] = [];
     let ins: [str] = [];
-    { ext: xs, dfl: ds, pkgs: ps, inits: ins, argv: false }
+    { ext: xs, dfl: ds, pkgs: ps, inits: ins, argv: false, tys: [] }
 };
 
+// A std unit's source, from disk (std_lib_src): only a ycc without the unit
+// in its pack, or --std-src, gets here.
 def std_unit_src(name: str) -> str {
-    if (name == "prelude") {
-        PRELUDE_SRC
-    } else if (name == "exec") {
-        EXEC_SRC
-    } else if (name == "str") {
-        STR_SRC
+    let src = std_lib_src(name);
+    if (len(src) == 0) {
+        puts("error: std module '" + name + "': not in this compiler's std pack, and no src/y/std/" + name + ".y beside it or in the working directory\n");
+        exit(1);
+    };
+    src
+};
+
+// Blank the `export { ... };` lines a std module carries for the splicer (which
+// drops them before the lexer sees the text, see the splice); a unit compiled
+// straight from the same text has no splicer in the way. They are blanked, not
+// removed, so every line number below -- and so every `.loc` marker -- stays.
+def std_drop_exports(src: str) -> str {
+    let out: [str] = [];
+    let n = len(src);
+    let i = 0;
+    let start = 0;
+    let dropping = false;
+    while (i <= n) {
+        if (i == n || src[i] == '\n') {
+            let line = src[start:i];
+            let t = trim(line);
+            if (dropping) {
+                out += "";
+                if (index_of(line, "}") >= 0) { dropping = false; };
+            } else if (t[:7] == "export ") {
+                out += "";
+                if (index_of(line, "{") >= 0 && index_of(line, "}") < 0) { dropping = true; };
+            } else {
+                out += line;
+            };
+            start = i + 1;
+        };
+        i = i + 1;
+    };
+    join(out, "\n")
+};
+
+// A library std unit's place in the order below: its uids and global cells
+// start in a range of their own, past the packages' 5e9 + k*1e9 (ycc.y), so a
+// program linking both cannot collide. -1 is not a library unit.
+def std_lib_index(name: str) -> long {
+    let xs = std_lib_names();
+    let i = 0;
+    let found = -1;
+    while (i < len(xs)) {
+        if (xs[i] == name) { found = i; };
+        i = i + 1;
+    };
+    found
+};
+
+// What a library unit imports. A unit is compiled and linked against the units
+// before it in std_unit_names order, so a program that needs one needs these
+// too (std_order): without them the unit's calls into its import have no label
+// to reach. This is the `import` list of the sources; a test checks the pack
+// covers every module a unit mentions.
+def std_lib_deps(name: str) -> [str] {
+    if (name == "fs") {
+        ["sort"]
+    } else if (name == "json") {
+        ["sort"]
+    } else if (name == "net") {
+        ["fs"]
+    } else if (name == "x509") {
+        ["crypto", "fs", "struct"]
+    } else if (name == "tls") {
+        ["crypto", "x509", "net"]
+    } else if (name == "http") {
+        ["net", "tls"]
     } else {
-        RT_SRC
+        []
     }
+};
+
+// Every std library unit, in the order std_unit_names appends them. A module
+// that imports another must come after it (fs after sort, tls after crypto/
+// x509/net): a unit's imports bind units, never splices.
+def std_lib_names() -> [str] {
+    // Dependency first: a unit is compiled against the ones before it
+    // (std_compile's `prev`), so an importer must come after what it imports --
+    // fs and json after sort, net after fs, x509 after crypto/fs/struct, tls
+    // after crypto/x509/net, http after net/tls.
+    ["math", "sort", "fs", "json", "struct", "crypto", "x509", "net", "tls",
+     "http", "regex", "random", "utf8", "args", "test", "tui"]
+};
+
+// The source of a std LIBRARY module (args, net, math, ...) from disk, or ""
+// when there is none. No std source is embedded: every unit travels compiled
+// in the std pack attached to ycc, so its source is read
+// only to build that pack, under --std-src, and by a compiler with no pack
+// (cycc, a bootstrap generation) -- all of which run in a checkout. Std
+// directories only: a package root's module of the same name is a module of
+// that package (res_local_mod), never the std unit's source.
+def std_lib_src(name: str) -> str {
+    let path = std_lib_path(name);
+    let out = "";
+    if (len(path) > 0) {
+        let t = fs.read_file(path);
+        if (!(t == none)) { out = std_text(unwrap(t)); };
+    };
+    out
+};
+
+// Where std_lib_src reads library unit `name` from, or "" when no candidate
+// exists. Exported: the language server opens the same file to show a unit
+// member's signature and doc comment, which the pack does not carry.
+def std_lib_path(name: str) -> str {
+    let cands: [str] = [];
+    cands += "src/y/std/" + name + ".y";
+    let d = self_dir();
+    if (len(d) > 0) {
+        cands += d + "/std/" + name + ".y";
+        cands += d + "/src/y/std/" + name + ".y";
+        cands += d + "/../src/y/std/" + name + ".y";
+    };
+    let out = "";
+    let i = 0;
+    while (len(out) == 0 && i < len(cands)) {
+        if (!(fs.read_file(cands[i]) == none)) { out = cands[i]; };
+        i = i + 1;
+    };
+    out
 };
 
 // Where a std unit's uids and global cells start counting (see the
@@ -11636,23 +12412,32 @@ def std_unit_base(name: str) -> long {
         2000000000
     } else if (name == "str") {
         3000000000
-    } else {
+    } else if (name == "rt") {
         4000000000
+    } else {
+        let i = std_lib_index(name);
+        if (i < 0) { 0 } else { 1000000000000 + i * 1000000000 }
     }
 };
 
 // A library unit: the program sees its exports (see the section note).
 def std_unit_bound(name: str) -> bool {
-    name == "prelude" || name == "exec"
+    // the two units a program calls by bare name, and every library unit: those
+    // are referenced qualified (math.pi), see unit_externs
+    name == "prelude" || name == "exec" || std_lib_index(name) >= 0
 };
 
 // Every std unit, in link order (see native_resolve_x).
 def std_unit_names() -> [str] {
-    ["prelude", "exec", "str", "rt"]
+    let out = ["prelude", "exec", "str", "rt"];
+    std_lib_names().foreach((n) => {
+        out += n;
+    });
+    out
 };
 
 // The std units `names` (link order, see native_resolve_x): from `pack`
-// (std_pack) when it has them, else compiled from the embedded sources.
+// (std_pack) when it has them, else compiled from their sources on disk.
 // exec calls into the prelude (y_stdin_sync), so it sees the prelude's
 // exports -- linked, and so compiled, before it.
 def std_units(names: [str], pack: str) -> [Unit] {
@@ -11660,6 +12445,8 @@ def std_units(names: [str], pack: str) -> [Unit] {
     if (len(pack) > 0) {
         out = std_unpack(pack, names);
     }
+    // the arch blocks come from the same pack when it was read (arch_set)
+    if (len(out) > 0) { arch_pack = pack; } else { arch_pack = ""; };
     if (len(out) == 0) {
         names.foreach((el) => {
             let nm: str = el;
@@ -11669,34 +12456,69 @@ def std_units(names: [str], pack: str) -> [Unit] {
                     if (u.name == "prelude") { ext += u.exports; }
                 });
             }
-            out += std_compile(nm, ext);
+            out += std_compile(nm, ext, out);
         });
     }
     out
 };
 
-// One std unit, from its embedded source. It always carries its `.loc`
+
+
+// One std unit, from its source on disk (std_unit_src). It always carries its `.loc`
 // markers (link_units strips them unless -g), so it compiles the same
 // for every program. A failure here is the compiler's own bug: reported
 // as one, and the run ends.
-def std_compile(name: str, ext: [Sym]) -> Unit {
+def std_compile(name: str, ext: [Sym], prev: [Unit]) -> Unit {
     let path = "std/" + name + ".y";
-    let ssrc = std_text(std_unit_src(name));
-    // A std unit is tokenized straight from its embedded bytes, so it never
+    let raw = std_drop_exports(std_text(std_unit_src(name)));
+    // A std unit is tokenized straight from its source bytes, so it never
     // goes through meta_scan: a `#{` here would reach the lexer as a bare `#`
     // and be reported as an expression error. A block in a std source is a
     // diagnostic (ideas/meta.md, "std sources"): it would run after the
     // program's own pass, with no origin to point at.
-    if (meta.mg_on && index_of(ssrc, "#{") >= 0) {
-        puts("error: " + path + ": a meta block cannot appear in a std source: std units are compiled from their embedded text after the program's own pass, so a block there has no generator to run in\n");
+    if (meta.mg_on && index_of(raw, "#{") >= 0) {
+        puts("error: " + path + ": a meta block cannot appear in a std source: std units are compiled from their own text after the program's own pass, so a block there has no generator to run in\n");
         exit(1);
     };
-    let ast = parser.parse_program(lexer.tokenize(ssrc));
-    let noimports: [str] = [];
     let nolines: [long] = [];
+    let ssrc = raw;
+    let imports: [str] = [];
+    let pkgs: [str] = [];
+    let sstd: [str] = [];
+    let ogen: [bool] = [];
+    // A library unit imports other library units (fs imports sort, x509 imports
+    // crypto/fs/struct, tls imports crypto/x509/net, http imports net/tls, json
+    // imports sort): those are units of the pack, never splices, so the text
+    // goes through the resolver exactly as a program's does -- a bare std
+    // library import already takes the unit path (std_lib_index, which is why
+    // nothing is spliced here) -- and the unit is then compiled against the ones
+    // already compiled (`prev`, in std_lib_names order, dependency first). A
+    // unit with no import keeps the direct path, so the four core units and
+    // math compile byte for byte as they did.
+    if (index_of(raw, "import ") >= 0) {
+        res_in_std = true;
+        let nr = native_resolve_x(raw, "std", 0, true, path);
+        res_in_std = false;
+        ssrc = nr.src;
+        imports = nr.imports;
+        pkgs = nr.pkgs;
+        sstd = nr.std;
+        ogen = nr.ogen;
+    };
+    let ast = parser.parse_program(lexer.tokenize(ssrc));
     let xt = externs_none();
-    xt.ext = ext;
-    let r = compile_unit(ast, noimports, { files: [path], nuser: 1, file: nolines, line: nolines, mods: [""] }, true, 0, name, std_unit_base(name), xt, []);
+    if (len(sstd) > 0) { xt = unit_externs(prev, sstd, [], pkgs); };
+    // The caller's `ext` (exec sees the prelude's exports) ADDS to what the
+    // imports bound -- an assignment here would wipe them, which is what made
+    // every `sort.` call in fs undefined while the ext list looked right.
+    let ei = 0;
+    while (ei < len(ext)) {
+        xt.ext += ext[ei];
+        ei = ei + 1;
+    };
+    let mods: [str] = [""];
+    if (std_lib_index(name) >= 0) { mods = [name]; };
+    let r = compile_unit(ast, imports, { files: [path], nuser: 1, file: nolines, line: nolines, mods: mods }, true, 0, name, std_unit_base(name), xt, ogen);
     if (!r.ok) {
         r.errors.foreach((e) => {
             puts("ycc: internal error: " + path + ":" + tostring(e.line) + ":" + tostring(e.col) + ": " + e.msg + "\n");
@@ -11761,6 +12583,29 @@ type UnitRes = { ok: bool, errors: [Diag], warnings: [Diag], times: [Timing], un
 // preceded by calls to `xt.inits` (the linked units' init labels); any
 // other unit's are its init function. `xt.ext` holds the externs, bound
 // by name in the checker and the emitter (see Externs).
+// What a unit's text needs set before strip_ns and rename see it, from the
+// externs it is compiled against (unit_externs): the packages and library units
+// strip_ns keeps qualified (pkg_ns), and the type aliases those units declared,
+// seeded as if this unit had declared them itself (each item is `name\ntcode`):
+// a unit's aliases are erased by its own rename, so an importer of `crypto`
+// could not otherwise write `h: crypto.Hash`, the type a value it gets back has
+// (see NATIVE.md). compile_unit runs it, and so does the language server's
+// checker (src/tools/lsp/diag.y), which drives the same passes by hand.
+def unit_prep(xt: Externs) {
+    pkg_ns = xt.pkgs;
+    if (len(xt.tys) > 0) {
+        let seeds: [Field] = [];
+        let si = 0;
+        while (si < len(xt.tys)) {
+            let item = xt.tys[si];
+            let nl = index_of(item, "\n");
+            seeds += { name: item[:nl], opt: false, typ: tdecode(item[nl + 1:]) };
+            si = si + 1;
+        };
+        rename.rn_types_seed_set(seeds);
+    };
+};
+
 def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel: long, name: str, base: long, xt: Externs, ogen: [bool]) -> UnitRes {
     tyset_reset();
     dbg_lines = debug;
@@ -11768,7 +12613,7 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
     dbg_line = origin.line;
     let ext = xt.ext;
     let inits = xt.inits;
-    pkg_ns = xt.pkgs;
+    unit_prep(xt);
     let times: [Timing] = [];
     let pt = clock_us();
     let ph = heap_used();
@@ -11778,6 +12623,21 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
     // Static name resolution: every binding gets a unique name, so neither
     // the checker nor the emitter deals with scopes or shadowing.
     let ast3: Block = rename.rename_program_x(ast2, xt.dfl, origin.file, origin.mods);
+    // What this unit's aliases resolved to (the seeds included), as `name\ntcode`
+    // for the pack: what makes the unit's own types nameable by its importers.
+    let out_types: [str] = [];
+    let ots = rename.rn_types_out_get();
+    let oi = 0;
+    while (oi < len(ots)) {
+        // A unit's own aliases come back bare when it has no module namespace of
+        // its own (the four core units, whose defs must stay bare): qualify them
+        // here, so rt's `YBig` publishes as `rt.YBig`, which is how a dependent
+        // module's source refers to it.
+        let tn = ots[oi].name;
+        if (index_of(tn, ".") < 0) { tn = name + "." + tn; };
+        out_types += tn + "\n" + tcode(ots[oi].typ);
+        oi = oi + 1;
+    };
     pr = phase_end(times, "rename", pt, ph);
     times = pr.times; pt = pr.t; ph = pr.h;
     let errors = types.check_program(ast3, ext);
@@ -12012,7 +12872,7 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
         let unit: Unit = { name: name, files: origin.files, exports: exports,
             init: init, bodies: ubodies, btext: ubtext, blob: [],
             labels: blabels, refs: brefs, rodata: st.rodata, globals: glabels,
-            dfl: udfl };
+            dfl: udfl, tys: out_types };
         { ok: true, errors: errors, warnings: warnings, times: times, unit: unit }
     }
 };
@@ -12061,7 +12921,16 @@ def unit_dfl(stmts: [Node], origin: Origin) -> [DflCode] {
     stmts.foreach((el) => {
         let s: Node = el;
         let nm = top_name_in(s, origin);
-        // (not an imported module's: see export_name)
+        // A library unit is compiled with its own namespace (see std_compile),
+        // so a def of its own comes back qualified (`fs.write_file`) while the
+        // export -- and so the default's key -- is the bare name. Strip our own
+        // namespaces; a name of an IMPORTED module stays skipped below.
+        let mi = 0;
+        while (mi < len(origin.mods)) {
+            let om = origin.mods[mi];
+            if (len(om) > 0 && nm[:len(om) + 1] == om + ".") { nm = nm[len(om) + 1:]; };
+            mi = mi + 1;
+        };
         if (len(nm) > 0 && index_of(nm, ".") < 0) {
             let keep: [DflCode] = [];
             out.foreach((d) => {
@@ -12308,6 +13177,12 @@ let gc_mode: long = 0;
 
 def set_gc_mode(m: long) -> void { gc_mode = m; };
 
+// --gc-stress: link the collector and run a cycle at every allocating slow
+// path (arch_gc_stress_lines). A debugging switch, not a mode to ship.
+let gc_stress: bool = false;
+
+def set_gc_stress(v: bool) -> void { gc_stress = v; };
+
 // ── the --gc decision ───────────────────────────────────────────────────
 // The collector is needed exactly when an allocation site can run more than
 // once: a loop or a recursion that can reach y_alloc. Everything here errs
@@ -12457,7 +13332,8 @@ def gc_recursive(labels: [str], refs: [[str]], keep: [bool], users: [str]) -> bo
 // auto (0): link the collector only when an allocation can repeat. always (1)
 // and never (2) say so outright.
 def gc_decide(mode: long, labels: [str], refs: [[str]], keep: [bool], all: [[long]], allblob: [str], ps: PShake, threads: bool) -> bool {
-    if (mode == 1) { true }
+    if (gc_stress) { true }
+    else if (mode == 1) { true }
     else if (mode == 2) { false }
     else if (threads) { true }
     else {
@@ -12595,14 +13471,13 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit, gcmode: long) -> [LinkPart
     let shaken = prune_bodies(labels, refs, extra);
     let keep = shaken.keep;
     let body_refs = shaken.refs;
-    let core_lines = check_os_call_names(arch.arch_prelude_lines());
-    // The Windows syscall self-test (arch/wselftest.s): no lines off Windows,
-    // and on Windows the _start prologue below calls the label it defines. It
-    // goes through the prelude so the shaker sees what it references.
-    core_lines += arch.w_self_test_lines();
+    // The target's prelude (on Windows with the NT syscall self-test, which
+    // the _start prologue calls: it goes through the prelude so the shaker sees
+    // what it references).
+    let core_lines = arch_core();
     let thr = uses_threads(body_refs);
     let mth = uses_math(body_refs);
-    let pb = prelude_blocks(prelude_with(core_lines, thr, mth));
+    let pb = prelude_with(core_lines, thr, mth);
     let ps = shake_prelude(pb, body_refs);
     // A cell no kept code reads, whose initializer only allocates, is dead:
     // dropping that range is what keeps the allocator -- and with it the whole
@@ -12657,7 +13532,7 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit, gcmode: long) -> [LinkPart
         shaken = prune_bodies(labels, refs, extra);
         keep = shaken.keep;
         body_refs = shaken.refs;
-        pb = prelude_blocks(prelude_with(core_lines, thr, mth));
+        pb = prelude_with(core_lines, thr, mth);
         ps = shake_prelude(pb, body_refs);
     };
     // A kept prelude block may call a Y helper (none does today): the
@@ -12672,7 +13547,7 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit, gcmode: long) -> [LinkPart
         if ((!thr && uses_threads(body_refs)) || (!mth && uses_math(body_refs))) {
             if (uses_threads(body_refs)) { thr = true; };
             if (uses_math(body_refs)) { mth = true; };
-            pb = prelude_blocks(prelude_with(core_lines, thr, mth));
+            pb = prelude_with(core_lines, thr, mth);
         };
         ps = shake_prelude(pb, body_refs);
         more = unkept_refs(ps.refs, bmap, keep);
@@ -12681,8 +13556,14 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit, gcmode: long) -> [LinkPart
     // stubs, so the registry, metadata arena, marker, sweeper and free lists go
     // unreachable and shake out. The allocator and heap_used() are untouched.
     if (!(gc_decide(gcmode, labels, refs, keep, all, allblob, ps, thr))) {
-        core_lines = arch.arch_nogc_lines(core_lines);
-        pb = prelude_blocks(prelude_with(core_lines, thr, mth));
+        core_lines = arch_blocks_sub(core_lines, arch.arch_nogc_subs());
+        pb = prelude_with(core_lines, thr, mth);
+        ps = shake_prelude(pb, body_refs);
+    };
+    // --gc-stress: every slow-path allocation runs a cycle.
+    if (gc_stress) {
+        core_lines = arch_blocks_sub(core_lines, arch.arch_gc_stress_subs());
+        pb = prelude_with(core_lines, thr, mth);
         ps = shake_prelude(pb, body_refs);
     };
     // Everything the kept code can reach: the kept bodies' own references
@@ -12729,7 +13610,9 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit, gcmode: long) -> [LinkPart
     if (dbg_lines) {
         head = file_dirs(files) + head;
     }
-    parts += [part_text(head + arch.arch_text() + ps.text)];
+    parts += [part_text(head + arch.arch_text())];
+    // the kept prelude blocks, as items
+    parts += [part_ir(ps.ir, ps.txt, 0, false)];
     // The generated interrupt plumbing (kernel mode): one stub per declared
     // `irq N def`, and the routine that fills the IDT and loads it.  It is a
     // text part and so is never shaken, which is why it carries its own copy
@@ -12828,7 +13711,7 @@ def link_text(parts: [LinkPart]) -> str {
 // unit's fields the same way.
 
 def pack_version() -> str {
-    "ycc-std-pack 6\n"
+    "ycc-std-pack 10\n"
 };
 
 def pack_put(out: [str], s: str) -> [str] {
@@ -12889,7 +13772,11 @@ def pack_word(out: [str], v: long) -> [str] {
         out += chr(127);
         out += chr(u & 255);
         out += chr((u >> 8) & 255);
-    } else if (v <= 65535) {
+    } else if (v >= 0 && v <= 65535) {
+        // v >= 0 matters: without it every value below -65535 landed here (it is
+        // <= 65535 too), was written as two bytes, and read back as a small
+        // POSITIVE number -- a silent corruption of every large negative
+        // immediate. A packed crypto unit is what finally exercised it.
         out += chr(126);
         out += chr(v & 255);
         out += chr((v >> 8) & 255);
@@ -12918,7 +13805,11 @@ def pack_lbl(out: [str], id: long) -> [str] {
 
 // One body as the pack carries it: the items above, item by item.
 def pack_body(u: Unit, b: long) -> str {
-    let ir = u.bodies[b];
+    pack_ir(u.bodies[b])
+};
+
+// Items as the pack carries them (pack_body, and the arch blocks).
+def pack_ir(ir: [long]) -> str {
     let out: [str] = [];
     let at = 0;
     while (at < len(ir)) {
@@ -13075,11 +13966,87 @@ def lbl_w(b: [byte], at: long) -> long {
     if (b[at] == 0) { 1 } else { 1 + word_w(b, at + 1) + unpack_word(b, at + 1) }
 };
 
+// The name of a packed label field, or "" for tag 0 (no label). unpack_lbl
+// interns the name into an id; a reference set is names, so read them here.
+def blob_lbl(b: [byte], at: long) -> str {
+    if (b[at] == 0) {
+        ""
+    } else {
+        let w = word_w(b, at + 1);
+        let n = unpack_word(b, at + 1);
+        from_bytes(b[at + 1 + w:at + 1 + w + n])
+    }
+};
+
+// A body's references, read out of its packed items: the mirror of ir_refs_item
+// (every label operand, the label of a memory operand, both of a diff) over the
+// blob encoding pack_body writes, so the pack need not carry the list. Duplicates
+// are kept and empty names dropped, exactly as ir_refs_push does. IR_LABEL,
+// IR_LOC and IR_TEXT items contribute nothing there either, but their operands
+// still have to be stepped over to stay in step.
+def blob_refs(blob: str) -> [str] {
+    let b = bytes(blob);
+    let n = len(b);
+    let out: [str] = [];
+    let at = 0;
+    while (at < n) {
+        let f = b[at];
+        at++;
+        if (f == insn.IR_LABEL) {
+            at += lbl_w(b, at);
+        } else if (f == insn.IR_LOC) {
+            at += word_w(b, at);
+            at += word_w(b, at);
+        } else if (f == insn.IR_TEXT) {
+            at += word_w(b, at);
+        } else {
+            let kinds = insn.ir_form(f).kinds;
+            let ki = 0;
+            while (ki < len(kinds)) {
+                let k = kinds[ki];
+                let nw = insn.ir_kind_words(k);
+                if (k == insn.O_LBL) {
+                    let nm = blob_lbl(b, at);
+                    if (len(nm) > 0) { out += nm; };
+                    at += lbl_w(b, at);
+                } else if (k == insn.O_DIFF) {
+                    let n1 = blob_lbl(b, at);
+                    if (len(n1) > 0) { out += n1; };
+                    at += lbl_w(b, at);
+                    let n2 = blob_lbl(b, at);
+                    if (len(n2) > 0) { out += n2; };
+                    at += lbl_w(b, at);
+                } else if (k == insn.O_MEM || k == insn.O_MEM0) {
+                    at += word_w(b, at);
+                    at += word_w(b, at);
+                    at += word_w(b, at);
+                    at += word_w(b, at);
+                    let nm = blob_lbl(b, at);
+                    if (len(nm) > 0) { out += nm; };
+                    at += lbl_w(b, at);
+                } else {
+                    at += word_w(b, at);
+                    if (nw > 1) { at += word_w(b, at); };
+                };
+                ki++;
+            };
+        };
+    };
+    out
+};
+
 // A type as text (for a pack or an object): a letter per kind, then its
 // parts -- names as netstrings, lists as a count and their items. Unlike
 // types.tstr it spells every type a unit may export (none, unknown and
 // the like too) and reads back exactly (tdecode).
 def tcode(t: Type) -> str {
+    // A tcode string must stand alone. tdecode runs once per string -- an
+    // export, or a unit's type alias -- and a `q` reference to a `Q` written in
+    // an EARLIER string has nothing to resolve against: tdec_encs is empty, so
+    // its `q` arm indexes tdec_refs[-1]. That was the crash an alias-carrying
+    // unit (crypto's Hash/Mont/Curve/Pt) produced. So the tref table starts
+    // empty for every call, and a shared tref is written out again.
+    tcode_refs = [];
     let out: [str] = [];
     out = tcode_go(out, t);
     join(out, "")
@@ -13193,7 +14160,13 @@ def tdecode_go(cur: Cursor) -> Type {
     else if (c == "[") { normtype({ k: K.tarr, of: tdecode_go(cur) }) }
     else if (c == "?") { normtype({ k: K.topt, of: tdecode_go(cur) }) }
     else if (c == "F") {
-        normtype({ k: K.tarrfix, of: tdecode_go(cur), n: pack_num(cur) })
+        // tcode_go writes "F", the COUNT, then the element type; the count must
+        // be read first (the map arm reads key then of because that is the order
+        // the writer uses). Reading the element first is what packed a fixed
+        // array ([long; 16], crypto's qround) into a crash.
+        let fn = pack_num(cur);
+        let fof = tdecode_go(cur);
+        normtype({ k: K.tarrfix, of: fof, n: fn })
     }
     else if (c == "M") {
         normtype({ k: K.tmap, key: tdecode_go(cur), of: tdecode_go(cur) })
@@ -13279,34 +14252,348 @@ def pack_unit_fields(u: Unit) -> str {
     out = pack_strs(out, pack_bodies(u));
     out = pack_strss(out, u.btext);
     out = pack_strs(out, u.labels);
-    let rf = u.refs;
-    out = pack_put(out, tostring(len(rf)));
-    let j = 0;
-    while (j < len(rf)) {
-        out = pack_strs(out, rf[j]);
-        j++;
-    };
     let rd = u.rodata;
     out = pack_put(out, tostring(len(rd)));
-    j = 0;
+    let j = 0;
     while (j < len(rd)) {
         out = pack_strs(out, rd[j]);
         j++;
     };
     out = pack_strs(out, u.globals);
+    out = pack_strs(out, u.tys);
     join(out, "")
 };
 
-// The pack of `units`.
+// ── the pack's LZ codec ─────────────────────────────────────────────────
+// A pack is mostly the same names, labels and type codes repeated, so it is
+// stored compressed: an LZ4-block stream -- a method byte, then tokens of
+// [literal length | match length-4], the literals, a 2-byte little-endian
+// match offset, then the match-length extension -- over a 4 KiB hash of 4-byte
+// sequences, offsets <= 65535 and no dictionary beyond the window. Determinism
+// is the point: the bytes depend on the input alone, so two builds agree (the
+// link suite compares the C copy's pack with the Y compiler's).
+//
+// A payload that does not shrink is stored plain, and a stream that does not
+// decode -- truncated, corrupted, mismatched -- answers "" so the reader falls
+// back to compiling the std units from source (std_unpack).
+def lz_method() -> str {
+    chr(1)
+};
+
+// 12 bits of a Knuth multiplier over four bytes: 4096 slots, first match wins,
+// the table always holds the most recent position.
+def lz_hash(b: [byte], at: long) -> long {
+    let v = b[at] + b[at + 1] * 256 + b[at + 2] * 65536 + b[at + 3] * 16777216;
+    ((v * 2654435761) >> 12) & 4095
+};
+
+// The 15+ extension of a length: 255s while it lasts, then the remainder.
+def lz_more(out: [str], v: long) -> [str] {
+    let left = v;
+    while (left >= 255) {
+        out += chr(255);
+        left = left - 255;
+    };
+    out += chr(left);
+    out
+};
+
+def lz_encode(s: str) -> str {
+    let b = bytes(s);
+    let n = len(b);
+    let out: [str] = [];
+    let tab: [long] = [];
+    let i = 0;
+    while (i < 4096) {
+        tab += -1;
+        i = i + 1;
+    };
+    let at = 0;
+    let lit = 0;
+    while (at < n) {
+        let hit = false;
+        let mlen = 0;
+        let moff = 0;
+        if (at + 4 <= n) {
+            let h = lz_hash(b, at);
+            let cand = tab[h];
+            tab[h] = at;
+            if (cand >= 0 && at - cand <= 65535) {
+                let k = 0;
+                while (at + k < n && b[cand + k] == b[at + k]) {
+                    k = k + 1;
+                };
+                if (k >= 4) {
+                    hit = true;
+                    mlen = k;
+                    moff = at - cand;
+                };
+            };
+        };
+        if (hit) {
+            let ll = at - lit;
+            let lh = ll;
+            if (lh > 15) { lh = 15; };
+            let mh = mlen - 4;
+            if (mh > 15) { mh = 15; };
+            out += chr(lh * 16 + mh);
+            if (ll >= 15) { out = lz_more(out, ll - 15); };
+            let q = lit;
+            while (q < at) {
+                out += chr(b[q]);
+                q = q + 1;
+            };
+            out += chr(moff & 255);
+            out += chr((moff >> 8) & 255);
+            if (mh == 15) { out = lz_more(out, mlen - 4 - 15); };
+            at = at + mlen;
+            lit = at;
+        } else {
+            at = at + 1;
+        };
+    };
+    // The last run is literals only, which is how the reader knows to stop.
+    let ll = n - lit;
+    let lh = ll;
+    if (lh > 15) { lh = 15; };
+    out += chr(lh * 16);
+    if (ll >= 15) { out = lz_more(out, ll - 15); };
+    let q = lit;
+    while (q < n) {
+        out += chr(b[q]);
+        q = q + 1;
+    };
+    join(out, "")
+};
+
+// The inverse; "" for anything that does not decode (the caller falls back to
+// source). Every step is bounds-checked: the pack is read from the compiler's
+// own tail, but a truncated or edited binary must not crash the compiler.
+def lz_decode(s: str) -> str {
+    let b = bytes(s);
+    let n = len(b);
+    let out: [byte] = [];
+    let at = 0;
+    let ok = true;
+    while (ok && at < n) {
+        let t = b[at];
+        at = at + 1;
+        let ll = t >> 4;
+        let mh = t & 15;
+        if (ll == 15) {
+            let more = true;
+            while (more && ok) {
+                if (at >= n) {
+                    ok = false;
+                } else {
+                    let x = b[at];
+                    at = at + 1;
+                    ll = ll + x;
+                    if (x != 255) { more = false; };
+                };
+            };
+        };
+        if (ok) {
+            if (at + ll > n) {
+                ok = false;
+            } else {
+                let q = 0;
+                while (q < ll) {
+                    out += b[at + q];
+                    q = q + 1;
+                };
+                at = at + ll;
+            };
+        };
+        // A match follows unless this was the final literal run.
+        if (ok && at < n) {
+            if (at + 2 > n) {
+                ok = false;
+            } else {
+                let moff = b[at] + b[at + 1] * 256;
+                at = at + 2;
+                let mlen = mh + 4;
+                if (mh == 15) {
+                    let more = true;
+                    while (more && ok) {
+                        if (at >= n) {
+                            ok = false;
+                        } else {
+                            let x = b[at];
+                            at = at + 1;
+                            mlen = mlen + x;
+                            if (x != 255) { more = false; };
+                        };
+                    };
+                };
+                if (ok && (moff == 0 || moff > len(out) || len(out) + mlen > 16777216)) {
+                    ok = false;
+                };
+                if (ok) {
+                    let src = len(out) - moff;
+                    let k = 0;
+                    while (k < mlen) {
+                        out += out[src + k];
+                        k = k + 1;
+                    };
+                };
+            };
+        };
+    };
+    if (ok) { from_bytes(out) } else { "" }
+};
+
+// The payload as it is stored: compressed when that is smaller, method byte
+// first. A plain pack starts with the version line's `y`, so the two cannot be
+// confused and an older reader sees a pack it does not know (and falls back).
+def pack_store(s: str) -> str {
+    let z = lz_encode(s);
+    if (len(z) + 1 < len(s)) { lz_method() + z } else { s }
+};
+
+// The pack of `units`. Each unit's fields are stored on their own
+// (pack_store: compressed when that is smaller), inside a plain frame, so a
+// compile decodes only the units it links: with every library unit in the
+// pack, inflating the whole stream cost a hello-world 96M instructions (2.4 ms
+// -> 6.7 ms) for 1.24 MB of units it never read.
 def std_pack(units: [Unit]) -> str {
     let out: [str] = [];
     out += pack_version();
-    out = pack_put(out, tostring(len(units)));
+    let sets = arch_set_names();
+    out = pack_put(out, tostring(len(units) + len(sets)));
     units.foreach((u) => {
         out = pack_put(out, u.name);
-        out = pack_put(out, pack_unit_fields(u));
+        out = pack_put(out, pack_store(pack_unit_fields(u)));
+    });
+    // The arch runtime's blocks (arch_blocks), one entry per set, after the
+    // units: `arch.linux` cannot be a unit's name, and std_unpack reads only
+    // the names it is asked for. Built from the text here and read back by
+    // every compile (arch_set), so no compile parses the assembly.
+    // The Windows prelude is the Linux one with the blocks wsys.s replaces and
+    // adds, so a block the two share travels once (arch_pack_set's `base`).
+    let linux = arch_blocks(arch_lines_of("linux"));
+    let none: [PBlk] = [];
+    sets.foreach((w) => {
+        out = pack_put(out, "arch." + w);
+        if (w == "linux") {
+            out = pack_put(out, pack_store(arch_pack_set(linux, none)));
+        } else if (w == "windows" || w == "kernel") {
+            out = pack_put(out, pack_store(arch_pack_set(arch_blocks(arch_lines_of(w)), linux)));
+        } else {
+            out = pack_put(out, pack_store(arch_pack_set(arch_blocks(arch_lines_of(w)), none)));
+        };
     });
     join(out, "")
+};
+
+// Every arch block set the pack carries (arch_set).
+def arch_set_names() -> [str] {
+    ["linux", "windows", "kernel", "wselftest", "threads", "math"]
+};
+
+// A block set's fields: the count, then per block a tag and the block. Tag
+// "b": the block -- its name, whether it falls through, its references, its
+// items and the raw lines their IR_TEXT items index. Tag "r": block N of
+// `base` (the Linux prelude, for the Windows one), given by N alone.
+def arch_pack_set(blks: [PBlk], base: [PBlk]) -> str {
+    let bkeys: [str] = [];
+    base.foreach((e) => {
+        let bb: PBlk = e;
+        bkeys += arch_block_key(bb);
+    });
+    let out: [str] = [];
+    out = pack_put(out, tostring(len(blks)));
+    blks.foreach((e) => {
+        let bk: PBlk = e;
+        let key = arch_block_key(bk);
+        let at = -1;
+        let i = 0;
+        while (at < 0 && i < len(bkeys)) {
+            if (bkeys[i] == key) { at = i; };
+            i++;
+        };
+        if (at >= 0) {
+            out = pack_put(out, "r");
+            out = pack_put(out, tostring(at));
+        } else {
+            out = pack_put(out, "b");
+            out = pack_put(out, bk.name);
+            out = pack_put(out, bk.falls ? "1" : "0");
+            out = pack_strs(out, bk.refs);
+            out = pack_put(out, arch_block_items(bk));
+            out = pack_strs(out, bk.txt);
+        };
+    });
+    join(out, "")
+};
+
+// A block's items as the pack carries them, whether it holds them decoded or
+// still packed.
+def arch_block_items(bk: PBlk) -> str {
+    if (len(bk.ir) == 0 && len(bk.blob) > 0) { bk.blob } else { pack_ir(bk.ir) }
+};
+
+// Everything a block is, as one string: two blocks with the same key are the
+// same block.
+def arch_block_key(bk: PBlk) -> str {
+    let out: [str] = [];
+    out = pack_put(out, bk.name);
+    out = pack_put(out, bk.falls ? "1" : "0");
+    out = pack_strs(out, bk.refs);
+    out = pack_put(out, arch_block_items(bk));
+    out = pack_strs(out, bk.txt);
+    join(out, "")
+};
+
+type ArchGot = { ok: bool, blks: [PBlk] };
+
+// Entry `entry` of `pack` as blocks; ok is false when the pack is not this
+// version's, lacks the entry, or does not decode (the caller builds the
+// blocks from the text).
+def arch_unpack(pack: str, entry: str) -> ArchGot {
+    let blks: [PBlk] = [];
+    let ok = false;
+    let ver = pack_version();
+    if (len(pack) > 0 && pack[:len(ver)] == ver) {
+        let cur = { s: pack, p: len(ver) };
+        let n = pack_num(cur);
+        let i = 0;
+        while (!ok && i < n) {
+            let nm = pack_get(cur);
+            let ul = pack_len(cur);
+            let at = cur.p;
+            if (nm == entry) {
+                let raw = pack[at:at + ul];
+                if (len(raw) > 0 && raw[0] == 1) { raw = lz_decode(raw[1:]); };
+                if (len(raw) > 0) {
+                    let c = { s: raw, p: 0 };
+                    let nb = pack_num(c);
+                    // a Windows block shared with the Linux prelude is a
+                    // reference to it (arch_pack_set)
+                    let base: [PBlk] = [];
+                    if (entry == "arch.windows" || entry == "arch.kernel") { base = arch_set("linux"); };
+                    ok = true;
+                    for b in 0..nb {
+                        if (pack_get(c) == "r") {
+                            let k = pack_num(c);
+                            if (k >= 0 && k < len(base)) { blks += base[k]; } else { ok = false; };
+                        } else {
+                            let bn = pack_get(c);
+                            let bf = pack_get(c) == "1";
+                            let br = pack_get_strs(c);
+                            let bb = pack_get(c);
+                            let bt = pack_get_strs(c);
+                            let noir: [long] = [];
+                            blks += { name: bn, falls: bf, refs: br, ir: noir, blob: bb, txt: bt };
+                        };
+                    };
+                };
+            };
+            cur.p = at + ul;
+            i++;
+        };
+    };
+    { ok: ok, blks: blks }
 };
 
 // Reading a pack: `cur` is the text and the position in it. pack_len
@@ -13380,11 +14667,14 @@ def unit_read(cur: Cursor, name: str, bound: bool) -> Unit {
         btext += [pack_get_strs(cur)];
     };
     let labels = pack_get_strs(cur);
+    // Refs are derived, not stored. refs[i] is exactly ir_refs(bodies[i]), and
+    // the pack already carries the item blob, so the names can be read straight
+    // out of it -- 27,374 bytes, 17.8% of the pack, for one byte-level scan per
+    // body that materializes no IR (blob_refs, the mirror of ir_refs_item).
     let refs: [[str]] = [];
-    let nr = pack_num(cur);
     j = 0;
-    while (j < nr) {
-        refs += [pack_get_strs(cur)];
+    while (j < len(blob)) {
+        refs += [blob_refs(blob[j])];
         j++;
     };
     let rodata: [[str]] = [];
@@ -13395,9 +14685,10 @@ def unit_read(cur: Cursor, name: str, bound: bool) -> Unit {
         j++;
     };
     let globals = pack_get_strs(cur);
+    let tys = pack_get_strs(cur);
     { name: name, files: files, exports: xs, init: init, bodies: [],
         btext: btext, blob: blob, labels: labels, refs: refs, rodata: rodata,
-        globals: globals, dfl: dfl }
+        globals: globals, dfl: dfl, tys: tys }
 };
 
 // The units `names` from a pack, in that order; [] for a pack of another
@@ -13409,13 +14700,27 @@ def std_unpack(pack: str, names: [str]) -> [Unit] {
         let cur = { s: pack, p: len(ver) };
         let n = pack_num(cur);
         let got: [Unit] = [];
+        let bad = false;
         for i in 0..n {
             let nm = pack_get(cur);
             let ul = pack_len(cur);
             let at = cur.p;
-            if (name_in(names, nm)) { got += unit_read(cur, nm, std_unit_bound(nm)); }
+            if (name_in(names, nm)) {
+                // Stored compressed? The method byte says so (a unit's plain
+                // fields start with a digit); a failed decode leaves "", and
+                // the pack is then not used -- the caller compiles from source
+                // rather than reading a corrupt stream.
+                let raw = pack[at:at + ul];
+                if (len(raw) > 0 && raw[0] == 1) { raw = lz_decode(raw[1:]); };
+                if (len(raw) == 0) {
+                    bad = true;
+                } else {
+                    got += unit_read({ s: raw, p: 0 }, nm, std_unit_bound(nm));
+                };
+            };
             cur.p = at + ul;
         };
+        if (bad) { got = []; };
         names.foreach((el) => {
             let want: str = el;
             got.foreach((u) => {
@@ -13431,7 +14736,7 @@ def std_unpack(pack: str, names: [str]) -> [Unit] {
 // fields, after a version line and the key it was compiled under (ycc.y
 // build_key) -- an object of another key, or a cut-off one, is no hit.
 def obj_version() -> str {
-    "ycc-unit 5\n"
+    "ycc-unit 7\n"
 };
 
 // An object carries a checksum over its own bytes, after them.
@@ -13503,13 +14808,46 @@ def unit_iface(u: Unit) -> str {
 def unit_externs(std: [Unit], snames: [str], deps: [Unit], pkgs: [str]) -> Externs {
     let xt = externs_none();
     let ext: [Sym] = [];
+    let dfl: [Dfl] = [];
+    let tys: [str] = [];
     let i = 0;
     while (i < len(std)) {
         let u = std[i];
-        if (std_unit_bound(u.name) && name_in(snames, u.name)) { ext += u.exports; }
+        let ut = 0;
+        while (ut < len(u.tys)) {
+            tys += u.tys[ut];
+            ut = ut + 1;
+        };
+        if (std_unit_bound(u.name) && name_in(snames, u.name)) {
+            if (std_lib_index(u.name) < 0) {
+                ext += u.exports;
+            } else {
+                // a library unit is referenced through its namespace, exactly
+                // as a package is (see pkg_ns): math.pi, and strip_ns keeps the
+                // dot because the name is in xt.pkgs
+                let xs = u.exports;
+                let j = 0;
+                while (j < len(xs)) {
+                    let x = xs[j];
+                    ext += { name: u.name + "." + x.name, label: x.label, typ: x.typ };
+                    j++;
+                };
+                let ds = u.dfl;
+                j = 0;
+                while (j < len(ds)) {
+                    let d = ds[j];
+                    let dv = d.vals;
+                    let vals: [Node] = [];
+                    dv.foreach((e) => {
+                        vals += lit_decode(e);
+                    });
+                    dfl += { name: u.name + "." + d.name, vals: vals };
+                    j++;
+                };
+            };
+        };
         i++;
     };
-    let dfl: [Dfl] = [];
     i = 0;
     while (i < len(deps)) {
         let u = deps[i];
@@ -13539,6 +14877,7 @@ def unit_externs(std: [Unit], snames: [str], deps: [Unit], pkgs: [str]) -> Exter
     xt.ext = ext;
     xt.dfl = dfl;
     xt.pkgs = pkgs;
+    xt.tys = tys;
     xt
 };
 
@@ -13600,7 +14939,7 @@ def emit_program(ast: Block, nr: Resolved, debug: bool, wlevel: long, std: [Unit
 // needs to KNOW whether a word is a builtin, and the list it keeps of them is
 // the one this predicate tests. Inert like the rest of the names here -- the
 // splicer deletes the export line, so nothing reaches codegen (LSP.md 9.1).
-export { emit_program, compile_package, std_units, std_unit_names, std_pack, unit_obj, unit_unobj, unit_iface, native_resolve, native_resolve_x, native_resolve_pk, origin_at, strip_ns, strip_list, strip_decl, phase_end, link_text, is_intrinsic_name, intrinsic_names };
+export { emit_program, compile_package, set_meta_pack, unit_externs, unit_prep, std_lib_path, std_units, std_unit_names, std_lib_deps, std_pack, pack_store, unit_obj, unit_unobj, unit_iface, native_resolve, native_resolve_x, native_resolve_pk, origin_at, strip_ns, strip_list, strip_decl, phase_end, link_text, is_intrinsic_name, intrinsic_names };
 
 // ── maps: dynamic {K => V} ────────────────────────────────────────────
 // A map value is a two-field record -- {keys: [K], vals: [V]} -- and
@@ -13760,7 +15099,7 @@ def gen_map_get(st: EmitSt, node: Index, mode: str) -> EmitSt {
     let sts: [Node] = [];
     sts += n_decl(t + "m", node.arr, ln, cl);
     sts += n_decl(t + "k", node.idx, ln, cl);
-    sts += n_decl(t + "ks", n_dot(m, "keys", ln, cl), ln, cl);
+    sts += n_decl(t + "ks", map_field(m, "keys", ln, cl), ln, cl);
     sts += n_decl(t + "i", n_num("0", ln, cl), ln, cl);
     sts += n_decl(t + "n", n_call1("len", n_id(t + "ks", ln, cl), ln, cl), ln, cl);
     sts += n_decl(t + "j", n, ln, cl);
@@ -13775,17 +15114,28 @@ def gen_map_get(st: EmitSt, node: Index, mode: str) -> EmitSt {
         let hit: [Node] = [];
         hit += n_num("0", ln, cl);
         sts += n_if(n_bin("==", i, n, ln, cl), block_of(miss, ln, cl), block_of(hit, ln, cl), ln, cl);
-        sts += n_idx(n_dot(m, "vals", ln, cl), i, ln, cl);
+        sts += n_idx(map_field(m, "vals", ln, cl), i, ln, cl);
+    } else if (mode == "dot") {
+        // `m.k` (TODO.md item 10): the entry, or stop with the key in the
+        // message -- the checker has already said this read is V, not V?.
+        let msg: Node = n_bin("+", n_bin("+", n_str("runtime error: no entry '", ln, cl), n_id(t + "k", ln, cl), ln, cl), n_str("' in this map\n", ln, cl), ln, cl);
+        let miss: [Node] = [];
+        miss += n_call1("eputs", msg, ln, cl);
+        miss += n_call1("exit", n_num("1", ln, cl), ln, cl);
+        let hit: [Node] = [];
+        hit += n_num("0", ln, cl);
+        sts += n_if(n_bin("==", i, n, ln, cl), block_of(miss, ln, cl), block_of(hit, ln, cl), ln, cl);
+        sts += n_idx(map_field(m, "vals", ln, cl), i, ln, cl);
     } else {
         let b: Node = n_id(t + "b", ln, cl);
         let fill: [Node] = [];
-        fill += n_assign(t + "b", n_call1("some", n_idx(n_dot(m, "vals", ln, cl), i, ln, cl), ln, cl), ln, cl);
-        fill += { k: K.idxassign, arr: n_dot(m, "boxes", ln, cl), idx: i, v: b, line: ln, col: cl };
+        fill += n_assign(t + "b", n_call1("some", n_idx(map_field(m, "vals", ln, cl), i, ln, cl), ln, cl), ln, cl);
+        fill += { k: K.idxassign, arr: map_field(m, "boxes", ln, cl), idx: i, v: b, line: ln, col: cl };
         fill += n_num("0", ln, cl);
         let kept: [Node] = [];
         kept += n_num("0", ln, cl);
         let hit: [Node] = [];
-        hit += n_decl(t + "b", n_idx(n_dot(m, "boxes", ln, cl), i, ln, cl), ln, cl);
+        hit += n_decl(t + "b", n_idx(map_field(m, "boxes", ln, cl), i, ln, cl), ln, cl);
         hit += n_if(n_call1("is_some", b, ln, cl), block_of(kept, ln, cl), block_of(fill, ln, cl), ln, cl);
         hit += b;
         let miss: [Node] = [];
@@ -13801,6 +15151,17 @@ def gen_map_get(st: EmitSt, node: Index, mode: str) -> EmitSt {
 // elements of an array value whose type unifies with [V], such as []).
 // The value runs before the scan counts the entries, so a value that
 // itself adds keys is seen.
+// The map's own three fields, as the generated map code reads them. A dot on a
+// map is an ENTRY now (TODO.md item 10), so the emitter's own code cannot spell
+// it `m.keys` -- that is an entry like any other, and reading it has to go
+// through the scan. These three names no program can write (`$` is not an
+// identifier character, as `opt$test` and `push$all` are), and each is exactly
+// the slot read the dot used to be.
+def map_field(m: Node, field: str, ln: long, cl: long) -> Node {
+    let name = "map$" + field;
+    n_call1(name, m, ln, cl)
+};
+
 def gen_map_set(st: EmitSt, node: IdxAssign) -> EmitSt {
     let ln = node.line;
     let cl = node.col;
@@ -13824,19 +15185,19 @@ def gen_map_set(st: EmitSt, node: IdxAssign) -> EmitSt {
     sts += n_decl(t + "m", node.arr, ln, cl);
     sts += n_decl(t + "k", node.idx, ln, cl);
     sts += n_decl_typ(t + "v", node.v, vt, ln, cl);
-    sts += n_decl(t + "ks", n_dot(m, "keys", ln, cl), ln, cl);
+    sts += n_decl(t + "ks", map_field(m, "keys", ln, cl), ln, cl);
     sts += n_decl(t + "i", n_num("0", ln, cl), ln, cl);
     sts += n_decl(t + "n", n_call1("len", n_id(t + "ks", ln, cl), ln, cl), ln, cl);
     sts += n_decl(t + "j", n, ln, cl);
     sts += map_scan(t, ln, cl);
     let hit: [Node] = [];
-    hit += { k: K.idxassign, arr: n_dot(m, "vals", ln, cl), idx: i, v: v, line: ln, col: cl };
-    hit += { k: K.idxassign, arr: n_dot(m, "boxes", ln, cl), idx: i, v: n_id("none", ln, cl), line: ln, col: cl };
+    hit += { k: K.idxassign, arr: map_field(m, "vals", ln, cl), idx: i, v: v, line: ln, col: cl };
+    hit += { k: K.idxassign, arr: map_field(m, "boxes", ln, cl), idx: i, v: n_id("none", ln, cl), line: ln, col: cl };
     hit += n_num("0", ln, cl);
     let grow: [Node] = [];
-    grow += n_call2("push", n_dot(m, "keys", ln, cl), k, ln, cl);
-    grow += n_call2("push", n_dot(m, "vals", ln, cl), v, ln, cl);
-    grow += n_call2("push", n_dot(m, "boxes", ln, cl), n_id("none", ln, cl), ln, cl);
+    grow += n_call2("push", map_field(m, "keys", ln, cl), k, ln, cl);
+    grow += n_call2("push", map_field(m, "vals", ln, cl), v, ln, cl);
+    grow += n_call2("push", map_field(m, "boxes", ln, cl), n_id("none", ln, cl), ln, cl);
     grow += n_num("0", ln, cl);
     sts += n_if(n_bin("<", i, n, ln, cl), block_of(hit, ln, cl), block_of(grow, ln, cl), ln, cl);
     sts += v;
@@ -13871,15 +15232,15 @@ def gen_map_repr(st: EmitSt, arg: Node, t: Type) -> EmitSt {
     sts += n_decl(g + "m", arg, ln, cl);
     sts += n_decl(g + "s", n_str("{", ln, cl), ln, cl);
     sts += n_decl(g + "i", n_num("0", ln, cl), ln, cl);
-    sts += n_decl(g + "n", n_call1("len", n_dot(m, "keys", ln, cl), ln, cl), ln, cl);
+    sts += n_decl(g + "n", n_call1("len", map_field(m, "keys", ln, cl), ln, cl), ln, cl);
     let sep: [Node] = [];
     sep += n_assign(g + "s", n_bin("+", s, n_str(", ", ln, cl), ln, cl), ln, cl);
     sep += n_num("0", ln, cl);
     let nosep: [Node] = [];
     nosep += n_num("0", ln, cl);
     let map: TMap = t;
-    let kpart: Node = map_key_repr(n_idx(n_dot(m, "keys", ln, cl), i, ln, cl), map.key, ln, cl);
-    let vpart: Node = n_call1("tostring", n_idx(n_dot(m, "vals", ln, cl), i, ln, cl), ln, cl);
+    let kpart: Node = map_key_repr(n_idx(map_field(m, "keys", ln, cl), i, ln, cl), map.key, ln, cl);
+    let vpart: Node = n_call1("tostring", n_idx(map_field(m, "vals", ln, cl), i, ln, cl), ln, cl);
     let put: Node = n_assign(g + "s", n_bin("+", n_bin("+", n_bin("+", s, kpart, ln, cl), n_str(": ", ln, cl), ln, cl), vpart, ln, cl), ln, cl);
     let step: Node = n_assign(g + "i", n_bin("+", i, n_num("1", ln, cl), ln, cl), ln, cl);
     let body: [Node] = [];

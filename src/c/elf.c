@@ -125,7 +125,9 @@ Yv *elf_build(Yv *code, Yv *rodata, ylong entry_off, ylong bss_len,
         out = push_le64(out, bss_vaddr);
         out = push_le64(out, bss_vaddr);
         out = push_le64(out, yv_l(yr_get(dbg, "bss_fsz")));
-        out = push_le64(out, bss_len);
+        /* the .bss starts code_off into the page: asm places its labels from
+         * the CODE's start (elf.y) */
+        out = push_le64(out, code_off + bss_len);
         out = push_le64(out, 4096);
         ;
     }
@@ -162,13 +164,9 @@ Yv *elf_debug(ylong code_off, ylong codesz, ylong ro_len, ylong filesz,
     } else {
         ylong base = 4194304;
         ylong ro_off = code_off + codesz;
-        /* bss_vaddr is already absolute: elf_write computed it as
-         * base + ... and handed it down (and used it, unmodified, as the
-         * PT_LOAD's p_vaddr).  Adding base a second time put every .bss
-         * symbol and the .bss section header at 0x802000 instead of
-         * 0x402000 -- debug metadata only, so nothing failed, and `nm`
-         * named an address the program never uses. */
-        ylong bss_addr = bss_vaddr;
+        /* where the labels put the .bss: bss_vaddr already holds the base
+         * (elf.y) */
+        ylong bss_addr = bss_vaddr + code_off;
         ylong bss_idx = 0;
         ylong symtab_idx = 3;
         if (bss_len > 0) {

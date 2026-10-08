@@ -24,9 +24,10 @@
 
 /* not instructions (see the header) */
 #define IR_W      8
-#define IR_LABEL 98
-#define IR_LOC 99
-#define IR_TEXT 100
+/* clear of the forms (ir.y) */
+#define IR_LABEL 200
+#define IR_LOC 201
+#define IR_TEXT 202
 
 /* register numbers, x86 encoding order */
 #define R_RAX  0
@@ -152,11 +153,41 @@
  * forked child uses to enter a compiled image it mapped at a scratch address
  * (meta.c run_image) -- Y cannot spell a jump to an address it computed. */
 #define F_JMP_IND 97
+/* the arch runtime's forms (ir.y): no encoder of their own, enc_form hands
+ * each to enc_insn */
+#define F_JAE_L 98
+#define F_JP_L 99
+#define F_JBE_L 100
+#define F_JA_L 101
+#define F_JNP_L 102
+#define F_TEST_I_R 103
+#define F_OR_I_R 104
+#define F_CMP_I_D 105
+#define F_XCHG_R_0 106
+#define F_TEST_R_R_ANY 107
+#define F_MOVSD_R_R 108
+#define F_MOVSD_D_R 109
+#define F_MOVSD_0_R 110
+#define F_MOVSD_R_D 111
+#define F_MOVSD_R_0 112
+#define F_ADDSD_D_R 113
+#define F_ADDSD_0_R 114
+#define F_SUBSD_D_R 115
+#define F_SUBSD_0_R 116
+#define F_MULSD_D_R 117
+#define F_MULSD_0_R 118
+#define F_DIVSD_D_R 119
+#define F_DIVSD_0_R 120
+#define F_UCOMISD_D_R 121
+#define F_UCOMISD_0_R 122
+#define F_CVTTSD2SI_R_R 123
+#define F_SQRTSD_R_R 124
 
 Yv *ir_push(Yv *ir, ylong f, ylong a, ylong b, ylong c, ylong d, ylong e, ylong g,
             ylong h);
 Yv *ir_cat(Yv *a, Yv *b);        /* a + b, the array concat (yv.h has none) */
 Yv *ir_form(ylong f);
+ylong ir_nforms(void);
 Yv *ir_render(Yv *ir, Yv *txt, ylong at, ylong fno);
 Yv *ir_render_all(Yv *ir, Yv *txt, int locs, ylong fno);
 Yv *ir_render_op(ylong k, Yv *ir, ylong at);

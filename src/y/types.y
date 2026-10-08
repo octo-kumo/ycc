@@ -924,6 +924,39 @@ def union_field(st: TcSt, t: Type, dkey: str, line: long, col: long) -> TcRes {
     if (ok) { { typ: ft, st: st } } else { { typ: t_unk(), st: st } }
 };
 
+// The two dot names a map keeps for itself, in the words a store needs:
+// `.length` IS a property (the entry count), so it is a place nowhere, while
+// `.ptr` is not one at all -- a map has no data block to point into, which is
+// what the read says too (typeof_prop).
+def map_dot_prop_msg(st: TcSt, t: Type, key: str, line: long, col: long) -> TcSt {
+    if (key == "ptr") {
+        fail(st, "cannot field-assign " + tstr(t) + ": it has no property '" + key + "' (it has '.length')", line, col)
+    } else {
+        fail(st, "cannot field-assign " + tstr(t) + " ('" + key + "' is a property, not an entry)", line, col)
+    }
+};
+
+// `m.k = v` on a map: the entry named "k", exactly as `m["k"] = v` -- which is
+// how the emitter lowers it, and there is nothing to check about a name that
+// is not known at compile time except that it is one the key type can hold.
+// A store ADDS the entry when it is not there, so unlike a dot read it cannot
+// trap.
+def dotassign_map(st: TcSt, t: Type, node: DotAssign) -> TcRes {
+    let key: str = node.key;
+    if (key == "length" || key == "ptr") {
+        st = map_dot_prop_msg(st, t, key, node.line, node.col);
+        return tc_res(t_unk(), st)
+    };
+    let map: TMap = t;
+    if (!map_key_is_str(t)) {
+        st = fail(st, "cannot field-assign " + tstr(t) + ": a dot name is a string, so the map's keys must be too (use m[\"" + key + "\"] = v)", node.line, node.col);
+        return tc_res(t_unk(), st)
+    };
+    let v = typeof_want(st, node.v, map.of);
+    st = expect_type(v.st, v.typ, map.of, "map entry '" + key + "'", node.line, node.col);
+    tc_res(map.of, st)
+};
+
 // `u.f = v` on a union: f as a read finds it (union_field), then v must
 // fit it.
 def dotassign_union(st: TcSt, t: Type, node: DotAssign) -> TcRes {
@@ -1639,6 +1672,24 @@ def in_int_ok(lt: Type, of: Type) -> bool {
     else { false }
 };
 
+// `"k" in m` -- is that key in the map (TODO.md item 14). A boolean, and the
+// scan a map read is (native.y gen_map_get's "has" mode), so it costs what a
+// read costs. Poison quietly on an unknown operand: whatever made it unknown
+// has already reported.
+def typeof_in_map(st: TcSt, op: str, lt: Type, rt: Type, line: long, col: long) -> TcRes {
+    let ru = unfold(rt);
+    if (ru.k == K.tmap || ru.k == K.tunk || rt.k == K.tnone) {
+        if (ru.k == K.tmap) {
+            let map: TMap = ru;
+            st = expect_type(st, lt, map.key, "'in' left operand", line, col);
+        };
+        tc_res(type_node({ k: K.tbool }), st)
+    } else {
+        st = fail(st, "'in' needs a map on the right, got " + tstr(rt), line, col);
+        tc_res(t_unk(), st)
+    }
+};
+
 def typeof_in(st: TcSt, lt: Type, rt: Type, line: long, col: long) -> TcRes {
     let r = unfold(rt);
     if (r.k == K.tstr) {
@@ -1662,7 +1713,7 @@ def typeof_in(st: TcSt, lt: Type, rt: Type, line: long, col: long) -> TcRes {
             tc_res(t_unk(), fail(st, "'in' on an array needs one of its elements on the left, got " + tstr(lt), line, col))
         }
     } else {
-        tc_res(t_unk(), fail(st, "'in' needs a str or an array on the right, got " + tstr(rt), line, col))
+        tc_res(t_unk(), fail(st, "'in' needs a str, an array or a map on the right, got " + tstr(rt), line, col))
     }
 };
 
@@ -2139,7 +2190,13 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
         else if (op == ">") { typeof_cmp(st, op, l.typ, r.typ, bin.line, bin.col) }
         else if (op == "<=") { typeof_cmp(st, op, l.typ, r.typ, bin.line, bin.col) }
         else if (op == ">=") { typeof_cmp(st, op, l.typ, r.typ, bin.line, bin.col) }
-        else if (op == "in") { typeof_in(st, l.typ, r.typ, bin.line, bin.col) }
+        else if (op == "in") {
+            if (unfold(r.typ).k == K.tmap) {
+                typeof_in_map(st, op, l.typ, r.typ, bin.line, bin.col)
+            } else {
+                typeof_in(st, l.typ, r.typ, bin.line, bin.col)
+            }
+        }
         else if (op == "==") { typeof_eq(st, op, l.typ, r.typ, bin.line, bin.col) }
         else if (op == "!=") { typeof_eq(st, op, l.typ, r.typ, bin.line, bin.col) }
         else if (op == "&&") { typeof_logic(st, op, l.typ, r.typ, bin.line, bin.col) }
@@ -2219,11 +2276,18 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
         let fe = typeof_expr(st, loop.iter);
         st = fe.st;
         let elt: Type = t_unk();
-        if (fe.typ.k == K.tarr) { let arr: TOf = fe.typ; elt = arr.of; }
-        else if (fe.typ.k == K.tarrfix) { let arr: TFix = fe.typ; elt = arr.of; }
-        else if (fe.typ.k == K.tunk) { }
+        // A recursive alias used as a variable's OWN type is a tref (TODO.md
+        // item 1: `type Ids = [Ids]` is legal), so what the iterable IS has to
+        // be read through the alias -- as the emitter's own infer does, and as
+        // every other shape test here already does.
+        let fu = unfold(fe.typ);
+        if (fu.k == K.tarr) { let arr: TOf = fu; elt = arr.of; }
+        else if (fu.k == K.tarrfix) { let arr: TFix = fu; elt = arr.of; }
+        else if (fu.k == K.tmap) { let mp: TMap = fu; elt = mp.key; }
+        else if (fu.k == K.tstr) { elt = type_node({ k: K.tbyte }); }
+        else if (fu.k == K.tunk) { }
         else {
-            st = fail(st, "'foreach' needs an array, got " + tstr(fe.typ), loop.line, loop.col);
+            st = fail(st, "'foreach' needs an array, a map or a string, got " + tstr(fe.typ), loop.line, loop.col);
         };
         st = st_bind(st, loop.name, elt, "local", loop.line, loop.col);
         let saved_loops = st.loops;
@@ -2625,6 +2689,8 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
                 }
             } else if (unfold(got.typ).k == K.tunion) {
                 dotassign_union(st, unfold(got.typ), assign)
+            } else if (unfold(got.typ).k == K.tmap) {
+                dotassign_map(st, unfold(got.typ), assign)
             } else {
                 st = fail(st, "cannot field-assign " + tstr(got.typ) + " (only records)", assign.line, assign.col);
                 tc_res(t_unk(), st)
@@ -2647,6 +2713,8 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
                 }
             } else if (obr.typ.k == K.tunion) {
                 dotassign_union(st, obr.typ, assign)
+            } else if (obr.typ.k == K.tmap) {
+                dotassign_map(st, obr.typ, assign)
             } else {
                 st = fail(st, "cannot field-assign " + tstr(obr.typ) + " (only records)", assign.line, assign.col);
                 tc_res(t_unk(), st)
@@ -2820,9 +2888,17 @@ def typeof_rectest(st: TcSt, node: Narrow) -> TcRes {
             };
         } else if (sk == K.trec) {
             st = fail(st, "match pattern type " + tstr(t) + " is not a record type", node.line, node.col);
+        } else if (sk == K.topt) {
+            // `if let long n = v`: the subject is an option, so the test is
+            // the option's own and the type is its payload's.
+            let inner = scalar_pat_narrow(s);
+            let iu = unfold(inner);
+            if (iu.k != K.tunk && !tcompat(iu, t) && !teq(iu, t)) {
+                st = fail(st, "pattern type " + tstr(t) + " can never match " + tstr(s), node.line, node.col);
+            };
         } else {
             if (!pattern_fits(s, t)) {
-                st = fail(st, "match pattern type " + tstr(t) + " is not a record type", node.line, node.col);
+                st = fail(st, "pattern type " + tstr(t) + " can never match " + tstr(s), node.line, node.col);
             };
         };
     } else if (tk != K.trec && tk != K.tpat) {
@@ -2840,6 +2916,16 @@ def typeof_rectest(st: TcSt, node: Narrow) -> TcRes {
         st = fail(st, "cannot match a record pattern against " + tstr(s), node.line, node.col);
     };
     tc_res(type_node({ k: K.tbool }), st)
+};
+
+// What a scalar pattern leaves bound: the subject with its option unwrapped,
+// so `if let long n = v` is `v != none and v is a long` -- the binding is the
+// payload, not the box (TODO.md item 13). A union member of the type matches
+// too, which is what makes the spelling useful once a union has primitive
+// members.
+def scalar_pat_narrow(s: Type) -> Type {
+    let u = unfold(s);
+    if (u.k == K.topt) { let opt: TOf = u; opt.of } else { s }
 };
 
 // The record type t is the subject s (a record) or one of its members (a
@@ -2860,6 +2946,10 @@ def typeof_narrow(st: TcSt, node: Narrow) -> TcRes {
     let tu = unfold(t);
     let tk: long = tu.k;
     if (is_prim_type(tu)) {
+        // The PATTERN's type is what is bound, not the subject's: for a union
+        // subject (a primitive member is boxed in a hidden one-field record) the
+        // member is `long`, and for an option subject the payload is. Taking
+        // the subject instead would bind the whole union.
         tc_res(tu, r.st)
     } else if (tk == K.trec || tk == K.tpat) {
         tc_res(narrow_type(r.typ, t), r.st)
@@ -2986,6 +3076,28 @@ def typeof_field(st: TcSt, t: Type, dkey: str, line: long, col: long) -> TcRes {
         }
     } else if (t.k == K.tunion) {
         union_field(st, t, dkey, line, col)
+    } else if (t.k == K.tmap) {
+        // `m.k` is the entry named "k" (TODO.md item 10). It is the VALUE, not
+        // the option a bracket read gives, and the emitter stops the program
+        // when there is no such entry -- a dot is a claim that the entry is
+        // there, so a typo must not become a silent `none`; `m["k"]` stays the
+        // probe and `m["k"]!` its answer.
+        //
+        // `m.length` is the number of entries, as it is for an array or a
+        // string, and `m.ptr` has none to give -- both go to the property arm,
+        // which is also what says so. Nothing else is reserved: `m.keys`,
+        // `m.vals` and `m.boxes` are entries like any other (the map's three
+        // fields are the emitter's own business -- `keys(m)` and `values(m)`
+        // are the program's).
+        if (dkey == "length" || dkey == "ptr") {
+            typeof_prop(st, t, dkey, line, col)
+        } else if (map_key_is_str(t)) {
+            let map: TMap = t;
+            tc_res(map.of, st)
+        } else {
+            st = fail(st, "cannot read field '" + dkey + "' of " + tstr(t) + ": a dot name is a string, so the map's keys must be too (use m[\"" + dkey + "\"])", line, col);
+            tc_res(t_unk(), st)
+        }
     } else if (t.k == K.tunk) {
         tc_res(t_unk(), st)
     } else if (t.k == K.tnone) {
@@ -3008,6 +3120,14 @@ def typeof_field(st: TcSt, t: Type, dkey: str, line: long, col: long) -> TcRes {
 // so it is valid for an empty array too, where &a[0] traps. A str has no
 // `.ptr`: its bytes can live in read-only .rodata, where a store through
 // the pointer would fault.
+// A dot name is a string, so only a map keyed by one can be read with one.
+def map_key_is_str(t: Type) -> bool {
+    if (t.k == K.tmap) {
+        let map: TMap = t;
+        map.key.k == K.tstr
+    } else { false }
+};
+
 def typeof_prop(st: TcSt, t: Type, key: str, line: long, col: long) -> TcRes {
     if (key == "length") {
         tc_res(type_node({ k: K.tlong }), st)
@@ -3020,6 +3140,7 @@ def typeof_prop(st: TcSt, t: Type, key: str, line: long, col: long) -> TcRes {
     } else {
         let have = "'.length' and '.ptr'";
         if (t.k == K.tstr) { have = "'.length'"; };
+        if (t.k == K.tmap) { have = "'.length'"; };
         st = fail(st, tstr(t) + " has no property '" + key + "' (it has " + have + ")", line, col);
         tc_res(t_unk(), st)
     }
@@ -3216,7 +3337,13 @@ def place_check(st: TcSt, tgt: Node, tt: Type, op: str, line: long, col: long) -
         let key: str = dot.key;
         if (tt.k != K.tunk && (key == "length" || key == "ptr")) {
             let bt = base_type(st, dot.obj);
-            if (bt.k == K.tarr || bt.k == K.tarrfix || bt.k == K.tstr) {
+            if (bt.k == K.tmap) {
+                // a map's `.length` is its entry count and `.ptr` has no data
+                // block to give, so neither is an entry -- the same words the
+                // plain store gets (map_dot_prop_msg)
+                st = map_dot_prop_msg(st, bt, key, line, col);
+                ok = false;
+            } else if (bt.k == K.tarr || bt.k == K.tarrfix || bt.k == K.tstr) {
                 st = fail(st, "cannot field-assign " + tstr(bt) + " (only records)", line, col);
                 ok = false;
             };
@@ -3895,6 +4022,28 @@ def typeof_call_go(st: TcSt, node: Call) -> TcRes {
                     tc_res(t_unk(), st)
                 } else {
                     st = fail(st, "keys needs a map, got " + tstr(r.typ), node.line, node.col);
+                    tc_res(t_unk(), st)
+                }
+            }
+        } else if (name == "values") {
+            // values(m) -> [V]: the entries of map m, in the same insertion
+            // order as keys(m) -- so keys(m)[i] and values(m)[i] are the same
+            // entry (TODO.md item 10's answer to the reserved-names question:
+            // no reserved names, the pair is the API)
+            if (len(cargs) != 1) {
+                st = fail(st, "values takes exactly 1 argument", node.line, node.col);
+                tc_res(t_unk(), st)
+            } else {
+                let r = typeof_expr(st, cargs[0]);
+                st = r.st;
+                let mt = unfold(r.typ);
+                if (mt.k == K.tmap) {
+                    let map: TMap = mt;
+                    tc_res(type_node({ k: K.tarr, of: map.of }), st)
+                } else if (mt.k == K.tunk) {
+                    tc_res(t_unk(), st)
+                } else {
+                    st = fail(st, "values needs a map, got " + tstr(r.typ), node.line, node.col);
                     tc_res(t_unk(), st)
                 }
             }

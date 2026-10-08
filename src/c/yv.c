@@ -866,14 +866,22 @@ Yv *read_file(const Yv *path) {
     return ys_n(buf, rd);
 }
 
+/* A buffered write only fails when the buffer is flushed, so `fclose`'s
+ * return is the one that says whether the bytes landed -- discarding it (as
+ * this did) is how `cycc -o /dev/full` exited 0 while `ycc` reported the
+ * failure: the Y twin writes with `write(2)`, which fails on the spot. */
+static int close_written(FILE *f, size_t wr, size_t n) {
+    int rc = fclose(f); /* flushes; EOF on a write error */
+    return wr == n && rc == 0;
+}
+
 int write_file(const Yv *path, const Yv *content) {
     if (!path || path->tag != Y_STR || !content || content->tag != Y_STR) return 0;
     FILE *f = fopen(path->u.s.p, "wb");
     if (!f) return 0;
     size_t n = content->u.s.n; /* length-based: a str may contain NULs */
     size_t wr = fwrite(content->u.s.p, 1, n, f);
-    fclose(f);
-    return wr == n;
+    return close_written(f, wr, n);
 }
 
 int remove_file(const Yv *path) {
@@ -892,8 +900,7 @@ int write_bytes(const Yv *path, const Yv *bytearr, ylong mode) {
     FILE *f = fopen(path->u.s.p, "wb");
     if (!f) return 0;
     size_t wr = fwrite(buf, 1, n, f);
-    fclose(f);
-    if (wr != n) return 0;
+    if (!close_written(f, wr, n)) return 0;
     if (mode >= 0) {
         if (chmod(path->u.s.p, (mode_t)mode) != 0) return 0;
     }

@@ -1383,7 +1383,9 @@ def enc_form(buf: [byte], at: long, f: long, mn: str, ops: [Operand], lng: bool)
     else if (f == 95) { enc_sse_arith(buf, at, mn, ops[1], ops[0]) }  // subsd O_REG O_REG
     else if (f == 96) { enc_ucomisd(buf, at, ops[1], ops[0]) }  // ucomisd O_REG O_REG
     else if (f == 97) { enc_jmp(buf, at, ops[0], lng) }  // jmp O_IND
-    else { enc_err(at, "unknown form '" + mn + "'") }
+    // the arch runtime's forms (ir.y, 98 on): the text path's encoder, so the
+    // item and the line it came from cannot differ
+    else { enc_insn(buf, at, mn, ops, lng) }
 };
 
 // The types are exported too: enc_insn and enc_form take [Operand] and return

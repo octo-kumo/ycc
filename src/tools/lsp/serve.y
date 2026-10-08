@@ -976,7 +976,34 @@ def resolve_name(st: State, d: Doc, name: str, member: bool, line: long, ch: lon
             };
         };
     };
+    // 3. a member of a std LIBRARY unit (`math.exp`): the unit is linked from
+    //    the std pack, not spliced, so neither index above holds it and the pack
+    //    carries types but no source. Its source file, when one is on disk (a
+    //    checkout, or std/ beside the server: native.std_lib_path), gives the
+    //    position, the signature as written and the doc comment. With none, hover
+    //    still shows the checker's type for the expression.
+    if (!is_some(out) && member && mod_of != "" && name_in_list(std_unit_names(), mod_of)) {
+        let target = std_lib_path(mod_of);
+        if (target != "") {
+            let got = fs.read_file(target);
+            if is_some(got) {
+                let ttext = got !;
+                let tidx = scope.index_src(ttext, target);
+                let hit = nav.find_decl_named(tidx, name);
+                if (is_some(hit)) {
+                    let hd: IdxDecl = hit !;
+                    out = some({ path: target, line: hd.line, ch: hd.ch, dcl: hd, cross: true });
+                };
+            };
+        };
+    };
     out
+}
+
+def name_in_list(xs: [str], n: str) -> bool {
+    let found = false;
+    foreach (x in xs) { if (x == n) { found = true; } };
+    found
 }
 
 // What hover shows for a declaration: its signature as written, then the

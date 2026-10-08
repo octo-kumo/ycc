@@ -434,6 +434,8 @@ HTTP_EXPECTED="200 OK 11 hello world
 twice hello world b'hello world' 4 4
 200 true hello world
 200 POST posted body
+same-origin 200 true
+cross-origin 200 -1 34
 custom value
 200 11 []
 404 no /nothing
@@ -485,11 +487,11 @@ if command -v openssl >/dev/null 2>&1; then
         openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-384 -keyout "$WORK/ec_key.pem" -out "$WORK/ec.pem" \
             -days 2 -nodes -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost" >/dev/null 2>&1
         tls_case TLS_AES_128_GCM_SHA256 "$WORK/rsa.pem" "$WORK/rsa_key.pem" localhost \
-            "suite 4865 alpn [http/1.1] HTTP/1.0 200 ok true err []" "-alpn http/1.1"
+            "suite 4865 alpn [http/1.1] matched true HTTP/1.0 200 ok true err []" "-alpn http/1.1"
         tls_case TLS_AES_256_GCM_SHA384 "$WORK/rsa.pem" "$WORK/rsa_key.pem" localhost \
-            "suite 4866 alpn [] HTTP/1.0 200 ok true err []"
+            "suite 4866 alpn [] matched false HTTP/1.0 200 ok true err []"
         tls_case TLS_CHACHA20_POLY1305_SHA256 "$WORK/ec.pem" "$WORK/ec_key.pem" localhost \
-            "suite 4867 alpn [] HTTP/1.0 200 ok true err []"
+            "suite 4867 alpn [] matched false HTTP/1.0 200 ok true err []"
         tls_case TLS_AES_256_GCM_SHA384 "$WORK/ec.pem" "$WORK/ec_key.pem" 127.0.0.1 \
             "ERROR certificate is not valid for 127.0.0.1"
         # A certificate that names the address in an iPAddress SAN. It used to be
@@ -500,7 +502,7 @@ if command -v openssl >/dev/null 2>&1; then
         openssl req -x509 -newkey rsa:2048 -keyout "$WORK/ip_key.pem" -out "$WORK/ip.pem" -days 2 -nodes \
             -subj "/CN=127.0.0.1" -addext "subjectAltName=IP:127.0.0.1" >/dev/null 2>&1
         tls_case TLS_AES_128_GCM_SHA256 "$WORK/ip.pem" "$WORK/ip_key.pem" 127.0.0.1 \
-            "suite 4865 alpn [] HTTP/1.0 200 ok true err []"
+            "suite 4865 alpn [] matched false HTTP/1.0 200 ok true err []"
         # https: the http client against `openssl s_server -WWW`
         if [ -x "$WORK/http_cli.copy" ]; then
             echo "hello over tls" > "$WORK/hello.txt"

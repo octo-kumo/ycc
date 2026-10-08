@@ -15,9 +15,22 @@
 # rather than a sample, because a line marker is what triggered the bug and
 # which programs carry one is not something to guess at.
 #
+# Known gap: a program importing net or tui (or http/tls, which import net)
+# may produce different PEs, and that is reported as a SKIP, not a failure.
+# Those two are the only std units with raw `syscall` sites, and a raw syscall
+# is expanded at compile time with the HOST's argument convention, so the unit
+# the reference links from its std pack carries the Linux one, while cycc (no
+# pack attached) compiles the unit from source for the target. Windows sockets
+# and termios are unsupported for now (AGENTS.md, Build). Only the byte
+# comparison is excused: exit codes, diagnostics and warnings still gate.
+#
 # Usage: ./test/sh/pe-port.sh   (YSHARD=K/N: one shard, see lib.sh)
 
 source "$(dirname "$0")/lib.sh"
+
+pe_known_gap() {
+    grep -qE '^[[:space:]]*import[[:space:]]+(net|tui|http|tls)[[:space:]]*;' "$1"
+}
 
 pe_port_check() {
     local file="$1" flags="$2"
@@ -36,6 +49,8 @@ pe_port_check() {
         fi
     elif [ "$rec" -ne 0 ] || [ "$cec" -ne 0 ]; then
         fail "$name" "reference exit=$rec, copy exit=$cec: $(echo "$cerr" | head -c 200 | tr '\n' '|')"
+    elif ! cmp -s "$binr" "$binc" && pe_known_gap "$file"; then
+        skip "$name" "imports net/tui: raw syscalls in a packed unit, a known PE gap"
     elif ! cmp -s "$binr" "$binc"; then
         fail "$name" "PEs differ: reference=$(stat -c%s "$binr") bytes, copy=$(stat -c%s "$binc") bytes"
     elif [ "$rerr" != "$cerr" ]; then

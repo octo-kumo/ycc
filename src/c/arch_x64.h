@@ -4,8 +4,10 @@
 //   export { arch_id, arch_word, arch_sysno, arch_fn_label, arch_loc_label,
 //            arch_str_label, arch_header, arch_rodata, arch_text,
 //            arch_bss, arch_global_cell, arch_heap_cells, arch_kernel_bss,
-//            arch_prelude_lines, arch_prelude_threads_lines, arch_math_lines,
-//            kernel_irq_text, arch_consts, arch_frame, arch_exit };
+//            kernel_irq_text, arch_set_files,
+//            arch_set_lines,
+//            arch_nogc_subs, arch_gc_stress_subs, arch_consts,
+//            arch_frame, arch_exit };
 #ifndef ARCH_X64_H
 #define ARCH_X64_H
 
@@ -32,13 +34,13 @@ ylong w_iat_offset(ylong d, ylong f);
 Yv *arch_heap_cells(void);
 Yv *arch_kernel_bss(void);
 Yv *kernel_irq_text(int has_trap);
-Yv *arch_prelude_lines(void);
-Yv *arch_prelude_threads_lines(void);
-Yv *arch_math_lines(void);
-Yv *w_self_test_lines(void);
+Yv *arch_set_files(Yv *which);
+Yv *arch_set_lines(Yv *which, Yv *texts);
+Yv *arch_nogc_subs(void);
+Yv *arch_gc_stress_subs(void);
 Yv *arch_consts(void);
 ylong arch_frame(ylong slots);
 Yv *arch_exit(void);
 
 #endif /* ARCH_X64_H */
-Yv *arch_nogc_lines(Yv *lines);
+

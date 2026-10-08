@@ -846,7 +846,7 @@ that wrote it — `[ycc][pack][pack length, 8 digits][YCCPACK1]` (the
 Makefile's `PACK`). Each compile reads the pack back from
 `/proc/self/exe` (`self_pack` in ycc.y) and links the units it needs
 straight from it. The pack is netstrings: a version line
-(`ycc-std-pack 6`), then each unit's name and fields as netstrings —
+(`ycc-std-pack 7`), then each unit's name and fields as netstrings —
 its bodies, each body's label and the labels it references (so linking
 never rescans std code), rodata, globals, init label, and its exports
 with their types in a prefix code (`tcode`/`tdecode`: total over every
@@ -866,8 +866,78 @@ What is precompiled is therefore everything up to the encoder: the std
 units are stored as items, not machine code, and the assembler still
 encodes the std bodies a program keeps along with the program's own.
 
-`--std-src` ignores the pack and compiles the std units from the
-embedded sources, as does a ycc whose pack is missing (cycc, or a ycc
+### Packing a library unit: what a spike proved
+
+Making the pack carry a library module instead of splicing it was spiked twice,
+by adding the module to `std_unit_names` and reading the errors out of
+`--std-pack`:
+
+    ycc: internal error: std/args.y:524:1: undefined variable 'export'
+    ycc: internal error: std/args.y:524:8: expected ';', got '{'
+    ycc: internal error: std/fs.y:33:1: undefined variable 'import'
+    ycc: internal error: std/fs.y:33:8: expected ';', got 'sort'
+
+Two obstacles, in order:
+
+1. A library module ends with `export { ... };` for the *splicer*, which drops
+   those lines before the lexer sees the text (`native.y`, the splice's
+   `trimmed[:7] != "export "` rule, through the line that closes the list).
+   `std_compile` lexes the embedded text directly, so the same lines must be
+   blanked there -- blanked, not removed, so every line number below them and
+   every `.loc` marker stays what it was. With that, `args` compiles.
+
+2. Then a module that imports another fails on its own `import` line, because
+   `std_compile` passes `noimports` and feeds raw text: `fs` imports `sort`,
+   `json` imports `sort`, `net` imports `fs`, `x509` imports `crypto`/`fs`/
+   `struct`, `tls` imports `crypto`/`x509`/`net` and `http` imports `net`/`tls`
+   (`math` imports nothing). A library unit therefore has to be resolved the way
+   a package is: its `import X;` lines bind `X` as a unit namespace
+   (`unit_externs`' package arm, `pkg_ns`), never a splice, and the units are
+   compiled in dependency order with the earlier ones' exports passed in. That
+   is `native_resolve_pk`/`compile_package`'s shape, and it is the bulk of the
+   work this section's plan calls Workstream 3.
+
+Both obstacles were reproduced from a clean build and the spike was reverted;
+the scaffolding is small (the source dispatch, a library base range past the
+packages' `5e9 + k*1e9`, and the blanking) but it belongs in a change that also
+portals to `src/c`, so it lands with the resolution work rather than before it.
+
+Read the answer to obstacle 1 off the error's column (`524:1`): a std export
+line starts at column 0, which is why the splicer's `trim` is not load-bearing
+there and a prefix test is enough.
+
+### The pack's size, and what is left to the codec
+
+`test/sh/pack_stats.py` parses the pack field by field and now knows the
+shapes (almost every field is "count, then items"; only `init` is one
+netstring). Measured on the payload after `refs` became derived (126,614 B):
+
+    bodies 116,322 (91.9%)   iface 6,446   labels 2,044   rodata 1,130
+    btext 377   globals 120   files 62   init 48
+    gzip -9 20,559 (6.16x)   xz -9 16,480 (7.68x)     (`--target`)
+
+Three of the fields left are repetition a codec subsumes -- label operands are
+39% of the body bytes (2,786 occurrences of 42/87/411/532 distinct names per
+unit), type codes repeat across exports, and `files` repeats one path -- so the
+next size step is a deterministic LZ block codec over the payload rather than
+more field surgery. Two removals are *not* repetition and stay on the list: the
+2,229 B of `tcode` for units whose reader never decodes it (an unbound std unit
+-- `std_unit_bound` false -- while the `ycc build` object format always wants
+types), which needs `pack_unit_fields` to know its reader, and the 377 B of
+`btext` in a unit with no IR_TEXT item. Each is worth under a percent once the
+payload compresses, so they follow the codec only if the measurement still
+cares.
+
+The codec's home is the trailing frame: keep `[payload][8-digit length]
+[YCCPACK1]` and let `self_pack` hand `std_unpack` a plain payload of the
+current version -- a method byte after the length, or a second magic. The
+language server reads the pack with its own copy of that frame
+(`src/tools/lsp/yserve.y`), so whatever the frame says, yserve has to decode it
+too, and the codec must be reachable from both.
+
+
+`--std-src` ignores the pack and compiles the std units from their
+sources on disk (`src/y/std`; none is embedded in the compiler), as does a ycc whose pack is missing (cycc, or a ycc
 just written by a self-compile) or of another version: the output is the
 same bytes either way (`test/sh/test_link.sh` checks it over programs
 that link every unit; `make ycc`, `ynew` and the fixpoint suite each

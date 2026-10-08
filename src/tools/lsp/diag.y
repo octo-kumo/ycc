@@ -36,19 +36,14 @@ type Finding = { msg: str, line: long, col: long, kind: long, file: str };
 const SEV_ERROR = 1;
 const SEV_WARNING = 2;
 
-// The checker binds a program's externs: the prelude's readline, exec's exec.
-// native.unit_externs does this and is not exported, so it is repeated here --
-// std_unit_bound is `name == "prelude" || name == "exec"`, and a unit counts
-// only when the program actually named it.
+// The checker binds a program's externs: the prelude's readline, exec's exec,
+// and every library unit's exports under its namespace (`fs.cwd`, `json.Val`'s
+// functions). native.unit_externs is the compiler's own answer, used as is: a
+// copy here bound only prelude and exec, which was right while library modules
+// were spliced from source, and made every `fs.` name undefined once they
+// became units of the std pack.
 def externs_for(su: [Unit], snames: [str]) -> [Sym] {
-    let ext: [Sym] = [];
-    foreach (u in su) {
-        let bound = u.name == "prelude" || u.name == "exec";
-        let named = false;
-        foreach (s in snames) { if (s == u.name) { named = true; } };
-        if (bound && named) { ext += u.exports; }
-    }
-    ext
+    unit_externs(su, snames, [], []).ext
 }
 
 // Which file a spliced line came from, as a path. native.origin_file would do
@@ -194,6 +189,11 @@ def diagnose(text: str, dir: str, path: str, pack: str, wlevel: long) -> [Findin
 
     let nr = native_resolve_x(src, dir, 0, true, path);
     let su = std_units(nr.std, pack);
+    // The compiler's front half, as compile_unit runs it: unit_prep sets what
+    // strip_ns keeps qualified (the library units, nr.pkgs) and seeds the type
+    // aliases those units declare (json.Val), and rename gets their defaults.
+    let xt = unit_externs(su, nr.std, [], nr.pkgs);
+    unit_prep(xt);
 
     // nr.src is the SPLICED text: this document with every import inlined ahead
     // of it. That is what has to be parsed -- parsing the buffer on its own
@@ -209,10 +209,9 @@ def diagnose(text: str, dir: str, path: str, pack: str, wlevel: long) -> [Findin
     // strip_ns + rename are the two passes compile_unit runs before the
     // checker; both are exported, so the pipeline can be driven directly.
     let ast2: Block = strip_ns(ast, nr.imports);
-    let ast3 = rename.rename_program_x(ast2, [], nr.origin.file, nr.origin.mods);
+    let ast3 = rename.rename_program_x(ast2, xt.dfl, nr.origin.file, nr.origin.mods);
 
-    let ext = externs_for(su, nr.std);
-    let errors = types.check_program(ast3, ext);
+    let errors = types.check_program(ast3, xt.ext);
     // `ogen` says which lines a meta block generated, and it is EMPTY unless
     // the meta pass ran: the pass is switched on by meta.meta_begin(), which
     // the DRIVER calls before its own resolve and nothing else does -- so a
@@ -302,6 +301,10 @@ def xref_for(text: str, dir: str, path: str, pack: str) -> Prepared? {
             // the first version of this did, and it produced exactly one name,
             // attributed to the wrong file.
             let ast = parser.parse_program(lexer.tokenize(nr.src));
+            // the units first, and the front half as diagnose runs it
+            let units = std_units(nr.std, pack);
+            let xt = unit_externs(units, nr.std, [], nr.pkgs);
+            unit_prep(xt);
             let ast2: Block = strip_ns(ast, nr.imports);
             // rename_program_x2, not rename_program_x, and only the tree is read
             // back. The second half of its answer -- the def site of every
@@ -311,9 +314,8 @@ def xref_for(text: str, dir: str, path: str, pack: str) -> Prepared? {
             // its declaration's SIGNATURE and doc comment, which a position does
             // not carry, so a column the server already had is all the map would
             // save. Binding it to a name would only have made the compiler warn.
-            let ast3: Block = rename.rename_program_x2(ast2, [], nr.origin.file, nr.origin.mods).ast;
+            let ast3: Block = rename.rename_program_x2(ast2, xt.dfl, nr.origin.file, nr.origin.mods).ast;
             let x = xref.tops_of(ast3);
-            let units = std_units(nr.std, pack);
             // From the origin map, not from a line count: a header comment before
             // the imports made the old shift wrong for every line after them.
             // xref.own_lines says which and by how much.
@@ -339,7 +341,7 @@ def xref_for(text: str, dir: str, path: str, pack: str) -> Prepared? {
             // expr_type() reads it from -- so the LSP never copies a type, it
             // asks the checker for the one it already computed.
             type_index_on();
-            let errs = check_program(ast3, externs_for(units, nr.std));
+            let errs = check_program(ast3, xt.ext);
             type_index_off();
             // The errors themselves are diagnose()'s job; xref_for only wants the
             // side effect. A buffer that does not type-check still navigates and

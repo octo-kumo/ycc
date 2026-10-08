@@ -119,25 +119,15 @@ else
     else
         fail "sections .text .rodata .bss .symtab .strtab .shstrtab" "got: $secs"
     fi
-    # The .bss address, which the debug metadata gets from a different
-    # expression than the program header does: it used to add the link base
-    # twice, so `nm` and readelf named 0x802000 for a section the loader puts
-    # at 0x402000.  A doubled address is the one thing this must not be, and
-    # a symbol has to land inside the section it is attributed to.
-    bssline=$(readelf -S -W "$TMPD/dbg" | grep -E '\.bss[[:space:]]+NOBITS')
-    if echo "$bssline" | grep -q '0000000000402000'; then
-        pass "the .bss section header names 0x402000"
+    # The .bss must lie inside the R+W segment that maps it: it starts code_off
+    # bytes into the segment's page (elf.y elf_build), and a segment of only
+    # bss_len bytes left its tail unmapped -- the collector's root scan faulted on
+    # it once it crossed a page. The section header (where -g says the .bss is)
+    # once added the load base twice, too. Both show here.
+    if bss_rng=$(python3 "$ROOT/test/sh/elf_bss_check.py" "$TMPD/dbg" 2>&1); then
+        pass "the .bss lies inside the R+W segment ($bss_rng)"
     else
-        fail "the .bss section header names 0x402000" "got: $bssline"
-    fi
-    gval=$(readelf -sW "$TMPD/dbg" | awk '$4 == "OBJECT" && $8 == "calls" { print $2 }')
-    # readelf prints the value in hex with no prefix: compare as hex, or a
-    # leading 4 reads as a decimal 402030.
-    gvald=$((16#$gval))
-    if [ -n "$gval" ] && [ "$gvald" -ge 4202496 ] && [ "$gvald" -lt 4206592 ]; then
-        pass "'calls' is inside .bss ($gval)"
-    else
-        fail "'calls' is inside .bss ($gval)"
+        fail "the .bss lies inside the R+W segment" "$bss_rng"
     fi
     dsecs=$(readelf -S -W "$TMPD/dbg" | grep -oE '\.debug_[a-z]+ ' | tr -d ' ' | tr '\n' ' ')
     if [ "$dsecs" = ".debug_info .debug_abbrev .debug_line " ]; then

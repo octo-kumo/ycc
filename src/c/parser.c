@@ -392,6 +392,8 @@ ylong op_prec(Yv *op) {
         return 4;
     } else if (ys_eq_lit(op, ">=")) {
         return 4;
+    } else if (ys_eq_lit(op, "in")) {
+        return 4;
     } else if (ys_eq_lit(op, "::")) {
         return 5;
     } else if (ys_eq_lit(op, "|")) {
@@ -1101,7 +1103,12 @@ Yv *parse_binary(Yv *toks, ylong p, ylong min_prec) {
             prec = op_prec(op);
             ;
         } else if (is_kw(toks, pos, ys("in"))) {
-            prec = 3;
+            /* `in` is a KEYWORD -- `for x in xs`, `foreach (k in keys(m))` --
+             * and here it is an operator: `"k" in m` asks a map for a key
+             * (TODO.md item 14). Both heads find their `in` before parsing an
+             * expression that starts after it, so nothing there can see this.
+             */
+            prec = op_prec(ys("in"));
         }
         // NOTE: nested ifs, not `||` — the operands mix long (prec flags)
         // with bools and the checker rejects the joint gate (tcompat law:
@@ -3159,27 +3166,20 @@ Yv *parse_some_pattern(Yv *toks, ylong p, Yv *tmp) {
 
 /* A type name in a pattern: builtin primitive names map to their type
  * kinds, anything else is an alias resolved by rename.y. */
-Yv *pattern_type(Yv *nm) {
-    if (ys_eq_lit(nm, "long") || ys_eq_lit(nm, "int")) { return yr(1, "k", yv_long(K_tlong)); }
-    else if (ys_eq_lit(nm, "byte")) { return yr(1, "k", yv_long(K_tbyte)); }
-    else if (ys_eq_lit(nm, "bool")) { return yr(1, "k", yv_long(K_tbool)); }
-    else if (ys_eq_lit(nm, "str")) { return yr(1, "k", yv_long(K_tstr)); }
-    else if (ys_eq_lit(nm, "float")) { return yr(1, "k", yv_long(K_tfloat)); }
-    else if (ys_eq_lit(nm, "bigint")) { return yr(1, "k", yv_long(K_tbigint)); }
-    else { return yr(2, "k", yv_long(K_tname), "name", nm); }
-}
-
-// T / T x / T {f, g: y}: T names a record or primitive type (an alias).
+/* T / T x / T {f, g: y}: T is a type in the annotation sense -- an alias (an
+ * `m.T` one of module m's), or one of the language's own names, which is what
+ * makes `if let long n = v`, `if let mutex held = m` and
+ * `match v { str s => ... }` parse at all (TODO.md item 13: they were
+ * `unknown type 'long'` and `unknown type 'mutex'`, because the pattern's type
+ * position built a raw tname where the annotation path builds its own kinds).
+ * parse_type_atom2 IS that path, so a pattern and an annotation of the same
+ * type can no longer disagree about what the name means. */
 Yv *parse_type_pattern(Yv *toks, ylong p, Yv *tmp) {
     ylong ln = tline(toks, p);
     ylong cl = tcol(toks, p);
-    Yv *tname = tv(toks, p);
-    ylong pos = p + 1;
-    if (is_op(toks, pos, ys(".")) && ys_eq_lit(tt(toks, pos + 1), "id")) {
-        tname = ys_cat(ys_cat(tname, ys(".")), tv(toks, pos + 1));
-        pos = pos + 2;
-    }
-    Yv *ty = pattern_type(tname);
+    Yv *atom = parse_type_atom2(toks, p);
+    Yv *ty = yr_get(atom, "node");
+    ylong pos = yv_l(yr_get(atom, "pos"));
     Yv *subj = subj_id(tmp, ln, cl);
     Yv *binds = yav(0);
     if (is_punct(toks, pos, ys("{"))) {

@@ -10,8 +10,9 @@ is the chronological log (round by round); **this file is the summary you want f
 |---|---|
 | worktree | `.worktrees/kernel`, branch `kernel` |
 | HEAD at handover | see `git log -1` (the last commit is "u021_rm -- rm from ring 3") |
-| kernel suite | **84 passed, 0 failed / 84 total** with the shipped `./ycc` and `./cycc` |
+| kernel suite | **86 passed, 0 failed / 86 total** with `./ycc` and `./cycc`, after the merge of master |
 | blessed compiler | `refs/ycc.ref` = `495c8127b96579aa` (re-run `make rebless` after any `src/y/std/*.y` or `arch/*.s` change) |
+| merged into master | master's pack model: `arch.kernel` is the fifth-plus block set, `fs`/`net`/... denial happens for pack library units too (native.y import walk) |
 | pre-merge fallback | `git tag pre-unmerge` (the pre-merge 33/33 line) |
 
 ## 2. How to build and run
@@ -225,7 +226,13 @@ delete-on-failure guards destroyed fixtures that the next step needed.
                              reference for the argv layout)
     src/y/arch/kernel.s      syscall entry, y_enter_frame, y_boot_frame, serial, PIC, kexit
     src/y/arch_x64.y (+.c)   multiboot, page tables, GDT, kernel IRQ/trap stubs
-    src/y/std/*.y            embedded in the compiler: an edit needs `make rebless`
+    src/y/arch/kernel.s      the kernel prelude, a block set of the std pack (`arch.kernel`:
+                             prelude.s with the blocks kernel.s replaces/adds); a change needs
+                             `make rebless`
+    src/y/std/kernel.y, yfs.y, fd.y
+                             NOT pack units (yet): `import kernel` splices them from disk, so
+                             a --kernel compile needs a checkout (src/y/std or std/ beside
+                             the binary). Making them units is the open step.
     os/kernel/elfload.y      the program-side loader still lives here (wired through kernel)
     os/tools/mkfs.y          the host-side image builder (direct slots + indirect block)
     test/kernel/             the fixtures, .expected/.exit/.stdin
@@ -258,3 +265,14 @@ each established by measurement rather than assumption:
 So nothing in the microkernel work moved a hosted program's bytes or behaviour: the port
 gate recompiles the entire corpus with both engines and compares bytes, in every shard, and
 it is 151/151.
+
+## 12. After the merge of master (std pack)
+
+* Master's compiler changed the bytes of the hosted user programs, so every `u*` fixture whose
+  `.expected` prints `size=` / `bytes=` (the ELF size) was updated -- 9 files, size only. Expect
+  that to happen again whenever codegen moves; the number is the user ELF's length.
+* `test/sh/test_fixpoint.sh` skips `kernel.y`/`yfs.y`/`fd.y` in the hosted std loop and compiles
+  two kernel fixtures with `--kernel` instead.
+* Not done: `kernel`, `yfs`, `fd` as std-pack units, which would make a packed `ycc` build a
+  kernel with no checkout. They are `ndef`/asm-bound, so the pack's unit compile needs a
+  kernel mode first.

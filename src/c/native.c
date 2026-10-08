@@ -19,6 +19,7 @@
  */
 #include "ylong.h"
 #include "host.h"
+#include <string.h>
 #include <unistd.h>
 #include "ir.h"
 #include "native.h"
@@ -60,10 +61,10 @@ Yv *arch_bss(void);
 Yv *arch_global_cell(Yv *label);
 Yv *arch_heap_cells(void);
 ylong arch_frame(ylong slots);
-Yv *arch_prelude_lines(void);
-Yv *arch_prelude_threads_lines(void);
-Yv *arch_math_lines(void);
-Yv *w_self_test_lines(void);
+Yv *arch_set_files(Yv *which);
+Yv *arch_set_lines(Yv *which, Yv *texts);
+Yv *arch_nogc_subs(void);
+Yv *arch_gc_stress_subs(void);
 Yv *arch_consts(void);
 /* src/y/types.y */
 Yv *os_call_names(void);
@@ -103,13 +104,15 @@ Yv *rec_names(Yv *fs);
 /* src/y/rename.y */
 Yv *rename_program(Yv *ast);
 Yv *rename_program_x(Yv *ast, Yv *dfl, Yv *ofile, Yv *fmods);
+/* The type aliases a unit's importers must be able to name: seeded before the
+ * rename of the unit being compiled, and published by it (rename.c's
+ * rn_types_seed/rn_types_out, native.y). */
+void rn_types_seed_set(Yv *xs);
+Yv *rn_types_out_get(void);
 
-/* The std units' sources (see std_units): native.y's `embed` declarations
- * (see Y_EMBED in yv.h). */
-Y_EMBED(RT_SRC, "src/y/std/rt.y")
-Y_EMBED(PRELUDE_SRC, "src/y/std/prelude.y")
-Y_EMBED(EXEC_SRC, "src/y/std/exec.y")
-Y_EMBED(STR_SRC, "src/y/std/str.y")
+/* No std source is embedded: every std unit travels compiled in the std
+ * pack, and a source is read from disk (std_lib_src) only to build it, under
+ * --std-src, or by a compiler with no pack (native.y). */
 
 /* `ycc -g` line markers, set by compile_unit for each unit. With
  * dbg_lines on, the text opens with a `.file N "path"` per origin file
@@ -124,6 +127,13 @@ static Yv *dbg_line;
 static Yv *res_pkgs;
 static Yv *res_roots;
 static Yv *res_used;
+/* std library units the resolver saw imported BY NAME (math, args, ...): they
+ * are linked units now, not spliced text, so native_resolve_x appends them to
+ * the program's `std` (native.y res_std_lib). */
+static Yv *res_std_lib;
+/* True while std_compile resolves a std unit's own imports (native.y
+ * res_in_std): the project-local lookup is skipped. */
+static int res_in_std;
 static Yv *pkg_ns;
 /* tcode's and tdecode's recursive aliases (trefs) being spelled out and
  * read back, and the count behind the unit ids tdecode gives them. */
@@ -258,7 +268,12 @@ Yv *labmap_put(Yv *m, Yv *name, ylong sec, ylong off);
 Yv *labmap_get(Yv *m, Yv *name);
 Yv *shake_keep(Yv *names, Yv *refs, Yv *falls, Yv *keep, Yv *roots);
 Yv *shake_refs(Yv *text, Yv *root_refs);
-Yv *prelude_blocks(Yv *lines);
+Yv *arch_blocks(Yv *lines);
+Yv *arch_index(Yv *blks);
+Yv *arch_blocks_sub(Yv *blks, Yv *subs);
+Yv *arch_set(Yv *which);
+Yv *arch_core(void);
+Yv *arch_lines_of(Yv *which);
 Yv *lines_refs(Yv *lines, ylong lo, ylong hi);
 int lines_fall(Yv *lines, ylong lo, ylong hi);
 Yv *shake_prelude(Yv *pb, Yv *roots);
@@ -294,6 +309,7 @@ Yv *fn_args_of(Yv *t);
 Yv *infer_block(Yv *st, Yv *node);
 Yv *infer_decl(Yv *st, Yv *node);
 int uses_argv(Yv *stmts);
+Yv *collect_from_list(Yv *nodes, Yv *out);
 Yv *collect_from_block(Yv *stmts, Yv *out);
 Yv *collect_from_node(Yv *node, Yv *out);
 int uses_threads(Yv *refs);
@@ -342,6 +358,7 @@ Yv *gen_discard(Yv *st, Yv *node);
 Yv *gen_make_closure(Yv *st, Yv *label, Yv *caps);
 Yv *gen_range(Yv *st, Yv *node);
 Yv *gen_slice(Yv *st, Yv *node);
+static Yv *mark_pf_arr(Yv *st, Yv *t);   /* A8: pointer-free array data */
 Yv *gen_indirect(Yv *st, Yv *node, Yv *callee);
 Yv *gen_str_slice(Yv *st, Yv *node);
 Yv *gen_sliceassign(Yv *st, Yv *node);
@@ -494,6 +511,9 @@ Yv *n_assign(Yv *name, Yv *v, ylong ln, ylong cl);
 Yv *block_of(Yv *sts, ylong ln, ylong cl);
 Yv *gen_maplit(Yv *st, Yv *node);
 int is_map_read(Yv *st, Yv *e);
+static Yv *gen_map_field(Yv *st, Yv *node, const char *name);
+static Yv *gen_dot_map(Yv *st, Yv *obj, Yv *dkey, long ln, long cl);
+static Yv *map_field(Yv *m, const char *field, long ln, long cl);
 int is_none_id(Yv *e);
 Yv *map_scan(Yv *t, ylong ln, ylong cl);
 Yv *gen_map_get(Yv *st, Yv *node, Yv *mode);
@@ -598,11 +618,13 @@ Yv *phase_end(Yv *times, Yv *name, ylong t0, ylong h0);
 Yv *unit_empty(Yv *name);
 Yv *externs_none(void);
 Yv *std_unit_src(Yv *name);
+Yv *std_lib_src(Yv *name);
+Yv *std_lib_path(Yv *name);
 ylong std_unit_base(Yv *name);
 int std_unit_bound(Yv *name);
 Yv *std_unit_names(void);
 Yv *std_units(Yv *names, Yv *pack);
-Yv *std_compile(Yv *name, Yv *ext);
+Yv *std_compile(Yv *name, Yv *ext, Yv *prev);
 Yv *export_name(Yv *name);
 Yv *unit_exports(Yv *stmts, Yv *hdefs, Yv *fns);
 int pkg_base(ylong base);
@@ -613,10 +635,11 @@ Yv *lit_code(Yv *d);
 Yv *lit_text(Yv *d);
 Yv *lit_neg_text(Yv *d);
 Yv *lit_decode(Yv *c);
+void unit_prep(Yv *xt);
 Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, ylong wlevel,
                  Yv *name, ylong base, Yv *xt, Yv *ogen);
 Yv *link_locs(Yv *body, ylong file);
-Yv *check_os_call_names(Yv *lines);
+Yv *check_os_call_names(Yv *blks);
 Yv *arch_label_name(Yv *l);
 Yv *rodata_intern(Yv *pieces, Yv *allrod, Yv *refs);
 Yv *relabel_dups(Yv *body, Yv *m, Yv *dup_new);
@@ -646,6 +669,9 @@ Yv *unit_obj(Yv *unit, Yv *key);
 Yv *unit_unobj(Yv *text, Yv *key);
 Yv *unit_iface(Yv *unit);
 Yv *unit_externs(Yv *std, Yv *snames, Yv *deps, Yv *pkgs);
+Yv *std_lib_names(void);
+ylong std_lib_index(Yv *name);
+Yv *std_lib_deps(Yv *name);
 Yv *compile_package(Yv *ast, Yv *nr, Yv *name, ylong base, ylong wlevel,
                     Yv *std, Yv *deps);
 Yv *emit_program(Yv *ast, Yv *nr, int debug, ylong wlevel, Yv *std, Yv *deps);
@@ -700,6 +726,7 @@ Yv *native_resolve_pk(Yv *src, Yv *base_dir, int allow_exec, Yv *root,
 Yv *resolve_unit(Yv *src, Yv *base_dir, ylong depth, int allow_exec,
                  Yv *root) {
     res_used = yav(0);
+    res_std_lib = yav(0);
     /* The program itself is de-duplicated by `self_path` and NOT by putting it in
      * `seen`. `seen` is also the file-id counter -- a nested call is handed
      * `len(seen)` -- so seeding it would shift every module's id in
@@ -813,6 +840,38 @@ Yv *resolve_unit(Yv *src, Yv *base_dir, ylong depth, int allow_exec,
      * so there is no name to test for. Unused helpers cost nothing in the
      * output -- prune_bodies drops them at link time. */
     std = ya_push(std, ys("rt"));
+    /* the library units the resolver saw imported by name -- but only the ones
+     * the program MENTIONS, a `name.` reference, as prelude and exec are linked
+     * only when one of their names is seen (native.y) */
+    Yv *want = yav(0);
+    ylong li = 0;
+    while (li < yv_len(res_std_lib)) {
+        Yv *ln = ya_get(res_std_lib, li);
+        if (ys_index_of(rsrc, ys_cat(ln, ys("."))) >= 0 && !name_in(want, ln)) {
+            want = ya_push(want, ln);
+        }
+        li = li + 1;
+    }
+    /* ...and the units those import (std_lib_deps), all in std_lib_names
+     * order, dependency first: every caller of std_units compiles a unit
+     * against the ones before it, so `std` is closed and ordered here
+     * (native.y). */
+    ylong wi = 0;
+    while (wi < yv_len(want)) {
+        Yv *ds = std_lib_deps(ya_get(want, wi));
+        ylong di = 0;
+        while (di < yv_len(ds)) {
+            if (!name_in(want, ya_get(ds, di))) { want = ya_push(want, ya_get(ds, di)); }
+            di = di + 1;
+        }
+        wi = wi + 1;
+    }
+    Yv *libs = std_lib_names();
+    ylong lj = 0;
+    while (lj < yv_len(libs)) {
+        if (name_in(want, ya_get(libs, lj))) { std = ya_push(std, ya_get(libs, lj)); }
+        lj = lj + 1;
+    }
     /* ogen is EMPTY for a unit with no blocks, which is what tells lint there is
      * no generator whose top level is this one (see lint_meta_top): a file with
      * blocks whose pieces happen to add no lines is still such a file. */
@@ -1377,6 +1436,13 @@ static Yv *meta_gorigin(ylong nbody);
  * its image. G's errors are reported with G's own origin map, so they read
  * `<file>.meta:<source line>` -- visibly about the synthesized text and not
  * about the user's file, and still carrying a line through the line map. */
+/* The pack the driver read from its own binary, or "" under --std-src: what a
+ * meta generator's std units come from (native.y set_meta_pack). */
+static Yv *meta_pack;
+void set_meta_pack(Yv *p) {
+    meta_pack = p;
+}
+
 static Yv *meta_compile_gen(void) {
     Yv *gt = meta_gtext();
     ylong nbody = mg_glines();
@@ -1387,7 +1453,9 @@ static Yv *meta_compile_gen(void) {
     if (mg_probe(yr_get(nr, "src"), mg_gbase)) {
         (void)mg_report(ys("a meta block cannot appear in a module imported into the meta generator: the generator's text is compiled with the pass off, so nothing in it is scanned"));
     };
-    Yv *su = std_units(yr_get(nr, "std"), ys(""));
+    /* the std units from the compiler's own pack, as the program's are
+     * (native.y) */
+    Yv *su = std_units(yr_get(nr, "std"), meta_pack ? meta_pack : ys(""));
     /* nr.src, not gt: the hoisted imports were spliced in by the resolve above,
      * and tokenizing gt would hand the parser a literal `import` line */
     Yv *toks = tokenize(yr_get(nr, "src"));
@@ -1475,6 +1543,21 @@ static Yv *self_dir(void) {
         if (yv_len(d) > 0) { return d; }
     }
     return by_argv;
+}
+
+/* A project-local module shadows the std library unit of that name
+ * (native.y res_local_mod). */
+int res_local_mod(Yv *name, Yv *base_dir) {
+    int found = !res_in_std &&
+                  !yv_is_none(read_file(ys_cat(
+                      ys_cat(ys_cat(base_dir, ys("/")), name), ys(".y"))));
+    ylong ri = 0;
+    while (!found && !res_in_std && ri < yv_len(res_roots)) {
+        found = !yv_is_none(read_file(ys_cat(
+            ys_cat(ys_cat(ya_get(res_roots, ri), ys("/")), name), ys(".y"))));
+        ri = ri + 1;
+    }
+    return found;
 }
 
 Yv *std_resolve(Yv *name, Yv *base_dir) {
@@ -1668,7 +1751,26 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, ylong depth, Yv *seen,
                         ;
                     }
                     path = name;
-                    if (name_in(res_pkgs, name)) {
+                    int is_lib = !name_in(res_pkgs, name) &&
+                                   std_lib_index(name) >= 0 &&
+                                   !res_local_mod(name, base_dir);
+                    if (name_in(res_pkgs, name) || is_lib) {
+                        /* a std library module takes the package path too: the
+                         * pack carries its unit, nothing is spliced, and
+                         * strip_ns qualifies its names (native.y) */
+                        /* kernel mode refuses a std library unit that is a
+                         * Linux syscall away from working (the same rule as
+                         * for a spliced std source, below) */
+                        if (is_lib && target_is_kernel() && name_in(kernel_std_denied(), name)) {
+                            puts_(ys_cat(ys_cat(ys_cat(ys_cat(ys("error: std/"), name),
+                                                      ys(" is not available in kernel mode: ")),
+                                              kernel_std_why(name)),
+                                       ys("\n")));
+                            exit_(1);
+                        };
+                        if (is_lib && !name_in(res_std_lib, name)) {
+                            res_std_lib = ya_push(res_std_lib, name);
+                        }
                         is_pkg = 1;
                         if (!name_in(res_used, name)) {
                             res_used = ya_push(res_used, name);
@@ -2055,6 +2157,19 @@ Yv *tok_push(Yv *out, Yv *t) {
     }
 }
 
+/* An SSE scalar-double mnemonic (native.y sse_mnemonic): five letters or more
+ * ending in `sd` (movsd, ucomisd, cvtsi2sd, ...) or `ds`. A fixed list used to
+ * stand here and missed ucomisd and the conversions, so the two twins
+ * disagreed on a block's references (harmless while they were only a set the
+ * shaker read; the arch blocks in the std pack carry them). */
+static int sse_mnemonic(Yv *w) {
+    ylong n = yv_len(w);
+    if (n < 5) { return 0; }
+    ylong a = ys_byte_at(w, n - 2);
+    ylong b = ys_byte_at(w, n - 1);
+    return (a == 115 && b == 100) || (a == 100 && b == 115);
+}
+
 /* Every symbol one line [lo, hi) references: call/lea/jump operands and
  * both labels of a computed immediate (`mov $A-B, ...`). Dispatch on the
  * mnemonic — this walks every line of the emitted text, so no searching. */
@@ -2072,10 +2187,7 @@ Yv *line_refs_b(Yv *text, Yv *b, ylong lo, ylong hi, Yv *out, int want_jumps) {
         } else if (ys_eq_lit(w, "lea")) {
             out = tok_push(out, tok_at_b(text, b, op, hi));
             ;
-        } else if (ys_eq_lit(w, "mov") || ys_eq_lit(w, "movsd") || ys_eq_lit(w, "movss")
-                   || ys_eq_lit(w, "movapd") || ys_eq_lit(w, "addsd") || ys_eq_lit(w, "subsd")
-                   || ys_eq_lit(w, "mulsd") || ys_eq_lit(w, "divsd") || ys_eq_lit(w, "addss")
-                   || ys_eq_lit(w, "subss") || ys_eq_lit(w, "mulss") || ys_eq_lit(w, "divss")) {
+        } else if (ys_eq_lit(w, "mov") || sse_mnemonic(w)) {
             ylong q = p;
             int go = 1;
             while (go) {
@@ -2822,15 +2934,15 @@ Yv *shake_refs(Yv *text, Yv *root_refs) {
     }
 }
 
-/* ── the arch prelude, shaken by lines ──────────────────────────────────
- * The prelude is ~1.7k lines of which a program keeps a few dozen, and
- * shaking it as text scanned all of it on every compile: two thirds of a
- * small program's compile. It comes as its lines (arch_prelude_lines):
- * labels alone at column 0, everything else indented, so its blocks are
- * found by each line's first byte, and only the blocks a program reaches
- * are scanned for references. Blocks and rules are shake_refs'.
- * PBlocks = { lines, starts, names, ix }; PShake = { text, refs }. */
-Yv *prelude_blocks(Yv *lines) {
+/* ── the arch prelude, shaken by blocks (native.y) ──────────────────────
+ * The runtime assembly cut into blocks, one per column-0 label, each built
+ * once: its references and whether it falls through (lines_refs/lines_fall),
+ * and its lines as IR items (ir_parse_line; anything else an IR_TEXT item).
+ * The std pack carries the blocks built; a compiler with no pack builds them
+ * from the text.
+ * PBlk = { name, falls, refs, ir, txt }; PBlocks = { blks, ix };
+ * PShake = { ir, txt, refs, bnames, brefs }. */
+Yv *arch_blocks(Yv *lines) {
     Yv *starts = yav(0);
     Yv *names = yav(0);
     ylong i = 0;
@@ -2850,8 +2962,76 @@ Yv *prelude_blocks(Yv *lines) {
         }
         i = i + 1;
     }
-    return yr(4, "lines", lines, "starts", starts, "names", names, "ix",
-              namemap_build(names));
+    Yv *out = yav(0);
+    ylong nb = yv_len(starts);
+    ylong b = 0;
+    while (b < nb) {
+        ylong lo = yv_l(ya_get(starts, b));
+        ylong hi = yv_len(lines);
+        if (b + 1 < nb) { hi = yv_l(ya_get(starts, b + 1)); }
+        Yv *nm = ya_get(names, b);
+        Yv *ir = yav(0);
+        Yv *txt = yav(0);
+        ylong li = lo;
+        while (li < hi) {
+            Yv *l = ya_get(lines, li);
+            if (li == lo && !ys_eq_lit(nm, "") && ys_eq(arch_label_name(l), nm)) {
+                ir = ir_push(ir, IR_LABEL, yv_l(lbl_new(nm)), 0, 0, 0, 0, 0, 0);
+            } else {
+                Yv *it = ir_parse_line(l);
+                if (yv_len(it) > 0) {
+                    ylong q = 0;
+                    while (q < yv_len(it)) { ir = ya_push(ir, ya_get(it, q)); q = q + 1; }
+                } else {
+                    txt = ya_push(txt, l);
+                    ir = ir_push(ir, IR_TEXT, yv_len(txt) - 1, 0, 0, 0, 0, 0, 0);
+                }
+            }
+            li = li + 1;
+        }
+        int falls = lines_fall(lines, lo, hi);
+        Yv *refs = lines_refs(lines, lo, hi);
+        out = ya_push(out, yr(6, "name", nm, "falls", yv_bool(falls), "refs", refs,
+                              "ir", ir, "blob", ys(""), "txt", txt));
+        b = b + 1;
+    }
+    return out;
+}
+
+Yv *arch_index(Yv *blks) {
+    Yv *names = yav(0);
+    ylong i = 0;
+    while (i < yv_len(blks)) {
+        names = ya_push(names, yr_get(ya_get(blks, i), "name"));
+        i = i + 1;
+    }
+    return yr(2, "blks", blks, "ix", namemap_build(names));
+}
+
+/* `blks` with each block a substitution names replaced by the blocks of its
+ * lines (`subs`: [name, line, ...] each; native.y arch_blocks_sub). */
+Yv *arch_blocks_sub(Yv *blks, Yv *subs) {
+    Yv *out = yav(0);
+    ylong i = 0;
+    while (i < yv_len(blks)) {
+        Yv *bk = ya_get(blks, i);
+        ylong at = -1;
+        ylong si = 0;
+        while (si < yv_len(subs)) {
+            if (ys_eq(ya_get(ya_get(subs, si), 0), yr_get(bk, "name"))) { at = si; }
+            si = si + 1;
+        }
+        if (at < 0) {
+            out = ya_push(out, bk);
+        } else {
+            Yv *sl = ya_get(subs, at);
+            Yv *nb = arch_blocks(ya_slice(sl, 1, yv_len(sl)));
+            ylong q = 0;
+            while (q < yv_len(nb)) { out = ya_push(out, ya_get(nb, q)); q = q + 1; }
+        }
+        i = i + 1;
+    }
+    return out;
 }
 
 /* Every reference the lines [lo, hi) make. */
@@ -2904,21 +3084,17 @@ int lines_fall(Yv *lines, ylong lo, ylong hi) {
 }
 
 /* Keep the blocks `roots` (the kept bodies' references) or a kept block
- * reaches, as shake_keep does, scanning only those. */
+ * reaches, as shake_keep does (native.y). */
 Yv *shake_prelude(Yv *pb, Yv *roots) {
-    Yv *lines = yr_get(pb, "lines");
-    Yv *starts = yr_get(pb, "starts");
-    Yv *names = yr_get(pb, "names");
-    ylong nb = yv_len(starts);
+    Yv *blks = yr_get(pb, "blks");
+    ylong nb = yv_len(blks);
     Yv *keep = yav(0);
     Yv *scanned = yav(0);
-    Yv *brefs = yav(0);
     ylong k = 0;
     while (k < nb) {
-        Yv *nm = ya_get(names, k);
+        Yv *nm = yr_get(ya_get(blks, k), "name");
         keep = ya_push(keep, yv_bool(yv_len(nm) == 0));
         scanned = ya_push(scanned, yv_bool(0));
-        brefs = ya_push(brefs, yav(0));
         k = k + 1;
     }
     ylong r = 0;
@@ -2937,16 +3113,11 @@ Yv *shake_prelude(Yv *pb, Yv *roots) {
             if (yv_b(ya_get(keep, b)) && !yv_b(ya_get(scanned, b))) {
                 ya_set(scanned, b, yv_bool(1));
                 more = 1;
-                ylong lo = yv_l(ya_get(starts, b));
-                ylong hi = yv_len(lines);
-                if (b + 1 < nb) {
-                    hi = yv_l(ya_get(starts, b + 1));
-                }
-                Yv *rs = lines_refs(lines, lo, hi);
-                ya_set(brefs, b, rs);
-                if (b + 1 < nb && lines_fall(lines, lo, hi)) {
+                Yv *bk = ya_get(blks, b);
+                if (b + 1 < nb && yv_b(yr_get(bk, "falls"))) {
                     ya_set(keep, b + 1, yv_bool(1));
                 }
+                Yv *rs = yr_get(bk, "refs");
                 ylong j = 0;
                 while (j < yv_len(rs)) {
                     ylong idx = namemap_get(yr_get(pb, "ix"), ya_get(rs, j));
@@ -2959,42 +3130,54 @@ Yv *shake_prelude(Yv *pb, Yv *roots) {
             b = b + 1;
         }
     }
-    Yv *pieces = yav(0);
+    Yv *ir = yav(0);
+    Yv *txt = yav(0);
     Yv *out = yav(0);
     Yv *knames = yav(0);
     Yv *krefs = yav(0);
     k = 0;
     while (k < nb) {
         if (yv_b(ya_get(keep, k))) {
-            ylong lo = yv_l(ya_get(starts, k));
-            ylong hi = yv_len(lines);
-            if (k + 1 < nb) {
-                hi = yv_l(ya_get(starts, k + 1));
+            Yv *bk = ya_get(blks, k);
+            /* the block's IR_TEXT items index its own lines: moved past the
+             * lines already taken */
+            ylong base = yv_len(txt);
+            Yv *bt = yr_get(bk, "txt");
+            ylong q = 0;
+            while (q < yv_len(bt)) { txt = ya_push(txt, ya_get(bt, q)); q = q + 1; }
+            Yv *bir = yr_get(bk, "ir");
+            /* a block read from the pack keeps its items packed until kept */
+            if (yv_len(bir) == 0 && yv_len(yr_get(bk, "blob")) > 0) {
+                bir = unpack_body(yr_get(bk, "blob"));
             }
-            ylong i = lo;
-            while (i < hi) {
-                pieces = ya_push(pieces, ya_get(lines, i));
-                pieces = ya_push(pieces, ys("\n"));
-                i = i + 1;
+            ylong at = 0;
+            while (at < yv_len(bir)) {
+                ylong f = yv_l(ya_get(bir, at));
+                if (f == IR_TEXT) {
+                    ir = ir_push(ir, f, yv_l(ya_get(bir, at + 1)) + base, 0, 0, 0, 0, 0, 0);
+                } else {
+                    ir = ir_push(ir, f, yv_l(ya_get(bir, at + 1)), yv_l(ya_get(bir, at + 2)),
+                                 yv_l(ya_get(bir, at + 3)), yv_l(ya_get(bir, at + 4)),
+                                 yv_l(ya_get(bir, at + 5)), yv_l(ya_get(bir, at + 6)),
+                                 yv_l(ya_get(bir, at + 7)));
+                }
+                at = at + IR_W;
             }
-            Yv *bk = ya_get(brefs, k);
+            Yv *bk_refs = yr_get(bk, "refs");
             ylong j = 0;
-            while (j < yv_len(bk)) {
-                out = ya_push(out, ya_get(bk, j));
+            while (j < yv_len(bk_refs)) {
+                out = ya_push(out, ya_get(bk_refs, j));
                 j = j + 1;
             }
-            knames = ya_push(knames, ya_get(names, k));
-            krefs = ya_push(krefs, bk);
+            knames = ya_push(knames, yr_get(bk, "name"));
+            krefs = ya_push(krefs, bk_refs);
         }
         k = k + 1;
     }
-    return yr(4, "text", ys_join(pieces, ys("")), "refs", out,
-              "bnames", knames, "brefs", krefs);
+    return yr(5, "ir", ir, "txt", txt, "refs", out, "bnames", knames, "brefs", krefs);
 }
 
-/* The prelude's lines, the thread runtime's after them when it is used. */
-/* a, then b: a NEW array (the Y `+` on arrays), which is the copy the loop
- * needs anyway. */
+/* a, then b: a NEW array (the Y `+` on arrays). */
 static Yv *lines_appended(Yv *a, Yv *b) {
     Yv *out = ya_slice(a, 0, yv_len(a));
     ylong i = 0;
@@ -3005,25 +3188,94 @@ static Yv *lines_appended(Yv *a, Yv *b) {
     return out;
 }
 
+/* The prelude's blocks, the thread runtime's and the float primitives' after
+ * them when a program's code calls into them (native.y). */
 Yv *prelude_with(Yv *core, int threads, int mathasm) {
-    /* The thread runtime's and the float primitives' lines only when a
-     * program's code calls into them (uses_threads / uses_math): a `native
-     * def` names one of those as its body, so the call is a reference like
-     * any other and the shaking keeps the block.
-     *
-     * Appending one at a time is not just tidier: `+` on an array makes a NEW
-     * one, so concatenating unconditionally copied the prelude's ~1500 lines
-     * for every compile that wanted neither -- 52K instructions on hello.y,
-     * which is 99.9% of what this module cost before the branches (callgrind,
-     * bench/compile_ir.sh). */
     Yv *out = core;
     if (threads) {
-        out = lines_appended(core, arch_prelude_threads_lines());
+        out = lines_appended(out, arch_set(ys("threads")));
     }
     if (mathasm) {
-        out = lines_appended(out, arch_math_lines());
+        out = lines_appended(out, arch_set(ys("math")));
     }
-    return out;
+    return arch_index(out);
+}
+
+/* The block set `which` (native.y arch_set): from the std pack this compile
+ * read (arch_pack), else built from the assembly text; once per process. */
+static Yv *arch_pack;
+static Yv *arch_cache_names;
+static Yv *arch_cache_sets;
+Yv *arch_unpack(Yv *pack, Yv *entry);
+
+Yv *arch_set(Yv *which) {
+    if (!arch_cache_names) { arch_cache_names = yav(0); arch_cache_sets = yav(0); }
+    if (!arch_pack) { arch_pack = ys(""); }
+    ylong at = -1;
+    ylong i = 0;
+    while (i < yv_len(arch_cache_names)) {
+        if (ys_eq(ya_get(arch_cache_names, i), which)) { at = i; }
+        i = i + 1;
+    }
+    if (at >= 0) {
+        return ya_get(arch_cache_sets, at);
+    }
+    Yv *got = arch_unpack(arch_pack, ys_cat(ys("arch."), which));
+    Yv *blks = yv_b(yr_get(got, "ok")) ? yr_get(got, "blks") : arch_blocks(arch_lines_of(which));
+    arch_cache_names = ya_push(arch_cache_names, which);
+    arch_cache_sets = ya_push(arch_cache_sets, blks);
+    return blks;
+}
+
+/* src/y/arch/<name>.s, searched like a std source (native.y arch_src). */
+static Yv *arch_src(Yv *name) {
+    Yv *cands = yav(0);
+    Yv *file = ys_cat(name, ys(".s"));
+    cands = ya_push(cands, ys_cat(ys("src/y/arch/"), file));
+    Yv *d = self_dir();
+    if (yv_len(d) > 0) {
+        cands = ya_push(cands, ys_cat(ys_cat(d, ys("/arch/")), file));
+        cands = ya_push(cands, ys_cat(ys_cat(d, ys("/src/y/arch/")), file));
+        cands = ya_push(cands, ys_cat(ys_cat(d, ys("/../src/y/arch/")), file));
+    }
+    ylong i = 0;
+    while (i < yv_len(cands)) {
+        Yv *t = read_file(ya_get(cands, i));
+        if (!yv_is_none(t)) { return yv_unwrap(t); }
+        i = i + 1;
+    }
+    puts_(ys_cat(ys_cat(ys_cat(ys_cat(ys("error: the arch runtime '"), file),
+                               ys("': not in this compiler's std pack, and no src/y/arch/")),
+                        file),
+                 ys(" beside it or in the working directory\n")));
+    exit_(1);
+    return ys("");
+}
+
+/* The lines of block set `which`, from its files on disk (native.y
+ * arch_lines_of). */
+Yv *arch_lines_of(Yv *which) {
+    Yv *files = arch_set_files(which);
+    Yv *texts = yav(0);
+    ylong i = 0;
+    while (i < yv_len(files)) {
+        texts = ya_push(texts, arch_src(ya_get(files, i)));
+        i = i + 1;
+    }
+    return arch_set_lines(which, texts);
+}
+
+/* This target's prelude, its os_call names checked (native.y arch_core). */
+Yv *arch_core(void) {
+    if (target_is_windows()) {
+        Yv *core = check_os_call_names(arch_set(ys("windows")));
+        /* the NT syscall self-test (arch/wselftest.s), which _start calls */
+        return lines_appended(core, arch_set(ys("wselftest")));
+    } else if (target_is_kernel()) {
+        return check_os_call_names(arch_set(ys("kernel")));
+    } else {
+        return check_os_call_names(arch_set(ys("linux")));
+    }
 }
 
 /* The references (a kept prelude's) that name a body not kept. */
@@ -3509,6 +3761,12 @@ static ylong frame_max = 0;
 static ylong gc_mode = 0;
 
 void set_gc_mode(ylong m) { gc_mode = m; }
+
+/* --gc-stress: link the collector and run a cycle at every allocating slow
+   path (arch_gc_stress_lines). A debugging switch, not a mode to ship. */
+static int gc_stress = 0;
+
+void set_gc_stress(int v) { gc_stress = v; }
 /* The label of the last literal closure gen_func_literal emitted. The array
  * methods read it right after gen(st, fnode) to call the body DIRECTLY when
  * the closure captures nothing -- the callee never looks at the record, so
@@ -4137,11 +4395,14 @@ Yv *infer_go(Yv *st, Yv *node) {
                 return uft;
             }
         } else if (yv_l(yr_get(unfold(dt), "k")) == K_tmap) {
-            /* the map lowering reads its {keys, vals, boxes} shape directly */
-            if (ys_eq_lit(yr_get(node, "key"), "keys")) { return normnode(yr(2, "k", yv_long(K_tarr), "of", yr_get(dt, "key"))); }
-            else if (ys_eq_lit(yr_get(node, "key"), "vals")) { return normnode(yr(2, "k", yv_long(K_tarr), "of", yr_get(dt, "of"))); }
-            else if (ys_eq_lit(yr_get(node, "key"), "boxes")) { return normnode(yr(2, "k", yv_long(K_tarr), "of", normnode(yr(2, "k", yv_long(K_topt), "of", yr_get(dt, "of"))))); }
-            else { return yr(1, "k", yv_long(K_tunk)); }
+            /* `m.k` is the entry (types.y typeof_dot, TODO.md item 10);
+             * `m.length` is the count, as for an array or a string. The map's
+             * own three fields are NOT reachable by dot -- `map$keys`/
+             * `map$vals`/`map$boxes` read those (see map_field). */
+            if (ys_eq_lit(yr_get(node, "key"), "length")) {
+                return yr(1, "k", yv_long(K_tlong));
+            }
+            return yr_get(dt, "of");
         } else if (yv_l(yr_get(dt, "k")) == K_tarr ||
                    yv_l(yr_get(dt, "k")) == K_tarrfix ||
                    yv_l(yr_get(dt, "k")) == K_tstr) {
@@ -4325,6 +4586,27 @@ Yv *infer_call(Yv *st, Yv *node) {
             } else {
                 return yr(1, "k", yv_long(K_tunk));
             }
+        } else if (ys_eq_lit(name, "map$keys") || ys_eq_lit(name, "map$vals") || ys_eq_lit(name, "map$boxes")) {
+            /* the emitter's own three fields (see map_field): [K], [V], [V?] */
+            Yv *mt2 = infer(st, ya_get(yr_get(node, "args"), 0));
+            if (yv_l(yr_get(mt2, "k")) == K_tmap) {
+                if (ys_eq_lit(name, "map$keys")) {
+                    return yr(2, "k", yv_long(K_tarr), "of", yr_get(mt2, "key"));
+                } else if (ys_eq_lit(name, "map$vals")) {
+                    return yr(2, "k", yv_long(K_tarr), "of", yr_get(mt2, "of"));
+                } else {
+                    return yr(2, "k", yv_long(K_tarr), "of", yr(2, "k", yv_long(K_topt), "of", yr_get(mt2, "of")));
+                }
+            } else {
+                return yr(1, "k", yv_long(K_tunk));
+            }
+        } else if (ys_eq_lit(name, "values")) {
+            Yv *kt = infer(st, ya_get(yr_get(node, "args"), 0));
+            if (yv_l(yr_get(kt, "k")) == K_tmap) {
+                return yr(2, "k", yv_long(K_tarr), "of", yr_get(kt, "of"));
+            } else {
+                return yr(1, "k", yv_long(K_tunk));
+            }
         } else if (ys_eq_lit(name, "sleep")) {
             return yr(1, "k", yv_long(K_tvoid));
         } else if (ys_eq_lit(name, "split") || ys_eq_lit(name, "argv")) {
@@ -4434,63 +4716,128 @@ int uses_argv(Yv *stmts) {
 }
 
 /* ── def collection (incl. hoisting) ────────────────────────────────────
- * Walk blocks/ifs/whiles/func-bodies; every named def and every let-bound
- * anonymous def becomes a top-level function (they capture nothing — the
- * checker proved it). Returns [{name, func}]. */
+ * Every named def and every let-bound anonymous def becomes a top-level
+ * function (the capture-free ones — the checker proved the rest capture).
+ * Returns [{name, func}].
+ *
+ * The walk below covers EVERY node kind, in the same order and shape as
+ * fv_walk's (see "free variables" above), because a `def` is a statement and
+ * a statement can live in a block, and a block is an expression: the two
+ * walks disagreeing is what let `if ({ def g() -> bool { true }; g() })`
+ * and a def in a call argument, an array element, a record value, an
+ * operand, an index or a loop head reach the assembler unhoisted, which
+ * then failed with `undefined label 'y_missing_...'`. Keep the two in step:
+ * one is free variables, the other definitions, and both need every arm. */
 
-Yv *collect_from_block(Yv *stmts, Yv *out) {
-    ylong i = 0;
-    while (i < yv_len(stmts)) {
-        out = collect_from_node(ya_get(stmts, i), out);
+Yv *collect_from_list(Yv *nodes, Yv *out) {
+    long i = 0;
+    while (i < yv_len(nodes)) {
+        out = collect_from_node(ya_get(nodes, i), out);
         i = i + 1;
     }
     return out;
 }
 
+Yv *collect_from_block(Yv *stmts, Yv *out) {
+    return collect_from_list(stmts, out);
+}
+
+/* A `def` declaration, and a `let` bound to a function literal: both are a
+ * name a call can resolve, so both are collected here and both recurse into
+ * the function body (a def nested in it is hoisted the same way). */
+static Yv *collect_decl(Yv *decl, Yv *out) {
+    Yv *v = yr_get(decl, "v");
+    if (yv_l(yr_get(v, "k")) == K_func) {
+        out = ya_push(out, yr(2, "name", yr_get(decl, "name"), "func", v));
+    }
+    return collect_from_node(v, out);
+}
+
 Yv *collect_from_node(Yv *node, Yv *out) {
     Yv *k = yr_get(node, "k");
     if (yv_l(k) == K_decl) {
-        if (ys_eq_lit(yr_get(node, "kind"), "def")) {
-            out = ya_push(out, yr(2, "name", yr_get(node, "name"), "func",
-                                  yr_get(node, "v")));
-            out = collect_from_node(yr_get(node, "v"), out);
-            ;
-        } else {
-            if (yv_l(yr_get(yr_get(node, "v"), "k")) == K_func) {
-                out = ya_push(out, yr(2, "name", yr_get(node, "name"), "func",
-                                      yr_get(node, "v")));
-                ;
-            }
-            out = collect_from_node(yr_get(node, "v"), out);
-            ;
-        }
-    } else if (yv_l(k) == K_func) {
-        out = collect_from_block(yr_get(yr_get(node, "body"), "stmts"), out);
-        ;
+        out = collect_decl(node, out);
+    } else if (yv_l(k) == K_un) {
+        out = collect_from_node(yr_get(node, "e"), out);
+    } else if (yv_l(k) == K_addr) {
+        out = collect_from_node(yr_get(node, "e"), out);
+    } else if (yv_l(k) == K_deref) {
+        out = collect_from_node(yr_get(node, "e"), out);
+    } else if (yv_l(k) == K_ret) {
+        out = collect_from_node(yr_get(node, "e"), out);
+    } else if (yv_l(k) == K_bin) {
+        out = collect_from_node(yr_get(node, "l"), out);
+        out = collect_from_node(yr_get(node, "r"), out);
+    } else if (yv_l(k) == K_array) {
+        out = collect_from_list(yr_get(node, "elems"), out);
+    } else if (yv_l(k) == K_rec) {
+        out = collect_from_list(yr_get(node, "vals"), out);
+    } else if (yv_l(k) == K_map) {
+        out = collect_from_list(yr_get(node, "vals"), out);
+    } else if (yv_l(k) == K_arrrep) {
+        out = collect_from_node(yr_get(node, "v"), out);
+    } else if (yv_l(k) == K_call) {
+        out = collect_from_node(yr_get(node, "callee"), out);
+        out = collect_from_list(yr_get(node, "args"), out);
+    } else if (yv_l(k) == K_index) {
+        out = collect_from_node(yr_get(node, "arr"), out);
+        out = collect_from_node(yr_get(node, "idx"), out);
+    } else if (yv_l(k) == K_slice) {
+        out = collect_from_node(yr_get(node, "arr"), out);
+        out = collect_from_node(yr_get(node, "lo"), out);
+        out = collect_from_node(yr_get(node, "hi"), out);
+    } else if (yv_l(k) == K_idxassign) {
+        out = collect_from_node(yr_get(node, "arr"), out);
+        out = collect_from_node(yr_get(node, "idx"), out);
+        out = collect_from_node(yr_get(node, "v"), out);
+    } else if (yv_l(k) == K_dot) {
+        out = collect_from_node(yr_get(node, "obj"), out);
+    } else if (yv_l(k) == K_dotassign) {
+        out = collect_from_node(yr_get(node, "obj"), out);
+        out = collect_from_node(yr_get(node, "v"), out);
+    } else if (yv_l(k) == K_store) {
+        out = collect_from_node(yr_get(node, "p"), out);
+        out = collect_from_node(yr_get(node, "v"), out);
+    } else if (yv_l(k) == K_assign) {
+        out = collect_from_node(yr_get(node, "v"), out);
+    } else if (yv_l(k) == K_incdec) {
+        out = collect_from_node(yr_get(node, "tgt"), out);
+    } else if (yv_l(k) == K_opassign) {
+        out = collect_from_node(yr_get(node, "tgt"), out);
+        out = collect_from_node(yr_get(node, "v"), out);
     } else if (yv_l(k) == K_kw_if) {
+        out = collect_from_node(yr_get(node, "cond"), out);
         out = collect_from_node(yr_get(node, "then"), out);
         if (yv_b(yr_get(node, "has_else"))) {
             out = collect_from_node(yr_get(node, "els"), out);
-            ;
         }
-        ;
     } else if (yv_l(k) == K_kw_while) {
+        out = collect_from_node(yr_get(node, "cond"), out);
         out = collect_from_node(yr_get(node, "body"), out);
-        ;
     } else if (yv_l(k) == K_kw_for) {
         out = collect_from_node(yr_get(node, "init"), out);
-        out = collect_from_node(yr_get(node, "body"), out);
+        out = collect_from_node(yr_get(node, "cond"), out);
         out = collect_from_node(yr_get(node, "step"), out);
-        ;
+        out = collect_from_node(yr_get(node, "body"), out);
     } else if (yv_l(k) == K_kw_foreach) {
+        out = collect_from_node(yr_get(node, "iter"), out);
         out = collect_from_node(yr_get(node, "body"), out);
-        ;
     } else if (yv_l(k) == K_forrange) {
+        out = collect_from_node(yr_get(node, "lo"), out);
+        out = collect_from_node(yr_get(node, "hi"), out);
         out = collect_from_node(yr_get(node, "body"), out);
-        ;
     } else if (yv_l(k) == K_block) {
         out = collect_from_block(yr_get(node, "stmts"), out);
-        ;
+    } else if (yv_l(k) == K_func) {
+        out = collect_from_node(yr_get(node, "body"), out);
+    } else if (yv_l(k) == K_sliceassign) {
+        out = collect_from_node(yr_get(node, "arr"), out);
+        out = collect_from_node(yr_get(node, "lo"), out);
+        out = collect_from_node(yr_get(node, "hi"), out);
+        out = collect_from_node(yr_get(node, "v"), out);
+    } else if (yv_l(k) == K_rectest || yv_l(k) == K_narrow ||
+               yv_l(k) == K_matchend) {
+        out = collect_from_node(yr_get(node, "e"), out);
     }
     return out;
 }
@@ -4593,7 +4940,8 @@ static Yv *intrinsics(void) {
          * once already. The NULL below is what makes that mistake impossible. */
         INTRINSICS =
             yavs(ys("print"), ys("syscall"), ys("len"), ys("push"), ys("some"),
-                ys("is_some"), ys("unwrap"), ys("opt$test"), ys("opt$val"), ys("trim"), ys("ord"),
+                ys("is_some"), ys("unwrap"), ys("opt$test"), ys("opt$val"), ys("values"),
+                ys("map$keys"), ys("map$vals"), ys("map$boxes"), ys("trim"), ys("ord"),
                 ys("byte_at"), ys("chr"), ys("tolong"), ys("tofloat"),
                 ys("tostring"),
                 ys("index_of"), ys("mod"), ys("prepend"), ys("last_index_of"), ys("join"),
@@ -5038,7 +5386,17 @@ Yv *gen_go(Yv *st, Yv *node) {
          * arm's binding: rectest checked its tag) */
         Yv *src = infer(st, yr_get(node, "e"));
         st = gen(st, yr_get(node, "e"));
-        return gen_convert(st, src, narrow_type(src, yr_get(node, "typ")), 0);
+        Yv *dst = narrow_type(src, yr_get(node, "typ"));
+        if (yv_l(yr_get(src, "k")) == K_topt &&
+            yv_l(yr_get(dst, "k")) != K_topt) {
+            /* `if let long n = v`: the binding is the option's payload -- the
+             * deref `unwrap` does, trap and all (rectest proved it is there).
+             * The box holds the payload in the destination type's own layout,
+             * so there is no conversion to do afterwards. */
+            st = emit_insn(st, F_JZ_L, yv_l(lbl_new(ys("y_opt_unwrap"))), 0, 0, 0, 0, 0, 0);
+            return emit_insn(st, F_MOV_0_R, R_RAX, -1, 1, -1, -1, R_RAX, 64);
+        }
+        return gen_convert(st, src, dst, 0);
     } else if (yv_l(k) == K_matchend) {
         /* unreachable when the checker accepted the match */
         st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_match_fail"))), 0, 0, 0, 0, 0, 0);
@@ -5695,7 +6053,9 @@ Yv *gen_make_closure(Yv *st, Yv *label, Yv *caps) {
 Yv *gen_range(Yv *st, Yv *node) {
     st = gen_push_args(st, yr_get(node, "args"));
     st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_range"))), 0, 0, 0, 0, 0, 0);
-    return emit_insn(st, F_ADD_I_R, 8, R_RSP, 64, 0, 0, 0, 0);
+    st = emit_insn(st, F_ADD_I_R, 8, R_RSP, 64, 0, 0, 0, 0);
+    /* range() is [long]: one mark per array (see ideas/OPTIMIZE.md A8). */
+    return mark_pf_arr(st, yr(1, "k", yv_long(K_tlong)));
 }
 
 /* arr[lo:hi] — half-open, clamped, always a NEW heap array (the operands
@@ -5728,7 +6088,8 @@ Yv *gen_slice(Yv *st, Yv *node) {
     st = emit_insn(st, F_MOV_I_R, slesz, R_RAX, 64, 0, 0, 0, 0);
     st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
     st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_arr_slice"))), 0, 0, 0, 0, 0, 0);
-    return emit_insn(st, F_ADD_I_R, 32, R_RSP, 64, 0, 0, 0, 0);
+    st = emit_insn(st, F_ADD_I_R, 32, R_RSP, 64, 0, 0, 0, 0);
+    return mark_pf_arr(st, arr_elem_type(infer(st, yr_get(node, "arr"))));
 }
 
 // s[lo:hi] -- the substring, half-open and clamped like an array slice;
@@ -5796,8 +6157,16 @@ Yv *gen_rectest(Yv *st, Yv *node) {
     st = gen(st, yr_get(node, "e"));
     if (yv_l(sk) == K_tunion) {
         return gen_tag_in(st, rectest_members(s, yr_get(node, "typ")), s);
+    } else if (yv_l(sk) == K_topt) {
+        /* `if let long n = v` where v is an option (TODO.md item 13; `some(m)`
+         * lowers to exactly this). The checker only lets a scalar pattern
+         * reach here, so the test is the option's own: %rax is 0 for none. */
+        st = emit_insn(st, F_TEST_R_R, R_RAX, 64, R_RAX, 64, 0, 0, 0);
+        st = emit_insn(st, F_SETNE_R, R_RAX, 8, 0, 0, 0, 0, 0);
+        return emit_insn(st, F_MOVZBQ_R_R, R_RAX, 8, R_RAX, 64, 0, 0, 0);
     } else {
-        // a record: the checker took the pattern as its own type
+        /* a record, or the scalar itself: the checker took the pattern as its
+         * own type, so it always matches */
         return emit_insn(st, F_MOV_I_R, 1, R_RAX, 64, 0, 0, 0, 0);
     }
 }
@@ -6011,7 +6380,17 @@ Yv *gen_in(Yv *st, Yv *node) {
     ylong cl = yv_l(yr_get(node, "col"));
     Yv *zero = n_num(ys("0"), ln, cl);
     Yv *r = unfold(infer(st, yr_get(node, "r")));
-    if (yv_l(yr_get(r, "k")) == K_tstr) {
+    ylong rk = yv_l(yr_get(r, "k"));
+    if (rk == K_tmap) {
+        /* `"k" in m` is the map read's own scan, in its "has" mode (TODO.md
+         * item 14): the key is on the left, so the Index node carries them
+         * swapped from what gen_map_get expects. */
+        Yv *ix = yr(5, "k", yv_long(K_index), "arr", yr_get(node, "r"),
+                    "idx", yr_get(node, "l"), "line", yv_long(ln),
+                    "col", yv_long(cl));
+        return gen_map_get(st, ix, ys("has"));
+    }
+    if (rk == K_tstr) {
         Yv *needle = yr_get(node, "l");
         if (yv_l(yr_get(unfold(infer(st, yr_get(node, "l"))), "k")) == K_tbyte) {
             needle = n_call1(ys("chr"), yr_get(node, "l"), ln, cl);
@@ -7366,16 +7745,28 @@ Yv *gen_call(Yv *st, Yv *node) {
             return gen_clock_us(st, node);
         } else if (ys_eq_lit(name, "time_us")) {
             return emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_time_us"))), 0, 0, 0, 0, 0, 0);
+        } else if (ys_eq_lit(name, "map$keys") || ys_eq_lit(name, "map$vals") || ys_eq_lit(name, "map$boxes")) {
+            return gen_map_field(st, node, ys_eq_lit(name, "map$keys") ? "map$keys" : (ys_eq_lit(name, "map$vals") ? "map$vals" : "map$boxes"));
         } else if (ys_eq_lit(name, "keys")) {
             /* a copy of the map's keys array (gen_maplit's {keys, vals, boxes}) */
             Yv *ln = yr_get(node, "line");
             Yv *cl = yr_get(node, "col");
             Yv *whole = yr(6, "k", yv_long(K_slice),
-                           "arr", n_dot(ya_get(yr_get(node, "args"), 0), ys("keys"), yv_l(ln), yv_l(cl)),
+                           "arr", map_field(ya_get(yr_get(node, "args"), 0), "keys", yv_l(ln), yv_l(cl)),
                            "lo", yr(3, "k", yv_long(K_void), "line", ln, "col", cl),
                            "hi", yr(3, "k", yv_long(K_void), "line", ln, "col", cl),
                            "line", ln, "col", cl);
             return gen_slice(st, whole);
+        } else if (ys_eq_lit(name, "values")) {
+            /* a copy of the map's values array, in the same order as keys(m) */
+            Yv *vln = yr_get(node, "line");
+            Yv *vcl = yr_get(node, "col");
+            Yv *vwhole = yr(6, "k", yv_long(K_slice),
+                            "arr", map_field(ya_get(yr_get(node, "args"), 0), "vals", yv_l(vln), yv_l(vcl)),
+                            "lo", yr(3, "k", yv_long(K_void), "line", vln, "col", vcl),
+                            "hi", yr(3, "k", yv_long(K_void), "line", vln, "col", vcl),
+                            "line", vln, "col", vcl);
+            return gen_slice(st, vwhole);
         } else if (ys_eq_lit(name, "sleep")) {
             return gen_sleep(st, node);
         } else if (ys_eq_lit(name, "heap_used")) {
@@ -7457,8 +7848,152 @@ static ylong arr_direct_label(Yv *st, Yv *fnode) {
     return lit_label;
 }
 
-/* The per-element call for an array method. */
-static Yv *gen_arr_call(Yv *st, ylong foff, Yv *arg_regs, ylong direct) {
+/* Whether a literal closure's body can be emitted INSIDE the loop. It must
+ * not need anything a separate frame gives it: no captures, no `self`, no
+ * nested function literal, and no append to one of its own parameters (those
+ * move into an own copy at a function boundary, see bind_own). */
+static int param_appended(Yv *ps, Yv *ap) {
+    ylong i = 0;
+    while (i < yv_len(ps)) {
+        if (name_in(ap, ya_get(ps, i))) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+static int arr_can_inline(Yv *st, Yv *fnode) {
+    if (yv_l(yr_get(fnode, "k")) != K_func) { return 0; }
+    if (name_in(fv_ids(yr_get(fnode, "body"), yav(0)), ys("self"))) { return 0; }
+    if (yv_len(box_names(fnode)) > 0) { return 0; }
+    if (param_appended(yr_get(fnode, "params"),
+                       app_names(yr_get(fnode, "body"), 0, yav(0)))) {
+        return 0;
+    }
+    return 1;
+}
+
+/* Captures of a literal that will be inlined: box each enclosing binding (the
+ * shared cell every closure sees, see box_capture). The record itself is built
+ * at the inline point, where the live temporaries have been promoted to block
+ * slots -- building it here would hand out slots in the temporaries' range,
+ * which is exactly the collision gen_lambda_inline's promotion exists to
+ * avoid. */
+static Yv *arr_box_caps(Yv *st, Yv *fnode) {
+    Yv *caps = fn_captures(fnode, yr_get(yr_get(st, "fns"), "ix"), ys(""));
+    ylong i = 0;
+    while (i < yv_len(caps)) {
+        st = box_capture(st, ya_get(caps, i));
+        i = i + 1;
+    }
+    return st;
+}
+
+/* `return` inside an inlined body lands on this state's end_label. */
+static Yv *st_end_label(Yv *st, ylong l) {
+    return yr(15, "ir", yr_get(st, "ir"), "txt", yr_get(st, "txt"), "rodata",
+              yr_get(st, "rodata"), "uid", yr_get(st, "uid"), "fuid",
+              yr_get(st, "fuid"), "loc", yr_get(st, "loc"), "env",
+              yr_get(st, "env"), "slots", yr_get(st, "slots"), "temp",
+              yr_get(st, "temp"), "self_label", yr_get(st, "self_label"),
+              "end_label", yv_long(l), "fns", yr_get(st, "fns"), "bodies",
+              yr_get(st, "bodies"), "btext", yr_get(st, "btext"), "blabels",
+              yr_get(st, "blabels"));
+}
+
+/* Emit a literal closure's body inside the caller's loop, its parameters bound
+ * to the values the loop has in arg_regs. This is what makes
+ * `a.foreach((x) => ...)` cost what the raw loop costs: no record, no separate
+ * body, no call/ret and no frame per element. The body's value ends in %rax,
+ * exactly like the call it replaces. */
+static Yv *gen_lambda_inline(Yv *st, Yv *fnode, Yv *arg_regs) {
+    ylong save_slots = yv_l(yr_get(st, "slots"));
+    ylong save_temp = yv_l(yr_get(st, "temp"));
+    ylong save_end = yv_l(yr_get(st, "end_label"));
+    /* The caller's live temporaries (the method's own slots) become block
+     * slots first: the body's statements declare locals -- a compound
+     * assignment's synthetic `let`, for one -- and those are allocated from
+     * st.slots, which would otherwise land on top of them. */
+    st = st_slots(st, save_slots + save_temp);
+    st = st_temp(st, 0);
+    Yv *params = yr_get(fnode, "params");
+    /* The parameters first: the record below clobbers %rax/%rcx, which is
+     * where the loop has the element and the index. */
+    ylong n = yv_len(params);
+    if (n > yv_len(arg_regs)) { n = yv_len(arg_regs); }
+    ylong base = yv_l(yr_get(st, "slots"));
+    st = st_slots(st, base + n);
+    Yv *rl = next_loc(st);
+    st = yr_get(rl, "st");
+    ylong lbl = yv_l(yr_get(rl, "label"));
+    ylong i = 0;
+    while (i < n) {
+        ylong off = (base + 1 + i) * -8;
+        st = emit_insn(st, F_MOV_R_D, yv_l(ya_get(arg_regs, i)), 64, R_RBP, -1,
+                       1, off, -1);
+        st = env_define(st, ya_get(params, i), ys("param"), off, yv_long(-1),
+                        ys(""), ya_get(yr_get(fnode, "ptypes"), i));
+        i = i + 1;
+    }
+    /* The stack closure record the captures read through: word j+1 is capture
+     * j's cell pointer (word 0 is the code pointer, which an inlined body
+     * never reads, so it is only reserved). Rebuilt each iteration, so a
+     * capture whose cell was refreshed -- a loop variable -- is picked up. */
+    Yv *caps = fn_captures(fnode, yr_get(yr_get(st, "fns"), "ix"), ys(""));
+    ylong m = yv_len(caps);
+    Yv *origs = yav(0);
+    if (m > 0) {
+        ylong rbase = yv_l(yr_get(st, "slots"));
+        ylong rptr = (rbase + m + 1) * -8;
+        ylong rsoff = (rbase + m + 2) * -8;
+        st = st_slots(st, rbase + m + 2);
+        st = emit_insn(st, F_LEA_D_R, R_RBP, -1, 1, rptr, -1, R_RAX, 64);
+        st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, rsoff, -1);
+        ylong ci = 0;
+        while (ci < m) {
+            st = gen_cap_ptr(st, ya_get(caps, ci));
+            st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1,
+                           rptr + 8 * (ci + 1), -1);
+            ci = ci + 1;
+        }
+        /* The enclosing bindings, so they can be put back after the body:
+         * env_define APPENDS to the env array in place (arrays are
+         * references), so saving and restoring the array itself would restore
+         * the capture entries too and let every later read of the name go
+         * through a record that no longer exists. */
+        ylong cj = 0;
+        while (cj < m) {
+            Yv *cn = ya_get(caps, cj);
+            Yv *oe = env_find(st, cn);
+            origs = ya_push(origs, oe);
+            st = env_define(st, cn, ys("capture"), rsoff, yv_long(-1),
+                            ys_tostring(yv_long(cj)), yr_get(oe, "typ"));
+            cj = cj + 1;
+        }
+    }
+    st = st_end_label(st, lbl);
+    st = gen_block(st, yr_get(fnode, "body"));
+    st = emit_label(st, lbl);
+    /* Put the enclosing bindings back (see the note above). */
+    ylong ck = 0;
+    while (ck < m) {
+        Yv *cn = ya_get(caps, ck);
+        Yv *oe = ya_get(origs, ck);
+        st = env_define(st, cn, yr_get(oe, "kind"), yv_l(yr_get(oe, "off")),
+                        yr_get(oe, "label"), yr_get(oe, "mark"),
+                        yr_get(oe, "typ"));
+        ck = ck + 1;
+    }
+    st = st_end_label(st, save_end);
+    st = st_slots(st, save_slots);
+    return st_temp(st, save_temp);
+}
+
+/* The per-element call for an array method: the body inlined when the literal
+ * allows it (arr_can_inline), a direct call when it captures nothing, and the
+ * closure record otherwise. */
+static Yv *gen_arr_call(Yv *st, ylong foff, Yv *arg_regs, ylong direct,
+                        Yv *fnode, int inl) {
+    if (inl) { return gen_lambda_inline(st, fnode, arg_regs); }
     if (direct < 0) { return gen_closure_call(st, foff, arg_regs); }
     ylong i = 0;
     while (i < yv_len(arg_regs)) {
@@ -7489,6 +8024,28 @@ static Yv *gen_arr_new_empty(Yv *st) {
     st = emit_insn(st, F_MOV_R_D, R_RCX, 64, R_RAX, -1, 1, 8, -1);
     st = emit_insn(st, F_MOV_R_D, R_RCX, 64, R_RAX, -1, 1, 16, -1);
     return emit_insn(st, F_MOV_R_D, R_RCX, 64, R_RAX, -1, 1, 24, -1);
+}
+
+/* Whether an array of this element type can hold a reference. A long, bool,
+ * float or byte element cannot, and neither can a packed [byte], so the
+ * collector may skip the data block's payload (y_alloc_pf's bit 2). */
+static int elem_pf(Yv *t) {
+    ylong k = yv_l(yr_get(t, "k"));
+    return k == K_tlong || k == K_tbool || k == K_tfloat || k == K_tbyte;
+}
+
+/* The array header is in %rax: mark the block its data pointer names as
+ * pointer-free. The header keeps the data pointer in word 2, and that block's
+ * own header word (the one before its payload) carries the flags, so bit 2 is
+ * where y_gc_drain looks. Only for element types that cannot hold a
+ * reference. */
+static Yv *mark_pf_arr(Yv *st, Yv *t) {
+    if (!elem_pf(t)) { return st; }
+    st = emit_insn(st, F_MOV_D_R, R_RAX, -1, 1, 16, -1, R_RDX, 64);
+    st = emit_insn(st, F_MOV_D_R, R_RDX, -1, 1, -8, -1, R_RCX, 64);
+    st = emit_insn(st, F_MOV_I_R, 4, R_R8, 64, 0, 0, 0, 0);
+    st = emit_insn(st, F_OR_R_R, R_R8, 64, R_RCX, 64, 0, 0, 0);
+    return emit_insn(st, F_MOV_R_D, R_RCX, 64, R_RDX, -1, 1, -8, -1);
 }
 
 static Yv *gen_arr_push_slot(Yv *st, ylong roff, ylong esz) {
@@ -7712,9 +8269,15 @@ static Yv *gen_arr_sort(Yv *st, Yv *node, int sorted) {
         st = emit_insn(st, F_ADD_I_R, 32, R_RSP, 64, 0, 0, 0, 0);
         st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, aoff, -1);
     }
-    st = gen(st, ya_get(args, 0));
-    ylong adir = arr_direct_label(st, ya_get(args, 0));
-    st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, foff, -1);
+    int inl = arr_can_inline(st, ya_get(args, 0));
+    ylong adir = -1;
+    if (inl) {
+        st = arr_box_caps(st, ya_get(args, 0));
+    } else {
+        st = gen(st, ya_get(args, 0));
+        adir = arr_direct_label(st, ya_get(args, 0));
+        st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, foff, -1);
+    }
     st = emit_insn(st, F_MOV_I_R, 1, R_RAX, 64, 0, 0, 0, 0);
     st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, ioff, -1);
     Yv *loop_i = next_loc(st);
@@ -7748,7 +8311,7 @@ static Yv *gen_arr_sort(Yv *st, Yv *node, int sorted) {
     st = emit_insn(st, F_MOV_R_D, R_RDX, 64, R_RBP, -1, 1, ajoff, -1);
     st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, ajoff, -1, R_RAX, 64);
     st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, koff, -1, R_RCX, 64);
-    st = gen_arr_call(st, foff, yav(2, yv_long(R_RAX), yv_long(R_RCX)), adir);
+    st = gen_arr_call(st, foff, yav(2, yv_long(R_RAX), yv_long(R_RCX)), adir, ya_get(args, 0), inl);
     st = emit_insn(st, F_CMP_I_R, 0, R_RAX, 64, 0, 0, 0, 0);
     st = emit_insn(st, F_JLE_L, yv_l(yr_get(shift_done, "label")), 0, 0, 0, 0, 0, 0);
     st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, aoff, -1, R_RAX, 64);
@@ -7832,9 +8395,15 @@ static Yv *gen_arr_iter_method(Yv *st, Yv *node, Yv *key, Yv *at) {
         st = st_temp(st, save + 5);
         st = gen(st, yr_get(dot, "obj"));
         st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, aoff, -1);
-        st = gen(st, fnode);
-        ylong adir = arr_direct_label(st, fnode);
-        st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, foff, -1);
+        int inl = arr_can_inline(st, fnode);
+        ylong adir = -1;
+        if (inl) {
+            st = arr_box_caps(st, fnode);
+        } else {
+            st = gen(st, fnode);
+            adir = arr_direct_label(st, fnode);
+            st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, foff, -1);
+        }
         st = gen_arr_new_empty(st);
         st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, roff, -1);
         st = emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
@@ -7851,7 +8420,7 @@ static Yv *gen_arr_iter_method(Yv *st, Yv *node, Yv *key, Yv *at) {
         Yv *regs = yav(0);
         if (nargs >= 1) { regs = ya_push(regs, yv_long(R_RAX)); }
         if (nargs >= 2) { regs = ya_push(regs, yv_long(R_RCX)); }
-        st = gen_arr_call(st, foff, regs, adir);
+        st = gen_arr_call(st, foff, regs, adir, fnode, inl);
         if (ys_eq_lit(key, "map")) {
             st = gen_arr_push_slot(st, roff, resesz);
         } else {
@@ -7880,9 +8449,15 @@ static Yv *gen_arr_iter_method(Yv *st, Yv *node, Yv *key, Yv *at) {
         st = st_temp(st, save + 4);
         st = gen(st, yr_get(dot, "obj"));
         st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, aoff, -1);
-        st = gen(st, fnode);
-        ylong adir = arr_direct_label(st, fnode);
-        st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, foff, -1);
+        int inl = arr_can_inline(st, fnode);
+        ylong adir = -1;
+        if (inl) {
+            st = arr_box_caps(st, fnode);
+        } else {
+            st = gen(st, fnode);
+            adir = arr_direct_label(st, fnode);
+            st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, foff, -1);
+        }
         st = emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
         st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, ioff, -1);
         Yv *loop = next_loc(st);
@@ -7899,7 +8474,7 @@ static Yv *gen_arr_iter_method(Yv *st, Yv *node, Yv *key, Yv *at) {
         Yv *regs = yav(0);
         if (nargs >= 1) { regs = ya_push(regs, yv_long(R_RAX)); }
         if (nargs >= 2) { regs = ya_push(regs, yv_long(R_RCX)); }
-        st = gen_arr_call(st, foff, regs, adir);
+        st = gen_arr_call(st, foff, regs, adir, fnode, inl);
         if (ys_eq_lit(key, "foreach")) {
             st = emit_insn(st, F_INC_D, R_RBP, -1, 1, ioff, -1, 0, 0);
             st = emit_insn(st, F_JMP_L, yv_l(yr_get(loop, "label")), 0, 0, 0, 0, 0, 0);
@@ -7953,9 +8528,15 @@ static Yv *gen_arr_iter_method(Yv *st, Yv *node, Yv *key, Yv *at) {
         st = st_temp(st, save + 4);
         st = gen(st, yr_get(dot, "obj"));
         st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, aoff, -1);
-        st = gen(st, fnode);
-        ylong adir = arr_direct_label(st, fnode);
-        st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, foff, -1);
+        int inl = arr_can_inline(st, fnode);
+        ylong adir = -1;
+        if (inl) {
+            st = arr_box_caps(st, fnode);
+        } else {
+            st = gen(st, fnode);
+            adir = arr_direct_label(st, fnode);
+            st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, foff, -1);
+        }
         st = gen(st, ya_get(args, 1));
         st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, acoff, -1);
         st = emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
@@ -7968,7 +8549,7 @@ static Yv *gen_arr_iter_method(Yv *st, Yv *node, Yv *key, Yv *at) {
         st = gen_arr_loop_head(st, at, aoff, ioff, yv_l(yr_get(done, "label")));
         st = emit_insn(st, F_MOV_R_R, R_RAX, 64, R_RCX, 64, 0, 0, 0);
         st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, acoff, -1, R_RAX, 64);
-        st = gen_arr_call(st, foff, yav(2, yv_long(R_RAX), yv_long(R_RCX)), adir);
+        st = gen_arr_call(st, foff, yav(2, yv_long(R_RAX), yv_long(R_RCX)), adir, fnode, inl);
         st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, acoff, -1);
         st = emit_insn(st, F_INC_D, R_RBP, -1, 1, ioff, -1, 0, 0);
         st = emit_insn(st, F_JMP_L, yv_l(yr_get(loop, "label")), 0, 0, 0, 0, 0, 0);
@@ -8151,6 +8732,21 @@ Yv *gen_print_scalar(Yv *st, Yv *arg, Yv *t) {
         st = gen_helper1(st, ys("y_bigint_print"));
         return emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
     } else if (yv_l(yr_get(t, "k")) == K_tstr) {
+        if (yv_l(yr_get(arg, "k")) == K_str) {
+            /* print("literal"): one helper call writes the literal's own bytes
+             * and the newline, so a program that only prints literals links
+             * y_print_lit and not the string helpers. gen(st, arg) already put
+             * the length HEADER in %rax; its bytes start eight bytes in. */
+            st = emit_insn(st, F_ADD_I_R, 8, R_RAX, 64, 0, 0, 0, 0);
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_MOV_I_R, yv_len(yr_get(arg, "v")), R_RAX, 64,
+                           0, 0, 0, 0);
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_print_lit"))),
+                           0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_ADD_I_R, 16, R_RSP, 64, 0, 0, 0, 0);
+            return emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
+        }
         st = gen_helper1(st, ys("y_print_hstr"));
         return emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
     } else if (yv_l(yr_get(t, "k")) == K_tfloat) {
@@ -8239,7 +8835,8 @@ Yv *gen_cons(Yv *st, Yv *node) {
     st = emit_insn(st, F_MOV_I_R, cesz, R_RAX, 64, 0, 0, 0, 0);
     st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
     st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_arr_cat"))), 0, 0, 0, 0, 0, 0);
-    return emit_insn(st, F_ADD_I_R, 24, R_RSP, 64, 0, 0, 0, 0);
+    st = emit_insn(st, F_ADD_I_R, 24, R_RSP, 64, 0, 0, 0, 0);
+    return mark_pf_arr(st, crt);
 }
 
 /* `l + r` on two arrays whose element types differ by an implicit numeric
@@ -8337,7 +8934,8 @@ Yv *gen_cat_arr(Yv *st, Yv *node, Yv *lt, Yv *rt) {
     st = emit_insn(st, F_MOV_I_R, esz, R_RAX, 64, 0, 0, 0, 0);
     st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
     st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_arr_cat"))), 0, 0, 0, 0, 0, 0);
-    return emit_insn(st, F_ADD_I_R, 24, R_RSP, 64, 0, 0, 0, 0);
+    st = emit_insn(st, F_ADD_I_R, 24, R_RSP, 64, 0, 0, 0, 0);
+    return mark_pf_arr(st, ety);
 }
 
 /* acc = acc + <constant>, with the layout above still in place. */
@@ -8832,6 +9430,16 @@ Yv *gen_foreach(Yv *st, Yv *node) {
         eltyp = yr_get(elt, "of");
         ;
     }
+    if (yv_l(yr_get(elt, "k")) == K_tmap) {
+        /* keys: the map record is {boxes@0, keys@8, vals@16} (gen_maplit),
+         * and a key is a str -- one word, like every other unboxed value. */
+        eltyp = yr_get(elt, "key");
+        ;
+    }
+    if (yv_l(yr_get(elt, "k")) == K_tstr) {
+        eltyp = yr(1, "k", yv_long(K_tbyte));
+        ;
+    }
     st = gen(st, yr_get(node, "iter"));
     st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RBP, -1, 1, aoff, -1);
     st = emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
@@ -8843,18 +9451,45 @@ Yv *gen_foreach(Yv *st, Yv *node) {
     Yv *r2 = next_loc(st);
     st = yr_get(r2, "st");
     st = emit_label(st, yv_l(yr_get(r1, "label")));
-    /* i < len(arr) — the heap header keeps the length in slot 0. The length
-     * is re-read on every iteration, not hoisted into a fourth slot: a body
-     * that appends to the array it walks goes on seeing what it appended
+    /* i < len(it) — a heap array and a string both keep their length in the
+     * first word of the header, and a map keeps it in its keys array. The
+     * length is re-read on every iteration, not hoisted into a fourth slot: a
+     * body that appends to the array it walks goes on seeing what it appended
      * (`foreach (x in a) { a += x }` never ends), which hoisting would
-     * change. */
+     * change. The same goes for a map: `foreach (k in m) { m["k2"] = 1 }`
+     * reaches the key it added, exactly as the array form reaches its
+     * element. */
+    int is_map = yv_l(yr_get(elt, "k")) == K_tmap;
+    int is_str = yv_l(yr_get(elt, "k")) == K_tstr;
     st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, aoff, -1, R_RDX, 64);
-    st = emit_insn(st, F_MOV_0_R, R_RDX, -1, 1, -1, -1, R_RCX, 64);
+    if (is_map) {
+        /* A map keeps no length of its own: %rdx is the record, and its keys
+         * array (at +8) is the thing with the length in its first word. */
+        st = emit_insn(st, F_MOV_M_R, R_RDX, -1, 1, 8, -1, R_R11, 64);
+        st = emit_insn(st, F_MOV_0_R, R_R11, -1, 1, -1, -1, R_RCX, 64);
+    } else {
+        /* an array header and a string header both start with the length */
+        st = emit_insn(st, F_MOV_0_R, R_RDX, -1, 1, -1, -1, R_RCX, 64);
+    }
     st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, ioff, -1, R_RAX, 64);
     st = emit_insn(st, F_CMP_R_R, R_RCX, 64, R_RAX, 64, 0, 0, 0);
     st = emit_insn(st, F_JGE_L, yv_l(yr_get(r2, "label")), 0, 0, 0, 0, 0, 0);
-    /* x = arr[i] */
-    st = elem_load(st, arr_elem_bytes(elt), R_RDX, R_RAX, R_RCX);
+    /* x = it[i] */
+    if (is_map) {
+        /* The key out of the keys array: %r11 is its header (still there from
+         * the length's load -- %rax holds the counter by now), and its data
+         * pointer is 16 bytes into it. */
+        st = emit_insn(st, F_MOV_D_R, R_R11, -1, 1, 16, -1, R_R11, 64);
+        st = emit_insn(st, F_MOV_M_R, R_R11, R_RAX, 8, 0, -1, R_RCX, 64);
+    } else if (is_str) {
+        /* A string's bytes follow its length, in place: 8(%rdx,%rax,1), with
+         * no data pointer to load first (a heap array has one, a string does
+         * not -- which is why an owned string can append into its own
+         * buffer). */
+        st = emit_insn(st, F_MOVZBQ_M_R, R_RDX, R_RAX, 1, 8, -1, R_RCX, 64);
+    } else {
+        st = elem_load(st, arr_elem_bytes(elt), R_RDX, R_RAX, R_RCX);
+    }
     st = emit_insn(st, F_MOV_R_D, R_RCX, 64, R_RBP, -1, 1, voff, -1);
     /* continue -> just before the increment, for the reason in gen_forrange */
     Yv *r3 = next_loc(st);
@@ -10988,6 +11623,19 @@ Yv *gen_dotassign(Yv *st, Yv *node) {
     Yv *dobj = yr_get(node, "obj");
     Yv *dkey = yr_get(node, "key");
     Yv *dt = infer(st, dobj);
+    if (yv_l(yr_get(dt, "k")) == K_tmap) {
+        /* `m.k = v` is the entry, exactly as `m["k"] = v` (types.y
+         * dotassign_map, TODO.md item 10) -- the store creates or replaces it
+         * and never traps. */
+        if (ys_eq_lit(dkey, "length") || ys_eq_lit(dkey, "ptr")) {
+            /* the checker has already said this is not a place; trap rather
+             * than emit a store somewhere wrong */
+            st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_match_fail"))), 0, 0, 0, 0, 0, 0);
+            return emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
+        }
+        Yv *asg = yr(6, "k", yv_long(K_idxassign), "arr", dobj, "idx", n_str(dkey, yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col"))), "v", yr_get(node, "v"), "line", yr_get(node, "line"), "col", yr_get(node, "col"));
+        return gen_map_set(st, asg);
+    }
     ylong idx = rec_field_idx(dt, dkey);
     st = gen(st, dobj);
     st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
@@ -12033,15 +12681,47 @@ Yv *gen_dot(Yv *st, Yv *node) {
     } else if (yv_l(tk) == K_tunion) {
         st = gen(st, dobj);
         return gen_union_slot(st, t, dkey, 0);
+    } else if (yv_l(tk) == K_tmap) {
+        /* `m.k` is the entry (types.y typeof_dot, TODO.md item 10):
+         * `m.length` is the property, any other name is the entry, the
+         * program stops when it is not there. The emitter's own three fields
+         * come through map$keys/map$vals/map$boxes (map_field), never by
+         * dot. */
+        if (ys_eq_lit(dkey, "length")) {
+            return gen_prop(st, dobj, dkey, yv_l(yr_get(node, "line")),
+                            yv_l(yr_get(node, "col")));
+        }
+        return gen_dot_map(st, dobj, dkey, yv_l(yr_get(node, "line")),
+                           yv_l(yr_get(node, "col")));
     } else {
         return gen_dot_rec(st, dobj, dkey, t);
     }
+}
+
+/* `m.k`: the entry named "k", or the program stops with the key in the
+ * message (a typo must not read as a missing entry). The checker typed the
+ * value; the scan code is gen_map_get's. */
+static Yv *gen_dot_map(Yv *st, Yv *obj, Yv *dkey, long ln, long cl) {
+    Yv *idx = yr(6, "k", yv_long(K_index), "arr", obj, "idx", n_str(dkey, ln, cl), "line", yv_long(ln), "col", yv_long(cl));
+    return gen_map_get(st, idx, ys("dot"));
 }
 
 /* Field `dkey` of a union value (types.y union_field: every member has
  * it, with one type): read into %rax from the record in %rax, or (store)
  * %rax written to the record in %rdx. A field every member shares sits at
  * one slot in every member held in the union (union_lay): one move. */
+/* map$keys / map$vals / map$boxes: the slot read `m.keys` used to be, now
+ * that a dot on a map is an entry (see map_field). The map is a record of
+ * boxes, keys, vals in that order. */
+static Yv *gen_map_field(Yv *st, Yv *node, const char *name) {
+    Yv *args = yr_get(node, "args");
+    st = gen(st, ya_get(args, 0));
+    long slot = 0;
+    if (strcmp(name, "map$keys") == 0) { slot = 1; }
+    else if (strcmp(name, "map$vals") == 0) { slot = 2; }
+    return emit_insn(st, F_MOV_D_R, R_RAX, -1, 1, 8 * slot, -1, R_RAX, 64);
+}
+
 Yv *gen_union_slot(Yv *st, Yv *t, Yv *dkey, int store) {
     return gen_slot_move(st, mfield_idx(union_shared(unfold(t)), dkey), store);
 }
@@ -12223,7 +12903,8 @@ Yv *gen_array_esz(Yv *st, Yv *node, ylong esz, Yv *ety) {
         st = elem_store_rdx_const(st, esz, R_R10, k);
         k = k - 1;
     }
-    return emit_insn(st, F_MOV_R_R, R_R10, 64, R_RAX, 64, 0, 0, 0);
+    st = emit_insn(st, F_MOV_R_R, R_R10, 64, R_RAX, 64, 0, 0, 0);
+    return mark_pf_arr(st, ety);
 }
 
 Yv *gen_len(Yv *st, Yv *node) {
@@ -12236,7 +12917,7 @@ Yv *gen_len(Yv *st, Yv *node) {
     Yv *at = infer(st, ya_get(args, 0));
     if (yv_l(yr_get(at, "k")) == K_tmap) {
         /* len(m) = len(m.keys): the entry count */
-        return gen(st, n_call1(ys("len"), n_dot(ya_get(args, 0), ys("keys"), yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col"))), yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col"))));
+        return gen(st, n_call1(ys("len"), map_field(ya_get(args, 0), "keys", yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col"))), yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col"))));
     } else if (yv_l(yr_get(at, "k")) == K_tstr) {
         st = gen(st, ya_get(args, 0));
         return emit_insn(st, F_MOV_0_R, R_RAX, -1, 1, -1, -1, R_RAX, 64);
@@ -12272,7 +12953,8 @@ Yv *gen_push_all(Yv *st, Yv *node) {
     st = emit_insn(st, F_MOV_I_R, pesz, R_RAX, 64, 0, 0, 0, 0);
     st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
     st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_arr_extend"))), 0, 0, 0, 0, 0, 0);
-    return emit_insn(st, F_ADD_I_R, 24, R_RSP, 64, 0, 0, 0, 0);
+    st = emit_insn(st, F_ADD_I_R, 24, R_RSP, 64, 0, 0, 0, 0);
+    return mark_pf_arr(st, arr_elem_type(infer(st, ya_get(pargs, 0))));
 }
 
 /* The payload of a `?.` chain, back in an option box (parser.y). A payload
@@ -13657,26 +14339,152 @@ Yv *unit_empty(Yv *name) {
     Yv *rs = yav(0);
     Yv *gs = yav(0);
     Yv *ds = yav(0);
-    return yr(12, "name", name, "files", fs, "exports", xs, "init", ys(""),
+    return yr(13, "name", name, "files", fs, "exports", xs, "init", ys(""),
               "bodies", bs, "btext", bt, "blob", yav(0), "labels", ls, "refs",
-              fr, "rodata", rs, "globals", gs, "dfl", ds);
+              fr, "rodata", rs, "globals", gs, "dfl", ds, "tys", yav(0));
 }
 
 Yv *externs_none(void) {
-    return yr(5, "ext", yav(0), "dfl", yav(0), "pkgs", yav(0), "inits",
-              yav(0), "argv", yv_bool(0));
+    return yr(6, "ext", yav(0), "dfl", yav(0), "pkgs", yav(0), "inits",
+              yav(0), "argv", yv_bool(0), "tys", yav(0));
 }
 
-Yv *std_unit_src(Yv *name) {
-    if (ys_eq_lit(name, "prelude")) {
-        return PRELUDE_SRC();
-    } else if (ys_eq_lit(name, "exec")) {
-        return EXEC_SRC();
-    } else if (ys_eq_lit(name, "str")) {
-        return STR_SRC();
-    } else {
-        return RT_SRC();
+/* The source of a std LIBRARY module from disk, or "" (native.y
+ * std_lib_src): only the four core units are embedded, every library unit
+ * travels compiled in the std pack. Std directories only, never a package
+ * root. */
+Yv *std_lib_src(Yv *name) {
+    Yv *path = std_lib_path(name);
+    Yv *out = ys("");
+    if (yv_len(path) > 0) {
+        Yv *t = read_file(path);
+        if (!yv_is_none(t)) { out = std_text(yv_unwrap(t)); }
     }
+    return out;
+}
+
+/* Where std_lib_src reads library unit `name` from, or "" (native.y
+ * std_lib_path; the language server opens the same file). */
+Yv *std_lib_path(Yv *name) {
+    Yv *cands = yav(0);
+    cands = ya_push(cands, ys_cat(ys_cat(ys("src/y/std/"), name), ys(".y")));
+    Yv *d = self_dir();
+    if (yv_len(d) > 0) {
+        cands = ya_push(
+            cands, ys_cat(ys_cat(ys_cat(d, ys("/std/")), name), ys(".y")));
+        cands = ya_push(cands, ys_cat(ys_cat(ys_cat(d, ys("/src/y/std/")), name),
+                                      ys(".y")));
+        cands = ya_push(cands, ys_cat(ys_cat(ys_cat(d, ys("/../src/y/std/")),
+                                             name),
+                                      ys(".y")));
+    }
+    Yv *out = ys("");
+    ylong i = 0;
+    while (yv_len(out) == 0 && i < yv_len(cands)) {
+        if (!yv_is_none(read_file(ya_get(cands, i)))) { out = ya_get(cands, i); }
+        i = i + 1;
+    }
+    return out;
+}
+
+/* Blank the `export { ... };` lines a std module carries for the splicer (which
+ * drops them before the lexer sees the text); a unit compiled straight from the
+ * same text has no splicer in the way. Blanked, not removed, so every line
+ * number below -- and every `.loc` marker -- stays (native.y std_drop_exports).
+ * Std export lines start at column 0, so a prefix test is enough here. */
+Yv *std_drop_exports(Yv *src) {
+    Yv *out = yav(0);
+    ylong n = yv_len(src);
+    ylong i = 0;
+    ylong start = 0;
+    int dropping = 0;
+    while (i <= n) {
+        if (i == n || ys_byte_at(src, i) == 10) {
+            Yv *line = ys_slice(src, start, i);
+            ylong p = 0;
+            while (p < yv_len(line)
+                   && (ys_byte_at(line, p) == 32 || ys_byte_at(line, p) == 9)) {
+                p = p + 1;
+            }
+            if (dropping) {
+                out = ya_push(out, ys(""));
+                if (ys_index_of(line, ys("}")) >= 0) { dropping = 0; }
+            } else if (yv_len(line) - p >= 7
+                       && ys_eq(ys_slice(line, p, p + 7), ys("export "))) {
+                out = ya_push(out, ys(""));
+                if (ys_index_of(line, ys("{")) >= 0 && ys_index_of(line, ys("}")) < 0) {
+                    dropping = 1;
+                }
+            } else {
+                out = ya_push(out, line);
+            }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    return ys_join(out, ys("\n"));
+}
+
+/* A std unit's source, from disk (native.y std_unit_src). */
+Yv *std_unit_src(Yv *name) {
+    Yv *src = std_lib_src(name);
+    if (yv_len(src) == 0) {
+        puts_(ys_cat(ys_cat(ys_cat(ys_cat(ys("error: std module '"), name),
+                                   ys("': not in this compiler's std pack, and no src/y/std/")),
+                            name),
+                     ys(".y beside it or in the working directory\n")));
+        exit_(1);
+    }
+    return src;
+}
+
+/* A library std unit's place in the list below; -1 is not a library unit. */
+ylong std_lib_index(Yv *name) {
+    Yv *xs = std_lib_names();
+    ylong i = 0;
+    ylong found = -1;
+    while (i < yv_len(xs)) {
+        if (ys_eq(ya_get(xs, i), name)) { found = i; }
+        i = i + 1;
+    }
+    return found;
+}
+
+/* What a library unit imports. A unit is compiled and linked against the units
+ * before it in std_unit_names order, so a program that needs one needs these
+ * too (std_order): without them the unit's calls into its import have no label
+ * to reach. This is the `import` list of the sources; a test checks the pack
+ * covers every module a unit mentions. */
+Yv *std_lib_deps(Yv *name) {
+    if (ys_eq_lit(name, "fs")) {
+        return yav(1, ys("sort"));
+    } else if (ys_eq_lit(name, "json")) {
+        return yav(1, ys("sort"));
+    } else if (ys_eq_lit(name, "net")) {
+        return yav(1, ys("fs"));
+    } else if (ys_eq_lit(name, "x509")) {
+        return yav(3, ys("crypto"), ys("fs"), ys("struct"));
+    } else if (ys_eq_lit(name, "tls")) {
+        return yav(3, ys("crypto"), ys("x509"), ys("net"));
+    } else if (ys_eq_lit(name, "http")) {
+        return yav(2, ys("net"), ys("tls"));
+    } else {
+        return yav(0);
+    }
+}
+
+/* Every std library unit, in the order std_unit_names appends them. A module
+ * that imports another must come after it (fs after sort, tls after crypto/
+ * x509/net): a unit's imports bind units, never splices. Dependency first: a
+ * unit is compiled against the ones before it (std_compile's `prev`), so an
+ * importer must come after what it imports -- fs and json after sort, net after
+ * fs, x509 after crypto/fs/struct, tls after crypto/x509/net, http after net/
+ * tls. */
+Yv *std_lib_names(void) {
+    return yav(16, ys("math"), ys("sort"), ys("fs"), ys("json"), ys("struct"),
+               ys("crypto"), ys("x509"), ys("net"), ys("tls"), ys("http"),
+               ys("regex"), ys("random"), ys("utf8"), ys("args"), ys("test"),
+               ys("tui"));
 }
 
 ylong std_unit_base(Yv *name) {
@@ -13686,17 +14494,31 @@ ylong std_unit_base(Yv *name) {
         return 2000000000L;
     } else if (ys_eq_lit(name, "str")) {
         return 3000000000L;
-    } else {
+    } else if (ys_eq_lit(name, "rt")) {
         return 4000000000L;
+    } else {
+        ylong i = std_lib_index(name);
+        if (i < 0) { return 0; }
+        return 1000000000000L + i * 1000000000L;
     }
 }
 
 int std_unit_bound(Yv *name) {
-    return ys_eq_lit(name, "prelude") || ys_eq_lit(name, "exec");
+    /* the two units a program calls by bare name, and every library unit:
+     * those are referenced qualified (math.pi), see unit_externs */
+    return ys_eq_lit(name, "prelude") || ys_eq_lit(name, "exec")
+        || std_lib_index(name) >= 0;
 }
 
 Yv *std_unit_names(void) {
-    return yav(4, ys("prelude"), ys("exec"), ys("str"), ys("rt"));
+    Yv *out = yav(4, ys("prelude"), ys("exec"), ys("str"), ys("rt"));
+    Yv *lib = std_lib_names();
+    ylong i = 0;
+    while (i < yv_len(lib)) {
+        out = ya_push(out, ya_get(lib, i));
+        i = i + 1;
+    }
+    return out;
 }
 
 Yv *std_units(Yv *names, Yv *pack) {
@@ -13705,6 +14527,8 @@ Yv *std_units(Yv *names, Yv *pack) {
         out = std_unpack(pack, names);
         ;
     }
+    /* the arch blocks come from the same pack when it was read (arch_set) */
+    arch_pack = yv_len(out) > 0 ? pack : ys("");
     if (yv_len(out) == 0) {
         ylong i = 0;
         while (i < yv_len(names)) {
@@ -13727,7 +14551,7 @@ Yv *std_units(Yv *names, Yv *pack) {
                 }
                 ;
             }
-            out = ya_push(out, std_compile(nm, ext));
+            out = ya_push(out, std_compile(nm, ext, out));
             i = i + 1;
         }
         ;
@@ -13735,33 +14559,68 @@ Yv *std_units(Yv *names, Yv *pack) {
     return out;
 }
 
-/* One std unit, from its embedded source. It always carries its `.loc`
+/* One std unit, from its source on disk (std_unit_src). It always carries its `.loc`
  * markers (link_units strips them unless -g), so it compiles the same
  * for every program. A failure here is the compiler's own bug: reported
  * as one, and the run ends. */
-Yv *std_compile(Yv *name, Yv *ext) {
+Yv *std_compile(Yv *name, Yv *ext, Yv *prev) {
     Yv *path = ys_cat(ys_cat(ys("std/"), name), ys(".y"));
-    Yv *ssrc = std_text(std_unit_src(name));
+    Yv *raw = std_drop_exports(std_text(std_unit_src(name)));
     /* A std unit is tokenized straight from its embedded bytes, so it never
      * goes through meta_scan: a `#{` here would reach the lexer as a bare `#`
      * and be reported as an expression error. A block in a std source is a
      * diagnostic (ideas/meta.md, "std sources"): it would run after the
      * program's own pass, with no origin to point at. */
-    if (mg_on && ys_index_of(ssrc, ys("#{")) >= 0) {
+    if (mg_on && ys_index_of(raw, ys("#{")) >= 0) {
         puts_(ys("error: "));
-        puts_(ys_cat(path, ys(": a meta block cannot appear in a std source: std units are compiled from their embedded text after the program's own pass, so a block there has no generator to run in\n")));
+        puts_(ys_cat(path, ys(": a meta block cannot appear in a std source: std units are compiled from their own text after the program's own pass, so a block there has no generator to run in\n")));
         exit_(1);
+    };
+    Yv *nolines = yav(0);
+    Yv *ssrc = raw;
+    Yv *imports = yav(0);
+    Yv *pkgs = yav(0);
+    Yv *sstd = yav(0);
+    Yv *ogen = yav(0);
+    /* A library unit imports other library units (fs imports sort, x509 imports
+     * crypto/fs/struct, tls imports crypto/x509/net, http imports net/tls, json
+     * imports sort): those are units of the pack, never splices, so the text
+     * goes through the resolver exactly as a program's does -- a bare std
+     * library import already takes the unit path (std_lib_index, which is why
+     * nothing is spliced here) -- and the unit is then compiled against the ones
+     * already compiled (`prev`, in std_lib_names order, dependency first). A
+     * unit with no import keeps the direct path, so the four core units and
+     * math compile byte for byte as they did. */
+    if (ys_index_of(raw, ys("import ")) >= 0) {
+        res_in_std = 1;
+        Yv *nr = native_resolve_x(raw, ys("std"), 0, 1, path);
+        res_in_std = 0;
+        ssrc = yr_get(nr, "src");
+        imports = yr_get(nr, "imports");
+        pkgs = yr_get(nr, "pkgs");
+        sstd = yr_get(nr, "std");
+        ogen = yr_get(nr, "ogen");
     };
     Yv *toks = tokenize(ssrc);
     Yv *ast = parse_program(toks);
-    Yv *noimports = yav(0);
-    Yv *nolines = yav(0);
-    Yv *origin = yr(5, "files", yav(1, path), "nuser", yv_long(1),
-                    "file", nolines, "line", nolines, "mods", yav(1, ys("")));
     Yv *xt = externs_none();
-    yr_set(xt, "ext", ext);
-    Yv *r = compile_unit(ast, noimports, origin, 1, 0, name,
-                         std_unit_base(name), xt, yav(0));
+    if (yv_len(sstd) > 0) { xt = unit_externs(prev, sstd, yav(0), pkgs); };
+    /* The caller's `ext` (exec sees the prelude's exports) ADDS to what the
+     * imports bound -- an assignment here would wipe them, which is what made
+     * every `sort.` call in fs undefined while the ext list looked right. */
+    Yv *xext = yr_get(xt, "ext");
+    ylong ei = 0;
+    while (ei < yv_len(ext)) {
+        xext = ya_push(xext, ya_get(ext, ei));
+        ei = ei + 1;
+    }
+    yr_set(xt, "ext", xext);
+    Yv *mods = yav(1, ys(""));
+    if (std_lib_index(name) >= 0) { mods = yav(1, name); };
+    Yv *origin = yr(5, "files", yav(1, path), "nuser", yv_long(1),
+                    "file", nolines, "line", nolines, "mods", mods);
+    Yv *r = compile_unit(ast, imports, origin, 1, 0, name,
+                         std_unit_base(name), xt, ogen);
     if (!yv_b(yr_get(r, "ok"))) {
         Yv *errs = yr_get(r, "errors");
         ylong k = 0;
@@ -13849,6 +14708,27 @@ Yv *unit_exports(Yv *stmts, Yv *hdefs, Yv *fns) {
  * other units have an init function. `xt` holds externs, defaults,
  * imported package namespaces, init labels and the argv-use flag. */
 
+/* What a unit's text needs set before strip_ns and rename see it (native.y
+ * unit_prep): pkg_ns, and the type aliases of the units it is compiled
+ * against, seeded as if it had declared them (each item `name\ntcode`). */
+void unit_prep(Yv *xt) {
+    pkg_ns = yr_get(xt, "pkgs");
+    Yv *xtys = yr_get(xt, "tys");
+    if (yv_len(xtys) > 0) {
+        Yv *seeds = yav(0);
+        ylong si = 0;
+        while (si < yv_len(xtys)) {
+            Yv *item = ya_get(xtys, si);
+            ylong nl = ys_index_of(item, ys("\n"));
+            seeds = ya_push(seeds, yr(3, "name", ys_slice(item, 0, nl), "opt",
+                                      yv_bool(0),
+                                      "typ", tdecode(ys_slice_from(item, nl + 1))));
+            si = si + 1;
+        }
+        rn_types_seed_set(seeds);
+    };
+}
+
 Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, ylong wlevel,
                  Yv *name, ylong base, Yv *xt, Yv *ogen) {
     tyset_reset();
@@ -13857,7 +14737,7 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, ylong wlevel,
     dbg_line = yr_get(origin, "line");
     Yv *ext = yr_get(xt, "ext");
     Yv *inits = yr_get(xt, "inits");
-    pkg_ns = yr_get(xt, "pkgs");
+    unit_prep(xt);
     Yv *times = yav(0);
     ylong pt = clock_us();
     ylong ph = heap_used();
@@ -13870,6 +14750,24 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, ylong wlevel,
      * the checker nor the emitter deals with scopes or shadowing. */
     Yv *ast3 = rename_program_x(ast2, yr_get(xt, "dfl"), yr_get(origin, "file"),
                                 yr_get(origin, "mods"));
+    /* What this unit's aliases resolved to (the seeds included), as `name\ntcode`
+     * for the pack: what makes the unit's own types nameable by its importers. */
+    Yv *out_types = yav(0);
+    Yv *ots = rn_types_out_get();
+    ylong oi = 0;
+    while (oi < yv_len(ots)) {
+        /* A unit's own aliases come back bare when it has no module namespace of
+         * its own (the four core units, whose defs must stay bare): qualify them
+         * here, so rt's `YBig` publishes as `rt.YBig`, which is how a dependent
+         * module's source refers to it. */
+        Yv *tn = yr_get(ya_get(ots, oi), "name");
+        if (ys_index_of(tn, ys(".")) < 0) {
+            tn = ys_cat(ys_cat(name, ys(".")), tn);
+        };
+        out_types = ya_push(out_types, ys_cat(ys_cat(tn, ys("\n")),
+                                              tcode(yr_get(ya_get(ots, oi), "typ"))));
+        oi = oi + 1;
+    };
     pr = phase_end(times, ys("rename"), pt, ph);
     times = yr_get(pr, "times");
     pt = yv_l(yr_get(pr, "t"));
@@ -14245,12 +15143,12 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, ylong wlevel,
             brefs = ya_push(brefs, ir_refs(ya_get(ubodies, bk)));
             bk = bk + 1;
         }
-        Yv *unit = yr(12, "name", name, "files", yr_get(origin, "files"),
+        Yv *unit = yr(13, "name", name, "files", yr_get(origin, "files"),
                       "exports", exports, "init", init, "bodies", ubodies,
                       "btext", ubtext, "blob", yav(0), "labels", blabels,
                       "refs", brefs,
                       "rodata", yr_get(st, "rodata"), "globals", glabels, "dfl",
-                      udfl);
+                      udfl, "tys", out_types);
         return yr(5, "ok", yv_bool(1), "errors", errors, "warnings",
                   warnings, "times", times, "unit", unit);
     }
@@ -14326,7 +15224,20 @@ Yv *unit_dfl(Yv *stmts, Yv *origin) {
     while (i < yv_len(stmts)) {
         Yv *s = ya_get(stmts, i);
         Yv *nm = top_name_in(s, origin);
-        /* (not an imported module's: see export_name) */
+        /* A library unit is compiled with its own namespace (see std_compile),
+         * so a def of its own comes back qualified (`fs.write_file`) while the
+         * export -- and so the default's key -- is the bare name. Strip our own
+         * namespaces; a name of an IMPORTED module stays skipped below. */
+        Yv *mods = yr_get(origin, "mods");
+        ylong mi = 0;
+        while (mi < yv_len(mods)) {
+            Yv *om = ya_get(mods, mi);
+            if (yv_len(om) > 0
+                && ys_eq(ys_slice(nm, 0, yv_len(om) + 1), ys_cat(om, ys(".")))) {
+                nm = ys_slice_from(nm, yv_len(om) + 1);
+            };
+            mi = mi + 1;
+        }
         if (yv_len(nm) > 0 && ys_index_of(nm, ys(".")) < 0) {
             Yv *keep = yav(0);
             ylong j = 0;
@@ -14516,11 +15427,11 @@ Yv *arch_label_name(Yv *l) {
     return nm;
 }
 
-Yv *check_os_call_names(Yv *lines) {
+Yv *check_os_call_names(Yv *blks) {
     Yv *labels = yav(0);
     ylong j = 0;
-    while (j < yv_len(lines)) {
-        Yv *nm = arch_label_name(ya_get(lines, j));
+    while (j < yv_len(blks)) {
+        Yv *nm = yr_get(ya_get(blks, j), "name");
         if (!ys_eq_lit(nm, "")) { labels = ya_push(labels, nm); }
         j = j + 1;
     }
@@ -14545,7 +15456,7 @@ Yv *check_os_call_names(Yv *lines) {
         }
         i = i + 1;
     }
-    return lines;
+    return blks;
 }
 
 Yv *rodata_intern(Yv *pieces, Yv *allrod, Yv *refs) {
@@ -14875,6 +15786,7 @@ static int gc_recursive(Yv *labels, Yv *refs, Yv *keep, Yv *users) {
    and never (2) say so outright. */
 static int gc_decide(ylong mode, Yv *labels, Yv *refs, Yv *keep, Yv *all,
                      Yv *allblob, Yv *ps, int threads) {
+    if (gc_stress) { return 1; }
     if (mode == 1) { return 1; }
     if (mode == 2) { return 0; }
     if (threads) { return 1; }
@@ -15051,19 +15963,12 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog, ylong gcmode) {
     Yv *shaken = prune_bodies(labels, refs, extra);
     Yv *keep = yr_get(shaken, "keep");
     Yv *body_refs = yr_get(shaken, "refs");
-    Yv *core_lines = check_os_call_names(arch_prelude_lines());
-    /* The Windows syscall self-test (arch/wselftest.s): no lines off Windows,
-       and on Windows the _start prologue below calls the label it defines. It
-       goes through the prelude so the shaker sees what it references. */
-    Yv *self_test_lines = w_self_test_lines();
-    ylong sti = 0;
-    while (sti < yv_len(self_test_lines)) {
-        core_lines = ya_push(core_lines, ya_get(self_test_lines, sti));
-        sti = sti + 1;
-    }
+    /* The target's prelude (on Windows with the NT syscall self-test, which
+       the _start prologue calls). */
+    Yv *core_lines = arch_core();
     int thr = uses_threads(body_refs);
     int mth = uses_math(body_refs);
-    Yv *pb = prelude_blocks(prelude_with(core_lines, thr, mth));
+    Yv *pb = prelude_with(core_lines, thr, mth);
     Yv *ps = shake_prelude(pb, body_refs);
     /* A cell no kept code reads, whose initializer only allocates, is dead:
        dropping that range is what keeps the allocator -- and with it the whole
@@ -15149,7 +16054,7 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog, ylong gcmode) {
         shaken = prune_bodies(labels, refs, extra);
         keep = yr_get(shaken, "keep");
         body_refs = yr_get(shaken, "refs");
-        pb = prelude_blocks(prelude_with(core_lines, thr, mth));
+        pb = prelude_with(core_lines, thr, mth);
         ps = shake_prelude(pb, body_refs);
     }
     /* A kept prelude block may call a Y helper (none does today): the
@@ -15168,7 +16073,7 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog, ylong gcmode) {
         if ((!thr && uses_threads(body_refs)) || (!mth && uses_math(body_refs))) {
             if (uses_threads(body_refs)) { thr = 1; }
             if (uses_math(body_refs)) { mth = 1; }
-            pb = prelude_blocks(prelude_with(core_lines, thr, mth));
+            pb = prelude_with(core_lines, thr, mth);
         }
         ps = shake_prelude(pb, body_refs);
         more = unkept_refs(yr_get(ps, "refs"), bmap, keep);
@@ -15177,8 +16082,14 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog, ylong gcmode) {
        stubs, so the registry, metadata arena, marker, sweeper and free lists go
        unreachable and shake out. The allocator and heap_used() are untouched. */
     if (!gc_decide(gcmode, labels, refs, keep, all, allblob, ps, thr)) {
-        core_lines = arch_nogc_lines(core_lines);
-        pb = prelude_blocks(prelude_with(core_lines, thr, mth));
+        core_lines = arch_blocks_sub(core_lines, arch_nogc_subs());
+        pb = prelude_with(core_lines, thr, mth);
+        ps = shake_prelude(pb, body_refs);
+    }
+    /* --gc-stress: every slow-path allocation runs a cycle. */
+    if (gc_stress) {
+        core_lines = arch_blocks_sub(core_lines, arch_gc_stress_subs());
+        pb = prelude_with(core_lines, thr, mth);
         ps = shake_prelude(pb, body_refs);
     }
     /* Everything the kept code can reach: the kept bodies' own references plus
@@ -15253,8 +16164,9 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog, ylong gcmode) {
         head = ys_cat(file_dirs(files), head);
         ;
     }
-    parts = ya_push(parts, part_text(ys_cat(ys_cat(head, arch_text()),
-                                           yr_get(ps, "text"))));
+    parts = ya_push(parts, part_text(ys_cat(head, arch_text())));
+    /* the kept prelude blocks, as items */
+    parts = ya_push(parts, part_ir(yr_get(ps, "ir"), yr_get(ps, "txt"), 0, 0));
     /* The generated interrupt plumbing (kernel mode): one stub per declared
        `irq N def`, and the routine that fills the IDT and loads it. It is a
        text part and so is never shaken, which is why it carries its own copy
@@ -15370,11 +16282,11 @@ Yv *link_text(Yv *parts) {
  * reuse the same unit-field encoding. */
 
 Yv *pack_version(void) {
-    return ys("ycc-std-pack 6\n");
+    return ys("ycc-std-pack 10\n");
 }
 
 Yv *obj_version(void) {
-    return ys("ycc-unit 5\n");
+    return ys("ycc-unit 7\n");
 }
 
 Yv *pack_put(Yv *out, Yv *s) {
@@ -15439,7 +16351,11 @@ static Yv *pack_word(Yv *out, ylong v) {
         out = ya_push(out, ys_chr(127));
         out = ya_push(out, ys_chr(u & 255));
         out = ya_push(out, ys_chr((u >> 8) & 255));
-    } else if (v <= 65535) {
+    } else if (v >= 0 && v <= 65535) {
+        /* v >= 0 matters: without it every value below -65535 landed here (it is
+         * <= 65535 too), was written as two bytes, and read back as a small
+         * POSITIVE number -- a silent corruption of every large negative
+         * immediate. A packed crypto unit is what finally exercised it. */
         out = ya_push(out, ys_chr(126));
         out = ya_push(out, ys_chr(v & 255));
         out = ya_push(out, ys_chr((v >> 8) & 255));
@@ -15469,8 +16385,13 @@ static Yv *pack_lbl(Yv *out, ylong id) {
 }
 
 /* One body as the pack carries it: the items above, item by item. */
+static Yv *pack_ir(Yv *ir);
 static Yv *pack_body(Yv *u, ylong b) {
-    Yv *ir = ya_get(yr_get(u, "bodies"), b);
+    return pack_ir(ya_get(yr_get(u, "bodies"), b));
+}
+
+/* Items as the pack carries them (pack_body, and the arch blocks). */
+static Yv *pack_ir(Yv *ir) {
     Yv *out = yav(0);
     ylong at = 0;
     while (at < yv_len(ir)) {
@@ -15623,7 +16544,10 @@ static ylong unpack_word(Yv *b, ylong at) {
         ylong sh = 0;
         ylong i = 0;
         while (i < 8) {
-            v = v + yv_l(ya_get(b, at + 1 + i)) * (1 << sh);
+            /* `((ylong)1) << sh`: Y's `1` is 64 bits, C's is 32, and sh reaches
+             * 56 -- a 32-bit shift is undefined and mangles every 9-byte word
+             * (the big immediate a packed body carries). */
+            v = v + yv_l(ya_get(b, at + 1 + i)) * (((ylong)1) << sh);
             sh = sh + 8;
             i = i + 1;
         }
@@ -15655,12 +16579,84 @@ static ylong lbl_w(Yv *b, ylong at) {
     }
 }
 
+/* The name of a packed label field, or "" for tag 0 (no label). unpack_lbl
+ * interns the name into an id; a reference set is names (native.y blob_lbl). */
+static Yv *blob_lbl(Yv *b, ylong at) {
+    if (yv_l(ya_get(b, at)) == 0) {
+        return ys("");
+    } else {
+        ylong w = word_w(b, at + 1);
+        ylong n = unpack_word(b, at + 1);
+        return from_bytes(ya_slice(b, at + 1 + w, at + 1 + w + n));
+    }
+}
+
+/* A body's references, read out of its packed items: the mirror of
+ * ir_refs_item over the blob encoding pack_body writes, so the pack need not
+ * carry the list (native.y blob_refs). Duplicates are kept and empty names
+ * dropped, as ir_refs_push does; IR_LABEL/IR_LOC/IR_TEXT contribute nothing but
+ * their operands still have to be stepped over. */
+static Yv *blob_refs(Yv *blob) {
+    Yv *b = bytes_of(blob);
+    ylong n = yv_len(b);
+    Yv *out = yav(0);
+    ylong at = 0;
+    while (at < n) {
+        ylong f = yv_l(ya_get(b, at));
+        at = at + 1;
+        if (f == IR_LABEL) {
+            at = at + lbl_w(b, at);
+        } else if (f == IR_LOC) {
+            at = at + word_w(b, at);
+            at = at + word_w(b, at);
+        } else if (f == IR_TEXT) {
+            at = at + word_w(b, at);
+        } else {
+            Yv *kinds = yr_get(ir_form(f), "kinds");
+            ylong ki = 0;
+            while (ki < yv_len(kinds)) {
+                ylong k = yv_l(ya_get(kinds, ki));
+                ylong nw = ir_kind_words(k);
+                if (k == O_LBL) {
+                    Yv *nm = blob_lbl(b, at);
+                    if (yv_len(nm) > 0) { out = ya_push(out, nm); }
+                    at = at + lbl_w(b, at);
+                } else if (k == O_DIFF) {
+                    Yv *n1 = blob_lbl(b, at);
+                    if (yv_len(n1) > 0) { out = ya_push(out, n1); }
+                    at = at + lbl_w(b, at);
+                    Yv *n2 = blob_lbl(b, at);
+                    if (yv_len(n2) > 0) { out = ya_push(out, n2); }
+                    at = at + lbl_w(b, at);
+                } else if (k == O_MEM || k == O_MEM0) {
+                    at = at + word_w(b, at);
+                    at = at + word_w(b, at);
+                    at = at + word_w(b, at);
+                    at = at + word_w(b, at);
+                    Yv *nm = blob_lbl(b, at);
+                    if (yv_len(nm) > 0) { out = ya_push(out, nm); }
+                    at = at + lbl_w(b, at);
+                } else {
+                    at = at + word_w(b, at);
+                    if (nw > 1) { at = at + word_w(b, at); }
+                }
+                ki = ki + 1;
+            }
+        }
+    }
+    return out;
+}
+
 /* A complete type encoding for std packs and package objects. It keeps
  * every type kind and record shape, unlike the user-facing tstr format. */
 Yv *tcode(Yv *t) {
-    if (tcode_refs == NULL) {
-        tcode_refs = yav(0);
-    }
+    /* A tcode string must stand alone. tdecode runs once per string -- an
+     * export, or a unit's type alias -- and a `q` reference to a `Q` written in
+     * an EARLIER string has nothing to resolve against: tdec_encs is empty, so
+     * its `q` arm indexes tdec_refs[-1]. That was the crash an alias-carrying
+     * unit (crypto's Hash/Mont/Curve/Pt) produced. So the tref table starts
+     * empty for every call, and a shared tref is written out again. */
+    tcode_refs = yav(0);
     return ys_join(tcode_go(yav(0), t), ys(""));
 }
 
@@ -15809,17 +16805,25 @@ Yv *tdecode_go(Yv *cur) {
     } else if (ys_eq_lit(c, "?")) {
         return normnode(yr(2, "k", yv_long(K_topt), "of", tdecode_go(cur)));
     } else if (ys_eq_lit(c, "F")) {
-        ylong n = pack_num(cur);
-        return normnode(yr(3, "k", yv_long(K_tarrfix), "of", tdecode_go(cur), "n",
-                          yv_long(n)));
+        /* tcode_go writes "F", the COUNT, then the element type; the count must
+         * be read first (the map arm reads key then of because that is the order
+         * the writer uses). Reading the element first is what packed a fixed
+         * array ([long; 16], crypto's qround) into a crash. Explicit locals: the
+         * order of a C call's arguments is UNSPECIFIED. */
+        ylong fn = pack_num(cur);
+        Yv *fof = tdecode_go(cur);
+        return normnode(yr(3, "k", yv_long(K_tarrfix), "of", fof, "n",
+                          yv_long(fn)));
     } else if (ys_eq_lit(c, "M")) {
+        /* key before of: the order tcode_go writes them. `kt` in a local, so
+         * only one reading call is left in the argument list. */
         Yv *kt = tdecode_go(cur);
-        return normnode(yr(3, "k", yv_long(K_tmap), "key", kt, "of",
-                          tdecode_go(cur)));
+        Yv *mof = tdecode_go(cur);
+        return normnode(yr(3, "k", yv_long(K_tmap), "key", kt, "of", mof));
     } else if (ys_eq_lit(c, ">")) {
         Yv *args = tdecode_list(cur);
-        return normnode(yr(3, "k", yv_long(K_tfunc), "args", args, "ret",
-                          tdecode_go(cur)));
+        Yv *ret = tdecode_go(cur);
+        return normnode(yr(3, "k", yv_long(K_tfunc), "args", args, "ret", ret));
     } else if (ys_eq_lit(c, "U")) {
         return normnode(yr(2, "k", yv_long(K_tunion), "ts", tdecode_list(cur)));
     } else if (ys_eq_lit(c, "T")) {
@@ -15910,37 +16914,349 @@ Yv *pack_unit_fields(Yv *unit) {
     out = pack_strs(out, pack_bodies(unit));
     out = pack_strss(out, yr_get(unit, "btext"));
     out = pack_strs(out, yr_get(unit, "labels"));
-    Yv *rf = yr_get(unit, "refs");
-    out = pack_put(out, ys_long(yv_len(rf)));
-    ylong j = 0;
-    while (j < yv_len(rf)) {
-        out = pack_strs(out, ya_get(rf, j));
-        j = j + 1;
-    }
     Yv *rd = yr_get(unit, "rodata");
     out = pack_put(out, ys_long(yv_len(rd)));
-    j = 0;
+    ylong j = 0;
     while (j < yv_len(rd)) {
         out = pack_strs(out, ya_get(rd, j));
         j = j + 1;
     }
     out = pack_strs(out, yr_get(unit, "globals"));
+    out = pack_strs(out, yr_get(unit, "tys"));
     return ys_join(out, ys(""));
 }
 
+/* -- the pack's LZ codec (native.y lz_*) ----------------------------------
+ * A pack is mostly the same names, labels and type codes repeated, so it is
+ * stored as an LZ4-block stream: a method byte, then tokens of [literal
+ * length | match length-4], the literals, a 2-byte little-endian match offset,
+ * then the match-length extension, over a 4 KiB hash of 4-byte sequences and
+ * offsets <= 65535. Determinism is the point: the bytes depend on the input
+ * alone, so the C copy's pack compares equal to the Y compiler's. A stream
+ * that does not decode answers "" and std_unpack falls back to source. */
+static Yv *lz_method(void) {
+    return ys_chr(1);
+}
+
+static ylong lz_hash(Yv *b, ylong at) {
+    ylong v = yv_l(ya_get(b, at)) + yv_l(ya_get(b, at + 1)) * 256
+            + yv_l(ya_get(b, at + 2)) * 65536
+            + yv_l(ya_get(b, at + 3)) * 16777216;
+    return ((v * 2654435761L) >> 12) & 4095;
+}
+
+static Yv *lz_more(Yv *out, ylong v) {
+    ylong left = v;
+    while (left >= 255) {
+        out = ya_push(out, ys_chr(255));
+        left = left - 255;
+    }
+    return ya_push(out, ys_chr(left));
+}
+
+static Yv *lz_encode(Yv *s) {
+    Yv *b = bytes_of(s);
+    ylong n = yv_len(b);
+    Yv *out = yav(0);
+    Yv *tab = yav(0);
+    ylong i = 0;
+    while (i < 4096) {
+        tab = ya_push(tab, yv_long(-1));
+        i = i + 1;
+    }
+    ylong at = 0;
+    ylong lit = 0;
+    while (at < n) {
+        int hit = 0;
+        ylong mlen = 0;
+        ylong moff = 0;
+        if (at + 4 <= n) {
+            ylong h = lz_hash(b, at);
+            ylong cand = yv_l(ya_get(tab, h));
+            ya_set(tab, h, yv_long(at));
+            if (cand >= 0 && at - cand <= 65535) {
+                ylong k = 0;
+                while (at + k < n && yv_l(ya_get(b, cand + k)) == yv_l(ya_get(b, at + k))) {
+                    k = k + 1;
+                }
+                if (k >= 4) {
+                    hit = 1;
+                    mlen = k;
+                    moff = at - cand;
+                }
+            }
+        }
+        if (hit) {
+            ylong ll = at - lit;
+            ylong lh = ll;
+            if (lh > 15) { lh = 15; }
+            ylong mh = mlen - 4;
+            if (mh > 15) { mh = 15; }
+            out = ya_push(out, ys_chr(lh * 16 + mh));
+            if (ll >= 15) { out = lz_more(out, ll - 15); }
+            ylong q = lit;
+            while (q < at) {
+                out = ya_push(out, ys_chr(yv_l(ya_get(b, q))));
+                q = q + 1;
+            }
+            out = ya_push(out, ys_chr(moff & 255));
+            out = ya_push(out, ys_chr((moff >> 8) & 255));
+            if (mh == 15) { out = lz_more(out, mlen - 4 - 15); }
+            at = at + mlen;
+            lit = at;
+        } else {
+            at = at + 1;
+        }
+    }
+    /* The last run is literals only, which is how the reader knows to stop. */
+    ylong ll = n - lit;
+    ylong lh = ll;
+    if (lh > 15) { lh = 15; }
+    out = ya_push(out, ys_chr(lh * 16));
+    if (ll >= 15) { out = lz_more(out, ll - 15); }
+    ylong q = lit;
+    while (q < n) {
+        out = ya_push(out, ys_chr(yv_l(ya_get(b, q))));
+        q = q + 1;
+    }
+    return ys_join(out, ys(""));
+}
+
+static Yv *lz_decode(Yv *s) {
+    Yv *b = bytes_of(s);
+    ylong n = yv_len(b);
+    Yv *out = yav(0);
+    ylong at = 0;
+    int ok = 1;
+    while (ok && at < n) {
+        ylong t = yv_l(ya_get(b, at));
+        at = at + 1;
+        ylong ll = t >> 4;
+        ylong mh = t & 15;
+        if (ll == 15) {
+            int more = 1;
+            while (more && ok) {
+                if (at >= n) {
+                    ok = 0;
+                } else {
+                    ylong x = yv_l(ya_get(b, at));
+                    at = at + 1;
+                    ll = ll + x;
+                    if (x != 255) { more = 0; }
+                }
+            }
+        }
+        if (ok) {
+            if (at + ll > n) {
+                ok = 0;
+            } else {
+                ylong q = 0;
+                while (q < ll) {
+                    out = ya_push(out, ya_get(b, at + q));
+                    q = q + 1;
+                }
+                at = at + ll;
+            }
+        }
+        /* A match follows unless this was the final literal run. */
+        if (ok && at < n) {
+            if (at + 2 > n) {
+                ok = 0;
+            } else {
+                ylong moff = yv_l(ya_get(b, at)) + yv_l(ya_get(b, at + 1)) * 256;
+                at = at + 2;
+                ylong mlen = mh + 4;
+                if (mh == 15) {
+                    int more = 1;
+                    while (more && ok) {
+                        if (at >= n) {
+                            ok = 0;
+                        } else {
+                            ylong x = yv_l(ya_get(b, at));
+                            at = at + 1;
+                            mlen = mlen + x;
+                            if (x != 255) { more = 0; }
+                        }
+                    }
+                }
+                if (ok && (moff == 0 || moff > yv_len(out)
+                           || yv_len(out) + mlen > 16777216)) {
+                    ok = 0;
+                }
+                if (ok) {
+                    ylong src = yv_len(out) - moff;
+                    ylong k = 0;
+                    while (k < mlen) {
+                        out = ya_push(out, ya_get(out, src + k));
+                        k = k + 1;
+                    }
+                }
+            }
+        }
+    }
+    if (ok) { return from_bytes(out); }
+    return ys("");
+}
+
+/* The payload as it is stored: compressed when that is smaller, method byte
+ * first (native.y pack_store). A plain pack starts with the version line's
+ * `y`, so the two cannot be confused. */
+static Yv *pack_store(Yv *s) {
+    Yv *z = lz_encode(s);
+    if (yv_len(z) + 1 < yv_len(s)) { return ys_cat(lz_method(), z); }
+    return s;
+}
+
 /* The pack of `units`. */
+static Yv *arch_pack_set(Yv *blks, Yv *base);
+static Yv *arch_set_names(void) {
+    return yav(6, ys("linux"), ys("windows"), ys("kernel"), ys("wselftest"), ys("threads"), ys("math"));
+}
+
 Yv *std_pack(Yv *units) {
     Yv *out = yav(0);
     out = ya_push(out, pack_version());
-    out = pack_put(out, ys_long(yv_len(units)));
+    Yv *sets = arch_set_names();
+    out = pack_put(out, ys_long(yv_len(units) + yv_len(sets)));
     ylong i = 0;
     while (i < yv_len(units)) {
         Yv *u = ya_get(units, i);
         out = pack_put(out, yr_get(u, "name"));
-        out = pack_put(out, pack_unit_fields(u));
+        /* each unit stored on its own, so a compile decodes only the units
+         * it links (native.y std_pack) */
+        out = pack_put(out, pack_store(pack_unit_fields(u)));
+        i = i + 1;
+    }
+    /* the arch runtime's blocks, one entry per set, after the units; the
+     * Windows prelude's blocks shared with the Linux one by reference
+     * (native.y std_pack) */
+    Yv *lin = arch_blocks(arch_lines_of(ys("linux")));
+    ylong w = 0;
+    while (w < yv_len(sets)) {
+        Yv *nm = ya_get(sets, w);
+        out = pack_put(out, ys_cat(ys("arch."), nm));
+        if (ys_eq_lit(nm, "linux")) {
+            out = pack_put(out, pack_store(arch_pack_set(lin, yav(0))));
+        } else if (ys_eq_lit(nm, "windows") || ys_eq_lit(nm, "kernel")) {
+            out = pack_put(out, pack_store(arch_pack_set(arch_blocks(arch_lines_of(nm)), lin)));
+        } else {
+            out = pack_put(out, pack_store(arch_pack_set(arch_blocks(arch_lines_of(nm)), yav(0))));
+        }
+        w = w + 1;
+    }
+    return ys_join(out, ys(""));
+}
+
+/* A block's items as the pack carries them (native.y arch_block_items). */
+static Yv *arch_block_items(Yv *bk) {
+    if (yv_len(yr_get(bk, "ir")) == 0 && yv_len(yr_get(bk, "blob")) > 0) {
+        return yr_get(bk, "blob");
+    }
+    return pack_ir(yr_get(bk, "ir"));
+}
+
+/* Everything a block is, as one string (native.y arch_block_key). */
+static Yv *arch_block_key(Yv *bk) {
+    Yv *out = yav(0);
+    out = pack_put(out, yr_get(bk, "name"));
+    out = pack_put(out, yv_b(yr_get(bk, "falls")) ? ys("1") : ys("0"));
+    out = pack_strs(out, yr_get(bk, "refs"));
+    out = pack_put(out, arch_block_items(bk));
+    out = pack_strs(out, yr_get(bk, "txt"));
+    return ys_join(out, ys(""));
+}
+
+/* A block set's fields: per block "b" and the block, or "r" and the index of
+ * the same block in `base` (native.y arch_pack_set). */
+static Yv *arch_pack_set(Yv *blks, Yv *base) {
+    Yv *bkeys = yav(0);
+    ylong i = 0;
+    while (i < yv_len(base)) {
+        bkeys = ya_push(bkeys, arch_block_key(ya_get(base, i)));
+        i = i + 1;
+    }
+    Yv *out = yav(0);
+    out = pack_put(out, ys_long(yv_len(blks)));
+    i = 0;
+    while (i < yv_len(blks)) {
+        Yv *bk = ya_get(blks, i);
+        Yv *key = arch_block_key(bk);
+        ylong at = -1;
+        ylong k = 0;
+        while (at < 0 && k < yv_len(bkeys)) {
+            if (ys_eq(ya_get(bkeys, k), key)) { at = k; }
+            k = k + 1;
+        }
+        if (at >= 0) {
+            out = pack_put(out, ys("r"));
+            out = pack_put(out, ys_long(at));
+        } else {
+            out = pack_put(out, ys("b"));
+            out = pack_put(out, yr_get(bk, "name"));
+            out = pack_put(out, yv_b(yr_get(bk, "falls")) ? ys("1") : ys("0"));
+            out = pack_strs(out, yr_get(bk, "refs"));
+            out = pack_put(out, arch_block_items(bk));
+            out = pack_strs(out, yr_get(bk, "txt"));
+        }
         i = i + 1;
     }
     return ys_join(out, ys(""));
+}
+
+/* Entry `entry` of `pack` as blocks: { ok, blks } (native.y arch_unpack). */
+Yv *arch_unpack(Yv *pack, Yv *entry) {
+    Yv *blks = yav(0);
+    int ok = 0;
+    Yv *ver = pack_version();
+    if (yv_len(pack) > 0 && ys_eq(ys_slice(pack, 0, yv_len(ver)), ver)) {
+        Yv *cur = yr(2, "s", pack, "p", yv_long(yv_len(ver)));
+        ylong n = pack_num(cur);
+        ylong i = 0;
+        while (!ok && i < n) {
+            Yv *nm = pack_get(cur);
+            ylong ul = pack_len(cur);
+            ylong at = yv_l(yr_get(cur, "p"));
+            if (ys_eq(nm, entry)) {
+                Yv *raw = ys_slice(pack, at, at + ul);
+                if (yv_len(raw) > 0 && ys_byte_at(raw, 0) == 1) {
+                    raw = lz_decode(ys_slice(raw, 1, yv_len(raw)));
+                }
+                if (yv_len(raw) > 0) {
+                    Yv *c = yr(2, "s", raw, "p", yv_long(0));
+                    ylong nb = pack_num(c);
+                    /* a Windows block shared with the Linux prelude is a
+                     * reference to it */
+                    Yv *base = yav(0);
+                    if (ys_eq_lit(entry, "arch.windows") || ys_eq_lit(entry, "arch.kernel")) { base = arch_set(ys("linux")); }
+                    ok = 1;
+                    ylong b = 0;
+                    while (b < nb) {
+                        if (ys_eq_lit(pack_get(c), "r")) {
+                            ylong k = pack_num(c);
+                            if (k >= 0 && k < yv_len(base)) {
+                                blks = ya_push(blks, ya_get(base, k));
+                            } else {
+                                ok = 0;
+                            }
+                        } else {
+                            Yv *bn = pack_get(c);
+                            int bf = ys_eq_lit(pack_get(c), "1");
+                            Yv *br = pack_get_strs(c);
+                            Yv *bb = pack_get(c);
+                            Yv *bt = pack_get_strs(c);
+                            blks = ya_push(blks, yr(6, "name", bn, "falls", yv_bool(bf),
+                                                    "refs", br, "ir", yav(0), "blob", bb,
+                                                    "txt", bt));
+                        }
+                        b = b + 1;
+                    }
+                }
+            }
+            yr_set(cur, "p", yv_long(at + ul));
+            i = i + 1;
+        }
+    }
+    return yr(2, "ok", yv_bool(ok), "blks", blks);
 }
 
 /* Reading a pack: `cur` is the text and the position in it. pack_len
@@ -16022,11 +17338,11 @@ Yv *unit_read(Yv *cur, Yv *name, int bound) {
         bi = bi + 1;
     }
     Yv *labels = pack_get_strs(cur);
+    /* Refs are derived, not stored (blob_refs). */
     Yv *refs = yav(0);
-    ylong nr = pack_num(cur);
     j = 0;
-    while (j < nr) {
-        refs = ya_push(refs, pack_get_strs(cur));
+    while (j < yv_len(blob)) {
+        refs = ya_push(refs, blob_refs(ya_get(blob, j)));
         j = j + 1;
     }
     Yv *rodata = yav(0);
@@ -16037,9 +17353,11 @@ Yv *unit_read(Yv *cur, Yv *name, int bound) {
         j = j + 1;
     }
     Yv *globals = pack_get_strs(cur);
-    return yr(12, "name", name, "files", files, "exports", xs, "init", init,
+    Yv *tys = pack_get_strs(cur);
+    return yr(13, "name", name, "files", files, "exports", xs, "init", init,
               "bodies", yav(0), "btext", btext, "blob", blob, "labels", labels,
-              "refs", refs, "rodata", rodata, "globals", globals, "dfl", dfl);
+              "refs", refs, "rodata", rodata, "globals", globals, "dfl", dfl,
+              "tys", tys);
 }
 
 /* The units `names` from a pack, in that order; [] for a pack of another
@@ -16051,19 +17369,30 @@ Yv *std_unpack(Yv *pack, Yv *names) {
         Yv *cur = yr(2, "s", pack, "p", yv_long(yv_len(ver)));
         ylong n = pack_num(cur);
         Yv *got = yav(0);
+        int bad = 0;
         ylong i = 0;
         while (i < n) {
             Yv *nm = pack_get(cur);
             ylong ul = pack_len(cur);
             ylong at = yv_l(yr_get(cur, "p"));
             if (name_in(names, nm)) {
-                got = ya_push(got,
-                              unit_read(cur, nm, std_unit_bound(nm)));
-                ;
+                /* stored compressed? the method byte says so; a failed decode
+                 * leaves "" and the pack is not used (native.y) */
+                Yv *raw = ys_slice(pack, at, at + ul);
+                if (yv_len(raw) > 0 && ys_byte_at(raw, 0) == 1) {
+                    raw = lz_decode(ys_slice(raw, 1, yv_len(raw)));
+                }
+                if (yv_len(raw) == 0) {
+                    bad = 1;
+                } else {
+                    got = ya_push(got, unit_read(yr(2, "s", raw, "p", yv_long(0)),
+                                                 nm, std_unit_bound(nm)));
+                }
             }
             yr_set(cur, "p", yv_long(at + ul));
             i = i + 1;
         }
+        if (bad) { got = yav(0); }
         ylong k = 0;
         while (k < yv_len(names)) {
             Yv *want = ya_get(names, k);
@@ -16154,22 +17483,60 @@ Yv *unit_iface(Yv *unit) {
 Yv *unit_externs(Yv *std, Yv *snames, Yv *deps, Yv *pkgs) {
     Yv *xt = externs_none();
     Yv *ext = yav(0);
+    Yv *dfl = yav(0);
+    Yv *tys = yav(0);
     ylong i = 0;
     while (i < yv_len(std)) {
         Yv *u = ya_get(std, i);
         Yv *un = yr_get(u, "name");
+        Yv *ut = yr_get(u, "tys");
+        ylong ui = 0;
+        while (ui < yv_len(ut)) {
+            tys = ya_push(tys, ya_get(ut, ui));
+            ui = ui + 1;
+        }
         if (std_unit_bound(un) && name_in(snames, un)) {
-            Yv *exports = yr_get(u, "exports");
-            ylong j = 0;
-            while (j < yv_len(exports)) {
-                ext = ya_push(ext, ya_get(exports, j));
-                j = j + 1;
+            if (std_lib_index(un) < 0) {
+                Yv *exports = yr_get(u, "exports");
+                ylong j = 0;
+                while (j < yv_len(exports)) {
+                    ext = ya_push(ext, ya_get(exports, j));
+                    j = j + 1;
+                }
+                ;
+            } else {
+                /* a library unit is referenced through its namespace, exactly
+                 * as a package is (see pkg_ns): math.pi, and strip_ns keeps the
+                 * dot because the name is in xt.pkgs */
+                Yv *xs = yr_get(u, "exports");
+                ylong j = 0;
+                while (j < yv_len(xs)) {
+                    Yv *x = ya_get(xs, j);
+                    ext = ya_push(ext, yr(3, "name",
+                        ys_cat(ys_cat(un, ys(".")), yr_get(x, "name")),
+                        "label", yr_get(x, "label"), "typ", yr_get(x, "typ")));
+                    j = j + 1;
+                }
+                Yv *ds = yr_get(u, "dfl");
+                j = 0;
+                while (j < yv_len(ds)) {
+                    Yv *d = ya_get(ds, j);
+                    Yv *dv = yr_get(d, "vals");
+                    Yv *vals = yav(0);
+                    ylong k = 0;
+                    while (k < yv_len(dv)) {
+                        vals = ya_push(vals, lit_decode(ya_get(dv, k)));
+                        k = k + 1;
+                    }
+                    dfl = ya_push(dfl, yr(2, "name",
+                        ys_cat(ys_cat(un, ys(".")), yr_get(d, "name")),
+                        "vals", vals));
+                    j = j + 1;
+                }
             }
-            ;
         }
         i = i + 1;
     }
-    Yv *dfl = yav(0);
     i = 0;
     while (i < yv_len(deps)) {
         Yv *u = ya_get(deps, i);
@@ -16209,6 +17576,7 @@ Yv *unit_externs(Yv *std, Yv *snames, Yv *deps, Yv *pkgs) {
     yr_set(xt, "ext", ext);
     yr_set(xt, "dfl", dfl);
     yr_set(xt, "pkgs", pkgs);
+    yr_set(xt, "tys", tys);
     return xt;
 }
 
@@ -16447,7 +17815,7 @@ Yv *gen_map_get(Yv *st, Yv *node, Yv *mode) {
     Yv *sts = yav(0);
     sts = ya_push(sts, n_decl(ys_cat(t, ys("m")), yr_get(node, "arr"), ln, cl));
     sts = ya_push(sts, n_decl(ys_cat(t, ys("k")), yr_get(node, "idx"), ln, cl));
-    sts = ya_push(sts, n_decl(ys_cat(t, ys("ks")), n_dot(m, ys("keys"), ln, cl), ln, cl));
+    sts = ya_push(sts, n_decl(ys_cat(t, ys("ks")), map_field(m, "keys", ln, cl), ln, cl));
     sts = ya_push(sts, n_decl(ys_cat(t, ys("i")), n_num(ys("0"), ln, cl), ln, cl));
     sts = ya_push(sts, n_decl(ys_cat(t, ys("n")), n_call1(ys("len"), n_id(ys_cat(t, ys("ks")), ln, cl), ln, cl), ln, cl));
     sts = ya_push(sts, n_decl(ys_cat(t, ys("j")), n, ln, cl));
@@ -16464,18 +17832,30 @@ Yv *gen_map_get(Yv *st, Yv *node, Yv *mode) {
         Yv *hit = yav(0);
         hit = ya_push(hit, n_num(ys("0"), ln, cl));
         sts = ya_push(sts, n_if(n_bin(ys("=="), i, n, ln, cl), block_of(miss, ln, cl), block_of(hit, ln, cl), ln, cl));
-        sts = ya_push(sts, n_idx(n_dot(m, ys("vals"), ln, cl), i, ln, cl));
+        sts = ya_push(sts, n_idx(map_field(m, "vals", ln, cl), i, ln, cl));
+        ;
+    } else if (ys_eq_lit(mode, "dot")) {
+        /* `m.k` (TODO.md item 10): the entry, or stop with the key in the
+         * message -- the checker has already said this read is V, not V?. */
+        Yv *msg = n_bin(ys("+"), n_bin(ys("+"), n_str(ys("runtime error: no entry '"), ln, cl), n_id(ys_cat(t, ys("k")), ln, cl), ln, cl), n_str(ys("' in this map\n"), ln, cl), ln, cl);
+        Yv *miss = yav(0);
+        miss = ya_push(miss, n_call1(ys("eputs"), msg, ln, cl));
+        miss = ya_push(miss, n_call1(ys("exit"), n_num(ys("1"), ln, cl), ln, cl));
+        Yv *hit = yav(0);
+        hit = ya_push(hit, n_num(ys("0"), ln, cl));
+        sts = ya_push(sts, n_if(n_bin(ys("=="), i, n, ln, cl), block_of(miss, ln, cl), block_of(hit, ln, cl), ln, cl));
+        sts = ya_push(sts, n_idx(map_field(m, "vals", ln, cl), i, ln, cl));
         ;
     } else {
         Yv *b = n_id(ys_cat(t, ys("b")), ln, cl);
         Yv *fill = yav(0);
-        fill = ya_push(fill, n_assign(ys_cat(t, ys("b")), n_call1(ys("some"), n_idx(n_dot(m, ys("vals"), ln, cl), i, ln, cl), ln, cl), ln, cl));
-        fill = ya_push(fill, yr(6, "k", yv_long(K_idxassign), "arr", n_dot(m, ys("boxes"), ln, cl), "idx", i, "v", b, "line", yv_long(ln), "col", yv_long(cl)));
+        fill = ya_push(fill, n_assign(ys_cat(t, ys("b")), n_call1(ys("some"), n_idx(map_field(m, "vals", ln, cl), i, ln, cl), ln, cl), ln, cl));
+        fill = ya_push(fill, yr(6, "k", yv_long(K_idxassign), "arr", map_field(m, "boxes", ln, cl), "idx", i, "v", b, "line", yv_long(ln), "col", yv_long(cl)));
         fill = ya_push(fill, n_num(ys("0"), ln, cl));
         Yv *kept = yav(0);
         kept = ya_push(kept, n_num(ys("0"), ln, cl));
         Yv *hit = yav(0);
-        hit = ya_push(hit, n_decl(ys_cat(t, ys("b")), n_idx(n_dot(m, ys("boxes"), ln, cl), i, ln, cl), ln, cl));
+        hit = ya_push(hit, n_decl(ys_cat(t, ys("b")), n_idx(map_field(m, "boxes", ln, cl), i, ln, cl), ln, cl));
         hit = ya_push(hit, n_if(n_call1(ys("is_some"), b, ln, cl), block_of(kept, ln, cl), block_of(fill, ln, cl), ln, cl));
         hit = ya_push(hit, b);
         Yv *miss = yav(0);
@@ -16492,6 +17872,22 @@ Yv *gen_map_get(Yv *st, Yv *node, Yv *mode) {
  * elements of an array value whose type unifies with [V], such as []).
  * The value runs before the scan counts the entries, so a value that
  * itself adds keys is seen. */
+/* The map's own three fields, as the generated map code reads them. A dot on a
+ * map is an ENTRY now (TODO.md item 10), so the emitter's own code cannot spell
+ * it `m.keys` -- that is an entry like any other, and reading it has to go
+ * through the scan. These three names no program can write (`$` is not an
+ * identifier character, as `opt$test` and `push$all` are), and each is exactly
+ * the slot read the dot used to be. */
+static Yv *map_field(Yv *m, const char *field, long ln, long cl) {
+    /* ys_cstr, not ys: ys() interns sizeof(lit)-1 bytes, so a variable name
+     * would be truncated to the size of a pointer (yields "map$key"). */
+    const char *name = NULL;
+    if (strcmp(field, "keys") == 0) { name = "map$keys"; }
+    else if (strcmp(field, "vals") == 0) { name = "map$vals"; }
+    else { name = "map$boxes"; }
+    return n_call1(ys_cstr(name), m, ln, cl);
+}
+
 Yv *gen_map_set(Yv *st, Yv *node) {
     ylong ln = yv_l(yr_get(node, "line"));
     ylong cl = yv_l(yr_get(node, "col"));
@@ -16515,19 +17911,19 @@ Yv *gen_map_set(Yv *st, Yv *node) {
     sts = ya_push(sts, n_decl(ys_cat(t, ys("m")), yr_get(node, "arr"), ln, cl));
     sts = ya_push(sts, n_decl(ys_cat(t, ys("k")), yr_get(node, "idx"), ln, cl));
     sts = ya_push(sts, n_decl_typ(ys_cat(t, ys("v")), yr_get(node, "v"), vt, ln, cl));
-    sts = ya_push(sts, n_decl(ys_cat(t, ys("ks")), n_dot(m, ys("keys"), ln, cl), ln, cl));
+    sts = ya_push(sts, n_decl(ys_cat(t, ys("ks")), map_field(m, "keys", ln, cl), ln, cl));
     sts = ya_push(sts, n_decl(ys_cat(t, ys("i")), n_num(ys("0"), ln, cl), ln, cl));
     sts = ya_push(sts, n_decl(ys_cat(t, ys("n")), n_call1(ys("len"), n_id(ys_cat(t, ys("ks")), ln, cl), ln, cl), ln, cl));
     sts = ya_push(sts, n_decl(ys_cat(t, ys("j")), n, ln, cl));
     sts = ya_push(sts, map_scan(t, ln, cl));
     Yv *hit = yav(0);
-    hit = ya_push(hit, yr(6, "k", yv_long(K_idxassign), "arr", n_dot(m, ys("vals"), ln, cl), "idx", i, "v", v, "line", yv_long(ln), "col", yv_long(cl)));
-    hit = ya_push(hit, yr(6, "k", yv_long(K_idxassign), "arr", n_dot(m, ys("boxes"), ln, cl), "idx", i, "v", n_id(ys("none"), ln, cl), "line", yv_long(ln), "col", yv_long(cl)));
+    hit = ya_push(hit, yr(6, "k", yv_long(K_idxassign), "arr", map_field(m, "vals", ln, cl), "idx", i, "v", v, "line", yv_long(ln), "col", yv_long(cl)));
+    hit = ya_push(hit, yr(6, "k", yv_long(K_idxassign), "arr", map_field(m, "boxes", ln, cl), "idx", i, "v", n_id(ys("none"), ln, cl), "line", yv_long(ln), "col", yv_long(cl)));
     hit = ya_push(hit, n_num(ys("0"), ln, cl));
     Yv *grow = yav(0);
-    grow = ya_push(grow, n_call2(ys("push"), n_dot(m, ys("keys"), ln, cl), k, ln, cl));
-    grow = ya_push(grow, n_call2(ys("push"), n_dot(m, ys("vals"), ln, cl), v, ln, cl));
-    grow = ya_push(grow, n_call2(ys("push"), n_dot(m, ys("boxes"), ln, cl), n_id(ys("none"), ln, cl), ln, cl));
+    grow = ya_push(grow, n_call2(ys("push"), map_field(m, "keys", ln, cl), k, ln, cl));
+    grow = ya_push(grow, n_call2(ys("push"), map_field(m, "vals", ln, cl), v, ln, cl));
+    grow = ya_push(grow, n_call2(ys("push"), map_field(m, "boxes", ln, cl), n_id(ys("none"), ln, cl), ln, cl));
     grow = ya_push(grow, n_num(ys("0"), ln, cl));
     sts = ya_push(sts, n_if(n_bin(ys("<"), i, n, ln, cl), block_of(hit, ln, cl), block_of(grow, ln, cl), ln, cl));
     sts = ya_push(sts, v);
@@ -16560,14 +17956,14 @@ Yv *gen_map_repr(Yv *st, Yv *arg, Yv *t) {
     sts = ya_push(sts, n_decl(ys_cat(g, ys("m")), arg, ln, cl));
     sts = ya_push(sts, n_decl(ys_cat(g, ys("s")), n_str(ys("{"), ln, cl), ln, cl));
     sts = ya_push(sts, n_decl(ys_cat(g, ys("i")), n_num(ys("0"), ln, cl), ln, cl));
-    sts = ya_push(sts, n_decl(ys_cat(g, ys("n")), n_call1(ys("len"), n_dot(m, ys("keys"), ln, cl), ln, cl), ln, cl));
+    sts = ya_push(sts, n_decl(ys_cat(g, ys("n")), n_call1(ys("len"), map_field(m, "keys", ln, cl), ln, cl), ln, cl));
     Yv *sep = yav(0);
     sep = ya_push(sep, n_assign(ys_cat(g, ys("s")), n_bin(ys("+"), s, n_str(ys(", "), ln, cl), ln, cl), ln, cl));
     sep = ya_push(sep, n_num(ys("0"), ln, cl));
     Yv *nosep = yav(0);
     nosep = ya_push(nosep, n_num(ys("0"), ln, cl));
-    Yv *kpart = map_key_repr(n_idx(n_dot(m, ys("keys"), ln, cl), i, ln, cl), yr_get(t, "key"), ln, cl);
-    Yv *vpart = n_call1(ys("tostring"), n_idx(n_dot(m, ys("vals"), ln, cl), i, ln, cl), ln, cl);
+    Yv *kpart = map_key_repr(n_idx(map_field(m, "keys", ln, cl), i, ln, cl), yr_get(t, "key"), ln, cl);
+    Yv *vpart = n_call1(ys("tostring"), n_idx(map_field(m, "vals", ln, cl), i, ln, cl), ln, cl);
     Yv *put = n_assign(ys_cat(g, ys("s")), n_bin(ys("+"), n_bin(ys("+"), n_bin(ys("+"), s, kpart, ln, cl), n_str(ys(": "), ln, cl), ln, cl), vpart, ln, cl), ln, cl);
     Yv *step = n_assign(ys_cat(g, ys("i")), n_bin(ys("+"), i, n_num(ys("1"), ln, cl), ln, cl), ln, cl);
     Yv *body = yav(0);

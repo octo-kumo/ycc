@@ -31,7 +31,7 @@ if [ ! -x "${YREF:-$ROOT/refs/ycc.ref}" ]; then
 fi
 YSELF_BIN="${YSELF:-$ROOT/ycc}"
 
-ALL="port pe-port native native-examples examples audit ycc-units ycc fixpoint loops comprehensive debug link pkg stdin-eof net lsp math coverage treeshake std-suites kernel"
+ALL="port pe-port native native-examples examples audit ycc-units ycc fixpoint loops comprehensive debug link pkg stdin-eof net lsp math coverage treeshake gc std-suites kernel"
 SUITES="${*:-$ALL}"
 declare -A SCRIPT_FOR=(
     [port]="test_port.sh"
@@ -54,6 +54,7 @@ declare -A SCRIPT_FOR=(
     [coverage]="test_coverage.sh"
     [math]="test_math.sh"
     [treeshake]="test_treeshake.sh"
+    [gc]="test_gc.sh"
     [std-suites]="test_std_suites.sh"
     [kernel]="test_kernel.sh"
 )

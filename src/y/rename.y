@@ -34,6 +34,22 @@ import parser from "./parser.y";
 type Dfl = { name: str, vals: [Node] };
 type RnBind = { orig: str, uniq: str };
 type RnSt = { scopes: [[RnBind]], n: long, tys: [Field], dfl: [Dfl] };
+
+// Type aliases a UNIT declared and its importers must be able to name. rename
+// erases an alias (rn_type_name substitutes the body, rn_drop_typedefs drops the
+// statement), so the name lives nowhere once a unit is compiled: an importer of
+// `crypto` could not write `h: crypto.Hash` (native.y unit_externs seeds
+// rn_types_seed from the units it links, compile_unit publishes rn_types_out).
+let rn_types_seed: [Field] = [];
+let rn_types_out: [Field] = [];
+
+def rn_types_seed_set(xs: [Field]) {
+    rn_types_seed = xs;
+};
+
+def rn_types_out_get() -> [Field] {
+    rn_types_out
+};
 type RnRes = { st: RnSt, node: Node };
 type RnStmts = { st: RnSt, stmts: [Node] };
 
@@ -518,7 +534,11 @@ def rn_reaches_go(st: RnSt, t: Type, id: long, seen: [long], bare: bool) -> bool
             rn_reaches_go(st, st.tys[j].typ, id, seen, bare)
         }
     }
-    else if (k == K.tptr) { let ptr: TPtr = t; rn_reaches_go(st, ptr.to, id, seen, bare) }
+    // A pointer is an indirection too: the value it holds is somewhere else,
+    // so it can be smaller than the alias. It guards on `bare` for the same
+    // reason the array arms below do, which is what lets `type Cell = *Cell`
+    // be written without a one-field wrapper record.
+    else if (k == K.tptr) { let ptr: TPtr = t; if (!bare) { rn_reaches_go(st, ptr.to, id, seen, bare) } else { false } }
     // An array, a fixed array, an option and a map are heap objects with a
     // header, so recursing through one is as sound as recursing through a
     // record field -- at runtime both are a pointer -- and they stop the BARE
@@ -624,7 +644,7 @@ def rn_typedef_err(s: TypeDef, st: RnSt) -> Node {
     let id = rn_alias_index(st, name);
     if (un != "") { rn_unknown_err(un, s.line, s.col) }
     else if (id >= 0 && rn_reaches(st, id, true)) {
-        let err: Err = { k: K.err, msg: "type '" + name + "' refers to itself outside any record field, array, option, map or function type", line: s.line, col: s.col };
+        let err: Err = { k: K.err, msg: "type '" + name + "' refers to itself outside any record field, function type, array, option, map or pointer", line: s.line, col: s.col };
         let node: Node = err;
         node
     } else {
@@ -1528,8 +1548,39 @@ def rename_program_go(stmts: [Node], line: long, col: long, dfl: [Dfl]) -> Block
     let d0: [Dfl] = [];
     d0 += dfl;
     let st: RnSt = { scopes: [[]], n: 1, tys: [], dfl: d0 };
+    // The aliases of the units this one was compiled against first: an alias is
+    // visible to every annotation of the block (rn_prepass_one hoists them).
+    let seed_n = len(rn_types_seed);
+    let si = 0;
+    while (si < len(rn_types_seed)) {
+        st.tys += rn_types_seed[si];
+        si = si + 1;
+    };
+    rn_types_seed = [];
     rn_ixn = 0;
-    { k: K.block, stmts: (rn_top(stmts, st)).stmts, line: line, col: col }
+    let top = rn_top(stmts, st);
+    // What THIS unit declared -- not the seeds, which are its dependencies': a
+    // unit publishes its own aliases only, or the list would grow with every
+    // unit that links it (an importer of an importer would re-seed them).
+    // Each is published RESOLVED -- what an annotation naming it stands for
+    // (rn_type_name: a recursive alias is its tref) -- never the body as
+    // written: json's `Val = Num | Str | ... | Arr | JObj` names other aliases
+    // bare, and an importer, which knows them only as `json.Num`, would read
+    // each as an unknown type.
+    let mine: [Field] = [];
+    let mod0 = rn_mod;
+    rn_mod = "";
+    let mi = seed_n;
+    while (mi < len(top.st.tys)) {
+        let e: Field = top.st.tys[mi];
+        let tn: TName = { k: K.tname, name: e.name };
+        let named: Type = tn;
+        mine += { name: e.name, opt: false, typ: rn_type_name(top.st, e.name, named, 0) };
+        mi = mi + 1;
+    };
+    rn_mod = mod0;
+    rn_types_out = mine;
+    { k: K.block, stmts: top.stmts, line: line, col: col }
 };
 
 // rename, AND the def sites of everything it renamed.

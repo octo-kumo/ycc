@@ -117,6 +117,14 @@ Yv *parse_cli_args(Yv *argv) {
             wlevel = wlevel_arg(argv, i, n);
             i = i + 1;
             ;
+        } else if (ys_eq_lit(a, "--gc-stress")) {
+            /* A cycle at every allocating slow path: the collector's strongest
+               test (native.c set_gc_stress). It implies the collector. */
+            set_gc_stress(1);
+            ;
+        } else if (ys_eq_lit(a, "--no-gc")) {
+            set_gc_mode(2);
+            ;
         } else if (yv_len(a) >= 5 && ys_eq_lit(ys_slice(a, 0, 5), "--gc=")) {
             /* Whether the collector is linked: auto (the default) decides from
                the program, always and never say so outright. The decision lives
@@ -194,6 +202,9 @@ puts_(ys("               status; everything after `--` is the program's argv\n")
             puts_(ys("               an else branch that does nothing; 2 adds the\n"));
             puts_(ys("               shortening suggestions of LINT_RULES.md\n"));
             puts_(ys("  --no-exec    omit exec() -- the binary cannot reach a shell\n"));
+            puts_(ys("  --gc-stress  run a collection at every allocating slow path: the\n"));
+            puts_(ys("               collector's own test, and a very slow build. It\n"));
+            puts_(ys("               implies the collector. --no-gc is --gc=never.\n"));
             puts_(ys("  --gc=MODE    the collector: auto (the default) links it only\n"));
             puts_(ys("               when an allocation can happen in a loop or a\n"));
             puts_(ys("               recursion; always and never force it. Without the\n"));
@@ -266,8 +277,17 @@ Yv *pack_magic(void) {
     return ys("YCCPACK1");
 }
 
-/* The pack attached to this binary, or "" when there is none. */
+/* The pack attached to this binary, or "" when there is none. Read once
+ * (ycc.y self_pack). */
+static Yv *self_pack_read(void);
+static Yv *self_pack_text;
+
 Yv *self_pack(void) {
+    if (!self_pack_text) { self_pack_text = self_pack_read(); }
+    return self_pack_text;
+}
+
+static Yv *self_pack_read(void) {
     int fd = open("/proc/self/exe", O_RDONLY);
     if (fd < 0) {
         return ys("");
@@ -410,25 +430,20 @@ ylong print_native_errors(Yv *errors, Yv *origin, int bare) {
     Yv *all = errors;
     /* One error per position: a malformed token can trip two checks (the
      * construct it broke, then the statement it ended), and the second
-     * message only repeats the first. */
-    Yv *seen = yav(0);
+     * message only repeats the first. The positions go in a name index, not
+     * an array: a linear scan of what has been printed makes printing n
+     * errors O(n^2), and a file with a mistake on every line is exactly when
+     * the messages matter most (measured: 2000 errors 10 ms, 4000 20, 8000
+     * 80, 16000 250 -- a name index makes each one a hash probe). */
+    Yv *seen = nameix_new(64);
     ylong i = 0;
     while (i < yv_len(all)) {
         Yv *e = ya_get(all, i);
         Yv *at = ys_cat(ys_cat(origin_at(origin, yv_l(yr_get(e, "line")), bare),
                                ys(":")),
                         ys_long(yv_l(yr_get(e, "col"))));
-        int dup = 0;
-        ylong j = 0;
-        while (j < yv_len(seen)) {
-            if (ys_eq(ya_get(seen, j), at)) {
-                dup = 1;
-                ;
-            }
-            j = j + 1;
-        }
-        if (!dup) {
-            seen = ya_push(seen, at);
+        if (nameix_get(seen, at) < 0) {
+            nameix_put(seen, at, 1);
             puts_(ys_cat(
                 ys_cat(ys_cat(at, ys(": error: ")),
                        yr_get(e, "msg")),
@@ -569,12 +584,33 @@ Yv *build_resolve(Yv *path, int allow_exec, Yv *pkgs, Yv *roots) {
 }
 
 Yv *std_order(Yv *names) {
+    /* A program that links a library unit links what that unit imports too: a
+     * unit is compiled and linked against the units before it (std_lib_deps),
+     * and std_unit_names is already dependency-first. `names` is copied first --
+     * arrays are references, and `+=` would grow the caller's resolution. */
+    Yv *want = yav(0);
+    ylong wi = 0;
+    while (wi < yv_len(names)) {
+        want = ya_push(want, ya_get(names, wi));
+        wi = wi + 1;
+    }
+    ylong i = 0;
+    while (i < yv_len(want)) {
+        Yv *ds = std_lib_deps(ya_get(want, i));
+        ylong di = 0;
+        while (di < yv_len(ds)) {
+            Yv *d = ya_get(ds, di);
+            if (!pk_has(want, d)) { want = ya_push(want, d); };
+            di = di + 1;
+        }
+        i = i + 1;
+    }
     Yv *all = std_unit_names();
     Yv *out = yav(0);
-    ylong i = 0;
+    i = 0;
     while (i < yv_len(all)) {
         Yv *nm = ya_get(all, i);
-        if (pk_has(names, nm)) {
+        if (pk_has(want, nm)) {
             out = ya_push(out, nm);
             ;
         }
@@ -1154,6 +1190,8 @@ ylong y_main(Yv *cmdline) {
         (ys_eq_lit(ya_get(cmdline, 1), "build") ||
          ys_eq_lit(ya_get(cmdline, 1), "vendor"))) {
         Yv *ba = build_args(cmdline);
+        /* a meta block's generator links the std units too (meta_compile_gen) */
+        if (!yv_b(yr_get(ba, "std_src"))) { set_meta_pack(self_pack()); }
         Yv *one = yr_get(ba, "one");
         if (ys_eq_lit(ya_get(cmdline, 1), "build") && yv_len(one) == 0) {
             build_project(yr_get(ba, "dir"), yv_b(yr_get(ba, "debug")),
@@ -1225,6 +1263,10 @@ ylong y_main(Yv *cmdline) {
              * meta_begin here and nothing else -- resolve_unit's meta_prepare
              * is what runs the generator. */
             (void)meta_begin();
+            /* A meta block's generator is compiled during the resolve below and
+             * links the std units as the program does: from this binary's pack
+             * (none under --std-src). */
+            if (!yv_b(yr_get(pargs, "std_src"))) { set_meta_pack(self_pack()); }
             /* get base dir from file path (use last slash, like C compiler's
              * strrchr) */
             ylong last_slash = ys_last_index_of(file, ys("/"));
@@ -1266,14 +1308,14 @@ ylong y_main(Yv *cmdline) {
             h0 = yv_l(yr_get(ph, "h"));
             /* The std units the program links (native_resolve_x picked
              * them): the ones attached to ycc, compiled when it was built,
-             * or (--std-src, or a ycc with none) compiled from the sources
-             * embedded in it. */
+             * or (--std-src, or a ycc with none) compiled from their sources
+             * on disk. */
             Yv *pack = ys("");
             if (!yv_b(yr_get(pargs, "std_src"))) {
                 pack = self_pack();
                 ;
             }
-            Yv *su = std_units(nrstd, pack);
+            Yv *su = std_units(std_order(nrstd), pack);
             ph = phase_end(dt, ys("std"), t0, h0);
             dt = yr_get(ph, "times");
             t0 = yv_l(yr_get(ph, "t"));

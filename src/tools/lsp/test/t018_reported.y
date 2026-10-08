@@ -332,13 +332,11 @@ print("-- 7. completion after a `.` is the object's OWN members");
 // pinned. What is pinned is the property: the receiver's own members, in the
 // receiver's own spelling, with the string methods absent.
 print("math. offers " + count_first(labels(st, 20, 29, col_of(29, "math.", 0) + 5)));
-// R6.3 says a completion item's `detail` is the type. For a module member that is
-// CONDITIONAL and, from a workspace, the condition is false: a linked unit's
-// `exports` are `[Sym]`s with types, but `std_units(nr.std, pack)` for a buffer
-// outside the compiler tree links only the always-on units -- `str` and `rt` -- and
-// neither is reachable as `x.`. So `math.` here reaches the SPLICED path, which has
-// names and no types, and the items carry no `detail`. Recorded as measured rather
-// than as wished for; `t020_sorttext` shows the same for a sibling file.
+// R6.3 says a completion item's `detail` is the type. For a module member that
+// used to be false: math was SPLICED, a path with names and no types, so the items
+// carried no `detail`. math is now a unit of the std pack, linked, and a linked
+// unit's `exports` are `[Sym]`s with types -- so each item's detail is its type.
+// `t020_sorttext` shows the same; a sibling FILE (spliced) still has none.
 print("  the first three, and whether each has a type: " + details_of(st, 26, 29, col_of(29, "math.", 0) + 5));
 print("  string methods wrongly among them: " + string_methods_in(labels(st, 26, 29, col_of(29, "math.", 0) + 5)));
 print("z. (a record literal) offers: " + labels(st, 21, 30, col_of(30, "z.", 0) + 2));

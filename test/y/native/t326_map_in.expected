@@ -1,0 +1,14 @@
+true false bool
+false 0 0
+true true false
+true true true
+true false
+true false
+map
+key
+map
+key
+true false
+1 true true false
+true true
+{"hits": 1} false

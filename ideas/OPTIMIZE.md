@@ -342,6 +342,74 @@ interleaving is unchanged). It is reached through the checker's named layer --
 `heap_used() > 0` is now `false` (printing no longer allocates) and the fixture says so.
 `test/y/native/t379_print_int_no_alloc.y` pins the heap delta across six prints at 0.
 
+### A9. The collector's thread support, and who pays for it (partly done)
+
+Stopping the world for threads (`ideas/lifetime_gc.md` item 1) put a safepoint
+and locks into the allocation path. The first two are thread-only now: the
+safepoint and the locked halves of the slow path live in the thread runtime and
+are reached through pointers (`y_gc_safe_fn`, `y_gc_free_fn`, `y_gc_chunk_fn`)
+that `y_threads_on` installs, so a program that never spawns calls the plain
+functions. That recovered most of the cost: `alloc_once.y` (which `--gc=auto`
+leaves collector-free) 1443 -> 1378 bytes and `forloop.y` 4077 -> 4047, both
+recorded in `test/treeshake/shapes.txt`.
+
+What is left is smaller and deliberately deferred: the metadata arena's lock is
+still taken by a single-threaded collector (the arena is reached from too many
+call sites to indirect cheaply), and the collector's thread helpers themselves
+(`y_gc_stw_begin`, `y_gc_thread_roots`, `y_gc_mark_threads`, the block
+begin/end pair, ~450 bytes) are linked whenever the collector is. Making those
+thread-only wants the `#=== replace:` block machinery wsys.s already uses, but
+between prelude.s and threads.s rather than prelude.s and wsys.s.
+
+### A8. Pointer-free payloads: do not scan bytes (partly done)
+
+**Problem.** The collector treats a marked block's payload as candidate pointers.
+A string buffer or a packed `[byte]` array cannot hold one, so every cycle walked
+its words for nothing -- and, worse, retained any garbage whose bytes happened to
+look like a pointer.
+
+**Fix.** `y_alloc_pf` sets `bit 2` of the header (pointer-free) and `y_gc_drain`
+skips such a payload entirely. The byte buffers now use it: `y_str_cat`,
+`y_str_app`'s new buffer, the join buffer (`ysj_alloc`), the long-to-string
+buffer (`ylts_mk`), the C-string conversion (`ycs_mk`) and `y_bytes_to_str`.
+
+**Result.** 120 live strings of ~108 KB (`"...".repeat(3000)`), under the normal
+cap: **61,934,562 -> 49,296,546** instructions (callgrind, -20.4%) at the same
+peak RSS (24.8 MB), same output. Short-string workloads are unchanged (the
+per-block drain overhead dominates there).
+
+**Packed `[byte]` data (done).** The array helpers already know `esz`, and
+`esz == 1` means the payload is bytes: the five data allocations a packed array
+can grow through (`y_arr_slice`, `y_arr_cat`, `y_arr_push`'s room, the capacity
+doubling, and the extend path) branch on `%r9 == 1` and allocate with
+`y_alloc_pf`. 600 live 30 KB byte arrays: **90.9M -> 36.7M** callgrind
+instructions, same peak RSS and output.
+
+**8-byte pointer-free elements (done for the building operations).** The
+emitter knows the element type at every array operation, so `mark_pf_arr` sets
+the flag on the block the header's data pointer names when the element type is
+`long`/`bool`/`float`/`byte`. Marked: a literal, `arr[lo:hi]`, `array + element`
+(`gen_cons`), `array + array` (`gen_cat_arr`) and `arr += other`
+(`gen_push_all`). 200 arrays of 12288 longs: **146.0M -> 100.7M** callgrind
+instructions, same output.
+
+**`range()` (done).** `gen_range` marks the result, which is always `[long]`:
+400 ranges of 4000 longs, **127.1M -> 105.4M** callgrind instructions, same
+output and peak RSS.
+
+**Deliberately not marked: `arr += x`.** The mark costs five instructions *per
+pushed element*, while the saving is one skipped word per eight bytes *per cycle
+the array survives*. An array built by pushing N elements would have to live
+through many cycles to pay that back. Marking a whole array once -- a literal, a
+slice, a cat, an extend, a range -- pays for itself at roughly twenty elements,
+which is why those are the sites that carry it.
+
+**Left.** `map`/`filter` result arrays. They cannot share one rule: `map`'s
+result holds the closure's return type, but `filter`'s closure returns `bool`
+while its result holds the *source* elements, so marking from the closure's type
+would mark a pointer-holding array pointer-free. Each needs its own (for filter,
+source-derived) element type.
+
 ### A7. `--gc`: do not link the collector a program cannot grow into (done)
 
 **Problem.** A program that allocates once -- `let a = [1, 2, 3]; print(a[0]);` --
@@ -674,7 +742,7 @@ IR.
 | **E5** | **Denser pack text.** `emit` output is indented 4 spaces (~6,700 × 4 = 27 KB of the pack). | −26 to −50 KB | medium | Requires a `pack_version` bump (`native.y:9666`, currently `ycc-std-pack 5`); touches `test_link.sh`, `test_fixpoint.sh`, and the object cache in `pkg.y`. **Superseded by Part 4 Stage 3.** |
 | **E6** | **Tail calls beyond direct self-recursion.** `is_self_call` (`native.y:5188`) only matches `self` or the function's own label. Mutual recursion, tail calls to other functions, and calls through closures all grow the stack per iteration. | runtime + max stack | medium | Needs a general tail-call decision (frame shapes differ per callee). Part of the deferred register-allocation territory. |
 | **E7** | **Inline tiny functions.** Every Y-level function is `call` + `add $N,%rsp` (`gen_direct`, `native.y:4982`), even `y_heap_used` (8 instructions, `arch_x64.y:498`). | runtime | medium | Requires a cost model and a call-site budget. |
-| **E8** | **Direct calls for literal closures (done).** `a.foreach((x) => ...)` and the other array methods (`map`, `filter`, `all`, `some`, `find`, `reduce`, `sort(cmp)`) went through `gen_closure_call`: push the record, load its code pointer, `call *%r10` -- per element. A literal closure that captures nothing never reads the record, so `arr_direct_label`/`gen_arr_call` (`native.y`, `native.c`) emit a plain `call <lambda>` with the same stack layout. Capturing literals keep the indirect path. | the indirect load, the record push and the branch, per element | done | `test/sh/test_treeshake.sh` gates foreach at <= raw-loop + 20 instructions (`foreach.y` 870 vs `forloop.y` 866) and the -S listing has no `call *%r10`; the record is still built once per call (skipping that needs the body emitter split out of `gen_func_literal`). |
+| **E8** | **Literal closures inlined into the array methods (done).** `a.foreach((x) => ...)`, `map`, `filter`, `all`, `some`, `find`, `reduce` and `sort(cmp)` used to call their literal closure through the record (push it, load its code pointer, `call *%r10`), and then directly (`call <lambda>`, `64f7556`). Now `arr_can_inline` (`native.y`/`native.c`) emits the body **inside the loop** for a literal that captures nothing, does not call `self`, has no nested function literal and does not append to a parameter: `gen_lambda_inline` promotes the caller's live temporaries to block slots, binds the parameters to fresh slots and emits the body with `st.end_label` pointing at a local return label, so the value lands in `%rax` exactly like the call it replaces. Nothing else can be inlined and the fallbacks stay (a capturing literal still goes through the record). | the closure record, the separate body, the call/ret and the frame, per element | done | **Capturing literals are inlined too**: `arr_box_caps` boxes each enclosing binding, and `gen_lambda_inline` builds the closure record the body expects **on the stack** for the loop (word j+1 is capture j's cell pointer). Two subtleties cost a debugging session each: the record must be built at the inline point, after the live temporaries are promoted to block slots (building it at the creation site hands out slots in the temporaries' range), and `env_define` APPENDS to the env array in place (arrays are references), so the capture entries are shadowed back with the saved bindings after the body -- otherwise a program whose loop body never ran read the capture through a record that was never stored and crashed. `test/treeshake/foreach_local.y` (3319 B, 856 instructions, no indirect call; the record path was 3443 B/896) and `foreach_capture.y` (5, 6, 9: the zero-iteration read, a plain capture and a nested-literal body) pin both. `test/sh/test_treeshake.sh` gates foreach **below** the raw loop (854 vs 866 instructions) with no `call *%r10`; `foreach.y` 3,384 -> 3,333 B against the raw loop's 3,497; callgrind on the foreach fixture 772 -> 675. The nested-closure and appended-parameter guards are checked by `test/treeshake/print_var.y`-style cases (a `str` parameter appended inside the lambda still gets its own copy). |
 
 ---
 

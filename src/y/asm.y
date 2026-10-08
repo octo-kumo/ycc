@@ -1254,6 +1254,151 @@ def ir_enc_item(ir: [long], at: long, sec: long, offs: [long], where: str) -> As
     }
 };
 
+// ── a line of hand-written assembly, as an item ─────────────────────────
+// The arch runtime (src/y/arch/*.s) travels in the std pack as IR, not text
+// (native.y arch_blocks). A line becomes an item only when that changes
+// nothing: the item renders back to the line byte for byte (so -S is the
+// text it always was) and assembles to the same bytes, fixups and branch
+// class as the line does through the text path. Anything else -- a
+// directive, a shape no form has, a spelling the renderer would change --
+// answers [] and the caller keeps the line as an IR_TEXT item, which the
+// assembler reads exactly as before. So a form that is wrong for a line can
+// only cost compactness, never a byte of output.
+def ir_parse_line(line: str) -> [long] {
+    let none: [long] = [];
+    let t = trim(line);
+    if (len(line) == 0 || (line[0] != 32 && line[0] != 9) || len(t) == 0 || t[0] == '.') {
+        none
+    } else {
+        let sp = index_of(t, " ");
+        let mn = t;
+        let rest = "";
+        if (sp >= 0) {
+            mn = t[0:sp];
+            rest = trim(t[sp + 1:]);
+        };
+        let ops: [Operand] = [];
+        let ok = true;
+        if (rest != "") {
+            let texts = split_ops(rest);
+            let i = 0;
+            while (ok && i < len(texts)) {
+                let r = parse_operand(texts[i]);
+                if (r.ok) { ops += r.op; } else { ok = false; };
+                i++;
+            };
+        };
+        let out = none;
+        if (ok) {
+            let nf = insn.ir_nforms();
+            let f = 0;
+            while (len(out) == 0 && f < nf) {
+                let fo = insn.ir_form(f);
+                if (fo.mn == mn && len(fo.kinds) == len(ops)) {
+                    let item = ir_item_of(f, fo.kinds, ops);
+                    if (len(item) > 0 && ir_same_as_line(item, line)) { out = item; };
+                };
+                f++;
+            };
+        };
+        out
+    }
+};
+
+// Form `f`'s item for `ops`, or [] when an operand is not of the kind the form
+// takes. Fields an operand does not use stay 0 (unpack_body's convention), and
+// an O_MEM0 operand's displacement is -1, as the emitter writes it.
+def ir_item_of(f: long, kinds: [long], ops: [Operand]) -> [long] {
+    let w: [long] = [0, 0, 0, 0, 0, 0, 0];
+    let wp = 0;
+    let ok = true;
+    let i = 0;
+    while (ok && i < len(kinds)) {
+        let k = kinds[i];
+        let o = ops[i];
+        if (k == insn.O_REG && o.k == K.reg) {
+            w[wp] = o.n;
+            w[wp + 1] = o.size;
+        } else if (k == insn.O_IND && o.k == K.ind) {
+            w[wp] = o.n;
+            w[wp + 1] = o.size;
+        } else if (k == insn.O_IMM && o.k == K.imm) {
+            w[wp] = o.v;
+        } else if (k == insn.O_LBL && o.k == K.lbl) {
+            w[wp] = lbl.lbl_new(o.name);
+        } else if (k == insn.O_DIFF && o.k == K.diff) {
+            w[wp] = lbl.lbl_new(o.a);
+            w[wp + 1] = lbl.lbl_new(o.b);
+        } else if ((k == insn.O_MEM || k == insn.O_MEM0) && o.k == K.mem) {
+            if (o.rip) {
+                w[wp] = -1;
+                w[wp + 1] = -1;
+                w[wp + 2] = 1;
+                w[wp + 3] = o.disp;
+                w[wp + 4] = lbl.lbl_new(o.lbl);
+            } else {
+                w[wp] = o.base;
+                w[wp + 1] = o.idx;
+                w[wp + 2] = o.scale;
+                w[wp + 3] = k == insn.O_MEM0 ? -1 : o.disp;
+                w[wp + 4] = -1;
+            };
+        } else if (k == insn.O_FS && o.k == K.fs && o.n == 0) {
+            w[wp] = o.disp;
+        } else {
+            ok = false;
+        };
+        wp = wp + insn.ir_kind_words(k);
+        i++;
+    };
+    if (ok) {
+        let item: [long] = [];
+        item = insn.ir_push(item, f, w[0], w[1], w[2], w[3], w[4], w[5], w[6]);
+        item
+    } else {
+        let none: [long] = [];
+        none
+    }
+};
+
+// The item stands for the line: the same text under -S, and the same bytes,
+// fixups and branch class out of the assembler.
+def ir_same_as_line(item: [long], line: str) -> bool {
+    let none: [str] = [];
+    // trailing blanks say nothing (math.s has some); -S drops them
+    let tl = line;
+    while (len(tl) > 0 && (tl[len(tl) - 1] == 32 || tl[len(tl) - 1] == 9)) { tl = tl[0:len(tl) - 1]; };
+    if (insn.ir_render(item, none, 0, 0) != tl) {
+        false
+    } else {
+        let noi: [AsmItem] = [];
+        let nol: [AsmLabel] = [];
+        let st = asm_assemble_line([line], 0, 0, 0, [0, 0, 0], noi, nol, "");
+        let r = ir_enc_item(item, 0, 0, [0, 0, 0], "");
+        if (st.err != "" || r.err != "" || len(st.items) != 1 || len(st.labels) != 0) {
+            false
+        } else {
+            let a = st.items[0];
+            let b = r.item;
+            let same = a.sec == b.sec && a.len == b.len && a.kind == b.kind && a.br == b.br
+                && len(a.fix) == len(b.fix) && len(a.bytes) == len(b.bytes);
+            let i = 0;
+            while (same && i < len(a.bytes)) {
+                if (a.bytes[i] != b.bytes[i]) { same = false; };
+                i++;
+            };
+            i = 0;
+            while (same && i < len(a.fix)) {
+                let fa = a.fix[i];
+                let fb = b.fix[i];
+                if (fa.off != fb.off || fa.kind != fb.kind || fa.lbl != fb.lbl || fa.lbl2 != fb.lbl2) { same = false; };
+                i++;
+            };
+            same
+        }
+    }
+};
+
 // A label definition (IR_LABEL): the AsmLabel asm_labdef_go builds, with the
 // name from the label table rather than from the line.
 def asm_ir_label(id: long, sec: long, offs: [long], items: [AsmItem], labels: [AsmLabel]) -> [AsmLabel] {
@@ -2307,5 +2452,5 @@ def ycc_assemble(parts: [LinkPart], debug: bool) -> { ok: bool, bytes: [byte], o
     }
 };
 
-export { asm_assemble, ycc_assemble, part_ir, part_text, LinkPart,
+export { asm_assemble, ycc_assemble, part_ir, part_text, LinkPart, ir_parse_line,
     labmap_new, labmap_put, labmap_get, hash_str };

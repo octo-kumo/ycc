@@ -1,4 +1,4 @@
-fs ok=true ino=2 size=4900
+fs ok=true ino=2 size=5520
 
-wc /prog bytes=4900
+wc /prog bytes=5520
 

@@ -109,17 +109,69 @@ print(m);                     // {1: 5}
 way; see Section~\ref{sec:type-maps} for the type-level rule.
 
 \noindent Keying is symbolic and exclusive: \ic{m['k']} is the map form
-and is reserved for maps; \ic{r.a} is the record form. Reading
+and is reserved for maps; \ic{r.a} is the record form --- except on a map
+keyed by \ic{str}, where a dot is the same entry spelled the other way
+(\emph{below}). Reading
 \ic{m[k]} yields \ic{\ty{V}?} --- \ic{none} when the key is absent,
 even though the map's type says \ty{V} --- and \ic{m[k] = v} stores in
 place (the store is visible through every binding of the map). A store
 to an existing key keeps its position; a new key is appended, so maps
 print in insertion order. Duplicate keys in a literal collapse the same
-way (the last value wins, the first position stays). \ic{len(m)} is the
-number of entries, and \ic{keys(m)} lists the keys in that order (a
-copy): \ic{foreach (k in keys(m)) \{ ... \}} visits every entry. The
+way (the last value wins, the first position stays). \ic{len(m)} and
+\ic{m.length} are the number of entries, and \ic{keys(m)} and
+\ic{values(m)} list the keys and the values in that same order (each a
+copy), so \ic{keys(m)[i]} and \ic{values(m)[i]} are one entry:
+\ic{foreach (k in keys(m)) \{ ... \}} visits every entry. The
 map grows as needed (amortized doubling, like arrays). Values are homogeneous: storing a \ic{str} into a
 \ic{\{str => long\}} is a compile error, as is a key of the wrong type.
+
+\paragraph{\ic{m.k} --- the dot form.} On a map keyed by \ic{str}, a
+dot names an entry: \ic{m.a} is \ic{m["a"]}, and \ic{m.a = v} is
+\ic{m["a"] = v} --- for a \ic{str}, \ic{long}, \ic{bool}, \ic{float} or
+union value alike, since the key type is what a dot name has to be. It
+reads as the \emph{value}, not the option a bracket read gives: there is
+no \ic{?} and no \ic{none} for a missing entry, because a dot is a
+claim that the entry is there, so the program stops with the key in the
+message instead:
+
+\begin{lstlisting}
+let m: {str => long} = {"a": 1};
+print(m.a);         // 1        -- m["a"]! is the same value
+m.a = 2;            // store, creating the entry like any other store
+print(m["a"]);      // some(2)  -- the probe spelling
+print(m.zz);        // runtime error: no entry 'zz' in this map
+\end{lstlisting}
+
+\noindent So \ic{m["k"]} remains the way to ask, and \ic{m["k"]!} to
+answer. \ic{m.length} is the one name a dot does \emph{not} read as an
+entry --- it is the count, as on an array or a string --- and \ic{m.ptr}
+is not a property of a map at all, so a read and a store both say so. A
+map keyed by anything else keeps its brackets and says why: a dot name
+is a string, so the keys have to be strings too.
+
+\paragraph{\ic{k in m} --- the presence test.} \ic{in} is a
+keyword (\ic{for x in xs}), reused here as an operator: \ic{"k" in m}
+asks whether the map has that key, and answers \ic{bool}. It binds as a
+comparison --- looser than arithmetic, tighter than \ic{\&\&} --- and
+costs what a map read costs, the same key scan in its \emph{has} form.
+It is the way to ask about a key without naming the value's type, which
+the bracket spellings force you to do (\ic{if let long v = m["k"]}), and it
+composes with them:
+
+\begin{lstlisting}
+let m: {str => long} = {"a": 1};
+print("a" in m);         // true
+print("zz" in m);        // false
+if "a" in m { m["a"] = m["a"]! + 1; };
+\end{lstlisting}
+
+\noindent The left operand must be the map's key type and the right a
+map, so a \ic{str}-keyed map takes a string; anything else says so
+(\ic{'in' needs a str, an array or a map on the right, got [long]}). On a
+\ty{str} or an array the operator keeps its other two meanings --- a
+substring and an element, both answered by \ic{index\_of} and a scan
+respectively --- which is why the diagnostic names all three and not
+just the map.
 
 \subsection{Equality}
 \label{sec:equality}

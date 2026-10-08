@@ -110,6 +110,12 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
         } else if (a == "-W") {
             wlevel = wlevel_arg(argv, i, n);
             i++;
+        } else if (a == "--gc-stress") {
+            // A cycle at every allocating slow path: the collector's strongest
+            // test (native.y set_gc_stress). It implies the collector.
+            nativelib.set_gc_stress(true);
+        } else if (a == "--no-gc") {
+            nativelib.set_gc_mode(2);
         } else if (a[0:5] == "--gc=") {
             // Whether the collector is linked: auto (the default) decides from
             // the program, always and never say so outright. The decision lives
@@ -172,6 +178,9 @@ def parse_cli_args(argv: [str]) -> { out: str, files: [str], asm_only: bool, tim
             puts("               the source files in place (implies -W 2), then\n");
             puts("               stop; the emitted bytes never depend on this\n");
             puts("  --no-exec    omit exec() -- the binary cannot reach a shell\n");
+            puts("  --gc-stress  run a collection at every allocating slow path: the\n");
+            puts("               collector's own test, and a very slow build. It\n");
+            puts("               implies the collector. --no-gc is --gc=never.\n");
             puts("  --gc=MODE    the collector: auto (the default) links it only\n");
             puts("               when an allocation can happen in a loop or a\n");
             puts("               recursion; always and never force it. Without the\n");
@@ -234,8 +243,20 @@ def pack_magic() -> str {
     "YCCPACK1"
 };
 
-// The pack attached to this binary, or "" when there is none.
+// The pack attached to this binary, or "" when there is none. Read once: the
+// driver hands it to the meta pass before the resolve and to std_units after.
+let self_pack_text = "";
+let self_pack_done = false;
+
 def self_pack() -> str {
+    if (!self_pack_done) {
+        self_pack_text = self_pack_read();
+        self_pack_done = true;
+    };
+    self_pack_text
+};
+
+def self_pack_read() -> str {
     let fd = syscall(257, -100, "/proc/self/exe", 0, 0);
     if (fd < 0) {
         ""
@@ -348,16 +369,16 @@ def print_native_errors(all: [Diag], origin: Origin, bare: bool) -> void {
     // `ycc build` names every file), `path:line:col` in any other.
     // One error per position: a malformed token can trip two checks (the
     // construct it broke, then the statement it ended), and the second
-    // message only repeats the first.
-    let seen: [str] = [];
+    // message only repeats the first. The positions go in a name index, not
+    // an array: a linear scan of what has been printed makes printing n
+    // errors O(n^2), and a file with a mistake on every line is exactly when
+    // the messages matter most (measured: 2000 errors 10 ms, 4000 20, 8000
+    // 80, 16000 250 -- a name index makes each one a hash probe).
+    let seen = parser.nameix_new(64);
     all.foreach((e) => {
         let at = nativelib.origin_at(origin, e.line, bare) + ":" + tostring(e.col);
-        let dup = false;
-        foreach (s in seen) {
-            if (s == at) { dup = true; }
-        };
-        if (!dup) {
-            seen += at;
+        if (parser.nameix_get(seen, at) < 0) {
+            parser.nameix_put(seen, at, 1);
             puts(at + ": error: " + e.msg + "\n");
         }
     });
@@ -443,11 +464,27 @@ def build_resolve(path: str, allow_exec: bool, pkgs: [str], roots: [str]) -> Res
 
 // The std units among `names`, in link order.
 def std_order(names: [str]) -> [str] {
+    // A program that links a library unit links what that unit imports too: a
+    // unit is compiled and linked against the units before it (std_lib_deps),
+    // and std_unit_names is already dependency-first. `names` is copied first --
+    // arrays are references, and `+=` would grow the caller's resolution.
+    let want: [str] = [];
+    names.foreach((e) => {
+        want += e;
+    });
+    let i = 0;
+    while (i < len(want)) {
+        let ds = nativelib.std_lib_deps(want[i]);
+        ds.foreach((d) => {
+            if (!pkg.pk_has(want, d)) { want += d; };
+        });
+        i = i + 1;
+    };
     let all = nativelib.std_unit_names();
     let out: [str] = [];
     all.foreach((e) => {
         let nm: str = e;
-        if (pkg.pk_has(names, nm)) { out += nm; }
+        if (pkg.pk_has(want, nm)) { out += nm; }
     });
     out
 };
@@ -904,6 +941,8 @@ def main(cmdline: [str]) -> long {
     }
     if (len(cmdline) > 1 && (cmdline[1] == "build" || cmdline[1] == "vendor")) {
         let ba = build_args(cmdline);
+        // a meta block's generator links the std units too (meta_compile_gen)
+        if (!ba.std_src) { nativelib.set_meta_pack(self_pack()); };
         if (cmdline[1] == "build" && len(ba.one) == 0) {
             build_project(ba.dir, ba.debug, ba.nowarn, ba.wlevel, ba.allow_exec, ba.std_src);
         } else if (cmdline[1] == "build") {
@@ -957,6 +996,10 @@ def main(cmdline: [str]) -> long {
             // meta_begin here and nothing else -- resolve_unit's meta_prepare
             // is what runs the generator.
             meta.meta_begin();
+            // A meta block's generator is compiled during the resolve below and
+            // links the std units as the program does: from this binary's pack
+            // (none under --std-src, so from source).
+            if (!pargs.std_src) { nativelib.set_meta_pack(self_pack()); 0; }
             // get base dir from file path (use last slash, like C compiler's strrchr)
             let last_slash = last_index_of(file, "/");
             let base_dir = ".";
@@ -987,12 +1030,12 @@ def main(cmdline: [str]) -> long {
             dt = ph.times; t0 = ph.t; h0 = ph.h;
             // The std units the program links (native_resolve_x picked
             // them): the ones attached to ycc, compiled when it was built,
-            // or (--std-src, or a ycc with none) compiled from the sources
-            // embedded in it.
+            // or (--std-src, or a ycc with none) compiled from their sources
+            // on disk.
             let nrstd = nr.std;
             let pack = "";
             if (!pargs.std_src) { pack = self_pack(); 0; }
-            let su = nativelib.std_units(nrstd, pack);
+            let su = nativelib.std_units(std_order(nrstd), pack);
             ph = nativelib.phase_end(dt, "std", t0, h0);
             dt = ph.times; t0 = ph.t; h0 = ph.h;
             let r = nativelib.emit_program(ast, nr, pargs.debug, pargs.wlevel, su, []);

@@ -1,0 +1,14 @@
+2 0 2 2
+1
+elem 0
+elem 0
+1 0 
+missing is none: true
+typeof: {str => Tree}
+key a -> 0
+cast 0
+none is empty
+one holds a Maybe
+wrap none ok
+pointer alias declared
+1 2

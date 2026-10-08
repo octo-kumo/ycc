@@ -1,54 +1,26 @@
 // arch_x64.y — Linux x86_64 code emitters for the native backend (ycc).
 //
-// The machine code itself lives in src/y/arch/*.s, embedded here and
-// .incbin'd by the C twin (PORTING.md rules 10 and 11): ONE copy of the
-// assembly, not one per compiler. A whole-line '#' comment is documentation —
-// for whoever reads the .s, and for `make asm-check` (GNU as) — and
+// The machine code itself lives in src/y/arch/*.s: ONE copy of the assembly,
+// read by both compilers, and NOT embedded in either. It travels in the std
+// pack as blocks of IR (native.y arch_set); the files are read from disk
+// (native.y arch_src) only to build that pack, or by a compiler with no pack
+// (cycc, a bootstrap generation). This module turns their texts into a block
+// set's lines (arch_set_lines). A whole-line '#' comment is documentation --
+// for whoever reads the .s, and for `make asm-check` (GNU as) -- and
 // arch_asm_lines drops it, because the in-tree assembler treats a comment as a
-// backend bug and must never see one.
-embed PRELUDE_ASM from "./arch/prelude.s";
-embed THREADS_ASM from "./arch/threads.s";
-// The Windows half of the arch prelude: the blocks of prelude.s that reach
-// the kernel, replaced whole (see arch_windows_lines). It is DATA here, not a
-// second arch module -- a path import is flattened into its importer, so a
-// second arch_x64.y could not coexist (arch_frame would be defined twice and
-// the second would win).
-embed W_SYS_ASM from "./arch/wsys.s";
-// The float primitives std/math.y's kernels reach for (`ndef`s with no
-// body -- see NATIVE.md, "Backend"), one embedded copy like the rest.
-embed MATH_ASM from "./arch/math.s";
-// The Windows syscall self-test: the probe w_self_test_lines returns, run
-// from _start before anything else on that target. Its own file so GNU as
-// reads it (make asm-check) like the other arch assembly.
-embed WSELFTEST_ASM from "./arch/wselftest.s";
-// ⚠ OPEN (kernel): master's collector (arch/prelude.s, a block of its own) is
-// emitted AFTER the kernel's own prelude blocks, and label resolution is
-// last-wins -- so its y_gc_maybe/y_gc_chunk_add override arch/kernel.s's
-// no-ops and the collector runs in a kernel image again.  Measured: in a
-// kernel -S listing built by refs/ycc.ref (pre-merge) `y_gc_maybe:` does not
-// appear at all; built by the merged compiler it appears once, with the
-// prelude's body.  The result is a kernel whose allocations go through a
-// collector that has no valid heap: a user-mode read at 0 (err=5) before the
-// first byte of output, reproducible with a program that never allocates.
-// (Old kernel + program built by the NEW compiler works, which is what
-// isolates this to the kernel image.)
-//
-// FIXED the second way: arch/kernel.s now declares the four no-ops as
-// `#=== replace: NAME ===` blocks, and the listing confirms the kernel's body
-// (`xor %eax, %eax; ret`) is the one emitted.  That closed THIS gap but not
-// the failure: a kernel built by the merged compiler still faults with a
-// user-mode read at 0 (err=5) on a program that never allocates -- and the
-// same program runs on a pre-merge kernel image, so the remaining difference
-// is elsewhere in the merged kernel image (the new allocator text is in it, and
-// its fast path uses the runtime's y_heap cell pair, which the kernel's
-// y_heap_region_set does not write -- worth checking next).
-//
-// The kernel half of the prelude (`ycc --kernel`): the blocks of prelude.s
-// that touch the kernel, replaced whole -- mmap, serial, exit, the traps --
-// plus the pieces a freestanding payload needs and a hosted program does not
-// (port I/O, the PIC, the IDT, the halt loop). Same `#=== replace:` /
-// `#=== add:` mechanism as wsys.s; see arch_replaced_lines.
-embed KERNEL_ASM from "./arch/kernel.s";
+// backend bug and must never see one. The files:
+//   prelude.s    the runtime primitives (the Linux prelude)
+//   wsys.s       the Windows half of the prelude: the blocks of prelude.s that
+//                reach the kernel, replaced whole (see arch_windows_lines). It
+//                is DATA, not a second arch module -- a path import is
+//                flattened into its importer, so a second arch_x64.y could not
+//                coexist (arch_frame would be defined twice and the second
+//                would win).
+//   wselftest.s  the Windows syscall self-test, run from _start before
+//                anything else on that target
+//   threads.s    the thread runtime
+//   math.s       the float primitives std/math.y's kernels reach for (`ndef`s
+//                with no body -- see NATIVE.md, "Backend")
 
 // The ELF32 Multiboot writer's layout constants (base, header size, where
 // .bss starts). The trampoline below bakes the same numbers into its 32-bit
@@ -138,16 +110,39 @@ def w_sysno(name: str) -> long {
     else { -1 }
 };
 
-// The Windows syscall self-test (ideas/WINDOWS.md W3), its lines in
-// arch/wselftest.s: one Nt call per class -- memory, time, file -- with its
-// NTSTATUS checked once at program start, so a number that drifted on a
-// different Windows build fails loudly instead of calling some other real Nt
-// function. native.y feeds these lines to the prelude (so the shaker keeps
-// y_os_write/y_os_exit for them) and the _start prologue calls
-// y_w_self_test, both on the Windows target only: on Linux this returns no
-// lines and no call is emitted.
-def w_self_test_lines() -> [str] {
-    if (target_is_windows()) { arch_asm_lines(WSELFTEST_ASM) } else {[] }
+// The lines of arch block set `which` (native.y arch_set builds its blocks
+// from them, once, when the std pack is written or when a compiler has none):
+//   linux, windows  the prelude for that target (windows: prelude.s with the
+//                   blocks wsys.s replaces and adds, arch_windows_lines)
+//   wselftest       the Windows syscall self-test (ideas/WINDOWS.md W3,
+//                   arch/wselftest.s): one Nt call per class -- memory, time,
+//                   file -- with its NTSTATUS checked once at program start, so
+//                   a number that drifted on a different Windows build fails
+//                   loudly instead of calling some other real Nt function. The
+//                   Windows prelude carries it, and _start calls y_w_self_test
+//                   on that target only.
+//   kernel          the prelude for `ycc --kernel`: prelude.s with the blocks
+//                   kernel.s replaces and adds (arch_kernel_lines)
+//   threads, math   the thread runtime and the float primitives (below)
+// The files each set is built from, under src/y/arch (without the `.s`).
+def arch_set_files(which: str) -> [str] {
+    if (which == "linux") { ["prelude"] }
+    else if (which == "windows") { ["prelude", "wsys"] }
+    else if (which == "kernel") { ["prelude", "kernel"] }
+    else { [which] }
+};
+
+// `texts` holds the files arch_set_files names, in that order.
+def arch_set_lines(which: str, texts: [str]) -> [str] {
+    if (which == "windows") { arch_windows_lines(texts[0], texts[1]) }
+    else if (which == "kernel") { arch_kernel_lines(texts[0], texts[1]) }
+    else if (which == "linux" || which == "wselftest" || which == "threads" || which == "math") {
+        arch_asm_lines(texts[0])
+    } else {
+        puts("ycc: internal error: no arch block set '" + which + "'\n");
+        exit(1);
+        []
+    }
 };
 
 def arch_fn_label(uid: long, name: str) -> str {
@@ -275,14 +270,31 @@ def arch_heap_cells() -> str {
     // live-byte and trigger counters, and the running/off guards. They are
     // words, so a program that never allocates shakes them out with y_alloc
     // and every other program carries a few hundred zeroed .bss bytes.
-    "y_heap:\n.zero 32\ny_heap_base:\n.zero 8\n" +
+    "y_heap:\n.zero 128\ny_heap_base:\n.zero 8\n" +
     "y_gc_stack_top:\n.zero 8\ny_gc_lo:\n.zero 8\ny_gc_hi:\n.zero 8\n" +
     "y_gc_all:\n.zero 8\ny_gc_tab:\n.zero 8\ny_gc_tabn:\n.zero 8\n" +
     "y_gc_meta_cur:\n.zero 8\ny_gc_meta_end:\n.zero 8\n" +
     "y_gc_free:\n.zero 8\ny_gc_ms_cur:\n.zero 8\ny_gc_ms_end:\n.zero 8\n" +
     "y_gc_ms_seg:\n.zero 8\n" +
     "y_gc_live:\n.zero 8\ny_gc_last:\n.zero 8\n" +
-    "y_gc_run:\n.zero 8\ny_gc_off:\n.zero 8\n"
+    "y_gc_run:\n.zero 8\ny_gc_off:\n.zero 8\n" +
+    // The thread registry and the stop-the-world protocol (arch/threads.s
+    // registers, arch/prelude.s's collector stops): the tcb list head, how
+    // many threads are registered, how many are parked at the allocator's
+    // slow path, and the flag that asks them to park.
+    "y_gc_threads:\n.zero 8\ny_gc_nthr:\n.zero 8\n" +
+    "y_gc_parked:\n.zero 8\ny_gc_stw:\n.zero 8\n" +
+    // The two locks the allocation side needs once threads allocate at once:
+    // the free lists and the chunk registry (y_gc_lk), then the metadata arena
+    // (y_gc_mlk). Always taken in that order, and never while parked.
+    "y_gc_lk:\n.zero 8\ny_gc_mlk:\n.zero 8\n" +
+    // The allocator's safepoint, as a pointer: only the thread runtime
+    // installs one, so a program that never spawns carries no parking code.
+    "y_gc_safe_fn:\n.zero 8\n" +
+    // The locked halves of the slow path, as pointers the thread runtime
+    // installs: a program that never spawns calls the plain functions and
+    // carries neither the locks nor their call sites.
+    "y_gc_free_fn:\n.zero 8\ny_gc_chunk_fn:\n.zero 8\n"
 };
 
 def arch_frame(slots: long) -> long {
@@ -339,24 +351,6 @@ def arch_kernel_bss() -> str {
     "y_kernel_end:\n"
 };
 
-// The prelude as its lines: labels alone at column 0, everything else
-// indented (native.y prelude_blocks relies on it).
-def arch_prelude_lines() -> [str] {
-    // Runtime PRIMITIVES — everything with a specific behaviour lives in
-    // std/rt.y as ordinary Y code (tree shaking drops what a program does
-    // not use, here and there: native.y's shake_prelude prunes these lines
-    // block by block, prune_bodies does the same for rt.y's functions).
-    // What stays here is what only raw machine state can do: the bump
-    // allocator (y_alloc, over 4 MB mmap chunks, its state in the y_heap
-    // .bss cells), the trap stubs, the byte-moving
-    // string/array cores
-    // (eq/cmp/cat/join/slice, arr push/prepend/slice/cat/eq), long and
-    // float formatting, str<->[byte] conversion and argv materialization.
-    if (target_is_windows()) { arch_windows_lines() }
-    else if (target_is_kernel()) { arch_kernel_lines() }
-    else { arch_asm_lines(PRELUDE_ASM) }
-};
-
 // ── the Windows half of the prelude ─────────────────────────────────────
 // Everything in prelude.s that reaches the kernel carries a SysV `syscall`
 // inline, so those blocks are wrong on Windows and everything else in the
@@ -387,17 +381,17 @@ def arch_prelude_lines() -> [str] {
 // arch_win_find): it means the Windows half was written against a block that
 // moved, and the substitution would silently do nothing. `make asm-check`
 // gives GNU as a second opinion on wsys.s as well.
-def arch_windows_lines() -> [str] {
-    arch_replaced_lines(W_SYS_ASM, "src/y/arch/wsys.s")
+def arch_windows_lines(prelude: str, wsys: str) -> [str] {
+    arch_replaced_lines(prelude, wsys, "src/y/arch/wsys.s")
 };
 
 // The kernel's replacement blocks (`ycc --kernel`): the same substitution,
 // against src/y/arch/kernel.s.
-def arch_kernel_lines() -> [str] {
-    arch_replaced_lines(KERNEL_ASM, "src/y/arch/kernel.s")
+def arch_kernel_lines(prelude: str, kernel: str) -> [str] {
+    arch_replaced_lines(prelude, kernel, "src/y/arch/kernel.s")
 };
 
-def arch_replaced_lines(sub: str, what: str) -> [str] {
+def arch_replaced_lines(prelude: str, sub: str, what: str) -> [str] {
     let blocks = arch_win_blocks(split(sub, "\n"));
     blocks.foreach((e) => {
         if (len(e) > 1 && e[1] == "2") {
@@ -405,7 +399,7 @@ def arch_replaced_lines(sub: str, what: str) -> [str] {
             exit(1);
         };
     });
-    let lines = arch_asm_lines(PRELUDE_ASM);
+    let lines = arch_asm_lines(prelude);
     arch_win_check(lines, blocks, what);
     arch_win_sub(lines, blocks)
 };
@@ -511,29 +505,6 @@ def arch_is_label_line(l: str) -> bool {
     else { index_of(l, " ") < 0 }
 };
 
-// `lines` walked; at a label a replacing block claims, that block's lines and
-// not the prelude's. The new blocks go after the last replaced one.
-// Replace the block that starts at the column-0 label `name` (through the line
-// before the next label) with `repl`.
-def arch_block_sub(lines: [str], name: str, repl: [str]) -> [str] {
-    let out: [str] = [];
-    let i = 0;
-    while (i < len(lines)) {
-        let l = lines[i];
-        if (arch_is_label_line(l) && trim(l[0:len(l) - 1]) == name) {
-            repl.foreach((r) => {
-                out += r;
-            });
-            i++;
-            while (i < len(lines) && !(arch_is_label_line(lines[i]))) { i++; };
-        } else {
-            out += l;
-            i++;
-        };
-    };
-    out
-};
-
 // The GC-free runtime: a program whose heap cannot grow does not link the
 // collector at all (--gc, or the auto analysis). The allocator itself is
 // UNCHANGED -- only the collector's three entry points become stubs -- so the
@@ -543,12 +514,67 @@ def arch_block_sub(lines: [str], name: str, repl: [str]) -> [str] {
 //   y_gc_maybe      never runs a cycle
 //   y_gc_alloc_free never recycles a block (0 = none)
 //   y_gc_chunk_add  returns the base the allocator wants and registers nothing
-def arch_nogc_lines(lines: [str]) -> [str] {
-    let out = arch_block_sub(lines, "y_gc_maybe", ["y_gc_maybe:", "    ret"]);
-    out = arch_block_sub(out, "y_gc_alloc_free",
-        ["y_gc_alloc_free:", "    xor %eax, %eax", "    ret"]);
-    arch_block_sub(out, "y_gc_chunk_add",
-        ["y_gc_chunk_add:", "    mov %rdi, %rax", "    ret"])
+// Each substitution is [block name, its replacement lines...]: native.y's
+// arch_blocks_sub replaces the block of that name with the blocks of the lines.
+def arch_nogc_subs() -> [[str]] {
+    [["y_gc_maybe", "y_gc_maybe:", "    ret"],
+     ["y_gc_alloc_free", "y_gc_alloc_free:", "    xor %eax, %eax", "    ret"],
+     ["y_gc_chunk_add", "y_gc_chunk_add:", "    mov %rdi, %rax", "    ret"]]
+};
+
+// --gc-stress: a cycle at every allocating slow path. The collector is correct
+// either way, so this is the tool for finding where it is not: a missed root
+// shows up as a crash or a wrong answer in minutes instead of days. It is also
+// the strongest check the threaded stop-the-world has.
+// The invariant trap reports the walking state in the fields a reader needs:
+// chunk base, chunk end, the block, the word there, its two neighbours, then
+// the map/block register and its word. The neighbours are what separate "the
+// walk is misaligned" from "one block's header was overwritten".
+def arch_gc_stress_subs() -> [[str]] {
+    [["y_gc_maybe", "y_gc_maybe:", "    call y_gc_collect", "    ret"],
+     ["y_bad_trap",
+        "y_bad_trap:",
+        "    push %rbx",
+        "    push %r12",
+        "    push %r13",
+        "    mov 0(%rbx), %rax",
+        "    push %rax",
+        "    call y_os_print_int",
+        "    add $8, %rsp",
+        "    mov 8(%rbx), %rax",
+        "    push %rax",
+        "    call y_os_print_int",
+        "    add $8, %rsp",
+        "    mov %r12, %rax",
+        "    push %rax",
+        "    call y_os_print_int",
+        "    add $8, %rsp",
+        "    mov 0(%r12), %rax",
+        "    push %rax",
+        "    call y_os_print_int",
+        "    add $8, %rsp",
+        "    mov -8(%r12), %rax",
+        "    push %rax",
+        "    call y_os_print_int",
+        "    add $8, %rsp",
+        "    mov 8(%r12), %rax",
+        "    push %rax",
+        "    call y_os_print_int",
+        "    add $8, %rsp",
+        "    mov %r13, %rax",
+        "    push %rax",
+        "    call y_os_print_int",
+        "    add $8, %rsp",
+        "    mov 0(%r13), %rax",
+        "    push %rax",
+        "    call y_os_print_int",
+        "    add $8, %rsp",
+        "    pop %r13",
+        "    pop %r12",
+        "    pop %rbx",
+        "    mov $1, %rax",
+        "    mov $1, %rdi",
+        "    syscall"]]
 };
 
 def arch_win_sub(lines: [str], blocks: [[str]]) -> [str] {
@@ -604,21 +630,12 @@ def arch_win_push(out: [str], l: str) -> void {
     out
 };
 
-// The thread runtime (CHOICES_MADE.md 33), linked only when a program's
-// code calls into it (native.y uses_threads): every compile looks at
-// each line of the prelude it is given.
-def arch_prelude_threads_lines() -> [str] {
-    arch_asm_lines(THREADS_ASM)
-};
-
-// The floating-point primitives (src/y/arch/math.s): the four a std module
-// reaches through `ndef`, and the only machine code between Y and a
-// numeric library -- Y has no float-to-long conversion and no way to read a
-// float's bits. Always given to the shaking (they are a few lines, unlike the
-// thread runtime, so there is nothing to save by looking first).
-def arch_math_lines() -> [str] {
-    arch_asm_lines(MATH_ASM)
-};
+// threads.s is the thread runtime (CHOICES_MADE.md 33), linked only when a
+// program's code calls into it (native.y uses_threads); math.s the
+// floating-point primitives: the four a std module reaches through `ndef`, and
+// the only machine code between Y and a numeric library -- Y has no
+// float-to-long conversion and no way to read a float's bits. Both are block
+// sets (arch_set_lines).
 
 def arch_consts() -> str {
     // rodata literals emitted once at the end of the file (string headers,
@@ -1124,4 +1141,4 @@ def k_oct3(v: long) -> str {
     tostring(a) + tostring(b) + tostring(c)
 };
 
-export { WImport, w_imports, w_iat_label, w_iat_term_label, w_iat_bss_lines, w_iat_offset, arch_id, arch_word, arch_sysno, arch_fn_label, arch_global_label, arch_loc_label, arch_str_label, arch_header, arch_rodata, arch_text, arch_bss, arch_global_cell, arch_heap_cells, arch_kernel_bss, arch_prelude_lines, arch_prelude_threads_lines, arch_math_lines, w_self_test_lines, arch_consts, arch_frame, arch_exit };
+export { WImport, w_imports, w_iat_label, w_iat_term_label, w_iat_bss_lines, w_iat_offset, arch_id, arch_word, arch_sysno, arch_fn_label, arch_global_label, arch_loc_label, arch_str_label, arch_header, arch_rodata, arch_text, arch_bss, arch_global_cell, arch_heap_cells, arch_kernel_bss, arch_set_files, arch_set_lines, arch_nogc_subs, arch_gc_stress_subs, arch_consts, arch_frame, arch_exit };

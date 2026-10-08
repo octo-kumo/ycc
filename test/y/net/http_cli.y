@@ -29,6 +29,14 @@ print(d.status, " ", d.url == base + "/hello", " ", d.text());
 let e = http.post(base + "/echo", "posted body");
 print(e.status, " ", e.text());
 let h = http.get(base + "/header", { headers: {"X-Custom": "custom value"} });
+// A redirect within one origin keeps the caller's headers; one that leaves
+// the origin drops Authorization and Cookie (RFC 9110 11.6.2) and keeps the
+// rest. /xredirect goes to the same server as `localhost`, not as the
+// address the request came in on.
+let same = http.get(base + "/sredirect", { headers: { "Authorization": "Bearer secret", "X-Probe": "p" } });
+print("same-origin ", same.status, " ", same.text().index_of("authorization") >= 0);
+let cross = http.get(base + "/xredirect", { headers: { "Authorization": "Bearer secret", "X-Probe": "p" } });
+print("cross-origin ", cross.status, " ", cross.text().index_of("authorization"), " ", cross.text().index_of("x-probe"));
 print(h.text());
 let hd = http.head(base + "/hello");
 print(hd.status, " ", hd.size, " [", hd.text(), "]");

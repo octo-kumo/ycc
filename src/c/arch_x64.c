@@ -5,27 +5,10 @@
 #include "arch_x64.h"
 #include "target.h"
 
-Y_EMBED(PRELUDE_ASM, "src/y/arch/prelude.s")
-Y_EMBED(THREADS_ASM, "src/y/arch/threads.s")
-/* The Windows half of the arch prelude: the blocks of prelude.s that reach
-   the kernel, replaced whole (see arch_windows_lines). It is DATA here, not a
-   second arch module — a path import is flattened into its importer, so a
-   second arch_x64.y could not coexist (arch_frame would be defined twice and
-   the second would win). */
-Y_EMBED(W_SYS_ASM, "src/y/arch/wsys.s")
-/* The float primitives std/math.y's kernels reach for (`native def`s with no
-   body -- see NATIVE.md, "Backend"), one embedded copy like the rest. */
-Y_EMBED(MATH_ASM, "src/y/arch/math.s")
-/* The Windows syscall self-test: the probe w_self_test_lines returns, run
-   from _start before anything else on that target. Its own file so GNU as
-   reads it (make asm-check) like the other arch assembly. */
-Y_EMBED(WSELFTEST_ASM, "src/y/arch/wselftest.s")
-/* The kernel half of the prelude (`ycc --kernel`): the blocks of prelude.s
-   that touch the kernel, replaced whole -- mmap, serial, exit, the traps --
-   plus the pieces a freestanding payload needs and a hosted program does not
-   (port I/O, the PIC, the IDT, the halt loop). Same `#=== replace:` /
-   `#=== add:` mechanism as wsys.s; see arch_replaced_lines. */
-Y_EMBED(KERNEL_ASM, "src/y/arch/kernel.s")
+/* The machine code lives in src/y/arch/*.s, read by both compilers and
+   embedded in neither: it travels in the std pack as blocks of IR, and the
+   files are read from disk (native.c arch_src) only to build the pack or by a
+   compiler with no pack (arch_x64.y's header has the file list). */
 
 /* The ELF32 Multiboot writer's layout constants (base, header size, where
    .bss starts). The trampoline below bakes the same numbers into its 32-bit
@@ -44,9 +27,9 @@ Y_EMBED(KERNEL_ASM, "src/y/arch/kernel.s")
    it. */
 static ylong l_sysno(Yv *name);
 static ylong w_sysno(Yv *name);
-static Yv *arch_windows_lines(void);
-static Yv *arch_kernel_lines(void);
-static Yv *arch_replaced_lines(Yv *sub, Yv *what);
+static Yv *arch_windows_lines(Yv *prelude, Yv *wsys);
+static Yv *arch_kernel_lines(Yv *prelude, Yv *kernel);
+static Yv *arch_replaced_lines(Yv *prelude, Yv *sub, Yv *what);
 static Yv *arch_win_blocks(Yv *lines);
 static ylong arch_win_check(Yv *lines, Yv *blocks, Yv *what);
 static int arch_win_labeled(Yv *lines, Yv *nm);
@@ -152,22 +135,32 @@ static ylong w_sysno(Yv *name) {
     else { return -1; }
 }
 
-/* The Windows syscall self-test is NOT implemented. The design is in
-   ideas/WINDOWS.md (Risks): one Nt call per class -- memory, file, time,
-   thread -- with its NTSTATUS checked once at program start, so a number that
-   drifted on a different Windows build fails loudly instead of calling some
-   other real Nt function. It is a real gap rather than a postponed detail:
-   w_sysno's numbers are pinned to one ntdll sample and nothing verifies them
-   at runtime. This stub returns no lines, and says so, because a comment that
-   promises a probe nobody runs is worse than no comment.
+/* The lines of arch block set `which` (arch_x64.y arch_set_lines): native.c
+   arch_set builds its blocks from them, once, when the std pack is written or
+   when a compiler has none. `wselftest` is the Windows syscall self-test
+   (arch/wselftest.s), which the Windows prelude carries and _start calls. */
+/* The files each set is built from, under src/y/arch (arch_x64.y). */
+Yv *arch_set_files(Yv *which) {
+    if (ys_eq_lit(which, "linux")) { return yav(1, ys("prelude")); }
+    else if (ys_eq_lit(which, "windows")) { return yav(2, ys("prelude"), ys("wsys")); }
+    else if (ys_eq_lit(which, "kernel")) { return yav(2, ys("prelude"), ys("kernel")); }
+    else { return yav(1, which); }
+}
 
-   Not `static`, and not in arch_x64.h either: a Y `def` is callable from
-   anywhere in its module and nothing warns when nothing calls it, whereas an
-   unused static is a -Wunused-function warning. Leaving the definition with
-   external linkage keeps the twin honest; leaving it out of the header keeps
-   the header matching the Y export list exactly. */
-Yv *w_self_test_lines(void) {
-    if (target_is_windows()) { return arch_asm_lines(WSELFTEST_ASM()); } else { return yav(0); }
+/* `texts` holds the files arch_set_files names, in that order. */
+Yv *arch_set_lines(Yv *which, Yv *texts) {
+    if (ys_eq_lit(which, "windows")) {
+        return arch_windows_lines(ya_get(texts, 0), ya_get(texts, 1));
+    } else if (ys_eq_lit(which, "kernel")) {
+        return arch_kernel_lines(ya_get(texts, 0), ya_get(texts, 1));
+    } else if (ys_eq_lit(which, "linux") || ys_eq_lit(which, "wselftest")
+               || ys_eq_lit(which, "threads") || ys_eq_lit(which, "math")) {
+        return arch_asm_lines(ya_get(texts, 0));
+    } else {
+        puts_(ys_cat(ys_cat(ys("ycc: internal error: no arch block set '"), which), ys("'\n")));
+        exit_(1);
+        return yav(0);
+    }
 }
 
 Yv *arch_fn_label(ylong uid, Yv *name) {
@@ -314,14 +307,19 @@ Yv *arch_heap_cells(void) {
        live-byte and trigger counters, and the running/off guards. They are
        words, so a program that never allocates shakes them out with y_alloc
        and every other program carries a few hundred zeroed .bss bytes. */
-    return ys("y_heap:\n.zero 32\ny_heap_base:\n.zero 8\n"
+    return ys("y_heap:\n.zero 128\ny_heap_base:\n.zero 8\n"
               "y_gc_stack_top:\n.zero 8\ny_gc_lo:\n.zero 8\ny_gc_hi:\n.zero 8\n"
               "y_gc_all:\n.zero 8\ny_gc_tab:\n.zero 8\ny_gc_tabn:\n.zero 8\n"
               "y_gc_meta_cur:\n.zero 8\ny_gc_meta_end:\n.zero 8\n"
               "y_gc_free:\n.zero 8\ny_gc_ms_cur:\n.zero 8\ny_gc_ms_end:\n.zero 8\n"
               "y_gc_ms_seg:\n.zero 8\n"
               "y_gc_live:\n.zero 8\ny_gc_last:\n.zero 8\n"
-              "y_gc_run:\n.zero 8\ny_gc_off:\n.zero 8\n");
+              "y_gc_run:\n.zero 8\ny_gc_off:\n.zero 8\n"
+        "y_gc_threads:\n.zero 8\ny_gc_nthr:\n.zero 8\n"
+        "y_gc_parked:\n.zero 8\ny_gc_stw:\n.zero 8\n"
+        "y_gc_lk:\n.zero 8\ny_gc_mlk:\n.zero 8\n"
+        "y_gc_safe_fn:\n.zero 8\n"
+        "y_gc_free_fn:\n.zero 8\ny_gc_chunk_fn:\n.zero 8\n");
 }
 
 ylong arch_frame(ylong slots) {
@@ -377,41 +375,10 @@ Yv *arch_kernel_bss(void) {
               "y_kernel_end:\n");
 }
 
-// The prelude as its lines: labels alone at column 0, everything else
-// indented (native.c prelude_blocks relies on it).
-Yv *arch_prelude_lines(void) {
-    // Runtime PRIMITIVES — everything with a specific behaviour lives in
-    // std/rt.y as ordinary Y code (tree shaking drops what a program does
-    // not use, here and there: native.y's shake_prelude prunes these lines
-    // block by block, prune_bodies does the same for rt.y's functions).
-    // What stays here is what only raw machine state can do: the bump
-    // allocator (y_alloc, over 4 MB mmap chunks, its state in the y_heap
-    // .bss cells), the trap stubs, the byte-moving
-    // string/array cores
-    // (eq/cmp/cat/join/slice, arr push/prepend/slice/cat/eq), long and
-    // float formatting, str<->[byte] conversion and argv materialization.
-    if (target_is_windows()) { return arch_windows_lines(); }
-    else if (target_is_kernel()) { return arch_kernel_lines(); }
-    else { return arch_asm_lines(PRELUDE_ASM()); }
-}
-
-// The thread runtime (CHOICES_MADE.md 33), linked only when a program's
-// code calls into it (native.y uses_threads): every compile looks at
-// each line of the prelude it is given.
-Yv *arch_prelude_threads_lines(void) {
-    return arch_asm_lines(THREADS_ASM());
-}
-
-
-/* The floating-point primitives (src/y/arch/math.s): the four a std module
- * reaches through `native def`, and the only machine code between Y and a
- * numeric library -- Y has no float-to-long conversion and no way to read a
- * float's bits. Always given to the shaking (they are a few lines, unlike the
- * thread runtime, so there is nothing to save by looking first). */
-Yv *arch_math_lines(void) {
-    return arch_asm_lines(MATH_ASM());
-}
-
+/* threads.s is the thread runtime (CHOICES_MADE.md 33), linked only when a
+ * program's code calls into it (native.y uses_threads); math.s the
+ * floating-point primitives a std module reaches through `ndef`. Both are
+ * block sets (arch_set_lines). */
 
 Yv *arch_consts(void) {
     // rodata literals emitted once at the end of the file (string headers,
@@ -461,17 +428,17 @@ Yv *arch_consts(void) {
 // arch_win_find): it means the Windows half was written against a block that
 // moved, and the substitution would silently do nothing. `make asm-check`
 // gives GNU as a second opinion on wsys.s as well.
-static Yv *arch_windows_lines(void) {
-    return arch_replaced_lines(W_SYS_ASM(), ys("src/y/arch/wsys.s"));
+static Yv *arch_windows_lines(Yv *prelude, Yv *wsys) {
+    return arch_replaced_lines(prelude, wsys, ys("src/y/arch/wsys.s"));
 }
 
 // The kernel's replacement blocks (`ycc --kernel`): the same substitution,
 // against src/y/arch/kernel.s.
-static Yv *arch_kernel_lines(void) {
-    return arch_replaced_lines(KERNEL_ASM(), ys("src/y/arch/kernel.s"));
+static Yv *arch_kernel_lines(Yv *prelude, Yv *kernel) {
+    return arch_replaced_lines(prelude, kernel, ys("src/y/arch/kernel.s"));
 }
 
-static Yv *arch_replaced_lines(Yv *sub, Yv *what) {
+static Yv *arch_replaced_lines(Yv *prelude, Yv *sub, Yv *what) {
     Yv *blocks = arch_win_blocks(ys_split(sub, ys("\n")));
     /* NOTE: index loop, not foreach (PORTING.md rule 9). */
     ylong i = 0;
@@ -486,7 +453,7 @@ static Yv *arch_replaced_lines(Yv *sub, Yv *what) {
         };
         i = i + 1;
     }
-    Yv *lines = arch_asm_lines(PRELUDE_ASM());
+    Yv *lines = arch_asm_lines(prelude);
     arch_win_check(lines, blocks, what);
     return arch_win_sub(lines, blocks);
 }
@@ -609,32 +576,6 @@ static int arch_is_label_line(Yv *l) {
 
 // `lines` walked; at a label a replacing block claims, that block's lines and
 // not the prelude's. The new blocks go after the last replaced one.
-/* Replace the block that starts at the column-0 label `name` (through the line
-   before the next label) with `repl`. */
-static Yv *arch_block_sub(Yv *lines, Yv *name, Yv *repl) {
-    Yv *out = yav(0);
-    ylong i = 0;
-    while (i < yv_len(lines)) {
-        Yv *l = ya_get(lines, i);
-        if (arch_is_label_line(l)
-            && ys_eq(ys_trim(ys_slice(l, 0, yv_len(l) - 1)), name)) {
-            ylong r = 0;
-            while (r < yv_len(repl)) {
-                out = ya_push(out, ya_get(repl, r));
-                r = r + 1;
-            }
-            i = i + 1;
-            while (i < yv_len(lines) && !arch_is_label_line(ya_get(lines, i))) {
-                i = i + 1;
-            }
-        } else {
-            out = ya_push(out, l);
-            i = i + 1;
-        }
-    }
-    return out;
-}
-
 /* The GC-free runtime: a program whose heap cannot grow does not link the
    collector at all (--gc, or the auto analysis). The allocator itself is
    UNCHANGED -- only the collector's three entry points become stubs -- so the
@@ -643,16 +584,26 @@ static Yv *arch_block_sub(Yv *lines, Yv *name, Yv *repl) {
    becomes unreachable and is shaken out.
      y_gc_maybe      never runs a cycle
      y_gc_alloc_free never recycles a block (0 = none)
-     y_gc_chunk_add  returns the base the allocator wants, registers nothing */
-Yv *arch_nogc_lines(Yv *lines) {
-    Yv *out = arch_block_sub(lines, ys("y_gc_maybe"),
-                             yavs(ys("y_gc_maybe:"), ys("    ret"), NULL));
-    out = arch_block_sub(out, ys("y_gc_alloc_free"),
-                         yavs(ys("y_gc_alloc_free:"), ys("    xor %eax, %eax"),
-                              ys("    ret"), NULL));
-    return arch_block_sub(out, ys("y_gc_chunk_add"),
-                          yavs(ys("y_gc_chunk_add:"), ys("    mov %rdi, %rax"),
-                               ys("    ret"), NULL));
+     y_gc_chunk_add  returns the base the allocator wants, registers nothing
+   Each substitution is [block name, its replacement lines...] (native.c
+   arch_blocks_sub). */
+Yv *arch_nogc_subs(void) {
+    return yav(3,
+               yavs(ys("y_gc_maybe"), ys("y_gc_maybe:"), ys("    ret"), NULL),
+               yavs(ys("y_gc_alloc_free"), ys("y_gc_alloc_free:"), ys("    xor %eax, %eax"),
+                    ys("    ret"), NULL),
+               yavs(ys("y_gc_chunk_add"), ys("y_gc_chunk_add:"), ys("    mov %rdi, %rax"),
+                    ys("    ret"), NULL));
+}
+
+/* --gc-stress: a cycle at every allocating slow path (native.y). The invariant
+   trap reports chunk base/end, the block, the word there, its two neighbours
+   and the map register, because "bad block header" alone names nothing and
+   the neighbours separate a misaligned walk from an overwritten header. */
+Yv *arch_gc_stress_subs(void) {
+    return yav(2,
+               yavs(ys("y_gc_maybe"), ys("y_gc_maybe:"), ys("    call y_gc_collect"), ys("    ret"), NULL),
+               yav(43, ys("y_bad_trap"), ys("y_bad_trap:"), ys("    push %rbx"), ys("    push %r12"), ys("    push %r13"), ys("    mov 0(%rbx), %rax"), ys("    push %rax"), ys("    call y_os_print_int"), ys("    add $8, %rsp"), ys("    mov 8(%rbx), %rax"), ys("    push %rax"), ys("    call y_os_print_int"), ys("    add $8, %rsp"), ys("    mov %r12, %rax"), ys("    push %rax"), ys("    call y_os_print_int"), ys("    add $8, %rsp"), ys("    mov 0(%r12), %rax"), ys("    push %rax"), ys("    call y_os_print_int"), ys("    add $8, %rsp"), ys("    mov -8(%r12), %rax"), ys("    push %rax"), ys("    call y_os_print_int"), ys("    add $8, %rsp"), ys("    mov 8(%r12), %rax"), ys("    push %rax"), ys("    call y_os_print_int"), ys("    add $8, %rsp"), ys("    mov %r13, %rax"), ys("    push %rax"), ys("    call y_os_print_int"), ys("    add $8, %rsp"), ys("    mov 0(%r13), %rax"), ys("    push %rax"), ys("    call y_os_print_int"), ys("    add $8, %rsp"), ys("    pop %r13"), ys("    pop %r12"), ys("    pop %rbx"), ys("    mov $1, %rax"), ys("    mov $1, %rdi"), ys("    syscall")));
 }
 
 static Yv *arch_win_sub(Yv *lines, Yv *blocks) {

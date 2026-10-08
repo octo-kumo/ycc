@@ -1,8 +1,7 @@
 // std/prelude.y -- readline() and the stdin buffer behind it, written in
-// Y. native.y embeds this file's text (`embed PRELUDE_SRC from
-// "./std/prelude.y";`) and splices it in front of a program that mentions
-// one of prelude_names() -- readline, clear_eof, y_stdin_sync -- so a
-// program that reads nothing carries none of it.
+// Y. It is a unit of the std pack, linked into a program that mentions one
+// of prelude_names() -- readline, clear_eof, y_stdin_sync -- so a program
+// that reads nothing carries none of it.
 //
 // WHY THIS EXISTS: every builtin used to mean another hand-written block of
 // assembly in arch_x64.y. That does not scale and it is where the bugs

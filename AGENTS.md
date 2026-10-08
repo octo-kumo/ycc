@@ -14,7 +14,13 @@ semantics. **Every change to `src/y/*.y` gets the same change in `src/c/*.c`.**
 - `make cycc.exe` → Windows cross-build (mingw-w64), gated by
   `test/sh/cycc-win.sh` under wine; `--target=windows` by `pe-gate.sh`,
   `pe-packinv.sh`, `pe-fixtures.sh`. The four `t34{1,2,3,4}_threads_*` and four
-  `ELF-OUTPUT-DIFF` cases are known PE gaps, not regressions. A PE runs the NT
+  `ELF-OUTPUT-DIFF` cases are known PE gaps, not regressions, and so is anything
+  importing `net` or `tui` (or `http`/`tls` through them): those two modules are
+  the only std sources with raw `syscall` sites, and a raw `syscall` is expanded
+  at compile time with the HOST's argument convention, so a packed unit bakes it.
+  `os_call` is the target-neutral form (a label resolved against the arch lines at
+  link time) and the four core units already use it. Windows sockets and termios
+  are therefore unsupported for now; the ELF side is unaffected. A PE runs the NT
   syscall self-test at startup (`arch/wselftest.s`, from `w_self_test_lines`), so
   a drifted `w_sysno` fails loudly instead of calling the wrong Nt function.
 - `make yserve` → the language server; both compilers must produce it
@@ -24,13 +30,26 @@ semantics. **Every change to `src/y/*.y` gets the same change in `src/c/*.c`.**
 - Never commit artifacts: `*.o`, `cycc`, `cycc.exe`, `cycc-asan`, `ycc`, `_ycc*`,
   `ynew`, `ytest*`, `*.pack`, `a.out`, `_check/`, `_ktmp/`. `refs/` is gitignored
   and is **not** disposable: it is the port's ground truth.
-- `src/y/std/{rt,prelude,exec,str}.y` are embedded into the compiler when it is
-  built (`embed` in native.y, `Y_EMBED` in native.c) — edit them directly; there
-  is no generator, and `str.y` holds no string literals. Every other std unit is
-  read from `src/y/std/` at compile time.
-- `src/y/arch/*.s` is embedded the same way, through `arch_x64.y`/`arch_x64.c`
-  (PORTING.md rules 11–12). Whole-line `#` comments are dropped before the
-  in-tree assembler sees them; `make asm-check` checks the files with GNU `as`.
+- **No std source is embedded in the compiler.** Every `src/y/std/*.y` is a
+  unit compiled into the std pack attached to `ycc` (the four core units and the
+  sixteen library modules alike; `STD_SRCS` in the Makefile makes an edit
+  rebuild every packed binary) — edit them directly; there is no generator, and
+  `str.y` holds no string literals. A source is read from disk (`src/y/std/`,
+  or `std/` beside the binary: native.y `std_lib_path`) only to build the pack,
+  under `--std-src`, and by a compiler with no pack attached (`cycc`, a bootstrap
+  generation) — so a packed `ycc` does **not** see an edit to a std file until it
+  is rebuilt; test one with `cycc`, `--std-src`, or `make ynew`. A project-local
+  `name.y` (beside the importer or in a package root) shadows the std unit
+  `name`.
+- **The runtime assembly is not embedded either.** `src/y/arch/*.s` is cut into
+  blocks of IR once (native.y `arch_blocks`: one per column-0 label, a line an IR
+  form reproduces exactly as an item, any other line as raw text) and the std pack
+  carries the blocks (`arch.linux`, `arch.windows`, `arch.wselftest`,
+  `arch.threads`, `arch.math`); a compile decodes only the blocks it keeps. The
+  files are read from disk (`arch_src`) only to build the pack or by a pack-less
+  compiler, so the same rebuild rule as for `std/` applies (`ARCH_SRCS`).
+  Whole-line `#` comments are dropped before the in-tree assembler sees them;
+  `make asm-check` checks the files with GNU `as`.
 - **Under 4 GB of memory, always** — the machine goes down past it. The Makefile
   runs recipes through `test/sh/capped.sh` (`ulimit -S -v 3670016`); by hand,
   `(ulimit -v 3670016; timeout … cmd)`, valgrind/gdb/perf included. Hitting the
@@ -74,7 +93,10 @@ moved with the callgrind table, `perf`, or `ycc --time`.
 - `./ycc f.y -o /tmp/b && /tmp/b`; the same through `./cycc`; `./ycc -S f.y`.
 - `--gc=auto|always|never` (default `auto`): whether the collector is linked.
   Auto omits it when no loop or recursion can reach the allocator, so a program
-  that allocates once carries neither; `always` is the escape hatch.
+  that allocates once carries neither; `always` is the escape hatch and
+  `--no-gc` is `--gc=never`. `--gc-stress` runs a cycle at *every* allocating
+  slow path — the collector's own test (a missed root shows up as a crash in
+  minutes, not days), used by the `gc` suite, and a very slow build.
 - `ycc run f.y` compiles and runs in one step; `ycc -E f.y` dumps the source the
   pass saw (meta blocks expanded); `ycc build` / `ycc vendor` for `y.toml`
   projects.
@@ -84,16 +106,20 @@ moved with the callgrind table, `perf`, or `ycc --time`.
   `valgrind --tool=callgrind`, `gdb` (`break file.y:N`, no variables), `nm` and
   `addr2line` name things.
 - Always feed `</dev/null` in scripts.
-- **Run a compiler from the tree it was built in.** Std units resolve against the
-  compiler's own directory, so a binary copied to `/tmp` has no `std/` beside it
-  and every `import fs`-style program fails to resolve.
-- Branches and worktrees: `master`, plus `mem-lifetime` (`.worktrees/mem`),
-  `kernel` (`.worktrees/kernel`) and `bigint-math` (`../compiler-bigint`). Merge
-  forward into `master`; never rewrite a branch another worktree has checked out.
+- **A built `ycc` is self-contained.** All twenty std units travel precompiled
+  in the std pack attached to the binary (pack 9: each unit stored and
+  compressed on its own, so a compile decodes only the units it links), so a
+  copy in an empty directory compiles `import fs`/`net`/`args`-style programs
+  with no source anywhere. A lone `ycc --std-src` has nothing to compile from and
+  says so.
+- Branches and worktrees: `master`, plus `std-pack-units`. The microkernel
+  (`ycc --kernel`, `YOS-HANDOVER.md`) is merged into `master`; `mem-lifetime` and
+  `bigint-math` were merged and their worktrees removed. Never rewrite a branch
+  another worktree has checked out.
 
 ## Tests
 
-`make test` runs all 21 suites (`test/sh/run_all.sh`; `-j N`, `YSHARD=k/n`,
+`make test` runs all 23 suites (`test/sh/run_all.sh`; `-j N`, `YSHARD=k/n`,
 `./run_all.sh -j4 port native` for a subset). They take `CYCC`, `YREF`, `YCC`,
 `YSELF`, `YQUIET` and `YPORT_SELF` from the environment.
 
@@ -111,6 +137,8 @@ moved with the callgrind table, `perf`, or `ycc --time`.
 | lsp | the server's fixtures under both compilers, `check-refs.py`, `check-names.py`, formatter idempotence |
 | math | `test/math/ulp_table.txt` within 1 ulp, plus the kernel and threshold audits |
 | coverage | every diagnostic and manual section has a checked test (`test/COVERAGE.md`) |
+| gc | the collector under a cap: two threads of 300k allocations must run in 64 MiB (`test/y/native/t385_gc_threads_alloc.y`), with `--gc=never` as the control that does not fit, and two threads of 20k under `--gc-stress` (a cycle at every allocation, `test/y/native/t389_gc_stress_threads.y`) |
+| kernel | `test/kernel/`: each fixture built with both engines (`--kernel`), images compared, booted under qemu, serial output and exit status checked (`test/sh/test_kernel.sh`; needs `qemu-system-x86_64`) |
 | treeshake, std-suites | the unused-code cost ratchets, plus four checks a runtime addition must pass: a program that allocates nothing names no `y_alloc` and no collector block, `--gc=auto` omits the collector for a one-shot allocation while `always` keeps and `never` drops it (same output), `test/sh/deadcode.py` counts instructions the shake leaves unreachable (`test/treeshake/deadcode.txt`), and `test/treeshake/shapes.txt` records the size of the shapes a runtime change moves first; the `test/std/` self-test suites |
 
 Run by hand (not in `make test`): `test/sh/cycc-win.sh` (wine),
@@ -196,9 +224,9 @@ under its bare name because generated code calls it by label, and a program's ow
 - `src/y/` — the compiler: `ycc.y` (driver), `pkg.y` (`ycc build`), `lexer.y`,
   `parser.y`, `rename.y`, `types.y` (checker), `lint.y` (warnings and `--fix`),
   `native.y` (emitter), `meta.y`, `arch_x64.y`, `enc64.y`, `asm.y`, `elf.y`,
-  `pe.y`, `dwarf.y`, `target.y`, `tags.y`; `std/` (the four embedded units, plus
+  `pe.y`, `dwarf.y`, `target.y`, `tags.y`; `std/` (the four core units, plus
   `fs`, `net`, `struct`, `math`, `crypto`, `x509`, `tls`, `regex`, `json`,
-  `args`, `tui`, `utf8`, …); `arch/*.s`.
+  `args`, `tui`, `utf8`, … — all of them pack units, see Build); `arch/*.s`.
 - `src/c/` — the 1:1 copy, plus `yv.c`/`yv.h` (the value model; no Y twin).
   `PORTING.md` is the contract.
 - `src/tools/lsp/` — `yserve` and its modules (`LSP.md` is the design; the VS Code

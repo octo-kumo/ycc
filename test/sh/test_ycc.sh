@@ -150,6 +150,8 @@ for compiler in "$YCC_BIN" "$CYCC"; do
     mkdir -p "$install"
     cp "$compiler" "$install/ycc-installed"
     cp -r "$ROOT/src/y/std" "$install/std"
+    # a compiler with no pack (cycc) builds the runtime from arch/ beside it too
+    cp -r "$ROOT/src/y/arch" "$install/arch"
     rm -f "$PATH_DIR/work/out"
     out=$(cd "$PATH_DIR/work" && PATH="$install:$PATH" timeout $(( 120 * YTIMEOUT_SCALE )) \
         ycc-installed prog.y -o out </dev/null 2>&1)
@@ -231,6 +233,16 @@ expect_cli_error "assembly write failure" "error: writing '/nonexistent/dir/out'
     -S -o /nonexistent/dir/out "$ROOT/test/y/native/t01_arith.y"
 expect_cli_error "executable write failure" "error: writing '/nonexistent/dir/out' failed" \
     -o /nonexistent/dir/out "$ROOT/test/y/native/t01_arith.y"
+# A write that fails at the flush rather than at the write. /dev/full takes
+# the bytes and fails when they are flushed, so the answer is in the close's
+# return: the Y twin writes with write(2) and sees the error at once, the C
+# twin buffers and has to read fclose's return -- which it did not, so
+# `cycc -o /dev/full` exited 0 with nothing written. The /nonexistent/dir
+# cases above cannot see this: there fopen itself fails.
+expect_cli_error "assembly write failure at the flush" "error: writing '/dev/full' failed" \
+    -S -o /dev/full "$ROOT/test/y/native/t01_arith.y"
+expect_cli_error "executable write failure at the flush" "error: writing '/dev/full' failed" \
+    -o /dev/full "$ROOT/test/y/native/t01_arith.y"
 
 # Import depth: a chain of 33 nested imports is fatal. Only a chain reaches
 # the limit -- the resolver's `seen` list stops a cycle first.
@@ -273,6 +285,36 @@ for compiler in "$YCC_BIN" "$CYCC"; do
 done
 [ "$oom_seen" -eq 2 ] && pass "OOM report identical from both copies"
 rm -rf "$OOM_DIR"
+
+# Errors are printed one per position, and the positions already printed go
+# into a name index so a file with a mistake on every line does not make
+# printing quadratic. What must not change is *which* errors are printed: a
+# file with 300 distinct undefined variables answers with 300 lines, one each,
+# in position order, from both compilers (the dedup is keyed by position, so a
+# regression that dropped or repeated one shows up as a count or a first line).
+MANY_DIR=$(mktemp -d /tmp/ycc_many.XXXXXX)
+{
+    for i in $(seq 0 299); do
+        echo "def f$i() -> long { missing$i }"
+    done
+} > "$MANY_DIR/many.y"
+for compiler in "$YCC_BIN" "$CYCC"; do
+    many_out=$(timeout $(( 120 * YTIMEOUT_SCALE )) "$compiler" -o "$MANY_DIR/many.bin" \
+        "$MANY_DIR/many.y" </dev/null 2>&1)
+    many_ec=$?
+    many_lines=$(printf '%s\n' "$many_out" | grep -c "undefined variable 'missing")
+    many_first=$(printf '%s\n' "$many_out" | head -1)
+    many_last=$(printf '%s\n' "$many_out" | tail -1)
+    if [ "$many_ec" -eq 1 ] && [ "$many_lines" -eq 300 ] \
+        && [ "$many_first" = "1:20: error: undefined variable 'missing0'" ] \
+        && [ "$many_last" = "300:22: error: undefined variable 'missing299'" ]; then
+        pass "300 errors, one per position (${compiler##*/})"
+    else
+        fail "300 errors, one per position (${compiler##*/})" \
+            "exit=$many_ec, lines=$many_lines, first='$many_first', last='$many_last'"
+    fi
+done
+rm -rf "$MANY_DIR"
 
 # A fifo is not seekable: there is no size to ask for, so the whole-file path
 # (fseek/ftell) cannot be used and the stream has to be read to its end. The Y
