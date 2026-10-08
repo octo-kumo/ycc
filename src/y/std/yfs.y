@@ -272,3 +272,48 @@ def yfs_append(ino: long, buf: long, len: long) -> long {
     if (n != len) { return 0 - 1; };
     len
 };
+
+// Create an empty file named `name` in the root directory and return its inode, or
+// -1.  This is the first half of write support that can ADD something: a free inode
+// gets mode/size/empty block list, and the directory gains one entry at the end of
+// its entry list (its size field is the ENTRY COUNT for a directory), reusing the
+// 4-byte stride rule the reader walks.
+def yfs_create(name: str) -> long {
+    if (yfs_ok == 0) { return 0 - 1; };
+    // a free inode: mode 0, never used
+    let ino = 0 - 1;
+    let i = 1;
+    while (i < yfs_inodes) {
+        if (yfs_u32(yfs_inode_off(i)) == 0) { ino = i; i = yfs_inodes; } else { i = i + 1; };
+    };
+    if (ino < 0) { return 0 - 1; };
+    let base = yfs_inode_off(ino);
+    kernel.poke32(yfs_phys + base, 1);          // mode: a file
+    kernel.poke32(yfs_phys + base + 4, 0);      // size 0
+    // the root directory's entry list: walk past the entries already there
+    let rbase = yfs_inode_off(yfs_root);
+    let count = yfs_u32(rbase + 4);
+    let blk = yfs_u32(rbase + 8);
+    if (blk == 0) {
+        blk = yfs_next;
+        yfs_next = yfs_next + 1;
+        kernel.poke32(yfs_phys + rbase + 8, blk);
+    };
+    let e = blk * yfs_block_size;
+    let idx = 0;
+    while (idx < count) {
+        let nl = yfs_u16(e);
+        if (nl == 0) { return 0 - 1; };
+        e = e + ((8 + nl + 3) & (0 - 4));
+        idx = idx + 1;
+    };
+    kernel.poke8(yfs_phys + e, len(name) & 255);
+    kernel.poke8(yfs_phys + e + 1, (len(name) >> 8) & 255);
+    kernel.poke8(yfs_phys + e + 2, 1);
+    kernel.poke8(yfs_phys + e + 3, 0);
+    kernel.poke32(yfs_phys + e + 4, ino);
+    let k = 0;
+    while (k < len(name)) { kernel.poke8(yfs_phys + e + 8 + k, name[k] & 255); k = k + 1; };
+    kernel.poke32(yfs_phys + rbase + 4, count + 1);
+    ino
+};
