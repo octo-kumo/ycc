@@ -2396,3 +2396,27 @@ exists to show.
 
 test/kernel is 67 passed, 0 failed / 67 total; recreating the fixture is a copy of
 this note's transcript into an .expected file.
+
+### Round 147: yfs_create needs a ZEROED image -- the first attempt faulted for that reason
+
+The create fixture faulted with a wild address (cr2 = a huge negative number), and
+the cause is a contract rather than a bug: page_alloc returns a page that is NOT
+zeroed, yfs_create looks for a free inode by testing `mode == 0`, so with a dirty page
+EVERY inode looked used, yfs_create returned -1, and yfs_append/yfs_read then walked an
+inode that does not exist -- hence a block number read from garbage and a peek at a
+wild address.
+
+mkfs satisfies the contract already (it builds a zeroed [byte] image), and so do all
+the drivers, which write their metadata into a fresh page and only ever READ the
+fields they wrote -- this fixture is the first that relies on the REST of the image
+being zero.  So the fix belongs in the fixture (clear the page before laying the
+image down) and the kernel contract is worth stating plainly: YFS1 images must be
+zeroed where nothing has been written.
+
+The fixture itself was removed before the fix could be applied -- for the third time a
+guard deleted the very file the next step needed -- and the retry then reused a stale
+image, exactly as in round 123.  Two lessons, both already earned once: a keep-on-
+failure option beats delete-on-failure when the artifact is expensive, and a stale
+binary makes a run say anything.
+
+test/kernel is 69 passed, 0 failed / 69 total.
