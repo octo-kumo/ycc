@@ -5,6 +5,12 @@
 
 let yfs_phys: long = 0;
 let yfs_ok: long = 0;
+let yfs_total: long = 0;
+let yfs_inodes: long = 0;
+// The image's first free block.  A scan rather than a bitmap: images are small and
+// it needs no format change.  Indirect blocks count as used, and their CONTENTS are
+// scanned too, or a file past twelve blocks would hand out a block that is in use.
+let yfs_next: long = 0;
 let yfs_block_size: long = 4096;
 let yfs_root: long = 1;
 
@@ -26,7 +32,10 @@ def yfs_init(phys: long) -> bool {
     if (kernel.peek8(phys + 3) != 49) { return false; };
     if (yfs_u32(4) != 1) { return false; };
     yfs_block_size = yfs_u32(8);
+    yfs_total = yfs_u32(12);
+    yfs_inodes = yfs_u32(16);
     yfs_root = yfs_u32(20);
+    yfs_recompute_next();
     yfs_ok = 1;
     true
 };
@@ -202,4 +211,64 @@ def yfs_store(ino: long, off: long, buf: long, len: long) -> long {
         done = done + 1;
     };
     done
+};
+
+def yfs_recompute_next() -> void {
+    let m = 0;
+    let i = 1;
+    while (i < yfs_inodes) {
+        let base = yfs_inode_off(i);
+        if (yfs_u32(base) != 0) {
+            let d = 0;
+            while (d < 12) {
+                let b = yfs_u32(base + 8 + d * 4);
+                if (b > m) { m = b; };
+                d = d + 1;
+            };
+            let ind = yfs_u32(base + 56);
+            if (ind > m) { m = ind; };
+            if (ind != 0) {
+                let e = 0;
+                while (e < yfs_block_size / 4) {
+                    let b2 = yfs_u32(ind * yfs_block_size + e * 4);
+                    if (b2 > m) { m = b2; };
+                    e = e + 1;
+                };
+            };
+        };
+        i = i + 1;
+    };
+    yfs_next = m + 1;
+};
+
+// Append `len` bytes to a file, allocating blocks as needed and updating the size.
+// The blocks are attached FIRST, then the size moves, then yfs_store can write them
+// because they are inside the file.
+def yfs_append(ino: long, buf: long, len: long) -> long {
+    if (yfs_ok == 0) { return 0 - 1; };
+    let size = yfs_size(ino);
+    let base = yfs_inode_off(ino);
+    let have = (size + yfs_block_size - 1) / yfs_block_size;
+    let want = (size + len + yfs_block_size - 1) / yfs_block_size;
+    let bi = have;
+    while (bi < want) {
+        let b = yfs_next;
+        yfs_next = yfs_next + 1;
+        if (bi < 12) {
+            kernel.poke32(yfs_phys + base + 8 + bi * 4, b);
+        } else {
+            let ind = yfs_u32(base + 56);
+            if (ind == 0) {
+                ind = yfs_next;
+                yfs_next = yfs_next + 1;
+                kernel.poke32(yfs_phys + base + 56, ind);
+            };
+            kernel.poke32(yfs_phys + ind * yfs_block_size + (bi - 12) * 4, b);
+        };
+        bi = bi + 1;
+    };
+    kernel.poke32(yfs_phys + base + 4, size + len);
+    let n = yfs_store(ino, size, buf, len);
+    if (n != len) { return 0 - 1; };
+    len
 };
