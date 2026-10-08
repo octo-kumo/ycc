@@ -2556,3 +2556,25 @@ The fixture mkdir wants: mkdir("d"), then create a file INSIDE it, then look the
 up through the path "/d/child" -- which needs one more thing from yfs_add_entry's
 caller, since the wrappers still parent everything at the root.  That composition is the
 next step, and it is small: the path walk already descends directories.
+
+### Round 157: mkdir's path prints NOTHING for its own line -- kept for inspection
+
+The nested-directory fixture produced one line only:
+
+    create ok=true made=2 w=4 found=2 n=4 text=979899100
+
+and its own print -- "mkdir d=... child=... deep=..." -- never appeared, even though it
+is emitted BEFORE the create line in the program.  So the transcript cannot be a prefix
+problem: the program reached the create print and did not reach the earlier one, which
+means the print statements around the mkdir path were not executed at all... except that
+a program executes in order.  The honest reading is that the capture is not showing
+everything the run produced, and the next step is a print BETWEEN the mkdir steps --
+d right after yfs_mkdir, child right after yfs_add_entry, deep right after the lookup --
+which is the technique that has settled every one of these in one run.
+
+The fixture is KEPT, renamed _t020_mkdir.y.keep so it is outside the harness's [tx]* glob
+and the suite stays green; test/kernel is 73 passed, 0 failed / 73 total.
+
+A guard note worth keeping: this fixture's guard was RELATIONAL -- child == deep, and the
+directory's inode different from both -- rather than a literal, which is the right shape
+after four literal-guard failures.  It correctly refused to commit on an empty read.
