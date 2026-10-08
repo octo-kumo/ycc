@@ -5,6 +5,8 @@
 //   ytest coverage [FILE...]  gcov line coverage of src/c over a corpus (cov.y)
 //   ytest deadcode [-v] F.s   unreachable instructions in a listing (deadcode.y)
 //   ytest os-build|os-run|os-session   Y-OS: build, boot, script a session (yos.y)
+//   ytest math-pairs [N] | math-repeats | math-thresholds | math-coverage | math-unroll
+//                             the std/math.y audits (mpairs.y, mstatic.y)
 //   ytest lsp-e2e             the language server as a process (lsp_e2e.y)
 //   ytest check-refs|check-names   the language server's static checks (su_lsp.y)
 //   ytest pty-test PROG       test/std/term_test.y on a real pty (pty.y)
@@ -38,15 +40,18 @@ import su_kernel;
 import yos;
 import su_lsp;
 import lsp_e2e;
+import mpairs;
+import mstatic;
+import su_math;
 import pack;
 import deadcode;
 import pty;
 
-let ALL = ["port", "pe-port", "native", "native-examples", "examples", "audit", "ycc-units", "loops", "comprehensive", "ycc", "fixpoint", "debug", "link", "gc", "stdin-eof", "treeshake", "std-suites", "net", "pkg", "kernel", "os", "lsp"];
+let ALL = ["port", "pe-port", "native", "native-examples", "examples", "audit", "ycc-units", "loops", "comprehensive", "ycc", "fixpoint", "debug", "link", "gc", "stdin-eof", "treeshake", "std-suites", "net", "pkg", "kernel", "os", "lsp", "math"];
 
 // Suites that drive the built ./ycc; skipped without it.
 def needs_ycc(name: str) -> bool {
-    name == "native" || name == "native-examples" || name == "ycc" || name == "fixpoint" || name == "debug" || name == "link" || name == "pkg" || name == "kernel" || name == "os"
+    name == "native" || name == "native-examples" || name == "ycc" || name == "fixpoint" || name == "debug" || name == "link" || name == "pkg" || name == "kernel" || name == "os" || name == "math"
 };
 
 def suite_cases(name: str) -> [yt.Case] {
@@ -70,6 +75,7 @@ def suite_cases(name: str) -> [yt.Case] {
     if (name == "kernel") { return su_kernel.cases(); };
     if (name == "os") { return yos.cases(); };
     if (name == "lsp") { return su_lsp.cases(); };
+    if (name == "math") { return su_math.cases(); };
     if (name == "loops") { return su_inline.loops(); };
     if (name == "comprehensive") { return su_inline.comprehensive(); };
     []
@@ -203,6 +209,10 @@ def main(av: [str]) -> long {
             return yos.main_run(av[i + 1:]);
         } else if (a == "os-session") {
             return yos.main_session(av[i + 1:]);
+        } else if (a.starts_with("math-") && a != "math-pairs") {
+            return mstatic.main(a[5:], av[i + 1:]);
+        } else if (a == "math-pairs") {
+            return mpairs.main(av[i + 1:]);
         } else if (a == "lsp-e2e") {
             return lsp_e2e.main(av[i + 1:]);
         } else if (a == "check-refs") {
