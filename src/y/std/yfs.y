@@ -169,3 +169,15 @@ def yfs_dir_inode(ino: long, index: long) -> long {
     if (e == 0) { return 0 - 1; };
     yfs_u32(e + 4)
 };
+
+// One byte of a file, BY VALUE.  yfs_read pokes into a virtual address in the
+// CALLER's space, which execve cannot use while it is building another address
+// space -- it has physical destinations and no VA for them.  This returns the byte
+// instead, so a caller can place it with poke8 (physical) anywhere it likes.
+def yfs_fetch(ino: long, off: long) -> long {
+    if (yfs_ok == 0) { return 0 - 1; };
+    if (off >= yfs_size(ino)) { return 0 - 1; };
+    let blk = yfs_block_of(ino, off);
+    if (blk == 0) { return 0 - 1; };
+    kernel.peek8(yfs_phys + blk * yfs_block_size + off % yfs_block_size)
+};
