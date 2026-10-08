@@ -936,8 +936,8 @@ language server reads the pack with its own copy of that frame
 too, and the codec must be reachable from both.
 
 
-`--std-src` ignores the pack and compiles the std units from the
-embedded sources, as does a ycc whose pack is missing (cycc, or a ycc
+`--std-src` ignores the pack and compiles the std units from their
+sources on disk (`src/y/std`; none is embedded in the compiler), as does a ycc whose pack is missing (cycc, or a ycc
 just written by a self-compile) or of another version: the output is the
 same bytes either way (`test/sh/test_link.sh` checks it over programs
 that link every unit; `make ycc`, `ynew` and the fixpoint suite each

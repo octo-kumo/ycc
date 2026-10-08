@@ -434,11 +434,27 @@ def build_resolve(path: str, allow_exec: bool, pkgs: [str], roots: [str]) -> Res
 
 // The std units among `names`, in link order.
 def std_order(names: [str]) -> [str] {
+    // A program that links a library unit links what that unit imports too: a
+    // unit is compiled and linked against the units before it (std_lib_deps),
+    // and std_unit_names is already dependency-first. `names` is copied first --
+    // arrays are references, and `+=` would grow the caller's resolution.
+    let want: [str] = [];
+    names.foreach((e) => {
+        want += e;
+    });
+    let i = 0;
+    while (i < len(want)) {
+        let ds = nativelib.std_lib_deps(want[i]);
+        ds.foreach((d) => {
+            if (!pkg.pk_has(want, d)) { want += d; };
+        });
+        i = i + 1;
+    };
     let all = nativelib.std_unit_names();
     let out: [str] = [];
     all.foreach((e) => {
         let nm: str = e;
-        if (pkg.pk_has(names, nm)) { out += nm; }
+        if (pkg.pk_has(want, nm)) { out += nm; }
     });
     out
 };
@@ -964,12 +980,12 @@ def main(cmdline: [str]) -> long {
             dt = ph.times; t0 = ph.t; h0 = ph.h;
             // The std units the program links (native_resolve_x picked
             // them): the ones attached to ycc, compiled when it was built,
-            // or (--std-src, or a ycc with none) compiled from the sources
-            // embedded in it.
+            // or (--std-src, or a ycc with none) compiled from their sources
+            // on disk.
             let nrstd = nr.std;
             let pack = "";
             if (!pargs.std_src) { pack = self_pack(); 0; }
-            let su = nativelib.std_units(nrstd, pack);
+            let su = nativelib.std_units(std_order(nrstd), pack);
             ph = nativelib.phase_end(dt, "std", t0, h0);
             dt = ph.times; t0 = ph.t; h0 = ph.h;
             let r = nativelib.emit_program(ast, nr, pargs.debug, pargs.wlevel, su, []);

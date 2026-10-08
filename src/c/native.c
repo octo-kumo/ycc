@@ -103,29 +103,15 @@ Yv *rec_names(Yv *fs);
 /* src/y/rename.y */
 Yv *rename_program(Yv *ast);
 Yv *rename_program_x(Yv *ast, Yv *dfl, Yv *ofile, Yv *fmods);
+/* The type aliases a unit's importers must be able to name: seeded before the
+ * rename of the unit being compiled, and published by it (rename.c's
+ * rn_types_seed/rn_types_out, native.y). */
+void rn_types_seed_set(Yv *xs);
+Yv *rn_types_out_get(void);
 
-/* The std units' sources (see std_units): native.y's `embed` declarations
- * (see Y_EMBED in yv.h). */
-Y_EMBED(RT_SRC, "src/y/std/rt.y")
-Y_EMBED(PRELUDE_SRC, "src/y/std/prelude.y")
-Y_EMBED(EXEC_SRC, "src/y/std/exec.y")
-Y_EMBED(STR_SRC, "src/y/std/str.y")
-Y_EMBED(ARGS_SRC, "src/y/std/args.y")
-Y_EMBED(CRYPTO_SRC, "src/y/std/crypto.y")
-Y_EMBED(FS_SRC, "src/y/std/fs.y")
-Y_EMBED(HTTP_SRC, "src/y/std/http.y")
-Y_EMBED(JSON_SRC, "src/y/std/json.y")
-Y_EMBED(MATH_SRC, "src/y/std/math.y")
-Y_EMBED(NET_SRC, "src/y/std/net.y")
-Y_EMBED(RANDOM_SRC, "src/y/std/random.y")
-Y_EMBED(REGEX_SRC, "src/y/std/regex.y")
-Y_EMBED(SORT_SRC, "src/y/std/sort.y")
-Y_EMBED(STRUCT_SRC, "src/y/std/struct.y")
-Y_EMBED(TEST_SRC, "src/y/std/test.y")
-Y_EMBED(TLS_SRC, "src/y/std/tls.y")
-Y_EMBED(TUI_SRC, "src/y/std/tui.y")
-Y_EMBED(UTF8_SRC, "src/y/std/utf8.y")
-Y_EMBED(X509_SRC, "src/y/std/x509.y")
+/* No std source is embedded: every std unit travels compiled in the std
+ * pack, and a source is read from disk (std_lib_src) only to build it, under
+ * --std-src, or by a compiler with no pack (native.y). */
 
 /* `ycc -g` line markers, set by compile_unit for each unit. With
  * dbg_lines on, the text opens with a `.file N "path"` per origin file
@@ -144,6 +130,9 @@ static Yv *res_used;
  * are linked units now, not spliced text, so native_resolve_x appends them to
  * the program's `std` (native.y res_std_lib). */
 static Yv *res_std_lib;
+/* True while std_compile resolves a std unit's own imports (native.y
+ * res_in_std): the project-local lookup is skipped. */
+static int res_in_std;
 static Yv *pkg_ns;
 /* tcode's and tdecode's recursive aliases (trefs) being spelled out and
  * read back, and the count behind the unit ids tdecode gives them. */
@@ -623,12 +612,13 @@ Yv *phase_end(Yv *times, Yv *name, ylong t0, ylong h0);
 Yv *unit_empty(Yv *name);
 Yv *externs_none(void);
 Yv *std_unit_src(Yv *name);
-Yv *std_mod_src(Yv *name);
+Yv *std_lib_src(Yv *name);
+Yv *std_lib_path(Yv *name);
 ylong std_unit_base(Yv *name);
 int std_unit_bound(Yv *name);
 Yv *std_unit_names(void);
 Yv *std_units(Yv *names, Yv *pack);
-Yv *std_compile(Yv *name, Yv *ext);
+Yv *std_compile(Yv *name, Yv *ext, Yv *prev);
 Yv *export_name(Yv *name);
 Yv *unit_exports(Yv *stmts, Yv *hdefs, Yv *fns);
 int pkg_base(ylong base);
@@ -639,6 +629,7 @@ Yv *lit_code(Yv *d);
 Yv *lit_text(Yv *d);
 Yv *lit_neg_text(Yv *d);
 Yv *lit_decode(Yv *c);
+void unit_prep(Yv *xt);
 Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, ylong wlevel,
                  Yv *name, ylong base, Yv *xt, Yv *ogen);
 Yv *link_locs(Yv *body, ylong file);
@@ -674,6 +665,7 @@ Yv *unit_iface(Yv *unit);
 Yv *unit_externs(Yv *std, Yv *snames, Yv *deps, Yv *pkgs);
 Yv *std_lib_names(void);
 ylong std_lib_index(Yv *name);
+Yv *std_lib_deps(Yv *name);
 Yv *compile_package(Yv *ast, Yv *nr, Yv *name, ylong base, ylong wlevel,
                     Yv *std, Yv *deps);
 Yv *emit_program(Yv *ast, Yv *nr, int debug, ylong wlevel, Yv *std, Yv *deps);
@@ -838,13 +830,34 @@ Yv *resolve_unit(Yv *src, Yv *base_dir, ylong depth, int allow_exec,
     /* the library units the resolver saw imported by name -- but only the ones
      * the program MENTIONS, a `name.` reference, as prelude and exec are linked
      * only when one of their names is seen (native.y) */
+    Yv *want = yav(0);
     ylong li = 0;
     while (li < yv_len(res_std_lib)) {
         Yv *ln = ya_get(res_std_lib, li);
-        if (ys_index_of(rsrc, ys_cat(ln, ys("."))) >= 0 && !name_in(std, ln)) {
-            std = ya_push(std, ln);
+        if (ys_index_of(rsrc, ys_cat(ln, ys("."))) >= 0 && !name_in(want, ln)) {
+            want = ya_push(want, ln);
         }
         li = li + 1;
+    }
+    /* ...and the units those import (std_lib_deps), all in std_lib_names
+     * order, dependency first: every caller of std_units compiles a unit
+     * against the ones before it, so `std` is closed and ordered here
+     * (native.y). */
+    ylong wi = 0;
+    while (wi < yv_len(want)) {
+        Yv *ds = std_lib_deps(ya_get(want, wi));
+        ylong di = 0;
+        while (di < yv_len(ds)) {
+            if (!name_in(want, ya_get(ds, di))) { want = ya_push(want, ya_get(ds, di)); }
+            di = di + 1;
+        }
+        wi = wi + 1;
+    }
+    Yv *libs = std_lib_names();
+    ylong lj = 0;
+    while (lj < yv_len(libs)) {
+        if (name_in(want, ya_get(libs, lj))) { std = ya_push(std, ya_get(libs, lj)); }
+        lj = lj + 1;
     }
     /* ogen is EMPTY for a unit with no blocks, which is what tells lint there is
      * no generator whose top level is this one (see lint_meta_top): a file with
@@ -1510,6 +1523,21 @@ static Yv *self_dir(void) {
     return by_argv;
 }
 
+/* A project-local module shadows the std library unit of that name
+ * (native.y res_local_mod). */
+int res_local_mod(Yv *name, Yv *base_dir) {
+    int found = !res_in_std &&
+                  !yv_is_none(read_file(ys_cat(
+                      ys_cat(ys_cat(base_dir, ys("/")), name), ys(".y"))));
+    ylong ri = 0;
+    while (!found && !res_in_std && ri < yv_len(res_roots)) {
+        found = !yv_is_none(read_file(ys_cat(
+            ys_cat(ys_cat(ya_get(res_roots, ri), ys("/")), name), ys(".y"))));
+        ri = ri + 1;
+    }
+    return found;
+}
+
 Yv *std_resolve(Yv *name, Yv *base_dir) {
     Yv *cands = yav(0);
     cands = ya_push(cands,
@@ -1625,7 +1653,6 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, ylong depth, Yv *seen,
                 ylong from_idx = ys_index_of(rest, ys(" from "));
                 Yv *name = ys("");
                 Yv *full = ys("");
-                Yv *mod_emb = ys("");
                 Yv *path = ys("");
                 int is_pkg = 0;
                 if (from_idx >= 0) {
@@ -1655,11 +1682,14 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, ylong depth, Yv *seen,
                         ;
                     }
                     path = name;
-                    if (name_in(res_pkgs, name) || std_lib_index(name) >= 0) {
+                    int is_lib = !name_in(res_pkgs, name) &&
+                                   std_lib_index(name) >= 0 &&
+                                   !res_local_mod(name, base_dir);
+                    if (name_in(res_pkgs, name) || is_lib) {
                         /* a std library module takes the package path too: the
                          * pack carries its unit, nothing is spliced, and
                          * strip_ns qualifies its names (native.y) */
-                        if (std_lib_index(name) >= 0 && !name_in(res_std_lib, name)) {
+                        if (is_lib && !name_in(res_std_lib, name)) {
                             res_std_lib = ya_push(res_std_lib, name);
                         }
                         is_pkg = 1;
@@ -1670,16 +1700,6 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, ylong depth, Yv *seen,
                         ;
                     } else {
                         full = std_resolve(name, base_dir);
-                        /* a std library module with no source on disk: its
-                           source is embedded (std_mod_src). */
-                        if (yv_len(full) == 0) {
-                            Yv *emb = std_mod_src(name);
-                            if (yv_len(emb) > 0) {
-                                mod_emb = emb;
-                                full = ys_cat(ys_cat(ys("std/"), name), ys(".y"));
-                            }
-                        }
-                        ;
                     }
                     ;
                 }
@@ -1698,8 +1718,7 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, ylong depth, Yv *seen,
                     exit_(1);
                     ;
                 } else {
-                    /* the embedded copy, when std_resolve fell back to it */
-                    Yv *mod_src = yv_len(mod_emb) > 0 ? mod_emb : read_file(full);
+                    Yv *mod_src = read_file(full);
                     if (yv_is_none(mod_src)) {
                         puts_(ys_cat(
                             ys_cat(ys_cat(ys_cat(ys("error: cannot open import '"),
@@ -14050,55 +14069,52 @@ Yv *unit_empty(Yv *name) {
     Yv *rs = yav(0);
     Yv *gs = yav(0);
     Yv *ds = yav(0);
-    return yr(12, "name", name, "files", fs, "exports", xs, "init", ys(""),
+    return yr(13, "name", name, "files", fs, "exports", xs, "init", ys(""),
               "bodies", bs, "btext", bt, "blob", yav(0), "labels", ls, "refs",
-              fr, "rodata", rs, "globals", gs, "dfl", ds);
+              fr, "rodata", rs, "globals", gs, "dfl", ds, "tys", yav(0));
 }
 
 Yv *externs_none(void) {
-    return yr(5, "ext", yav(0), "dfl", yav(0), "pkgs", yav(0), "inits",
-              yav(0), "argv", yv_bool(0));
+    return yr(6, "ext", yav(0), "dfl", yav(0), "pkgs", yav(0), "inits",
+              yav(0), "argv", yv_bool(0), "tys", yav(0));
 }
 
-/* The source of a std LIBRARY module (native.y std_mod_src): the four core
- * units travel compiled in ycc's std pack, every other std module is
- * spliced from source, and a lone ycc has no src/y/std/ beside it. */
-Yv *std_mod_src(Yv *name) {
-    if (ys_eq_lit(name, "args")) {
-        return std_text(ARGS_SRC());
-    } else if (ys_eq_lit(name, "crypto")) {
-        return std_text(CRYPTO_SRC());
-    } else if (ys_eq_lit(name, "fs")) {
-        return std_text(FS_SRC());
-    } else if (ys_eq_lit(name, "http")) {
-        return std_text(HTTP_SRC());
-    } else if (ys_eq_lit(name, "json")) {
-        return std_text(JSON_SRC());
-    } else if (ys_eq_lit(name, "math")) {
-        return std_text(MATH_SRC());
-    } else if (ys_eq_lit(name, "net")) {
-        return std_text(NET_SRC());
-    } else if (ys_eq_lit(name, "random")) {
-        return std_text(RANDOM_SRC());
-    } else if (ys_eq_lit(name, "regex")) {
-        return std_text(REGEX_SRC());
-    } else if (ys_eq_lit(name, "sort")) {
-        return std_text(SORT_SRC());
-    } else if (ys_eq_lit(name, "struct")) {
-        return std_text(STRUCT_SRC());
-    } else if (ys_eq_lit(name, "test")) {
-        return std_text(TEST_SRC());
-    } else if (ys_eq_lit(name, "tls")) {
-        return std_text(TLS_SRC());
-    } else if (ys_eq_lit(name, "tui")) {
-        return std_text(TUI_SRC());
-    } else if (ys_eq_lit(name, "utf8")) {
-        return std_text(UTF8_SRC());
-    } else if (ys_eq_lit(name, "x509")) {
-        return std_text(X509_SRC());
-    } else {
-        return ys("");
+/* The source of a std LIBRARY module from disk, or "" (native.y
+ * std_lib_src): only the four core units are embedded, every library unit
+ * travels compiled in the std pack. Std directories only, never a package
+ * root. */
+Yv *std_lib_src(Yv *name) {
+    Yv *path = std_lib_path(name);
+    Yv *out = ys("");
+    if (yv_len(path) > 0) {
+        Yv *t = read_file(path);
+        if (!yv_is_none(t)) { out = std_text(yv_unwrap(t)); }
     }
+    return out;
+}
+
+/* Where std_lib_src reads library unit `name` from, or "" (native.y
+ * std_lib_path; the language server opens the same file). */
+Yv *std_lib_path(Yv *name) {
+    Yv *cands = yav(0);
+    cands = ya_push(cands, ys_cat(ys_cat(ys("src/y/std/"), name), ys(".y")));
+    Yv *d = self_dir();
+    if (yv_len(d) > 0) {
+        cands = ya_push(
+            cands, ys_cat(ys_cat(ys_cat(d, ys("/std/")), name), ys(".y")));
+        cands = ya_push(cands, ys_cat(ys_cat(ys_cat(d, ys("/src/y/std/")), name),
+                                      ys(".y")));
+        cands = ya_push(cands, ys_cat(ys_cat(ys_cat(d, ys("/../src/y/std/")),
+                                             name),
+                                      ys(".y")));
+    }
+    Yv *out = ys("");
+    ylong i = 0;
+    while (yv_len(out) == 0 && i < yv_len(cands)) {
+        if (!yv_is_none(read_file(ya_get(cands, i)))) { out = ya_get(cands, i); }
+        i = i + 1;
+    }
+    return out;
 }
 
 /* Blank the `export { ... };` lines a std module carries for the splicer (which
@@ -14139,21 +14155,17 @@ Yv *std_drop_exports(Yv *src) {
     return ys_join(out, ys("\n"));
 }
 
+/* A std unit's source, from disk (native.y std_unit_src). */
 Yv *std_unit_src(Yv *name) {
-    if (ys_eq_lit(name, "prelude")) {
-        return PRELUDE_SRC();
-    } else if (ys_eq_lit(name, "exec")) {
-        return EXEC_SRC();
-    } else if (ys_eq_lit(name, "str")) {
-        return STR_SRC();
-    } else if (ys_eq_lit(name, "rt")) {
-        return RT_SRC();
-    } else {
-        /* a library unit: the same embedded text the splicer would have used.
-         * The C copy's std_mod_src already applies std_text (the Y twin's does
-         * not), so this is the one place the two idioms differ. */
-        return std_mod_src(name);
+    Yv *src = std_lib_src(name);
+    if (yv_len(src) == 0) {
+        puts_(ys_cat(ys_cat(ys_cat(ys_cat(ys("error: std module '"), name),
+                                   ys("': not in this compiler's std pack, and no src/y/std/")),
+                            name),
+                     ys(".y beside it or in the working directory\n")));
+        exit_(1);
     }
+    return src;
 }
 
 /* A library std unit's place in the list below; -1 is not a library unit. */
@@ -14168,11 +14180,41 @@ ylong std_lib_index(Yv *name) {
     return found;
 }
 
-/* Every std library unit, in the order std_unit_names appends them. math first:
- * it imports nothing, so it is the one the pack can compile before std_compile
- * resolves a library unit's own imports the way a package's are resolved. */
+/* What a library unit imports. A unit is compiled and linked against the units
+ * before it in std_unit_names order, so a program that needs one needs these
+ * too (std_order): without them the unit's calls into its import have no label
+ * to reach. This is the `import` list of the sources; a test checks the pack
+ * covers every module a unit mentions. */
+Yv *std_lib_deps(Yv *name) {
+    if (ys_eq_lit(name, "fs")) {
+        return yav(1, ys("sort"));
+    } else if (ys_eq_lit(name, "json")) {
+        return yav(1, ys("sort"));
+    } else if (ys_eq_lit(name, "net")) {
+        return yav(1, ys("fs"));
+    } else if (ys_eq_lit(name, "x509")) {
+        return yav(3, ys("crypto"), ys("fs"), ys("struct"));
+    } else if (ys_eq_lit(name, "tls")) {
+        return yav(3, ys("crypto"), ys("x509"), ys("net"));
+    } else if (ys_eq_lit(name, "http")) {
+        return yav(2, ys("net"), ys("tls"));
+    } else {
+        return yav(0);
+    }
+}
+
+/* Every std library unit, in the order std_unit_names appends them. A module
+ * that imports another must come after it (fs after sort, tls after crypto/
+ * x509/net): a unit's imports bind units, never splices. Dependency first: a
+ * unit is compiled against the ones before it (std_compile's `prev`), so an
+ * importer must come after what it imports -- fs and json after sort, net after
+ * fs, x509 after crypto/fs/struct, tls after crypto/x509/net, http after net/
+ * tls. */
 Yv *std_lib_names(void) {
-    return yav(1, ys("math"));
+    return yav(16, ys("math"), ys("sort"), ys("fs"), ys("json"), ys("struct"),
+               ys("crypto"), ys("x509"), ys("net"), ys("tls"), ys("http"),
+               ys("regex"), ys("random"), ys("utf8"), ys("args"), ys("test"),
+               ys("tui"));
 }
 
 ylong std_unit_base(Yv *name) {
@@ -14237,7 +14279,7 @@ Yv *std_units(Yv *names, Yv *pack) {
                 }
                 ;
             }
-            out = ya_push(out, std_compile(nm, ext));
+            out = ya_push(out, std_compile(nm, ext, out));
             i = i + 1;
         }
         ;
@@ -14245,33 +14287,68 @@ Yv *std_units(Yv *names, Yv *pack) {
     return out;
 }
 
-/* One std unit, from its embedded source. It always carries its `.loc`
+/* One std unit, from its source on disk (std_unit_src). It always carries its `.loc`
  * markers (link_units strips them unless -g), so it compiles the same
  * for every program. A failure here is the compiler's own bug: reported
  * as one, and the run ends. */
-Yv *std_compile(Yv *name, Yv *ext) {
+Yv *std_compile(Yv *name, Yv *ext, Yv *prev) {
     Yv *path = ys_cat(ys_cat(ys("std/"), name), ys(".y"));
-    Yv *ssrc = std_drop_exports(std_text(std_unit_src(name)));
+    Yv *raw = std_drop_exports(std_text(std_unit_src(name)));
     /* A std unit is tokenized straight from its embedded bytes, so it never
      * goes through meta_scan: a `#{` here would reach the lexer as a bare `#`
      * and be reported as an expression error. A block in a std source is a
      * diagnostic (ideas/meta.md, "std sources"): it would run after the
      * program's own pass, with no origin to point at. */
-    if (mg_on && ys_index_of(ssrc, ys("#{")) >= 0) {
+    if (mg_on && ys_index_of(raw, ys("#{")) >= 0) {
         puts_(ys("error: "));
-        puts_(ys_cat(path, ys(": a meta block cannot appear in a std source: std units are compiled from their embedded text after the program's own pass, so a block there has no generator to run in\n")));
+        puts_(ys_cat(path, ys(": a meta block cannot appear in a std source: std units are compiled from their own text after the program's own pass, so a block there has no generator to run in\n")));
         exit_(1);
+    };
+    Yv *nolines = yav(0);
+    Yv *ssrc = raw;
+    Yv *imports = yav(0);
+    Yv *pkgs = yav(0);
+    Yv *sstd = yav(0);
+    Yv *ogen = yav(0);
+    /* A library unit imports other library units (fs imports sort, x509 imports
+     * crypto/fs/struct, tls imports crypto/x509/net, http imports net/tls, json
+     * imports sort): those are units of the pack, never splices, so the text
+     * goes through the resolver exactly as a program's does -- a bare std
+     * library import already takes the unit path (std_lib_index, which is why
+     * nothing is spliced here) -- and the unit is then compiled against the ones
+     * already compiled (`prev`, in std_lib_names order, dependency first). A
+     * unit with no import keeps the direct path, so the four core units and
+     * math compile byte for byte as they did. */
+    if (ys_index_of(raw, ys("import ")) >= 0) {
+        res_in_std = 1;
+        Yv *nr = native_resolve_x(raw, ys("std"), 0, 1, path);
+        res_in_std = 0;
+        ssrc = yr_get(nr, "src");
+        imports = yr_get(nr, "imports");
+        pkgs = yr_get(nr, "pkgs");
+        sstd = yr_get(nr, "std");
+        ogen = yr_get(nr, "ogen");
     };
     Yv *toks = tokenize(ssrc);
     Yv *ast = parse_program(toks);
-    Yv *noimports = yav(0);
-    Yv *nolines = yav(0);
-    Yv *origin = yr(5, "files", yav(1, path), "nuser", yv_long(1),
-                    "file", nolines, "line", nolines, "mods", yav(1, ys("")));
     Yv *xt = externs_none();
-    yr_set(xt, "ext", ext);
-    Yv *r = compile_unit(ast, noimports, origin, 1, 0, name,
-                         std_unit_base(name), xt, yav(0));
+    if (yv_len(sstd) > 0) { xt = unit_externs(prev, sstd, yav(0), pkgs); };
+    /* The caller's `ext` (exec sees the prelude's exports) ADDS to what the
+     * imports bound -- an assignment here would wipe them, which is what made
+     * every `sort.` call in fs undefined while the ext list looked right. */
+    Yv *xext = yr_get(xt, "ext");
+    ylong ei = 0;
+    while (ei < yv_len(ext)) {
+        xext = ya_push(xext, ya_get(ext, ei));
+        ei = ei + 1;
+    }
+    yr_set(xt, "ext", xext);
+    Yv *mods = yav(1, ys(""));
+    if (std_lib_index(name) >= 0) { mods = yav(1, name); };
+    Yv *origin = yr(5, "files", yav(1, path), "nuser", yv_long(1),
+                    "file", nolines, "line", nolines, "mods", mods);
+    Yv *r = compile_unit(ast, imports, origin, 1, 0, name,
+                         std_unit_base(name), xt, ogen);
     if (!yv_b(yr_get(r, "ok"))) {
         Yv *errs = yr_get(r, "errors");
         ylong k = 0;
@@ -14359,6 +14436,27 @@ Yv *unit_exports(Yv *stmts, Yv *hdefs, Yv *fns) {
  * other units have an init function. `xt` holds externs, defaults,
  * imported package namespaces, init labels and the argv-use flag. */
 
+/* What a unit's text needs set before strip_ns and rename see it (native.y
+ * unit_prep): pkg_ns, and the type aliases of the units it is compiled
+ * against, seeded as if it had declared them (each item `name\ntcode`). */
+void unit_prep(Yv *xt) {
+    pkg_ns = yr_get(xt, "pkgs");
+    Yv *xtys = yr_get(xt, "tys");
+    if (yv_len(xtys) > 0) {
+        Yv *seeds = yav(0);
+        ylong si = 0;
+        while (si < yv_len(xtys)) {
+            Yv *item = ya_get(xtys, si);
+            ylong nl = ys_index_of(item, ys("\n"));
+            seeds = ya_push(seeds, yr(3, "name", ys_slice(item, 0, nl), "opt",
+                                      yv_bool(0),
+                                      "typ", tdecode(ys_slice_from(item, nl + 1))));
+            si = si + 1;
+        }
+        rn_types_seed_set(seeds);
+    };
+}
+
 Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, ylong wlevel,
                  Yv *name, ylong base, Yv *xt, Yv *ogen) {
     tyset_reset();
@@ -14367,7 +14465,7 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, ylong wlevel,
     dbg_line = yr_get(origin, "line");
     Yv *ext = yr_get(xt, "ext");
     Yv *inits = yr_get(xt, "inits");
-    pkg_ns = yr_get(xt, "pkgs");
+    unit_prep(xt);
     Yv *times = yav(0);
     ylong pt = clock_us();
     ylong ph = heap_used();
@@ -14380,6 +14478,24 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, ylong wlevel,
      * the checker nor the emitter deals with scopes or shadowing. */
     Yv *ast3 = rename_program_x(ast2, yr_get(xt, "dfl"), yr_get(origin, "file"),
                                 yr_get(origin, "mods"));
+    /* What this unit's aliases resolved to (the seeds included), as `name\ntcode`
+     * for the pack: what makes the unit's own types nameable by its importers. */
+    Yv *out_types = yav(0);
+    Yv *ots = rn_types_out_get();
+    ylong oi = 0;
+    while (oi < yv_len(ots)) {
+        /* A unit's own aliases come back bare when it has no module namespace of
+         * its own (the four core units, whose defs must stay bare): qualify them
+         * here, so rt's `YBig` publishes as `rt.YBig`, which is how a dependent
+         * module's source refers to it. */
+        Yv *tn = yr_get(ya_get(ots, oi), "name");
+        if (ys_index_of(tn, ys(".")) < 0) {
+            tn = ys_cat(ys_cat(name, ys(".")), tn);
+        };
+        out_types = ya_push(out_types, ys_cat(ys_cat(tn, ys("\n")),
+                                              tcode(yr_get(ya_get(ots, oi), "typ"))));
+        oi = oi + 1;
+    };
     pr = phase_end(times, ys("rename"), pt, ph);
     times = yr_get(pr, "times");
     pt = yv_l(yr_get(pr, "t"));
@@ -14740,12 +14856,12 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, ylong wlevel,
             brefs = ya_push(brefs, ir_refs(ya_get(ubodies, bk)));
             bk = bk + 1;
         }
-        Yv *unit = yr(12, "name", name, "files", yr_get(origin, "files"),
+        Yv *unit = yr(13, "name", name, "files", yr_get(origin, "files"),
                       "exports", exports, "init", init, "bodies", ubodies,
                       "btext", ubtext, "blob", yav(0), "labels", blabels,
                       "refs", brefs,
                       "rodata", yr_get(st, "rodata"), "globals", glabels, "dfl",
-                      udfl);
+                      udfl, "tys", out_types);
         return yr(5, "ok", yv_bool(1), "errors", errors, "warnings",
                   warnings, "times", times, "unit", unit);
     }
@@ -14821,7 +14937,20 @@ Yv *unit_dfl(Yv *stmts, Yv *origin) {
     while (i < yv_len(stmts)) {
         Yv *s = ya_get(stmts, i);
         Yv *nm = top_name_in(s, origin);
-        /* (not an imported module's: see export_name) */
+        /* A library unit is compiled with its own namespace (see std_compile),
+         * so a def of its own comes back qualified (`fs.write_file`) while the
+         * export -- and so the default's key -- is the bare name. Strip our own
+         * namespaces; a name of an IMPORTED module stays skipped below. */
+        Yv *mods = yr_get(origin, "mods");
+        ylong mi = 0;
+        while (mi < yv_len(mods)) {
+            Yv *om = ya_get(mods, mi);
+            if (yv_len(om) > 0
+                && ys_eq(ys_slice(nm, 0, yv_len(om) + 1), ys_cat(om, ys(".")))) {
+                nm = ys_slice_from(nm, yv_len(om) + 1);
+            };
+            mi = mi + 1;
+        }
         if (yv_len(nm) > 0 && ys_index_of(nm, ys(".")) < 0) {
             Yv *keep = yav(0);
             ylong j = 0;
@@ -15840,11 +15969,11 @@ Yv *link_text(Yv *parts) {
  * reuse the same unit-field encoding. */
 
 Yv *pack_version(void) {
-    return ys("ycc-std-pack 7\n");
+    return ys("ycc-std-pack 9\n");
 }
 
 Yv *obj_version(void) {
-    return ys("ycc-unit 6\n");
+    return ys("ycc-unit 7\n");
 }
 
 Yv *pack_put(Yv *out, Yv *s) {
@@ -16203,9 +16332,13 @@ static Yv *blob_refs(Yv *blob) {
 /* A complete type encoding for std packs and package objects. It keeps
  * every type kind and record shape, unlike the user-facing tstr format. */
 Yv *tcode(Yv *t) {
-    if (tcode_refs == NULL) {
-        tcode_refs = yav(0);
-    }
+    /* A tcode string must stand alone. tdecode runs once per string -- an
+     * export, or a unit's type alias -- and a `q` reference to a `Q` written in
+     * an EARLIER string has nothing to resolve against: tdec_encs is empty, so
+     * its `q` arm indexes tdec_refs[-1]. That was the crash an alias-carrying
+     * unit (crypto's Hash/Mont/Curve/Pt) produced. So the tref table starts
+     * empty for every call, and a shared tref is written out again. */
+    tcode_refs = yav(0);
     return ys_join(tcode_go(yav(0), t), ys(""));
 }
 
@@ -16354,17 +16487,25 @@ Yv *tdecode_go(Yv *cur) {
     } else if (ys_eq_lit(c, "?")) {
         return normnode(yr(2, "k", yv_long(K_topt), "of", tdecode_go(cur)));
     } else if (ys_eq_lit(c, "F")) {
-        ylong n = pack_num(cur);
-        return normnode(yr(3, "k", yv_long(K_tarrfix), "of", tdecode_go(cur), "n",
-                          yv_long(n)));
+        /* tcode_go writes "F", the COUNT, then the element type; the count must
+         * be read first (the map arm reads key then of because that is the order
+         * the writer uses). Reading the element first is what packed a fixed
+         * array ([long; 16], crypto's qround) into a crash. Explicit locals: the
+         * order of a C call's arguments is UNSPECIFIED. */
+        ylong fn = pack_num(cur);
+        Yv *fof = tdecode_go(cur);
+        return normnode(yr(3, "k", yv_long(K_tarrfix), "of", fof, "n",
+                          yv_long(fn)));
     } else if (ys_eq_lit(c, "M")) {
+        /* key before of: the order tcode_go writes them. `kt` in a local, so
+         * only one reading call is left in the argument list. */
         Yv *kt = tdecode_go(cur);
-        return normnode(yr(3, "k", yv_long(K_tmap), "key", kt, "of",
-                          tdecode_go(cur)));
+        Yv *mof = tdecode_go(cur);
+        return normnode(yr(3, "k", yv_long(K_tmap), "key", kt, "of", mof));
     } else if (ys_eq_lit(c, ">")) {
         Yv *args = tdecode_list(cur);
-        return normnode(yr(3, "k", yv_long(K_tfunc), "args", args, "ret",
-                          tdecode_go(cur)));
+        Yv *ret = tdecode_go(cur);
+        return normnode(yr(3, "k", yv_long(K_tfunc), "args", args, "ret", ret));
     } else if (ys_eq_lit(c, "U")) {
         return normnode(yr(2, "k", yv_long(K_tunion), "ts", tdecode_list(cur)));
     } else if (ys_eq_lit(c, "T")) {
@@ -16463,6 +16604,7 @@ Yv *pack_unit_fields(Yv *unit) {
         j = j + 1;
     }
     out = pack_strs(out, yr_get(unit, "globals"));
+    out = pack_strs(out, yr_get(unit, "tys"));
     return ys_join(out, ys(""));
 }
 
@@ -16656,10 +16798,12 @@ Yv *std_pack(Yv *units) {
     while (i < yv_len(units)) {
         Yv *u = ya_get(units, i);
         out = pack_put(out, yr_get(u, "name"));
-        out = pack_put(out, pack_unit_fields(u));
+        /* each unit stored on its own, so a compile decodes only the units
+         * it links (native.y std_pack) */
+        out = pack_put(out, pack_store(pack_unit_fields(u)));
         i = i + 1;
     }
-    return pack_store(ys_join(out, ys("")));
+    return ys_join(out, ys(""));
 }
 
 /* Reading a pack: `cur` is the text and the position in it. pack_len
@@ -16756,39 +16900,46 @@ Yv *unit_read(Yv *cur, Yv *name, int bound) {
         j = j + 1;
     }
     Yv *globals = pack_get_strs(cur);
-    return yr(12, "name", name, "files", files, "exports", xs, "init", init,
+    Yv *tys = pack_get_strs(cur);
+    return yr(13, "name", name, "files", files, "exports", xs, "init", init,
               "bodies", yav(0), "btext", btext, "blob", blob, "labels", labels,
-              "refs", refs, "rodata", rodata, "globals", globals, "dfl", dfl);
+              "refs", refs, "rodata", rodata, "globals", globals, "dfl", dfl,
+              "tys", tys);
 }
 
 /* The units `names` from a pack, in that order; [] for a pack of another
  * version, or one missing any of them. */
 Yv *std_unpack(Yv *pack, Yv *names) {
     Yv *out = yav(0);
-    /* Stored compressed? The method byte says so; a failed decode leaves ""
-     * and the version check below rejects it, so the caller compiles from
-     * source rather than reading a corrupt stream. */
-    if (yv_len(pack) > 0 && ys_byte_at(pack, 0) == 1) {
-        pack = lz_decode(ys_slice(pack, 1, yv_len(pack)));
-    }
     Yv *ver = pack_version();
     if (ys_eq(ys_slice(pack, 0, yv_len(ver)), ver)) {
         Yv *cur = yr(2, "s", pack, "p", yv_long(yv_len(ver)));
         ylong n = pack_num(cur);
         Yv *got = yav(0);
+        int bad = 0;
         ylong i = 0;
         while (i < n) {
             Yv *nm = pack_get(cur);
             ylong ul = pack_len(cur);
             ylong at = yv_l(yr_get(cur, "p"));
             if (name_in(names, nm)) {
-                got = ya_push(got,
-                              unit_read(cur, nm, std_unit_bound(nm)));
-                ;
+                /* stored compressed? the method byte says so; a failed decode
+                 * leaves "" and the pack is not used (native.y) */
+                Yv *raw = ys_slice(pack, at, at + ul);
+                if (yv_len(raw) > 0 && ys_byte_at(raw, 0) == 1) {
+                    raw = lz_decode(ys_slice(raw, 1, yv_len(raw)));
+                }
+                if (yv_len(raw) == 0) {
+                    bad = 1;
+                } else {
+                    got = ya_push(got, unit_read(yr(2, "s", raw, "p", yv_long(0)),
+                                                 nm, std_unit_bound(nm)));
+                }
             }
             yr_set(cur, "p", yv_long(at + ul));
             i = i + 1;
         }
+        if (bad) { got = yav(0); }
         ylong k = 0;
         while (k < yv_len(names)) {
             Yv *want = ya_get(names, k);
@@ -16880,10 +17031,17 @@ Yv *unit_externs(Yv *std, Yv *snames, Yv *deps, Yv *pkgs) {
     Yv *xt = externs_none();
     Yv *ext = yav(0);
     Yv *dfl = yav(0);
+    Yv *tys = yav(0);
     ylong i = 0;
     while (i < yv_len(std)) {
         Yv *u = ya_get(std, i);
         Yv *un = yr_get(u, "name");
+        Yv *ut = yr_get(u, "tys");
+        ylong ui = 0;
+        while (ui < yv_len(ut)) {
+            tys = ya_push(tys, ya_get(ut, ui));
+            ui = ui + 1;
+        }
         if (std_unit_bound(un) && name_in(snames, un)) {
             if (std_lib_index(un) < 0) {
                 Yv *exports = yr_get(u, "exports");
@@ -16965,6 +17123,7 @@ Yv *unit_externs(Yv *std, Yv *snames, Yv *deps, Yv *pkgs) {
     yr_set(xt, "ext", ext);
     yr_set(xt, "dfl", dfl);
     yr_set(xt, "pkgs", pkgs);
+    yr_set(xt, "tys", tys);
     return xt;
 }
 

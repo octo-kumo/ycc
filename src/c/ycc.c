@@ -557,12 +557,33 @@ Yv *build_resolve(Yv *path, int allow_exec, Yv *pkgs, Yv *roots) {
 }
 
 Yv *std_order(Yv *names) {
+    /* A program that links a library unit links what that unit imports too: a
+     * unit is compiled and linked against the units before it (std_lib_deps),
+     * and std_unit_names is already dependency-first. `names` is copied first --
+     * arrays are references, and `+=` would grow the caller's resolution. */
+    Yv *want = yav(0);
+    ylong wi = 0;
+    while (wi < yv_len(names)) {
+        want = ya_push(want, ya_get(names, wi));
+        wi = wi + 1;
+    }
+    ylong i = 0;
+    while (i < yv_len(want)) {
+        Yv *ds = std_lib_deps(ya_get(want, i));
+        ylong di = 0;
+        while (di < yv_len(ds)) {
+            Yv *d = ya_get(ds, di);
+            if (!pk_has(want, d)) { want = ya_push(want, d); };
+            di = di + 1;
+        }
+        i = i + 1;
+    }
     Yv *all = std_unit_names();
     Yv *out = yav(0);
-    ylong i = 0;
+    i = 0;
     while (i < yv_len(all)) {
         Yv *nm = ya_get(all, i);
-        if (pk_has(names, nm)) {
+        if (pk_has(want, nm)) {
             out = ya_push(out, nm);
             ;
         }
@@ -1240,14 +1261,14 @@ ylong y_main(Yv *cmdline) {
             h0 = yv_l(yr_get(ph, "h"));
             /* The std units the program links (native_resolve_x picked
              * them): the ones attached to ycc, compiled when it was built,
-             * or (--std-src, or a ycc with none) compiled from the sources
-             * embedded in it. */
+             * or (--std-src, or a ycc with none) compiled from their sources
+             * on disk. */
             Yv *pack = ys("");
             if (!yv_b(yr_get(pargs, "std_src"))) {
                 pack = self_pack();
                 ;
             }
-            Yv *su = std_units(nrstd, pack);
+            Yv *su = std_units(std_order(nrstd), pack);
             ph = phase_end(dt, ys("std"), t0, h0);
             dt = yr_get(ph, "times");
             t0 = yv_l(yr_get(ph, "t"));

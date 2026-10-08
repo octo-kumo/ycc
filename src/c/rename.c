@@ -47,6 +47,22 @@ static Yv *rn_mod;
 /* The aliases modules declare at their top level, as `m.T` (rn_top). */
 static Yv *rn_mod_types;
 
+/* Type aliases a UNIT declared and its importers must be able to name. rename
+ * erases an alias (rn_type_name substitutes the body, rn_drop_typedefs drops the
+ * statement), so the name lives nowhere once a unit is compiled: an importer of
+ * `crypto` could not write `h: crypto.Hash` (native.c unit_externs seeds
+ * rn_types_seed from the units it links, compile_unit publishes rn_types_out). */
+static Yv *rn_types_seed;
+static Yv *rn_types_out;
+
+void rn_types_seed_set(Yv *xs) {
+    rn_types_seed = xs;
+}
+
+Yv *rn_types_out_get(void) {
+    return rn_types_out;
+}
+
 /* state (rename.y's RnSt) = { scopes: [[{ orig: str, uniq: str }]],
  *           n: long, tys: [{ name, typ }], dfl: [{ name, vals }] } */
 Yv *rn_fresh(Yv *st, Yv *orig) {
@@ -1891,8 +1907,38 @@ Yv *rename_program_go(Yv *stmts, ylong line, ylong col, Yv *dfl) {
         i = i + 1;
     }
     Yv *st = yr(4, "scopes", yav(1, yav(0)), "n", yv_long(1), "tys", yav(0), "dfl", d0);
+    /* The aliases of the units this one was compiled against first: an alias is
+     * visible to every annotation of the block (rn_prepass_one hoists them). */
+    ylong seed_n = yv_len(rn_types_seed);
+    ylong si = 0;
+    while (si < yv_len(rn_types_seed)) {
+        ya_push(yr_get(st, "tys"), ya_get(rn_types_seed, si));
+        si = si + 1;
+    }
+    rn_types_seed = yav(0);
     rn_ixn = 0;
     Yv *b = rn_top(stmts, st);
+    /* What THIS unit declared -- not the seeds, which are its dependencies': a
+     * unit publishes its own aliases only, or the list would grow with every
+     * unit that links it (an importer of an importer would re-seed them). */
+    /* Each is published RESOLVED (rn_type_name: a recursive alias is its
+     * tref), never the body as written -- json's Val names other aliases bare,
+     * and an importer knows them only as `json.Num` (rename.y). */
+    Yv *mine = yav(0);
+    Yv *bst = yr_get(b, "st");
+    Yv *btys = yr_get(bst, "tys");
+    Yv *mod0 = rn_mod;
+    rn_mod = ys("");
+    ylong mi = seed_n;
+    while (mi < yv_len(btys)) {
+        Yv *e = ya_get(btys, mi);
+        Yv *named = yr(2, "k", yv_long(K_tname), "name", yr_get(e, "name"));
+        mine = ya_push(mine, yr(3, "name", yr_get(e, "name"), "opt", yv_bool(0),
+                                "typ", rn_type_name(bst, yr_get(e, "name"), named, 0)));
+        mi = mi + 1;
+    }
+    rn_mod = mod0;
+    rn_types_out = mine;
     return yr(4, "k", yv_long(K_block), "stmts", yr_get(b, "stmts"), "line",
               yv_long(line), "col", yv_long(col));
 }

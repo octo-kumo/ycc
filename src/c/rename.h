@@ -139,6 +139,11 @@ Yv *rn_qualify(Yv *s);
 Yv *rn_top(Yv *stmts, Yv *st);
 Yv *rename_program_go(Yv *stmts, ylong line, ylong col, Yv *dfl);
 
+/* the aliases a unit publishes, and the seed of the units it links
+ * (rename.y rn_types_seed/rn_types_out) */
+void rn_types_seed_set(Yv *xs);
+Yv *rn_types_out_get(void);
+
 /* defaults, type aliases, match / slice-assign nodes */
 Yv *rn_note_defaults(Yv *st, Yv *uniq, Yv *func);
 Yv *rn_find_defaults(Yv *st, Yv *name);

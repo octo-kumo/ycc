@@ -35,11 +35,11 @@ SHELL := $(CURDIR)/test/sh/capped.sh
 # The Y compiler sources: what the compiler compiles (and mirrors in C).
 YCC_SRCS=src/y/ycc.y src/y/tags.y src/y/target.y src/y/pkg.y src/y/lexer.y src/y/parser.y src/y/types.y src/y/native.y src/y/labels.y src/y/ir.y src/y/arch_x64.y src/y/rename.y src/y/enc64.y src/y/asm.y src/y/elf.y src/y/pe.y src/y/dwarf.y src/y/lint.y src/y/meta.y src/y/std/fs.y src/y/std/net.y src/y/std/struct.y src/y/std/prelude.y src/y/std/exec.y src/y/std/rt.y src/y/std/str.y
 
-# The std files the compiler splices into programs, embedded into it when
-# it is built: native.y says `embed RT_SRC from "./std/rt.y";`, the C copy
-# Y_EMBED(...) — an .incbin, so the C build reads them too (from the repo
-# root, where these rules run gcc).
-STD_EMBEDS=src/y/std/rt.y src/y/std/prelude.y src/y/std/exec.y src/y/std/str.y src/y/std/args.y src/y/std/crypto.y src/y/std/fs.y src/y/std/http.y src/y/std/json.y src/y/std/math.y src/y/std/net.y src/y/std/random.y src/y/std/regex.y src/y/std/sort.y src/y/std/struct.y src/y/std/test.y src/y/std/tls.y src/y/std/tui.y src/y/std/utf8.y src/y/std/x509.y
+# The std sources. None is embedded in the compiler: every std unit is compiled
+# into the std pack attached to ycc (the PACK step below), so an edit to any of
+# them must rebuild every packed binary. cycc and a bootstrap generation, which
+# carry no pack, read them from src/y/std at run time.
+STD_SRCS=$(wildcard src/y/std/*.y)
 
 # The assembly the compiler hands to asm.y for every program, in src/y/arch/,
 # embedded the same way: arch_x64.y says `embed PRELUDE_ASM from
@@ -50,7 +50,7 @@ ARCH_EMBEDS=$(wildcard src/y/arch/*.s)
 all: cycc
 
 # [1/3] gcc builds the C copy of the compiler.
-cycc: $(CYC_SRCS) $(CY_HDRS) $(STD_EMBEDS) $(ARCH_EMBEDS)
+cycc: $(CYC_SRCS) $(CY_HDRS) $(ARCH_EMBEDS)
 	$(GCC) $(CFLAGS) -o cycc $(CYC_SRCS)
 	@echo "cycc built: the C copy of the compiler ($$(stat -c%s cycc) bytes)"
 
@@ -92,7 +92,7 @@ YCC_MEM_KB=2097152
 ASAN_RSS_MB=3500
 # $(call PACK,BIN,OUT): OUT = BIN with its std pack attached.
 PACK = ./$(1) --std-pack $(2).pack && cat $(1) $(2).pack > $(2) && chmod 755 $(2) && rm -f $(2).pack
-ycc: cycc $(YCC_SRCS) $(CYC_SRCS) $(CY_HDRS) $(STD_EMBEDS) $(ARCH_EMBEDS)
+ycc: cycc $(YCC_SRCS) $(CYC_SRCS) $(CY_HDRS) $(STD_SRCS) $(ARCH_EMBEDS)
 	ulimit -v $(CYCC_MEM_KB); ./cycc -o _ycc0 src/y/ycc.y
 	$(call PACK,_ycc0,ycc)
 	cmp ycc refs/ycc.ref
@@ -117,7 +117,7 @@ ytest: ycc
 # embeds the host's own absolute cwd, which is a different string on Windows
 # by construction, so it is compared host-against-host, not across hosts.
 MINGW ?= x86_64-w64-mingw32-gcc
-cycc.exe: $(CYC_SRCS) $(CY_HDRS) $(STD_EMBEDS) $(ARCH_EMBEDS)
+cycc.exe: $(CYC_SRCS) $(CY_HDRS) $(ARCH_EMBEDS)
 	$(MINGW) $(CFLAGS) -o cycc.exe $(CYC_SRCS)
 	@echo "cycc.exe built: the C copy for Windows ($$(stat -c%s cycc.exe) bytes)"
 
@@ -126,7 +126,7 @@ cycc.exe: $(CYC_SRCS) $(CY_HDRS) $(STD_EMBEDS) $(ARCH_EMBEDS)
 # carry on, and a suite that compares outputs never sees a report it printed.
 ASAN_FLAGS=-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -g
 
-cycc-asan: $(CYC_SRCS) $(CY_HDRS) $(STD_EMBEDS) $(ARCH_EMBEDS)
+cycc-asan: $(CYC_SRCS) $(CY_HDRS) $(ARCH_EMBEDS)
 	$(GCC) $(CFLAGS) $(ASAN_FLAGS) -o cycc-asan $(CYC_SRCS)
 
 asan: cycc-asan
@@ -180,7 +180,7 @@ test-compile: cycc ycc
 LSP_SRC := $(wildcard src/tools/lsp/*.y)
 # The reference compiler, as the suites call it: the last blessed build.
 YREF ?= $(CURDIR)/refs/ycc.ref
-yserve: $(LSP_SRC) src/y/std/json.y cycc
+yserve: $(LSP_SRC) $(STD_SRCS) cycc
 	@rm -f yserve _yserve0 _yserve1 _yserve1p
 	ulimit -v $(CYCC_MEM_KB); ./cycc -o _yserve0 src/tools/lsp/yserve.y
 	$(call PACK,_yserve0,yserve)
@@ -274,7 +274,7 @@ NEW_DEP = $(if $(filter ./ynew ynew,$(NEW)),ynew)
 # second and third must be byte-identical (the fixpoint); the third is
 # compiled with the second's std pack attached, so that is checked too.
 # Needs no C port.
-ynew: $(YCC_SRCS) $(BOOT) $(STD_EMBEDS) $(ARCH_EMBEDS)
+ynew: $(YCC_SRCS) $(BOOT) $(STD_SRCS) $(ARCH_EMBEDS)
 	ulimit -v $(YCC_MEM_KB); $(abspath $(BOOT)) -o _ynew1 src/y/ycc.y
 	ulimit -v $(YCC_MEM_KB); ./_ynew1 -o _ynew2 src/y/ycc.y
 	$(call PACK,_ynew2,_ynewp)

@@ -14,7 +14,13 @@ semantics. **Every change to `src/y/*.y` gets the same change in `src/c/*.c`.**
 - `make cycc.exe` → Windows cross-build (mingw-w64), gated by
   `test/sh/cycc-win.sh` under wine; `--target=windows` by `pe-gate.sh`,
   `pe-packinv.sh`, `pe-fixtures.sh`. The four `t34{1,2,3,4}_threads_*` and four
-  `ELF-OUTPUT-DIFF` cases are known PE gaps, not regressions. A PE runs the NT
+  `ELF-OUTPUT-DIFF` cases are known PE gaps, not regressions, and so is anything
+  importing `net` or `tui` (or `http`/`tls` through them): those two modules are
+  the only std sources with raw `syscall` sites, and a raw `syscall` is expanded
+  at compile time with the HOST's argument convention, so a packed unit bakes it.
+  `os_call` is the target-neutral form (a label resolved against the arch lines at
+  link time) and the four core units already use it. Windows sockets and termios
+  are therefore unsupported for now; the ELF side is unaffected. A PE runs the NT
   syscall self-test at startup (`arch/wselftest.s`, from `w_self_test_lines`), so
   a drifted `w_sysno` fails loudly instead of calling the wrong Nt function.
 - `make yserve` → the language server; both compilers must produce it
@@ -24,12 +30,17 @@ semantics. **Every change to `src/y/*.y` gets the same change in `src/c/*.c`.**
 - Never commit artifacts: `*.o`, `cycc`, `cycc.exe`, `cycc-asan`, `ycc`, `_ycc*`,
   `ynew`, `ytest*`, `*.pack`, `a.out`, `_check/`, `_ktmp/`. `refs/` is gitignored
   and is **not** disposable: it is the port's ground truth.
-- Every `src/y/std/*.y` is embedded into the compiler when it is built (`embed`
-  in native.y, `Y_EMBED` in native.c; `STD_EMBEDS` in the Makefile lists them so
-  an edit forces a rebuild) — edit them directly; there is no generator, and
-  `str.y` holds no string literals. A compile reads the source from disk when one
-  is reachable (the checkout, a package root, `std/`) and falls back to the
-  embedded copy otherwise, which is what makes a lone `ycc` self-contained.
+- **No std source is embedded in the compiler.** Every `src/y/std/*.y` is a
+  unit compiled into the std pack attached to `ycc` (the four core units and the
+  sixteen library modules alike; `STD_SRCS` in the Makefile makes an edit
+  rebuild every packed binary) — edit them directly; there is no generator, and
+  `str.y` holds no string literals. A source is read from disk (`src/y/std/`,
+  or `std/` beside the binary: native.y `std_lib_path`) only to build the pack,
+  under `--std-src`, and by a compiler with no pack attached (`cycc`, a bootstrap
+  generation) — so a packed `ycc` does **not** see an edit to a std file until it
+  is rebuilt; test one with `cycc`, `--std-src`, or `make ynew`. A project-local
+  `name.y` (beside the importer or in a package root) shadows the std unit
+  `name`.
 - `src/y/arch/*.s` is embedded the same way, through `arch_x64.y`/`arch_x64.c`
   (PORTING.md rules 11–12). Whole-line `#` comments are dropped before the
   in-tree assembler sees them; `make asm-check` checks the files with GNU `as`.
@@ -89,14 +100,12 @@ moved with the callgrind table, `perf`, or `ycc --time`.
   `valgrind --tool=callgrind`, `gdb` (`break file.y:N`, no variables), `nm` and
   `addr2line` name things.
 - Always feed `</dev/null` in scripts.
-- **A built `ycc` is self-contained.** Every std source is embedded in the
-  compiler (native.y `embed`, the C copy's `Y_EMBED`) and the four core runtime
-  units travel precompiled in the std pack attached to the binary, so a copy in
-  an empty directory compiles `import fs`/`net`/`args`-style programs. Resolution
-  still prefers `src/y/std/` when it is there (that is how a std unit is edited
-  and tested); the embedded text is the fallback when no source is on disk.
-  The embedding costs ~540 KB of compiler binary and `STD_EMBEDS` in the
-  Makefile lists every std source so a rebuild picks up an edit.
+- **A built `ycc` is self-contained.** All twenty std units travel precompiled
+  in the std pack attached to the binary (pack 9: each unit stored and
+  compressed on its own, so a compile decodes only the units it links), so a
+  copy in an empty directory compiles `import fs`/`net`/`args`-style programs
+  with no source anywhere. A lone `ycc --std-src` has nothing to compile from and
+  says so.
 - Branches and worktrees: `master`, plus `mem-lifetime` (`.worktrees/mem`),
   `kernel` (`.worktrees/kernel`) and `bigint-math` (`../compiler-bigint`). Merge
   forward into `master`; never rewrite a branch another worktree has checked out.
@@ -207,7 +216,7 @@ under its bare name because generated code calls it by label, and a program's ow
 - `src/y/` — the compiler: `ycc.y` (driver), `pkg.y` (`ycc build`), `lexer.y`,
   `parser.y`, `rename.y`, `types.y` (checker), `lint.y` (warnings and `--fix`),
   `native.y` (emitter), `meta.y`, `arch_x64.y`, `enc64.y`, `asm.y`, `elf.y`,
-  `pe.y`, `dwarf.y`, `target.y`, `tags.y`; `std/` (the four embedded units, plus
+  `pe.y`, `dwarf.y`, `target.y`, `tags.y`; `std/` (the four core units, plus
   `fs`, `net`, `struct`, `math`, `crypto`, `x509`, `tls`, `regex`, `json`,
   `args`, `tui`, `utf8`, … — all of them embedded, see Build); `arch/*.s`.
 - `src/c/` — the 1:1 copy, plus `yv.c`/`yv.h` (the value model; no Y twin).

@@ -46,8 +46,8 @@ requires byte-identical binaries).
 | `src/y/ycc.y`           | `src/c/ycc.c`         | driver + `main`                   |
 | `src/y/pkg.y`           | `src/c/pkg.c`         | `ycc build`/`vendor`: y.toml, graph, git, y.lock, hashing; `exec` is fork + execve(`/bin/sh`, envp NULL) like std/exec.y, `syscall` openat/mkdir the libc calls |
 | —                       | `src/c/yv.c`/`yv.h`   | the value model (no Y twin; the runtime of *compiled* programs is `src/y/std/rt.y`) |
-| `src/y/std/rt.y`, `prelude.y`, `exec.y`, `str.y` | (stay Y)  | the std units, compiled separately and linked into programs (std_units; precompiled in ycc's std pack): their sources are native.y's `embed`, the C copy's `Y_EMBED` (rule 11) |
-| `src/y/std/fs.y`, `net.y`, `struct.y`   | (stay Y)  | optional modules resolved **from disk** by `std_resolve` when a program imports them; not embedded |
+| `src/y/std/rt.y`, `prelude.y`, `exec.y`, `str.y` | (stay Y)  | the core std units, compiled separately and linked into programs (std_units; precompiled in ycc's std pack). Not embedded: both twins read the source from disk (`std_lib_src`) when they compile a unit |
+| `src/y/std/fs.y`, `net.y`, `struct.y`, ... (all sixteen) | (stay Y)  | the library std units: every one travels in the std pack, linked as a unit of its own rather than spliced text, and none is embedded -- the source is read from disk (`std_lib_src`) only to build the pack, under `--std-src`, or by a compiler with no pack. A project-local module of the same name is spliced instead (`res_local_mod`); `STD_SRCS` makes an edit rebuild the pack |
 | `src/tools/lsp/*.y`    | (none — stays Y)  | the language server (`yserve`), the VS Code extension and `LSP.md`. **Not ported, and not to be**: it is a tool, not the compiler, and it is the only program that imports the compiler's own modules **by path** — `types.y`, `native.y`, `parser.y`, `rename.y`, `lint.y`. A path import *flattens* (no namespace), so every name `src/tools/lsp/` defines lands in the compiler's vocabulary and two of them colliding is a duplicate-definition error reported against the wrong file. `src/tools/lsp/check-names.py` is what keeps that from happening, and it runs in `test/sh/test_lsp.sh`; it also checks each module's **basename**, because `strip_ns` rewrites any `name.field` in the whole program as a module reference — a module called `index.y` turned the compiler's own 42 `index.idx` reads into names that do not exist. Add a module there and the checker has to pass before the port gate means anything |
 
 ## Translation rules
@@ -205,12 +205,11 @@ requires byte-identical binaries).
 10. **Errors and exits** behave like the Y code: `exit(n)` terminates;
    diagnostics go through `puts`/`eputs` unchanged.
 
-11. **Embedded files**: a top-level `embed NAME from "./std/rt.y";` (a str
-    const holding the file, read when the compiler is built) →
-    `Y_EMBED(NAME, "src/y/std/rt.y")` (yv.h: the assembler's `.incbin`,
+11. **Embedded files**: a top-level `embed NAME from "./arch/prelude.s";` (a
+    str const holding the file, read when the compiler is built) →
+    `Y_EMBED(NAME, "src/y/arch/prelude.s")` (yv.h: the assembler's `.incbin`,
     path relative to the repo root, where the Makefile runs gcc), read as
-    `NAME()`. The Makefile lists the files in `STD_EMBEDS` so cycc rebuilds
-    when one changes.
+    `NAME()`. Only the arch assembly is embedded (rule 12); no std source is.
 
 12. **Assembly files**, the same mechanism and the same reason: `src/y/arch/
     *.s` holds the machine code (arch_x64.y `embed PRELUDE_ASM from

@@ -1,7 +1,7 @@
 /* native.h — the emitter (1:1 port of src/y/native.y).
  *
  * native.y's `export { emit_program, compile_package, std_units,
- * std_unit_names, std_pack, unit_obj, unit_unobj, unit_iface,
+ * std_unit_names, std_lib_deps, std_pack, unit_obj, unit_unobj, unit_iface,
  * native_resolve, native_resolve_x, native_resolve_pk, origin_at,
  * strip_ns, strip_list, strip_decl, phase_end, link_text, is_intrinsic_name,
  * intrinsic_names };` — exactly those
@@ -20,6 +20,7 @@ Yv *native_resolve_pk(Yv *src, Yv *base_dir, int allow_exec, Yv *root,
                       Yv *pkgs, Yv *roots);
 Yv *std_units(Yv *names, Yv *pack);
 Yv *std_unit_names(void);
+Yv *std_lib_deps(Yv *name);
 Yv *std_pack(Yv *units);
 Yv *compile_package(Yv *ast, Yv *nr, Yv *name, ylong base, ylong wlevel,
                     Yv *std, Yv *deps);

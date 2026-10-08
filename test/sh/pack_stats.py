@@ -10,7 +10,10 @@ itself is the netstring framing native.y's std_pack writes:
     "ycc-std-pack N\\n"          version line, a literal (not framed)
     count:...                    how many units
     per unit:  name:...          the unit's name
-               fields:...        pack_unit_fields, itself netstringed
+               fields:...        pack_unit_fields, itself netstringed; from
+                                 pack 9 each unit's fields are stored on their
+                                 own (method byte 1 = compressed), the frame
+                                 plain, before that the whole pack was
 
 Inside those fields, in order (native.y pack_unit_fields), the shapes are:
 
@@ -87,6 +90,8 @@ def payload_of(raw):
 
 
 FIELDS = ["files", "iface", "init", "bodies", "btext", "labels", "rodata", "globals"]
+# pack 8 added `tys` (a unit's own type aliases, as `name\ntcode`), after globals.
+FIELDS8 = FIELDS + ["tys"]
 
 
 class Bad(Exception):
@@ -144,11 +149,13 @@ def iface(s, p):
     return p
 
 
-def parse_fields(payload):
+def parse_fields(payload, fields=None):
     """Walk pack_unit_fields; return [(field, bytes)] and the end position."""
+    if fields is None:
+        fields = FIELDS
     got = []
     p = 0
-    for f in FIELDS:
+    for f in fields:
         start = p
         if f == "init":
             _, p = nstr(payload, p)
@@ -158,7 +165,7 @@ def parse_fields(payload):
             p = run(payload, p, "run")
         elif f in ("refs", "rodata"):
             p = run(payload, p, "run")
-        else:                      # files, bodies, labels, globals
+        else:                      # files, bodies, labels, globals, tys
             p = run(payload, p, "put")
         got.append((f, p - start))
     return got, p
@@ -195,32 +202,46 @@ def main():
         return 2
     version = pack[:nl + 1]
     p = nl + 1
+    # Which fields a unit has depends on the pack version: 8 added `tys`.
+    vnum = 0
+    for w in version.decode(errors="replace").split():
+        if w.isdigit():
+            vnum = int(w)
+    fields = FIELDS8 if vnum >= 8 else FIELDS
     cnt, p = num(pack, p, "unit count")
     print("version %s" % version.decode(errors="replace").strip())
     print("payload %d bytes, %d units\n" % (len(pack), cnt))
 
-    totals = dict((f, 0) for f in FIELDS)
+    totals = dict((f, 0) for f in fields)
     rows = []
+    unit_stored = 0
     for _ in range(cnt):
         name, p = nstr(pack, p)
-        fields, p = nstr(pack, p)
-        got, end = parse_fields(fields)
-        if end != len(fields):
+        body, p = nstr(pack, p)
+        unit_stored += len(body)
+        if vnum >= 9 and body[:1] == b"\x01":
+            body = lz_decode(body[1:])
+        got, end = parse_fields(body, fields)
+        if end != len(body):
             raise Bad("unit %s: %d of %d field bytes used"
-                      % (name.decode(), end, len(fields)))
+                      % (name.decode(), end, len(body)))
         for f, sz in got:
             totals[f] += sz
-        rows.append((name.decode(), len(fields), got))
+        rows.append((name.decode(), len(body), got))
     if p != len(pack):
         raise Bad("%d bytes left after the units" % (len(pack) - p))
 
+    if vnum >= 9:
+        print("units stored in %d bytes (frame %d)\n" % (unit_stored, len(pack) - unit_stored))
     for name, total, got in rows:
         big = "  ".join("%s=%d" % (f, sz) for f, sz in got if sz > 200)
         print("%-10s %8d   %s" % (name, total, big))
     print("")
-    for f in sorted(FIELDS, key=lambda x: -totals[x]):
-        print("%-8s %8d  %5.1f%%" % (f, totals[f], 100.0 * totals[f] / len(pack)))
-    print("%-8s %8d" % ("TOTAL", len(pack)))
+    # the decoded field bytes (from pack 9 the frame holds stored units)
+    dec = sum(totals.values()) or 1
+    for f in sorted(fields, key=lambda x: -totals[x]):
+        print("%-8s %8d  %5.1f%%" % (f, totals[f], 100.0 * totals[f] / dec))
+    print("%-8s %8d" % ("TOTAL", dec))
     return 0
 
 

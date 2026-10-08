@@ -13,7 +13,7 @@
 #
 # The check needs no Windows machine and no wine: it compares two PE files this
 # compiler produced from the same source, one linked against the attached pack
-# and one against the embedded sources (--std-src). If any std unit still
+# and one against the std sources (--std-src, read from src/y/std). If any std unit still
 # depends on the target, the two differ, and the difference is a real defect in
 # the pack rather than a runtime mystery.
 #

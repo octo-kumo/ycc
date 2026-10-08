@@ -1618,7 +1618,8 @@ fail with whatever the compiler's own state happened to be. It compares against
    Named as out of scope for v1 rather than discovered later.
 6. **`yserve`'s size.** It imports six compiler modules plus `json`; the binary
    will be comparable to `ycc`. If that matters it can be cut by dropping the
-   std pack and compiling the std units from the embedded sources instead.
+   std pack and compiling the std units from their sources on disk instead
+   (none is embedded in the compiler).
 7. **Compiler internals are cited by symbol, not by line** (see the note at the
    top). This is the single biggest ongoing coordination cost between this work
    and anyone else changing the compiler: a document that cites `native.y:NNNN`

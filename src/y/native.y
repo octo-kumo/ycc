@@ -49,30 +49,11 @@ import lint from "./lint.y";
 import meta from "./meta.y";
 import fs;
 
-// The std units' sources (see std_units). `embed` (see embed_decl) makes
-// each file a str const when the compiler is BUILT: the shipped ycc is a
-// standalone static ELF and cannot read support files at run time. The C
-// copy embeds the same files (Y_EMBED in src/c/yv.h).
-embed RT_SRC from "./std/rt.y";
-embed PRELUDE_SRC from "./std/prelude.y";
-embed EXEC_SRC from "./std/exec.y";
-embed STR_SRC from "./std/str.y";
-embed ARGS_SRC from "./std/args.y";
-embed CRYPTO_SRC from "./std/crypto.y";
-embed FS_SRC from "./std/fs.y";
-embed HTTP_SRC from "./std/http.y";
-embed JSON_SRC from "./std/json.y";
-embed MATH_SRC from "./std/math.y";
-embed NET_SRC from "./std/net.y";
-embed RANDOM_SRC from "./std/random.y";
-embed REGEX_SRC from "./std/regex.y";
-embed SORT_SRC from "./std/sort.y";
-embed STRUCT_SRC from "./std/struct.y";
-embed TEST_SRC from "./std/test.y";
-embed TLS_SRC from "./std/tls.y";
-embed TUI_SRC from "./std/tui.y";
-embed UTF8_SRC from "./std/utf8.y";
-embed X509_SRC from "./std/x509.y";
+// No std source is embedded in the compiler. Every std unit -- the four core
+// units and the library modules alike -- travels compiled in the std pack
+// attached to ycc (std_pack); a source is read from disk (std_lib_src) only to
+// build that pack, under --std-src, and by a compiler with no pack attached
+// (cycc, a bootstrap generation), all of which run in a checkout.
 
 // `ycc -g` line markers, set by compile_unit for each unit. With
 // dbg_lines on, the text opens with a `.file N "path"` per origin file
@@ -97,6 +78,9 @@ let res_used: [str] = [];
 // they are linked units now, not spliced text, so native_resolve_x appends
 // them to the program's `std` (see std_lib_names).
 let res_std_lib: [str] = [];
+// True while std_compile resolves a std unit's own imports: those always
+// bind units, so the project-local lookup (res_local_mod) is skipped.
+let res_in_std = false;
 // The packages the unit being compiled imports (compile_unit): strip_ns
 // turns `json.parse` into the QUALIFIED name `json.parse` -- an id no Y
 // source can spell, bound to the package's export -- not into `parse`.
@@ -280,12 +264,33 @@ def resolve_unit(src: str, base_dir: str, depth: long, allow_exec: bool, root: s
     // unit_externs to bind either (treeshake: unused import). A comment or a
     // string holding `math.` links the unit anyway, which costs bytes but never
     // changes what the program prints.
+    let want: [str] = [];
     let li = 0;
     while (li < len(res_std_lib)) {
-        if (index_of(rsrc, res_std_lib[li] + ".") >= 0 && !name_in(std, res_std_lib[li])) {
-            std += res_std_lib[li];
+        if (index_of(rsrc, res_std_lib[li] + ".") >= 0 && !name_in(want, res_std_lib[li])) {
+            want += res_std_lib[li];
         };
         li = li + 1;
+    };
+    // ...and the units those import (std_lib_deps), all in std_lib_names order,
+    // dependency first: every caller of std_units -- ycc, the language server's
+    // diagnostics, native_compile -- compiles a unit against the ones before it,
+    // so `std` must be closed and ordered here, not by each caller.
+    let wi = 0;
+    while (wi < len(want)) {
+        let ds = std_lib_deps(want[wi]);
+        let di = 0;
+        while (di < len(ds)) {
+            if (!name_in(want, ds[di])) { want += ds[di]; };
+            di = di + 1;
+        };
+        wi = wi + 1;
+    };
+    let libs = std_lib_names();
+    let lj = 0;
+    while (lj < len(libs)) {
+        if (name_in(want, libs[lj])) { std += libs[lj]; };
+        lj = lj + 1;
     };
     // ogen is EMPTY for a unit with no blocks, which is what tells lint there is
     // no generator whose top level is this one (see lint_meta_top): a file with
@@ -345,7 +350,7 @@ def str_names() -> [str] {
         "upper", "lower", "repeat", "lines"]
 };
 
-// An embedded std file, newline-terminated (as every source file the
+// A std source, newline-terminated (as every source file the
 // compiler reads should be).
 def std_text(s: str) -> str {
     if (s[len(s) - 1:] == "\n") { s } else { s + "\n" }
@@ -801,6 +806,19 @@ def self_dir() -> str {
     } else { by_argv }
 };
 
+// A project-local module `name` -- next to the importer or in a package's
+// source root, never a std directory -- shadows the std library unit of that
+// name, as it did when every std module was spliced from source.
+def res_local_mod(name: str, base_dir: str) -> bool {
+    let found = !res_in_std && !(fs.read_file(base_dir + "/" + name + ".y") == none);
+    let ri = 0;
+    while (!found && !res_in_std && ri < len(res_roots)) {
+        found = !(fs.read_file(res_roots[ri] + "/" + name + ".y") == none);
+        ri = ri + 1;
+    };
+    found
+};
+
 def std_resolve(name: str, base_dir: str) -> str {
     let cands: [str] = [];
     cands += base_dir + "/" + name + ".y";
@@ -897,7 +915,6 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str], smods
                 let from_idx = index_of(rest, " from ");
                 let name = "";
                 let full = "";
-                let mod_emb: str = "";
                 let path = "";
                 let is_pkg = false;
                 if (from_idx >= 0) {
@@ -920,7 +937,8 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str], smods
                         name = trim(name[:len(name) - 1]);
                     };
                     path = name;
-                    if (name_in(res_pkgs, name) || std_lib_index(name) >= 0) {
+                    let is_lib = !name_in(res_pkgs, name) && std_lib_index(name) >= 0 && !res_local_mod(name, base_dir);
+                    if (name_in(res_pkgs, name) || is_lib) {
                         // a dependency (ycc build): a unit of its own,
                         // linked -- strip_ns qualifies its names. A std
                         // library module takes the same path: the pack
@@ -928,22 +946,11 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str], smods
                         // spliced and its `import`s are the pack's problem.
                         is_pkg = true;
                         if (!name_in(res_used, name)) { res_used += name; }
-                        if (std_lib_index(name) >= 0 && !name_in(res_std_lib, name)) {
+                        if (is_lib && !name_in(res_std_lib, name)) {
                             res_std_lib += name;
                         }
                     } else {
                         full = std_resolve(name, base_dir);
-                        // A std library module (args, net, math, ...) is spliced
-                        // from source, and a ycc that is not in its checkout has
-                        // none on disk. Its source is embedded in this binary
-                        // (std_mod_src), so name it here and take it from memory.
-                        if (len(full) == 0) {
-                            let emb = std_mod_src(name);
-                            if (len(emb) > 0) {
-                                mod_emb = emb;
-                                full = "std/" + name + ".y";
-                            };
-                        };
                     };
                 };
                 if (is_pkg) {
@@ -958,9 +965,7 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str], smods
                     puts("error: cannot find module '" + name + "' (import name; looks next to the importer and in std/)\n");
                     exit(1);
                 } else {
-                    // the embedded copy, when std_resolve fell back to it
-                    let mod_src: str? = none;
-                    if (len(mod_emb) > 0) { mod_src = some(mod_emb); } else { mod_src = fs.read_file(full); };
+                    let mod_src = fs.read_file(full);
                     if (mod_src == none) {
                         puts("error: cannot open import '" + path + "' (resolved to '" + full + "')\n");
                         exit(1);
@@ -6145,7 +6150,7 @@ def gen_call(st: EmitSt, node: Call) -> EmitSt {
             // value. The NAME is a literal the checker already matched against
             // os_call_names (types.y), so it is emitted as a plain `call` to a
             // label: the same instruction on every target, which is what makes
-            // the four embedded std units target-independent even though they
+            // the std units target-independent even though they
             // are compiled once and serialized into one pack.
             //
             // The arguments go on the stack left to right, so inside the block
@@ -11987,13 +11992,13 @@ type DflCode = { name: str, vals: [str] };
 // items index. A unit read from the std pack or an object cache carries them
 // PACKED instead: `blob` one blob per body (pack_body) and `btext` the lines,
 // and link_units decodes the bodies it keeps (unpack_body).
-type Unit = { name: str, files: [str], exports: [Sym], init: str, bodies: [[long]], btext: [[str]], blob: [str], labels: [str], refs: [[str]], rodata: [[str]], globals: [str], dfl: [DflCode] };
+type Unit = { name: str, files: [str], exports: [Sym], init: str, bodies: [[long]], btext: [[str]], blob: [str], labels: [str], refs: [[str]], rodata: [[str]], globals: [str], dfl: [DflCode], tys: [str] };
 // What compile_unit binds besides the unit's own names: the externs
 // (`ext`) and their parameter defaults (`dfl`, as rename.y takes them),
 // the package namespaces the unit imports (`pkgs`, see pkg_ns), the
 // init labels `_start` calls first (`inits`), and whether a linked unit
 // reads argv() (`argv`: `_start` must materialize it then).
-type Externs = { ext: [Sym], dfl: [Dfl], pkgs: [str], inits: [str], argv: bool };
+type Externs = { ext: [Sym], dfl: [Dfl], pkgs: [str], inits: [str], argv: bool, tys: [str] };
 
 def unit_empty(name: str) -> Unit {
     let fs: [str] = [];
@@ -12006,7 +12011,7 @@ def unit_empty(name: str) -> Unit {
     let gs: [str] = [];
     let ds: [DflCode] = [];
     { name: name, files: fs, exports: xs, init: "", bodies: bs, btext: bt,
-        blob: [], labels: ls, refs: fr, rodata: rs, globals: gs, dfl: ds }
+        blob: [], labels: ls, refs: fr, rodata: rs, globals: gs, dfl: ds, tys: [] }
 };
 
 // No externs at all (a std unit compiled on its own).
@@ -12015,22 +12020,18 @@ def externs_none() -> Externs {
     let ds: [Dfl] = [];
     let ps: [str] = [];
     let ins: [str] = [];
-    { ext: xs, dfl: ds, pkgs: ps, inits: ins, argv: false }
+    { ext: xs, dfl: ds, pkgs: ps, inits: ins, argv: false, tys: [] }
 };
 
+// A std unit's source, from disk (std_lib_src): only a ycc without the unit
+// in its pack, or --std-src, gets here.
 def std_unit_src(name: str) -> str {
-    if (name == "prelude") {
-        PRELUDE_SRC
-    } else if (name == "exec") {
-        EXEC_SRC
-    } else if (name == "str") {
-        STR_SRC
-    } else if (name == "rt") {
-        RT_SRC
-    } else {
-        // a library unit: the same embedded text the splicer would have used
-        std_text(std_mod_src(name))
-    }
+    let src = std_lib_src(name);
+    if (len(src) == 0) {
+        puts("error: std module '" + name + "': not in this compiler's std pack, and no src/y/std/" + name + ".y beside it or in the working directory\n");
+        exit(1);
+    };
+    src
 };
 
 // Blank the `export { ... };` lines a std module carries for the splicer (which
@@ -12077,59 +12078,77 @@ def std_lib_index(name: str) -> long {
     found
 };
 
+// What a library unit imports. A unit is compiled and linked against the units
+// before it in std_unit_names order, so a program that needs one needs these
+// too (std_order): without them the unit's calls into its import have no label
+// to reach. This is the `import` list of the sources; a test checks the pack
+// covers every module a unit mentions.
+def std_lib_deps(name: str) -> [str] {
+    if (name == "fs") {
+        ["sort"]
+    } else if (name == "json") {
+        ["sort"]
+    } else if (name == "net") {
+        ["fs"]
+    } else if (name == "x509") {
+        ["crypto", "fs", "struct"]
+    } else if (name == "tls") {
+        ["crypto", "x509", "net"]
+    } else if (name == "http") {
+        ["net", "tls"]
+    } else {
+        []
+    }
+};
+
 // Every std library unit, in the order std_unit_names appends them. A module
 // that imports another must come after it (fs after sort, tls after crypto/
 // x509/net): a unit's imports bind units, never splices.
 def std_lib_names() -> [str] {
-    // math first: it imports nothing, so it is the one library module the pack
-    // can compile without resolving a unit's own imports (fs imports sort,
-    // net imports fs, x509 crypto/fs/struct, tls crypto/x509/net, http
-    // net/tls, json sort -- that order is where the rest go, once
-    // std_compile resolves a library unit the way a package is resolved).
-    ["math"]
+    // Dependency first: a unit is compiled against the ones before it
+    // (std_compile's `prev`), so an importer must come after what it imports --
+    // fs and json after sort, net after fs, x509 after crypto/fs/struct, tls
+    // after crypto/x509/net, http after net/tls.
+    ["math", "sort", "fs", "json", "struct", "crypto", "x509", "net", "tls",
+     "http", "regex", "random", "utf8", "args", "test", "tui"]
 };
 
-// The source of a std LIBRARY module (args, net, math, ...) as embedded in this
-// binary, or "" when it is not one. The four core units travel compiled (in the
-// std pack attached to ycc); every other std module is spliced into the program
-// from source, and a lone ycc has no src/y/std/ beside it -- so the sources are
-// embedded too and std_resolve falls back to this (see resolve_unit).
-def std_mod_src(name: str) -> str {
-    if (name == "args") {
-        std_text(ARGS_SRC)
-    } else if (name == "crypto") {
-        std_text(CRYPTO_SRC)
-    } else if (name == "fs") {
-        std_text(FS_SRC)
-    } else if (name == "http") {
-        std_text(HTTP_SRC)
-    } else if (name == "json") {
-        std_text(JSON_SRC)
-    } else if (name == "math") {
-        std_text(MATH_SRC)
-    } else if (name == "net") {
-        std_text(NET_SRC)
-    } else if (name == "random") {
-        std_text(RANDOM_SRC)
-    } else if (name == "regex") {
-        std_text(REGEX_SRC)
-    } else if (name == "sort") {
-        std_text(SORT_SRC)
-    } else if (name == "struct") {
-        std_text(STRUCT_SRC)
-    } else if (name == "test") {
-        std_text(TEST_SRC)
-    } else if (name == "tls") {
-        std_text(TLS_SRC)
-    } else if (name == "tui") {
-        std_text(TUI_SRC)
-    } else if (name == "utf8") {
-        std_text(UTF8_SRC)
-    } else if (name == "x509") {
-        std_text(X509_SRC)
-    } else {
-        ""
-    }
+// The source of a std LIBRARY module (args, net, math, ...) from disk, or ""
+// when there is none. No std source is embedded: every unit travels compiled
+// in the std pack attached to ycc, so its source is read
+// only to build that pack, under --std-src, and by a compiler with no pack
+// (cycc, a bootstrap generation) -- all of which run in a checkout. Std
+// directories only: a package root's module of the same name is a module of
+// that package (res_local_mod), never the std unit's source.
+def std_lib_src(name: str) -> str {
+    let path = std_lib_path(name);
+    let out = "";
+    if (len(path) > 0) {
+        let t = fs.read_file(path);
+        if (!(t == none)) { out = std_text(unwrap(t)); };
+    };
+    out
+};
+
+// Where std_lib_src reads library unit `name` from, or "" when no candidate
+// exists. Exported: the language server opens the same file to show a unit
+// member's signature and doc comment, which the pack does not carry.
+def std_lib_path(name: str) -> str {
+    let cands: [str] = [];
+    cands += "src/y/std/" + name + ".y";
+    let d = self_dir();
+    if (len(d) > 0) {
+        cands += d + "/std/" + name + ".y";
+        cands += d + "/src/y/std/" + name + ".y";
+        cands += d + "/../src/y/std/" + name + ".y";
+    };
+    let out = "";
+    let i = 0;
+    while (len(out) == 0 && i < len(cands)) {
+        if (!(fs.read_file(cands[i]) == none)) { out = cands[i]; };
+        i = i + 1;
+    };
+    out
 };
 
 // Where a std unit's uids and global cells start counting (see the
@@ -12167,7 +12186,7 @@ def std_unit_names() -> [str] {
 };
 
 // The std units `names` (link order, see native_resolve_x): from `pack`
-// (std_pack) when it has them, else compiled from the embedded sources.
+// (std_pack) when it has them, else compiled from their sources on disk.
 // exec calls into the prelude (y_stdin_sync), so it sees the prelude's
 // exports -- linked, and so compiled, before it.
 def std_units(names: [str], pack: str) -> [Unit] {
@@ -12184,34 +12203,69 @@ def std_units(names: [str], pack: str) -> [Unit] {
                     if (u.name == "prelude") { ext += u.exports; }
                 });
             }
-            out += std_compile(nm, ext);
+            out += std_compile(nm, ext, out);
         });
     }
     out
 };
 
-// One std unit, from its embedded source. It always carries its `.loc`
+
+
+// One std unit, from its source on disk (std_unit_src). It always carries its `.loc`
 // markers (link_units strips them unless -g), so it compiles the same
 // for every program. A failure here is the compiler's own bug: reported
 // as one, and the run ends.
-def std_compile(name: str, ext: [Sym]) -> Unit {
+def std_compile(name: str, ext: [Sym], prev: [Unit]) -> Unit {
     let path = "std/" + name + ".y";
-    let ssrc = std_drop_exports(std_text(std_unit_src(name)));
-    // A std unit is tokenized straight from its embedded bytes, so it never
+    let raw = std_drop_exports(std_text(std_unit_src(name)));
+    // A std unit is tokenized straight from its source bytes, so it never
     // goes through meta_scan: a `#{` here would reach the lexer as a bare `#`
     // and be reported as an expression error. A block in a std source is a
     // diagnostic (ideas/meta.md, "std sources"): it would run after the
     // program's own pass, with no origin to point at.
-    if (meta.mg_on && index_of(ssrc, "#{") >= 0) {
-        puts("error: " + path + ": a meta block cannot appear in a std source: std units are compiled from their embedded text after the program's own pass, so a block there has no generator to run in\n");
+    if (meta.mg_on && index_of(raw, "#{") >= 0) {
+        puts("error: " + path + ": a meta block cannot appear in a std source: std units are compiled from their own text after the program's own pass, so a block there has no generator to run in\n");
         exit(1);
     };
-    let ast = parser.parse_program(lexer.tokenize(ssrc));
-    let noimports: [str] = [];
     let nolines: [long] = [];
+    let ssrc = raw;
+    let imports: [str] = [];
+    let pkgs: [str] = [];
+    let sstd: [str] = [];
+    let ogen: [bool] = [];
+    // A library unit imports other library units (fs imports sort, x509 imports
+    // crypto/fs/struct, tls imports crypto/x509/net, http imports net/tls, json
+    // imports sort): those are units of the pack, never splices, so the text
+    // goes through the resolver exactly as a program's does -- a bare std
+    // library import already takes the unit path (std_lib_index, which is why
+    // nothing is spliced here) -- and the unit is then compiled against the ones
+    // already compiled (`prev`, in std_lib_names order, dependency first). A
+    // unit with no import keeps the direct path, so the four core units and
+    // math compile byte for byte as they did.
+    if (index_of(raw, "import ") >= 0) {
+        res_in_std = true;
+        let nr = native_resolve_x(raw, "std", 0, true, path);
+        res_in_std = false;
+        ssrc = nr.src;
+        imports = nr.imports;
+        pkgs = nr.pkgs;
+        sstd = nr.std;
+        ogen = nr.ogen;
+    };
+    let ast = parser.parse_program(lexer.tokenize(ssrc));
     let xt = externs_none();
-    xt.ext = ext;
-    let r = compile_unit(ast, noimports, { files: [path], nuser: 1, file: nolines, line: nolines, mods: [""] }, true, 0, name, std_unit_base(name), xt, []);
+    if (len(sstd) > 0) { xt = unit_externs(prev, sstd, [], pkgs); };
+    // The caller's `ext` (exec sees the prelude's exports) ADDS to what the
+    // imports bound -- an assignment here would wipe them, which is what made
+    // every `sort.` call in fs undefined while the ext list looked right.
+    let ei = 0;
+    while (ei < len(ext)) {
+        xt.ext += ext[ei];
+        ei = ei + 1;
+    };
+    let mods: [str] = [""];
+    if (std_lib_index(name) >= 0) { mods = [name]; };
+    let r = compile_unit(ast, imports, { files: [path], nuser: 1, file: nolines, line: nolines, mods: mods }, true, 0, name, std_unit_base(name), xt, ogen);
     if (!r.ok) {
         r.errors.foreach((e) => {
             puts("ycc: internal error: " + path + ":" + tostring(e.line) + ":" + tostring(e.col) + ": " + e.msg + "\n");
@@ -12276,6 +12330,29 @@ type UnitRes = { ok: bool, errors: [Diag], warnings: [Diag], times: [Timing], un
 // preceded by calls to `xt.inits` (the linked units' init labels); any
 // other unit's are its init function. `xt.ext` holds the externs, bound
 // by name in the checker and the emitter (see Externs).
+// What a unit's text needs set before strip_ns and rename see it, from the
+// externs it is compiled against (unit_externs): the packages and library units
+// strip_ns keeps qualified (pkg_ns), and the type aliases those units declared,
+// seeded as if this unit had declared them itself (each item is `name\ntcode`):
+// a unit's aliases are erased by its own rename, so an importer of `crypto`
+// could not otherwise write `h: crypto.Hash`, the type a value it gets back has
+// (see NATIVE.md). compile_unit runs it, and so does the language server's
+// checker (src/tools/lsp/diag.y), which drives the same passes by hand.
+def unit_prep(xt: Externs) {
+    pkg_ns = xt.pkgs;
+    if (len(xt.tys) > 0) {
+        let seeds: [Field] = [];
+        let si = 0;
+        while (si < len(xt.tys)) {
+            let item = xt.tys[si];
+            let nl = index_of(item, "\n");
+            seeds += { name: item[:nl], opt: false, typ: tdecode(item[nl + 1:]) };
+            si = si + 1;
+        };
+        rename.rn_types_seed_set(seeds);
+    };
+};
+
 def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel: long, name: str, base: long, xt: Externs, ogen: [bool]) -> UnitRes {
     tyset_reset();
     dbg_lines = debug;
@@ -12283,7 +12360,7 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
     dbg_line = origin.line;
     let ext = xt.ext;
     let inits = xt.inits;
-    pkg_ns = xt.pkgs;
+    unit_prep(xt);
     let times: [Timing] = [];
     let pt = clock_us();
     let ph = heap_used();
@@ -12293,6 +12370,21 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
     // Static name resolution: every binding gets a unique name, so neither
     // the checker nor the emitter deals with scopes or shadowing.
     let ast3: Block = rename.rename_program_x(ast2, xt.dfl, origin.file, origin.mods);
+    // What this unit's aliases resolved to (the seeds included), as `name\ntcode`
+    // for the pack: what makes the unit's own types nameable by its importers.
+    let out_types: [str] = [];
+    let ots = rename.rn_types_out_get();
+    let oi = 0;
+    while (oi < len(ots)) {
+        // A unit's own aliases come back bare when it has no module namespace of
+        // its own (the four core units, whose defs must stay bare): qualify them
+        // here, so rt's `YBig` publishes as `rt.YBig`, which is how a dependent
+        // module's source refers to it.
+        let tn = ots[oi].name;
+        if (index_of(tn, ".") < 0) { tn = name + "." + tn; };
+        out_types += tn + "\n" + tcode(ots[oi].typ);
+        oi = oi + 1;
+    };
     pr = phase_end(times, "rename", pt, ph);
     times = pr.times; pt = pr.t; ph = pr.h;
     let errors = types.check_program(ast3, ext);
@@ -12512,7 +12604,7 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
         let unit: Unit = { name: name, files: origin.files, exports: exports,
             init: init, bodies: ubodies, btext: ubtext, blob: [],
             labels: blabels, refs: brefs, rodata: st.rodata, globals: glabels,
-            dfl: udfl };
+            dfl: udfl, tys: out_types };
         { ok: true, errors: errors, warnings: warnings, times: times, unit: unit }
     }
 };
@@ -12561,7 +12653,16 @@ def unit_dfl(stmts: [Node], origin: Origin) -> [DflCode] {
     stmts.foreach((el) => {
         let s: Node = el;
         let nm = top_name_in(s, origin);
-        // (not an imported module's: see export_name)
+        // A library unit is compiled with its own namespace (see std_compile),
+        // so a def of its own comes back qualified (`fs.write_file`) while the
+        // export -- and so the default's key -- is the bare name. Strip our own
+        // namespaces; a name of an IMPORTED module stays skipped below.
+        let mi = 0;
+        while (mi < len(origin.mods)) {
+            let om = origin.mods[mi];
+            if (len(om) > 0 && nm[:len(om) + 1] == om + ".") { nm = nm[len(om) + 1:]; };
+            mi = mi + 1;
+        };
         if (len(nm) > 0 && index_of(nm, ".") < 0) {
             let keep: [DflCode] = [];
             out.foreach((d) => {
@@ -13311,7 +13412,7 @@ def link_text(parts: [LinkPart]) -> str {
 // unit's fields the same way.
 
 def pack_version() -> str {
-    "ycc-std-pack 7\n"
+    "ycc-std-pack 9\n"
 };
 
 def pack_put(out: [str], s: str) -> [str] {
@@ -13636,6 +13737,13 @@ def blob_refs(blob: str) -> [str] {
 // types.tstr it spells every type a unit may export (none, unknown and
 // the like too) and reads back exactly (tdecode).
 def tcode(t: Type) -> str {
+    // A tcode string must stand alone. tdecode runs once per string -- an
+    // export, or a unit's type alias -- and a `q` reference to a `Q` written in
+    // an EARLIER string has nothing to resolve against: tdec_encs is empty, so
+    // its `q` arm indexes tdec_refs[-1]. That was the crash an alias-carrying
+    // unit (crypto's Hash/Mont/Curve/Pt) produced. So the tref table starts
+    // empty for every call, and a shared tref is written out again.
+    tcode_refs = [];
     let out: [str] = [];
     out = tcode_go(out, t);
     join(out, "")
@@ -13749,7 +13857,13 @@ def tdecode_go(cur: Cursor) -> Type {
     else if (c == "[") { normtype({ k: K.tarr, of: tdecode_go(cur) }) }
     else if (c == "?") { normtype({ k: K.topt, of: tdecode_go(cur) }) }
     else if (c == "F") {
-        normtype({ k: K.tarrfix, of: tdecode_go(cur), n: pack_num(cur) })
+        // tcode_go writes "F", the COUNT, then the element type; the count must
+        // be read first (the map arm reads key then of because that is the order
+        // the writer uses). Reading the element first is what packed a fixed
+        // array ([long; 16], crypto's qround) into a crash.
+        let fn = pack_num(cur);
+        let fof = tdecode_go(cur);
+        normtype({ k: K.tarrfix, of: fof, n: fn })
     }
     else if (c == "M") {
         normtype({ k: K.tmap, key: tdecode_go(cur), of: tdecode_go(cur) })
@@ -13843,6 +13957,7 @@ def pack_unit_fields(u: Unit) -> str {
         j++;
     };
     out = pack_strs(out, u.globals);
+    out = pack_strs(out, u.tys);
     join(out, "")
 };
 
@@ -14033,16 +14148,20 @@ def pack_store(s: str) -> str {
     if (len(z) + 1 < len(s)) { lz_method() + z } else { s }
 };
 
-// The pack of `units`.
+// The pack of `units`. Each unit's fields are stored on their own
+// (pack_store: compressed when that is smaller), inside a plain frame, so a
+// compile decodes only the units it links: with every library unit in the
+// pack, inflating the whole stream cost a hello-world 96M instructions (2.4 ms
+// -> 6.7 ms) for 1.24 MB of units it never read.
 def std_pack(units: [Unit]) -> str {
     let out: [str] = [];
     out += pack_version();
     out = pack_put(out, tostring(len(units)));
     units.foreach((u) => {
         out = pack_put(out, u.name);
-        out = pack_put(out, pack_unit_fields(u));
+        out = pack_put(out, pack_store(pack_unit_fields(u)));
     });
-    pack_store(join(out, ""))
+    join(out, "")
 };
 
 // Reading a pack: `cur` is the text and the position in it. pack_len
@@ -14134,31 +14253,42 @@ def unit_read(cur: Cursor, name: str, bound: bool) -> Unit {
         j++;
     };
     let globals = pack_get_strs(cur);
+    let tys = pack_get_strs(cur);
     { name: name, files: files, exports: xs, init: init, bodies: [],
         btext: btext, blob: blob, labels: labels, refs: refs, rodata: rodata,
-        globals: globals, dfl: dfl }
+        globals: globals, dfl: dfl, tys: tys }
 };
 
 // The units `names` from a pack, in that order; [] for a pack of another
 // version, or one missing any of them.
 def std_unpack(pack: str, names: [str]) -> [Unit] {
     let out: [Unit] = [];
-    // Stored compressed? The method byte says so; a failed decode leaves ""
-    // and the version check below rejects it, so the caller compiles from
-    // source rather than reading a corrupt stream.
-    if (len(pack) > 0 && pack[0] == 1) { pack = lz_decode(pack[1:]); };
     let ver = pack_version();
     if (pack[:len(ver)] == ver) {
         let cur = { s: pack, p: len(ver) };
         let n = pack_num(cur);
         let got: [Unit] = [];
+        let bad = false;
         for i in 0..n {
             let nm = pack_get(cur);
             let ul = pack_len(cur);
             let at = cur.p;
-            if (name_in(names, nm)) { got += unit_read(cur, nm, std_unit_bound(nm)); }
+            if (name_in(names, nm)) {
+                // Stored compressed? The method byte says so (a unit's plain
+                // fields start with a digit); a failed decode leaves "", and
+                // the pack is then not used -- the caller compiles from source
+                // rather than reading a corrupt stream.
+                let raw = pack[at:at + ul];
+                if (len(raw) > 0 && raw[0] == 1) { raw = lz_decode(raw[1:]); };
+                if (len(raw) == 0) {
+                    bad = true;
+                } else {
+                    got += unit_read({ s: raw, p: 0 }, nm, std_unit_bound(nm));
+                };
+            };
             cur.p = at + ul;
         };
+        if (bad) { got = []; };
         names.foreach((el) => {
             let want: str = el;
             got.foreach((u) => {
@@ -14174,7 +14304,7 @@ def std_unpack(pack: str, names: [str]) -> [Unit] {
 // fields, after a version line and the key it was compiled under (ycc.y
 // build_key) -- an object of another key, or a cut-off one, is no hit.
 def obj_version() -> str {
-    "ycc-unit 6\n"
+    "ycc-unit 7\n"
 };
 
 // An object carries a checksum over its own bytes, after them.
@@ -14247,9 +14377,15 @@ def unit_externs(std: [Unit], snames: [str], deps: [Unit], pkgs: [str]) -> Exter
     let xt = externs_none();
     let ext: [Sym] = [];
     let dfl: [Dfl] = [];
+    let tys: [str] = [];
     let i = 0;
     while (i < len(std)) {
         let u = std[i];
+        let ut = 0;
+        while (ut < len(u.tys)) {
+            tys += u.tys[ut];
+            ut = ut + 1;
+        };
         if (std_unit_bound(u.name) && name_in(snames, u.name)) {
             if (std_lib_index(u.name) < 0) {
                 ext += u.exports;
@@ -14309,6 +14445,7 @@ def unit_externs(std: [Unit], snames: [str], deps: [Unit], pkgs: [str]) -> Exter
     xt.ext = ext;
     xt.dfl = dfl;
     xt.pkgs = pkgs;
+    xt.tys = tys;
     xt
 };
 
@@ -14370,7 +14507,7 @@ def emit_program(ast: Block, nr: Resolved, debug: bool, wlevel: long, std: [Unit
 // needs to KNOW whether a word is a builtin, and the list it keeps of them is
 // the one this predicate tests. Inert like the rest of the names here -- the
 // splicer deletes the export line, so nothing reaches codegen (LSP.md 9.1).
-export { emit_program, compile_package, std_units, std_unit_names, std_pack, pack_store, unit_obj, unit_unobj, unit_iface, native_resolve, native_resolve_x, native_resolve_pk, origin_at, strip_ns, strip_list, strip_decl, phase_end, link_text, is_intrinsic_name, intrinsic_names };
+export { emit_program, compile_package, unit_externs, unit_prep, std_lib_path, std_units, std_unit_names, std_lib_deps, std_pack, pack_store, unit_obj, unit_unobj, unit_iface, native_resolve, native_resolve_x, native_resolve_pk, origin_at, strip_ns, strip_list, strip_decl, phase_end, link_text, is_intrinsic_name, intrinsic_names };
 
 // ── maps: dynamic {K => V} ────────────────────────────────────────────
 // A map value is a two-field record -- {keys: [K], vals: [V]} -- and
