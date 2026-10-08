@@ -2312,3 +2312,29 @@ Until that prints, every conclusion about the append is about a path the run may
 even have entered.
 
 Reverted; test/kernel is 67 passed, 0 failed / 67 total.
+
+### Round 142: the write DOES reach sys_write -- and returns 0 from the broker
+
+Printed at the TOP of sys_write, with every artifact rebuilt:
+
+    SW fd=3 buf=272638088 len=4      <- the program's write to the file descriptor
+    SW fd=1 buf=272638688 len=24     <- the print that reports the result
+    P seek=12 nw=0 n=0 b0=0
+
+So the wiring is right and round 138's "the write never reaches the broker" was
+wrong: fd=3 arrives at sys_write, and the `fd >= 3` branch must therefore have run
+fd_write.  What returns 0 is fd_write, and it can only do that two ways: yfs_append
+refusing (it returns -1, not 0, so not that) or yfs_store answering 0, which it does
+when `off >= size`.
+
+Which means the state fd_write sees is not the state the earlier rounds measured.  In
+round 140 the append ran and read back 16; in round 141 and here it did not run at
+all, with the same driver and program.  The ONE print that has never been made is
+fd_write's own entry line -- `ino`, `off`, `size` -- in the SAME RUN as this sys_write
+print.  Every round has printed one side or the other: 137/140 had fd_write and append
+prints but no sys_write print, 141/142 have the syscall prints but not fd_write's.
+
+That single line is the next step, and it is the last unknown in a path that has now
+been measured from both ends.
+
+Reverted; test/kernel is 67 passed, 0 failed / 67 total.
