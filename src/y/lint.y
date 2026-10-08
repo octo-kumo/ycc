@@ -588,6 +588,24 @@ def lint_const_node(s: Node) -> bool {
     k == K.num || k == K.str || k == K.char || k == K.bool || k == K.bstr
 };
 
+// A constant array literal searched inside a loop -- `[35, 34, 39].index(c)`,
+// `c in ["a", "b"]`, a loop condition included: the literal is a new array
+// every time it is evaluated, so the loop allocates one per iteration. meta.y's
+// scanner did that for every byte of every file with a '#' in it.
+def lint_loop_arr(st: LintSt, n: Node) -> void {
+    if (st.loops > 0 && n.k == K.array) {
+        let a: ArrLit = n;
+        let es = a.elems;
+        let all = len(es) > 0;
+        let i = 0;
+        while (all && i < len(es)) {
+            if (!lint_const_node(es[i])) { all = false; };
+            i++;
+        };
+        if (all) { lint_warn_at(st, "this array literal is built again on every iteration of the loop -- bind it once before the loop", n); };
+    };
+};
+
 // Not the parser's trailing void, and not a def.
 def lint_code(s: Node) -> bool {
     let k: long = s.k;
@@ -638,6 +656,10 @@ def lint_node(st: LintSt, node: Node, used: bool) -> void {
     } else if (k == K.call) {
         let call: Call = node;
         lint_node(st, call.callee, true);
+        if (call.callee.k == K.dot) {
+            let cd: Dot = call.callee;
+            lint_loop_arr(st, cd.obj);
+        };
         if (st.wlevel < 2 || !lint_short_ord(st, call)) {
             lint_list(st, call.args);
         };
@@ -683,7 +705,7 @@ def lint_node(st: LintSt, node: Node, used: bool) -> void {
         lint_opassign(st, opassign, used)
     } else if (k == K.kw_while) {
         let loop: While = node;
-        lint_node(st, loop.cond, true);
+        lint_loop_head(st, loop.cond, true);
         if (st.wlevel >= 1 && lint_bool_lit(loop.cond) == 0) { lint_warn_at(st, "the condition is always false, so the loop never runs", loop.cond); };
         if (st.wlevel >= 2) { lint_short_while(st, loop); };
         lint_loop_body(st, loop.body)
@@ -855,6 +877,7 @@ def lint_bin(st: LintSt, node: Bin, used: bool) -> void {
     };
     let l = node.l;
     let r = node.r;
+    if (op == "in") { lint_loop_arr(st, r); };
     if ((op == "&&" || op == "||") && !used && lint_effect(r)) {
         lint_node(st, l, true);
         lint_node(st, r, false);
@@ -1854,8 +1877,8 @@ def fx_split_comma(s: str) -> [str] {
     let cur = "";
     for i in 0..len(s) {
         let c = s[i];
-        if ([40, 91, 123].index(c) >= 0) { d++; };
-        if ([41, 93, 125].index(c) >= 0) { d--; };
+        if (c == 40 || c == 91 || c == 123) { d++; };
+        if (c == 41 || c == 93 || c == 125) { d--; };
         if (c == 44 && d == 0) { out += cur; cur = ""; } else { cur += s[i:i + 1]; };
     };
     out += cur;
@@ -3353,9 +3376,16 @@ def lint_empty_arm(n: Node) -> bool {
 
 def lint_for(st: LintSt, node: For) -> void {
     lint_node(st, node.init, false);
-    lint_node(st, node.cond, true);
-    lint_node(st, node.step, false);
+    lint_loop_head(st, node.cond, true);
+    lint_loop_head(st, node.step, false);
     lint_loop_body(st, node.body)
+};
+
+// A loop's condition or step: evaluated every iteration, like the body.
+def lint_loop_head(st: LintSt, n: Node, used: bool) -> void {
+    st.loops = st.loops + 1;
+    lint_node(st, n, used);
+    st.loops = st.loops - 1;
 };
 
 // A loop body: its value is dropped, so a block body's last statement is a

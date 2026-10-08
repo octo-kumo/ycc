@@ -383,6 +383,11 @@ when the fixer rewrote the lexer's own bounds checks (round 9).
 - one type written out in full twice, or where an alias already names it.
 - a top-level statement beside a meta block — it runs twice.
 - a value-used `+=` on a string inside a loop — copies the whole string.
+- a constant array literal searched inside a loop (`[40, 41].index(c)`,
+  `c in [97, 98]`, the loop's condition and a `for`'s step included) — a new
+  array every iteration; bind it once before the loop. It found five in the
+  compiler itself (the lexer's f-string scanner, `fx_split_comma`, the
+  arch-block fall-through test) and meta.y's per-byte scanner (t407).
 
 ## 7. TODO
 

@@ -2219,7 +2219,8 @@ def lines_fall(lines: [str], lo: long, hi: long) -> bool {
         let s = skip_sp(lb, 0, len(lb));
         if (s < len(lb)) {
             go = false;
-            if ((tok_at_b(l, lb, s, len(lb))) in ["ret", "jmp", "syscall"]) { falls = false; };
+            let tk = tok_at_b(l, lb, s, len(lb));
+            if (tk == "ret" || tk == "jmp" || tk == "syscall") { falls = false; };
         };
         i = i - 1;
     };

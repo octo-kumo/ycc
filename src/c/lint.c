@@ -640,6 +640,28 @@ static int lint_const_node(Yv *s) {
     return k == K_num || k == K_str || k == K_char || k == K_bool || k == K_bstr;
 }
 
+/* A constant array literal searched inside a loop (lint.y lint_loop_arr): a
+ * new array every iteration. */
+static void lint_loop_arr(LintSt st, Yv *n) {
+    if (yv_l(yr_get(st, "loops")) > 0 && yv_l(yr_get(n, "k")) == K_array) {
+        Yv *es = yr_get(n, "elems");
+        int all = yv_len(es) > 0;
+        ylong i = 0;
+        while (all && i < yv_len(es)) {
+            if (!lint_const_node(ya_get(es, i))) { all = 0; }
+            i = i + 1;
+        }
+        if (all) { (void)lint_warn_at(st, ys("this array literal is built again on every iteration of the loop -- bind it once before the loop"), n); }
+    }
+}
+
+/* A loop's condition or step: evaluated every iteration, like the body. */
+static void lint_loop_head(LintSt st, Yv *n, int used) {
+    (void)yr_set(st, "loops", yv_long(yv_l(yr_get(st, "loops")) + 1));
+    (void)lint_node(st, n, used);
+    (void)yr_set(st, "loops", yv_long(yv_l(yr_get(st, "loops")) - 1));
+}
+
 static int lint_code(Yv *s) {
     Yv *k = yr_get(s, "k");
     if (yv_l(k) == K_void) {
@@ -686,6 +708,9 @@ static ylong lint_node(LintSt st, Yv *node, int used) {
         return lint_id(st, node, used);
     } else if (yv_l(k) == K_call) {
         (void)lint_node(st, yr_get(node, "callee"), 1);
+        if (yv_l(yr_get(yr_get(node, "callee"), "k")) == K_dot) {
+            lint_loop_arr(st, yr_get(yr_get(node, "callee"), "obj"));
+        }
         if (yv_l(yr_get(st, "wlevel")) < 2 || !lint_short_ord(st, node)) {
             (void)lint_list(st, yr_get(node, "args"));
         }
@@ -726,7 +751,7 @@ static ylong lint_node(LintSt st, Yv *node, int used) {
     } else if (yv_l(k) == K_opassign) {
         return lint_opassign(st, node, used);
     } else if (yv_l(k) == K_kw_while) {
-        (void)lint_node(st, yr_get(node, "cond"), 1);
+        lint_loop_head(st, yr_get(node, "cond"), 1);
         if (yv_l(yr_get(st, "wlevel")) >= 1 && lint_bool_lit(yr_get(node, "cond")) == 0) { (void)lint_warn_at(st, ys("the condition is always false, so the loop never runs"), yr_get(node, "cond")); }
         if (yv_l(yr_get(st, "wlevel")) >= 2) {
             (void)lint_short_while(st, node);
@@ -1017,6 +1042,7 @@ static ylong lint_bin(LintSt st, Yv *node, int used) {
     }
     Yv *l = yr_get(node, "l");
     Yv *r = yr_get(node, "r");
+    if (ys_eq_lit(op, "in")) { lint_loop_arr(st, r); }
     if ((ys_eq_lit(op, "&&") || ys_eq_lit(op, "||")) && !used &&
         lint_effect(r)) {
         (void)lint_node(st, l, 1);
@@ -2281,8 +2307,8 @@ static int lint_empty_arm(Yv *n) {
 
 static ylong lint_for(LintSt st, Yv *node) {
     (void)lint_node(st, yr_get(node, "init"), 0);
-    (void)lint_node(st, yr_get(node, "cond"), 1);
-    (void)lint_node(st, yr_get(node, "step"), 0);
+    lint_loop_head(st, yr_get(node, "cond"), 1);
+    lint_loop_head(st, yr_get(node, "step"), 0);
     return lint_loop_body(st, yr_get(node, "body"));
 }
 
