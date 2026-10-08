@@ -80,3 +80,14 @@ def fd_seek_set(fd: long, off: long) -> long {
     fd_off[fd - 3] = off;
     off
 };
+
+// Writes at the fd's offset and advances it, the mirror of fd_read.  The filesystem
+// is still read-only in the sense that it cannot GROW a file: this overwrites bytes
+// that are already there.
+def fd_write(fd: long, buf: long, len: long) -> long {
+    if (!fd_valid(fd)) { return 0 - 14; };
+    let i = fd - 3;
+    let n = yfs.yfs_store(fd_inode[i], fd_off[i], buf, len);
+    if (n > 0) { fd_off[i] = fd_off[i] + n; };
+    n
+};

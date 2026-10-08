@@ -181,3 +181,25 @@ def yfs_fetch(ino: long, off: long) -> long {
     if (blk == 0) { return 0 - 1; };
     kernel.peek8(yfs_phys + blk * yfs_block_size + off % yfs_block_size)
 };
+
+// The write counterpart of yfs_read, in the same physical terms as yfs_fetch: the
+// bytes come FROM the caller's memory (peek_va8) and go INTO the image (poke8).
+// It writes within the file's existing size -- growing a file needs an allocator,
+// which is the next step.
+def yfs_store(ino: long, off: long, buf: long, len: long) -> long {
+    if (yfs_ok == 0) { return 0 - 1; };
+    let size = yfs_size(ino);
+    if (off >= size) { return 0; };
+    if (off + len > size) { len = size - off; };
+    let done = 0;
+    while (done < len) {
+        let pos = off + done;
+        let blk = yfs_block_of(ino, pos);
+        if (blk == 0) { return done; };
+        let bo = pos % yfs_block_size;
+        let d = blk * yfs_block_size + bo;
+        kernel.poke8(yfs_phys + d, kernel.peek_va8(buf + done));
+        done = done + 1;
+    };
+    done
+};

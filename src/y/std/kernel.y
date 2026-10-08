@@ -900,6 +900,7 @@ def poke_va8(addr: long, v: long) -> void {
 // serial console -- what the kernel suite's transcripts read.  The buffer is
 // a user address, so every byte goes through the validation above.
 def sys_write(fd: long, buf: long, len: long) -> long {
+    if (fd >= 3) { return fd.fd_write(fd, buf, len); };
     if (!user_ok(buf, len)) { return E_FAULT; };
     if (fd != 1 && fd != 2) { return E_FAULT; };
     let i = 0;
