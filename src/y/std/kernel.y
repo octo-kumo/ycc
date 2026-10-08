@@ -849,6 +849,7 @@ const SYS_CLOSE = 3;
 const SYS_LSEEK = 8;
 const SYS_OPENAT = 257;
 const SYS_EXECVE = 59;
+const SYS_UNLINKAT = 263;
 const SYS_GETDENTS64 = 217;
 const SYS_GETPID = 39;
 // The kernel's own calls, above the Linux numbers so they can never collide
@@ -969,6 +970,7 @@ def y_sys_dispatch(nr: long, a1: long, a2: long, a3: long, a4: long, a5: long, a
     if (nr == SYS_LSEEK) { return sys_lseek(a1, a2, a3); };
     if (nr == SYS_OPENAT) { return sys_openat(a1, a2, a3); };
     if (nr == SYS_EXECVE) { return sys_execve(a1, a2); };
+    if (nr == SYS_UNLINKAT) { return sys_unlinkat(a1, a2, a3); };
     if (nr == SYS_GETDENTS64) { return sys_getdents64(a1, a2, a3); };
     E_NOSYS
 };
@@ -1296,6 +1298,13 @@ def sys_openat(dirfd: long, pathp: long, flags: long) -> long {
 };
 
 def sys_close(fdno: long) -> long { fd.fd_close(fdno) };
+
+// unlinkat(dirfd, path, flags): removal, which is what rm is.  dirfd is ignored for
+// now -- every path is resolved from the root -- and so are the flags.
+def sys_unlinkat(dirfd: long, pathp: long, flags: long) -> long {
+    if (pathp == 0) { return E_FAULT; };
+    yfs_unlink(user_path(pathp))
+};
 
 def sys_lseek(fdno: long, off: long, whence: long) -> long { fd.fd_lseek(fdno, off) };
 
