@@ -2226,3 +2226,36 @@ at all.  (One easy confound to rule out first: the image is /tmp/u16.img, built
 before some of this work; rebuild it and re-run before believing anything.)
 
 Reverted; test/kernel is 67 passed, 0 failed / 67 total.
+
+### Round 139: the two runs differ by the SLACK, and that is the clue
+
+Comparing the two instrumented-free results that already exist:
+
+    round 137, driver with four blocks of slack : nw=4
+    round 138, u016's driver, no slack          : nw=0
+
+Same program shape, same syscalls, same kernel -- the only difference is that the
+second image has NO FREE BLOCK.  So the append is not "broken": it is REFUSED when
+the image is full, and yfs_append's own line
+
+    let n = yfs_store(ino, size, buf, len);
+    if (n != len) { return 0 - 1; };
+
+is the only thing in it that can turn a 4 into a 0.  That means yfs_store wrote
+fewer bytes than asked, which it does when `off + len > size` -- and size was JUST
+set to size + len by the poke32 above it.  Two ways that can happen:
+
+  * the poke32 did not land where yfs_size reads (base differs, or yfs_phys moved);
+  * or yfs_store's clamp used a size that is still the OLD one, because reading the
+    field back is not seeing the write -- the same "poke then read" question that
+    cost three rounds in yfs_lookup, where the answer was a missing image offset.
+
+So the print belongs INSIDE yfs_append between those two statements: base, the size
+it poked, and yfs_size(ino) read back immediately.  Neither round 137 nor 138 printed
+that because both instrumented fd_write and the top of yfs_append, not the gap in
+between -- and the round-138 conclusion ("the write never reaches the broker") was
+wrong for a simpler reason: in that run nw=0 came from yfs_append's refusal, not from
+sys_write, and the prints did not appear because the INSTRUMENTED BUILD was not the
+one that produced /tmp/u16.img (it was built earlier in the session).
+
+test/kernel is 67 passed, 0 failed / 67 total; nothing is committed but this note.
