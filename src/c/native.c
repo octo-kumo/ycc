@@ -338,6 +338,7 @@ Yv *fv_bind_params(Yv *ps, Yv *out);
 Yv *fn_names_of(Yv *fns);
 Yv *fns_kind(Yv *label);
 Yv *gen(Yv *st, Yv *node);
+Yv *as_num(Yv *n);
 Yv *gen_go(Yv *st, Yv *node);
 Yv *gen_as(Yv *st, Yv *node, Yv *want);
 int is_empty_rec(Yv *node);
@@ -456,6 +457,8 @@ Yv *gen_block_as(Yv *st, Yv *node, int dropped);
 ylong mfield_idx(Yv *names, Yv *name);
 Yv *gen_reclit(Yv *st, Yv *node, Yv *want);
 int lit_wraps(Yv *st, Yv *mv, Yv *rtu, Yv *mk, Yv *ft);
+int rec_leaf_field(Yv *st, Yv *mv, Yv *rtu, Yv *mk);
+ylong rec_leaf_imm(Yv *mv);
 ylong fnv64(Yv *s);
 Yv *hex16(ylong h);
 ylong rec_slot(Yv *fs, Yv *key);
@@ -5673,6 +5676,66 @@ Yv *fns_kind(Yv *label) {
 
 /* ── expression emission (value in %rax) ──────────────────────────────── */
 
+/* The unit's number consts, read as their literal so an operand takes the
+ * immediate forms (`node.k == K.call` is `cmp $11, %rax`, not two loads):
+ * `name` for `const name = 7`, and for `const name = { f: 7, ... }` the name
+ * with -2 and each number field under `name.f`. Unannotated only (an
+ * annotation may make `1` a float), and none the checker saw escape
+ * (types.y escaped: an address taken, a record read whole). */
+static Yv *fold_ix;
+static Yv *fold_lits;
+
+void fold_consts(Yv *stmts) {
+    fold_ix = nameix_new(8);
+    fold_lits = yav(0);
+    Yv *esc = escaped();
+    for (ylong si = 0; si < yv_len(stmts); si++) {
+        Yv *s = ya_get(stmts, si);
+        if (yv_l(yr_get(s, "k")) == K_decl) {
+            Yv *v = yr_get(s, "v");
+            Yv *name = yr_get(s, "name");
+            int in_esc = 0;
+            for (ylong ei = 0; ei < yv_len(esc); ei++) {
+                if (ys_eq(ya_get(esc, ei), name)) { in_esc = 1; break; }
+            }
+            if (ys_eq_lit(yr_get(s, "kind"), "const") && yv_l(yr_get(yr_get(s, "typ"), "k")) == K_tnone && !in_esc) {
+                if (yv_l(yr_get(v, "k")) == K_num) {
+                    nameix_put(fold_ix, name, yv_len(fold_lits));
+                    fold_lits = ya_push(fold_lits, v);
+                } else if (yv_l(yr_get(v, "k")) == K_rec) {
+                    Yv *keys = yr_get(v, "keys");
+                    Yv *vals = yr_get(v, "vals");
+                    nameix_put(fold_ix, name, -2);
+                    for (ylong i = 0; i < yv_len(keys); i++) {
+                        if (yv_l(yr_get(ya_get(vals, i), "k")) == K_num) {
+                            nameix_put(fold_ix, ys_cat(ys_cat(name, ys(".")), ya_get(keys, i)), yv_len(fold_lits));
+                            fold_lits = ya_push(fold_lits, ya_get(vals, i));
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/* n, or the literal a folded const read stands for (fold_consts). */
+Yv *as_num(Yv *n) {
+    if (!fold_lits || yv_len(fold_lits) == 0) return n;
+    ylong k = yv_l(yr_get(n, "k"));
+    ylong i = -1;
+    if (k == K_id) {
+        i = nameix_get(fold_ix, yr_get(n, "v"));
+    } else if (k == K_dot) {
+        Yv *o = yr_get(n, "obj");
+        if (yv_l(yr_get(o, "k")) == K_id) {
+            if (nameix_get(fold_ix, yr_get(o, "v")) == -2) {
+                i = nameix_get(fold_ix, ys_cat(ys_cat(yr_get(o, "v"), ys(".")), yr_get(n, "key")));
+            }
+        }
+    }
+    return i >= 0 ? ya_get(fold_lits, i) : n;
+}
+
 Yv *gen(Yv *st, Yv *node) {
     yv_nest++;
     if (yv_nest > MAX_NEST) {
@@ -5702,7 +5765,12 @@ Yv *gen_go(Yv *st, Yv *node) {
     } else if (yv_l(k) == K_void) {
         return emit_insn(st, F_XOR_R_R, R_RAX, 32, R_RAX, 32, 0, 0, 0);
     } else if (yv_l(k) == K_id) {
-        return gen_id(st, node);
+        Yv *f = as_num(node);
+        if (yv_l(yr_get(f, "k")) == K_num) {
+            return gen_lit(st, f);
+        } else {
+            return gen_id(st, node);
+        }
     } else if (yv_l(k) == K_un) {
         return gen_un(st, node);
     } else if (yv_l(k) == K_addr) {
@@ -5786,7 +5854,12 @@ Yv *gen_go(Yv *st, Yv *node) {
     } else if (yv_l(k) == K_dotassign) {
         return gen_dotassign(st, node);
     } else if (yv_l(k) == K_dot) {
-        return gen_dot(st, node);
+        Yv *f = as_num(node);
+        if (yv_l(yr_get(f, "k")) == K_num) {
+            return gen_lit(st, f);
+        } else {
+            return gen_dot(st, node);
+        }
     } else if (yv_l(k) == K_rec) {
         /* record literal anywhere (let/call-arg): heap address in %rax. */
         return gen_reclit(st, node, yr(1, "k", yv_long(K_tnone)));
@@ -7067,6 +7140,8 @@ int leaf_expr(Yv *n) {
     ylong k = yv_l(yr_get(n, "k"));
     if (k == K_num || k == K_id) {
         return 1;
+    } else if (k == K_dot) {
+        return yv_l(yr_get(as_num(n), "k")) == K_num;
     } else if (k == K_un) {
         return leaf_expr(yr_get(n, "e"));
     } else {
@@ -7778,6 +7853,7 @@ Yv *gen_setcc(Yv *st, Yv *op) {
 }
 
 ylong shift_imm(Yv *r) {
+    r = as_num(r);
     if (yv_l(yr_get(r, "k")) == K_num) {
         if (lit_is_float(yr_get(r, "v"))) {
             return -1;
@@ -9684,6 +9760,7 @@ ylong int_cmp_jcc(Yv *st, Yv *node) {
 /* The value of a plain decimal literal that fits an instruction's 32-bit
  * immediate (at most nine digits), else -1: `x + 1`, `i < 8`. */
 ylong imm_lit(Yv *n) {
+    n = as_num(n);
     if (yv_l(yr_get(n, "k")) == K_num) {
         Yv *s = norm_num(yr_get(n, "v"));
         int ok = yv_len(s) > 0 && yv_len(s) < 10 && !lit_is_float(s);
@@ -11023,19 +11100,38 @@ Yv *gen_reclit(Yv *st, Yv *node, Yv *want) {
     }
     Yv *dr = ty_desc_in(st, rt, wu);
     st = yr_get(dr, "st");
+    /* %rcx holds the new record after every field's store. A field whose value
+     * loads without touching %rcx (rec_leaf_field) is stored through it as it
+     * stands; any other runs with the record parked on the stack and reloads
+     * %rcx from there. When every field is the first kind nothing is parked. */
+    Yv *leafs = yav(0);
+    int parked = 0;
+    for (ylong li = 0; li < nent; li++) {
+        int lf = !ys_eq_lit(ya_get(mkeys, li), "...") && rec_leaf_field(st, ya_get(mvals, li), rtu, ya_get(mkeys, li));
+        leafs = ya_push(leafs, yv_bool(lf));
+        if (!lf) parked = 1;
+    }
     st = emit_insn(st, F_MOV_I_R, 8 * n + 16, R_RDI, 64, 0, 0, 0, 0);
     st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_alloc"))), 0, 0, 0, 0, 0, 0);
-    st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+    if (parked) st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_MOV_R_R, R_RAX, 64, R_RCX, 64, 0, 0, 0);
     st = emit_insn(st, F_LEA_P_R, -1, -1, 1, 0, yv_l(yr_get(dr, "label")), R_RAX, 64);
-    st = emit_insn(st, F_POP_R, R_RCX, 64, 0, 0, 0, 0, 0);
     st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RCX, -1, 1, 0, -1);
-    st = emit_insn(st, F_PUSH_R, R_RCX, 64, 0, 0, 0, 0, 0);
     ylong i = 0;
     while (i < nent) {
         /* mv is walked twice (gen, then infer), so bind it once. */
         Yv *mv = ya_get(mvals, i);
         Yv *mk = ya_get(mkeys, i);
-        if (ys_eq_lit(mk, "...")) {
+        if (yv_b(ya_get(leafs, i))) {
+            ylong off = 8 + mfield_idx(slots, mk) * 8;
+            ylong im = rec_leaf_imm(mv);
+            if (im >= 0) {
+                st = emit_insn(st, F_MOV_I_D, im, R_RCX, -1, 1, off, -1, 0);
+            } else {
+                st = gen(st, mv);
+                st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RCX, -1, 1, off, -1);
+            }
+        } else if (ys_eq_lit(mk, "...")) {
             /* Spread: the source runs ONCE; copy each of its fields into
              * the slot it has here. A later entry's store overwrites. */
             st = gen(st, mv);
@@ -11055,6 +11151,7 @@ Yv *gen_reclit(Yv *st, Yv *node, Yv *want) {
                     sj = sj + 1;
                 }
             }
+            st = emit_insn(st, F_PUSH_R, R_RCX, 64, 0, 0, 0, 0, 0);
         } else {
             Yv *ft = rec_field_type(rtu, mk);
             if (lit_wraps(st, mv, rtu, mk, ft)) {
@@ -11064,15 +11161,52 @@ Yv *gen_reclit(Yv *st, Yv *node, Yv *want) {
             } else {
                 st = gen_as(st, mv, ft);
             }
-            st = emit_insn(st, F_POP_R, R_RCX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, F_MOV_0_R, R_RSP, -1, 1, 0, -1, R_RCX, 64);
             ylong mi = mfield_idx(slots, mk);
             st = emit_insn(st, F_MOV_R_D, R_RAX, 64, R_RCX, -1, 1, 8 + mi * 8, -1);
         }
-        st = emit_insn(st, F_PUSH_R, R_RCX, 64, 0, 0, 0, 0, 0);
         i = i + 1;
     }
-    st = emit_insn(st, F_POP_R, R_RAX, 64, 0, 0, 0, 0, 0);
-    return emit_insn(st, F_ADD_I_R, 8, R_RAX, 64, 0, 0, 0, 0);
+    if (parked) {
+        st = emit_insn(st, F_POP_R, R_RAX, 64, 0, 0, 0, 0, 0);
+        return emit_insn(st, F_ADD_I_R, 8, R_RAX, 64, 0, 0, 0, 0);
+    } else {
+        return emit_insn(st, F_LEA_D_R, R_RCX, -1, 1, 8, -1, R_RAX, 64);
+    }
+}
+
+/* Field mk of a literal made as rtu takes mv with no code but mv's own load,
+ * and that load leaves %rcx alone (gen_reclit keeps the record there): a leaf
+ * that is not captured, not wrapped as some(v), and of the field's own type,
+ * so gen_as would convert nothing. */
+int rec_leaf_field(Yv *st, Yv *mv, Yv *rtu, Yv *mk) {
+    if (!rcx_free_leaf(st, mv) && rec_leaf_imm(mv) < 0) return 0;
+    Yv *ft = rec_field_type(rtu, mk);
+    if (lit_wraps(st, mv, rtu, mk, ft)) return 0;
+    Yv *w = unfold(ft);
+    ylong wk = yv_l(yr_get(w, "k"));
+    if (wk == K_tfloat || wk == K_tbyte || wk == K_tbigint) {
+        return 0;
+    } else if (wk == K_trec) {
+        return yv_l(yr_get(unfold(infer(st, mv)), "k")) == K_trec;
+    } else if (wk == K_tunion) {
+        return teq(unfold(infer(st, mv)), w);
+    } else {
+        return 1;
+    }
+}
+
+/* The 32-bit immediate a leaf field stores directly, else -1: a small integer
+ * literal (or a folded const), true and false, none. */
+ylong rec_leaf_imm(Yv *mv) {
+    ylong k = yv_l(yr_get(mv, "k"));
+    if (k == K_bool) {
+        return ys_eq_lit(yr_get(mv, "v"), "true") ? 1 : 0;
+    } else if (k == K_id) {
+        return ys_eq_lit(yr_get(mv, "v"), "none") ? 0 : imm_lit(mv);
+    } else {
+        return imm_lit(mv);
+    }
 }
 
 /* Value mv given for field mk of rtu, the record type a literal is created
@@ -12379,6 +12513,7 @@ ylong inplace_slot(Yv *st, Yv *node) {
 Yv *int_imm(Yv *r) {
     int ok = 0;
     ylong v = 0;
+    r = as_num(r);
     if (yv_l(yr_get(r, "k")) == K_num) {
         Yv *num = r;
         if (!lit_is_float(yr_get(num, "v"))) {
@@ -15411,6 +15546,7 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, ylong wlevel,
             pt = yv_l(yr_get(pr, "t"));
             ph = yv_l(yr_get(pr, "h"));
         }
+        fold_consts(yr_get(ast3, "stmts"));
         Yv *gdecls = global_decls(yr_get(ast3, "stmts"));
         Yv *gnames = yav(0);
         ylong gi = 0;

@@ -4493,6 +4493,61 @@ def fns_kind(label: str) -> long {
 // ── expression emission (value in %rax) ────────────────────────────────
 
 // The emitter's walk counts its depth (tags.y MAX_NEST) like the others'.
+// The unit's number consts, read as their literal so an operand takes the
+// immediate forms (`node.k == K.call` is `cmp $11, %rax`, not two loads):
+// `name` for `const name = 7`, and for `const name = { f: 7, ... }` the name
+// with -2 and each number field under `name.f`. Unannotated only (an
+// annotation may make `1` a float), and none the checker saw escape
+// (types.y escaped: an address taken, a record read whole).
+let fold_ix: NameIx = parser.nameix_new(8);
+let fold_lits: [Node] = [];
+
+def fold_consts(stmts: [Node]) -> void {
+    fold_ix = parser.nameix_new(8);
+    fold_lits = [];
+    let esc = types.escaped();
+    foreach (s in stmts) {
+        if (s.k == K.decl) {
+            let decl: Decl = s;
+            let v = decl.v;
+            if (decl.kind == "const" && decl.typ.k == K.tnone && !(decl.name in esc)) {
+                if (v.k == K.num) {
+                    parser.nameix_put(fold_ix, decl.name, len(fold_lits));
+                    fold_lits += v;
+                } else if (v.k == K.rec) {
+                    let rec: RecLit = v;
+                    parser.nameix_put(fold_ix, decl.name, -2);
+                    for i in 0..len(rec.keys) {
+                        if (rec.vals[i].k == K.num) {
+                            parser.nameix_put(fold_ix, decl.name + "." + rec.keys[i], len(fold_lits));
+                            fold_lits += rec.vals[i];
+                        };
+                    };
+                };
+            };
+        };
+    };
+};
+
+// n, or the literal a folded const read stands for (fold_consts).
+def as_num(n: Node) -> Node {
+    if (len(fold_lits) == 0) { return n; };
+    let k = n.k;
+    let i = -1;
+    if (k == K.id) {
+        let id: Leaf = n;
+        i = parser.nameix_get(fold_ix, id.v);
+    } else if (k == K.dot) {
+        let dot: Dot = n;
+        let o = dot.obj;
+        if (o.k == K.id) {
+            let oid: Leaf = o;
+            if (parser.nameix_get(fold_ix, oid.v) == -2) { i = parser.nameix_get(fold_ix, oid.v + "." + dot.key); };
+        };
+    };
+    if (i >= 0) { fold_lits[i] } else { n }
+};
+
 def gen(st: EmitSt, node: Node) -> EmitSt {
     nest++;
     if (nest > MAX_NEST) { too_deep("an expression", node.line, node.col); };
@@ -4525,8 +4580,14 @@ def gen_go(st: EmitSt, node: Node) -> EmitSt {
     } else if (k == K.void) {
         emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0)
     } else if (k == K.id) {
-        let id: Leaf = node;
-        gen_id(st, id)
+        let f = as_num(node);
+        if (f.k == K.num) {
+            let lit: Leaf = f;
+            gen_lit(st, lit)
+        } else {
+            let id: Leaf = node;
+            gen_id(st, id)
+        }
     } else if (k == K.un) {
         let un: Un = node;
         gen_un(st, un)
@@ -4624,8 +4685,14 @@ def gen_go(st: EmitSt, node: Node) -> EmitSt {
         let assign: DotAssign = node;
         gen_dotassign(st, assign)
     } else if (k == K.dot) {
-        let dot: Dot = node;
-        gen_dot(st, dot)
+        let f = as_num(node);
+        if (f.k == K.num) {
+            let lit: Leaf = f;
+            gen_lit(st, lit)
+        } else {
+            let dot: Dot = node;
+            gen_dot(st, dot)
+        }
     } else if (k == K.rec) {
         // record literal anywhere (let/call-arg): heap address in %rax.
         let rec: RecLit = node;
@@ -5781,6 +5848,8 @@ def gen_cat(st: EmitSt, node: Bin, lt: Type, rt: Type) -> EmitSt {
 def leaf_expr(n: Node) -> bool {
     if (n.k == K.num || n.k == K.id) {
         true
+    } else if (n.k == K.dot) {
+        as_num(n).k == K.num
     } else if (n.k == K.un) {
         let un: Un = n;
         leaf_expr(un.e)
@@ -6416,6 +6485,7 @@ def gen_shift(st: EmitSt, node: Bin, op: str) -> EmitSt {
 // The count of a shift when it is a literal from 0 to 63 (gen_shift), else
 // -1. A radix literal may wrap negative (0xFFFF_FFFF_FFFF_FFFF is -1).
 def shift_imm(r: Node) -> long {
+    r = as_num(r);
     if (r.k == K.num) {
         let num: Leaf = r;
         if (lit_is_float(num.v)) { -1 } else {
@@ -8234,6 +8304,7 @@ def int_cmp_jcc(st: EmitSt, node: Node) -> long {
 // The value of a plain decimal literal that fits an instruction's 32-bit
 // immediate (at most nine digits), else -1: `x + 1`, `i < 8`.
 def imm_lit(n: Node) -> long {
+    n = as_num(n);
     if (n.k == K.num) {
         let num: Leaf = n;
         let s = norm_num(num.v);
@@ -9426,18 +9497,37 @@ def gen_reclit(st: EmitSt, node: RecLit, want: Type) -> EmitSt {
     if (wu.k == K.tunion && rtu.k == K.trec) { slots = union_lay(rtu, wu); };
     let dr = ty_desc_in(st, rt, wu);
     st = dr.st;
+    // %rcx holds the new record after every field's store. A field whose value
+    // loads without touching %rcx (rec_leaf_field) is stored through it as it
+    // stands; any other runs with the record parked on the stack and reloads
+    // %rcx from there. When every field is the first kind nothing is parked.
+    let leafs: [bool] = [];
+    let parked = false;
+    for li in 0..nent {
+        let lf = mkeys[li] != "..." && rec_leaf_field(st, mvals[li], rtu, mkeys[li]);
+        leafs += lf;
+        if (!lf) { parked = true; };
+    };
     st = emit_insn(st, insn.F_MOV_I_R, 8 * n + 16, insn.R_RDI, 64, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_CALL_L, lbl_new("y_alloc"), 0, 0, 0, 0, 0, 0);
-    st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+    if (parked) { st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0); };
+    st = emit_insn(st, insn.F_MOV_R_R, insn.R_RAX, 64, insn.R_RCX, 64, 0, 0, 0);
     st = emit_insn(st, insn.F_LEA_P_R, -1, -1, 1, 0, dr.label, insn.R_RAX, 64);
-    st = emit_insn(st, insn.F_POP_R, insn.R_RCX, 64, 0, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RCX, -1, 1, 0, -1);
-    st = emit_insn(st, insn.F_PUSH_R, insn.R_RCX, 64, 0, 0, 0, 0, 0);
     for i in 0..nent {
         // mv is walked twice (gen, then infer), so bind it once.
         let mv = mvals[i];
         let mk = mkeys[i];
-        if (mk == "...") {
+        if (leafs[i]) {
+            let off = 8 + (mfield_idx(slots, mk)) * 8;
+            let im = rec_leaf_imm(mv);
+            if (im >= 0) {
+                st = emit_insn(st, insn.F_MOV_I_D, im, insn.R_RCX, -1, 1, off, -1, 0);
+            } else {
+                st = gen(st, mv);
+                st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RCX, -1, 1, off, -1);
+            };
+        } else if (mk == "...") {
             // Spread: the source runs ONCE; copy each of its fields into
             // the slot it has here. A later entry's store overwrites.
             st = gen(st, mv);
@@ -9454,7 +9544,8 @@ def gen_reclit(st: EmitSt, node: RecLit, want: Type) -> EmitSt {
                     st = emit_insn(st, insn.F_MOV_D_R, insn.R_RDX, -1, 1, 8 * rec_slot(sfs2, sf2.name), -1, insn.R_RSI, 64);
                     st = emit_insn(st, insn.F_MOV_R_D, insn.R_RSI, 64, insn.R_RCX, -1, 1, 8 + mi2 * 8, -1);
                 });
-            }
+            };
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RCX, 64, 0, 0, 0, 0, 0);
         } else {
             let ft = rec_field_type(rtu, mk);
             if (lit_wraps(st, mv, rtu, mk, ft)) {
@@ -9465,13 +9556,45 @@ def gen_reclit(st: EmitSt, node: RecLit, want: Type) -> EmitSt {
             } else {
                 st = gen_as(st, mv, ft);
             };
-            st = emit_insn(st, insn.F_POP_R, insn.R_RCX, 64, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_MOV_0_R, insn.R_RSP, -1, 1, 0, -1, insn.R_RCX, 64);
             st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RCX, -1, 1, 8 + (mfield_idx(slots, mk)) * 8, -1);
         };
-        st = emit_insn(st, insn.F_PUSH_R, insn.R_RCX, 64, 0, 0, 0, 0, 0);
     };
-    st = emit_insn(st, insn.F_POP_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
-    emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RAX, 64, 0, 0, 0, 0)
+    if (parked) {
+        st = emit_insn(st, insn.F_POP_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+        emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RAX, 64, 0, 0, 0, 0)
+    } else {
+        emit_insn(st, insn.F_LEA_D_R, insn.R_RCX, -1, 1, 8, -1, insn.R_RAX, 64)
+    }
+};
+
+// Field mk of a literal made as rtu takes mv with no code but mv's own load,
+// and that load leaves %rcx alone (gen_reclit keeps the record there): a leaf
+// that is not captured, not wrapped as some(v), and of the field's own type,
+// so gen_as would convert nothing.
+def rec_leaf_field(st: EmitSt, mv: Node, rtu: Type, mk: str) -> bool {
+    if (!rcx_free_leaf(st, mv) && rec_leaf_imm(mv) < 0) { return false; };
+    let ft = rec_field_type(rtu, mk);
+    if (lit_wraps(st, mv, rtu, mk, ft)) { return false; };
+    let w = types.unfold(ft);
+    let wk = w.k;
+    if (wk == K.tfloat || wk == K.tbyte || wk == K.tbigint) { false }
+    else if (wk == K.trec) { types.unfold(infer(st, mv)).k == K.trec }
+    else if (wk == K.tunion) { types.teq(types.unfold(infer(st, mv)), w) }
+    else { true }
+};
+
+// The 32-bit immediate a leaf field stores directly, else -1: a small integer
+// literal (or a folded const), true and false, none.
+def rec_leaf_imm(mv: Node) -> long {
+    let k = mv.k;
+    if (k == K.bool) {
+        let b: Leaf = mv;
+        if (b.v == "true") { 1 } else { 0 }
+    } else if (k == K.id) {
+        let id: Leaf = mv;
+        if (id.v == "none") { 0 } else { imm_lit(mv) }
+    } else { imm_lit(mv) }
 };
 
 // Value mv given for field mk of rtu, the record type a literal is created
@@ -10585,6 +10708,7 @@ def inplace_slot(st: EmitSt, node: Node) -> long {
 def int_imm(r: Node) -> AsmNum {
     let ok = false;
     let v = 0;
+    r = as_num(r);
     if (r.k == K.num) {
         let num: Leaf = r;
         if (!lit_is_float(num.v)) {
@@ -13272,6 +13396,7 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
             pr = phase_end(times, "lint", pt, ph);
             times = pr.times; pt = pr.t; ph = pr.h;
         };
+        fold_consts(ast3.stmts);
         let gdecls = global_decls(ast3.stmts);
         let gnames: [str] = [];
         gdecls.foreach((e) => {

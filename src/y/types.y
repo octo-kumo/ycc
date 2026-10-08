@@ -1207,6 +1207,15 @@ def tc_res(typ: Type, st: TcSt) -> TcRes {
 let tc_ix: NameIx = parser.nameix_new(8);
 let tc_ixn = 0;
 
+// The consts the emitter may not fold (native.y fold_consts): a record const
+// read as a whole value (it may then be aliased and written through) and any
+// const whose address is taken. tc_dotbase is set while the object of a
+// `name.field` read is checked, which is not such a read.
+let tc_esc: [str] = [];
+let tc_dotbase = false;
+
+def escaped() -> [str] { tc_esc };
+
 def lookup(bindings: [Binding], name: str) -> Lookup {
     // The newest binding of the name: the last few bindings first (a
     // local is almost always among them), then the index: scanning back
@@ -2046,6 +2055,8 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
         tc_res(type_node({ k: K.tvoid }), st)
     } else if (k == K.id) {
         let id: Leaf = node;
+        let db = tc_dotbase;
+        tc_dotbase = false;
         if (id.v == "self") {
             // resolved by the enclosing def pre-pass (stored as _self in st)
             if (st.self.k == K.tnone) {
@@ -2072,6 +2083,7 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
                 tc_res(t_unk(), st)
             } else {
                 st = check_visible(st, got, id.v, id.line, id.col);
+                if (!db && got.kind == "const" && !is_prim_type(got.typ)) { tc_esc += id.v; };
                 tc_res(got.typ, st)
             }
         }
@@ -2104,6 +2116,7 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
             let id: Leaf = addr.e;
             if (id.v != "self") {
                 let got = lookup(st.bindings, id.v);
+                if (got.kind == "const") { tc_esc += id.v; };
                 if (got.kind == "") {
                     st = fail(st, "undefined variable '" + id.v + "'", addr.line, addr.col);
                     tc_res(t_unk(), st)
@@ -2533,6 +2546,7 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
         // function would resolve against the rebound shape.
         let dobj = dot.obj;
         let dkey = dot.key;
+        tc_dotbase = dobj.k == K.id;
         let r = typeof_expr(st, dobj);
         typeof_field(r.st, r.typ, dkey, dot.line, dot.col)
     } else if (k == K.func) {
@@ -5390,6 +5404,7 @@ def check_program(ast: Block, ext: [Sym]) -> [Diag] {
     // program would be a cost paid for a feature no compiler run uses.
     if (tc_index) { tci_reset(); };
     tc_ixn = 0;
+    tc_esc = [];
     // pass 1: collect top-level def signatures (allows mutual recursion).
     let defs: [Field] = [];
     let pstmts: [Node] = ast.stmts;
@@ -5456,4 +5471,4 @@ def def_sig(name: str, func: Func) -> Field {
     { name: name, opt: false, typ: type_node({ k: K.tfunc, args: args, ret: ret }) }
 };
 
-export { check_program, os_call_names, tstr, teq, leaf_of, field_pos, field_merge, narrow_type, pat_subject, union_member, unfold, members, union_parts, pat_members, lit_target, opt_wraps, t_mutex, t_sem, tcanon, tsig, inferred_ret, str_sorted, rec_names, type_names, member_fields, member_field_type, is_prim_type, is_boxable_type, box_field_name, str_method, fmt_spec, fmt_kind, expr_type, type_index_on, type_index_off, Sym };
+export { check_program, escaped, os_call_names, tstr, teq, leaf_of, field_pos, field_merge, narrow_type, pat_subject, union_member, unfold, members, union_parts, pat_members, lit_target, opt_wraps, t_mutex, t_sem, tcanon, tsig, inferred_ret, str_sorted, rec_names, type_names, member_fields, member_field_type, is_prim_type, is_boxable_type, box_field_name, str_method, fmt_spec, fmt_kind, expr_type, type_index_on, type_index_off, Sym };

@@ -1513,6 +1513,15 @@ static int is_hash_key(Yv *t) {
 static Yv *tc_ix;
 static ylong tc_ixn;
 
+// The consts the emitter may not fold (native.y fold_consts): a record const
+// read as a whole value (it may then be aliased and written through) and any
+// const whose address is taken. tc_dotbase is set while the object of a
+// `name.field` read is checked, which is not such a read.
+static Yv *tc_esc;
+static int tc_dotbase;
+
+Yv *escaped(void) { return tc_esc; }
+
 static Yv *lookup(Yv *bindings, Yv *name) {
     /* The newest binding of the name: the last few bindings first (a
      * local is almost always among them), then the index: scanning back
@@ -2580,6 +2589,8 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
         // (an id, see below), never this node.
         return yr(2, "typ", yr(1, "k", yv_long(K_tvoid)), "st", st);
     } else if (yv_l(k) == K_id) {
+        int db = tc_dotbase;
+        tc_dotbase = 0;
         if (ys_eq_lit(yr_get(node, "v"), "self")) {
             // resolved by the enclosing def pre-pass (stored as _self in st)
             if (yv_l(yr_get(yr_get(st, "self"), "k")) == K_tnone) {
@@ -2620,6 +2631,9 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                 st = check_visible(st, got, yr_get(node, "v"),
                                    yv_l(yr_get(node, "line")),
                                    yv_l(yr_get(node, "col")));
+                if (!db && ys_eq_lit(yr_get(got, "kind"), "const") && !is_prim_type(yr_get(got, "typ"))) {
+                    tc_esc = ya_push(tc_esc, yr_get(node, "v"));
+                }
                 return yr(2, "typ", yr_get(got, "typ"), "st", st);
             }
         }
@@ -2656,6 +2670,9 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
             if (!ys_eq_lit(yr_get(yr_get(node, "e"), "v"), "self")) {
                 Yv *got = lookup(yr_get(st, "bindings"),
                                  yr_get(yr_get(node, "e"), "v"));
+                if (ys_eq_lit(yr_get(got, "kind"), "const")) {
+                    tc_esc = ya_push(tc_esc, yr_get(yr_get(node, "e"), "v"));
+                }
                 if (ys_eq_lit(yr_get(got, "kind"), "")) {
                     st = fail(st,
                               ys_cat(ys_cat(ys("undefined variable '"),
@@ -3297,6 +3314,7 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
         // wrong shape.
         Yv *dobj = yr_get(node, "obj");
         Yv *dkey = yr_get(node, "key");
+        tc_dotbase = yv_l(yr_get(dobj, "k")) == K_id;
         Yv *r = typeof_expr(st, dobj);
         return typeof_field(yr_get(r, "st"), yr_get(r, "typ"), dkey,
                             yv_l(yr_get(node, "line")),
@@ -7178,6 +7196,7 @@ Yv *check_program(Yv *ast, Yv *ext) {
         tci_reset();
     }
     tc_ixn = 0;
+    tc_esc = yav(0);
     // pass 1: collect top-level def signatures (allows mutual recursion).
     Yv *defs = yav(0);
     Yv *pstmts = yr_get(ast, "stmts");
