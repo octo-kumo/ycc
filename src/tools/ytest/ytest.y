@@ -3,6 +3,9 @@
 //   ytest [-j N] [SUITE...]   run the suites (all by default), N cases at once
 //   ytest list                the suite names
 //   ytest coverage [FILE...]  gcov line coverage of src/c over a corpus (cov.y)
+//   ytest deadcode [-v] F.s   unreachable instructions in a listing (deadcode.y)
+//   ytest pty-test PROG       test/std/term_test.y on a real pty (pty.y)
+//   ytest pack-stats PACK     a std pack's bytes by unit and field (pack.y)
 //
 // A suite is a module (su_*.y) whose `cases` lists closures; yt.y runs each in
 // a child of its own, so the cases of every suite share one pool of workers
@@ -21,12 +24,20 @@ import su_inline;
 import su_ycc;
 import su_fixpoint;
 import su_debug;
+import su_link;
+import su_gc;
+import su_eof;
+import su_treeshake;
+import su_std;
+import pack;
+import deadcode;
+import pty;
 
-let ALL = ["port", "pe-port", "native", "native-examples", "examples", "audit", "ycc-units", "loops", "comprehensive", "ycc", "fixpoint", "debug"];
+let ALL = ["port", "pe-port", "native", "native-examples", "examples", "audit", "ycc-units", "loops", "comprehensive", "ycc", "fixpoint", "debug", "link", "gc", "stdin-eof", "treeshake", "std-suites"];
 
 // Suites that drive the built ./ycc; skipped without it.
 def needs_ycc(name: str) -> bool {
-    name == "native" || name == "native-examples" || name == "ycc" || name == "fixpoint" || name == "debug"
+    name == "native" || name == "native-examples" || name == "ycc" || name == "fixpoint" || name == "debug" || name == "link"
 };
 
 def suite_cases(name: str) -> [yt.Case] {
@@ -40,6 +51,11 @@ def suite_cases(name: str) -> [yt.Case] {
     if (name == "ycc") { return su_ycc.cases(); };
     if (name == "fixpoint") { return su_fixpoint.cases(); };
     if (name == "debug") { return su_debug.cases(); };
+    if (name == "link") { return su_link.cases(); };
+    if (name == "gc") { return su_gc.cases(); };
+    if (name == "stdin-eof") { return su_eof.cases(); };
+    if (name == "treeshake") { return su_treeshake.cases(); };
+    if (name == "std-suites") { return su_std.cases(); };
     if (name == "loops") { return su_inline.loops(); };
     if (name == "comprehensive") { return su_inline.comprehensive(); };
     []
@@ -165,6 +181,12 @@ def main(av: [str]) -> long {
         } else if (a == "list") {
             print(join(ALL, "\n"));
             return 0;
+        } else if (a == "deadcode") {
+            return deadcode.main(av[i + 1:]);
+        } else if (a == "pty-test") {
+            return pty.main(av[i + 1:]);
+        } else if (a == "pack-stats") {
+            return pack.main(av[i + 1:]);
         } else if (a == "coverage") {
             return cov.coverage(av[i + 1:]);
         } else {

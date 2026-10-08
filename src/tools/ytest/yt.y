@@ -40,6 +40,14 @@ def tmp_dir(tag: str) -> str {
     d
 };
 
+/** This program's own path (/proc/self/exe), to run a subcommand of it. */
+def self_exe() -> str {
+    let buf: [byte; 4096] = [0; 4096];
+    let p = cz("/proc/self/exe");
+    let n = syscall(89, &p[0], &buf[0], 4096);
+    if (n <= 0) { "" } else { from_bytes(buf[0:n]) }
+};
+
 def cleanup() {
     if (SCR != "") { fs.remove_all(SCR); };
 };
@@ -525,7 +533,7 @@ def init() {
     COLOR = syscall(16, 1, 21505, &tio[0]) == 0 && env("NO_COLOR", "") == "";
 };
 
-export { Cmd, Res, Case, Done, scratch, tmp, tmp_dir, cleanup, environ, env, which,
+export { Cmd, Res, Case, Done, self_exe, scratch, tmp, tmp_dir, cleanup, environ, env, which,
     cmd, run, exe, exe2, sh, q, read, write, concat, same_file, size, ls, files, num, le, bytes_of, have, hex, sleep_us, tree, clip, lines,
-    first_line, words, has_line, cz, say, pass, fail, skip, check, case_of, run_cases, init, paint, getpid,
+    first_line, words, has_line, cz, sleep_us, say, pass, fail, skip, check, case_of, run_cases, init, paint, getpid,
     MEM_KB, SCALE, QUIET };

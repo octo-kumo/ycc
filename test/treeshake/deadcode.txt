@@ -1,5 +1,5 @@
 # The instructions a program cannot execute, in the shaken -S listing
-# (test/sh/deadcode.py). A ratchet: growth fails, shrinkage is reported so the
+# (src/tools/ytest/deadcode.y, `ytest deadcode`). A ratchet: growth fails, shrinkage is reported so the
 # numbers can be brought down deliberately.
 #
 # hello.y and minimal.y allocate nothing (print(<int>) formats on the stack),
@@ -10,4 +10,4 @@ hello.y 0
 minimal.y 0
 forloop.y 0
 foreach.y 0
-dead.y 35
+dead.y 6
