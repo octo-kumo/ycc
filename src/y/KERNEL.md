@@ -2469,3 +2469,34 @@ is allowed while "off > size" is refused.
 
 The fixture stays parked (_t018_create.y.keep), the instrumented copy is in /tmp, and
 test/kernel is 69 passed, 0 failed / 69 total.
+
+### Round 150: the allocator's cursor is GARBAGE -- that is the wild pointer
+
+Printed inside yfs_append's attach loop, with the clamp fixed, and the whole thing is
+now one number:
+
+    AP base=384 size=0 have=0 want=1 next=1735357041
+    AP b=1735357041 bi=0
+    trap vector=14 err=0 cr2=-130947386953472
+
+yfs_next -- the image's first free block, computed by yfs_recompute_next at yfs_init --
+is 1735357041 (0x67726131, which even looks like text).  yfs_append takes it as the
+block to attach, pokes it into the new inode's direct[0], and then yfs_store does
+`blk * yfs_block_size` on it: 1735357041 * 256 is the wild address the trap reports.
+So the fault is not in the append logic at all -- every step of it is right -- but in
+the cursor it was handed.
+
+That cursor comes from a scan of the inode table at init, and the scan itself is now
+the whole remaining question: it reads yfs_inodes from the superblock (+16), walks the
+inodes' direct slots and one indirect block, and takes the maximum.  Two candidates,
+both one print away: yfs_inodes is not what the fixture wrote (so the scan reads past
+the inode table into whatever the page holds), or the page_alloc'd image is not the
+memory the fixture wrote (so the metadata reads back as something else entirely --
+0x67726131 looks like ASCII, which is suspicious).
+
+ALSO FIXED, and reading-verified: yfs_store refused `off >= size`, but yfs_append
+legitimately calls it with off == the file's old size (0 for a new file) after moving
+the size -- so the clamp is now `off > size`, allowing a write at the end while still
+refusing one strictly past it.  The suite is green with it.
+
+test/kernel is 69 passed, 0 failed / 69 total; the create fixture stays parked.

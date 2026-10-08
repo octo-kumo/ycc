@@ -65,7 +65,9 @@ def yfs_block_of(ino: long, pos: long) -> long {
 def yfs_read(ino: long, off: long, buf: long, len: long) -> long {
     if (yfs_ok == 0) { return 0 - 1; };
     let size = yfs_size(ino);
-    if (off >= size) { return 0; };
+    // off == size is allowed: that is a write AT THE END, which yfs_append uses after
+    // it has already moved the size.  Only a write strictly past the end is refused.
+    if (off > size) { return 0; };
     if (off + len > size) { len = size - off; };
     let done = 0;
     while (done < len) {
