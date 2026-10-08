@@ -31,7 +31,7 @@ if [ ! -x "${YREF:-$ROOT/refs/ycc.ref}" ]; then
 fi
 YSELF_BIN="${YSELF:-$ROOT/ycc}"
 
-ALL="port pe-port native native-examples examples audit ycc-units ycc fixpoint loops comprehensive debug link pkg stdin-eof net lsp math coverage treeshake gc std-suites kernel"
+ALL="port pe-port native native-examples examples audit ycc-units ycc fixpoint loops comprehensive debug link pkg stdin-eof net lsp math coverage treeshake gc std-suites kernel os"
 SUITES="${*:-$ALL}"
 declare -A SCRIPT_FOR=(
     [port]="test_port.sh"
@@ -57,6 +57,7 @@ declare -A SCRIPT_FOR=(
     [gc]="test_gc.sh"
     [std-suites]="test_std_suites.sh"
     [kernel]="test_kernel.sh"
+    [os]="test_os.sh"
 )
 # Under -j these run as this many shards at once: alone they take ~80, ~37,
 # ~40 and ~16 s, the others 13 s at most. pe-port is the Windows half of the
@@ -73,7 +74,7 @@ done
 # these suites exercise the built ycc binary itself.
 skipped() {
     case "$1" in
-        ycc | fixpoint | native | native-examples | debug | link | pkg | math | kernel) [ ! -x "$YSELF_BIN" ] ;;
+        ycc | fixpoint | native | native-examples | debug | link | pkg | math | kernel | os) [ ! -x "$YSELF_BIN" ] ;;
         *) return 1 ;;
     esac
 }

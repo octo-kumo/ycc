@@ -1,0 +1,126 @@
+Y-OS shell. Type help.
+$ echo n0
+n0
+$ echo n1
+n1
+$ echo n2
+n2
+$ echo n3
+n3
+$ echo n4
+n4
+$ echo n5
+n5
+$ echo n6
+n6
+$ echo n7
+n7
+$ echo n8
+n8
+$ echo n9
+n9
+$ echo n10
+n10
+$ echo n11
+n11
+$ echo n12
+n12
+$ echo n13
+n13
+$ echo n14
+n14
+$ echo n15
+n15
+$ echo n16
+n16
+$ echo n17
+n17
+$ echo n18
+n18
+$ echo n19
+n19
+$ echo n20
+n20
+$ echo n21
+n21
+$ echo n22
+n22
+$ echo n23
+n23
+$ echo n24
+n24
+$ echo n25
+n25
+$ echo n26
+n26
+$ echo n27
+n27
+$ echo n28
+n28
+$ echo n29
+n29
+$ echo n30
+n30
+$ echo n31
+n31
+$ echo n32
+n32
+$ echo n33
+n33
+$ echo n34
+n34
+$ echo n35
+n35
+$ echo n36
+n36
+$ echo n37
+n37
+$ echo n38
+n38
+$ echo n39
+n39
+$ echo n40
+n40
+$ echo n41
+n41
+$ echo n42
+n42
+$ echo n43
+n43
+$ echo n44
+n44
+$ echo n45
+n45
+$ echo n46
+n46
+$ echo n47
+n47
+$ echo n48
+n48
+$ echo n49
+n49
+$ echo n50
+n50
+$ echo n51
+n51
+$ echo n52
+n52
+$ echo n53
+n53
+$ echo n54
+n54
+$ echo n55
+n55
+$ echo n56
+n56
+$ echo n57
+n57
+$ echo n58
+n58
+$ echo n59
+n59
+$ write a.txt x
+$ cat a.txt
+x
+$ halt
+bye

@@ -121,7 +121,7 @@ moved with the callgrind table, `perf`, or `ycc --time`.
 
 ## Tests
 
-`make test` runs all 23 suites (`test/sh/run_all.sh`; `-j N`, `YSHARD=k/n`,
+`make test` runs all 24 suites (`test/sh/run_all.sh`; `-j N`, `YSHARD=k/n`,
 `./run_all.sh -j4 port native` for a subset). They take `CYCC`, `YREF`, `YCC`,
 `YSELF`, `YQUIET` and `YPORT_SELF` from the environment.
 
@@ -141,6 +141,7 @@ moved with the callgrind table, `perf`, or `ycc --time`.
 | coverage | every diagnostic and manual section has a checked test (`test/COVERAGE.md`) |
 | gc | the collector under a cap: two threads of 300k allocations must run in 64 MiB (`test/y/native/t385_gc_threads_alloc.y`), with `--gc=never` as the control that does not fit, and two threads of 20k under `--gc-stress` (a cycle at every allocation, `test/y/native/t389_gc_stress_threads.y`) |
 | kernel | `test/kernel/`: each fixture built with both engines (`--kernel`), images compared, booted under qemu, serial output and exit status checked (`test/sh/test_kernel.sh`; needs `qemu-system-x86_64`) |
+| os | `test/os/`: Y-OS (`make os`, `os/README.md`) built by both compilers (identical images), then scripted shell sessions booted under qemu and compared with their transcripts (`test/sh/test_os.sh`, `os/session.py`) |
 | treeshake, std-suites | the unused-code cost ratchets, plus four checks a runtime addition must pass: a program that allocates nothing names no `y_alloc` and no collector block, `--gc=auto` omits the collector for a one-shot allocation while `always` keeps and `never` drops it (same output), `test/sh/deadcode.py` counts instructions the shake leaves unreachable (`test/treeshake/deadcode.txt`), and `test/treeshake/shapes.txt` records the size of the shapes a runtime change moves first; the `test/std/` self-test suites |
 
 Run by hand (not in `make test`): `test/sh/cycc-win.sh` (wine),
@@ -238,6 +239,7 @@ under its bare name because generated code calls it by label, and a program's ow
   ships; the server does diagnostics, hover, definition, completion and
   formatting. `check-names.py` also tests each module's basename, because
   `strip_ns` rewrites any `name.field` program-wide as a module reference.
+- `os/` — Y-OS: the boot program, the shell and its programs, `mkfs`, the session driver (`os/README.md`).
 - `src/tools/ytest/` — the suite timer and gcov coverage reporter.
 - `refs/` — reference binaries for the port gate. `test/` — `sh/` drivers, `y/`
   fixtures (`native/`, `audit/`, `examples/`, `ycc/`, `net/`), `std/`, `math/`,

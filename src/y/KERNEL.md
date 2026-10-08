@@ -18,6 +18,28 @@ hello from a Y kernel
 42
 ```
 
+## Y-OS: a usable system
+
+The kernel now boots a real system: `make run-os` (`os/README.md`). A shell reads
+lines from the serial console and runs the programs in `os/uland/` with fork,
+execve and wait4, from a YFS1 filesystem mounted in RAM. Getting there needed
+the kernel to give memory back, which it had never done:
+
+* a page free list (`page_free`; `page_alloc` takes from it before the bump
+  pointer, and zeroes what it hands out); `vm_free_dir` returns a whole address
+  space; `execve` frees the replaced one; a reaped task's space and kernel stack
+  go back at the next `task_sweep` (wait4 and fork call it);
+* `mmap` of an anonymous region only RESERVES it: the page-fault stub for vector
+  14 calls `y_kernel_pf`, which maps a zeroed page on first touch and resumes the
+  instruction. The runtime maps a 4 MB heap chunk per process; a fork used to
+  copy all of it, and now copies the few pages a program touched;
+* `wait4` that blocked never marked the child reaped, so the next `wait4` found
+  the old zombie and returned at once (the shell printed its prompt before the
+  command's output); `TASK_REAPED` fixes it, and `TASK_FREE` no longer shares a
+  value with `TASK_BOOT`;
+* `u015_exec` used to exec itself forever and end only when `exec` ran the kernel
+  out of pages; it execs once, with an argument, and stops.
+
 ## Status and handover
 
 The summary of the whole kernel line of work: what exists, what is proven, what is parked, and the rules learned by breaking them. The rest of this file is the chronological log, round by round.

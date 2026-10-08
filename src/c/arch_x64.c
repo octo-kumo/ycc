@@ -700,7 +700,7 @@ static int trap_has_error_code(ylong v) {
     return v == 8 || (v >= 10 && v <= 14) || v == 17 || v == 21 || v == 29 || v == 30;
 }
 
-Yv *kernel_irq_text(int has_trap) {
+Yv *kernel_irq_text(int has_trap, int has_pf) {
     Yv *out = ys(".text\n");
     out = ys_cat(out, ys("y_kernel_irq_default:\n"));
     out = ys_cat(out, ys("    jmp y_kernel_halt\n"));
@@ -727,6 +727,35 @@ Yv *kernel_irq_text(int has_trap) {
         out = ys_cat(out, ys("    push %r11\n"));
         out = ys_cat(out, ys("    mov %rsp, %rbp\n"));
         out = ys_cat(out, ys("    and $-16, %rsp\n"));
+        if (v == 14 && has_pf) {
+            /* A page fault the kernel can mend (std/kernel.y's y_kernel_pf:
+               a page of an mmap'd region touched for the first time) is
+               resumed: the registers come back, the error code is dropped and
+               the faulting instruction runs again. Anything else falls on into
+               the diagnostic below. */
+            out = ys_cat(out, ys("    mov 80(%rbp), %rax\n"));
+            out = ys_cat(out, ys("    push %rax\n"));
+            out = ys_cat(out, ys("    call y_cr2_get\n"));
+            out = ys_cat(out, ys("    push %rax\n"));
+            out = ys_cat(out, ys("    call y_kernel_pf\n"));
+            out = ys_cat(out, ys("    add $16, %rsp\n"));
+            out = ys_cat(out, ys("    test %rax, %rax\n"));
+            out = ys_cat(out, ys("    jz y_trap_pf_fail\n"));
+            out = ys_cat(out, ys("    mov %rbp, %rsp\n"));
+            out = ys_cat(out, ys("    pop %r11\n"));
+            out = ys_cat(out, ys("    pop %r10\n"));
+            out = ys_cat(out, ys("    pop %r9\n"));
+            out = ys_cat(out, ys("    pop %r8\n"));
+            out = ys_cat(out, ys("    pop %rdi\n"));
+            out = ys_cat(out, ys("    pop %rsi\n"));
+            out = ys_cat(out, ys("    pop %rdx\n"));
+            out = ys_cat(out, ys("    pop %rcx\n"));
+            out = ys_cat(out, ys("    pop %rax\n"));
+            out = ys_cat(out, ys("    pop %rbp\n"));
+            out = ys_cat(out, ys("    add $8, %rsp\n"));
+            out = ys_cat(out, ys("    iretq\n"));
+            out = ys_cat(out, ys("y_trap_pf_fail:\n"));
+        };
         out = ys_cat(out, ys_cat(ys_cat(ys("    mov $"), ys_long(v)), ys(", %eax\n")));
         out = ys_cat(out, ys("    push %rax\n"));
         if (trap_has_error_code(v)) {

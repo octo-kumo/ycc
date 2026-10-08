@@ -33,7 +33,7 @@ Yv *w_iat_bss_lines(void);
 ylong w_iat_offset(ylong d, ylong f);
 Yv *arch_heap_cells(void);
 Yv *arch_kernel_bss(void);
-Yv *kernel_irq_text(int has_trap);
+Yv *kernel_irq_text(int has_trap, int has_pf);
 Yv *arch_set_files(Yv *which);
 Yv *arch_set_lines(Yv *which, Yv *texts);
 Yv *arch_nogc_subs(void);

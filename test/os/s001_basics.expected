@@ -1,0 +1,27 @@
+Y-OS shell. Type help.
+$ help
+built in: help, exit (or halt)
+programs: sh ls cat echo wc head cp rm mv write halt pwd 
+$ echo hello world
+hello world
+$ ls
+sh
+ls
+cat
+echo
+wc
+head
+cp
+rm
+mv
+write
+halt
+pwd
+$ pwd
+/
+$ nosuch
+sh: nosuch: not found
+$ echo   spaced    out  
+spaced out
+$ halt
+bye

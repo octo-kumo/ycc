@@ -8,6 +8,7 @@ import fs;
 
 const BS = 4096;
 const INODES = 256;
+const SPARE = 512;       // free blocks (2 MiB) at the end of the image
 
 def put32(b: [byte], off: long, v: long) -> void {
     b[off] = v & 255;
@@ -53,7 +54,9 @@ if (len(a) < 3 || ((len(a) - 2) % 2) != 0) {
         k = k + 1;
     };
     let root_block = data_start;
-    let total = data_start + 1 + total_data;
+    // Room to grow: a file made or extended on the running system takes free
+    // blocks, and the filesystem ends where the image does.
+    let total = data_start + 1 + total_data + SPARE;
     let img: [byte] = [];
     let z = 0;
     while (z < total * BS) { img += 0; z = z + 1; };

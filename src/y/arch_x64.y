@@ -698,7 +698,7 @@ def name_in_ints(xs: [long], v: long) -> bool {
     found
 };
 
-def kernel_irq_text(has_trap: bool) -> str {
+def kernel_irq_text(has_trap: bool, has_pf: bool) -> str {
     let out = ".text\n";
     out += "y_kernel_irq_default:\n";
     out += "    jmp y_kernel_halt\n";
@@ -730,6 +730,35 @@ def kernel_irq_text(has_trap: bool) -> str {
         out += "    push %r11\n";
         out += "    mov %rsp, %rbp\n";
         out += "    and $-16, %rsp\n";
+        if (v == 14 && has_pf) {
+            // A page fault the kernel can mend (std/kernel.y's y_kernel_pf:
+            // a page of an mmap'd region touched for the first time) is
+            // resumed: the registers come back, the error code is dropped and
+            // the faulting instruction runs again. Anything else falls on into
+            // the diagnostic below.
+            out += "    mov 80(%rbp), %rax\n";
+            out += "    push %rax\n";
+            out += "    call y_cr2_get\n";
+            out += "    push %rax\n";
+            out += "    call y_kernel_pf\n";
+            out += "    add $16, %rsp\n";
+            out += "    test %rax, %rax\n";
+            out += "    jz y_trap_pf_fail\n";
+            out += "    mov %rbp, %rsp\n";
+            out += "    pop %r11\n";
+            out += "    pop %r10\n";
+            out += "    pop %r9\n";
+            out += "    pop %r8\n";
+            out += "    pop %rdi\n";
+            out += "    pop %rsi\n";
+            out += "    pop %rdx\n";
+            out += "    pop %rcx\n";
+            out += "    pop %rax\n";
+            out += "    pop %rbp\n";
+            out += "    add $8, %rsp\n";
+            out += "    iretq\n";
+            out += "y_trap_pf_fail:\n";
+        };
         out += "    mov $" + tostring(v) + ", %eax\n";
         out += "    push %rax\n";
         if (name_in_ints(errv, v)) {

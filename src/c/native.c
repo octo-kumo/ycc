@@ -15978,6 +15978,7 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog, ylong gcmode) {
          * a root or it is dropped and the stub names nothing.  A program
          * that links no such def gets a generated default instead. */
         extra = ya_push(extra, ys("y_kernel_trap"));
+        extra = ya_push(extra, ys("y_kernel_pf"));
     };
     Yv *shaken = prune_bodies(labels, refs, extra);
     Yv *keep = yr_get(shaken, "keep");
@@ -16195,7 +16196,8 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog, ylong gcmode) {
         /* Whether some unit defines the trap handler decides whether the
          * generated stubs call it or fall back to a halt. */
         ylong has_trap = namemap_get(namemap_build(labels), ys("y_kernel_trap"));
-        parts = ya_push(parts, part_text(kernel_irq_text(has_trap >= 0)));
+        ylong has_pf = namemap_get(namemap_build(labels), ys("y_kernel_pf"));
+        parts = ya_push(parts, part_text(kernel_irq_text(has_trap >= 0, has_pf >= 0)));
     };
     /* The bodies, kept, as parts: their items, with the `.loc` markers moved
        to the unit's place in the program's file table. Every body is items

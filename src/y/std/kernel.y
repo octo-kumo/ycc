@@ -414,8 +414,35 @@ def heap_bytes() -> long {
 def heap_start_phys() -> long { y_heap_init(); y_heap_start_get() };
 def phys_start() -> long { phys_init(); phys_next };
 
+// Freed pages are chained through their own first word: head is the most
+// recently freed page, 0 when there is none. page_alloc takes from the chain
+// before the bump pointer; pages_alloc (contiguous runs) never does.
+let free_head = 0;
+let free_count = 0;
+
+def page_free(p: long) -> void {
+    if (p != 0) {
+        poke64(p, free_head);
+        free_head = p;
+        free_count = free_count + 1;
+    };
+};
+
+/** How many pages are on the free chain. */
+def pages_freed() -> long { free_count };
+
+/** One zeroed page, or 0 when RAM is exhausted. */
 def page_alloc() -> long {
     phys_init();
+    if (free_head != 0) {
+        let p = free_head;
+        free_head = peek64(p);
+        free_count = free_count - 1;
+        // a recycled page is dirty, and a page table must start empty
+        let k = 0;
+        while (k < 4096) { poke64(p + k, 0); k = k + 8; };
+        return p;
+    };
     if (phys_next + 4096 > phys_limit) { return 0; };
     let p = phys_next;
     phys_next = phys_next + 4096;
@@ -752,7 +779,10 @@ const TASK_BLOCKED = 4;
 // is done (the boot context).  Distinct from BLOCKED so the scheduler can tell
 // "waiting for a message" from "waiting for the machine to go quiet".
 const TASK_BOOT = 5;
-const TASK_FREE = 5;
+const TASK_FREE = 7;
+// Waited for, its status delivered, but its address space and kernel stack are
+// still in use until the task is no longer the one running (task_sweep).
+const TASK_REAPED = 6;
 
 // A message: what a client asks a server, and what a server answers.  Five
 // words is a design decision, not a limit of anything: a message that needs to
@@ -890,6 +920,12 @@ def sys_mmap(addr: long, len: long, prot: long, flags: long, fd: long, off: long
     let base = mmap_next;
     if (addr != 0) { base = addr; };
     mmap_next = base + want + 4096;
+    // An anonymous region the kernel chooses is only RESERVED: each page is
+    // given (zeroed) by y_kernel_pf the first time it is touched. The runtime
+    // maps a 4 MB heap chunk and a program that allocates little touches a few
+    // pages of it, so a fork has almost nothing to copy and an exit nothing to
+    // free. A region at a fixed address is mapped now.
+    if (addr == 0) { return base; };
     let p = 0;
     while (p < want) {
         let page = page_alloc();
@@ -901,6 +937,18 @@ def sys_mmap(addr: long, len: long, prot: long, flags: long, fd: long, off: long
 };
 
 def mmap_bytes() -> long { mmap_next - MMAP_BASE };
+
+/** The page-fault handler the trap stub calls first (arch_x64.y kernel_irq_text):
+ *  a page missing inside the mmap region is mapped, zeroed, and the faulting
+ *  instruction retried. Nonzero when the fault is mended. */
+def y_kernel_pf(err: long, addr: long) -> long {
+    if ((err & 1) != 0) { return 0; };
+    if (addr < MMAP_BASE || addr >= mmap_next) { return 0; };
+    let page = page_alloc();
+    if (page == 0) { return 0; };
+    if (!vm_map(vm_current(), addr & (0 - 4096), page, PTE_U | PTE_W)) { return 0; };
+    1
+};
 
 // exit_group(status): the task is done.  With one task left the machine has
 // nothing to run, so the verdict goes to the test harness through kexit; with
@@ -1151,6 +1199,7 @@ def task_exit() -> void {
                 tasks[p].wait_pid = 0 - 1;
                 tasks[p].wait_statusp = 0;
                 task_complete(p, tasks[cur_task].pid);
+                tasks[cur_task].state = TASK_REAPED;
             };
         };
     };
@@ -1212,6 +1261,43 @@ def vm_copy_user(src: long, dst: long) -> bool {
         pi = pi + 1;
     };
     true
+};
+
+// Free everything a dead (or replaced) address space owns: the user pages, the
+// page tables over them, and the directory itself. The kernel's pieces stay: the
+// 2 MB page in PD[0] (a large-page entry, skipped) and PML4[273], the direct map,
+// shared with every address space. `dir` must not be the one in CR3.
+def vm_free_dir(dir: long) -> void {
+    let e4 = peek64(dir);
+    if ((e4 & PTE_P) != 0) {
+        let pdpt = e4 & PHYS_MASK;
+        let pi = 0;
+        while (pi < 512) {
+            let e3 = peek64(pdpt + pi * 8);
+            if ((e3 & PTE_P) != 0 && (e3 & PTE_PS) == 0) {
+                let pd = e3 & PHYS_MASK;
+                let di = 0;
+                while (di < 512) {
+                    let e2 = peek64(pd + di * 8);
+                    if ((e2 & PTE_P) != 0 && (e2 & PTE_PS) == 0) {
+                        let pt = e2 & PHYS_MASK;
+                        let ti = 0;
+                        while (ti < 512) {
+                            let e1 = peek64(pt + ti * 8);
+                            if ((e1 & PTE_P) != 0 && (e1 & PTE_U) != 0) { page_free(e1 & PHYS_MASK); };
+                            ti = ti + 1;
+                        };
+                        page_free(pt);
+                    };
+                    di = di + 1;
+                };
+                page_free(pd);
+            };
+            pi = pi + 1;
+        };
+        page_free(pdpt);
+    };
+    page_free(dir);
 };
 
 // fork: a copy of this address space and a frame that is a copy of this one,
@@ -1323,14 +1409,9 @@ def kexec_load(dir: long, ino: long) -> long {
     let size = yfs.yfs_size(ino);
     if (size <= 0) { return 0; };
     let nb = (size + 4095) / 4096;
-    let buf = 0;
-    let i = 0;
-    while (i < nb) {
-        let p = page_alloc();
-        if (p == 0) { return 0; };
-        if (i == 0) { buf = p; };
-        i = i + 1;
-    };
+    // the file, read once into a contiguous run that goes back when it is loaded
+    let buf = pages_alloc(nb * 4096);
+    if (buf == 0) { return 0; };
     let k = 0;
     while (k < size) { poke8(buf + k, yfs.yfs_fetch(ino, k)); k = k + 1; };
     if (peek32(buf) != 1179403647) { return 0; };
@@ -1362,7 +1443,10 @@ def kexec_load(dir: long, ino: long) -> long {
         };
         p = p + 1;
     };
-    peek64(buf + 24)
+    let entry = peek64(buf + 24);
+    let fi = 0;
+    while (fi < nb) { page_free(buf + fi * 4096); fi = fi + 1; };
+    entry
 };
 
 // execve(path): replace the CALLER with the program in that file.  A fresh address
@@ -1429,8 +1513,10 @@ def sys_execve(pathp: long, argvp: long) -> long {
     top = top - 8;
     poke64(spage + top, argc);
     let sp = top;
+    let old = tasks[cur_task].cr3;
     vm_switch(dir);
     tasks[cur_task].cr3 = dir;
+    if (old != dir) { vm_free_dir(old); };
     let fr = y_cur_task_rsp_get();
     if (fr == 0) { return E_FAULT; };
     poke_va64(fr + 120, entry);
@@ -1440,6 +1526,7 @@ def sys_execve(pathp: long, argvp: long) -> long {
 };
 
 def sys_fork() -> long {
+    task_sweep();
     let me = cur_task;
     let dir = vm_new_dir();
     if (dir == 0) { return E_FAULT; };
@@ -1564,12 +1651,33 @@ def sys_ipc_reply(value: long) -> long {
 // until one is.  The suspended case needs no kernel continuation: the caller's
 // frame is already saved at the syscall entry, so the child's exit writes the
 // answer into it and the scheduler resumes it there.
+/** Give back what reaped tasks held: the address space and, for a forked task,
+ *  its 64 KB kernel stack. A reaped task that is still the one running keeps
+ *  both until the next sweep. */
+def task_sweep() -> void {
+    let i = 0;
+    while (i < len(tasks)) {
+        if (tasks[i].state == TASK_REAPED && i != cur_task) {
+            if (tasks[i].cr3 != tasks[cur_task].cr3) { vm_free_dir(tasks[i].cr3); };
+            if (tasks[i].name == "fork") {
+                let kb = tasks[i].kstack - 65536 - DIRECT_BASE;
+                let ki = 0;
+                while (ki < 16) { page_free(kb + ki * 4096); ki = ki + 1; };
+            };
+            tasks[i].state = TASK_FREE;
+        };
+        i = i + 1;
+    };
+};
+
 def sys_wait4(pid: long, statusp: long, options: long, rusage: long) -> long {
+    task_sweep();
     let z = find_zombie(cur_task, pid);
     if (z >= 0) {
         let w = (tasks[z].exit_status & 255) << 8;
         if (statusp != 0 && user_ok(statusp, 4)) { poke_va32(statusp, w); };
-        tasks[z].state = TASK_FREE;
+        tasks[z].state = TASK_REAPED;
+        task_sweep();
         return tasks[z].pid;
     };
     if ((options & 1) != 0) { return 0; };

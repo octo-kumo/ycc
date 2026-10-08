@@ -1,0 +1,7 @@
+help
+echo hello world
+ls
+pwd
+nosuch
+echo   spaced    out  
+halt

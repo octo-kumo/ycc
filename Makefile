@@ -181,6 +181,15 @@ test-compile: cycc ycc
 LSP_SRC := $(wildcard src/tools/lsp/*.y)
 # The reference compiler, as the suites call it: the last blessed build.
 YREF ?= $(CURDIR)/refs/ycc.ref
+# Y-OS (os/README.md): the kernel image and a filesystem of the shell and its
+# programs in os/build/; `make run-os` boots it on this terminal.
+OS_SRCS=$(wildcard os/kernel/*.y os/uland/*.y os/tools/*.y)
+os/build/os.img os/build/os.fs: ycc $(OS_SRCS) $(STD_SRCS) os/build.sh
+	bash os/build.sh ./ycc
+os: os/build/os.img
+run-os: os
+	bash os/run.sh
+
 yserve: $(LSP_SRC) $(STD_SRCS) $(ARCH_SRCS) cycc
 	@rm -f yserve _yserve0 _yserve1 _yserve1p
 	ulimit -v $(CYCC_MEM_KB); ./cycc -o _yserve0 src/tools/lsp/yserve.y
@@ -422,4 +431,4 @@ $(DOC_PDF): $(DOC_SRC) docs/Tectonic.toml
 	fi
 	@echo "manual: $(DOC_PDF) ($$(stat -c%s $(DOC_PDF)) bytes, $$(grep -o '([0-9]* pages' $(DOC_LOG) | tail -1 | tr -d '()' | cut -d' ' -f1) pages), no errors and no warnings"
 
-.PHONY: all clean valgrind test test-fast test-compile asan test-asan asm-check ycc yserve lsp-ext lsp-vsix lsp-e2e check port-check corpus-diff bench bench-ir rebless docs
+.PHONY: all clean valgrind test test-fast test-compile asan test-asan asm-check ycc yserve lsp-ext lsp-vsix lsp-e2e check port-check corpus-diff bench bench-ir rebless docs os run-os

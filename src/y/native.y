@@ -13487,6 +13487,7 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit, gcmode: long) -> [LinkPart
         // links no such def gets a generated default instead (see
         // kernel_irq_text's has_trap).
         extra += "y_kernel_trap";
+        extra += "y_kernel_pf";
     };
     let shaken = prune_bodies(labels, refs, extra);
     let keep = shaken.keep;
@@ -13642,7 +13643,8 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit, gcmode: long) -> [LinkPart
         // Whether some unit defines the trap handler decides whether the
         // generated stubs call it or fall back to a halt.
         let has_trap = namemap_get(namemap_build(labels), "y_kernel_trap") >= 0;
-        parts += [part_text(arch.kernel_irq_text(has_trap))];
+        let has_pf = namemap_get(namemap_build(labels), "y_kernel_pf") >= 0;
+        parts += [part_text(arch.kernel_irq_text(has_trap, has_pf))];
     };
     // The bodies, kept, as parts: their items, with the `.loc` markers moved
     // to the unit's place in the program's file table. Every body is items

@@ -1,0 +1,39 @@
+Y-OS shell. Type help.
+$ write note.txt remember the milk
+$ cat note.txt
+remember the milk
+$ wc note.txt
+1 3 18 note.txt
+$ head -n 1 note.txt
+remember the milk
+$ cp note.txt copy.txt
+$ cat copy.txt
+remember the milk
+$ mv copy.txt moved.txt
+$ cat copy.txt
+cat: copy.txt: no such file
+$ cat moved.txt
+remember the milk
+$ rm note.txt
+$ rm note.txt
+rm: note.txt: no such file
+$ ls
+sh
+ls
+cat
+echo
+wc
+head
+cp
+rm
+mv
+write
+halt
+pwd
+moved.txt
+$ cat
+usage: cat <file>...
+$ cp nosuch x
+cp: nosuch: no such file
+$ halt
+bye
