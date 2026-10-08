@@ -1,7 +1,9 @@
-// YFS1 in the kernel.  The format is specified in src/y/KERNEL.md: a
+// YFS1 in the kmem.  The format is specified in src/y/KERNEL.md: a
 // superblock, a 64-byte inode table and data blocks, all read straight out of
 // the image's physical memory (the multiboot module today, a page the fs server
 // mapped later).  The path walk, the fd broker and the fs server build on these.
+
+import kmem;
 
 let yfs_phys: long = 0;
 let yfs_ok: long = 0;
@@ -16,20 +18,20 @@ let yfs_root: long = 1;
 
 // u16 by hand: the kernel's peek helpers are for 8, 32 and 64 bits.
 def yfs_u16(off: long) -> long {
-    kernel.peek8(yfs_phys + off) + kernel.peek8(yfs_phys + off + 1) * 256
+    kmem.peek8(yfs_phys + off) + kmem.peek8(yfs_phys + off + 1) * 256
 };
 
 def yfs_u32(off: long) -> long {
-    kernel.peek32(yfs_phys + off)
+    kmem.peek32(yfs_phys + off)
 };
 
 def yfs_init(phys: long) -> bool {
     yfs_phys = phys;
     yfs_ok = 0;
-    if (kernel.peek8(phys) != 89) { return false; };
-    if (kernel.peek8(phys + 1) != 70) { return false; };
-    if (kernel.peek8(phys + 2) != 83) { return false; };
-    if (kernel.peek8(phys + 3) != 49) { return false; };
+    if (kmem.peek8(phys) != 89) { return false; };
+    if (kmem.peek8(phys + 1) != 70) { return false; };
+    if (kmem.peek8(phys + 2) != 83) { return false; };
+    if (kmem.peek8(phys + 3) != 49) { return false; };
     if (yfs_u32(4) != 1) { return false; };
     yfs_block_size = yfs_u32(8);
     yfs_total = yfs_u32(12);
@@ -80,7 +82,7 @@ def yfs_read(ino: long, off: long, buf: long, len: long) -> long {
         let src = blk * yfs_block_size + bo;
         let i = 0;
         while (i < n) {
-            kernel.poke_va8(buf + done + i, kernel.peek8(yfs_phys + src + i));
+            kmem.poke_va8(buf + done + i, kmem.peek8(yfs_phys + src + i));
             i = i + 1;
         };
         done = done + n;
@@ -97,7 +99,7 @@ def yfs_name_is(e: long, path: str, a: long, b: long) -> bool {
     if (yfs_u16(e) != b - a) { return false; };
     let i = 0;
     while (i < b - a) {
-        if (kernel.peek8(yfs_phys + e + 8 + i) != path[a + i]) { return false; };
+        if (kmem.peek8(yfs_phys + e + 8 + i) != path[a + i]) { return false; };
         i = i + 1;
     };
     true
@@ -168,7 +170,7 @@ def yfs_readdir(ino: long, index: long, buf: long) -> long {
     if (nl == 0) { return 0 - 1; };
     let k = 0;
     while (k < nl) {
-        kernel.poke_va8(buf + k, kernel.peek8(yfs_phys + e + 8 + k));
+        kmem.poke_va8(buf + k, kmem.peek8(yfs_phys + e + 8 + k));
         k = k + 1;
     };
     nl
@@ -190,7 +192,7 @@ def yfs_fetch(ino: long, off: long) -> long {
     if (off >= yfs_size(ino)) { return 0 - 1; };
     let blk = yfs_block_of(ino, off);
     if (blk == 0) { return 0 - 1; };
-    kernel.peek8(yfs_phys + blk * yfs_block_size + off % yfs_block_size)
+    kmem.peek8(yfs_phys + blk * yfs_block_size + off % yfs_block_size)
 };
 
 // The write counterpart of yfs_read, in the same physical terms as yfs_fetch: the
@@ -209,7 +211,7 @@ def yfs_store(ino: long, off: long, buf: long, len: long) -> long {
         if (blk == 0) { return done; };
         let bo = pos % yfs_block_size;
         let d = blk * yfs_block_size + bo;
-        kernel.poke8(yfs_phys + d, kernel.peek_va8(buf + done));
+        kmem.poke8(yfs_phys + d, kmem.peek_va8(buf + done));
         done = done + 1;
     };
     done
@@ -257,19 +259,19 @@ def yfs_append(ino: long, buf: long, len: long) -> long {
         let b = yfs_next;
         yfs_next = yfs_next + 1;
         if (bi < 12) {
-            kernel.poke32(yfs_phys + base + 8 + bi * 4, b);
+            kmem.poke32(yfs_phys + base + 8 + bi * 4, b);
         } else {
             let ind = yfs_u32(base + 56);
             if (ind == 0) {
                 ind = yfs_next;
                 yfs_next = yfs_next + 1;
-                kernel.poke32(yfs_phys + base + 56, ind);
+                kmem.poke32(yfs_phys + base + 56, ind);
             };
-            kernel.poke32(yfs_phys + ind * yfs_block_size + (bi - 12) * 4, b);
+            kmem.poke32(yfs_phys + ind * yfs_block_size + (bi - 12) * 4, b);
         };
         bi = bi + 1;
     };
-    kernel.poke32(yfs_phys + base + 4, size + len);
+    kmem.poke32(yfs_phys + base + 4, size + len);
     let n = yfs_store(ino, size, buf, len);
     if (n != len) { return 0 - 1; };
     len
@@ -290,8 +292,8 @@ def yfs_add_entry(dir: long, name: str, mode: long) -> long {
     };
     if (ino < 0) { return 0 - 1; };
     let base = yfs_inode_off(ino);
-    kernel.poke32(yfs_phys + base, mode);
-    kernel.poke32(yfs_phys + base + 4, 0);      // size 0
+    kmem.poke32(yfs_phys + base, mode);
+    kmem.poke32(yfs_phys + base + 4, 0);      // size 0
     // the root directory's entry list: walk past the entries already there
     let rbase = yfs_inode_off(dir);
     let count = yfs_u32(rbase + 4);
@@ -299,7 +301,7 @@ def yfs_add_entry(dir: long, name: str, mode: long) -> long {
     if (blk == 0) {
         blk = yfs_next;
         yfs_next = yfs_next + 1;
-        kernel.poke32(yfs_phys + rbase + 8, blk);
+        kmem.poke32(yfs_phys + rbase + 8, blk);
     };
     let e = blk * yfs_block_size;
     let idx = 0;
@@ -309,14 +311,14 @@ def yfs_add_entry(dir: long, name: str, mode: long) -> long {
         e = e + ((8 + nl + 3) & (0 - 4));
         idx = idx + 1;
     };
-    kernel.poke8(yfs_phys + e, len(name) & 255);
-    kernel.poke8(yfs_phys + e + 1, (len(name) >> 8) & 255);
-    kernel.poke8(yfs_phys + e + 2, 1);
-    kernel.poke8(yfs_phys + e + 3, 0);
-    kernel.poke32(yfs_phys + e + 4, ino);
+    kmem.poke8(yfs_phys + e, len(name) & 255);
+    kmem.poke8(yfs_phys + e + 1, (len(name) >> 8) & 255);
+    kmem.poke8(yfs_phys + e + 2, 1);
+    kmem.poke8(yfs_phys + e + 3, 0);
+    kmem.poke32(yfs_phys + e + 4, ino);
     let k = 0;
-    while (k < len(name)) { kernel.poke8(yfs_phys + e + 8 + k, name[k] & 255); k = k + 1; };
-    kernel.poke32(yfs_phys + rbase + 4, count + 1);
+    while (k < len(name)) { kmem.poke8(yfs_phys + e + 8 + k, name[k] & 255); k = k + 1; };
+    kmem.poke32(yfs_phys + rbase + 4, count + 1);
     ino
 };
 
@@ -340,7 +342,7 @@ def yfs_unlink(name: str) -> long {
         let nl = yfs_u16(e);
         if (nl == 0) { return 0 - 1; };
         if (nl == len(name) - st && yfs_name_is(e, name, st, len(name))) {
-            kernel.poke32(yfs_phys + yfs_inode_off(yfs_u32(e + 4)), 0);
+            kmem.poke32(yfs_phys + yfs_inode_off(yfs_u32(e + 4)), 0);
             let src = e + ((8 + nl + 3) & (0 - 4));
             let j = idx + 1;
             while (j < count) {
@@ -348,15 +350,15 @@ def yfs_unlink(name: str) -> long {
                 if (sl == 0) { j = count; } else {
                     let sstride = (8 + sl + 3) & (0 - 4);
                     let k = 0;
-                    while (k < sstride) { kernel.poke8(yfs_phys + e + k, kernel.peek8(yfs_phys + src + k)); k = k + 1; };
+                    while (k < sstride) { kmem.poke8(yfs_phys + e + k, kmem.peek8(yfs_phys + src + k)); k = k + 1; };
                     e = e + sstride;
                     src = src + sstride;
                     j = j + 1;
                 };
             };
             let t = 0;
-            while (t < 8) { kernel.poke8(yfs_phys + e + t, 0); t = t + 1; };
-            kernel.poke32(yfs_phys + rbase + 4, count - 1);
+            while (t < 8) { kmem.poke8(yfs_phys + e + t, 0); t = t + 1; };
+            kmem.poke32(yfs_phys + rbase + 4, count - 1);
             return 0;
         };
         e = e + ((8 + nl + 3) & (0 - 4));
@@ -390,7 +392,7 @@ def yfs_link(dir: long, name: str, ino: long) -> long {
     if (blk == 0) {
         blk = yfs_next;
         yfs_next = yfs_next + 1;
-        kernel.poke32(yfs_phys + rbase + 8, blk);
+        kmem.poke32(yfs_phys + rbase + 8, blk);
     };
     let e = blk * yfs_block_size;
     let idx = 0;
@@ -400,14 +402,14 @@ def yfs_link(dir: long, name: str, ino: long) -> long {
         e = e + ((8 + nl + 3) & (0 - 4));
         idx = idx + 1;
     };
-    kernel.poke8(yfs_phys + e, n & 255);
-    kernel.poke8(yfs_phys + e + 1, (n >> 8) & 255);
-    kernel.poke8(yfs_phys + e + 2, 1);
-    kernel.poke8(yfs_phys + e + 3, 0);
-    kernel.poke32(yfs_phys + e + 4, ino);
+    kmem.poke8(yfs_phys + e, n & 255);
+    kmem.poke8(yfs_phys + e + 1, (n >> 8) & 255);
+    kmem.poke8(yfs_phys + e + 2, 1);
+    kmem.poke8(yfs_phys + e + 3, 0);
+    kmem.poke32(yfs_phys + e + 4, ino);
     let k = 0;
-    while (k < n) { kernel.poke8(yfs_phys + e + 8 + k, byte_at(name, st + k)); k = k + 1; };
-    kernel.poke32(yfs_phys + rbase + 4, count + 1);
+    while (k < n) { kmem.poke8(yfs_phys + e + 8 + k, byte_at(name, st + k)); k = k + 1; };
+    kmem.poke32(yfs_phys + rbase + 4, count + 1);
     ino
 };
 

@@ -171,6 +171,18 @@ comparisons compare raw addresses; equality is word equality. The
 offset must be \ic{long} or \ic{byte}, and mixing pointer types in a
 difference is a compile error.
 
+\noindent\textbf{Pointers and integers.} A pointer is its address at run
+time, and two builtins say so. \ic{ptr\_addr(p)} is the \ic{long} value of a
+pointer. \ic{ptr\_from(n)} is the pointer whose address is the integer
+\ic{n} (a \ic{long} or a \ic{byte}), the inverse. Its result has no pointee
+type of its own, so the type comes from where it is used: write
+\ic{let p: *byte = ptr\_from(a)}, pass it to a \ic{*T} parameter, or store it
+in a \ic{*T} field. A bare \ic{let p = ptr\_from(a)} is a compile error
+(``ptr\_from does not say which pointer type it makes''), and so is a
+non-integer argument. Nothing checks that \ic{n} is mapped memory: a wrong
+address faults when it is dereferenced, which is what a kernel's physical
+memory access needs and why ordinary code does not use it.
+
 \noindent\textbf{A pointer does not outlive what it points into.}
 \ic{\&x} on a local or a parameter is the address of a cell in that
 function's frame, and the frame is reclaimed the moment the function

@@ -3,6 +3,7 @@
 // size on purpose: the reader takes it from the superblock, so this also pins
 // that it is not hard-wired to 4096.
 import kernel;
+import yfs;
 
 def p8(addr: long, v: long) -> void { kernel.poke_va8(addr, v & 255); };
 
@@ -45,8 +46,8 @@ p8(img + 521, 105);
 // the file's data in block 3
 p8(img + 768, 104);
 p8(img + 769, 105);
-let ok = yfs_init(img);
-let ino = yfs_lookup("hi");
-let n = yfs_read(ino, 0, out, 2);
+let ok = yfs.yfs_init(img);
+let ino = yfs.yfs_lookup("hi");
+let n = yfs.yfs_read(ino, 0, out, 2);
 print("yfs " + tostring(ok) + " ino " + tostring(ino) + " n " + tostring(n) + " c " + tostring(kernel.peek_va8(out)) + tostring(kernel.peek_va8(out + 1)) + "\n");
 kernel.kexit(9);

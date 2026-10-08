@@ -4549,6 +4549,23 @@ def typeof_call_go(st: TcSt, node: Call) -> TcRes {
                     tc_res(type_node({ k: K.tlong }), st)
                 }
             }
+        } else if (name == "ptr_from") {
+            // ptr_from(n) -> *T: the pointer whose numeric value is the integer
+            // n, the inverse of ptr_addr. The pointee type is not in the
+            // argument, so the result is a pointer to "no type yet" (tunk) that any
+            // *T accepts (an annotation, a parameter, a store); an unannotated
+            // `let p = ptr_from(n)` is refused (typeof_decl). Nothing checks
+            // that n is an address worth dereferencing -- that is the point.
+            if (len(cargs) != 1) {
+                st = fail(st, "ptr_from takes exactly 1 argument (an integer)", node.line, node.col);
+            } else {
+                let r = typeof_expr(st, cargs[0]);
+                st = r.st;
+                if (r.typ.k == K.tlong || r.typ.k == K.tbyte || r.typ.k == K.tunk) { } else {
+                    st = fail(st, "ptr_from needs an integer, got " + tstr(r.typ), node.line, node.col);
+                };
+            };
+            tc_res(type_node({ k: K.tptr, to: t_unk() }), st)
         } else if (name == "os_call") {
             // os_call("y_os_read", fd, buf, len) -> long: the NAMED syscall
             // layer. The first argument is a name from os_call_names (the only
@@ -4978,6 +4995,12 @@ def typeof_decl(st: TcSt, node: Decl) -> TcRes {
             st = r.st;
             let t = r.typ;
             let vk = node.v.k;
+            if (node.typ.k == K.tnone && t.k == K.tptr) {
+                let pt: TPtr = t;
+                if (pt.to.k == K.tunk) {
+                    st = fail(st, "ptr_from does not say which pointer type it makes; write it: let " + disp(node.name) + ": *T = ptr_from(n)", node.line, node.col);
+                };
+            };
             if (node.typ.k != K.tnone) {
                 if (!is_value_type(node.typ)) {
                     st = fail(st, "annotation '" + tstr(node.typ) + "' is not a native value type", node.line, node.col);

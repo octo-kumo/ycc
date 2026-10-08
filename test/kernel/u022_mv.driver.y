@@ -3,6 +3,7 @@
 // made the first attempt at this fault was a program longer than one block whose
 // second block was never recorded, so the ELF was loaded truncated.
 import kernel;
+import yfs;
 import elf from "../../os/kernel/elfload.y";
 
 def p8(addr: long, v: long) -> void { kernel.poke_va8(addr, v & 255); };
@@ -68,8 +69,8 @@ let k = 0;
 while (k < msize) { p8(img + prog_at * BS + k, kernel.peek8(mphys + k)); k = k + 1; };
 let m = 0;
 while (m < len(msg)) { p8(img + msg_at * BS + m, msg[m]); m = m + 1; };
-let ok = yfs_init(img);
-print("fs ok=" + tostring(ok) + " msg=" + tostring(yfs_lookup_path("/msg")) + "\n");
+let ok = yfs.yfs_init(img);
+print("fs ok=" + tostring(ok) + " msg=" + tostring(yfs.yfs_lookup_path("/msg")) + "\n");
 let dir = kernel.vm_new_dir();
 kernel.vm_switch(dir);
 let entry = elf.elf_map(img + prog_at * BS, msize);

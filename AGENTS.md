@@ -32,7 +32,7 @@ semantics. **Every change to `src/y/*.y` gets the same change in `src/c/*.c`.**
   and is **not** disposable: it is the port's ground truth.
 - **No std source is embedded in the compiler.** Every `src/y/std/*.y` is a
   unit compiled into the std pack attached to `ycc` (the four core units and the
-  sixteen library modules alike; `STD_SRCS` in the Makefile makes an edit
+  twenty library modules alike (`kmem`, `yfs`, `fd` and `kernel` among them: `ycc --kernel` needs no checkout either); `STD_SRCS` in the Makefile makes an edit
   rebuild every packed binary) — edit them directly; there is no generator, and
   `str.y` holds no string literals. A source is read from disk (`src/y/std/`,
   or `std/` beside the binary: native.y `std_lib_path`) only to build the pack,
@@ -106,18 +106,14 @@ moved with the callgrind table, `perf`, or `ycc --time`.
   `valgrind --tool=callgrind`, `gdb` (`break file.y:N`, no variables), `nm` and
   `addr2line` name things.
 - Always feed `</dev/null` in scripts.
-- **A built `ycc` is self-contained.** All twenty std units travel precompiled
+- **A built `ycc` is self-contained.** All twenty-four std units travel precompiled
   in the std pack attached to the binary (pack 9: each unit stored and
   compressed on its own, so a compile decodes only the units it links), so a
   copy in an empty directory compiles `import fs`/`net`/`args`-style programs
   with no source anywhere. A lone `ycc --std-src` has nothing to compile from and
   says so.
-  **Exception: `--kernel`.** `std/kernel.y`, `yfs.y` and `fd.y` are not pack
-  units: `import kernel` splices them from disk (`std_resolve`), so a kernel
-  build needs a checkout (or `std/` beside the binary). Only the kernel's arch
-  prelude (`arch.kernel`) travels in the pack.
 - Branches and worktrees: `master`, plus `kernel` (`.worktrees/kernel`, the
-  microkernel: `ycc --kernel`, `YOS-HANDOVER.md`), which is merged into `master`
+  microkernel: `ycc --kernel`, `src/y/KERNEL.md`), which is merged into `master`
   and kept for further kernel work. `mem-lifetime` and `bigint-math` were merged
   and their worktrees removed; `std-pack-units` and `backup-master` are merged
   too. Merge forward into `master`; never rewrite a branch another worktree has

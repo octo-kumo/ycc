@@ -34,11 +34,11 @@ base
 hover on nothing: true
 -- completion
 isIncomplete true
-every label: twice,base,use,print,syscall,len,push,some,is_some,unwrap,values,trim,ord,byte_at,chr,tolong,tofloat,tostring,index_of,mod,prepend,last_index_of,join,split,puts,eputs,clock_us,time_us,sleep,heap_used,keys,spawn,fork,wait_pid,mutex,sem,lock,try_lock,post,wait,exit,argv,range,typeof,bytes,from_bytes,ptr_addr,os_call,jmp_at,self,none
+every label: twice,base,use,print,syscall,len,push,some,is_some,unwrap,values,trim,ord,byte_at,chr,tolong,tofloat,tostring,index_of,mod,prepend,last_index_of,join,split,puts,eputs,clock_us,time_us,sleep,heap_used,keys,spawn,fork,wait_pid,mutex,sem,lock,try_lock,post,wait,exit,argv,range,typeof,bytes,from_bytes,ptr_addr,ptr_from,os_call,jmp_at,self,none
 prefix `tw`: twice
-inside use(): twice,base,use,local,print,syscall,len,push,some,is_some,unwrap,values,trim,ord,byte_at,chr,tolong,tofloat,tostring,index_of,mod,prepend,last_index_of,join,split,puts,eputs,clock_us,time_us,sleep,heap_used,keys,spawn,fork,wait_pid,mutex,sem,lock,try_lock,post,wait,exit,argv,range,typeof,bytes,from_bytes,ptr_addr,os_call,jmp_at,self,none
-at use()'s closing brace: twice,base,use,print,syscall,len,push,some,is_some,unwrap,values,trim,ord,byte_at,chr,tolong,tofloat,tostring,index_of,mod,prepend,last_index_of,join,split,puts,eputs,clock_us,time_us,sleep,heap_used,keys,spawn,fork,wait_pid,mutex,sem,lock,try_lock,post,wait,exit,argv,range,typeof,bytes,from_bytes,ptr_addr,os_call,jmp_at,self,none
-at top level: twice,base,use,print,syscall,len,push,some,is_some,unwrap,values,trim,ord,byte_at,chr,tolong,tofloat,tostring,index_of,mod,prepend,last_index_of,join,split,puts,eputs,clock_us,time_us,sleep,heap_used,keys,spawn,fork,wait_pid,mutex,sem,lock,try_lock,post,wait,exit,argv,range,typeof,bytes,from_bytes,ptr_addr,os_call,jmp_at,self,none
+inside use(): twice,base,use,local,print,syscall,len,push,some,is_some,unwrap,values,trim,ord,byte_at,chr,tolong,tofloat,tostring,index_of,mod,prepend,last_index_of,join,split,puts,eputs,clock_us,time_us,sleep,heap_used,keys,spawn,fork,wait_pid,mutex,sem,lock,try_lock,post,wait,exit,argv,range,typeof,bytes,from_bytes,ptr_addr,ptr_from,os_call,jmp_at,self,none
+at use()'s closing brace: twice,base,use,print,syscall,len,push,some,is_some,unwrap,values,trim,ord,byte_at,chr,tolong,tofloat,tostring,index_of,mod,prepend,last_index_of,join,split,puts,eputs,clock_us,time_us,sleep,heap_used,keys,spawn,fork,wait_pid,mutex,sem,lock,try_lock,post,wait,exit,argv,range,typeof,bytes,from_bytes,ptr_addr,ptr_from,os_call,jmp_at,self,none
+at top level: twice,base,use,print,syscall,len,push,some,is_some,unwrap,values,trim,ord,byte_at,chr,tolong,tofloat,tostring,index_of,mod,prepend,last_index_of,join,split,puts,eputs,clock_us,time_us,sleep,heap_used,keys,spawn,fork,wait_pid,mutex,sem,lock,try_lock,post,wait,exit,argv,range,typeof,bytes,from_bytes,ptr_addr,ptr_from,os_call,jmp_at,self,none
 -- completion items carry the declaration's own detail
   twice detail: (x: long) -> long
   twice detail has the return type too: true
@@ -46,11 +46,11 @@ at top level: twice,base,use,print,syscall,len,push,some,is_some,unwrap,values,t
   twice textEdit: twice
   found: 1
 -- the builtins come from the compiler's own list
-typable builtins 48, missing from the list 0
+typable builtins 49, missing from the list 0
 no `opt$test` in the list: true
 no `#fmt` in the list: true
 -- and the PREDICATE agrees with the list
-names 54, accepted by is_intrinsic_name 54, disagreed 0
+names 55, accepted by is_intrinsic_name 55, disagreed 0
 non-builtins wrongly accepted: 0
 -- the index the requests agree on
 definition and hover agree: true

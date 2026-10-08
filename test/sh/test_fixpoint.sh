@@ -80,9 +80,9 @@ fi
 printf 'import fs;\nimport net;\nimport struct;\nimport crypto;\nimport x509;\nimport tls;\nimport http;\nimport regex;\nimport json;\nputs("ok\\n");\n' > /tmp/yfp_std.y
 std_bad=""
 for f in /tmp/yfp_std.y "$ROOT"/src/y/std/*.y; do
-    # kernel, yfs and fd are the microkernel's: `ndef`s into assembly only a
+    # kernel, kmem, yfs and fd are the microkernel's: `ndef`s into assembly only a
     # kernel image has, so they compile under --kernel (below), not hosted
-    case "$(basename "$f")" in kernel.y|yfs.y|fd.y) continue ;; esac
+    case "$(basename "$f")" in kernel.y|kmem.y|yfs.y|fd.y) continue ;; esac
     if ! timeout 120 "$YCC_BIN" -o /tmp/yfp_std_bin "$f" </dev/null >/tmp/yfp_std_err 2>&1 \
        || [ -s /tmp/yfp_std_err ]; then
         std_bad="$std_bad $(basename "$f"): $(head -c 200 /tmp/yfp_std_err)"

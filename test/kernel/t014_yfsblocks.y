@@ -8,6 +8,7 @@
 // The file's byte i is 65 + (i % 26), which makes the answer arithmetic rather
 // than merely recorded: offset 250 -> 81, offset 299 -> 78.
 import kernel;
+import yfs;
 
 def p8(addr: long, v: long) -> void { kernel.poke_va8(addr, v & 255); };
 
@@ -50,8 +51,8 @@ while (i < 300) {
     p8(img + 768 + i, 65 + (i % 26));
     i = i + 1;
 };
-let ok = yfs_init(img);
-let ino = yfs_lookup("big");
-let n = yfs_read(ino, 250, out, 100);
+let ok = yfs.yfs_init(img);
+let ino = yfs.yfs_lookup("big");
+let n = yfs.yfs_read(ino, 250, out, 100);
 print("blk ok=" + tostring(ok) + " ino=" + tostring(ino) + " n=" + tostring(n) + " first=" + tostring(kernel.peek_va8(out)) + " last=" + tostring(kernel.peek_va8(out + n - 1)) + "\n");
 kernel.kexit(9);

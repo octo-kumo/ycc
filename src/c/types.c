@@ -6038,6 +6038,27 @@ static Yv *typeof_call_go(Yv *st, Yv *node) {
                     return yr(2, "typ", yr(1, "k", yv_long(K_tlong)), "st", st);
                 }
             }
+        } else if (ys_eq_lit(name, "ptr_from")) {
+            // ptr_from(n) -> *T: the pointer whose numeric value is the integer
+            // n, the inverse of ptr_addr. The pointee type is not in the
+            // argument, so the result is a pointer to "no type yet" (tunk) that any
+            // *T accepts (an annotation, a parameter, a store); an unannotated
+            // `let p = ptr_from(n)` is refused (typeof_decl). Nothing checks
+            // that n is an address worth dereferencing -- that is the point.
+            if (yv_len(cargs) != 1) {
+                st = fail(st, ys("ptr_from takes exactly 1 argument (an integer)"),
+                          yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
+            } else {
+                Yv *r = typeof_expr(st, ya_get(cargs, 0));
+                st = yr_get(r, "st");
+                ylong rk = yv_l(yr_get(yr_get(r, "typ"), "k"));
+                if (rk == K_tlong || rk == K_tbyte || rk == K_tunk) {
+                } else {
+                    st = fail(st, ys_cat(ys("ptr_from needs an integer, got "), tstr(yr_get(r, "typ"))),
+                              yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
+                };
+            };
+            return yr(2, "typ", yr(2, "k", yv_long(K_tptr), "to", yr(1, "k", yv_long(K_tunk))), "st", st);
         } else if (ys_eq_lit(name, "os_call")) {
             /* os_call("y_os_read", fd, buf, len) -> long: the NAMED syscall
                layer. The first argument is a name from os_call_names (the only
@@ -6638,6 +6659,15 @@ static Yv *typeof_decl(Yv *st, Yv *node) {
             st = yr_get(r, "st");
             Yv *t = yr_get(r, "typ");
             Yv *vk = yr_get(yr_get(node, "v"), "k");
+            if (yv_l(yr_get(yr_get(node, "typ"), "k")) == K_tnone &&
+                yv_l(yr_get(t, "k")) == K_tptr &&
+                yv_l(yr_get(yr_get(t, "to"), "k")) == K_tunk) {
+                st = fail(st,
+                          ys_cat(ys_cat(ys("ptr_from does not say which pointer type it makes; write it: let "),
+                                       disp(yr_get(node, "name"))),
+                                 ys(": *T = ptr_from(n)")),
+                          yv_l(yr_get(node, "line")), yv_l(yr_get(node, "col")));
+            };
             if (yv_l(yr_get(yr_get(node, "typ"), "k")) != K_tnone) {
                 if (!is_value_type(yr_get(node, "typ"))) {
                     st = fail(st,

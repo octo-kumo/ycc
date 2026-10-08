@@ -36,7 +36,9 @@ const IRQ_ATA1 = 14;
 const IRQ_ATA2 = 15;
 
 // ── the machine primitives (src/y/arch/kernel.s) ────────────────────────
-import fd from "./fd.y";
+import kmem;
+import yfs;
+import fd;
 
 ndef y_serial_init() -> long = "y_serial_init";
 ndef y_serial_irq_on() -> long = "y_serial_irq_on";
@@ -123,26 +125,8 @@ def getc() -> long {
     y_serial_getb()
 };
 
-// ── raw memory ──────────────────────────────────────────────────────────
-// Y has no address-to-pointer conversion -- a `*T` comes only from `&x` or
-// `arr.ptr` -- but a pointer to a GLOBAL can be MOVED by pointer arithmetic,
-// and a global's address is known.  So one 8-byte anchor is the whole of the
-// kernel's raw memory access: every read and write below is a pointer
-// arithmetic step away from it.  (This is the hack the language needs until
-// an integer-to-pointer cast exists; it is also why the kernel can touch page
-// tables, the Multiboot structure and device memory with no assembly.)
-let mem_word: long = 0;
-
-// The kernel's own mapping is ONE 2 MB page at 1 MB (arch_x64.y's trampoline):
-// the image and nothing else in the low half, so that 0x400000 -- where a
-// Linux executable is linked -- stays free for user space.  Everything else
-// in RAM is reached through the direct map the trampoline also builds, all of
-// RAM in 2 MB pages at 0xFFFF888000000000.  As a signed 64-bit long that base
-// is negative, and Y's pointer arithmetic carries it exactly.
-//
-// CONVENTION: peek*/poke* take a PHYSICAL address and add this; the Y heap's
-// own pointers are direct-map VIRTUAL addresses (phys_init sets them up that
-// way).  Mixing the two is the one way to get this wrong.
+// ── raw memory: kmem.y owns it; the names below forward to it ───────────
+// (the direct map's base, see kmem.y)
 const DIRECT_BASE = -131391639519232;
 
 // ALIGNMENT RULE: the low bits of an address come out with `& 7`, never with
@@ -157,29 +141,22 @@ const DIRECT_BASE = -131391639519232;
 // spelled out rather than written as 2^52-1 because a 64-bit literal is what
 // the encoder can emit (an ALU immediate is 32 bits).
 def peek_word(addr: long) -> long {
-    let p: *long = &mem_word;
-    *(p + (addr + DIRECT_BASE - ptr_addr(p)) / 8)
+    kmem.peek_word(addr)
 };
 
 def poke_word(addr: long, v: long) -> void {
-    let p: *long = &mem_word;
-    *(p + (addr + DIRECT_BASE - ptr_addr(p)) / 8) = v;
+    kmem.poke_word(addr, v);
 };
 
 // The 32-bit field at `addr`, zero-extended.  The Multiboot memory map's
 // u64 fields sit at offset 4 of a 24-byte entry -- 4-aligned, not 8 -- so
 // this is the primitive, and the 64-bit read below is two of them.
 def peek32(addr: long) -> long {
-    let sh = (addr & 7) * 8;
-    ((peek_word(addr - (addr & 7)) >> sh) << 32) >>> 32
+    kmem.peek32(addr)
 };
 
 def poke32(addr: long, v: long) -> void {
-    let base = addr - (addr & 7);
-    let sh = (addr & 7) * 8;
-    let w = peek_word(base);
-    let mask = 4294967295 << sh;
-    poke_word(base, (w & ~mask) | (((v << 32) >>> 32) << sh));
+    kmem.poke32(addr, v);
 };
 
 // ── the same reads and writes at a VIRTUAL address ──────────────────────
@@ -190,37 +167,29 @@ def poke32(addr: long, v: long) -> void {
 // that task's memory.  A syscall that copies to or from a user buffer uses
 // these, after checking the range is the user's.
 def peek_va64(addr: long) -> long {
-    let p: *long = &mem_word;
-    *(p + (addr - ptr_addr(p)) / 8)
+    kmem.peek_va64(addr)
 };
 
 def poke_va64(addr: long, v: long) -> void {
-    let p: *long = &mem_word;
-    *(p + (addr - ptr_addr(p)) / 8) = v;
+    kmem.poke_va64(addr, v);
 };
 
 // The 64-bit word at physical `addr`, any 4-byte alignment.
 def peek64(addr: long) -> long {
-    peek32(addr) | (peek32(addr + 4) << 32)
+    kmem.peek64(addr)
 };
 
 def poke64(addr: long, v: long) -> void {
-    poke32(addr, v);
-    poke32(addr + 4, v >> 32);
+    kmem.poke64(addr, v);
 };
 
 // A byte, any alignment.
 def peek8(addr: long) -> long {
-    let sh = (addr & 7) * 8;
-    (peek_word(addr - (addr & 7)) >> sh) & 255
+    kmem.peek8(addr)
 };
 
 def poke8(addr: long, v: long) -> void {
-    let base = addr - (addr & 7);
-    let sh = (addr & 7) * 8;
-    let w = peek_word(base);
-    let mask = 255 << sh;
-    poke_word(base, (w & ~mask) | ((v & 255) << sh));
+    kmem.poke8(addr, v);
 };
 
 // ── physical memory ─────────────────────────────────────────────────────
@@ -874,8 +843,7 @@ def user_ok(addr: long, len: long) -> bool {
 };
 
 def peek_va8(addr: long) -> long {
-    let sh = (addr & 7) * 8;
-    (peek_va64(addr - (addr & 7)) >> sh) & 255
+    kmem.peek_va8(addr)
 };
 
 // The 32- and 8-bit writers of the virtual family.  peek_va64/poke_va64 move
@@ -884,19 +852,11 @@ def peek_va8(addr: long) -> long {
 // writing it with poke_va64 put it at offset 0, left RSP0 zero, and made the
 // first ring-3 fault a #SS (#DF, then a triple fault).
 def poke_va32(addr: long, v: long) -> void {
-    let base = addr - (addr & 7);
-    let sh = (addr & 7) * 8;
-    let w = peek_va64(base);
-    let mask = 4294967295 << sh;
-    poke_va64(base, (w & ~mask) | (((v << 32) >>> 32) << sh));
+    kmem.poke_va32(addr, v);
 };
 
 def poke_va8(addr: long, v: long) -> void {
-    let base = addr - (addr & 7);
-    let sh = (addr & 7) * 8;
-    let w = peek_va64(base);
-    let mask = 255 << sh;
-    poke_va64(base, (w & ~mask) | ((v & 255) << sh));
+    kmem.poke_va8(addr, v);
 };
 
 // write(fd, buf, len): there are no file descriptors yet, so 1 and 2 are the
@@ -1290,12 +1250,12 @@ def user_path(ptr: long) -> str {
 def sys_openat(dirfd: long, pathp: long, flags: long) -> long {
     if (pathp == 0) { return E_FAULT; };
     let path = user_path(pathp);
-    let ino = yfs_lookup_path(path);
+    let ino = yfs.yfs_lookup_path(path);
     if (ino < 0) {
         // O_CREAT is 0100 = 64: create it rather than failing, which is what cp, an
         // editor's save and ycc's output files all need.
         if ((flags & 64) == 0) { return 0 - 2; };
-        ino = yfs_create(path);
+        ino = yfs.yfs_create(path);
         if (ino < 0) { return 0 - 2; };
     };
     fd.fd_open_ino(ino)
@@ -1307,7 +1267,7 @@ def sys_close(fdno: long) -> long { fd.fd_close(fdno) };
 // now -- every path is resolved from the root -- and so are the flags.
 def sys_unlinkat(dirfd: long, pathp: long, flags: long) -> long {
     if (pathp == 0) { return E_FAULT; };
-    yfs_unlink(user_path(pathp))
+    yfs.yfs_unlink(user_path(pathp))
 };
 
 // reboot(cmd): leave the machine.  A ring-3 program saying "halt" has to be able to,
@@ -1320,7 +1280,7 @@ def sys_reboot(cmd: long) -> long {
 // for now, like unlinkat's.
 def sys_renameat(od: long, oldp: long, nd: long, newp: long) -> long {
     if (oldp == 0 || newp == 0) { return E_FAULT; };
-    yfs_rename(user_path(oldp), user_path(newp))
+    yfs.yfs_rename(user_path(oldp), user_path(newp))
 };
 
 def sys_lseek(fdno: long, off: long, whence: long) -> long { fd.fd_lseek(fdno, off) };
@@ -1336,15 +1296,15 @@ def put16b(buf: long, off: long, v: long) -> void {
 def sys_getdents64(fdno: long, buf: long, len: long) -> long {
     if (!fd.fd_valid(fdno)) { return E_FAULT; };
     let ino = fd.fd_ino(fdno);
-    let count = yfs_dir_count(ino);
+    let count = yfs.yfs_dir_count(ino);
     let off = fd.fd_tell(fdno);
     let w = 0;
     while (off < count) {
-        let nl = yfs_readdir(ino, off, buf + w + 19);
+        let nl = yfs.yfs_readdir(ino, off, buf + w + 19);
         if (nl < 0) { break; };
         let reclen = (19 + nl + 1 + 7) & (0 - 8);
         if (w + reclen > len) { break; };
-        poke_va64(buf + w, yfs_dir_inode(ino, off));
+        poke_va64(buf + w, yfs.yfs_dir_inode(ino, off));
         poke_va64(buf + w + 8, 0);
         put16b(buf, w + 16, reclen);
         poke_va8(buf + w + 18, 0);
@@ -1360,7 +1320,7 @@ def sys_getdents64(fdno: long, buf: long, len: long) -> long {
 // entry (or 0).  Every destination is reached with page_alloc + vm_map and written
 // through vm_translate, so no virtual address in the new space is ever needed.
 def kexec_load(dir: long, ino: long) -> long {
-    let size = yfs_size(ino);
+    let size = yfs.yfs_size(ino);
     if (size <= 0) { return 0; };
     let nb = (size + 4095) / 4096;
     let buf = 0;
@@ -1372,7 +1332,7 @@ def kexec_load(dir: long, ino: long) -> long {
         i = i + 1;
     };
     let k = 0;
-    while (k < size) { poke8(buf + k, yfs_fetch(ino, k)); k = k + 1; };
+    while (k < size) { poke8(buf + k, yfs.yfs_fetch(ino, k)); k = k + 1; };
     if (peek32(buf) != 1179403647) { return 0; };
     let phoff = peek64(buf + 32);
     let phentsize = peek32(buf + 54);
@@ -1412,7 +1372,7 @@ const EXEC_STACK = 100663296;
 def sys_execve(pathp: long, argvp: long) -> long {
     if (pathp == 0) { return E_FAULT; };
     let path = user_path(pathp);
-    let ino = yfs_lookup_path(path);
+    let ino = yfs.yfs_lookup_path(path);
     if (ino < 0) { return 0 - 2; };
     let dir = vm_new_dir();
     if (dir == 0) { return E_FAULT; };

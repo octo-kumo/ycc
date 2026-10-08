@@ -2,7 +2,7 @@
 // with YFS1 underneath.  It sits beside the syscalls for now and is shared by
 // every task -- per-process tables arrive with the fs server -- and fds 0,1,2 are
 // the console, so the first allocated fd is 3.
-import yfs from "./yfs.y";
+import yfs;
 
 const FD_MAX = 16;
 

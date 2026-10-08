@@ -1004,6 +1004,12 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str], smods
                         // carries its unit (std_lib_names), so nothing is
                         // spliced and its `import`s are the pack's problem.
                         is_pkg = true;
+                        // a hosted compile refuses std/kernel: `ndef`s into
+                        // assembly that only a kernel image has
+                        if (is_lib && name == "kernel" && !target_is_kernel()) {
+                            puts("error: std/kernel is only available in kernel mode (ycc --kernel)\n");
+                            exit(1);
+                        };
                         // kernel mode refuses a std library unit that is a
                         // Linux syscall away from working (the same rule
                         // as for a spliced std source, below)
@@ -3422,6 +3428,8 @@ def infer_call(st: EmitSt, node: Call) -> Type {
             normtype({ k: K.tstr })
         } else if (name == "ptr_addr") {
             normtype({ k: K.tlong })
+        } else if (name == "ptr_from") {
+            normtype({ k: K.tptr, to: normtype({ k: K.tunk }) })
         } else if (name == "os_call") {
             // os_call's result is whatever the named block returns, which is a
             // long on every name in os_call_names (types.y owns the list and
@@ -3795,7 +3803,7 @@ let INTRINSICS: [str] = ["print", "syscall", "len", "push", "some", "is_some", "
     "last_index_of", "join", "split", "puts", "eputs", "clock_us",
     "time_us", "sleep", "heap_used", "keys", "spawn", "fork", "wait_pid",
     "mutex", "sem", "lock", "try_lock", "post", "wait", "exit", "argv", "range", "typeof", "bytes",
-    "from_bytes", "ptr_addr", "os_call", "jmp_at", "self", "none", "#fmt"];
+    "from_bytes", "ptr_addr", "ptr_from", "os_call", "jmp_at", "self", "none", "#fmt"];
 
 // Builtins are resolved by name at the call site, never captured.
 def is_intrinsic_name(n: str) -> bool {
@@ -6390,6 +6398,11 @@ def gen_call(st: EmitSt, node: Call) -> EmitSt {
             st = gen_push_args(st, args);
             st = emit_insn(st, insn.F_CALL_L, lbl_new("y_bytes_to_str"), 0, 0, 0, 0, 0, 0);
             emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0)
+        } else if (name == "ptr_from") {
+            // ... and so is an integer: the inverse of ptr_addr, the operand
+            // evaluated and left in %rax as the pointer.
+            let pfargs: [Node] = node.args;
+            gen(st, pfargs[0])
         } else if (name == "ptr_addr") {
             // A pointer IS its numeric value at run time: nothing to emit
             // beyond evaluating the operand. This exists only so the type
@@ -12347,6 +12360,12 @@ def std_lib_deps(name: str) -> [str] {
         ["crypto", "x509", "net"]
     } else if (name == "http") {
         ["net", "tls"]
+    } else if (name == "yfs") {
+        ["kmem"]
+    } else if (name == "fd") {
+        ["yfs"]
+    } else if (name == "kernel") {
+        ["kmem", "yfs", "fd"]
     } else {
         []
     }
@@ -12361,7 +12380,8 @@ def std_lib_names() -> [str] {
     // fs and json after sort, net after fs, x509 after crypto/fs/struct, tls
     // after crypto/x509/net, http after net/tls.
     ["math", "sort", "fs", "json", "struct", "crypto", "x509", "net", "tls",
-     "http", "regex", "random", "utf8", "args", "test", "tui"]
+     "http", "regex", "random", "utf8", "args", "test", "tui", "kmem", "yfs",
+     "fd", "kernel"]
 };
 
 // The source of a std LIBRARY module (args, net, math, ...) from disk, or ""

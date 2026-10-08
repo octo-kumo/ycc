@@ -1758,6 +1758,12 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, ylong depth, Yv *seen,
                         /* a std library module takes the package path too: the
                          * pack carries its unit, nothing is spliced, and
                          * strip_ns qualifies its names (native.y) */
+                        /* a hosted compile refuses std/kernel: `ndef`s into
+                         * assembly that only a kernel image has */
+                        if (is_lib && ys_eq_lit(name, "kernel") && !target_is_kernel()) {
+                            puts_(ys("error: std/kernel is only available in kernel mode (ycc --kernel)\n"));
+                            exit_(1);
+                        };
                         /* kernel mode refuses a std library unit that is a
                          * Linux syscall away from working (the same rule as
                          * for a spliced std source, below) */
@@ -4558,6 +4564,8 @@ Yv *infer_call(Yv *st, Yv *node) {
             return yr(1, "k", yv_long(K_tstr));
         } else if (ys_eq_lit(name, "ptr_addr")) {
             return yr(1, "k", yv_long(K_tlong));
+        } else if (ys_eq_lit(name, "ptr_from")) {
+            return yr(2, "k", yv_long(K_tptr), "to", yr(1, "k", yv_long(K_tunk)));
         } else if (ys_eq_lit(name, "os_call")) {
             /* os_call's result is whatever the named block returns, which is a
                long on every name in os_call_names (types.c owns the list and
@@ -4949,7 +4957,7 @@ static Yv *intrinsics(void) {
                 ys("heap_used"), ys("keys"), ys("spawn"), ys("fork"), ys("wait_pid"),
                 ys("mutex"), ys("sem"), ys("lock"), ys("try_lock"), ys("post"), ys("wait"),
                 ys("exit"), ys("argv"), ys("range"), ys("typeof"),
-                ys("bytes"), ys("from_bytes"), ys("ptr_addr"), ys("os_call"),
+                ys("bytes"), ys("from_bytes"), ys("ptr_addr"), ys("ptr_from"), ys("os_call"),
                 ys("jmp_at"),
                 ys("self"),
                 ys("none"), ys("#fmt"), NULL);
@@ -7783,6 +7791,11 @@ Yv *gen_call(Yv *st, Yv *node) {
             st = gen_push_args(st, yr_get(node, "args"));
             st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_bytes_to_str"))), 0, 0, 0, 0, 0, 0);
             return emit_insn(st, F_ADD_I_R, 8, R_RSP, 64, 0, 0, 0, 0);
+        } else if (ys_eq_lit(name, "ptr_from")) {
+            /* ... and so is an integer: the inverse of ptr_addr, the operand
+             * evaluated and left in %rax as the pointer. */
+            Yv *pfargs = yr_get(node, "args");
+            return gen(st, ya_get(pfargs, 0));
         } else if (ys_eq_lit(name, "ptr_addr")) {
             /* A pointer IS its numeric value at run time: nothing to emit
              * beyond evaluating the operand. This exists only so the type
@@ -14468,6 +14481,12 @@ Yv *std_lib_deps(Yv *name) {
         return yav(3, ys("crypto"), ys("x509"), ys("net"));
     } else if (ys_eq_lit(name, "http")) {
         return yav(2, ys("net"), ys("tls"));
+    } else if (ys_eq_lit(name, "yfs")) {
+        return yav(1, ys("kmem"));
+    } else if (ys_eq_lit(name, "fd")) {
+        return yav(1, ys("yfs"));
+    } else if (ys_eq_lit(name, "kernel")) {
+        return yav(3, ys("kmem"), ys("yfs"), ys("fd"));
     } else {
         return yav(0);
     }
@@ -14481,10 +14500,10 @@ Yv *std_lib_deps(Yv *name) {
  * fs, x509 after crypto/fs/struct, tls after crypto/x509/net, http after net/
  * tls. */
 Yv *std_lib_names(void) {
-    return yav(16, ys("math"), ys("sort"), ys("fs"), ys("json"), ys("struct"),
+    return yav(20, ys("math"), ys("sort"), ys("fs"), ys("json"), ys("struct"),
                ys("crypto"), ys("x509"), ys("net"), ys("tls"), ys("http"),
                ys("regex"), ys("random"), ys("utf8"), ys("args"), ys("test"),
-               ys("tui"));
+               ys("tui"), ys("kmem"), ys("yfs"), ys("fd"), ys("kernel"));
 }
 
 ylong std_unit_base(Yv *name) {
