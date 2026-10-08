@@ -15351,14 +15351,12 @@ def lz_decode(s: str) -> str {
     if (ok && w == tot) { from_bytes(out) } else { "" }
 };
 
-// n zero bytes: a block of eight doubled until it covers n, then cut.
+// n zero bytes: one allocation and one word loop (prelude.s). Doubling a
+// block by slices copied every byte about three times.
+ndef y_bytes_zero(n: long) -> [byte] = "y_bytes_zero";
+
 def zero_bytes(n: long) -> [byte] {
-    let out: [byte] = [0, 0, 0, 0, 0, 0, 0, 0];
-    while (len(out) < n) {
-        let k = if (len(out) < n - len(out)) { len(out) } else { n - len(out) };
-        out += out[0:k];
-    };
-    if (n < len(out)) { out[0:n] } else { out }
+    y_bytes_zero(n)
 };
 
 // n bytes front to back (prelude.s): a source that starts less than n bytes
@@ -15866,7 +15864,7 @@ def emit_program(ast: Block, nr: Resolved, debug: bool, wlevel: long, std: [Unit
 // needs to KNOW whether a word is a builtin, and the list it keeps of them is
 // the one this predicate tests. Inert like the rest of the names here -- the
 // splicer deletes the export line, so nothing reaches codegen (LSP.md 9.1).
-export { emit_program, compile_package, set_meta_pack, unit_externs, unit_prep, std_lib_path, std_units, std_unit_names, std_lib_deps, std_pack, pack_store, unit_obj, unit_unobj, unit_iface, native_resolve, native_resolve_x, native_resolve_pk, origin_at, unused_imports, strip_ns, strip_list, strip_decl, phase_end, link_text, is_intrinsic_name, intrinsic_names };
+export { emit_program, zero_bytes, compile_package, set_meta_pack, unit_externs, unit_prep, std_lib_path, std_units, std_unit_names, std_lib_deps, std_pack, pack_store, unit_obj, unit_unobj, unit_iface, native_resolve, native_resolve_x, native_resolve_pk, origin_at, unused_imports, strip_ns, strip_list, strip_decl, phase_end, link_text, is_intrinsic_name, intrinsic_names };
 
 // ── maps: dynamic {K => V} ────────────────────────────────────────────
 // A map value is a two-field record -- {keys: [K], vals: [V]} -- and

@@ -295,7 +295,6 @@ static Yv *self_pack_read(void) {
     Yv *pack = ys("");
     ylong size = (ylong)lseek(fd, 0, SEEK_END);
     if (size >= 16) {
-        char buf[65536];
         char tailbuf[16];
         lseek(fd, (off_t)(size - 16), SEEK_SET);
         ssize_t k = read(fd, tailbuf, 16);
@@ -305,28 +304,15 @@ static Yv *self_pack_read(void) {
             if (ys_eq(ys_slice(tail, 8, 16), pack_magic()) &&
                 n > 0 && n <= size - 16) {
                 lseek(fd, (off_t)(size - 16 - n), SEEK_SET);
-                Yv *pieces = yav(0);
-                ylong left = n;
-                while (left > 0) {
-                    ylong want = left;
-                    if (want > 65536) {
-                        want = 65536;
-                        ;
-                    }
-                    ssize_t got = read(fd, buf, (size_t)want);
-                    if (got <= 0) {
-                        left = -1;
-                        ;
-                    } else {
-                        pieces = ya_push(pieces, ys_n(buf, (size_t)got));
-                        left = left - got;
-                        ;
-                    }
+                /* straight into one buffer of the pack's size (ycc.y) */
+                char *data = malloc((size_t)n);
+                ylong got = 0;
+                while (data && got >= 0 && got < n) {
+                    ssize_t r = read(fd, data + got, (size_t)(n - got));
+                    if (r <= 0) { got = -1; } else { got += r; }
                 }
-                if (left == 0) {
-                    pack = ys_join(pieces, ys(""));
-                    ;
-                }
+                if (data && got == n) { pack = ys_n(data, (size_t)n); }
+                free(data);
                 ;
             }
             ;

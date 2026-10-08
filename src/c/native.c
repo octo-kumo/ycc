@@ -17942,7 +17942,7 @@ static Yv *lz_encode(Yv *s) {
     return ys_join(out, ys(""));
 }
 
-static Yv *zero_bytes(ylong n);
+Yv *zero_bytes(ylong n);
 
 /* The inverse, given the payload as pack_store wrote it (method byte, decoded
  * length, then the stream); "" for anything that does not decode (native.y
@@ -18017,7 +18017,7 @@ static Yv *lz_decode(Yv *s) {
 }
 
 /* n zero bytes (native.y zero_bytes). */
-static Yv *zero_bytes(ylong n) {
+Yv *zero_bytes(ylong n) {
     Yv *out = yav(0);
     for (ylong i = 0; i < n; i++) { out = ya_push(out, yv_long(0)); }
     return out;

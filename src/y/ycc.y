@@ -264,7 +264,7 @@ def self_pack_read() -> str {
         let pack = "";
         let size = syscall(8, fd, 0, 2);
         if (size >= 16) {
-            let buf: [byte; 65536] = [0; 65536];
+            let buf: [byte; 16] = [0; 16];
             syscall(8, fd, size - 16, 0);
             if ((syscall(0, fd, &buf[0], 16)) == 16) {
                 let tail = from_bytes(buf[0:16]);
@@ -278,21 +278,15 @@ def self_pack_read() -> str {
                 if (nopt != none && tail[8:] == pack_magic() && nopt ! > 0 && nopt ! <= size - 16) {
                     let n = nopt !;
                     syscall(8, fd, size - 16 - n, 0);
-                    let pieces: [str] = [];
-                    let left = n;
-                    while (left > 0) {
-                        let want = left;
-                        if (want > 65536) { want = 65536; }
-                        let got = syscall(0, fd, &buf[0], want);
-                        if (got <= 0) {
-                            left = -1;
-                        } else {
-                            // (a slice copies byte by byte: only a part chunk pays it)
-                            if (got == 65536) { pieces += from_bytes(buf); } else { pieces += from_bytes(buf[0:got]); };
-                            left = left - got;
-                        };
+                    // straight into one buffer of the pack's size: no chunks
+                    // to copy into strings and join
+                    let data = nativelib.zero_bytes(n);
+                    let got = 0;
+                    while (got >= 0 && got < n) {
+                        let r = syscall(0, fd, &data[got], n - got);
+                        if (r <= 0) { got = -1; } else { got += r; };
                     };
-                    if (left == 0) { pack = join(pieces, ""); }
+                    if (got == n) { pack = from_bytes(data); }
                 }
             }
         }

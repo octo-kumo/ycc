@@ -34,6 +34,7 @@ Yv *strip_ns(Yv *node, Yv *imports);
 Yv *strip_list(Yv *nodes, Yv *imports);
 Yv *strip_decl(Yv *node, Yv *imports);
 Yv *phase_end(Yv *times, Yv *name, ylong t0, ylong h0);
+Yv *zero_bytes(ylong n);   /* n zero bytes (the pack reader's buffer) */
 Yv *emit_program(Yv *ast, Yv *nr, int debug, ylong wlevel, Yv *std,
                     Yv *deps);
 /* The parts emit_program returned, rendered as assembly text: what -S
