@@ -5455,8 +5455,67 @@ def gen_in(st: EmitSt, node: Bin) -> EmitSt {
     }
 };
 
+// A condition the emitter can branch on without building its bool: `&&`,
+// `||`, and `!` of a bool (gen_branch walks them).
+def is_logic(st: EmitSt, n: Node) -> bool {
+    if (n.k == K.bin) {
+        let b: Bin = n;
+        b.op == "&&" || b.op == "||"
+    } else if (n.k == K.un) {
+        let u: Un = n;
+        u.op == "!" && unfold(infer(st, u.e)).k == K.tbool
+    } else {
+        false
+    }
+};
+
+// The jump taken on the other outcome of the same flags.
+def jcc_flip(j: long) -> long {
+    if (j == insn.F_JGE_L) { insn.F_JL_L } else if (j == insn.F_JL_L) { insn.F_JGE_L }
+    else if (j == insn.F_JLE_L) { insn.F_JG_L } else if (j == insn.F_JG_L) { insn.F_JLE_L }
+    else if (j == insn.F_JNE_L) { insn.F_JE_L } else { insn.F_JNE_L }
+};
+
+// Jump to `label` when `cond` is true (`on_true`) or false, and fall through
+// otherwise: a comparison jumps on its own flags, `&&`, `||` and a bool's `!`
+// on their operands', so no condition builds the bool it only tests. Anything
+// else is evaluated and tested, as it always was.
+def gen_branch(st: EmitSt, cond: Node, label: long, on_true: bool) -> EmitSt {
+    if (cond.k == K.un && is_logic(st, cond)) {
+        let u: Un = cond;
+        return gen_branch(st, u.e, label, !on_true);
+    };
+    if (cond.k == K.bin) {
+        let b: Bin = cond;
+        if (b.op == "&&" || b.op == "||") {
+            if ((b.op == "||") == on_true) {
+                // either operand decides it: `a || b` true, `a && b` false
+                st = gen_branch(st, b.l, label, on_true);
+                return gen_branch(st, b.r, label, on_true);
+            };
+            // the left operand decides it the other way and skips the right
+            let r = next_loc(st);
+            st = r.st;
+            st = gen_branch(st, b.l, r.label, !on_true);
+            st = gen_branch(st, b.r, label, on_true);
+            return emit_label(st, r.label);
+        };
+    };
+    let jcc = int_cmp_jcc(st, cond);
+    if (jcc != 0) {
+        let cbin: Bin = cond;
+        st = gen_cmp_flags(st, cbin);
+        emit_insn(st, if (on_true) { jcc_flip(jcc) } else { jcc }, label, 0, 0, 0, 0, 0, 0)
+    } else {
+        st = gen(st, cond);
+        st = emit_insn(st, insn.F_TEST_R_R, insn.R_RAX, 64, insn.R_RAX, 64, 0, 0, 0);
+        emit_insn(st, if (on_true) { insn.F_JNZ_L } else { insn.F_JZ_L }, label, 0, 0, 0, 0, 0, 0)
+    }
+};
+
 // Short-circuit logic: value is 0/1; the right operand only evaluates when
-// the left operand does not already decide the result.
+// the left operand does not already decide the result. Each operand is a
+// branch (gen_branch), so `a < b && c` compares and jumps without a bool.
 //   a && b : test a -> jz F; test b -> jz F; 1; jmp E; F: 0; E:
 //   a || b : test a -> jnz T; test b -> jnz T; 0; jmp E; T: 1; E:
 def gen_logic(st: EmitSt, node: Bin, is_or: bool) -> EmitSt {
@@ -5466,22 +5525,9 @@ def gen_logic(st: EmitSt, node: Bin, is_or: bool) -> EmitSt {
     st = rF.st;
     let rE = next_loc(st);
     st = rE.st;
-    st = gen(st, node.l);
-    st = emit_insn(st, insn.F_TEST_R_R, insn.R_RAX, 64, insn.R_RAX, 64, 0, 0, 0);
-    if (is_or) {
-        st = emit_insn(st, insn.F_JNZ_L, rT.label, 0, 0, 0, 0, 0, 0);
-    }
-    if (!(is_or)) {
-        st = emit_insn(st, insn.F_JZ_L, rF.label, 0, 0, 0, 0, 0, 0);
-    };
-    st = gen(st, node.r);
-    st = emit_insn(st, insn.F_TEST_R_R, insn.R_RAX, 64, insn.R_RAX, 64, 0, 0, 0);
-    if (is_or) {
-        st = emit_insn(st, insn.F_JNZ_L, rT.label, 0, 0, 0, 0, 0, 0);
-    }
-    if (!(is_or)) {
-        st = emit_insn(st, insn.F_JZ_L, rF.label, 0, 0, 0, 0, 0, 0);
-    };
+    let jl = if (is_or) { rT.label } else { rF.label };
+    st = gen_branch(st, node.l, jl, is_or);
+    st = gen_branch(st, node.r, jl, is_or);
     if (!(is_or)) {
         st = emit_insn(st, insn.F_MOV_I_R, 1, insn.R_RAX, 64, 0, 0, 0, 0);
         st = emit_insn(st, insn.F_JMP_L, rE.label, 0, 0, 0, 0, 0, 0);
@@ -8212,6 +8258,8 @@ def gen_if_go(st: EmitSt, node: If) -> EmitSt {
         let cbin: Bin = node.cond;
         st = gen_cmp_flags(st, cbin);
         st = emit_insn(st, jcc, r1.label, 0, 0, 0, 0, 0, 0);
+    } else if (is_logic(st, node.cond)) {
+        st = gen_branch(st, node.cond, r1.label, false);
     } else {
         st = gen(st, node.cond);
         st = emit_insn(st, insn.F_TEST_R_R, insn.R_RAX, 64, insn.R_RAX, 64, 0, 0, 0);
@@ -8248,6 +8296,8 @@ def gen_while(st: EmitSt, node: While) -> EmitSt {
         let cbin: Bin = node.cond;
         st = gen_cmp_flags(st, cbin);
         st = emit_insn(st, jcc, r2.label, 0, 0, 0, 0, 0, 0);
+    } else if (is_logic(st, node.cond)) {
+        st = gen_branch(st, node.cond, r2.label, false);
     } else {
         st = gen(st, node.cond);
         st = emit_insn(st, insn.F_TEST_R_R, insn.R_RAX, 64, insn.R_RAX, 64, 0, 0, 0);
@@ -8299,6 +8349,8 @@ def gen_for(st: EmitSt, node: For) -> EmitSt {
         let cbin: Bin = node.cond;
         st = gen_cmp_flags(st, cbin);
         st = emit_insn(st, jcc, r2.label, 0, 0, 0, 0, 0, 0);
+    } else if (is_logic(st, node.cond)) {
+        st = gen_branch(st, node.cond, r2.label, false);
     } else {
         st = gen(st, node.cond);
         st = emit_insn(st, insn.F_TEST_R_R, insn.R_RAX, 64, insn.R_RAX, 64, 0, 0, 0);
@@ -8608,7 +8660,8 @@ def gen_tail(st: EmitSt, node: Node) -> EmitSt {
     } else if (k == K.kw_if) {
         let branch: If = node;
         let jcc = int_cmp_jcc(st, branch.cond);
-        if (jcc == 0) { st = gen(st, branch.cond); }
+        let logic = jcc == 0 && is_logic(st, branch.cond);
+        if (jcc == 0 && !logic) { st = gen(st, branch.cond); }
         let rl1 = next_loc(st);
         st = rl1.st;
         let lelse = rl1.label;
@@ -8620,6 +8673,8 @@ def gen_tail(st: EmitSt, node: Node) -> EmitSt {
             let cbin: Bin = branch.cond;
             st = gen_cmp_flags(st, cbin);
             st = emit_insn(st, jcc, lelse, 0, 0, 0, 0, 0, 0);
+        } else if (logic) {
+            st = gen_branch(st, branch.cond, lelse, false);
         } else {
             st = emit_insn(st, insn.F_TEST_R_R, insn.R_RAX, 64, insn.R_RAX, 64, 0, 0, 0);
             st = emit_insn(st, insn.F_JZ_L, lelse, 0, 0, 0, 0, 0, 0);

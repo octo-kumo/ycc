@@ -6735,6 +6735,61 @@ Yv *gen_in(Yv *st, Yv *node) {
     return gen_bin(st, n_bin(ys(">="), call, zero, ln, cl));
 }
 
+/* A condition the emitter can branch on without building its bool (native.y
+ * is_logic): `&&`, `||`, and `!` of a bool. */
+static int is_logic(Yv *st, Yv *n) {
+    ylong k = yv_l(yr_get(n, "k"));
+    if (k == K_bin) {
+        Yv *op = yr_get(n, "op");
+        return ys_eq_lit(op, "&&") || ys_eq_lit(op, "||");
+    } else if (k == K_un) {
+        return ys_eq_lit(yr_get(n, "op"), "!") && yv_l(yr_get(unfold(infer(st, yr_get(n, "e"))), "k")) == K_tbool;
+    } else {
+        return 0;
+    }
+}
+
+/* The jump taken on the other outcome of the same flags. */
+static ylong jcc_flip(ylong j) {
+    if (j == F_JGE_L) { return F_JL_L; } else if (j == F_JL_L) { return F_JGE_L; }
+    else if (j == F_JLE_L) { return F_JG_L; } else if (j == F_JG_L) { return F_JLE_L; }
+    else if (j == F_JNE_L) { return F_JE_L; } else { return F_JNE_L; }
+}
+
+ylong int_cmp_jcc(Yv *st, Yv *node);
+Yv *gen_cmp_flags(Yv *st, Yv *node);
+
+/* Jump to `label` when `cond` is true (`on_true`) or false, and fall through
+ * otherwise (native.y gen_branch). */
+static Yv *gen_branch(Yv *st, Yv *cond, ylong label, int on_true) {
+    if (yv_l(yr_get(cond, "k")) == K_un && is_logic(st, cond)) {
+        return gen_branch(st, yr_get(cond, "e"), label, !on_true);
+    }
+    if (yv_l(yr_get(cond, "k")) == K_bin) {
+        Yv *op = yr_get(cond, "op");
+        if (ys_eq_lit(op, "&&") || ys_eq_lit(op, "||")) {
+            if (ys_eq_lit(op, "||") == on_true) {
+                st = gen_branch(st, yr_get(cond, "l"), label, on_true);
+                return gen_branch(st, yr_get(cond, "r"), label, on_true);
+            }
+            Yv *r = next_loc(st);
+            st = yr_get(r, "st");
+            st = gen_branch(st, yr_get(cond, "l"), yv_l(yr_get(r, "label")), !on_true);
+            st = gen_branch(st, yr_get(cond, "r"), label, on_true);
+            return emit_label(st, yv_l(yr_get(r, "label")));
+        }
+    }
+    ylong jcc = int_cmp_jcc(st, cond);
+    if (jcc != 0) {
+        st = gen_cmp_flags(st, cond);
+        return emit_insn(st, on_true ? jcc_flip(jcc) : jcc, label, 0, 0, 0, 0, 0, 0);
+    } else {
+        st = gen(st, cond);
+        st = emit_insn(st, F_TEST_R_R, R_RAX, 64, R_RAX, 64, 0, 0, 0);
+        return emit_insn(st, on_true ? F_JNZ_L : F_JZ_L, label, 0, 0, 0, 0, 0, 0);
+    }
+}
+
 Yv *gen_logic(Yv *st, Yv *node, int is_or) {
     Yv *rT = next_loc(st);
     st = yr_get(rT, "st");
@@ -6742,30 +6797,9 @@ Yv *gen_logic(Yv *st, Yv *node, int is_or) {
     st = yr_get(rF, "st");
     Yv *rE = next_loc(st);
     st = yr_get(rE, "st");
-    st = gen(st, yr_get(node, "l"));
-    st = emit_insn(st, F_TEST_R_R, R_RAX, 64, R_RAX, 64, 0, 0, 0);
-    if (is_or) {
-        st = emit_insn(st, F_JNZ_L, yv_l(yr_get(rT, "label")), 0, 0, 0, 0, 0, 0);
-        ;
-    }
-    if (is_or) {
-        ;
-    } else {
-        st = emit_insn(st, F_JZ_L, yv_l(yr_get(rF, "label")), 0, 0, 0, 0, 0, 0);
-        ;
-    }
-    st = gen(st, yr_get(node, "r"));
-    st = emit_insn(st, F_TEST_R_R, R_RAX, 64, R_RAX, 64, 0, 0, 0);
-    if (is_or) {
-        st = emit_insn(st, F_JNZ_L, yv_l(yr_get(rT, "label")), 0, 0, 0, 0, 0, 0);
-        ;
-    }
-    if (is_or) {
-        ;
-    } else {
-        st = emit_insn(st, F_JZ_L, yv_l(yr_get(rF, "label")), 0, 0, 0, 0, 0, 0);
-        ;
-    }
+    ylong jl = is_or ? yv_l(yr_get(rT, "label")) : yv_l(yr_get(rF, "label"));
+    st = gen_branch(st, yr_get(node, "l"), jl, is_or);
+    st = gen_branch(st, yr_get(node, "r"), jl, is_or);
     if (is_or) {
         ;
     } else {
@@ -9670,6 +9704,8 @@ Yv *gen_if(Yv *st, Yv *node) {
            `cmp; jcc` (two) -- 3,049 such sites in ycc's own output. */
         st = gen_cmp_flags(st, yr_get(node, "cond"));
         st = emit_insn(st, jcc, yv_l(yr_get(r1, "label")), 0, 0, 0, 0, 0, 0);
+    } else if (is_logic(st, yr_get(node, "cond"))) {
+        st = gen_branch(st, yr_get(node, "cond"), yv_l(yr_get(r1, "label")), 0);
     } else {
         st = gen(st, yr_get(node, "cond"));
         st = emit_insn(st, F_TEST_R_R, R_RAX, 64, R_RAX, 64, 0, 0, 0);
@@ -9705,6 +9741,8 @@ Yv *gen_while(Yv *st, Yv *node) {
     if (jcc != 0) {
         st = gen_cmp_flags(st, yr_get(node, "cond"));
         st = emit_insn(st, jcc, yv_l(yr_get(r2, "label")), 0, 0, 0, 0, 0, 0);
+    } else if (is_logic(st, yr_get(node, "cond"))) {
+        st = gen_branch(st, yr_get(node, "cond"), yv_l(yr_get(r2, "label")), 0);
     } else {
         st = gen(st, yr_get(node, "cond"));
         st = emit_insn(st, F_TEST_R_R, R_RAX, 64, R_RAX, 64, 0, 0, 0);
@@ -9751,6 +9789,8 @@ Yv *gen_for(Yv *st, Yv *node) {
     if (jcc != 0) {
         st = gen_cmp_flags(st, yr_get(node, "cond"));
         st = emit_insn(st, jcc, yv_l(yr_get(r2, "label")), 0, 0, 0, 0, 0, 0);
+    } else if (is_logic(st, yr_get(node, "cond"))) {
+        st = gen_branch(st, yr_get(node, "cond"), yv_l(yr_get(r2, "label")), 0);
     } else {
         st = gen(st, yr_get(node, "cond"));
         st = emit_insn(st, F_TEST_R_R, R_RAX, 64, R_RAX, 64, 0, 0, 0);
@@ -10055,7 +10095,8 @@ Yv *gen_tail(Yv *st, Yv *node) {
         return st;
     } else if (yv_l(k) == K_kw_if) {
         ylong jcc = int_cmp_jcc(st, yr_get(node, "cond"));
-        if (jcc == 0) {
+        int logic = jcc == 0 && is_logic(st, yr_get(node, "cond"));
+        if (jcc == 0 && !logic) {
             st = gen(st, yr_get(node, "cond"));
         }
         Yv *rl1 = next_loc(st);
@@ -10068,6 +10109,8 @@ Yv *gen_tail(Yv *st, Yv *node) {
             /* the flags come from the comparison itself (see int_cmp_jcc) */
             st = gen_cmp_flags(st, yr_get(node, "cond"));
             st = emit_insn(st, jcc, yv_l(lelse), 0, 0, 0, 0, 0, 0);
+        } else if (logic) {
+            st = gen_branch(st, yr_get(node, "cond"), yv_l(lelse), 0);
         } else {
             st = emit_insn(st, F_TEST_R_R, R_RAX, 64, R_RAX, 64, 0, 0, 0);
             st = emit_insn(st, F_JZ_L, yv_l(lelse), 0, 0, 0, 0, 0, 0);
