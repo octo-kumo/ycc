@@ -142,7 +142,7 @@ for a subset). They take `CYCC`, `YREF`, `YCC`,
 | debug, link, pkg | `-g` output; the std pack; `ycc build`/`vendor` over real projects |
 | stdin-eof, net | stdin/EOF; loopback HTTP/TCP, DNS and TLS |
 | lsp | the server's fixtures under both compilers, `ytest check-refs`, `ytest check-names`, formatter idempotence |
-| math | `test/math/ulp_table.txt` within 1 ulp, plus the kernel and threshold audits |
+| math | `test/math/ulp_table.txt` within 1 ulp, every answer in it correctly rounded (`ytest math-table`, against `mref.y`'s 320-bit references), the kernel tables the fit (`math-fit`), the assembly kernels what their generators write (`math-gen`), plus the threshold and repetition audits |
 | coverage | every diagnostic and manual section has a checked test (`test/COVERAGE.md`) |
 | gc | the collector under a cap: two threads of 300k allocations must run in 64 MiB (`test/y/native/t385_gc_threads_alloc.y`), with `--gc=never` as the control that does not fit, and two threads of 20k under `--gc-stress` (a cycle at every allocation, `test/y/native/t389_gc_stress_threads.y`) |
 | kernel | `test/kernel/`: each fixture built with both engines (`--kernel`), images compared, booted under qemu, serial output and exit status checked (`src/tools/ytest/su_kernel.y`; needs `qemu-system-x86_64`) |
@@ -151,7 +151,8 @@ for a subset). They take `CYCC`, `YREF`, `YCC`,
 
 Run by hand (not in `make test`): `ytest cycc-win` (wine),
 `ytest w-sysno`, `ytest run-parity` (`ycc run` == compile + execute),
-`ytest mem`, `ytest gcov`, `make lsp-e2e`.
+`ytest mem`, `ytest gcov`, `make lsp-e2e`, the math sweeps (`ytest math-exact`,
+`math-float`, `math-edges`), `ytest oom`, `ytest install-vscode`.
 
 Fuzzing (`ytest fuzz [ITER] [SEED]`): mutates corpus programs and compiles
 each with both compilers under the cap and a timeout; a crash or a divergence is

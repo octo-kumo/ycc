@@ -4,7 +4,10 @@
 // The table is the reference: one line per case, the function's name, its
 // argument(s) and the correctly-rounded answer, all as IEEE-754 bit patterns
 // in decimal (tolong reads decimal, so the table reads in what the program can
-// read). test/math/gen_ulp_table.py wrote it, from the platform libm.
+// read). Every answer is the correctly rounded one: `ytest math-table` checks
+// each row against mref.y's 320-bit references (the platform libm, which wrote
+// the first version, was 1 ulp off the truth on 63 rows and certified a sign
+// defect in trunc, ceil and round on 126 more).
 //
 // The measurement is the gap in ulps between what std/math.y returned and what
 // the table says, counted through the standard monotone key of a double's bits

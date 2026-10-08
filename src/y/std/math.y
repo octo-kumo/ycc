@@ -512,7 +512,8 @@ def floor(x: float) -> float {
     }
 };
 
-// ceil(x): the least integer >= x, with the same zero rule.
+// ceil(x): the least integer >= x, with the same zero rule -- and a zero
+// answer keeps x's sign, so ceil(-0.5) is -0.0 as in C (x * 0.0 is that zero).
 def ceil(x: float) -> float {
     if (x != x || x >= two63 || x < 0.0 - two63) {
         x
@@ -520,12 +521,13 @@ def ceil(x: float) -> float {
         x
     } else {
         let t: float = raw_to_int(x);
-        if (t < x) { t + 1.0 } else { t }
+        if (t < x) { t + 1.0 } else if (t == 0.0) { x * 0.0 } else { t }
     }
 };
 
 // trunc(x): the integer part with the fractional part dropped -- what to_int
-// gives, as a float, keeping the sign of a zero.
+// gives, as a float, keeping the sign of a zero: trunc(-0.5) is -0.0, as in C
+// (the cast answers 0, which has no sign to keep).
 def trunc(x: float) -> float {
     if (x != x || x >= two63 || x < 0.0 - two63) {
         x
@@ -533,7 +535,7 @@ def trunc(x: float) -> float {
         x
     } else {
         let t: float = raw_to_int(x);
-        t
+        if (t == 0.0) { x * 0.0 } else { t }
     }
 };
 
@@ -931,7 +933,7 @@ def hypot_scaled(m: float, s: float) -> float {
 // the sum to a small fraction of an ulp. The split costs one multiply and one
 // add a term and nothing at all in the constants.
 //
-// test/math/gen_kernel.py fits the coefficients, prints them as the literals
+// `ytest math-fit` fits the coefficients, prints them as the literals
 // below, and reports the error of the split evaluation in ulps of the answer
 // (about one ulp of the kernel for each, which the factorisation is what turns
 // into a fraction of an ulp here).
@@ -959,7 +961,7 @@ let exp_kl: [float] = [2.731824807595654e-26, 9.251831897791138e-18,
     2.317267918780335e-18, -1.5735622740938769e-19, 5.097412265283907e-20,
     1.3140192523087737e-20, 8.921709691222807e-22, -6.87290497175393e-23,
     -1.12468925587968e-23, 1.1649605174557337e-24, -1.2128533042289473e-25,
-    3.918194843020948e-27, 2.939928092011524e-28];
+    3.918194843020948e-27, 2.939928092011525e-28];
 
 // log's kernel, in w = z^2, for |z| <= sqrt(2)-1: the series 2/(2k+3)
 let log_k: [float] = [0.6666666666666666, 0.4, 0.2857142857142857,
@@ -1086,7 +1088,7 @@ let sinh_kl: [float] = [9.251858534705814e-18, 1.1565019634686237e-19,
 // evaluation its accuracy. Same operations, same sequence, no array.
 def poly_exp(w: float) -> float {
     let p = 1.3336404122592556e-11;
-    let q = 2.939928092011524e-28;
+    let q = 2.939928092011525e-28;
     p = p * w + 1.5868300911899847e-10;
     q = q * w + 3.918194843020948e-27;
     p = p * w + 2.0887964071930685e-09;
@@ -1180,7 +1182,7 @@ def poly_sinh(w: float) -> float {
 //   asin(s) = s * (1 + z*P(z)),  s <= 1/2,  z <= 1/4
 // The coefficients are the Taylor values C(2k,k)/(4^k(2k+1)) -- the same
 // rationals as sinh_k's, one step further out the same series -- so there is
-// nothing to fit: `test/math/gen_kernel.py`'s asinexact is the same function
+// nothing to fit: `ytest math-fit`'s asinexact is the same function
 // and this is where its answer went.
 //
 // TWENTY-FOUR terms, and that many is the price of the branch: the series in z
@@ -1318,7 +1320,7 @@ def poly_atan(w: float) -> float {
 };
 
 // tanh's kernel, in w = x^2, for |x| <= 1/2: tanh(x) = x * (1 + w*P(w)). Its
-// Taylor values are -1/3, 2/15, -17/315 ... and gen_kernel.py fits degree 11
+// Taylor values are -1/3, 2/15, -17/315 ... and `ytest math-fit` fits degree 11
 // over the branch, reporting 0.000 ulp on it -- so this is the generator's own
 // answer, taken rather than retyped, and the low halves are in its sixteenth
 // digits.
@@ -1718,7 +1720,7 @@ def log_y(x: float) -> float {
 // how the first attempt got one of them wrong: a hand-written log10(2) tail
 // was off by a factor of EIGHT, and every test that followed it was an exact
 // power of ten, where the tail does not show at all. Same lesson as the
-// polynomial kernels' low halves, and the same reason gen_kernel.py exists.
+// polynomial kernels' low halves, and the same reason `ytest math-fit` exists.
 let log2e_hi: float = 1.4426950408889634;
 let log2e_lo: float = 2.0355273740931033e-17;
 // TWO constants, and confusing them is a bug that was made here: log10's answer
@@ -1905,7 +1907,8 @@ def log10(x: float) -> float {
         // SIZE of the error rather than from what an error does -- an error of any
         // size produces a whole-ulp answer if it lands on the wrong side of a tie.
         // Measured: log10 2 ulps on 379 of 20000 decade-uniform arguments becomes
-        // 288 of 20000, and log2 is unchanged.
+        // 288 of 20000, and log2 is unchanged -- against a double-rounded
+        // reference; against the correctly rounded one it is 1 in 20000 (t322).
         let ae = prod_err(ef, log10_2_hi, a) + ef * log10_2_lo;
         // ln(m) scaled by log10(e), NOT by log10(2) -- see the two constants
         let bq = l * log10e_hi;

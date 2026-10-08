@@ -24,11 +24,18 @@
 // log10 is NOT within an ulp everywhere, and the honest figure is the one
 // measured over a spread UNIFORM IN THE DECADES rather than log-uniformly: the
 // 1-in-12026 above is a log-uniform number, and a decade-uniform spread of
-// 20000 arguments (test/math/audit_float.py) finds log10 2 ulps out on 379 of
+// 20000 arguments (`ytest math-float`) finds log10 2 ulps out on 379 of
 // them -- 1.9%, spread across EVERY decade, not concentrated near zero. The
 // constant log10_2_lo has since been added (see the module) and that is 288 of
 // 20000, 1.44%; the figure 379 is what the three compensated-z-series attempts
 // below each left unchanged.
+//
+// CORRECTION: those counts were the REFERENCE's. The Python audit compared
+// against float(ln x) / float(ln 10) -- two roundings -- and that alone makes
+// ~1.5% of a decade-uniform spread look 2 ulps out (306 of 20000, measured by
+// putting the same division into `ytest math-float`). Against ONE rounding of
+// the exact log10 the spread finds 1 argument in 20000 over 1 ulp. The attempts
+// below were measured with the double-rounded reference.
 //
 // An earlier version of this comment blamed the two terms being of COMPARABLE
 // size -- e*log10(2) beside ln(m)*log10(e) -- so that ln(m)'s error was not

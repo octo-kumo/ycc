@@ -51,6 +51,10 @@ import gexp;
 import glog;
 import gsin;
 import gpow;
+import mtable;
+import maudit;
+import mfit;
+import ytools;
 import su_math;
 import su_coverage;
 import pe;
@@ -229,10 +233,10 @@ let USAGE = "usage: ytest [-j N] [SUITE...]     run the suites (all of them by d
        ytest list                     the suite names
 suites' tools:  deadcode pack-stats pty-test check-refs check-names lsp-e2e coverage-list
                 os-build os-run os-session
-math:           math-gen math-pairs math-repeats math-thresholds math-coverage math-unroll
+math:           math-gen math-fit math-table math-exact math-float math-edges math-pairs math-repeats math-thresholds math-coverage math-unroll
 windows:        pe-gate pe-packinv pe-fixtures cycc-win w-sysno
 development:    check corpus-diff bench bench-run bench-ir profile fuzz fmt fmt-check
-                run-parity meta-identity mem gcov
+                run-parity meta-identity mem gcov oom install-vscode
 environment:    CYCC YREF YCC (the compilers), YJOBS, YQUIET, YMEM_KB, YTIMEOUT_SCALE, NO_COLOR
 ";
 
@@ -263,6 +267,20 @@ def main(av: [str]) -> long {
             return yos.main_run(av[i + 1:]);
         } else if (a == "os-session") {
             return yos.main_session(av[i + 1:]);
+        } else if (a == "math-exact") {
+            return maudit.main_exact(av[i + 1:]);
+        } else if (a == "math-float") {
+            return maudit.main_float(av[i + 1:]);
+        } else if (a == "math-edges") {
+            return maudit.main_edges(av[i + 1:]);
+        } else if (a == "oom") {
+            return ytools.main_oom(av[i + 1:]);
+        } else if (a == "install-vscode") {
+            return ytools.main_install(av[i + 1:]);
+        } else if (a == "math-fit") {
+            return mfit.main(av[i + 1:]);
+        } else if (a == "math-table") {
+            return mtable.main(av[i + 1:]);
         } else if (a == "math-gen") {
             return math_gen(av[i + 1:]);
         } else if (a.starts_with("math-") && a != "math-pairs") {

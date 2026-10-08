@@ -42,7 +42,7 @@ and VS Code registers the TextMate grammar from `package.json`.
 ## Install
 
 ```sh
-sh src/tools/lsp/install-vscode.sh
+./ytest install-vscode          # make ytest first; --dry-run shows the steps
 ```
 
 That builds the server (`make yserve`), builds and packages the extension

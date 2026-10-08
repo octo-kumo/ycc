@@ -21,11 +21,11 @@ per iteration allocates per iteration.
 ## Running
 
 ```sh
-ideas/oom/run.sh                       # every program, default size
-ideas/oom/run.sh s05_arr_concat 31000  # one program at one size
+./ytest oom                       # every program, default size
+./ytest oom s05_arr_concat 31000  # one program at one size
 ```
 
-`run.sh` compiles with the `ycc` in this tree and runs each program under
+`ytest oom` compiles with the `ycc` in this tree and runs each program under
 `ulimit -S -v 3670016` (AGENTS.md's 3.5 GiB cap), then prints the line the
 program reports. Each program takes its size from `argv[1]` and reports
 `heap` = `heap_used()` delta and `per_iter` = that over `n`.

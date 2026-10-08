@@ -2,13 +2,15 @@
 // and the audits that keep the module's own structure honest.
 //
 // test/math/ulp_table.txt holds one case per line -- the function, its
-// argument(s) and the correctly-rounded answer, as IEEE-754 bit patterns (the
-// platform libm's) -- and test/math/ulp_check.y prints every case more than one
+// argument(s) and the correctly-rounded answer, as IEEE-754 bit patterns
+// (checked against mref.y's 320-bit references by `ytest math-table`) -- and test/math/ulp_check.y prints every case more than one
 // ulp off. "Within 1 ulp" is the whole promise. Both compilers run it and must
 // say the same, and every name in the table must be one the harness dispatches
 // on, or a function nobody tested would pass silently.
 //
-// Then: the four assembly kernels in arch/math.s are what their generators
+// Then: every table answer is the correctly rounded one (math-table); the
+// kernels' coefficient tables are what the fitter produces (math-fit); the
+// four assembly kernels in arch/math.s are what their generators
 // write from math.y's own constants (`ytest math-gen`); the eight unrolled
 // kernels are what the generator writes (mstatic.y math-unroll) and agree with poly_split to the bit (t328, both compilers); no
 // new repeated computation (math-repeats); every seam a comparison branches on
@@ -96,6 +98,18 @@ def cases() -> [yt.Case] {
          let r = yt.run(c);
          yt.check("y_exp, y_log, y_sin/y_cos and y_pow in math.s are what the generators write", r.code == 0,
              yt.clip(r.out, 400));
+     }),
+     yt.case_of(s, "table", () => {
+         let c = yt.cmd([yt.self_exe(), "math-table"]);
+         c.merge = true;
+         let r = yt.run(c);
+         yt.check("every answer in ulp_table.txt is the correctly rounded one (mref.y)", r.code == 0, yt.clip(r.out, 600));
+     }),
+     yt.case_of(s, "fit", () => {
+         let c = yt.cmd([yt.self_exe(), "math-fit"]);
+         c.merge = true;
+         let r = yt.run(c);
+         yt.check("math.y's kernel coefficient tables are the fit, hi and lo, to the bit", r.code == 0, yt.clip(r.out, 600));
      }),
      yt.case_of(s, "t328 cycc", () => t328(yc.CYCC)),
      yt.case_of(s, "t328 ycc", () => t328(yc.YCC)),

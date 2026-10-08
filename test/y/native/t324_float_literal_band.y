@@ -25,7 +25,7 @@
 //
 // Nothing caught this for a long time because the ulp table carries bit PATTERNS
 // -- `5.0e-324` as a hex constant -- so a literal-parsing defect is invisible to
-// it by construction. That is the lesson the header of audit_exact.py records in
+// it by construction. That is the lesson the header of `ytest math-exact` records in
 // its own terms: a gate that cannot see a class of bug is not evidence about it.
 //
 // ── and the second half: a zero mantissa is exempt from the range check ───────

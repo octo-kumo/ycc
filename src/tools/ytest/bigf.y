@@ -346,6 +346,15 @@ def atan_inv(n: long) -> BF {
 let PI_: [BF] = [];
 let TAN_PI_8: [BF] = [];
 
+/** Work at p bits from here on (the cached constants are recomputed). */
+def set_prec(p: long) {
+    if (p != PREC) {
+        PREC = p;
+        PI_ = [];
+        TAN_PI_8 = [];
+    };
+};
+
 /** pi, by Machin: 16 atan(1/5) - 4 atan(1/239). */
 def pi() -> BF {
     if (PI_.length == 0) {
@@ -388,5 +397,33 @@ def atan(t: BF) -> BF {
     if (t.neg) { neg(r) } else { r }
 };
 
-export { BF, PREC, from_double, to_double, from_long, add, sub, mul, div, div_small, recip, sqrt, atan, pi, neg, abs,
-    cmp, is_zero, ldexp };
+/** The integer nearest a >= 0 (ties to even), as a natural. */
+def round_int(a: BF) -> [long] {
+    if (is_zero(a)) { return []; };
+    if (a.e >= 0) { return bn_shl(a.m, a.e); };
+    let k = 0 - a.e;
+    let q = bn_shr(a.m, k);
+    if (bn_bit(a.m, k - 1) && (bn_low_any(a.m, k - 1) || bn_bit(q, 0))) { q = bn_add(q, [1]); };
+    q
+};
+
+/** A natural in decimal. */
+def decimal(n: [long]) -> str {
+    if (n.length == 0) { return "0"; };
+    let parts: [str] = [];
+    let v = n;
+    while (v.length > 0) {
+        let inexact = [false];
+        let q = bn_div_small(v, 1000000000, inexact);
+        // the remainder: v - q * 10^9, below 2^30
+        let r = bn_sub(v, bn_mul(q, bn_from(1000000000)));
+        parts *= tostring(if (r.length == 0) { 0 } else { r[0] });
+        v = q;
+    };
+    let s = parts[0];
+    for i in 1..parts.length { s += parts[i].pad_left(9, "0"); };
+    s
+};
+
+export { BF, PREC, round_int, decimal, set_prec, top, unit, from_double, to_double, from_long, add, sub, mul, div, div_small, recip, sqrt, atan, pi, neg, abs,
+    cmp, is_zero, ldexp, bn_shr, bn_low_any };
