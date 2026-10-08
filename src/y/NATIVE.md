@@ -175,15 +175,20 @@ ported, so they may use the whole native surface -- `&x`, `*p`,
   may call (`gen_eq_vals`'s left operand, an array read whose bounds check can
   call `y_oob`, a field read, a nested float operator) still pushes.
 - Y functions use a private convention: args pushed on the stack left to
-  right, caller cleans up, result in `%rax`. The last-pushed arg sits at
-  `rbp+16`, so param `k` of an `n`-arg function lives at
-  `rbp+16+8*(n-1-k)` (arity-dependent by construction).
+  right, result in `%rax`. The last-pushed arg sits at `rbp+16`, so param `k`
+  of an `n`-arg function lives at `rbp+16+8*(n-1-k)` (arity-dependent by
+  construction). A Y def's body (a `yfn_` label) pops its own arguments with
+  `ret $8n`, so no call to it is followed by an `add $8n, %rsp`; a runtime
+  `y_` def and an asm label leave them to the caller, because assembly and the
+  emitter's helper calls reach those (native.y `pops_args`). A function value
+  made from one of those gets a thunk that copies the arguments, calls it, and
+  pops them (`pop_thunk`).
 - **Closures** are heap records `[code_addr, cap0, cap1, ...]`; a function
   value is that record's address. An indirect call pushes the closure
   **first** (deepest), then the args left to right, so param offsets are
   identical to a direct call and the closure sits at `rbp+16+8*nargs`. One
   body serves both call forms — capture-free bodies simply never read that
-  slot. A capturing function is emitted at its *creation site*, because only
+  slot, and the callee pops the args while the caller pops the closure. A capturing function is emitted at its *creation site*, because only
   the enclosing environment knows each captured name's type. Every capture
   slot holds a pointer to one heap **cell**, so a captured variable is
   *shared* between the enclosing frame and every closure over it — writes

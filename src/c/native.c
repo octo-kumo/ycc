@@ -306,6 +306,8 @@ Yv *strip_type_list(Yv *ts, Yv *imports);
 Yv *st_new(void);
 Yv *emit(Yv *st, Yv *line);
 Yv *next_uid(Yv *st);
+int pops_args(Yv *label);
+Yv *pop_thunk(Yv *st, Yv *label, ylong n);
 Yv *next_loc(Yv *st);
 Yv *esc_asm(Yv *s);
 Yv *env_find(Yv *st, Yv *name);
@@ -4227,6 +4229,44 @@ Yv *emit(Yv *st, Yv *line) {
     return st_with(st, b, txt);
 }
 
+/* Does the function at this label pop its own arguments? A Y def's body does
+ * (`ret $8n`, emit_one_fn), so a call to one is not followed by the `add $8n,
+ * %rsp` it would otherwise need. A runtime y_ def and an asm label do not:
+ * assembly and the emitter's helper calls reach them and clean up after them. */
+int pops_args(Yv *label) {
+    return ys_starts_with(lname(label), ys("yfn_"));
+}
+
+/* The code of a function value made from a def that does not pop its n
+ * arguments: a closure call leaves them to the callee, so this pushes a copy,
+ * calls the def, and pops the originals itself. */
+Yv *pop_thunk(Yv *st, Yv *label, ylong n) {
+    Yv *ru = next_uid(st);
+    st = yr_get(ru, "st");
+    Yv *tl = lbl_new(arch_fn_label(yv_l(yr_get(ru, "uid")), ys("thunk")));
+    Yv *body = yav(0);
+    body = ir_push(body, IR_LABEL, yv_l(tl), 0, 0, 0, 0, 0, 0);
+    body = ir_push(body, F_PUSH_R, R_RBP, 64, 0, 0, 0, 0, 0);
+    body = ir_push(body, F_MOV_R_R, R_RSP, 64, R_RBP, 64, 0, 0, 0);
+    for (ylong k = 0; k < n; k++) {
+        body = ir_push(body, F_PUSH_M, R_RBP, -1, 1, 16 + 8 * (n - 1 - k), -1, 0, 0);
+    }
+    body = ir_push(body, F_CALL_L, yv_l(label), 0, 0, 0, 0, 0, 0);
+    body = ir_push(body, F_MOV_R_R, R_RBP, 64, R_RSP, 64, 0, 0, 0);
+    body = ir_push(body, F_POP_R, R_RBP, 64, 0, 0, 0, 0, 0);
+    body = ir_push(body, F_RET_I, 8 * n, 0, 0, 0, 0, 0, 0);
+    Yv *bodies = ya_push(yr_get(st, "bodies"), body);
+    Yv *btext = ya_push(yr_get(st, "btext"), yav(0));
+    Yv *blabels = ya_push(yr_get(st, "blabels"), lname(tl));
+    st = yr(15, "ir", yr_get(st, "ir"), "txt", yr_get(st, "txt"), "rodata", yr_get(st, "rodata"), "uid",
+            yr_get(st, "uid"), "fuid", yr_get(st, "fuid"),
+            "loc", yr_get(st, "loc"), "env", yr_get(st, "env"), "slots",
+            yr_get(st, "slots"), "temp", yr_get(st, "temp"), "self_label", yr_get(st, "self_label"),
+            "end_label", yr_get(st, "end_label"), "fns", yr_get(st, "fns"),
+            "bodies", bodies, "btext", btext, "blabels", blabels);
+    return yr(2, "st", st, "label", tl);
+}
+
 Yv *next_uid(Yv *st) {
     ylong u = yv_l(yr_get(st, "uid"));
     st = yr(15, "ir", yr_get(st, "ir"), "txt", yr_get(st, "txt"), "rodata", yr_get(st, "rodata"), "uid",
@@ -5971,7 +6011,14 @@ Yv *gen_id(Yv *st, Yv *node) {
             if (soff >= 0) {
                 return emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, soff, -1, R_RAX, 64);
             } else {
-                return gen_make_closure(st, yr_get(e, "label"), yav(0));
+                Yv *cl = yr_get(e, "label");
+                ylong na = yv_len(fn_args_of(yr_get(e, "typ")));
+                if (na > 0 && !pops_args(cl)) {
+                    Yv *th = pop_thunk(st, cl, na);
+                    st = yr_get(th, "st");
+                    cl = yr_get(th, "label");
+                }
+                return gen_make_closure(st, cl, yav(0));
             }
         } else if ((yv_l(yr_get(e, "kind")) == SK_global)) {
             /* An appendable global gives up its buffer on every read
@@ -6023,7 +6070,8 @@ Yv *gen_id(Yv *st, Yv *node) {
  * the args left to right. Param offsets are therefore identical to a direct
  * call, and the closure pointer sits at rbp+16+8*nargs. That is why a
  * capture-free body works unchanged under both call forms: it simply never
- * reads that slot, and the caller cleans up either way. */
+ * reads that slot. The callee pops the args (`ret $8n`, pops_args) and the
+ * caller the closure. */
 
 /* The cell pointer for a capture, in %rax. Every capture slot holds a
  * heap BOX pointer (see box_capture) — through a closure record or through
@@ -6724,7 +6772,8 @@ Yv *gen_indirect(Yv *st, Yv *node, Yv *callee) {
     st = emit_insn(st, F_MOV_D_R, R_RSP, -1, 1, 8 * n, -1, R_RAX, 64);
     st = emit_insn(st, F_MOV_0_R, R_RAX, -1, 1, -1, -1, R_RAX, 64);
     st = emit_insn(st, F_CALL_IND, R_RAX, 64, 0, 0, 0, 0, 0);
-    return emit_insn(st, F_ADD_I_R, 8 * (n + 1), R_RSP, 64, 0, 0, 0, 0);
+    /* the callee popped the arguments (pops_args); the closure is left */
+    return emit_insn(st, F_ADD_I_R, 8, R_RSP, 64, 0, 0, 0, 0);
 }
 
 Yv *gen_un(Yv *st, Yv *node) {
@@ -8576,8 +8625,8 @@ static Yv *gen_arr_call(Yv *st, ylong foff, Yv *arg_regs, ylong direct,
         st = emit_insn(st, F_PUSH_R, yv_l(ya_get(arg_regs, i)), 64, 0, 0, 0, 0, 0);
         i = i + 1;
     }
-    st = emit_insn(st, F_CALL_L, direct, 0, 0, 0, 0, 0, 0);
-    return emit_insn(st, F_ADD_I_R, 8 * yv_len(arg_regs), R_RSP, 64, 0, 0, 0, 0);
+    /* a literal's body pops its own arguments (pops_args) */
+    return emit_insn(st, F_CALL_L, direct, 0, 0, 0, 0, 0, 0);
 }
 
 static Yv *gen_closure_call(Yv *st, ylong foff, Yv *arg_regs) {
@@ -8589,7 +8638,8 @@ static Yv *gen_closure_call(Yv *st, ylong foff, Yv *arg_regs) {
     st = emit_insn(st, F_MOV_D_R, R_RBP, -1, 1, foff, -1, R_R10, 64);
     st = emit_insn(st, F_MOV_0_R, R_R10, -1, 1, -1, -1, R_R10, 64);
     st = emit_insn(st, F_CALL_IND, R_R10, 64, 0, 0, 0, 0, 0);
-    return emit_insn(st, F_ADD_I_R, 8 * (yv_len(arg_regs) + 1), R_RSP, 64, 0, 0, 0, 0);
+    /* the callee popped the arguments (pops_args); the closure is left */
+    return emit_insn(st, F_ADD_I_R, 8, R_RSP, 64, 0, 0, 0, 0);
 }
 
 static Yv *gen_arr_new_empty(Yv *st) {
@@ -9701,7 +9751,7 @@ Yv *gen_direct(Yv *st, Yv *node, Yv *name) {
         }
         st = gen_push_args_as(st, yr_get(node, "args"), dptypes);
         st = emit_insn(st, F_CALL_L, yv_l(label), 0, 0, 0, 0, 0, 0);
-        ylong nbytes = yv_len(yr_get(node, "args")) * 8;
+        ylong nbytes = pops_args(label) ? 0 : yv_len(yr_get(node, "args")) * 8;
         if (soff >= 0) {
             nbytes = nbytes + 8;
             ;
@@ -14623,7 +14673,11 @@ Yv *emit_one_fn(Yv *st, Yv *label, ylong fuid, Yv *func, int is_main,
     } else {
         body = ir_push(body, F_MOV_R_R, R_RBP, 64, R_RSP, 64, 0, 0, 0);
         body = ir_push(body, F_POP_R, R_RBP, 64, 0, 0, 0, 0, 0);
-        body = ir_push(body, F_RET, 0, 0, 0, 0, 0, 0, 0);
+        if (nargs > 0 && pops_args(label)) {
+            body = ir_push(body, F_RET_I, 8 * nargs, 0, 0, 0, 0, 0, 0);
+        } else {
+            body = ir_push(body, F_RET, 0, 0, 0, 0, 0, 0, 0);
+        }
     }
     /* NOTE: append to f.bodies, NOT st.bodies. Emitting this body can add
      * bodies of its own (a nested capturing def is emitted at its creation

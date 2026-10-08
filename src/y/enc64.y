@@ -1202,7 +1202,10 @@ def enc_insn(buf: [byte], at: long, mn: str, ops: [Operand], lng: bool) -> Encod
     } else if (mn == "syscall") {
         enc_ok(put2(buf, at, 15, 5), [])
     } else if (mn == "ret") {
-        enc_ok(put(buf, at, 195), [])
+        // `ret $n` (C2 iw): a Y function pops its own arguments
+        if (len(ops) == 1 && ops[0].k == K.imm) {
+            enc_ok(put3(buf, at, 194, ops[0].v & 255, (ops[0].v >> 8) & 255), [])
+        } else { enc_ok(put(buf, at, 195), []) }
         // The five jumps and movsd below sit LAST in the chain on purpose. An
         // arm costs every line below it one or more comparisons, and this runs
         // once per line of emitted text: beside the other jumps they measured

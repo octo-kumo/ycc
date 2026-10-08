@@ -3169,6 +3169,46 @@ def emit(st: EmitSt, line: str) -> EmitSt {
     st_with(st, insn.ir_push(st.ir, insn.IR_TEXT, len(txt) - 1, 0, 0, 0, 0, 0, 0), txt)
 };
 
+// Does the function at this label pop its own arguments? A Y def's body does
+// (`ret $8n`, emit_one_fn), so a call to one is not followed by the `add $8n,
+// %rsp` it would otherwise need. A runtime y_ def and an asm label do not:
+// assembly and the emitter's helper calls reach them and clean up after them.
+def pops_args(label: long) -> bool {
+    lname(label).starts_with("yfn_")
+};
+
+// The code of a function value made from a def that does not pop its n
+// arguments: a closure call leaves them to the callee, so this pushes a copy,
+// calls the def, and pops the originals itself.
+def pop_thunk(st: EmitSt, label: long, n: long) -> StLbl {
+    let ru = next_uid(st);
+    st = ru.st;
+    let tl = lbl_new(arch.arch_fn_label(ru.uid, "thunk"));
+    let body: [long] = [];
+    body = insn.ir_push(body, insn.IR_LABEL, tl, 0, 0, 0, 0, 0, 0);
+    body = insn.ir_push(body, insn.F_PUSH_R, insn.R_RBP, 64, 0, 0, 0, 0, 0);
+    body = insn.ir_push(body, insn.F_MOV_R_R, insn.R_RSP, 64, insn.R_RBP, 64, 0, 0, 0);
+    for k in 0..n {
+        body = insn.ir_push(body, insn.F_PUSH_M, insn.R_RBP, -1, 1, 16 + 8 * (n - 1 - k), -1, 0, 0);
+    };
+    body = insn.ir_push(body, insn.F_CALL_L, label, 0, 0, 0, 0, 0, 0);
+    body = insn.ir_push(body, insn.F_MOV_R_R, insn.R_RBP, 64, insn.R_RSP, 64, 0, 0, 0);
+    body = insn.ir_push(body, insn.F_POP_R, insn.R_RBP, 64, 0, 0, 0, 0, 0);
+    body = insn.ir_push(body, insn.F_RET_I, 8 * n, 0, 0, 0, 0, 0, 0);
+    let notxt: [str] = [];
+    let bodies = st.bodies;
+    bodies += [body];
+    let btext = st.btext;
+    btext += [notxt];
+    let blabels = st.blabels;
+    blabels += lname(tl);
+    st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid,
+        fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots, temp: st.temp,
+        self_label: st.self_label, end_label: st.end_label, fns: st.fns,
+        bodies: bodies, btext: btext, blabels: blabels };
+    { st: st, label: tl }
+};
+
 def next_uid(st: EmitSt) -> { st: EmitSt, uid: long } {
     let u = st.uid;
     st = { ir: st.ir, txt: st.txt, rodata: st.rodata, uid: st.uid + 1,
@@ -4803,7 +4843,14 @@ def gen_id(st: EmitSt, node: Leaf) -> EmitSt {
             if (soff >= 0) {
                 emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, soff, -1, insn.R_RAX, 64)
             } else {
-                gen_make_closure(st, e.label, [])
+                let cl = e.label;
+                let na = len(fn_args_of(e.typ));
+                if (na > 0 && !pops_args(cl)) {
+                    let th = pop_thunk(st, cl, na);
+                    st = th.st;
+                    cl = th.label;
+                };
+                gen_make_closure(st, cl, [])
             }
         } else if (e.kind == SK.global) {
             // An appendable global gives up its buffer on every read
@@ -4849,7 +4896,8 @@ def gen_id(st: EmitSt, node: Leaf) -> EmitSt {
 // the args left to right. Param offsets are therefore identical to a direct
 // call, and the closure pointer sits at rbp+16+8*nargs. That is why a
 // capture-free body works unchanged under both call forms: it simply never
-// reads that slot, and the caller cleans up either way.
+// reads that slot. The callee pops the args (`ret $8n`, pops_args) and the
+// caller the closure.
 
 // The cell pointer for a capture, in %rax. Every capture slot holds a
 // heap BOX pointer (see box_capture) — through a closure record or through
@@ -5451,7 +5499,8 @@ def gen_indirect(st: EmitSt, node: Call, callee: Node) -> EmitSt {
     st = emit_insn(st, insn.F_MOV_D_R, insn.R_RSP, -1, 1, 8 * n, -1, insn.R_RAX, 64);
     st = emit_insn(st, insn.F_MOV_0_R, insn.R_RAX, -1, 1, -1, -1, insn.R_RAX, 64);
     st = emit_insn(st, insn.F_CALL_IND, insn.R_RAX, 64, 0, 0, 0, 0, 0);
-    emit_insn(st, insn.F_ADD_I_R, 8 * (n + 1), insn.R_RSP, 64, 0, 0, 0, 0)
+    // the callee popped the arguments (pops_args); the closure is left
+    emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0)
 };
 
 def gen_un(st: EmitSt, node: Un) -> EmitSt {
@@ -7043,8 +7092,8 @@ def gen_arr_call(st: EmitSt, foff: long, arg_regs: [long], direct: long, fnode: 
         arg_regs.foreach((e) => {
             st = emit_insn(st, insn.F_PUSH_R, e, 64, 0, 0, 0, 0, 0);
         });
-        st = emit_insn(st, insn.F_CALL_L, direct, 0, 0, 0, 0, 0, 0);
-        emit_insn(st, insn.F_ADD_I_R, 8 * len(arg_regs), insn.R_RSP, 64, 0, 0, 0, 0)
+        // a literal's body pops its own arguments (pops_args)
+        emit_insn(st, insn.F_CALL_L, direct, 0, 0, 0, 0, 0, 0)
     }
 };
 
@@ -7194,7 +7243,8 @@ def gen_closure_call(st: EmitSt, foff: long, arg_regs: [long]) -> EmitSt {
     st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, foff, -1, insn.R_R10, 64);
     st = emit_insn(st, insn.F_MOV_0_R, insn.R_R10, -1, 1, -1, -1, insn.R_R10, 64);
     st = emit_insn(st, insn.F_CALL_IND, insn.R_R10, 64, 0, 0, 0, 0, 0);
-    emit_insn(st, insn.F_ADD_I_R, 8 * (len(arg_regs) + 1), insn.R_RSP, 64, 0, 0, 0, 0)
+    // the callee popped the arguments (pops_args); the closure is left
+    emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0)
 };
 
 def gen_arr_new_empty(st: EmitSt) -> EmitSt {
@@ -8250,7 +8300,7 @@ def gen_direct(st: EmitSt, node: Call, name: str) -> EmitSt {
         }
         st = gen_push_args_as(st, node.args, dptypes);
         st = emit_insn(st, insn.F_CALL_L, label, 0, 0, 0, 0, 0, 0);
-        let nbytes = len(node.args) * 8;
+        let nbytes = pops_args(label) ? 0 : len(node.args) * 8;
         if (soff >= 0) {
             nbytes = nbytes + 8;
         }
@@ -12582,7 +12632,11 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
     } else {
         body = insn.ir_push(body, insn.F_MOV_R_R, insn.R_RBP, 64, insn.R_RSP, 64, 0, 0, 0);
         body = insn.ir_push(body, insn.F_POP_R, insn.R_RBP, 64, 0, 0, 0, 0, 0);
-        body = insn.ir_push(body, insn.F_RET, 0, 0, 0, 0, 0, 0, 0);
+        if (nargs > 0 && pops_args(label)) {
+            body = insn.ir_push(body, insn.F_RET_I, 8 * nargs, 0, 0, 0, 0, 0, 0);
+        } else {
+            body = insn.ir_push(body, insn.F_RET, 0, 0, 0, 0, 0, 0, 0);
+        };
     };
     // NOTE: append to f.bodies, NOT st.bodies. Emitting this body can add
     // bodies of its own (a nested capturing def is emitted at its creation

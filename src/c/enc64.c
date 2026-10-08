@@ -1431,7 +1431,13 @@ Yv *enc_insn(Yv *buf, ylong at, Yv *mn, Yv *ops, int lng) {
     } else if (ys_eq_lit(mn, "syscall")) {
         return enc_ok(put2(buf, at, 15, 5), yav(0));
     } else if (ys_eq_lit(mn, "ret")) {
-        return enc_ok(put(buf, at, 195), yav(0));
+        /* `ret $n` (C2 iw): a Y function pops its own arguments */
+        if (yv_len(ops) == 1 && yv_l(yr_get(ya_get(ops, 0), "k")) == K_imm) {
+            ylong v = yv_l(yr_get(ya_get(ops, 0), "v"));
+            return enc_ok(put3(buf, at, 194, v & 255, (v >> 8) & 255), yav(0));
+        } else {
+            return enc_ok(put(buf, at, 195), yav(0));
+        }
     } else if (ys_eq_lit(mn, "cli")) {
         return enc_ok(put(buf, at, 250), yav(0));
     } else if (ys_eq_lit(mn, "sti")) {

@@ -184,6 +184,7 @@ const F_SQRTSD_R_R = 124;
 // into one of these when nothing reads %rax after it (an argument list).
 const F_PUSH_I = 125;
 const F_PUSH_M = 126;
+const F_RET_I = 127;
 
 // Register numbers, x86 encoding order (enc64's reg_num is the same table:
 // %rax %rcx %rdx %rbx %rsp %rbp %rsi %rdi %r8..%r15, and %xmm0..).
@@ -343,6 +344,7 @@ def ir_init() -> void {
     t += { id: F_SQRTSD_R_R, mn: "sqrtsd", kinds: [O_REG, O_REG] };
     t += { id: F_PUSH_I, mn: "push", kinds: [O_IMM] };
     t += { id: F_PUSH_M, mn: "push", kinds: [O_MEM] };
+    t += { id: F_RET_I, mn: "ret", kinds: [O_IMM] };
     // The ids above are positions in this list; a form added in the wrong
     // place would decode and print as a different instruction, so check it.
     t.foreach((e, i) => {
