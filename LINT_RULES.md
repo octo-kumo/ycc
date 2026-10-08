@@ -384,10 +384,13 @@ when the fixer rewrote the lexer's own bounds checks (round 9).
 - a top-level statement beside a meta block — it runs twice.
 - a value-used `+=` on a string inside a loop — copies the whole string.
 - a constant array literal searched inside a loop (`[40, 41].index(c)`,
-  `c in [97, 98]`, the loop's condition and a `for`'s step included) — a new
-  array every iteration; bind it once before the loop. It found five in the
-  compiler itself (the lexer's f-string scanner, `fx_split_comma`, the
-  arch-block fall-through test) and meta.y's per-byte scanner (t407).
+  `s.byte_at(i) in [97, 98]`, the loop's condition and a `for`'s step
+  included) — a new array every iteration; bind it once before the loop. It
+  found five in the compiler itself (the lexer's f-string scanner,
+  `fx_split_comma`, the arch-block fall-through test) and meta.y's per-byte
+  scanner (t407). `x in [97, 98]` with `x` a name or a literal and the elements
+  all integer or all string literals is exempt: the emitter compiles it to
+  compares and builds no array (types.y `in_compares`, t410).
 
 ## 7. TODO
 

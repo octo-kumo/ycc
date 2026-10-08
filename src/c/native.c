@@ -4081,6 +4081,7 @@ static int oob_fold(Yv *ir) {
     ylong x = -1;
     if (yv_l(ya_get(ir, c)) == F_CMP_R_R && yv_l(ya_get(ir, c + 4)) == 64) { x = yv_l(ya_get(ir, c + 3)); }
     else if (yv_l(ya_get(ir, c)) == F_CMP_I_R && yv_l(ya_get(ir, c + 3)) == 64) { x = yv_l(ya_get(ir, c + 2)); }
+    else if (yv_l(ya_get(ir, c)) == F_CMP_M_R && yv_l(ya_get(ir, c + 7)) == 64) { x = yv_l(ya_get(ir, c + 6)); }
     if (x < 0) { return 0; }
     ylong k = 0;
     int found = 0;
@@ -6878,8 +6879,7 @@ Yv *gen_elem_addr(Yv *st, Yv *node) {
         st = emit_insn(st, F_JGE_L, yv_l(lbl_new(ys("y_oob"))), 0, 0, 0, 0, 0, 0);
         ;
     } else {
-        st = emit_insn(st, F_MOV_0_R, R_RAX, -1, 1, -1, -1, R_RDX, 64);
-        st = emit_insn(st, F_CMP_R_R, R_RDX, 64, R_RCX, 64, 0, 0, 0);
+        st = emit_insn(st, F_CMP_M_R, R_RAX, -1, 1, 0, -1, R_RCX, 64);
         st = emit_insn(st, F_JGE_L, yv_l(lbl_new(ys("y_oob"))), 0, 0, 0, 0, 0, 0);
         ;
     }
@@ -6913,7 +6913,24 @@ Yv *gen_bin(Yv *st, Yv *node) {
  *   a && b : test a -> jz F; test b -> jz F; 1; jmp E; F: 0; E:
  *   a || b : test a -> jnz T; test b -> jnz T; 0; jmp E; T: 1; E: */
 /* `x in s` / `e in a` (LINT_RULES.md 5.1): one pass, no short-circuit. */
+/* `x in [c1, c2, ...]` (types.in_compares) as `x == c1 || x == c2 || ...`:
+ * no array is built, and a condition jumps on each compare (gen_branch). */
+static Yv *in_chain(Yv *node) {
+    Yv *es = yr_get(yr_get(node, "r"), "elems");
+    Yv *ln = yr_get(node, "line");
+    Yv *cl = yr_get(node, "col");
+    Yv *out = yr(6, "k", yv_long(K_bin), "op", ys("=="), "l", yr_get(node, "l"), "r", ya_get(es, 0),
+                 "line", ln, "col", cl);
+    for (ylong i = 1; i < yv_len(es); i++) {
+        Yv *eq = yr(6, "k", yv_long(K_bin), "op", ys("=="), "l", yr_get(node, "l"), "r", ya_get(es, i),
+                    "line", ln, "col", cl);
+        out = yr(6, "k", yv_long(K_bin), "op", ys("||"), "l", out, "r", eq, "line", ln, "col", cl);
+    }
+    return out;
+}
+
 Yv *gen_in(Yv *st, Yv *node) {
+    if (in_compares(yr_get(node, "l"), yr_get(node, "r"))) { return gen(st, in_chain(node)); }
     ylong ln = yv_l(yr_get(node, "line"));
     ylong cl = yv_l(yr_get(node, "col"));
     Yv *zero = n_num(ys("0"), ln, cl);
@@ -6950,7 +6967,8 @@ static int is_logic(Yv *st, Yv *n) {
     ylong k = yv_l(yr_get(n, "k"));
     if (k == K_bin) {
         Yv *op = yr_get(n, "op");
-        return ys_eq_lit(op, "&&") || ys_eq_lit(op, "||");
+        return ys_eq_lit(op, "&&") || ys_eq_lit(op, "||")
+            || (ys_eq_lit(op, "in") && in_compares(yr_get(n, "l"), yr_get(n, "r")));
     } else if (k == K_un) {
         return ys_eq_lit(yr_get(n, "op"), "!") && yv_l(yr_get(unfold(infer(st, yr_get(n, "e"))), "k")) == K_tbool;
     } else {
@@ -6974,6 +6992,10 @@ static Yv *rax_into_rcx(Yv *st);
 static Yv *gen_branch(Yv *st, Yv *cond, ylong label, int on_true) {
     if (yv_l(yr_get(cond, "k")) == K_un && is_logic(st, cond)) {
         return gen_branch(st, yr_get(cond, "e"), label, !on_true);
+    }
+    if (yv_l(yr_get(cond, "k")) == K_bin && ys_eq_lit(yr_get(cond, "op"), "in")
+        && in_compares(yr_get(cond, "l"), yr_get(cond, "r"))) {
+        cond = in_chain(cond);
     }
     if (yv_l(yr_get(cond, "k")) == K_bin) {
         Yv *op = yr_get(cond, "op");
@@ -8204,16 +8226,21 @@ Yv *gen_cast_check(Yv *st, Yv *ts, Yv *u) {
     Yv *ok = next_loc(st);
     st = yr_get(ok, "st");
     st = emit_insn(st, F_MOV_D_R, R_RAX, -1, 1, -8, -1, R_RCX, 64);
+    ylong last = yv_len(ts) - 1;
     ylong i = 0;
     while (i < yv_len(ts)) {
         Yv *dr = ty_desc_in(st, ya_get(ts, i), u);
         st = yr_get(dr, "st");
         st = emit_insn(st, F_LEA_P_R, -1, -1, 1, 0, yv_l(yr_get(dr, "label")), R_RDX, 64);
         st = emit_insn(st, F_CMP_R_R, R_RDX, 64, R_RCX, 64, 0, 0, 0);
-        st = emit_insn(st, F_JE_L, yv_l(yr_get(ok, "label")), 0, 0, 0, 0, 0, 0);
+        if (i == last) {
+            st = emit_insn(st, F_JNE_L, yv_l(lbl_new(ys("y_cast_trap"))), 0, 0, 0, 0, 0, 0);
+        } else {
+            st = emit_insn(st, F_JE_L, yv_l(yr_get(ok, "label")), 0, 0, 0, 0, 0, 0);
+        }
         i = i + 1;
     }
-    st = emit_insn(st, F_JMP_L, yv_l(lbl_new(ys("y_cast_trap"))), 0, 0, 0, 0, 0, 0);
+    if (last < 0) { st = emit_insn(st, F_JMP_L, yv_l(lbl_new(ys("y_cast_trap"))), 0, 0, 0, 0, 0, 0); }
     return emit_label(st, yv_l(yr_get(ok, "label")));
 }
 
@@ -12366,8 +12393,7 @@ Yv *gen_index(Yv *st, Yv *node) {
         st = emit_insn(st, F_JGE_L, yv_l(lbl_new(ys("y_oob"))), 0, 0, 0, 0, 0, 0);
         return elem_load(st, ixesz, R_RAX, R_RCX, R_RAX);
     } else {
-        st = emit_insn(st, F_MOV_0_R, R_RAX, -1, 1, -1, -1, R_RDX, 64);
-        st = emit_insn(st, F_CMP_R_R, R_RDX, 64, R_RCX, 64, 0, 0, 0);
+        st = emit_insn(st, F_CMP_M_R, R_RAX, -1, 1, 0, -1, R_RCX, 64);
         st = emit_insn(st, F_JGE_L, yv_l(lbl_new(ys("y_oob"))), 0, 0, 0, 0, 0, 0);
         return elem_load(st, ixesz, R_RAX, R_RCX, R_RAX);
     }
@@ -13090,11 +13116,8 @@ Yv *gen_idxassign(Yv *st, Yv *node) {
         st = emit_insn(st, F_MOV_R_R, R_R10, 64, R_RDX, 64, 0, 0, 0);
         ;
     } else {
-        st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
-        st = emit_insn(st, F_MOV_0_R, R_RDX, -1, 1, -1, -1, R_RAX, 64);
-        st = emit_insn(st, F_CMP_R_R, R_RAX, 64, R_RCX, 64, 0, 0, 0);
+        st = emit_insn(st, F_CMP_M_R, R_RDX, -1, 1, 0, -1, R_RCX, 64);
         st = emit_insn(st, F_JGE_L, yv_l(lbl_new(ys("y_oob"))), 0, 0, 0, 0, 0, 0);
-        st = emit_insn(st, F_POP_R, R_RAX, 64, 0, 0, 0, 0, 0);
         st = emit_insn(st, F_MOV_R_R, R_RDX, 64, R_R10, 64, 0, 0, 0);
         st = emit_insn(st, F_MOV_R_R, R_RAX, 64, R_RDX, 64, 0, 0, 0);
         st = elem_store_rdx(st, iaesz, R_R10, R_RCX);
@@ -13865,10 +13888,9 @@ Yv *gen_byte_at(Yv *st, Yv *node) {
     st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
     st = gen(st, ya_get(args, 1));
     st = emit_insn(st, F_POP_R, R_RCX, 64, 0, 0, 0, 0, 0);
-    st = emit_insn(st, F_MOV_0_R, R_RCX, -1, 1, -1, -1, R_RDX, 64);
     st = emit_insn(st, F_TEST_R_R, R_RAX, 64, R_RAX, 64, 0, 0, 0);
     st = emit_insn(st, F_JS_L, yv_l(lbl_new(ys("y_oob"))), 0, 0, 0, 0, 0, 0);
-    st = emit_insn(st, F_CMP_R_R, R_RDX, 64, R_RAX, 64, 0, 0, 0);
+    st = emit_insn(st, F_CMP_M_R, R_RCX, -1, 1, 0, -1, R_RAX, 64);
     st = emit_insn(st, F_JGE_L, yv_l(lbl_new(ys("y_oob"))), 0, 0, 0, 0, 0, 0);
     return emit_insn(st, F_MOVZBQ_M_R, R_RCX, R_RAX, 1, 8, -1, R_RAX, 64);
 }

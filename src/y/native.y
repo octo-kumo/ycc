@@ -2990,7 +2990,8 @@ def oob_fold(ir: [long]) -> bool {
     };
     if (len(pos) < 3) { return false; };
     let c = pos[0];
-    let x = if (ir[c] == insn.F_CMP_R_R && ir[c + 4] == 64) { ir[c + 3] } else if (ir[c] == insn.F_CMP_I_R && ir[c + 3] == 64) { ir[c + 2] } else { -1 };
+    let x = if (ir[c] == insn.F_CMP_R_R && ir[c + 4] == 64) { ir[c + 3] } else if (ir[c] == insn.F_CMP_I_R && ir[c + 3] == 64) { ir[c + 2] }
+        else if (ir[c] == insn.F_CMP_M_R && ir[c + 7] == 64) { ir[c + 6] } else { -1 };
     if (x < 0) { return false; };
     // pos[1..k] the loads between (k = 0..2), pos[k + 1] the js, pos[k + 2] the test
     let k = 0;
@@ -5594,8 +5595,7 @@ def gen_elem_addr(st: EmitSt, node: Index) -> EmitSt {
         st = emit_insn(st, insn.F_CMP_I_R, arr.n, insn.R_RCX, 64, 0, 0, 0, 0);
         st = emit_insn(st, insn.F_JGE_L, lbl_new("y_oob"), 0, 0, 0, 0, 0, 0);
     } else {
-        st = emit_insn(st, insn.F_MOV_0_R, insn.R_RAX, -1, 1, -1, -1, insn.R_RDX, 64);
-        st = emit_insn(st, insn.F_CMP_R_R, insn.R_RDX, 64, insn.R_RCX, 64, 0, 0, 0);
+        st = emit_insn(st, insn.F_CMP_M_R, insn.R_RAX, -1, 1, 0, -1, insn.R_RCX, 64);
         st = emit_insn(st, insn.F_JGE_L, lbl_new("y_oob"), 0, 0, 0, 0, 0, 0);
     };
     st = emit_insn(st, insn.F_MOV_D_R, insn.R_RAX, -1, 1, 16, -1, insn.R_RAX, 64);
@@ -5624,8 +5624,24 @@ def gen_bin(st: EmitSt, node: Bin) -> EmitSt {
     }
 };
 
+// `x in [c1, c2, ...]` (types.in_compares) as `x == c1 || x == c2 || ...`:
+// no array is built, and a condition jumps on each compare (gen_branch).
+def in_chain(node: Bin) -> Node {
+    let a: ArrLit = node.r;
+    let es = a.elems;
+    let ln = node.line;
+    let cl = node.col;
+    let out: Node = { k: K.bin, op: "==", l: node.l, r: es[0], line: ln, col: cl };
+    for i in 1..len(es) {
+        let eq: Node = { k: K.bin, op: "==", l: node.l, r: es[i], line: ln, col: cl };
+        out = { k: K.bin, op: "||", l: out, r: eq, line: ln, col: cl };
+    };
+    out
+};
+
 // `x in s` / `e in a` (LINT_RULES.md 5.1): one pass, no short-circuit.
 def gen_in(st: EmitSt, node: Bin) -> EmitSt {
+    if (types.in_compares(node.l, node.r)) { return gen(st, in_chain(node)); };
     let ln = node.line;
     let cl = node.col;
     let zero = n_num("0", ln, cl);
@@ -5654,7 +5670,7 @@ def gen_in(st: EmitSt, node: Bin) -> EmitSt {
 def is_logic(st: EmitSt, n: Node) -> bool {
     if (n.k == K.bin) {
         let b: Bin = n;
-        b.op == "&&" || b.op == "||"
+        b.op == "&&" || b.op == "||" || (b.op == "in" && types.in_compares(b.l, b.r))
     } else if (n.k == K.un) {
         let u: Un = n;
         u.op == "!" && unfold(infer(st, u.e)).k == K.tbool
@@ -5678,6 +5694,10 @@ def gen_branch(st: EmitSt, cond: Node, label: long, on_true: bool) -> EmitSt {
     if (cond.k == K.un && is_logic(st, cond)) {
         let u: Un = cond;
         return gen_branch(st, u.e, label, !on_true);
+    };
+    if (cond.k == K.bin) {
+        let bi: Bin = cond;
+        if (bi.op == "in" && types.in_compares(bi.l, bi.r)) { cond = in_chain(bi); };
     };
     if (cond.k == K.bin) {
         let b: Bin = cond;
@@ -6801,19 +6821,25 @@ def cast_members(s: Type, t: Type) -> [Type] {
 };
 
 // gen_convert's check of a cast from union u: the record in %rax (kept)
-// is one of its members ts, or the program stops (y_cast_trap).
+// is one of its members ts, or the program stops (y_cast_trap). The last
+// member's compare jumps to the trap when it fails.
 def gen_cast_check(st: EmitSt, ts: [Type], u: Type) -> EmitSt {
     let ok = next_loc(st);
     st = ok.st;
     st = emit_insn(st, insn.F_MOV_D_R, insn.R_RAX, -1, 1, -8, -1, insn.R_RCX, 64);
-    ts.foreach((e) => {
+    let last = len(ts) - 1;
+    ts.foreach((e, ti) => {
         let dr = ty_desc_in(st, e, u);
         st = dr.st;
         st = emit_insn(st, insn.F_LEA_P_R, -1, -1, 1, 0, dr.label, insn.R_RDX, 64);
         st = emit_insn(st, insn.F_CMP_R_R, insn.R_RDX, 64, insn.R_RCX, 64, 0, 0, 0);
-        st = emit_insn(st, insn.F_JE_L, ok.label, 0, 0, 0, 0, 0, 0);
+        if (ti == last) {
+            st = emit_insn(st, insn.F_JNE_L, lbl_new("y_cast_trap"), 0, 0, 0, 0, 0, 0);
+        } else {
+            st = emit_insn(st, insn.F_JE_L, ok.label, 0, 0, 0, 0, 0, 0);
+        };
     });
-    st = emit_insn(st, insn.F_JMP_L, lbl_new("y_cast_trap"), 0, 0, 0, 0, 0, 0);
+    if (last < 0) { st = emit_insn(st, insn.F_JMP_L, lbl_new("y_cast_trap"), 0, 0, 0, 0, 0, 0); };
     emit_label(st, ok.label)
 };
 
@@ -10594,8 +10620,7 @@ def gen_index(st: EmitSt, node: Index) -> EmitSt {
         st = emit_insn(st, insn.F_JGE_L, lbl_new("y_oob"), 0, 0, 0, 0, 0, 0);
         elem_load(st, ixesz, insn.R_RAX, insn.R_RCX, insn.R_RAX)
     } else {
-        st = emit_insn(st, insn.F_MOV_0_R, insn.R_RAX, -1, 1, -1, -1, insn.R_RDX, 64);
-        st = emit_insn(st, insn.F_CMP_R_R, insn.R_RDX, 64, insn.R_RCX, 64, 0, 0, 0);
+        st = emit_insn(st, insn.F_CMP_M_R, insn.R_RAX, -1, 1, 0, -1, insn.R_RCX, 64);
         st = emit_insn(st, insn.F_JGE_L, lbl_new("y_oob"), 0, 0, 0, 0, 0, 0);
         elem_load(st, ixesz, insn.R_RAX, insn.R_RCX, insn.R_RAX)
     }
@@ -11199,11 +11224,8 @@ def gen_idxassign(st: EmitSt, node: IdxAssign) -> EmitSt {
         st = elem_store_rdx(st, iaesz, insn.R_R10, insn.R_RCX);
         st = emit_insn(st, insn.F_MOV_R_R, insn.R_R10, 64, insn.R_RDX, 64, 0, 0, 0);
     } else {
-        st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
-        st = emit_insn(st, insn.F_MOV_0_R, insn.R_RDX, -1, 1, -1, -1, insn.R_RAX, 64);
-        st = emit_insn(st, insn.F_CMP_R_R, insn.R_RAX, 64, insn.R_RCX, 64, 0, 0, 0);
+        st = emit_insn(st, insn.F_CMP_M_R, insn.R_RDX, -1, 1, 0, -1, insn.R_RCX, 64);
         st = emit_insn(st, insn.F_JGE_L, lbl_new("y_oob"), 0, 0, 0, 0, 0, 0);
-        st = emit_insn(st, insn.F_POP_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
         st = emit_insn(st, insn.F_MOV_R_R, insn.R_RDX, 64, insn.R_R10, 64, 0, 0, 0);
         st = emit_insn(st, insn.F_MOV_R_R, insn.R_RAX, 64, insn.R_RDX, 64, 0, 0, 0);
         st = elem_store_rdx(st, iaesz, insn.R_R10, insn.R_RCX);
@@ -11937,10 +11959,9 @@ def gen_byte_at(st: EmitSt, node: Call) -> EmitSt {
     st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     st = gen(st, args[1]);
     st = emit_insn(st, insn.F_POP_R, insn.R_RCX, 64, 0, 0, 0, 0, 0);
-    st = emit_insn(st, insn.F_MOV_0_R, insn.R_RCX, -1, 1, -1, -1, insn.R_RDX, 64);
     st = emit_insn(st, insn.F_TEST_R_R, insn.R_RAX, 64, insn.R_RAX, 64, 0, 0, 0);
     st = emit_insn(st, insn.F_JS_L, lbl_new("y_oob"), 0, 0, 0, 0, 0, 0);
-    st = emit_insn(st, insn.F_CMP_R_R, insn.R_RDX, 64, insn.R_RAX, 64, 0, 0, 0);
+    st = emit_insn(st, insn.F_CMP_M_R, insn.R_RCX, -1, 1, 0, -1, insn.R_RAX, 64);
     st = emit_insn(st, insn.F_JGE_L, lbl_new("y_oob"), 0, 0, 0, 0, 0, 0);
     emit_insn(st, insn.F_MOVZBQ_M_R, insn.R_RCX, insn.R_RAX, 1, 8, -1, insn.R_RAX, 64)
 };

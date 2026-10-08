@@ -1042,7 +1042,7 @@ static ylong lint_bin(LintSt st, Yv *node, int used) {
     }
     Yv *l = yr_get(node, "l");
     Yv *r = yr_get(node, "r");
-    if (ys_eq_lit(op, "in")) { lint_loop_arr(st, r); }
+    if (ys_eq_lit(op, "in") && !in_compares(l, r)) { lint_loop_arr(st, r); }
     if ((ys_eq_lit(op, "&&") || ys_eq_lit(op, "||")) && !used &&
         lint_effect(r)) {
         (void)lint_node(st, l, 1);

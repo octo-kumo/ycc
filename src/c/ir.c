@@ -145,6 +145,7 @@ static void ir_init(void) {
     t = ya_push(t, yr(3, "id", yv_long(F_PUSH_I), "mn", ys("push"), "kinds", yav(1, yv_long(O_IMM))));
     t = ya_push(t, yr(3, "id", yv_long(F_PUSH_M), "mn", ys("push"), "kinds", yav(1, yv_long(O_MEM))));
     t = ya_push(t, yr(3, "id", yv_long(F_RET_I), "mn", ys("ret"), "kinds", yav(1, yv_long(O_IMM))));
+    t = ya_push(t, yr(3, "id", yv_long(F_CMP_M_R), "mn", ys("cmp"), "kinds", yav(2, yv_long(O_MEM), yv_long(O_REG))));
     /* The ids above are positions in this list; a form added in the wrong
        place would decode and print as a different instruction, so check it. */
     ylong i = 0;

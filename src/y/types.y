@@ -1216,6 +1216,29 @@ let tc_dotbase = false;
 
 def escaped() -> [str] { tc_esc };
 
+// `l in r` that the emitter compiles to compares, building no array (native.y
+// in_chain): l a name or a literal, r an array literal of integer literals or
+// of string literals. lint.y does not call such an `in` in a loop a rebuilt
+// array.
+def in_compares(l: Node, r: Node) -> bool {
+    let lk = l.k;
+    if (r.k != K.array || (lk != K.id && lk != K.num && lk != K.str)) { return false; };
+    let a: ArrLit = r;
+    let es = a.elems;
+    if (len(es) == 0) { return false; };
+    let k0 = es[0].k;
+    if (k0 != K.num && k0 != K.str) { return false; };
+    let ok = true;
+    for i in 0..len(es) {
+        let e = es[i];
+        if (e.k != k0) { ok = false; } else if (k0 == K.num) {
+            let lit: Leaf = e;
+            if (num_is_float(lit.v)) { ok = false; };
+        };
+    };
+    ok
+};
+
 def lookup(bindings: [Binding], name: str) -> Lookup {
     // The newest binding of the name: the last few bindings first (a
     // local is almost always among them), then the index: scanning back
@@ -5471,4 +5494,4 @@ def def_sig(name: str, func: Func) -> Field {
     { name: name, opt: false, typ: type_node({ k: K.tfunc, args: args, ret: ret }) }
 };
 
-export { check_program, escaped, os_call_names, tstr, teq, leaf_of, field_pos, field_merge, narrow_type, pat_subject, union_member, unfold, members, union_parts, pat_members, lit_target, opt_wraps, t_mutex, t_sem, tcanon, tsig, inferred_ret, str_sorted, rec_names, type_names, member_fields, member_field_type, is_prim_type, is_boxable_type, box_field_name, str_method, fmt_spec, fmt_kind, expr_type, type_index_on, type_index_off, Sym };
+export { check_program, escaped, in_compares, os_call_names, tstr, teq, leaf_of, field_pos, field_merge, narrow_type, pat_subject, union_member, unfold, members, union_parts, pat_members, lit_target, opt_wraps, t_mutex, t_sem, tcanon, tsig, inferred_ret, str_sorted, rec_names, type_names, member_fields, member_field_type, is_prim_type, is_boxable_type, box_field_name, str_method, fmt_spec, fmt_kind, expr_type, type_index_on, type_index_off, Sym };

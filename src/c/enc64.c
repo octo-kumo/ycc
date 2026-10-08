@@ -696,6 +696,13 @@ static Yv *enc_arith(Yv *buf, ylong at, Yv *op, Yv *dst, Yv *src) {
         else if (ys_eq_lit(op, "test")) { base = 133; }
         ylong n = put_rex(buf, at, rex(1, yv_l(yr_get(src, "n")), -1, yv_l(yr_get(dst, "n"))));
         return enc_ok(put2(buf, n, base, modrm(3, yv_l(yr_get(src, "n")), yv_l(yr_get(dst, "n")))), yav(0));
+    } else if (ys_eq_lit(op, "cmp") && yv_l(yr_get(dst, "k")) == K_reg && op_size(dst) == 64
+               && yv_l(yr_get(src, "k")) == K_mem) {
+        /* cmp mem, r64 (3B /r): a bounds check against the length in memory */
+        Yv *t = mem_tail(src, yv_l(yr_get(dst, "n")));
+        ylong n = put_rex(buf, at, rex_rm(1, yv_l(yr_get(dst, "n")), src));
+        ylong m = put2(buf, n, 59, yv_l(yr_get(t, "modrm")));
+        return enc_mem_result(buf, mem_tail_put(buf, m, t), t);
     } else {
         return enc_err(at, ys("arith reg form"));
     }

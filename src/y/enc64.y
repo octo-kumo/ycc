@@ -554,6 +554,10 @@ def enc_arith(buf: [byte], at: long, op: str, dst: Operand, src: Operand) -> Enc
         else if (op == "cmp") { base = 57; }
         else if (op == "test") { base = 133; }
         enc_ok(put2(buf, (put_rex(buf, at, rex(true, src.n, -1, dst.n))), base, modrm(3, src.n, dst.n)), [])
+    } else if (op == "cmp" && dst.k == K.reg && op_size(dst) == 64 && src.k == K.mem) {
+        // cmp mem, r64 (3B /r): a bounds check against the length in memory
+        let t = mem_tail(src, dst.n);
+        enc_mem_result(buf, mem_tail_put(buf, (put2(buf, (put_rex(buf, at, rex_rm(true, dst.n, src))), 59, t.modrm)), t), t)
     } else {
         enc_err(at, "arith reg form")
     }

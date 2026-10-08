@@ -185,6 +185,8 @@ const F_SQRTSD_R_R = 124;
 const F_PUSH_I = 125;
 const F_PUSH_M = 126;
 const F_RET_I = 127;
+// `cmp mem, %reg`: a bounds check against the length in the array header
+const F_CMP_M_R = 128;
 
 // Register numbers, x86 encoding order (enc64's reg_num is the same table:
 // %rax %rcx %rdx %rbx %rsp %rbp %rsi %rdi %r8..%r15, and %xmm0..).
@@ -345,6 +347,7 @@ def ir_init() -> void {
     t += { id: F_PUSH_I, mn: "push", kinds: [O_IMM] };
     t += { id: F_PUSH_M, mn: "push", kinds: [O_MEM] };
     t += { id: F_RET_I, mn: "ret", kinds: [O_IMM] };
+    t += { id: F_CMP_M_R, mn: "cmp", kinds: [O_MEM, O_REG] };
     // The ids above are positions in this list; a form added in the wrong
     // place would decode and print as a different instruction, so check it.
     t.foreach((e, i) => {

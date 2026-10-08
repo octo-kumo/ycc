@@ -1522,6 +1522,28 @@ static int tc_dotbase;
 
 Yv *escaped(void) { return tc_esc; }
 
+/* `l in r` that the emitter compiles to compares, building no array (native.y
+ * in_chain): l a name or a literal, r an array literal of integer literals or
+ * of string literals. lint.y does not call such an `in` in a loop a rebuilt
+ * array. */
+int in_compares(Yv *l, Yv *r) {
+    ylong lk = yv_l(yr_get(l, "k"));
+    if (yv_l(yr_get(r, "k")) != K_array || (lk != K_id && lk != K_num && lk != K_str)) return 0;
+    Yv *es = yr_get(r, "elems");
+    if (yv_len(es) == 0) return 0;
+    ylong k0 = yv_l(yr_get(ya_get(es, 0), "k"));
+    if (k0 != K_num && k0 != K_str) return 0;
+    int ok = 1;
+    for (ylong i = 0; i < yv_len(es); i++) {
+        Yv *e = ya_get(es, i);
+        if (yv_l(yr_get(e, "k")) != k0) { ok = 0; }
+        else if (k0 == K_num) {
+            if (num_is_float(yr_get(e, "v"))) { ok = 0; }
+        }
+    }
+    return ok;
+}
+
 static Yv *lookup(Yv *bindings, Yv *name) {
     /* The newest binding of the name: the last few bindings first (a
      * local is almost always among them), then the index: scanning back

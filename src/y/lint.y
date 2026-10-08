@@ -877,7 +877,7 @@ def lint_bin(st: LintSt, node: Bin, used: bool) -> void {
     };
     let l = node.l;
     let r = node.r;
-    if (op == "in") { lint_loop_arr(st, r); };
+    if (op == "in" && !types.in_compares(l, r)) { lint_loop_arr(st, r); };
     if ((op == "&&" || op == "||") && !used && lint_effect(r)) {
         lint_node(st, l, true);
         lint_node(st, r, false);

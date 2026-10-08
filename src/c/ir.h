@@ -185,6 +185,7 @@
 #define F_PUSH_I 125
 #define F_PUSH_M 126
 #define F_RET_I 127
+#define F_CMP_M_R 128
 
 Yv *ir_push(Yv *ir, ylong f, ylong a, ylong b, ylong c, ylong d, ylong e, ylong g,
             ylong h);
