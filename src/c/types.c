@@ -212,6 +212,7 @@ static Yv *scalar_pat_narrow(Yv *s);
 static Yv *typeof_narrow(Yv *st, Yv *node);
 static Yv *typeof_matchend(Yv *st, Yv *node);
 static int covered(Yv *m, Yv *cover);
+static int option_covered(Yv *s, Yv *cover);
 static Yv *union_field(Yv *st, Yv *t, Yv *dkey, ylong line, ylong col);
 static Yv *dotassign_union(Yv *st, Yv *t, Yv *node);
 static Yv *typeof_sliceassign(Yv *st, Yv *node);
@@ -3952,6 +3953,8 @@ static Yv *typeof_matchend(Yv *st, Yv *node) {
         }
     } else if (yv_l(sk) == K_trec && covered(s, cover)) {
         ;
+    } else if (yv_l(sk) == K_topt && option_covered(s, cover)) {
+        ;
     } else {
         st = fail(st, ys_cat(ys_cat(ys_cat(ys("non-exhaustive match on "),
                                           tstr(s)),
@@ -3960,6 +3963,41 @@ static Yv *typeof_matchend(Yv *st, Yv *node) {
                   NLINE, NCOL);
     }
     return yr(2, "typ", t_unk(), "st", st);
+}
+
+// An option is covered by a `none` arm (cover marker void) together with
+// either a `some(x)` arm (marker unk: any payload) or type arms that cover the
+// payload: a record, every member of a union, or the payload's own type.
+static int option_covered(Yv *s, Yv *cover) {
+    int has_none = 0;
+    int has_some = 0;
+    int exact = 0;
+    Yv *inner = unfold(yr_get(s, "of"));
+    ylong i = 0;
+    while (i < yv_len(cover)) {
+        Yv *c = unfold(ya_get(cover, i));
+        if (yv_l(yr_get(c, "k")) == K_tvoid) {
+            has_none = 1;
+        } else if (yv_l(yr_get(c, "k")) == K_tunk) {
+            has_some = 1;
+        } else if (teq(inner, c)) {
+            exact = 1;
+        }
+        i = i + 1;
+    }
+    if (!has_none) { return 0; }
+    if (has_some || exact) { return 1; }
+    if (yv_l(yr_get(inner, "k")) == K_trec) { return covered(inner, cover); }
+    if (yv_l(yr_get(inner, "k")) == K_tunion) {
+        Yv *ms = members(inner);
+        i = 0;
+        while (i < yv_len(ms)) {
+            if (!covered(ya_get(ms, i), cover)) { return 0; }
+            i = i + 1;
+        }
+        return 1;
+    }
+    return 0;
 }
 
 // A member is covered by a type arm of its type.

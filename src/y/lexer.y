@@ -407,8 +407,8 @@ def fstr_walk(src: str, q: long) -> { end: long, err: str, at: long, fields: [lo
                 } else if (hc == '}') {
                     fields += lo;
                     fields += hi;
-                    fields += 0 - 1;
-                    fields += 0 - 1;
+                    fields += -1;
+                    fields += -1;
                     i = hi + 1;
                 } else {
                     // the spec: up to the closing brace

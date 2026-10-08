@@ -198,7 +198,7 @@ def nopts() -> long { len(ar_ln) };
 
 // The spec's index for a long name, -1 when it declares no such option.
 def ar_find_long(name: str) -> long {
-    let hit = 0 - 1;
+    let hit = -1;
     let i = 0;
     while (i < len(ar_ln)) {
         if (hit < 0 && ar_ln[i] == name) { hit = i; };
@@ -209,7 +209,7 @@ def ar_find_long(name: str) -> long {
 
 // The spec's index for a short name, -1 when it declares no such option.
 def ar_find_short(c: str) -> long {
-    let hit = 0 - 1;
+    let hit = -1;
     let i = 0;
     while (i < len(ar_sn)) {
         if (hit < 0 && len(ar_sn[i]) > 0 && ar_sn[i] == c) { hit = i; };

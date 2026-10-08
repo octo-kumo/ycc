@@ -46,7 +46,7 @@ def loop_pop() -> void {
 
 def loop_resolve(label: str) -> str {
     if (label == "") { return ""; };
-    let found = 0 - 1;
+    let found = -1;
     let i = len(ploop_names) - 1;
     while (found < 0 && i >= 0) {
         if (ploop_names[i] == label) { found = i; };
@@ -2747,6 +2747,13 @@ def parse_pattern(toks: [Tok], p: long, tmp: str) -> PatRes {
         pat_res({ k: K.void, line: ln, col: cl }, nob, { k: K.tnone }, true, p + 1)
     } else if (t == K.id && v == "some" && is_punct(toks, p + 1, "(")) {
         parse_some_pattern(toks, p, tmp)
+    } else if (t == K.id && v == "none") {
+        // `none =>` is the value pattern for an option that holds nothing. It
+        // is built here, not by parse_unary, which would read `none =>` as an
+        // arrow function with a parameter called `none`.
+        // Its cover is the marker `void` (never a real pattern type): the
+        // checker reads it as "this match has a none arm" (typeof_matchend).
+        pat_res({ k: K.bin, op: "==", l: subj, r: { k: K.id, v: "none", line: ln, col: cl }, line: ln, col: cl }, nob, { k: K.tvoid }, false, p + 1)
     } else if (t == K.id && v != "none") {
         parse_type_pattern(toks, p, tmp)
     } else if (is_punct(toks, p, "{")) {
@@ -2797,7 +2804,8 @@ def parse_some_pattern(toks: [Tok], p: long, tmp: str) -> PatRes {
     } else {
         binds += { k: K.err, msg: "expected ')' to close 'some(', got '" + tv(toks, pos) + "'", line: tline(toks, pos), col: tcol(toks, pos) };
     };
-    pat_res(test, binds, { k: K.tnone }, false, pos)
+    // Its cover is the marker `unk`: a payload of any type, bound by the name.
+    pat_res(test, binds, { k: K.tunk }, false, pos)
 };
 
 // A type name in a pattern: the builtin primitive names map to their type

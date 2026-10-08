@@ -18,7 +18,7 @@ def fd_reset() -> void {
 
 def fd_open(path: str) -> long {
     let ino = yfs.yfs_lookup_path(path);
-    if (ino < 0) { return 0 - 1; };
+    if (ino < 0) { return -1; };
     let i = 0;
     while (i < len(fd_used)) {
         if (fd_used[i] == 0) {
@@ -29,7 +29,7 @@ def fd_open(path: str) -> long {
         };
         i = i + 1;
     };
-    if (len(fd_used) >= FD_MAX) { return 0 - 1; };
+    if (len(fd_used) >= FD_MAX) { return -1; };
     fd_used += 1;
     fd_inode += ino;
     fd_off += 0;
@@ -44,7 +44,7 @@ def fd_valid(fd: long) -> bool {
 
 // Reads at the fd's offset and advances it, so two reads walk the file.
 def fd_read(fd: long, buf: long, len: long) -> long {
-    if (!fd_valid(fd)) { return 0 - 14; };
+    if (!fd_valid(fd)) { return -14; };
     let i = fd - 3;
     let n = yfs.yfs_read(fd_inode[i], fd_off[i], buf, len);
     if (n > 0) { fd_off[i] = fd_off[i] + n; };
@@ -52,13 +52,13 @@ def fd_read(fd: long, buf: long, len: long) -> long {
 };
 
 def fd_lseek(fd: long, off: long) -> long {
-    if (!fd_valid(fd)) { return 0 - 14; };
+    if (!fd_valid(fd)) { return -14; };
     fd_off[fd - 3] = off;
     off
 };
 
 def fd_close(fd: long) -> long {
-    if (!fd_valid(fd)) { return 0 - 14; };
+    if (!fd_valid(fd)) { return -14; };
     fd_used[fd - 3] = 0;
     0
 };
@@ -66,17 +66,17 @@ def fd_close(fd: long) -> long {
 // What a directory listing needs: the inode behind an fd and its position, with
 // the position settable so getdents64 can walk a directory across calls.
 def fd_ino(fd: long) -> long {
-    if (!fd_valid(fd)) { return 0 - 14; };
+    if (!fd_valid(fd)) { return -14; };
     fd_inode[fd - 3]
 };
 
 def fd_tell(fd: long) -> long {
-    if (!fd_valid(fd)) { return 0 - 14; };
+    if (!fd_valid(fd)) { return -14; };
     fd_off[fd - 3]
 };
 
 def fd_seek_set(fd: long, off: long) -> long {
-    if (!fd_valid(fd)) { return 0 - 14; };
+    if (!fd_valid(fd)) { return -14; };
     fd_off[fd - 3] = off;
     off
 };
@@ -85,7 +85,7 @@ def fd_seek_set(fd: long, off: long) -> long {
 // is still read-only in the sense that it cannot GROW a file: this overwrites bytes
 // that are already there.
 def fd_write(fd: long, buf: long, len: long) -> long {
-    if (!fd_valid(fd)) { return 0 - 14; };
+    if (!fd_valid(fd)) { return -14; };
     let i = fd - 3;
     let ino = fd_inode[i];
     let off = fd_off[i];
@@ -104,13 +104,13 @@ def fd_write(fd: long, buf: long, len: long) -> long {
 // The fd allocation half of fd_open, for a caller that has the inode already -- which
 // is what openat needs after creating a file.
 def fd_open_ino(ino: long) -> long {
-    if (ino < 0) { return 0 - 1; };
+    if (ino < 0) { return -1; };
     let i = 0;
     while (i < len(fd_used)) {
         if (fd_used[i] == 0) { fd_used[i] = 1; fd_inode[i] = ino; fd_off[i] = 0; return i + 3; };
         i = i + 1;
     };
-    if (len(fd_used) >= FD_MAX) { return 0 - 1; };
+    if (len(fd_used) >= FD_MAX) { return -1; };
     fd_used += 1;
     fd_inode += ino;
     fd_off += 0;

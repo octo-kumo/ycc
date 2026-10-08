@@ -85,7 +85,7 @@ def y_str_fail(p: str) -> [long] {
 def y_str_scan(s: str, p: str, f: [long], from: long) -> long {
     let n = len(s);
     let m = len(p);
-    let at = 0 - 1;
+    let at = -1;
     if (m > 0 && from < n) {
         if (n - from < m + m) {
             let i = from;
@@ -118,7 +118,7 @@ def y_str_scan(s: str, p: str, f: [long], from: long) -> long {
 def y_str_lastidx(s: str, p: str, from: long) -> long {
     let n = len(s);
     let m = len(p);
-    let found = 0 - 1;
+    let found = -1;
     if (m > 0 && m <= n) {
         // `from` past the last place a match can begin (which is what the
         // two-argument caller passes: LONG_MAX) means the whole string, so
@@ -197,7 +197,7 @@ def y_str_replace(s: str, pat: str, rep: str) -> str {
 };
 
 // ASCII letters only; every other byte is kept.
-def y_str_upper(s: str) -> str { y_str_case(s, 97, 122, 0 - 32) };
+def y_str_upper(s: str) -> str { y_str_case(s, 97, 122, -32) };
 
 def y_str_lower(s: str) -> str { y_str_case(s, 65, 90, 32) };
 

@@ -139,6 +139,10 @@ static Yv *res_std_lib;
 /* True while std_compile resolves a std unit's own imports (native.y
  * res_in_std): the project-local lookup is skipped. */
 static int res_in_std;
+/* The bare `import name;` lines of the unit's own file that nothing uses
+ * (`name.` appears nowhere else in it), as warnings at the import's line:
+ * native_resolve_seen fills it at depth 0, compile_unit hands it to lint. */
+static Yv *res_unused;
 static Yv *pkg_ns;
 /* tcode's and tdecode's recursive aliases (trefs) being spelled out and
  * read back, and the count behind the unit ids tdecode gives them. */
@@ -1695,6 +1699,43 @@ static Yv *kernel_std_why(Yv *name) {
     else { return ys("it uses the OS"); }
 }
 
+/* The unused bare imports of the unit last resolved (see res_unused). */
+Yv *unused_imports(void) { return res_unused ? res_unused : yav(0); }
+
+/* Whether the bare import `name` is used by a line other than line `skip`: the
+ * text `name.` outside a `//` comment, not the tail of a longer name or of a
+ * field (`xfs.read`, `a.fs.read`). Blunt on purpose -- a use inside a string
+ * counts -- because the one thing it must never do is call a used import
+ * unused. */
+static int import_used(Yv *lines, ylong skip, Yv *name) {
+    Yv *pat = ys_cat(name, ys("."));
+    ylong j = 0;
+    while (j < yv_len(lines)) {
+        if (j != skip) {
+            Yv *ln = ya_get(lines, j);
+            Yv *t = ys_trim(ln);
+            if (!ys_eq_lit(ys_slice(t, 0, 2), "//") &&
+                !ys_eq_lit(ys_slice(t, 0, 7), "import ")) {
+                ylong at = ys_index_of(ln, pat);
+                ylong off = 0;
+                while (at >= 0) {
+                    ylong p = off + at;
+                    if (p == 0) { return 1; }
+                    ylong c = ys_byte_at(ln, p - 1);
+                    if (!(c == 46 || c == 95 || (c >= 48 && c <= 57) ||
+                          (c >= 65 && c <= 90) || (c >= 97 && c <= 122))) {
+                        return 1;
+                    }
+                    off = p + 1;
+                    at = ys_index_of(ys_slice_from(ln, off), pat);
+                }
+            }
+        }
+        j = j + 1;
+    }
+    return 0;
+}
+
 /* The program text `src` of file `fid` (its index in the origin map's
  * files: 0 for the program itself, k for seen[k - 1]) with its imports
  * spliced in, as lines; ofile/oline map each one back (see the origin map
@@ -1718,6 +1759,7 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, ylong depth, Yv *seen,
          * hoisted import path normalizes against the file the block came from;
          * and the whole thing runs before words_seen (resolve_unit), so
          * std-unit selection sees the GENERATED text. */
+        if (depth == 0 && !res_in_std) { res_unused = yav(0); }
         Yv *sc = meta_meta_scan(src, base_dir, fid);
         if (!yv_truth(yr_get(sc, "ok"))) {
             /* Fatal, like every other diagnostic the resolve raises: a pass
@@ -1764,7 +1806,12 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, ylong depth, Yv *seen,
                 if (from_idx >= 0) {
                     name = ys_trim(ys_slice(rest, 0, from_idx));
                     Yv *path_part = ys_trim(ys_slice_from(rest, from_idx + 6));
-                    if (ys_eq_lit(ys_slice_from(path_part, yv_len(path_part) - 1),
+                    /* through the closing quote: a `;` and a comment after it
+                     * are not the path */
+                    ylong endq = ys_index_of(ys_slice_from(path_part, 1), ys("\""));
+                    if (ys_eq_lit(ys_slice(path_part, 0, 1), "\"") && endq >= 0) {
+                        path_part = ys_slice(path_part, 0, endq + 2);
+                    } else if (ys_eq_lit(ys_slice_from(path_part, yv_len(path_part) - 1),
                                   ";")) {
                         path_part = ys_slice(path_part, 0, yv_len(path_part) - 1);
                         ;
@@ -1782,9 +1829,11 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, ylong depth, Yv *seen,
                 } else {
                     /* bare `import name;`: an optional std module (net, ui,
                      * ...) or a project-local one — see std_resolve above. */
+                    /* up to the `;`: a `// comment` after it is not the name */
+                    ylong semi = ys_index_of(rest, ys(";"));
                     name = ys_trim(rest);
-                    if (ys_eq_lit(ys_slice_from(name, yv_len(name) - 1), ";")) {
-                        name = ys_trim(ys_slice(name, 0, yv_len(name) - 1));
+                    if (semi >= 0) {
+                        name = ys_trim(ys_slice(rest, 0, semi));
                         ;
                     }
                     path = name;
@@ -1977,6 +2026,23 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, ylong depth, Yv *seen,
                     ;
                 }
                 ;
+                /* The unit's own file: a placeholder line stands where the
+                 * import was (its text went into the splice, or nowhere for a
+                 * library), so a warning has a line of the file to point at. */
+                if (depth == 0 && !res_in_std && from_idx < 0 && yv_len(name) > 0) {
+                    out_lines = ya_push(out_lines, ys(""));
+                    ofile = ya_push(ofile, yv_long(lf));
+                    oline = ya_push(oline, yv_long(ln));
+                    ogen = ya_push(ogen, yv_bool(gen_at(inf_gen, i)));
+                    if (!import_used(lines, i, name)) {
+                        res_unused = ya_push(
+                            res_unused,
+                            yr(3, "msg",
+                               ys_cat(ys_cat(ys("unused import '"), name), ys("'")),
+                               "line", yv_long(yv_len(out_lines)), "col",
+                               yv_long(1)));
+                    }
+                }
             } else if (is_embed_decl(trimmed)) {
                 out_lines = ya_push(out_lines, embed_decl(trimmed, base_dir));
                 ofile = ya_push(ofile, yv_long(lf));
@@ -12917,9 +12983,18 @@ static Yv *gen_map_field(Yv *st, Yv *node, const char *name) {
 /* Whether a map keyed by kt carries the hash index (zidx): str and long keys.
  * A byte, bool or float key has too few distinct values (or too rare a use) to
  * be worth the helper; those maps stay on the inline scan. */
+/* The runtime probe/index helpers for a hashed key type. */
+static Yv *map_helper(Yv *kt, const char *what) {
+    ylong k = yv_l(yr_get(unfold(kt), "k"));
+    Yv *w = ys_cstr(what);
+    if (k == K_tstr) { return ys_cat(ys_cat(ys("y_map_"), w), ys("_str")); }
+    if (k == K_tfloat) { return ys_cat(ys_cat(ys("y_map_"), w), ys("_float")); }
+    return ys_cat(ys_cat(ys("y_map_"), w), ys("_long"));
+}
+
 int map_hashed(Yv *kt) {
     ylong k = yv_l(yr_get(unfold(kt), "k"));
-    return k == K_tstr || k == K_tlong;
+    return k == K_tstr || k == K_tlong || k == K_tfloat;
 }
 
 Yv *map_key_of(Yv *t) {
@@ -12940,7 +13015,7 @@ static Yv *gen_map_find(Yv *st, Yv *node) {
     pushed = ya_push(pushed, map_field(m, "zidx", ln, cl));
     pushed = ya_push(pushed, ya_get(args, 1));
     st = gen_push_args(st, pushed);
-    st = emit_insn(st, F_CALL_L, yv_l(lbl_new(yv_l(yr_get(unfold(yr_get(mt, "key")), "k")) == K_tstr ? ys("y_map_find_str") : ys("y_map_find_long"))), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_CALL_L, yv_l(lbl_new(map_helper(yr_get(mt, "key"), "find"))), 0, 0, 0, 0, 0, 0);
     return emit_insn(st, F_ADD_I_R, 24, R_RSP, 64, 0, 0, 0, 0);
 }
 
@@ -12955,7 +13030,7 @@ static Yv *gen_map_note(Yv *st, Yv *node) {
     pushed = ya_push(pushed, map_field(m, "keys", ln, cl));
     pushed = ya_push(pushed, map_field(m, "zidx", ln, cl));
     st = gen_push_args(st, pushed);
-    st = emit_insn(st, F_CALL_L, yv_l(lbl_new(yv_l(yr_get(unfold(yr_get(mt, "key")), "k")) == K_tstr ? ys("y_map_note_str") : ys("y_map_note_long"))), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, F_CALL_L, yv_l(lbl_new(map_helper(yr_get(mt, "key"), "note"))), 0, 0, 0, 0, 0, 0);
     return emit_insn(st, F_ADD_I_R, 16, R_RSP, 64, 0, 0, 0, 0);
 }
 
@@ -15043,7 +15118,8 @@ Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, ylong wlevel,
          * never a std unit's. */
         if (yv_len(name) == 0 || pkg_base(base)) {
             warnings = lint_unit(ast, ast3, yr_get(origin, "file"),
-                                yr_get(origin, "mods"), wlevel, ogen);
+                                yr_get(origin, "mods"), wlevel, ogen,
+                                unused_imports());
             pr = phase_end(times, ys("lint"), pt, ph);
             times = yr_get(pr, "times");
             pt = yv_l(yr_get(pr, "t"));

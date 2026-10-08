@@ -228,7 +228,7 @@ def set_count2(bm: [byte; 32]) -> long {
 
 // The one byte a set holding exactly one byte holds, -1 otherwise.
 def set_the_one(bm: [byte; 32]) -> long {
-    let out = 0 - 1;
+    let out = -1;
     let i = 0;
     while (i < 32) {
         let b = bm[i];
@@ -254,7 +254,7 @@ def class_one(classes: [byte], k: long) -> long {
     let bm: [byte; 32] = [0; 32];
     let i = 0;
     while (i < 32) { bm[i] = classes[k * 32 + i]; i = i + 1; };
-    if (set_count2(bm) == 1) { set_the_one(bm) } else { 0 - 1 }
+    if (set_count2(bm) == 1) { set_the_one(bm) } else { -1 }
 };
 
 // The next set number, with bm's 32 bytes in the list.
@@ -299,7 +299,7 @@ def hex_val(c: long) -> long {
     if (c >= 48 && c <= 57) { c - 48 }
     else if (c >= 97 && c <= 102) { c - 97 + 10 }
     else if (c >= 65 && c <= 70) { c - 65 + 10 }
-    else { 0 - 1 }
+    else { -1 }
 };
 
 def hex_of(v: long) -> str {
@@ -342,12 +342,12 @@ def perr(p: PP, msg: str) -> RErr {
 // The byte at the cursor, -1 at the end (byte_at traps, and the cursor may sit
 // there).
 def peek(p: PP) -> long {
-    if (p.pos < len(p.pat)) { byte_at(p.pat, p.pos) } else { 0 - 1 }
+    if (p.pos < len(p.pat)) { byte_at(p.pat, p.pos) } else { -1 }
 };
 
 def peek_at(p: PP, k: long) -> long {
     let i = p.pos + k;
-    if (i < len(p.pat)) { byte_at(p.pat, i) } else { 0 - 1 }
+    if (i < len(p.pat)) { byte_at(p.pat, i) } else { -1 }
 };
 
 def eat(p: PP, c: long) -> bool {
@@ -517,16 +517,16 @@ def posix_class(p: PP, bm: [byte; 32]) -> bool {
 // (?i) would stop being a range.
 def class_item(p: PP, bm: [byte; 32], fold: bool) -> long {
     let c = peek(p);
-    if (c < 0) { return 0 - 2; };
+    if (c < 0) { return -2; };
     let sk = shorthand_kind(c);
     if (c == 91 && peek_at(p, 1) == 58) {
-        if (!posix_class(p, bm)) { return 0 - 2; };
-        return 0 - 1;
+        if (!posix_class(p, bm)) { return -2; };
+        return -1;
     };
     if (sk == 1) {
         p.pos = p.pos + 1;
         shorthand(c, bm);
-        return 0 - 1;
+        return -1;
     };
     if (c == 92) {
         p.pos = p.pos + 1;
@@ -534,7 +534,7 @@ def class_item(p: PP, bm: [byte; 32], fold: bool) -> long {
         if (shorthand_kind(e) == 1) {
             p.pos = p.pos + 1;
             shorthand(e, bm);
-            return 0 - 1;
+            return -1;
         };
         if (e == 98) {                       // \b is a backspace in here
             set_bit(bm, 8);
@@ -544,13 +544,13 @@ def class_item(p: PP, bm: [byte; 32], fold: bool) -> long {
         let bs = esc_bytes(p);
         let i = 0;
         while (i < len(bs)) { set_bit(bm, bs[i]); i = i + 1; };
-        if (len(bs) != 1) { return 0 - 1; };
+        if (len(bs) != 1) { return -1; };
         return bs[0];
     };
     p.pos = p.pos + 1;
     if (fold && p.icase) {
         add_byte(p, bm, c);
-        0 - 1
+        -1
     } else {
         set_bit(bm, c);
         c
@@ -839,15 +839,15 @@ def p_rep(p: PP, atom: RE) -> RE {
     let lo = 0;
     let hi = 0;
     let any = false;
-    if (c == 42) { p.pos = p.pos + 1; lo = 0; hi = 0 - 1; any = true; }
-    else if (c == 43) { p.pos = p.pos + 1; lo = 1; hi = 0 - 1; any = true; }
+    if (c == 42) { p.pos = p.pos + 1; lo = 0; hi = -1; any = true; }
+    else if (c == 43) { p.pos = p.pos + 1; lo = 1; hi = -1; any = true; }
     else if (c == 63) { p.pos = p.pos + 1; lo = 0; hi = 1; any = true; }
     else if (c == 123 && is_digit_byte(peek_at(p, 1))) {
         // the cursor is past the '}' by the time the checks below run
         p.pos = p.pos + 1;
         lo = read_int(p);
         if (eat(p, 44)) {
-            if (is_digit_byte(peek(p))) { hi = read_int(p); } else { hi = 0 - 1; };
+            if (is_digit_byte(peek(p))) { hi = read_int(p); } else { hi = -1; };
         } else { hi = lo; };
         if (p.err == "" && !eat(p, 125)) {
             perr_at(p, "bad repetition count");
@@ -863,7 +863,7 @@ def p_rep(p: PP, atom: RE) -> RE {
     let greedy = true;
     if (eat(p, 63)) { greedy = false; };
     let nx = peek(p);
-    if (nx == 43 && hi == 0 - 1) {
+    if (nx == 43 && hi == -1) {
         perr_at(p, "a repetition cannot be possessive");
         return { k: K_ERR };
     };
@@ -966,7 +966,7 @@ def any_group(xs: [RE]) -> bool {
 
 // How many bytes this tree always matches, -1 when that is not a fixed number.
 def width(n: RE) -> long {
-    let out = 0 - 1;
+    let out = -1;
     if (n.k == K_SET) { out = 1; }
     else if (n.k == K_AS) { out = 0; }
     else if (n.k == K_LOOK) { out = 0; }
@@ -1162,8 +1162,8 @@ def emit_opt(out: [long], item: RE, k: long, greedy: bool) -> long {
     if (k <= 0) { return 0; };
     let next_slot = 2;                       // where the next level goes
     if (!greedy) { next_slot = 1; };
-    let prev_jmp = 0 - 1;
-    let prev_split = 0 - 1;
+    let prev_jmp = -1;
+    let prev_split = -1;
     let i = 0;
     while (i < k) {
         let sp = emit2(out, 2, 0, 0);
@@ -1280,7 +1280,7 @@ def new_run(re: Re, s: str) -> Run {
         // both buffers start at their full width: the group-free match path
         // writes hit's two slots directly rather than copying into a vector that
         // has to grow first
-        base: [], hit: blank_caps([], ncap), hit_end: 0, want_end: 0 - 1,
+        base: [], hit: blank_caps([], ncap), hit_end: 0, want_end: -1,
         free: [], free_n: 0,
         ok: false, matched: false, look: 0, subs: [] }
 };
@@ -1296,7 +1296,7 @@ def new_sub(r: Run, depth: long) -> Run {
         ninst: r.ninst, ncap: r.ncap,
         cur_pc: [], cur_cap: [], cur_n: 0, nxt_pc: [], nxt_cap: [], nxt_n: 0,
         seen: seen, gen: 1, wpc: [], wcap: [],
-        base: [], hit: blank_caps([], r.ncap), hit_end: 0, want_end: 0 - 1,
+        base: [], hit: blank_caps([], r.ncap), hit_end: 0, want_end: -1,
         free: [], free_n: 0,
         ok: false, matched: false, look: depth, subs: r.subs }
 };
@@ -1306,7 +1306,7 @@ def blank_caps(dst: [long], n: long) -> [long] {
     let dl = len(dst);
     let i = 0;
     while (i < n) {
-        if (i < dl) { dst[i] = 0 - 1; } else { dst += 0 - 1; dl = dl + 1; };
+        if (i < dl) { dst[i] = -1; } else { dst += -1; dl = dl + 1; };
         i = i + 1;
     };
     dst
@@ -1371,7 +1371,7 @@ def copy_caps(dst: [long], src: [long], n: long) -> long {
     let sl = len(src);
     let i = 0;
     while (i < n) {
-        let v = 0 - 1;
+        let v = -1;
         if (i < sl) { v = src[i]; };
         if (i < dl) { dst[i] = v; } else { dst += v; dl = dl + 1; };
         i = i + 1;
@@ -1384,7 +1384,7 @@ def clone_caps(c: [long], n: long) -> [long] {
     let cl = len(c);
     let i = 0;
     while (i < n) {
-        out += (if (i < cl) { c[i] } else { 0 - 1 });
+        out += (if (i < cl) { c[i] } else { -1 });
         i = i + 1;
     };
     out
@@ -1428,9 +1428,9 @@ def add(r: Run, pc0: long, pos: long, caps: [long]) -> long {
         if (r.seen[pc] != r.gen) {
             r.seen[pc] = r.gen;
             let op = r.prog[pc];
-            let n1 = 0 - 1;                     // what to visit next
+            let n1 = -1;                     // what to visit next
             let c1 = c;                         // with these captures
-            let n2 = 0 - 1;                     // then this, lower priority
+            let n2 = -1;                     // then this, lower priority
             if (op == 3) {
                 n1 = r.prog[pc + 1];
             } else if (op == 2) {
@@ -1587,7 +1587,7 @@ def run_from(r: Run, from: long, at: long, want_end: long) -> bool {
     let base = r.base;
     if (len(base) == r.ncap) {
         let i = 0;
-        while (i < r.ncap) { base[i] = 0 - 1; i = i + 1; };
+        while (i < r.ncap) { base[i] = -1; i = i + 1; };
     } else {
         base = blank_caps(base, r.ncap);
     };
@@ -1615,7 +1615,7 @@ def run_from(r: Run, from: long, at: long, want_end: long) -> bool {
     r.matched
 };
 
-def run(r: Run, at: long) -> bool { run_from(r, 0, at, 0 - 1) };
+def run(r: Run, at: long) -> bool { run_from(r, 0, at, -1) };
 
 // \b and \B look at the bytes on each side of pos, and past the ends there is
 // no word.
@@ -1664,7 +1664,7 @@ def look_ok(r: Run, packed: long, sub: long, pos: long) -> bool {
         while (len(r.subs) < d) { r.subs += new_sub(r, len(r.subs)); };
         if (d >= len(r.subs)) { r.subs += new_sub(r, d); };
         let r2 = r.subs[d];
-        ok = run_from(r2, sub, at, 0 - 1);
+        ok = run_from(r2, sub, at, -1);
         if (kind == 3 || kind == 4) { ok = ok && r2.hit_end == pos; };
     };
     r.look = r.look - 1;
@@ -1679,7 +1679,7 @@ def build(pat: str) -> Built {
     let p: PP = { pat: pat, pos: 0, err: "",
         icase: false, dotall: false, multiline: false,
         groups: 0, names: names, classes: [] };
-    let empty: Re = { pattern: pat, prog: [], classes: [], nclass: 0, first: 0 - 1,
+    let empty: Re = { pattern: pat, prog: [], classes: [], nclass: 0, first: -1,
         literal: "", need: "", anchored: false, groups: 0, names: names };
     let node = p_alt(p, 0);
     if (p.err != "") { return { re: empty, err: p.err }; };
@@ -1703,7 +1703,7 @@ def build(pat: str) -> Built {
     // with, and whether only position 0 can match
     let acc: [byte; 32] = [0; 32];
     let nullable = first_of(node, p, acc);
-    let first = 0 - 1;
+    let first = -1;
     if (!nullable && !set_full_p(acc)) { first = add_class(p, acc); };
     let re: Re = { pattern: pat, prog: out, classes: p.classes, nclass: len(p.classes) / 32,
         first: first, literal: prefix_of(node, p), need: required_of(node, p),
@@ -1742,7 +1742,7 @@ def need_ok(re: Re, s: str) -> bool {
 // The byte a first set holds when it holds exactly one, -1 otherwise. A search
 // skips on a byte compare instead of a set lookup when it has one.
 def first_byte(re: Re) -> long {
-    if (re.first < 0) { 0 - 1 } else { class_one(re.classes, re.first) }
+    if (re.first < 0) { -1 } else { class_one(re.classes, re.first) }
 };
 
 // The next position at or after `from` where a match could begin, -1 when there
@@ -1755,7 +1755,7 @@ def seek(re: Re, r: Run, s: str, from: long, one: long) -> long {
     let last = n;
     if (first >= 0) { last = n - 1; };      // a match has to consume a byte
     let pos = from;
-    let out = 0 - 1;
+    let out = -1;
     let go = pos <= last;
     // hoisted: this loop runs once per match, and the old one read re's fields
     // through the record on every byte it skipped
@@ -1807,7 +1807,7 @@ def seek(re: Re, r: Run, s: str, from: long, one: long) -> long {
 def find_sub_from(s: str, needle: str, from: long) -> long {
     let m = len(needle);
     let n = len(s);
-    let out = 0 - 1;
+    let out = -1;
     if (m > 0 && m <= n) {
         let c0 = byte_at(needle, 0);
         let pos = from;
@@ -1885,7 +1885,7 @@ def find(re: Re, s: str, limit: long = -1) -> [Match] {
     let one = first_byte(re);
     let n = len(s);
     let at = 0;
-    let prev_end = 0 - 1;
+    let prev_end = -1;
     let go = limit != 0;
     while (go) {
         let st = seek(re, r, s, at, one);
@@ -2030,7 +2030,7 @@ def tmpl(re: Re, r: Run, rep: str, parts: [str]) -> long {
 // -1 when it is a literal $ after all, so tmpl copies the $ and moves on.
 def subst(re: Re, r: Run, rep: str, i: long, parts: [str]) -> long {
     let n = len(rep);
-    if (i + 1 >= n) { return 0 - 1; };
+    if (i + 1 >= n) { return -1; };
     let d = byte_at(rep, i + 1);
     if (d == 36) {
         parts += "$";
@@ -2043,9 +2043,9 @@ def subst(re: Re, r: Run, rep: str, i: long, parts: [str]) -> long {
             name += chr(byte_at(rep, j));
             j = j + 1;
         };
-        if (j >= n) { return 0 - 1; };
+        if (j >= n) { return -1; };
         let num = group_num(re, name);
-        if (num < 0) { return 0 - 1; };
+        if (num < 0) { return -1; };
         parts += group_of(r, num);
         return j + 1;
     };
@@ -2056,11 +2056,11 @@ def subst(re: Re, r: Run, rep: str, i: long, parts: [str]) -> long {
             v = v * 10 + (byte_at(rep, j) - 48);
             j = j + 1;
         };
-        if (v > re.groups) { return 0 - 1; };
+        if (v > re.groups) { return -1; };
         parts += group_of(r, v);
         return j;
     };
-    0 - 1
+    -1
 };
 
 // What $name names: a group number, or -1 when the pattern has no such group
@@ -2074,10 +2074,10 @@ def group_num(re: Re, name: str) -> long {
     };
     if (digits) {
         let v = tolong(name) !;
-        if (v <= re.groups) { v } else { 0 - 1 }
+        if (v <= re.groups) { v } else { -1 }
     } else {
         let got = re.names[name];
-        if (got == none) { 0 - 1 } else { got ! }
+        if (got == none) { -1 } else { got ! }
     }
 };
 

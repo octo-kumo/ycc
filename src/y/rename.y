@@ -174,7 +174,7 @@ let rn_want_defs: bool = false;
 // The name's position, or none. -1 is the sentinel and a consumer must treat it
 // as "no site in the source", never as line -1.
 def rn_def_site(uniq: str) -> long {
-    let out = 0 - 1;
+    let out = -1;
     if (rn_want_defs) {
         let packed = parser.nameix_get(rn_defs, uniq);
         if (packed >= 0) { out = packed; };

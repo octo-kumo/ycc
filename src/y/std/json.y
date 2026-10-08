@@ -318,7 +318,7 @@ type P = { s: str, i: long };
 
 // The value of one hex digit, or -1.
 def hexval(c: long) -> long {
-    let d = 0 - 1;
+    let d = -1;
     if (c >= 48 && c <= 57) { d = c - 48; }
     if (c >= 97 && c <= 102) { d = c - 97 + 10; }
     if (c >= 65 && c <= 70) { d = c - 65 + 10; }
@@ -340,7 +340,7 @@ def p_ws(p: P) -> long {
 }
 
 def at(p: P) -> long {
-    if (p.i < len(p.s)) { byte_at(p.s, p.i) } else { 0 - 1 }
+    if (p.i < len(p.s)) { byte_at(p.s, p.i) } else { -1 }
 }
 
 def lit(p: P, t: str) -> bool {
@@ -369,7 +369,7 @@ def p_hex4(p: P) -> long {
         }
         k = k + 1;
     };
-    if (bad) { 0 - 1 } else { v }
+    if (bad) { -1 } else { v }
 }
 
 // One \uXXXX, with a surrogate pair folded into one codepoint, appended to
@@ -382,7 +382,7 @@ def p_hex4(p: P) -> long {
 // byte, `v mod 256`.
 def p_uescape(p: P, out: [byte]) -> long {
     let cp = p_hex4(p);
-    if (cp < 0) { return 0 - 1; }
+    if (cp < 0) { return -1; }
     if (cp >= 55296 && cp < 56320) {
         // a high surrogate: a \uDC00.. low surrogate must follow
         let paired = false;
@@ -397,10 +397,10 @@ def p_uescape(p: P, out: [byte]) -> long {
                 p.i = save;
             }
         }
-        if (!paired) { return 0 - 1; }
+        if (!paired) { return -1; }
     } else if (cp >= 56320 && cp < 57344) {
         // a low surrogate with no high one before it
-        return 0 - 1;
+        return -1;
     }
     out = utf8_put(out, cp);
     0
@@ -465,7 +465,7 @@ def p_number(p: P) -> str? {
     if (at(p) == 48) {
         p.i = p.i + 1;
     } else {
-        let d = 0 - 1;
+        let d = -1;
         if (at(p) >= 0) { d = hexval(at(p)); }
         if (d < 1 || d > 9) { return none; }
         while (at(p) >= 48 && at(p) <= 57) { p.i = p.i + 1; }

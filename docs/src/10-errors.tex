@@ -92,7 +92,7 @@ value on purpose.
 \paragraph{Optional checks: \ic{-W N}}
 \label{sec:wlevel}
 
-Three checks are off by default, because in ordinary code they are a
+Some checks are off by default, because in ordinary code they are a
 habit rather than a mistake: a getter call or a bare \ic{a[i]} as a
 statement reads fine. Raise the warning level to turn them on -- \ic{ycc
 -W 1} (a project: \ic{ycc build -W 1}), which adds
@@ -108,7 +108,13 @@ statement reads fine. Raise the warning level to turn them on -- \ic{ycc
 \item \ic{the 'else' branch is empty}: an \ic{if} whose \ic{else} does
   nothing. The void redesign (Section~\ref{sec:void}) made the branch
   unnecessary, so it can go; an \ic{else} that runs anything, and an
-  \ic{if} with no \ic{else}, draw nothing.
+  \ic{if} with no \ic{else}, draw nothing;
+\item \ic{unused import 'fs'}: a bare \ic{import fs;} in the program's own
+  file (or a package's) while \ic{fs.} appears nowhere else in it. The
+  check is a text search, so a use in a string counts, and a mention in a
+  \ic{//} comment or as the tail of a longer name (\ic{xfs.read}) does not.
+  An import by path (\ic{import m from "m.y"}) flattens its names and is not
+  checked.
 \end{itemize}
 
 \noindent Level \ic{0} (the default) is the set above. \ic{-W} with no

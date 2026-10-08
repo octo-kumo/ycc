@@ -54,7 +54,7 @@ def clamp(x: long, lo: long, hi: long) -> long {
 
 // -1, 0 or 1.
 def sign(x: long) -> long {
-    if (x > 0) { 1 } else if (x < 0) { 0 - 1 } else { 0 }
+    if (x > 0) { 1 } else if (x < 0) { -1 } else { 0 }
 };
 
 // The greatest common divisor, always >= 0; gcd(0, 0) is 0.
@@ -411,7 +411,7 @@ let two63: float = 4611686018427387904.0 * 2.0;
 // clearing it again is a subtraction, so the two helpers below are one each and
 // nothing depends on writing 2^63.
 def sign_bit() -> long {
-    0 - 9223372036854775807 - 1
+    -9223372036854775807 - 1
 };
 
 // The sign bit CLEARED: a pattern that has it comes back to its magnitude.
@@ -613,7 +613,7 @@ def ldexp(x: float, e: long) -> float {
         // than 2^1023: one more step than the range needs, so a step never
         // overflows on its own.
         let up = 1022;
-        let down = 0 - 1022;
+        let down = -1022;
         while (k >= up) { r = r * 4.49423283715578977e307; k = k - up; };
         while (k <= down) { r = r * 2.2250738585072014e-308; k = k - down; };
         // A big step can have already carried r out of the range -- to an
@@ -632,7 +632,7 @@ def ldexp(x: float, e: long) -> float {
             // subnormal has field 0, so every step of it is a doubling).
             let f = exp_field(r);
             if (f == 0 || f + k < 1) {
-                let step = if (k < 0) { 0 - 1 } else { 1 };
+                let step = if (k < 0) { -1 } else { 1 };
                 let rest = k;
                 while (rest != 0) {
                     r = r * if (step < 0) { 0.5 } else { 2.0 };
@@ -681,7 +681,7 @@ def nextafter(x: float, y: float) -> float {
     } else if (x == 0.0) {
         // from a zero the step is out of the subnormal range: 1 ulp is the
         // smallest double there is, one side or the other
-        if (y > x) { bitsf(1) } else { bitsf(0 - 9223372036854775807) }
+        if (y > x) { bitsf(1) } else { bitsf(-9223372036854775807) }
     } else {
         // One unit in the last place, toward y -- and the direction flips with
         // the sign, because the patterns run the other way for a negative
@@ -689,7 +689,7 @@ def nextafter(x: float, y: float) -> float {
         // 0xBFEFFFFFFFFFFFFF, one SMALLER. So a step toward a larger value is
         // +1 when x is positive and -1 when x is negative.
         let bx = fbits(x);
-        let step = 0 - 1;
+        let step = -1;
         if ((bx > 0) == (y > x)) { step = 1; };
         bitsf(bx + step)
     }
@@ -2795,12 +2795,12 @@ def pow(x: float, y: float) -> float {
 // multiplying by the signed value gives the same bits. The multiplies are meant
 // to wrap; that is the mixing.
 def splitmix64(state: [long]) -> long {
-    let z = state[0] + (0 - 7046029254386353131);       // 0x9E3779B97F4A7C15
+    let z = state[0] + (-7046029254386353131);       // 0x9E3779B97F4A7C15
     state[0] = z;
     let a = z ^ (z >>> 30);
-    let m1 = a * (0 - 4658895280553007687);             // 0xBF58476D1CE4E5B9
+    let m1 = a * (-4658895280553007687);             // 0xBF58476D1CE4E5B9
     let b = m1 ^ (m1 >>> 27);
-    let m = b * (0 - 7723592293110705685);              // 0x94D049BB133111EB
+    let m = b * (-7723592293110705685);              // 0x94D049BB133111EB
     m ^ (m >>> 31)
 };
 

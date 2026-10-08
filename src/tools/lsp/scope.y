@@ -109,7 +109,7 @@ type FileIdx = {
 // The packed end of the scope that begins at `start`, or -1 if it has not
 // closed (or `start` is -1, meaning top level, which never ends).
 def scope_end(ends: { long => long }, start: long) -> long {
-    let out = 0 - 1;
+    let out = -1;
     if (start >= 0) {
         let got = ends[start];
         if is_some(got) { out = got !; };
@@ -450,7 +450,7 @@ def index_src(src: str, path: str) -> FileIdx {
         let dcl = decls[di];
         if (dcl.scope_start >= 0) {
             let got = ends[dcl.scope_start];
-            let e = 0 - 1;
+            let e = -1;
             if is_some(got) { e = got !; };
             dcl.scope_end = e;
             decls[di] = dcl;

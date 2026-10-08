@@ -75,7 +75,7 @@ def y_eput_bool(b: bool) -> long { y_eput_hstr(y_bool_tostr(b)) };
 // ord(s) = code of the first byte, -1 when empty. chr(n) is its
 // inverse. Both work through the [byte] bridge.
 def y_str_ord(s: str) -> long {
-    if (len(s) > 0) { byte_at(s, 0) } else { 0 - 1 }
+    if (len(s) > 0) { byte_at(s, 0) } else { -1 }
 };
 def y_str_chr(n: long) -> str {
     let b: [byte; 1] = [0; 1];
@@ -278,7 +278,7 @@ def y_f2l(x: float) -> long? {
 def y_str_lastidx(hay: str, needle: str, from: long) -> long {
     let n = len(hay);
     let m = len(needle);
-    let found = 0 - 1;
+    let found = -1;
     if (m > 0) {
         if (n >= m) {
             // a `from` past the end means the whole string (the two-argument
@@ -309,7 +309,7 @@ def y_str_lastidx(hay: str, needle: str, from: long) -> long {
 // ── map lookup ──────────────────────────────────────────────────────────
 // A map is {boxes, keys, vals, zidx} (native.y gen_maplit): keys in insertion
 // order, plus -- for a str or long key -- zidx, an open-addressing index that
-// holds entry i as i+1 (0 = empty). A map of up to 8 entries has no index and
+// holds entry i as i+1 (0 = empty). A float key is indexed too. A map of up to 8 entries has no index and
 // is scanned; the 9th insert builds it, and every insert after keeps it in
 // step (y_map_note_*). Reads never touch it. Nothing is ever deleted, so a
 // slot never needs a tombstone. The table stays at most half full.
@@ -339,6 +339,38 @@ def y_map_find_long(ks: [long], ix: [long], k: long) -> long {
     } else {
         let mask = cap - 1;
         let s = ((k * -7046029254386353131) >>> 32) & mask;
+        let e = ix[s];
+        while (e != 0) {
+            if (ks[e - 1] == k) { r = e - 1; e = 0; } else {
+                s = (s + 1) & mask;
+                e = ix[s];
+            };
+        };
+    };
+    r
+};
+
+// A float key hashes by its bits, with -0.0 and 0.0 (equal) sharing one and a
+// NaN (equal to nothing) wherever it lands: a lookup of it always misses, as the
+// scan's `==` does, and every insert of it is a new entry.
+def y_map_slot_float(k: float, mask: long) -> long {
+    let b = y_bigint_fbits(k);
+    if (k == 0.0) { b = 0; };
+    ((b * -7046029254386353131) >>> 32) & mask
+};
+
+def y_map_find_float(ks: [float], ix: [long], k: float) -> long {
+    let n = len(ks);
+    let cap = len(ix);
+    let r = n;
+    if (cap == 0) {
+        let i = 0;
+        while (i < n) {
+            if (ks[i] == k) { r = i; i = n; } else { i = i + 1; };
+        };
+    } else {
+        let mask = cap - 1;
+        let s = y_map_slot_float(k, mask);
         let e = ix[s];
         while (e != 0) {
             if (ks[e - 1] == k) { r = e - 1; e = 0; } else {
@@ -406,6 +438,28 @@ def y_map_note_long(ks: [long], ix: [long]) -> long {
         };
     } else {
         let s = ((ks[n - 1] * -7046029254386353131) >>> 32) & (cap - 1);
+        while (ix[s] != 0) { s = (s + 1) & (cap - 1); };
+        ix[s] = n;
+    };
+    0
+};
+
+def y_map_note_float(ks: [float], ix: [long]) -> long {
+    let n = len(ks);
+    let cap = len(ix);
+    if (cap == 0 && n <= 8) { return 0; };
+    if (cap == 0 || n * 2 > cap) {
+        cap = y_map_cap_for(n);
+        y_map_clear(ix, cap);
+        let j = 0;
+        while (j < n) {
+            let s = y_map_slot_float(ks[j], cap - 1);
+            while (ix[s] != 0) { s = (s + 1) & (cap - 1); };
+            ix[s] = j + 1;
+            j = j + 1;
+        };
+    } else {
+        let s = y_map_slot_float(ks[n - 1], cap - 1);
         while (ix[s] != 0) { s = (s + 1) & (cap - 1); };
         ix[s] = n;
     };
@@ -626,14 +680,14 @@ def y_bigint_from_long(v: long) -> YBig {
 
 def y_bigint_mag_cmp(a: YBig, b: YBig) -> long {
     if (a.n != b.n) {
-        if (a.n < b.n) { return 0 - 1; } else { return 1; };
+        if (a.n < b.n) { return -1; } else { return 1; };
     };
     let i = a.n - 1;
     while (i >= 0) {
         let av = a.limbs[i];
         let bv = b.limbs[i];
         if (av != bv) {
-            if (av < bv) { return 0 - 1; } else { return 1; };
+            if (av < bv) { return -1; } else { return 1; };
         };
         i = i - 1;
     };
@@ -642,7 +696,7 @@ def y_bigint_mag_cmp(a: YBig, b: YBig) -> long {
 
 def y_bigint_cmp(a: YBig, b: YBig) -> long {
     if (a.neg != b.neg) {
-        if (a.neg == 1) { return 0 - 1; } else { return 1; };
+        if (a.neg == 1) { return -1; } else { return 1; };
     };
     let c = y_bigint_mag_cmp(a, b);
     if (a.neg == 1) { return 0 - c; } else { return c; }
@@ -931,7 +985,7 @@ def y_bigint_digit(c: byte, radix: long) -> long {
     if (c >= '0' && c <= '9') { return c - '0'; };
     if (c >= 'a' && c <= 'f') { return c - 'a' + 10; };
     if (c >= 'A' && c <= 'F') { return c - 'A' + 10; };
-    0 - 1
+    -1
 };
 
 def y_bigint_parse(s: str) -> YBig {
@@ -1003,7 +1057,7 @@ def y_bigint_to_long(a: YBig) -> long? {
     } else {
         // The magnitude of LONG_MIN is one past LONG_MAX; build it without
         // ever naming the unrepresentable positive value.
-        let lim = y_bigint_from_long(0 - 9223372036854775807);
+        let lim = y_bigint_from_long(-9223372036854775807);
         lim = y_bigint_sub(lim, y_bigint_from_long(1));
         let lim_mag = y_bigint_copy_mag(lim, 0);
         if (y_bigint_mag_cmp(mag_a, lim_mag) > 0) { return none; };

@@ -3012,10 +3012,39 @@ def typeof_matchend(st: TcSt, node: MatchEnd) -> TcRes {
             st = fail(st, "non-exhaustive match: nothing matches " + join(missing, ", ") + " (add an arm or '_'" + hint + ")", node.line, node.col);
         }
     } else if (sk == K.trec && covered(s, cover)) {
+    } else if (sk == K.topt && option_covered(s, cover)) {
     } else {
         st = fail(st, "non-exhaustive match on " + tstr(s) + " (add a '_' arm" + hint + ")", node.line, node.col);
     };
     tc_res(t_unk(), st)
+};
+
+// An option is covered by a `none` arm (cover marker void) together with
+// either a `some(x)` arm (marker unk: any payload) or type arms that cover the
+// payload: a record, every member of a union, or the payload's own type.
+def option_covered(s: Type, cover: [Type]) -> bool {
+    let has_none = false;
+    let has_some = false;
+    let exact = false;
+    let opt: TOf = s;
+    let inner = unfold(opt.of);
+    for i in 0..len(cover) {
+        let c = unfold(cover[i]);
+        if (c.k == K.tvoid) { has_none = true; }
+        else if (c.k == K.tunk) { has_some = true; }
+        else if (teq(inner, c)) { exact = true; };
+    };
+    if (!has_none) { return false; };
+    if (has_some || exact) { return true; };
+    if (inner.k == K.trec) { return covered(inner, cover); };
+    if (inner.k == K.tunion) {
+        let ms = members(inner);
+        for i in 0..len(ms) {
+            if (!covered(ms[i], cover)) { return false; };
+        };
+        return true;
+    };
+    false
 };
 
 // A member is covered by a type arm of its type.

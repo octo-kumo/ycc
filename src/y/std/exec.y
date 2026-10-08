@@ -45,18 +45,18 @@ def exec(cmd: str) -> long {
         exit(127);
         0
     } else if (pid < 0) {
-        0 - 1
+        -1
     } else {
         let status: [long; 1] = [0; 1];
         let w = os_call("y_os_wait4", pid, ptr_addr(&status[0]));
-        if (w < 0) { 0 - 1 } else { exit_status(status[0]) }
+        if (w < 0) { -1 } else { exit_status(status[0]) }
     }
 };
 
 // Decode wait(2) status: low 7 bits are the terminating signal
 // (0 for a normal exit), next 8 bits the exit code.
 def exit_status(raw: long) -> long {
-    if (raw % 128 == 0) {(raw / 256) % 256 } else { 0 - 1 }
+    if (raw % 128 == 0) {(raw / 256) % 256 } else { -1 }
 };
 
 // ── a child's stdio: popen, pwrite, pread, pclose ────────────────────────
@@ -133,13 +133,13 @@ def popen(cmd: str) -> [long] {
 
 // All of s to the child's stdin. The bytes written, or -1.
 def pwrite(p: [long], s: str) -> long {
-    if (len(p) < 3) { return 0 - 1; };
+    if (len(p) < 3) { return -1; };
     let b = bytes(s);
     let total = len(b);
     let off = 0;
     while (off < total) {
         let w = os_call("y_os_write", p[1], ptr_addr(&b[off]), total - off);
-        if (w <= 0) { return 0 - 1; };
+        if (w <= 0) { return -1; };
         off = off + w;
     };
     total
@@ -148,10 +148,10 @@ def pwrite(p: [long], s: str) -> long {
 // Close the child's stdin so a reader in it sees end-of-file. pclose does
 // this too; call it earlier when the answer is wanted before the wait.
 def pclose_in(p: [long]) -> long {
-    if (len(p) < 3) { return 0 - 1; };
+    if (len(p) < 3) { return -1; };
     let r = os_call("y_os_close", p[1]);
-    p[1] = 0 - 1;
-    if (r < 0) { 0 - 1 } else { 0 }
+    p[1] = -1;
+    if (r < 0) { -1 } else { 0 }
 };
 
 // Everything the child writes to stdout, to end-of-file.
@@ -171,14 +171,14 @@ def pread(p: [long]) -> str {
 // an end twice is harmless here (the fd is marked spent), which is why
 // exec_capture can call pclose_in and then pclose.
 def pclose(p: [long]) -> long {
-    if (len(p) < 3) { return 0 - 1; };
+    if (len(p) < 3) { return -1; };
     if (p[1] >= 0) { os_call("y_os_close", p[1]); };
     if (p[2] >= 0) { os_call("y_os_close", p[2]); };
-    p[1] = 0 - 1;
-    p[2] = 0 - 1;
+    p[1] = -1;
+    p[2] = -1;
     let status: [long; 1] = [0; 1];
     let w = os_call("y_os_wait4", p[0], ptr_addr(&status[0]));
-    if (w < 0) { 0 - 1 } else { exit_status(status[0]) }
+    if (w < 0) { -1 } else { exit_status(status[0]) }
 };
 
 // The call most programs want: run cmd, feed it input, answer its stdout. The

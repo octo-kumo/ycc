@@ -7,6 +7,6 @@
 
 /* [{ msg, line, col }]: the warnings for one unit, sorted by position. */
 Yv *lint_unit(Yv *ast, Yv *ast3, Yv *ofile, Yv *fmods, ylong wlevel,
-              Yv *ogen);
+              Yv *ogen, Yv *unused);
 
 #endif /* LINT_H */

@@ -100,7 +100,7 @@ def lint_fix(st: LintSt, rule: str, line: long, col: long, a: str, b: str) -> vo
 // checked), sorted by position; ofile and fmods say which lines are a
 // module's. `ogen` says which lines a meta block generated (see lint_meta_top);
 // it is empty when the unit has no blocks.
-def lint_unit(ast: Block, ast3: Block, ofile: [long], fmods: [str], wlevel: long, ogen: [bool]) -> [Diag] {
+def lint_unit(ast: Block, ast3: Block, ofile: [long], fmods: [str], wlevel: long, ogen: [bool], unused: [Diag]) -> [Diag] {
     lint_ofile = ofile;
     lint_fmods = fmods;
     let warns: [Diag] = [];
@@ -117,6 +117,11 @@ def lint_unit(ast: Block, ast3: Block, ofile: [long], fmods: [str], wlevel: long
     lint_stmts(st, ast3.stmts, false, true);
     if (len(ogen) > 0) { lint_meta_top(st, ast3.stmts, ogen) };
     lint_vars(st);
+    // Level 1: a bare import nothing uses (the resolver found it: it has the
+    // text, and the import is gone from the spliced program).
+    if (wlevel >= 1) {
+        foreach (u in unused) { lint_warn(st, u.msg, u.line, u.col); };
+    };
     lint_types(st, ast.stmts);
     // Which defs could be void? A read at the top level, or in a def that
     // cannot be void itself, or in a def's body but not its tail, keeps the

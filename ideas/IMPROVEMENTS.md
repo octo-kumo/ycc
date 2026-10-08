@@ -35,22 +35,6 @@ goal is the language's: short, intuitive, safe, fast.
   (`fx_*`, `lint_fix`, `ycc --fix`) exists only in Y. It never touches emitted
   bytes, so the gate cannot see a drift there; a port would need `fix.y`'s text
   rewrites as well.
-- **`-> void` accepts a body that has a value** and the value is still returned
-  to callers (`lint_compound_op` was declared void and used as a predicate for
-  years). Either make `-> void` discard, or warn on a void def whose last
-  expression has a non-void type that a caller reads.
-- **Unused `import`** is not reported; imports are spliced as text before any
-  AST exists, so the resolver needs a diagnostic channel.
-- **`match o { T c => .., none => .. }`** on an option still errors (`none` is
-  read as a parameter name). `if let T c = o` works now.
-
-## Short, intuitive
-
-- `0 - n` is common in the compiler's own source (the new level-2 rule counts
-  ~100). If `-1` has a parsing hazard somewhere, fix the parser; if not, the
-  habit goes.
-- Maps are O(1) now for `str`/`long` keys; `byte`/`bool`/`float` keys still
-  scan. Documented in `07-references.tex`.
 
 ## Test infrastructure
 

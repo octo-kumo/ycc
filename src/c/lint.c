@@ -208,7 +208,8 @@ static Yv *lint_fmods;
  * checked), sorted by position; ofile and fmods say which lines are a
  * module's. `ogen` says which lines a meta block generated (see
  * lint_meta_top); it is empty when the unit has no blocks. */
-Yv *lint_unit(Yv *ast, Yv *ast3, Yv *ofile, Yv *fmods, ylong wlevel, Yv *ogen) {
+Yv *lint_unit(Yv *ast, Yv *ast3, Yv *ofile, Yv *fmods, ylong wlevel, Yv *ogen,
+              Yv *unused) {
     lint_ofile = ofile;
     lint_fmods = fmods;
     lint_drops = yav(0);
@@ -231,6 +232,15 @@ Yv *lint_unit(Yv *ast, Yv *ast3, Yv *ofile, Yv *fmods, ylong wlevel, Yv *ogen) {
         (void)lint_meta_top(st, yr_get(ast3, "stmts"), ogen);
     };
     (void)lint_vars(st);
+    /* Level 1: a bare import nothing uses (the resolver found it: it has the
+     * text, and the import is gone from the spliced program). */
+    if (wlevel >= 1) {
+        for (ylong ui = 0; ui < yv_len(unused); ui++) {
+            Yv *u = ya_get(unused, ui);
+            (void)lint_warn(st, yr_get(u, "msg"), yv_l(yr_get(u, "line")),
+                            yv_l(yr_get(u, "col")));
+        }
+    }
     (void)lint_types(st, yr_get(ast, "stmts"));
     /* Level 1: a dropped call, but only for a def no call reads. */
     for (ylong i = 0; i < yv_len(lint_drops); i++) {

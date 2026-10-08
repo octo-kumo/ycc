@@ -74,7 +74,7 @@ def below(n: long) -> long {
     let span = TOP62 + 1;                   // 2^62 draws
     if (n < 1 || n > span) { return 0; };
     let lim = (span / n) * n;               // the largest whole multiple of n in [0, span)
-    let v = 0 - 1;                          // the sentinel: forces one draw
+    let v = -1;                          // the sentinel: forces one draw
     // `v < 0` is what forces the first draw -- and it has to be spelled out,
     // because `%` in Y is C's truncated remainder, so `-1 % n` is -1 and NOT
     // the last index.  A sentinel that leans on the modulus being non-negative
@@ -99,7 +99,7 @@ def range(lo: long, hi: long) -> long {
     // 2^63, which is not a long. LONG_MIN / 2 is the other bound -- lo + the
     // width must not wrap either -- so both ends are checked.
     let w = hi - lo;
-    if (w == 9223372036854775807 || w < 0 - 9223372036854775807 - 1 + 1) { return lo };
+    if (w == 9223372036854775807 || w < -9223372036854775807 - 1 + 1) { return lo };
     let n = w + 1;
     if (n < 1 || n > 4611686018427387904) { return lo };
     lo + below(n)

@@ -65,7 +65,7 @@ def yfs_block_of(ino: long, pos: long) -> long {
 // CURRENT address space -- at a syscall that is the caller's, at boot the
 // kernel's.  Returns the number of bytes copied.
 def yfs_read(ino: long, off: long, buf: long, len: long) -> long {
-    if (yfs_ok == 0) { return 0 - 1; };
+    if (yfs_ok == 0) { return -1; };
     let size = yfs_size(ino);
     // off == size is allowed: that is a write AT THE END, which yfs_append uses after
     // it has already moved the size.  Only a write strictly past the end is refused.
@@ -106,16 +106,16 @@ def yfs_name_is(e: long, path: str, a: long, b: long) -> bool {
 };
 
 def yfs_find_in(dir: long, path: str, a: long, b: long) -> long {
-    if (yfs_ok == 0) { return 0 - 1; };
+    if (yfs_ok == 0) { return -1; };
     let count = yfs_dir_count(dir);
     let idx = 0;
     while (idx < count) {
         let e = yfs_entry_off(dir, idx);
-        if (e == 0) { return 0 - 1; };
+        if (e == 0) { return -1; };
         if (yfs_name_is(e, path, a, b)) { return yfs_u32(e + 4); };
         idx = idx + 1;
     };
-    0 - 1
+    -1
 };
 
 // One component, in the root directory.
@@ -134,7 +134,7 @@ def yfs_lookup_path(path: str) -> long {
         let j = i;
         while (j < len(path) && path[j] != 47) { j = j + 1; };
         cur = yfs_find_in(cur, path, i, j);
-        if (cur < 0) { return 0 - 1; };
+        if (cur < 0) { return -1; };
         i = j;
     };
     cur
@@ -152,7 +152,7 @@ def yfs_entry_off(ino: long, index: long) -> long {
     while (i < index) {
         let nl = yfs_u16(e);
         if (nl == 0) { return 0; };
-        e = e + ((8 + nl + 3) & (0 - 4));
+        e = e + ((8 + nl + 3) & (-4));
         i = i + 1;
     };
     e
@@ -163,11 +163,11 @@ def yfs_dir_count(ino: long) -> long {
 };
 
 def yfs_readdir(ino: long, index: long, buf: long) -> long {
-    if (yfs_ok == 0 || index >= yfs_dir_count(ino)) { return 0 - 1; };
+    if (yfs_ok == 0 || index >= yfs_dir_count(ino)) { return -1; };
     let e = yfs_entry_off(ino, index);
-    if (e == 0) { return 0 - 1; };
+    if (e == 0) { return -1; };
     let nl = yfs_u16(e);
-    if (nl == 0) { return 0 - 1; };
+    if (nl == 0) { return -1; };
     let k = 0;
     while (k < nl) {
         kmem.poke_va8(buf + k, kmem.peek8(yfs_phys + e + 8 + k));
@@ -177,9 +177,9 @@ def yfs_readdir(ino: long, index: long, buf: long) -> long {
 };
 
 def yfs_dir_inode(ino: long, index: long) -> long {
-    if (yfs_ok == 0 || index >= yfs_dir_count(ino)) { return 0 - 1; };
+    if (yfs_ok == 0 || index >= yfs_dir_count(ino)) { return -1; };
     let e = yfs_entry_off(ino, index);
-    if (e == 0) { return 0 - 1; };
+    if (e == 0) { return -1; };
     yfs_u32(e + 4)
 };
 
@@ -188,10 +188,10 @@ def yfs_dir_inode(ino: long, index: long) -> long {
 // space -- it has physical destinations and no VA for them.  This returns the byte
 // instead, so a caller can place it with poke8 (physical) anywhere it likes.
 def yfs_fetch(ino: long, off: long) -> long {
-    if (yfs_ok == 0) { return 0 - 1; };
-    if (off >= yfs_size(ino)) { return 0 - 1; };
+    if (yfs_ok == 0) { return -1; };
+    if (off >= yfs_size(ino)) { return -1; };
     let blk = yfs_block_of(ino, off);
-    if (blk == 0) { return 0 - 1; };
+    if (blk == 0) { return -1; };
     kmem.peek8(yfs_phys + blk * yfs_block_size + off % yfs_block_size)
 };
 
@@ -200,7 +200,7 @@ def yfs_fetch(ino: long, off: long) -> long {
 // It writes within the file's existing size -- growing a file needs an allocator,
 // which is the next step.
 def yfs_store(ino: long, off: long, buf: long, len: long) -> long {
-    if (yfs_ok == 0) { return 0 - 1; };
+    if (yfs_ok == 0) { return -1; };
     let size = yfs_size(ino);
     if (off >= size) { return 0; };
     if (off + len > size) { len = size - off; };
@@ -249,7 +249,7 @@ def yfs_recompute_next() -> void {
 // The blocks are attached FIRST, then the size moves, then yfs_store can write them
 // because they are inside the file.
 def yfs_append(ino: long, buf: long, len: long) -> long {
-    if (yfs_ok == 0) { return 0 - 1; };
+    if (yfs_ok == 0) { return -1; };
     let size = yfs_size(ino);
     let base = yfs_inode_off(ino);
     let have = (size + yfs_block_size - 1) / yfs_block_size;
@@ -273,7 +273,7 @@ def yfs_append(ino: long, buf: long, len: long) -> long {
     };
     kmem.poke32(yfs_phys + base + 4, size + len);
     let n = yfs_store(ino, size, buf, len);
-    if (n != len) { return 0 - 1; };
+    if (n != len) { return -1; };
     len
 };
 
@@ -283,14 +283,14 @@ def yfs_append(ino: long, buf: long, len: long) -> long {
 // its entry list (its size field is the ENTRY COUNT for a directory), reusing the
 // 4-byte stride rule the reader walks.
 def yfs_add_entry(dir: long, name: str, mode: long) -> long {
-    if (yfs_ok == 0) { return 0 - 1; };
+    if (yfs_ok == 0) { return -1; };
     // a free inode: mode 0, never used
-    let ino = 0 - 1;
+    let ino = -1;
     let i = 1;
     while (i < yfs_inodes) {
         if (yfs_u32(yfs_inode_off(i)) == 0) { ino = i; i = yfs_inodes; } else { i = i + 1; };
     };
-    if (ino < 0) { return 0 - 1; };
+    if (ino < 0) { return -1; };
     let base = yfs_inode_off(ino);
     kmem.poke32(yfs_phys + base, mode);
     kmem.poke32(yfs_phys + base + 4, 0);      // size 0
@@ -307,8 +307,8 @@ def yfs_add_entry(dir: long, name: str, mode: long) -> long {
     let idx = 0;
     while (idx < count) {
         let nl = yfs_u16(e);
-        if (nl == 0) { return 0 - 1; };
-        e = e + ((8 + nl + 3) & (0 - 4));
+        if (nl == 0) { return -1; };
+        e = e + ((8 + nl + 3) & (-4));
         idx = idx + 1;
     };
     kmem.poke8(yfs_phys + e, len(name) & 255);
@@ -327,11 +327,11 @@ def yfs_add_entry(dir: long, name: str, mode: long) -> long {
 // entry dead, because a reader stops at a zero name_len and would lose everything
 // after the hole.
 def yfs_unlink(name: str) -> long {
-    if (yfs_ok == 0) { return 0 - 1; };
+    if (yfs_ok == 0) { return -1; };
     let rbase = yfs_inode_off(yfs_root);
     let count = yfs_u32(rbase + 4);
     let blk = yfs_u32(rbase + 8);
-    if (blk == 0) { return 0 - 1; };
+    if (blk == 0) { return -1; };
     let e = blk * yfs_block_size;
     let idx = 0;
     // A leading slash is not part of the name -- the entries hold "msg", not "/msg" --
@@ -340,15 +340,15 @@ def yfs_unlink(name: str) -> long {
     if (len(name) > 0 && byte_at(name, 0) == 47) { st = 1; };
     while (idx < count) {
         let nl = yfs_u16(e);
-        if (nl == 0) { return 0 - 1; };
+        if (nl == 0) { return -1; };
         if (nl == len(name) - st && yfs_name_is(e, name, st, len(name))) {
             kmem.poke32(yfs_phys + yfs_inode_off(yfs_u32(e + 4)), 0);
-            let src = e + ((8 + nl + 3) & (0 - 4));
+            let src = e + ((8 + nl + 3) & (-4));
             let j = idx + 1;
             while (j < count) {
                 let sl = yfs_u16(src);
                 if (sl == 0) { j = count; } else {
-                    let sstride = (8 + sl + 3) & (0 - 4);
+                    let sstride = (8 + sl + 3) & (-4);
                     let k = 0;
                     while (k < sstride) { kmem.poke8(yfs_phys + e + k, kmem.peek8(yfs_phys + src + k)); k = k + 1; };
                     e = e + sstride;
@@ -361,10 +361,10 @@ def yfs_unlink(name: str) -> long {
             kmem.poke32(yfs_phys + rbase + 4, count - 1);
             return 0;
         };
-        e = e + ((8 + nl + 3) & (0 - 4));
+        e = e + ((8 + nl + 3) & (-4));
         idx = idx + 1;
     };
-    0 - 1
+    -1
 };
 
 // A file, and a directory, in the root.  A directory's size field is its ENTRY COUNT,
@@ -381,11 +381,11 @@ def yfs_mkdir(name: str) -> long {
 // without allocating an inode.  A leading slash is not part of the name, and a str's
 // characters are read with byte_at.
 def yfs_link(dir: long, name: str, ino: long) -> long {
-    if (yfs_ok == 0) { return 0 - 1; };
+    if (yfs_ok == 0) { return -1; };
     let st = 0;
     if (len(name) > 0 && byte_at(name, 0) == 47) { st = 1; };
     let n = len(name) - st;
-    if (n <= 0) { return 0 - 1; };
+    if (n <= 0) { return -1; };
     let rbase = yfs_inode_off(dir);
     let count = yfs_u32(rbase + 4);
     let blk = yfs_u32(rbase + 8);
@@ -398,8 +398,8 @@ def yfs_link(dir: long, name: str, ino: long) -> long {
     let idx = 0;
     while (idx < count) {
         let nl = yfs_u16(e);
-        if (nl == 0) { return 0 - 1; };
-        e = e + ((8 + nl + 3) & (0 - 4));
+        if (nl == 0) { return -1; };
+        e = e + ((8 + nl + 3) & (-4));
         idx = idx + 1;
     };
     kmem.poke8(yfs_phys + e, n & 255);
@@ -418,10 +418,10 @@ def yfs_link(dir: long, name: str, ino: long) -> long {
 // name replaces it, as POSIX says.
 def yfs_rename(oldname: str, newname: str) -> long {
     let ino = yfs_lookup_path(oldname);
-    if (ino < 0) { return 0 - 2; };
+    if (ino < 0) { return -2; };
     let ex = yfs_lookup_path(newname);
     if (ex >= 0) { yfs_unlink(newname); };
     let r = yfs_link(yfs_root, newname, ino);
-    if (r < 0) { return 0 - 1; };
+    if (r < 0) { return -1; };
     yfs_unlink(oldname)
 };

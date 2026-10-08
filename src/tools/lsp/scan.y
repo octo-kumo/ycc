@@ -171,7 +171,7 @@ def line_starts(src: str) -> [long] {
 // end.
 def off_at(src: str, line: long, col: long) -> long {
     let starts = line_starts(src);
-    if (line < 1 || line > len(starts)) { return 0 - 1; }
+    if (line < 1 || line > len(starts)) { return -1; }
     starts[line - 1] + (col - 1)
 }
 

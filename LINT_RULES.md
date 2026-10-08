@@ -359,9 +359,15 @@ when the fixer rewrote the lexer's own bounds checks (round 9).
 - **`0 - n`** (level 2). On a literal it is a negative literal; write `-n`.
   No fix is offered.
 
-Not done, and why: *an unused `import`* needs a diagnostic channel in
-`resolve_unit` (imports are spliced as text before any AST exists), so it
-cannot be a `lint.y` rule as the others are.
+- **An unused `import`** (level 1). A bare `import fs;` in the unit's own file
+  whose name `fs.` is not used anywhere else in it. **Detect** in the resolver
+  (`native_resolve_seen` at depth 0), not in `lint.y`: imports are spliced as
+  text before any AST exists, so the resolver has the only copy of the line and
+  leaves a blank placeholder where the import was, for the warning to point at;
+  `lint_unit` takes the list and adds it at level 1. A text search -- a use in
+  a string counts, a `//` comment and a longer name's tail do not. Path
+  imports (`import m from "m.y"`) are flattened and not checked. No fix is
+  offered.
 
 ## 6. Correctness (already warned)
 
@@ -380,10 +386,6 @@ cannot be a `lint.y` rule as the others are.
 
 ## 7. TODO
 
-- **`src/c/lint.c` is not a full copy of `lint.y` above level 0.** The default
-  level (section 6) and the new section 5b rules are at parity; rules 1.8 and
-  2.10 and the level-1 dropped-value check exist only in `lint.y` (the C
-  record has no `reads`/`rets` state). `-W 1`/`-W 2` output therefore differs
-  between `cycc` and `ycc` on such programs. Port them, or state that the
-  C copy is level 0 only.
-- **Unused `import`** (see 5b).
+- **The C copy has no `--fix`.** `lint.c` emits every warning `lint.y` does at
+  levels 0, 1 and 2 (the port gate compares them), but the fixer (`fx_*`,
+  `lint_fix`, `ycc --fix`) exists only in Y.

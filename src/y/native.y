@@ -86,6 +86,10 @@ let res_std_lib: [str] = [];
 // True while std_compile resolves a std unit's own imports: those always
 // bind units, so the project-local lookup (res_local_mod) is skipped.
 let res_in_std = false;
+// The bare `import name;` lines of the unit's own file that nothing uses
+// (`name.` appears nowhere else in it), as warnings at the import's line:
+// native_resolve_seen fills it at depth 0, compile_unit hands it to lint.
+let res_unused: [Diag] = [];
 // The packages the unit being compiled imports (compile_unit): strip_ns
 // turns `json.parse` into the QUALIFIED name `json.parse` -- an id no Y
 // source can spell, bound to the package's export -- not into `parse`.
@@ -944,6 +948,36 @@ def kernel_std_why(name: str) -> str {
     else { "it uses the OS" }
 };
 
+// The unused bare imports of the unit last resolved (see res_unused).
+def unused_imports() -> [Diag] { res_unused };
+
+// Whether the bare import `name` is used by a line other than line `skip`: the
+// text `name.` outside a `//` comment, not the tail of a longer name or of a
+// field (`xfs.read`, `a.fs.read`). Blunt on purpose -- a use inside a string
+// counts -- because the one thing it must never do is call a used import unused.
+def import_used(lines: [str], skip: long, name: str) -> bool {
+    let pat = name + ".";
+    for j in 0..len(lines) {
+        if (j != skip) {
+            let t = trim(lines[j]);
+            if (t[:2] != "//" && t[:7] != "import ") {
+                let ln = lines[j];
+                let at = index_of(ln, pat);
+                let off = 0;
+                while (at >= 0) {
+                    let p = off + at;
+                    if (p == 0) { return true; };
+                    let c = ln[p - 1];
+                    if (!(c == 46 || c == 95 || (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122))) { return true; };
+                    off = p + 1;
+                    at = index_of(ln[off:], pat);
+                };
+            };
+        };
+    };
+    false
+};
+
 // The program text `src` of file `fid` (its index in the origin map's
 // files: 0 for the program itself, k for seen[k - 1]) with its imports
 // spliced in, as lines; ofile/oline map each one back (see the origin map
@@ -968,6 +1002,7 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str], smods
         // hoisted import path normalizes against the file the block came from;
         // and the whole thing runs before words_seen (resolve_unit), so
         // std-unit selection sees the GENERATED text.
+        if (depth == 0 && !res_in_std) { res_unused = []; };
         let sc = meta_meta_scan(src, base_dir, fid);
         if (!sc.ok) {
             // Fatal, like every other diagnostic the resolve raises: a pass
@@ -1009,7 +1044,12 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str], smods
                 if (from_idx >= 0) {
                     name = trim(rest[:from_idx]);
                     let path_part = trim(rest[from_idx + 6:]);
-                    if (path_part[len(path_part) - 1:] == ";") {
+                    // through the closing quote: a `;` and a comment after it
+                    // are not the path
+                    let endq = index_of(path_part[1:], "\"");
+                    if (path_part[:1] == "\"" && endq >= 0) {
+                        path_part = path_part[:endq + 2];
+                    } else if (path_part[len(path_part) - 1:] == ";") {
                         path_part = path_part[:len(path_part) - 1];
                     };
                     path = path_part[1:len(path_part) - 1];
@@ -1021,10 +1061,10 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str], smods
                 } else {
                     // bare `import name;`: an optional std module (net, ui,
                     // ...) or a project-local one — see std_resolve above.
+                    // up to the `;`: a `// comment` after it is not the name
+                    let semi = index_of(rest, ";");
                     name = trim(rest);
-                    if (name[len(name) - 1:] == ";") {
-                        name = trim(name[:len(name) - 1]);
-                    };
+                    if (semi >= 0) { name = trim(rest[:semi]); };
                     path = name;
                     let is_lib = !name_in(res_pkgs, name) && std_lib_index(name) >= 0 && !res_local_mod(name, base_dir);
                     if (name_in(res_pkgs, name) || is_lib) {
@@ -1146,6 +1186,18 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str], smods
                         // a module imported by name keeps its namespace
                         // (rename.y), one imported by path is flattened
                         if (from_idx >= 0) { imports += name; }
+                    };
+                };
+                // The unit's own file: a placeholder line stands where the
+                // import was (its text went into the splice, or nowhere for a
+                // library), so a warning has a line of the file to point at.
+                if (depth == 0 && !res_in_std && from_idx < 0 && len(name) > 0) {
+                    out_lines += "";
+                    ofile += lf;
+                    oline += ln;
+                    ogen += gen_at(inf_gen, i);
+                    if (!import_used(lines, i, name)) {
+                        res_unused += { msg: "unused import '" + name + "'", line: len(out_lines), col: 1 };
                     };
                 };
             } else if (is_embed_decl(trimmed)) {
@@ -11121,9 +11173,9 @@ def gen_map_field(st: EmitSt, node: Call, name: str) -> EmitSt {
     gen_slot_move(st, slot, false)
 };
 
-// Whether a map keyed by kt carries the hash index (zidx): str and long keys.
-// A byte, bool or float key has too few distinct values (or too rare a use) to
-// be worth the helper; those maps stay on the inline scan.
+// Whether a map keyed by kt carries the hash index (zidx): str, long and float
+// keys. A byte or bool key has at most 256 or 2 distinct values, which the
+// inline scan covers in a few compares; those maps stay on it.
 def map_key_of(t: Type) -> Type {
     let mt: TMap = unfold(t);
     mt.key
@@ -11131,7 +11183,15 @@ def map_key_of(t: Type) -> Type {
 
 def map_hashed(kt: Type) -> bool {
     let k: long = unfold(kt).k;
-    k == K.tstr || k == K.tlong
+    k == K.tstr || k == K.tlong || k == K.tfloat
+};
+
+// The runtime probe/index helpers for a hashed key type.
+def map_helper(kt: Type, what: str) -> str {
+    let k: long = unfold(kt).k;
+    if (k == K.tstr) { "y_map_" + what + "_str" }
+    else if (k == K.tfloat) { "y_map_" + what + "_float" }
+    else { "y_map_" + what + "_long" }
 };
 
 // map$find(m, k): the entry index of key k in map m, or len(m) when absent.
@@ -11148,7 +11208,7 @@ def gen_map_find(st: EmitSt, node: Call) -> EmitSt {
     pushed += map_field(m, "zidx", ln, cl);
     pushed += args[1];
     st = gen_push_args(st, pushed);
-    st = emit_insn(st, insn.F_CALL_L, lbl_new(unfold(mt.key).k == K.tstr ? "y_map_find_str" : "y_map_find_long"), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_CALL_L, lbl_new(map_helper(mt.key, "find")), 0, 0, 0, 0, 0, 0);
     emit_insn(st, insn.F_ADD_I_R, 24, insn.R_RSP, 64, 0, 0, 0, 0)
 };
 
@@ -11163,7 +11223,7 @@ def gen_map_note(st: EmitSt, node: Call) -> EmitSt {
     pushed += map_field(m, "keys", ln, cl);
     pushed += map_field(m, "zidx", ln, cl);
     st = gen_push_args(st, pushed);
-    st = emit_insn(st, insn.F_CALL_L, lbl_new(unfold(mt.key).k == K.tstr ? "y_map_note_str" : "y_map_note_long"), 0, 0, 0, 0, 0, 0);
+    st = emit_insn(st, insn.F_CALL_L, lbl_new(map_helper(mt.key, "note")), 0, 0, 0, 0, 0, 0);
     emit_insn(st, insn.F_ADD_I_R, 16, insn.R_RSP, 64, 0, 0, 0, 0)
 };
 
@@ -12899,7 +12959,7 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
         // The warnings (lint.y): the program's unit's and a package's,
         // never a std unit's.
         if (len(name) == 0 || pkg_base(base)) {
-            warnings = lint.lint_unit(ast, ast3, origin.file, origin.mods, wlevel, ogen);
+            warnings = lint.lint_unit(ast, ast3, origin.file, origin.mods, wlevel, ogen, res_unused);
             pr = phase_end(times, "lint", pt, ph);
             times = pr.times; pt = pr.t; ph = pr.h;
         };
@@ -15181,7 +15241,7 @@ def emit_program(ast: Block, nr: Resolved, debug: bool, wlevel: long, std: [Unit
 // needs to KNOW whether a word is a builtin, and the list it keeps of them is
 // the one this predicate tests. Inert like the rest of the names here -- the
 // splicer deletes the export line, so nothing reaches codegen (LSP.md 9.1).
-export { emit_program, compile_package, set_meta_pack, unit_externs, unit_prep, std_lib_path, std_units, std_unit_names, std_lib_deps, std_pack, pack_store, unit_obj, unit_unobj, unit_iface, native_resolve, native_resolve_x, native_resolve_pk, origin_at, strip_ns, strip_list, strip_decl, phase_end, link_text, is_intrinsic_name, intrinsic_names };
+export { emit_program, compile_package, set_meta_pack, unit_externs, unit_prep, std_lib_path, std_units, std_unit_names, std_lib_deps, std_pack, pack_store, unit_obj, unit_unobj, unit_iface, native_resolve, native_resolve_x, native_resolve_pk, origin_at, unused_imports, strip_ns, strip_list, strip_decl, phase_end, link_text, is_intrinsic_name, intrinsic_names };
 
 // ── maps: dynamic {K => V} ────────────────────────────────────────────
 // A map value is a two-field record -- {keys: [K], vals: [V]} -- and
@@ -15332,7 +15392,7 @@ def map_scan(t: str, ln: long, cl: long) -> While {
 
 // The statements that find key t+"k" in map t+"m" (both bound by the caller):
 // t+"i" is its entry index, t+"n" the entry count, and t+"i" == t+"n" a miss.
-// A str or long key goes through the runtime probe (map$find), which uses the
+// A str, long or float key goes through the runtime probe (map$find), which uses the
 // hash index once the map has one; any other key scans inline (map_scan).
 def map_locate(st: EmitSt, marr: Node, t: str, sts: [Node], ln: long, cl: long) -> [Node] {
     let m: Node = n_id(t + "m", ln, cl);

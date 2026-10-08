@@ -180,6 +180,13 @@ is no value at all (\ic{void}, \ic{sem}) is the error \ic{match pattern type
 void is not a record or primitive type}, the one every pattern type that is
 not a record or a primitive has always got.
 
+An option is matched with \ic{none} and its payload: \ic{match o \{ T c => c.v,
+none => -1 \}} needs no \ic{\_}, because the \ic{none} arm covers the empty
+case and the type arm (or \ic{some(x)}, which takes any payload) the other.
+Either half alone is the error \ic{non-exhaustive match on T? (add a '\_'
+arm)}. A \ic{none} arm is a value pattern, so any other value arm
+(\ic{0 => ...}) does not count toward covering the payload.
+
 A union value also goes where one of its members is declared --- an
 annotated \ic{let}, an argument or a \ic{return} --- or a union of some of
 its members: that is a \emph{cast}, checked when the program runs. A value

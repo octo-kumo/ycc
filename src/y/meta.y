@@ -513,7 +513,7 @@ def page_up(n: long) -> long {
 };
 
 def run_fail(e: str) -> RunRes {
-    { ok: false, status: 0 - 1, sig: 0, out: [], err: e }
+    { ok: false, status: -1, sig: 0, out: [], err: e }
 };
 
 def run_image(b: [byte], av: [str], want_out: bool) -> RunRes {
@@ -537,7 +537,7 @@ def run_image(b: [byte], av: [str], want_out: bool) -> RunRes {
 def pipe_fds() -> { ok: bool, rfd: long, wfd: long } {
     let pf: [byte; 8] = [0; 8];
     if (syscall(SYS_PIPE, &pf[0], ptr_addr(&pf[0]) + 4, 0, 0, 0) != 0) {
-        { ok: false, rfd: 0 - 1, wfd: 0 - 1 }
+        { ok: false, rfd: -1, wfd: -1 }
     } else {
         let r = rd32(pf[0:8], 0);
         let w = rd32(pf[0:8], 4);
@@ -548,7 +548,7 @@ def pipe_fds() -> { ok: bool, rfd: long, wfd: long } {
         if (r2 < 0 || w2 < 0) {
             if (r2 >= 0) { syscall(SYS_CLOSE, r2, 0, 0, 0, 0); };
             if (w2 >= 0) { syscall(SYS_CLOSE, w2, 0, 0, 0, 0); };
-            { ok: false, rfd: 0 - 1, wfd: 0 - 1 }
+            { ok: false, rfd: -1, wfd: -1 }
         } else {
             { ok: true, rfd: r2, wfd: w2 }
         }
@@ -564,7 +564,7 @@ def pipe_fds() -> { ok: bool, rfd: long, wfd: long } {
 def image_fd(b: [byte], span: long) -> long {
     let fd = syscall(SYS_MEMFD, "ycc-image", 0);
     if (fd < 3) {
-        0 - 1
+        -1
     } else {
         image_fd_write(b, fd, span)
     }
@@ -578,7 +578,7 @@ def image_fd_write(b: [byte], fd: long, span: long) -> long {
         let k = syscall(SYS_WRITE, fd, at + off, n - off);
         if (k <= 0) {
             syscall(SYS_CLOSE, fd, 0, 0, 0, 0);
-            fd = 0 - 1;
+            fd = -1;
             off = n;
         } else {
             off += k;
@@ -590,7 +590,7 @@ def image_fd_write(b: [byte], fd: long, span: long) -> long {
     if (fd >= 0) {
         if (syscall(SYS_FTRUNCATE, fd, span, 0, 0, 0) != 0) {
             syscall(SYS_CLOSE, fd, 0, 0, 0, 0);
-            fd = 0 - 1;
+            fd = -1;
         };
     };
     fd
@@ -606,18 +606,18 @@ def img_span(im: Img) -> long {
 
 def run_image_go(b: [byte], av: [str], want_out: bool, im: Img) -> RunRes {
     let m: Mapd = { img: 0, memsz: im.memsz, entry: im.entry, span: img_span(im),
-        rfd: 0 - 1, keep: 0 - 1 };
+        rfd: -1, keep: -1 };
     if (want_out) {
         let pp = pipe_fds();
         if (!pp.ok) {
             run_fail("cannot create a pipe for the generator")
         } else {
             m.rfd = pp.rfd;
-            m.keep = 0 - 1;
+            m.keep = -1;
             run_image_fd(b, av, want_out, im, m, pp.wfd)
         }
     } else {
-        run_image_fd(b, av, want_out, im, m, 0 - 1)
+        run_image_fd(b, av, want_out, im, m, -1)
     }
 };
 
@@ -881,7 +881,7 @@ let sg_rpend = true;
 // The block array index this file's first block takes, and the P line a block
 // being opened sits on (-1 for a nested one, whose text P does not hold).
 let mg_first = 0;
-let mg_p_at = 0 - 1;
+let mg_p_at = -1;
 // The first diagnostic, and where. The rest of the text is not scanned.
 let sg_err = "";
 let sg_eline = 0;
@@ -1157,7 +1157,7 @@ def sg_break() -> void {
 def sg_out(a: long, b: long) -> void {
     let i = a;
     while (i < b) {
-        let nl = 0 - 1;
+        let nl = -1;
         let j = i;
         let go = true;
         while (go && j < b) {
@@ -1514,7 +1514,7 @@ def sg_open(i: long, n: long) -> long {
         let spliced = !dead && nested && have;
         mg_bfile += sg_fid;
         mg_bline += sg_line;
-        mg_p_at = 0 - 1;
+        mg_p_at = -1;
         if (!nested) { mg_p_at = len(sg_p); };
         mg_bslot += slot;
         mg_bp += mg_p_at;
@@ -1714,7 +1714,7 @@ def sg_mids_move() -> void {
     for i in 0..n { done += false; };
     let left = n;
     while (left > 0) {
-        let at = 0 - 1;
+        let at = -1;
         for j in 0..n {
             if (!done[j]) {
                 if (at < 0 || mg_after(j, at)) { at = j };
@@ -2384,7 +2384,7 @@ def mg_unframe(data: str) -> void {
 // (the top level IS the generator's program), so a gap means the generator
 // did not reach it -- and the message can name it.
 def mg_first_missing() -> long {
-    let at = 0 - 1;
+    let at = -1;
     for i in 0..mg_next {
         if (!mg_have[i]) { at = i; };
     };

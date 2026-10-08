@@ -3104,6 +3104,13 @@ Yv *parse_pattern(Yv *toks, ylong p, Yv *tmp) {
     } else if ((yv_l(t) == K_id) && ys_eq_lit(v, "some") &&
                is_punct(toks, p + 1, ys("("))) {
         return parse_some_pattern(toks, p, tmp);
+    } else if ((yv_l(t) == K_id) && ys_eq_lit(v, "none")) {
+        /* `none =>` is the value pattern for an option that holds nothing. It
+         * is built here, not by parse_unary, which would read `none =>` as an
+         * arrow function with a parameter called `none`. Its cover is the
+         * marker `void` (never a real pattern type): the checker reads it as
+         * "this match has a none arm" (typeof_matchend). */
+        return pat_res(yr(6, "k", yv_long(K_bin), "op", ys("=="), "l", subj, "r", yr(4, "k", yv_long(K_id), "v", ys("none"), "line", yv_long(ln), "col", yv_long(cl)), "line", yv_long(ln), "col", yv_long(cl)), nob, yr(1, "k", yv_long(K_tvoid)), 0, p + 1);
     } else if ((yv_l(t) == K_id) && !ys_eq_lit(v, "none")) {
         return parse_type_pattern(toks, p, tmp);
     } else if (is_punct(toks, p, ys("{"))) {
@@ -3161,7 +3168,8 @@ Yv *parse_some_pattern(Yv *toks, ylong p, Yv *tmp) {
     } else {
         binds = ya_push(binds, yr(4, "k", yv_long(K_err), "msg", ys_cat(ys("expected ')' to close 'some(', got '"), ys_cat(tv(toks, pos), ys("'"))), "line", yv_long(tline(toks, pos)), "col", yv_long(tcol(toks, pos))));
     }
-    return pat_res(test, binds, yr(1, "k", yv_long(K_tnone)), 0, pos);
+    /* Its cover is the marker `unk`: a payload of any type, bound by the name. */
+    return pat_res(test, binds, yr(1, "k", yv_long(K_tunk)), 0, pos);
 }
 
 /* A type name in a pattern: builtin primitive names map to their type

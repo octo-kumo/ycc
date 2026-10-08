@@ -692,7 +692,7 @@ def do_document_symbols(st: State, id: json.Val, p: { str => json.Val }) -> str 
 // below share this, so a client that omits the field gets an empty answer
 // rather than one handler being stricter than another.
 def request_position(p: { str => json.Val }) -> Pos {
-    let out: Pos = { line: 0 - 1, character: 0 - 1 };
+    let out: Pos = { line: -1, character: -1 };
     let m = members_of(field_of(p, "position"));
     // Both fields must be there. A position of line 0 / character 0 is a real
     // one (the top-left corner), so "absent" cannot be 0 -- hence -1, and hence
@@ -879,7 +879,7 @@ def inferred_at(st: State, d: Doc, line: long, ch: long) -> str {
 // on answers from a fixed table), and it is why the completion side refuses a
 // member whose object is not a single identifier.
 def before_dot_col(text: str, line: long, ch: long) -> long {
-    let out = 0 - 1;
+    let out = -1;
     if (ch > 0) {
         let lb = pos.line_bytes(text, pos.src_line(line));
         // ch is a 0-based CHARACTER; every byte before an ASCII identifier is
@@ -1630,7 +1630,7 @@ def object_hit(text: str, sps: [Span], off: long) -> Hit? {
 }
 
 def object_col(text: str, sps: [Span], off: long) -> long {
-    let out = 0 - 1;
+    let out = -1;
     let h = object_hit(text, sps, off);
     if (is_some(h)) {
         let hit: Hit = h !;

@@ -218,7 +218,7 @@ def diagnose(text: str, dir: str, path: str, pack: str, wlevel: long) -> [Findin
     // buffer checked here never has generated lines. Passing nr.ogen rather
     // than a literal [] is what keeps this honest if the server is ever taught
     // to run the pass: it is exactly what native.compile_unit does with it.
-    let warnings = lint.lint_unit(ast, ast3, nr.origin.file, nr.origin.mods, wlevel, nr.ogen);
+    let warnings = lint.lint_unit(ast, ast3, nr.origin.file, nr.origin.mods, wlevel, nr.ogen, native.unused_imports());
 
     // The checker's and the linter's lines are SPLICED lines; a Finding's are the
     // line in the file it names. See line_in_file.

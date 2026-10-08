@@ -39,7 +39,7 @@ def sh(cmd: str) -> Res {
     // this runner starts independent of whoever's shell invoked it.
     let p = popen("export PATH=/usr/bin:/bin; " + cmd);
     if (len(p) < 3) {
-        return { status: 0 - 1, out: "" };
+        return { status: -1, out: "" };
     };
     pclose_in(p);
     let out = pread(p);
