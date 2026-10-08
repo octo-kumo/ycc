@@ -273,11 +273,18 @@ def resolve_unit(src: str, base_dir: str, depth: long, allow_exec: bool, root: s
     // so there is no name to test for. Unused helpers cost nothing in the
     // output -- prune_bodies drops them at link time.
     std += "rt";
-    // The library units the resolver saw imported by name; std_order keeps
-    // only the ones a program needs, so this is the whole selection.
+    // The library units the resolver saw imported by name -- but only the ones
+    // the program MENTIONS, a `name.` reference, exactly as prelude and exec are
+    // linked only when one of their names is seen: `import math;` and nothing
+    // else must cost nothing, and with no reference there is no name for
+    // unit_externs to bind either (treeshake: unused import). A comment or a
+    // string holding `math.` links the unit anyway, which costs bytes but never
+    // changes what the program prints.
     let li = 0;
     while (li < len(res_std_lib)) {
-        if (!name_in(std, res_std_lib[li])) { std += res_std_lib[li]; };
+        if (index_of(rsrc, res_std_lib[li] + ".") >= 0 && !name_in(std, res_std_lib[li])) {
+            std += res_std_lib[li];
+        };
         li = li + 1;
     };
     // ogen is EMPTY for a unit with no blocks, which is what tells lint there is

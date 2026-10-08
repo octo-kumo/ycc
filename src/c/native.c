@@ -835,12 +835,14 @@ Yv *resolve_unit(Yv *src, Yv *base_dir, ylong depth, int allow_exec,
      * so there is no name to test for. Unused helpers cost nothing in the
      * output -- prune_bodies drops them at link time. */
     std = ya_push(std, ys("rt"));
-    /* the library units the resolver saw imported by name; std_order keeps
-     * only the ones a program needs */
+    /* the library units the resolver saw imported by name -- but only the ones
+     * the program MENTIONS, a `name.` reference, as prelude and exec are linked
+     * only when one of their names is seen (native.y) */
     ylong li = 0;
     while (li < yv_len(res_std_lib)) {
-        if (!name_in(std, ya_get(res_std_lib, li))) {
-            std = ya_push(std, ya_get(res_std_lib, li));
+        Yv *ln = ya_get(res_std_lib, li);
+        if (ys_index_of(rsrc, ys_cat(ln, ys("."))) >= 0 && !name_in(std, ln)) {
+            std = ya_push(std, ln);
         }
         li = li + 1;
     }
