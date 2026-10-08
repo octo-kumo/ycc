@@ -116,7 +116,25 @@ def parse_fields(payload):
     return got, p
 
 
+def target(pack):
+    """What an in-tree codec has to be measured against: gzip and xz of the
+    same payload. Not a gate -- the codec is deterministic and has no
+    dictionary, so it will not reach these; they are the size the entropy
+    allows, which is how the encoder's Format is judged."""
+    import gzip
+    import lzma
+    return len(gzip.compress(pack, 9)), len(lzma.compress(pack, preset=9))
+
+
 def main():
+    if len(sys.argv) == 3 and sys.argv[1] == "--target":
+        raw = open(sys.argv[2], "rb").read()
+        n = int(raw[-16:-8])
+        pack = raw[len(raw) - 16 - n:len(raw) - 16]
+        g, x = target(pack)
+        print("payload %d  gzip -9 %d (%.2fx)  xz -9 %d (%.2fx)"
+              % (len(pack), g, float(len(pack)) / g, x, float(len(pack)) / x))
+        return 0
     if len(sys.argv) != 2:
         sys.stderr.write(__doc__.split("\n\n")[0] + "\n")
         return 2

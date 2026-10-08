@@ -866,6 +866,36 @@ What is precompiled is therefore everything up to the encoder: the std
 units are stored as items, not machine code, and the assembler still
 encodes the std bodies a program keeps along with the program's own.
 
+### The pack's size, and what is left to the codec
+
+`test/sh/pack_stats.py` parses the pack field by field and now knows the
+shapes (almost every field is "count, then items"; only `init` is one
+netstring). Measured on the payload after `refs` became derived (126,614 B):
+
+    bodies 116,322 (91.9%)   iface 6,446   labels 2,044   rodata 1,130
+    btext 377   globals 120   files 62   init 48
+    gzip -9 20,559 (6.16x)   xz -9 16,480 (7.68x)     (`--target`)
+
+Three of the fields left are repetition a codec subsumes -- label operands are
+39% of the body bytes (2,786 occurrences of 42/87/411/532 distinct names per
+unit), type codes repeat across exports, and `files` repeats one path -- so the
+next size step is a deterministic LZ block codec over the payload rather than
+more field surgery. Two removals are *not* repetition and stay on the list: the
+2,229 B of `tcode` for units whose reader never decodes it (an unbound std unit
+-- `std_unit_bound` false -- while the `ycc build` object format always wants
+types), which needs `pack_unit_fields` to know its reader, and the 377 B of
+`btext` in a unit with no IR_TEXT item. Each is worth under a percent once the
+payload compresses, so they follow the codec only if the measurement still
+cares.
+
+The codec's home is the trailing frame: keep `[payload][8-digit length]
+[YCCPACK1]` and let `self_pack` hand `std_unpack` a plain payload of the
+current version -- a method byte after the length, or a second magic. The
+language server reads the pack with its own copy of that frame
+(`src/tools/lsp/yserve.y`), so whatever the frame says, yserve has to decode it
+too, and the codec must be reachable from both.
+
+
 `--std-src` ignores the pack and compiles the std units from the
 embedded sources, as does a ycc whose pack is missing (cycc, or a ycc
 just written by a self-compile) or of another version: the output is the
