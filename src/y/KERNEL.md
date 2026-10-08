@@ -2653,3 +2653,30 @@ byte pattern, and one byte of it would survive the NUL test.)
 
 Reverted; test/kernel is 77 passed, 0 failed / 77 total, and the argv fixture stays parked
 as _u019_args.*.keep.
+
+### Round 163: a Y `str` is LENGTH-PREFIXED -- so argv cannot be a [str] array
+
+Instrumented user_path to print the pointer it is handed and that pointer's first four
+bytes, and ran a program that hands it THREE pointers: the path it built itself, and the
+two elements of its `[str]` argv array.
+
+    UP p=272638496 bytes=47 112 114 111      <- "/prog": 47 '/', 112 'p', 114 'r', 111 'o'
+    UP p=4199029   bytes=4 0 0 0             <- the first argv "string"
+    UP p=4199042   bytes=5 0 0 0             <- the second
+
+4 and 5 are the LENGTHS of "prog" and "hello".  A Y string in an array is a value whose
+first byte is its length, not a pointer to NUL-terminated bytes -- which is exactly why
+user_path stopped after one character and stored a zero: it read the length byte as text
+and the next byte as the terminator.  Every earlier fixture passed paths as `[byte]`
+buffers it built itself (append each character, then append 0), which is why openat has
+always worked and only this new argv path broke.
+
+So execve's argv protocol has to be RAW: an array of pointers to NUL-terminated BYTES,
+built on the caller's side.  In Y that means one `[byte]` buffer per argument plus a
+`[long]` array of their addresses (`ptr_addr(&buf[0])`), handed over as
+`ptr_addr(&ptrs[0])` -- the same shape the kernel already walks, and the same technique
+every fixture uses for the path itself.
+
+That is a fixture-side fix, not a kernel change: the kernel's walk is right, given bytes.
+And it is worth recording as a language note for anyone writing a server or a shell in Y
+on this system: a `[str]` is not a C string array.
