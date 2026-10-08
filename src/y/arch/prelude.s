@@ -2780,7 +2780,30 @@ yapd_pn:
 # the one the caller passed in. Capacity doubles when reached (8
 # first), matching yv.c's ya_push; a grown block has no room in
 # front, so front becomes 0 (y_arr_prepend).
+# A free slot at the back (len < cap) is the common case: stored without a
+# frame, in %rax %rcx %rdx alone. Assembly callers (y_str_split, the insert
+# helper) keep their own registers across the call, %r9 (the element size
+# they passed) among them.
 y_arr_push:
+    mov 24(%rsp), %rax
+    mov (%rax), %rcx
+    cmp 8(%rax), %rcx
+    jae yap_full
+    lea 1(%rcx), %rdx
+    mov %rdx, (%rax)
+    mov 16(%rax), %rdx
+    cmp $1, 8(%rsp)
+    je yap_st1
+    lea (%rdx,%rcx,8), %rdx
+    mov 16(%rsp), %rcx
+    mov %rcx, (%rdx)
+    ret
+yap_st1:
+    add %rcx, %rdx
+    mov 16(%rsp), %rcx
+    movb %cl, (%rdx)
+    ret
+yap_full:
     push %rbp
     mov %rsp, %rbp
     push %rbx
@@ -2793,25 +2816,6 @@ y_arr_push:
     mov 16(%rbp), %r9
     mov (%rbx), %rcx
     mov 8(%rbx), %rdx
-    cmp %rdx, %rcx
-    jz yap_grow
-    mov 16(%rbx), %r13
-    mov %rcx, %rax
-    imul %r9, %rax
-    add %r13, %rax
-    cmp $1, %r9
-    je yap_st1
-    mov %r12, (%rax)
-    jmp yap_stn
-yap_st1:
-    mov %r12, %rdx
-    movb %dl, (%rax)
-yap_stn:
-    inc %rcx
-    mov %rcx, (%rbx)
-    mov %rbx, %rax
-    jmp yap_done
-yap_grow:
     mov %rdx, %r13
     shl $1, %r13
     cmp $8, %r13

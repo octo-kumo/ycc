@@ -11790,12 +11790,23 @@ def gen_array(st: EmitSt, node: ArrLit) -> EmitSt {
 // Same, with the element width supplied by the declaration (`let b:
 // [byte] = [104, 105]` — the literal's own elements infer as long), and
 // `ety` the element type each value converts to (store_elem_type).
+//
+// An element that is an integer immediate (rec_leaf_imm) has no effects to
+// order, so it is not evaluated ahead and parked: it is stored straight into
+// the data block. The others are evaluated in order and popped into place;
+// the data block stays in %r11 for the stores (y_alloc is done by then).
 def gen_array_esz(st: EmitSt, node: ArrLit, esz: long, ety: Type) -> EmitSt {
     let elems: [Node] = node.elems;
-    elems.foreach((e) => {
-        st = gen_as(st, e, ety);
-        st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
-    });
+    let ek = ety.k;
+    let imms: [long] = [];
+    foreach (e in elems) {
+        let im = if (ek == K.tlong || ek == K.tbyte || ek == K.tbool) { rec_leaf_imm(e) } else { -1 };
+        imms += im;
+        if (im < 0) {
+            st = gen_as(st, e, ety);
+            st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+        };
+    };
     let n = len(elems);
     st = emit_insn(st, insn.F_MOV_I_R, arr_alloc_size(esz, n), insn.R_RDI, 64, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_CALL_L, lbl_new("y_alloc"), 0, 0, 0, 0, 0, 0);
@@ -11803,18 +11814,28 @@ def gen_array_esz(st: EmitSt, node: ArrLit, esz: long, ety: Type) -> EmitSt {
     st = emit_insn(st, insn.F_MOV_I_R, arr_header_size(), insn.R_RDI, 64, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_CALL_L, lbl_new("y_alloc"), 0, 0, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_MOV_R_R, insn.R_RAX, 64, insn.R_R10, 64, 0, 0, 0);
-    st = emit_insn(st, insn.F_POP_R, insn.R_RDX, 64, 0, 0, 0, 0, 0);
+    // %rdx when nothing is popped after it (no REX byte), else %r11
+    let dr = if (n > 0) { insn.R_R11 } else { insn.R_RDX };
+    st = emit_insn(st, insn.F_POP_R, dr, 64, 0, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_MOV_I_0, n, insn.R_R10, -1, 1, -1, -1, 0);
     st = emit_insn(st, insn.F_MOV_I_D, n, insn.R_R10, -1, 1, 8, -1, 0);
-    st = emit_insn(st, insn.F_MOV_R_D, insn.R_RDX, 64, insn.R_R10, -1, 1, 16, -1);
+    st = emit_insn(st, insn.F_MOV_R_D, dr, 64, insn.R_R10, -1, 1, 16, -1);
     let k = n - 1;
     while (k >= 0) {
-        st = emit_insn(st, insn.F_POP_R, insn.R_RDX, 64, 0, 0, 0, 0, 0);
-        st = elem_store_rdx_const(st, esz, insn.R_R10, k);
+        let im = imms[k];
+        if (im >= 0) {
+            st = esz == 1 ? emit_insn(st, insn.F_MOVB_I_D, im, insn.R_R11, -1, 1, k, -1, 0)
+                : emit_insn(st, insn.F_MOV_I_D, im, insn.R_R11, -1, 1, k * 8, -1, 0);
+        } else {
+            st = emit_insn(st, insn.F_POP_R, insn.R_RDX, 64, 0, 0, 0, 0, 0);
+            st = esz == 1 ? emit_insn(st, insn.F_MOVB_R_D, insn.R_RDX, 8, insn.R_R11, -1, 1, k, -1)
+                : emit_insn(st, insn.F_MOV_R_D, insn.R_RDX, 64, insn.R_R11, -1, 1, k * 8, -1);
+        };
         k = k - 1;
     };
-    st = emit_insn(st, insn.F_MOV_R_R, insn.R_R10, 64, insn.R_RAX, 64, 0, 0, 0);
-    mark_pf_arr(st, ety)
+    // pointer-free data: the block's own header word, bit 2 (mark_pf_arr)
+    if (elem_pf(ety)) { st = emit_insn(st, insn.F_OR_I_D, 4, dr, -1, 1, -8, -1, 0); };
+    emit_insn(st, insn.F_MOV_R_R, insn.R_R10, 64, insn.R_RAX, 64, 0, 0, 0)
 };
 
 def gen_len(st: EmitSt, node: Call) -> EmitSt {

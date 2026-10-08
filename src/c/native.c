@@ -13718,13 +13718,22 @@ Yv *gen_array(Yv *st, Yv *node) {
 /* Same, with the element width supplied by the declaration (`let b:
  * [byte] = [104, 105]` — the literal's own elements infer as long), and
  * `ety` the element type each value converts to (store_elem_type). */
+/* An element that is an integer immediate (rec_leaf_imm) has no effects to
+ * order, so it is not evaluated ahead and parked: it is stored straight into
+ * the data block. The others are evaluated in order and popped into place;
+ * the data block stays in %r11 for the stores (y_alloc is done by then). */
 Yv *gen_array_esz(Yv *st, Yv *node, ylong esz, Yv *ety) {
     Yv *elems = yr_get(node, "elems");
-    ylong gi = 0;
-    while (gi < yv_len(elems)) {
-        st = gen_as(st, ya_get(elems, gi), ety);
-        st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
-        gi = gi + 1;
+    ylong ek = yv_l(yr_get(ety, "k"));
+    Yv *imms = yav(0);
+    for (ylong gi = 0; gi < yv_len(elems); gi++) {
+        Yv *e = ya_get(elems, gi);
+        ylong im = (ek == K_tlong || ek == K_tbyte || ek == K_tbool) ? rec_leaf_imm(e) : -1;
+        imms = ya_push(imms, yv_long(im));
+        if (im < 0) {
+            st = gen_as(st, e, ety);
+            st = emit_insn(st, F_PUSH_R, R_RAX, 64, 0, 0, 0, 0, 0);
+        }
     }
     ylong n = yv_len(elems);
     st = emit_insn(st, F_MOV_I_R, arr_alloc_size(esz, n), R_RDI, 64, 0, 0, 0, 0);
@@ -13733,18 +13742,28 @@ Yv *gen_array_esz(Yv *st, Yv *node, ylong esz, Yv *ety) {
     st = emit_insn(st, F_MOV_I_R, arr_header_size(), R_RDI, 64, 0, 0, 0, 0);
     st = emit_insn(st, F_CALL_L, yv_l(lbl_new(ys("y_alloc"))), 0, 0, 0, 0, 0, 0);
     st = emit_insn(st, F_MOV_R_R, R_RAX, 64, R_R10, 64, 0, 0, 0);
-    st = emit_insn(st, F_POP_R, R_RDX, 64, 0, 0, 0, 0, 0);
+    /* %rdx when nothing is popped after it (no REX byte), else %r11 */
+    ylong dr = n > 0 ? R_R11 : R_RDX;
+    st = emit_insn(st, F_POP_R, dr, 64, 0, 0, 0, 0, 0);
     st = emit_insn(st, F_MOV_I_0, n, R_R10, -1, 1, -1, -1, 0);
     st = emit_insn(st, F_MOV_I_D, n, R_R10, -1, 1, 8, -1, 0);
-    st = emit_insn(st, F_MOV_R_D, R_RDX, 64, R_R10, -1, 1, 16, -1);
+    st = emit_insn(st, F_MOV_R_D, dr, 64, R_R10, -1, 1, 16, -1);
     ylong k = n - 1;
     while (k >= 0) {
-        st = emit_insn(st, F_POP_R, R_RDX, 64, 0, 0, 0, 0, 0);
-        st = elem_store_rdx_const(st, esz, R_R10, k);
+        ylong im = yv_l(ya_get(imms, k));
+        if (im >= 0) {
+            st = esz == 1 ? emit_insn(st, F_MOVB_I_D, im, R_R11, -1, 1, k, -1, 0)
+                : emit_insn(st, F_MOV_I_D, im, R_R11, -1, 1, k * 8, -1, 0);
+        } else {
+            st = emit_insn(st, F_POP_R, R_RDX, 64, 0, 0, 0, 0, 0);
+            st = esz == 1 ? emit_insn(st, F_MOVB_R_D, R_RDX, 8, R_R11, -1, 1, k, -1)
+                : emit_insn(st, F_MOV_R_D, R_RDX, 64, R_R11, -1, 1, k * 8, -1);
+        }
         k = k - 1;
     }
-    st = emit_insn(st, F_MOV_R_R, R_R10, 64, R_RAX, 64, 0, 0, 0);
-    return mark_pf_arr(st, ety);
+    /* pointer-free data: the block's own header word, bit 2 (mark_pf_arr) */
+    if (elem_pf(ety)) { st = emit_insn(st, F_OR_I_D, 4, dr, -1, 1, -8, -1, 0); }
+    return emit_insn(st, F_MOV_R_R, R_R10, 64, R_RAX, 64, 0, 0, 0);
 }
 
 Yv *gen_len(Yv *st, Yv *node) {
