@@ -2500,3 +2500,37 @@ the size -- so the clamp is now `off > size`, allowing a write at the end while 
 refusing one strictly past it.  The suite is green with it.
 
 test/kernel is 69 passed, 0 failed / 69 total; the create fixture stays parked.
+
+### Round 151: the answer -- the fixtures' directory entry sits INSIDE the inode table
+
+Printed inside the free-block scan and it is unmistakable:
+
+    RN i=1 mode=2     d0=2
+    RN i=2 mode=0     d0=0
+    RN i=3 mode=0     d0=0
+    RN i=4 mode=65540 d0=1735357040      <- the "inode" that poisoned the cursor
+    RN i=5..7 mode=0
+
+Inode 4's offset is 256 + 4*64 = 512, and 512 is EXACTLY where the small fixtures write
+the root directory's entry.  mode=65540 is 0x10004, i.e. name_len 4 in the low half and
+type 1 in the high half; d0=1735357040 is 0x676F7270, which is "prog" -- the entry's
+name -- read as a block number.  So the scan was right and the fixture was wrong: with
+a 256-byte block size and 8 inodes, the inode table occupies 256..767 (blocks 1 and 2),
+and these fixtures put their directory entries at block 2.
+
+Why nothing noticed until now: every reader so far only ever looked at what the fixture
+WROTE, so an overlap with the inode table was harmless.  yfs_recompute_next is the first
+code that SCANS the table, and it immediately found the fixture's own bytes sitting in
+an inode.
+
+The fix is in the fixtures, not the kernel: data must start after the inode table, which
+for a 256-byte block size and 8 inodes is block 3 (768).  The DRIVERS are already
+correct -- they use 4096-byte blocks with a 256-inode table (four blocks) and start their
+data at block 5 -- which is why every ring-3 fixture has been fine and only the small
+t013-style images are wrong.
+
+That also means t013-t016 are passing on a technically malformed image.  Their fix is
+the same one-line change (data at block 3 rather than 2), and it is worth making so the
+whole fixture set uses a layout the kernel's own scan accepts.
+
+test/kernel is 69 passed, 0 failed / 69 total.
