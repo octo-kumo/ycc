@@ -15909,7 +15909,11 @@ static Yv *pack_word(Yv *out, ylong v) {
         out = ya_push(out, ys_chr(127));
         out = ya_push(out, ys_chr(u & 255));
         out = ya_push(out, ys_chr((u >> 8) & 255));
-    } else if (v <= 65535) {
+    } else if (v >= 0 && v <= 65535) {
+        /* v >= 0 matters: without it every value below -65535 landed here (it is
+         * <= 65535 too), was written as two bytes, and read back as a small
+         * POSITIVE number -- a silent corruption of every large negative
+         * immediate. A packed crypto unit is what finally exercised it. */
         out = ya_push(out, ys_chr(126));
         out = ya_push(out, ys_chr(v & 255));
         out = ya_push(out, ys_chr((v >> 8) & 255));
@@ -16093,7 +16097,10 @@ static ylong unpack_word(Yv *b, ylong at) {
         ylong sh = 0;
         ylong i = 0;
         while (i < 8) {
-            v = v + yv_l(ya_get(b, at + 1 + i)) * (1 << sh);
+            /* `((ylong)1) << sh`: Y's `1` is 64 bits, C's is 32, and sh reaches
+             * 56 -- a 32-bit shift is undefined and mangles every 9-byte word
+             * (the big immediate a packed body carries). */
+            v = v + yv_l(ya_get(b, at + 1 + i)) * (((ylong)1) << sh);
             sh = sh + 8;
             i = i + 1;
         }

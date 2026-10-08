@@ -13372,7 +13372,11 @@ def pack_word(out: [str], v: long) -> [str] {
         out += chr(127);
         out += chr(u & 255);
         out += chr((u >> 8) & 255);
-    } else if (v <= 65535) {
+    } else if (v >= 0 && v <= 65535) {
+        // v >= 0 matters: without it every value below -65535 landed here (it is
+        // <= 65535 too), was written as two bytes, and read back as a small
+        // POSITIVE number -- a silent corruption of every large negative
+        // immediate. A packed crypto unit is what finally exercised it.
         out += chr(126);
         out += chr(v & 255);
         out += chr((v >> 8) & 255);
