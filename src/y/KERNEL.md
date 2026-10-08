@@ -2578,3 +2578,20 @@ and the suite stays green; test/kernel is 73 passed, 0 failed / 73 total.
 A guard note worth keeping: this fixture's guard was RELATIONAL -- child == deep, and the
 directory's inode different from both -- rather than a literal, which is the right shape
 after four literal-guard failures.  It correctly refused to commit on an empty read.
+
+### Round 160: execve takes argv, so a shell can pass arguments
+
+sys_execve(pathp, argvp) -- the second argument is a USER pointer to a NULL-terminated
+array of string pointers, or 0 for the old behaviour.  The kernel walks the array (up to
+16), copies each string with user_path and places it at the top of the new stack with the
+physical pokes, then builds the pointer array and the argc slot below it.  The shape is
+the one elf_setup_stack produces and the runtime reads: RSP -> argc, then argv[0]..argv[n],
+then a NULL -- and the existing shell fixture, which passes 0, takes the branch where
+argv[0] is the path itself, so nothing that already worked changed.
+
+Suite green at 77 passed, 0 failed / 77 total.
+
+That is the piece the earlier shell fixture lacked: it could run a program but not give it
+arguments, which meant every M4 command would have had to read its input from somewhere
+else.  The fixture for it is next -- sh passing a word that the program prints -- and the
+stack layout is the only thing that could still be wrong, which the transcript will say.

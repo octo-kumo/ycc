@@ -968,7 +968,7 @@ def y_sys_dispatch(nr: long, a1: long, a2: long, a3: long, a4: long, a5: long, a
     if (nr == SYS_CLOSE) { return sys_close(a1); };
     if (nr == SYS_LSEEK) { return sys_lseek(a1, a2, a3); };
     if (nr == SYS_OPENAT) { return sys_openat(a1, a2, a3); };
-    if (nr == SYS_EXECVE) { return sys_execve(a1); };
+    if (nr == SYS_EXECVE) { return sys_execve(a1, a2); };
     if (nr == SYS_GETDENTS64) { return sys_getdents64(a1, a2, a3); };
     E_NOSYS
 };
@@ -1374,7 +1374,7 @@ def kexec_load(dir: long, ino: long) -> long {
 // space is built, one stack page carries argv, and the frame this syscall will
 // return through is rewritten -- so its own tail iretqs into the new program.
 const EXEC_STACK = 100663296;
-def sys_execve(pathp: long) -> long {
+def sys_execve(pathp: long, argvp: long) -> long {
     if (pathp == 0) { return E_FAULT; };
     let path = user_path(pathp);
     let ino = yfs_lookup_path(path);
@@ -1386,15 +1386,43 @@ def sys_execve(pathp: long) -> long {
     let spage = page_alloc();
     if (spage == 0) { return E_FAULT; };
     if (!vm_map(dir, EXEC_STACK, spage, PTE_U | PTE_W)) { return E_FAULT; };
-    let nl = len(path);
-    let base = 4096 - 16 - nl;
-    let c = 0;
-    while (c < nl) { poke8(spage + base + c, path[c] & 255); c = c + 1; };
-    poke8(spage + base + nl, 0);
-    let sp = base - 24;
-    poke64(spage + sp, 1);
-    poke64(spage + sp + 8, EXEC_STACK + base);
-    poke64(spage + sp + 16, 0);
+    // The strings go at the top of the stack, then the pointer array, then argc --
+    // the shape elf_setup_stack builds and the runtime reads: argv() walks from the
+    // argc slot up.  argvp == 0 means argv[0] is the path itself.
+    let top = 4096 - 16;
+    let ptrs: [long] = [];
+    let argc = 0;
+    if (argvp == 0 || peek_va64(argvp) == 0) {
+        let nl = len(path);
+        top = top - nl - 1;
+        let c = 0;
+        while (c < nl) { poke8(spage + top + c, path[c] & 255); c = c + 1; };
+        poke8(spage + top + nl, 0);
+        ptrs += EXEC_STACK + top;
+        argc = 1;
+    } else {
+        let i = 0;
+        while (i < 16) {
+            let up = peek_va64(argvp + i * 8);
+            if (up == 0) { i = 16; } else {
+                let arg = user_path(up);
+                let nl = len(arg);
+                top = top - nl - 1;
+                let c = 0;
+                while (c < nl) { poke8(spage + top + c, arg[c] & 255); c = c + 1; };
+                poke8(spage + top + nl, 0);
+                ptrs += EXEC_STACK + top;
+                argc = argc + 1;
+                i = i + 1;
+            };
+        };
+    };
+    let sp = top - 8 - 8 * argc;
+    sp = sp - (sp % 8);
+    let k = 0;
+    while (k < argc) { poke64(spage + sp + 8 + k * 8, ptrs[k]); k = k + 1; };
+    poke64(spage + sp + 8 + argc * 8, 0);
+    poke64(spage + sp, argc);
     vm_switch(dir);
     tasks[cur_task].cr3 = dir;
     let fr = y_cur_task_rsp_get();
