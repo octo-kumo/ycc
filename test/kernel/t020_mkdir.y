@@ -45,8 +45,11 @@ let w = yfs_append(made, ptr_addr(&data[0]), 4);
 // 2 and an entry count of 0, and yfs_add_entry with that inode as the parent puts the
 // child's entry in the DIRECTORY's entry block, allocated lazily on this first child.
 let d = yfs_mkdir("d");
+print("M1 d=" + tostring(d) + "\n");
 let child = yfs_add_entry(d, "child", 1);
+print("M2 child=" + tostring(child) + "\n");
 let deep = yfs_lookup_path("/d/child");
+print("M3 deep=" + tostring(deep) + "\n");
 let found = yfs_lookup_path("/new");
 let n = yfs_read(found, 0, out, 4);
 print("create ok=" + tostring(ok) + " made=" + tostring(made) + " w=" + tostring(w) + " found=" + tostring(found) + " n=" + tostring(n) + " text=" + tostring(kernel.peek_va8(out)) + tostring(kernel.peek_va8(out + 1)) + tostring(kernel.peek_va8(out + 2)) + tostring(kernel.peek_va8(out + 3)) + "\n");
