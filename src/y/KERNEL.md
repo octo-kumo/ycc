@@ -2141,3 +2141,33 @@ FRAME, which needs no new task and no context switch:
 That is ~50 lines using primitives std/kernel.y already has, needs no import, and
 creates no second copy of anything.  It is the piece a shell cannot exist without,
 and the design is now explicit rather than inferred.
+
+### Round 131: execve needs no new primitives -- only assembling them
+
+Checked what the kernel already has, because the previous round's conclusion was that
+execve must work in physical terms:
+
+    peek8 / poke8, peek32 / poke32, peek64 / poke64     (physical)
+    peek_va8 / poke_va8 / poke_va32 / poke_va64          (current address space)
+    vm_current, vm_new_dir, vm_map, vm_translate, page_alloc
+
+So the whole function is assembly, with no new helpers and no 8-byte poke loops:
+
+ 1. yfs_lookup_path(path) -> inode; yfs_size -> size;
+ 2. copy the file into a physical buffer: page_alloc a run of pages and
+    poke8(buf + k, yfs_fetch(ino, k));
+ 3. read the header at buf with peek32/peek64 -- magic 0x7F 'E' 'L' 'F', e_entry at
+    +24, e_phoff at +32, e_phentsize at +54, e_phnum at +56;
+ 4. for each PT_LOAD (p_type == 1 at +0): p_offset +8, p_vaddr +16, p_filesz +32,
+    p_memsz +40; allocate a page per 4 KB of memsz, vm_map(dir, vaddr_page, phys,
+    PTE_U | PTE_W), then place each byte with
+    poke8(vm_translate(dir, (vaddr + c) & -4096) + ((vaddr + c) & 4095), peek8(buf + p_offset + c));
+ 5. one stack page mapped at 0x6000000 (the base the loader's stack already uses),
+    the path string near its top, argc = 1 and argv[0] pointing at it, written with
+    the physical pokes;
+ 6. vm_switch(dir), store it on the task, and rewrite the CURRENT frame at
+    y_cur_tasksp -- RIP at +120, RSP at +144, rax at +48 set to 0 -- so the
+    syscall's own tail iretqs into the new program.
+
+That is the entire plan in one place, using names that exist.  test/kernel is 63
+passed, 0 failed / 63 total.
