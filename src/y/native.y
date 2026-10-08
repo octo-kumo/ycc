@@ -2876,6 +2876,8 @@ def emit_insn(st: EmitSt, f: long, a: long, b: long, c: long, d: long, e: long, 
         st
     } else if (f == insn.F_PUSH_R && a == insn.R_RCX && b == 64 && repush_fold(st.ir)) {
         st
+    } else if (f == insn.F_JGE_L && lname(a) == "y_oob" && oob_fold(st.ir)) {
+        st_ir(st, insn.ir_push(st.ir, insn.F_JAE_L, a, b, c, d, e, g, h))
     } else {
         st_ir(st, insn.ir_push(st.ir, f, a, b, c, d, e, g, h))
     }
@@ -2963,6 +2965,58 @@ def rax_dead_at(ir: [long], p: long) -> bool {
     } else {
         rax_load(ir, p, true)
     }
+};
+
+// An index's bounds check, `test X, X; js y_oob; ...; cmp len, X; jge y_oob`,
+// with the jge about to be emitted: one UNSIGNED compare does both halves (a
+// negative index is a huge unsigned one, past any length), so the test and the
+// js go and the jge becomes jae -- three instructions where there were five, on
+// every array access. Between the js and the cmp only loads into another
+// register and pushes may sit; `.loc` markers stay.
+def oob_fold(ir: [long]) -> bool {
+    let w = insn.IR_W;
+    let pos: [long] = [];
+    let p = len(ir) - w;
+    while (p >= 0 && len(pos) < 5) {
+        if (ir[p] != insn.IR_LOC) { pos += p; };
+        p = p - w;
+    };
+    if (len(pos) < 3) { return false; };
+    let c = pos[0];
+    let x = if (ir[c] == insn.F_CMP_R_R && ir[c + 4] == 64) { ir[c + 3] } else if (ir[c] == insn.F_CMP_I_R && ir[c + 3] == 64) { ir[c + 2] } else { -1 };
+    if (x < 0) { return false; };
+    // pos[1..k] the loads between (k = 0..2), pos[k + 1] the js, pos[k + 2] the test
+    let k = 0;
+    let found = false;
+    let go = true;
+    while (go && !found && k <= 2 && k + 2 < len(pos)) {
+        let j = pos[k + 1];
+        let t = pos[k + 2];
+        if (ir[j] == insn.F_JS_L && lname(ir[j + 1]) == "y_oob" && ir[t] == insn.F_TEST_R_R && ir[t + 1] == x
+            && ir[t + 2] == 64 && ir[t + 3] == x && ir[t + 4] == 64) {
+            found = true;
+        } else if (k < 2) {
+            let q = pos[k + 1];
+            let f = ir[q];
+            let between = f == insn.F_PUSH_R || ((f == insn.F_MOV_0_R || f == insn.F_MOV_D_R) && ir[q + 6] != x);
+            if (between) { k = k + 1; } else { go = false; };
+        } else {
+            go = false;
+        };
+    };
+    if (!found) { return false; };
+    let start = pos[k + 2];
+    let jsp = pos[k + 1];
+    let tail = ir[start:len(ir)];
+    while (len(ir) > start) { ir.pop(); };
+    let at = 0;
+    while (at < len(tail)) {
+        if (start + at != start && start + at != jsp) {
+            for i in 0..w { ir += tail[at + i]; };
+        };
+        at = at + w;
+    };
+    true
 };
 
 // `pop %rcx; <store through %rcx>; push %rcx`, the push about to be emitted:

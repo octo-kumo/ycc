@@ -4026,6 +4026,58 @@ static Yv *push_fold(Yv *ir) {
     return ir;
 }
 
+/* An index's bounds check, `test X, X; js y_oob; ...; cmp len, X; jge y_oob`,
+ * the jge about to be emitted (native.y oob_fold): one unsigned compare does
+ * both halves, so the test and the js go and the jge becomes jae. */
+static int oob_fold(Yv *ir) {
+    ylong w = IR_W;
+    ylong pos[5];
+    ylong np = 0;
+    ylong p = yv_len(ir) - w;
+    while (p >= 0 && np < 5) {
+        if (yv_l(ya_get(ir, p)) != IR_LOC) { pos[np] = p; np = np + 1; }
+        p = p - w;
+    }
+    if (np < 3) { return 0; }
+    ylong c = pos[0];
+    ylong x = -1;
+    if (yv_l(ya_get(ir, c)) == F_CMP_R_R && yv_l(ya_get(ir, c + 4)) == 64) { x = yv_l(ya_get(ir, c + 3)); }
+    else if (yv_l(ya_get(ir, c)) == F_CMP_I_R && yv_l(ya_get(ir, c + 3)) == 64) { x = yv_l(ya_get(ir, c + 2)); }
+    if (x < 0) { return 0; }
+    ylong k = 0;
+    int found = 0;
+    int go = 1;
+    while (go && !found && k <= 2 && k + 2 < np) {
+        ylong j = pos[k + 1];
+        ylong t = pos[k + 2];
+        if (yv_l(ya_get(ir, j)) == F_JS_L && ys_eq_lit(lname(ya_get(ir, j + 1)), "y_oob") && yv_l(ya_get(ir, t)) == F_TEST_R_R
+            && yv_l(ya_get(ir, t + 1)) == x && yv_l(ya_get(ir, t + 2)) == 64 && yv_l(ya_get(ir, t + 3)) == x
+            && yv_l(ya_get(ir, t + 4)) == 64) {
+            found = 1;
+        } else if (k < 2) {
+            ylong q = pos[k + 1];
+            ylong f = yv_l(ya_get(ir, q));
+            int between = f == F_PUSH_R || ((f == F_MOV_0_R || f == F_MOV_D_R) && yv_l(ya_get(ir, q + 6)) != x);
+            if (between) { k = k + 1; } else { go = 0; }
+        } else {
+            go = 0;
+        }
+    }
+    if (!found) { return 0; }
+    ylong start = pos[k + 2];
+    ylong jsp = pos[k + 1];
+    Yv *tail = ya_slice(ir, start, yv_len(ir));
+    ir->u.a.len = (size_t)start;
+    ylong at = 0;
+    while (at < yv_len(tail)) {
+        if (start + at != start && start + at != jsp) {
+            for (ylong i = 0; i < w; i++) { ir = ya_push(ir, ya_get(tail, at + i)); }
+        }
+        at = at + w;
+    }
+    return 1;
+}
+
 /* `pop %rcx; <store through %rcx>; push %rcx`, the push about to be emitted
  * (native.y repush_fold): the pop becomes `mov (%rsp), %rcx` and the push
  * goes. */
@@ -4135,6 +4187,8 @@ static Yv *emit_insn(Yv *st, ylong f, ylong a, ylong b, ylong c, ylong d, ylong 
         return st;
     } else if (f == F_PUSH_R && a == R_RCX && b == 64 && repush_fold(yr_get(st, "ir"))) {
         return st;
+    } else if (f == F_JGE_L && ys_eq_lit(lname(yv_long(a)), "y_oob") && oob_fold(yr_get(st, "ir"))) {
+        return st_ir(st, ir_push(yr_get(st, "ir"), F_JAE_L, a, b, c, d, e, g, h));
     } else {
         return st_ir(st, ir_push(yr_get(st, "ir"), f, a, b, c, d, e, g, h));
     }
