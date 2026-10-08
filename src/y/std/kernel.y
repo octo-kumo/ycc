@@ -848,6 +848,7 @@ const SYS_MMAP = 9;
 const SYS_CLOSE = 3;
 const SYS_LSEEK = 8;
 const SYS_OPENAT = 257;
+const SYS_EXECVE = 59;
 const SYS_GETDENTS64 = 217;
 const SYS_GETPID = 39;
 // The kernel's own calls, above the Linux numbers so they can never collide
@@ -966,6 +967,7 @@ def y_sys_dispatch(nr: long, a1: long, a2: long, a3: long, a4: long, a5: long, a
     if (nr == SYS_CLOSE) { return sys_close(a1); };
     if (nr == SYS_LSEEK) { return sys_lseek(a1, a2, a3); };
     if (nr == SYS_OPENAT) { return sys_openat(a1, a2, a3); };
+    if (nr == SYS_EXECVE) { return sys_execve(a1); };
     if (nr == SYS_GETDENTS64) { return sys_getdents64(a1, a2, a3); };
     E_NOSYS
 };
@@ -1316,6 +1318,90 @@ def sys_getdents64(fdno: long, buf: long, len: long) -> long {
         fd.fd_seek_set(fdno, off);
     };
     w
+};
+
+// Load the ELF in `ino` into the address space `dir`, PHYSICALLY, and return its
+// entry (or 0).  Every destination is reached with page_alloc + vm_map and written
+// through vm_translate, so no virtual address in the new space is ever needed.
+def kexec_load(dir: long, ino: long) -> long {
+    let size = yfs_size(ino);
+    if (size <= 0) { return 0; };
+    let nb = (size + 4095) / 4096;
+    let buf = 0;
+    let i = 0;
+    while (i < nb) {
+        let p = page_alloc();
+        if (p == 0) { return 0; };
+        if (i == 0) { buf = p; };
+        i = i + 1;
+    };
+    let k = 0;
+    while (k < size) { poke8(buf + k, yfs_fetch(ino, k)); k = k + 1; };
+    if (peek32(buf) != 1179403647) { return 0; };
+    let phoff = peek64(buf + 32);
+    let phentsize = peek32(buf + 54);
+    let phnum = peek32(buf + 56);
+    let p = 0;
+    while (p < phnum) {
+        let ph = buf + phoff + p * phentsize;
+        if (peek32(ph) == 1) {
+            let off = peek64(ph + 8);
+            let vaddr = peek64(ph + 16);
+            let filesz = peek64(ph + 32);
+            let memsz = peek64(ph + 40);
+            let va = vaddr & (0 - 4096);
+            let end = vaddr + memsz;
+            while (va < end) {
+                let phys = page_alloc();
+                if (phys == 0) { return 0; };
+                if (!vm_map(dir, va, phys, PTE_U | PTE_W)) { return 0; };
+                va = va + 4096;
+            };
+            let c = 0;
+            while (c < filesz) {
+                let d = vm_translate(dir, (vaddr + c) & (0 - 4096));
+                poke8(d + ((vaddr + c) & 4095), peek8(buf + off + c));
+                c = c + 1;
+            };
+        };
+        p = p + 1;
+    };
+    peek64(buf + 24)
+};
+
+// execve(path): replace the CALLER with the program in that file.  A fresh address
+// space is built, one stack page carries argv, and the frame this syscall will
+// return through is rewritten -- so its own tail iretqs into the new program.
+const EXEC_STACK = 100663296;
+def sys_execve(pathp: long) -> long {
+    if (pathp == 0) { return E_FAULT; };
+    let path = user_path(pathp);
+    let ino = yfs_lookup_path(path);
+    if (ino < 0) { return 0 - 2; };
+    let dir = vm_new_dir();
+    if (dir == 0) { return E_FAULT; };
+    let entry = kexec_load(dir, ino);
+    if (entry == 0) { return E_FAULT; };
+    let spage = page_alloc();
+    if (spage == 0) { return E_FAULT; };
+    if (!vm_map(dir, EXEC_STACK, spage, PTE_U | PTE_W)) { return E_FAULT; };
+    let nl = len(path);
+    let base = 4096 - 16 - nl;
+    let c = 0;
+    while (c < nl) { poke8(spage + base + c, path[c] & 255); c = c + 1; };
+    poke8(spage + base + nl, 0);
+    let sp = base - 24;
+    poke64(spage + sp, 1);
+    poke64(spage + sp + 8, EXEC_STACK + base);
+    poke64(spage + sp + 16, 0);
+    vm_switch(dir);
+    tasks[cur_task].cr3 = dir;
+    let fr = y_cur_task_rsp_get();
+    if (fr == 0) { return E_FAULT; };
+    poke_va64(fr + 120, entry);
+    poke_va64(fr + 144, EXEC_STACK + sp);
+    poke_va64(fr + 48, 0);
+    0
 };
 
 def sys_fork() -> long {
