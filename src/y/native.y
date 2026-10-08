@@ -13569,22 +13569,33 @@ def gc_users(labels: [str], refs: [[str]], keep: [bool], ps: PShake) -> [str] {
         };
         i++;
     };
+    // A breadth-first walk up the reverse edges from y_alloc, in the order it
+    // reaches them. `seen` is by the name's index, and `out` doubles as the
+    // queue (`wi` its head): a name list searched per edge was quadratic, 3.7%
+    // of a self-compile.
     let out: [str] = [];
-    let work: [str] = [];
-    if (namemap_get(ix, "y_alloc") >= 0) {
+    let a0 = namemap_get(ix, "y_alloc");
+    if (a0 >= 0) {
+        let seen: [bool] = [];
+        i = 0;
+        while (i < len(names)) {
+            seen += false;
+            i++;
+        };
+        seen[a0] = true;
         out += "y_alloc";
-        work += "y_alloc";
-        while (len(work) > 0) {
-            let w = work[0];
-            work = work[1:len(work)];
-            let j = namemap_get(ix, w);
+        let wi = 0;
+        while (wi < len(out)) {
+            let j = namemap_get(ix, out[wi]);
+            wi++;
             if (j >= 0) {
                 let rs = rev[j];
                 let k = 0;
                 while (k < len(rs)) {
-                    if (!(name_in(out, rs[k]))) {
+                    let m = namemap_get(ix, rs[k]);
+                    if (!(seen[m])) {
+                        seen[m] = true;
                         out += rs[k];
-                        work += rs[k];
                     };
                     k++;
                 };
@@ -13811,9 +13822,27 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit, gcmode: long) -> [LinkPart
     });
     cells += prog.globals;
     let dead_cells: [str] = [];
-    cells.foreach((cell) => {
-        if (!name_in(reads, cell)) { dead_cells += [cell]; };
-    });
+    // Every cell against every read was 3.5% of a self-compile: past a
+    // million comparisons the CELLS are indexed (there are far fewer of them
+    // than reads, and an index costs a record a name) and each read marks
+    // its cell. Below that the scan is cheaper than any hashing.
+    if (len(cells) * len(reads) > 1000000) {
+        let cix = namemap_build(cells);
+        let read: [bool] = [];
+        cells.foreach((cell) => { read += false; });
+        reads.foreach((r) => {
+            let k = namemap_get(cix, r);
+            if (k >= 0) { read[k] = true; };
+        });
+        cells.foreach((cell) => {
+            let k = namemap_get(cix, cell);
+            if (k < 0 || !read[k]) { dead_cells += [cell]; };
+        });
+    } else {
+        cells.foreach((cell) => {
+            if (!name_in(reads, cell)) { dead_cells += [cell]; };
+        });
+    };
     if (len(dead_cells) > 0) {
         all.foreach((_el, dj) => {
             if (keep[dj]) {
@@ -14904,13 +14933,17 @@ def pack_len(cur: Cursor) -> long {
     let s = cur.s;
     let p = cur.p;
     let n = 0;
-    let c = s[p];
-    while (c != ':' && p < len(s)) {
+    // The bound FIRST: a cut-off object (ycc build's cache) can end right
+    // after a complete field, and reading the next byte was past the end. With
+    // no ':' the cursor stops at the end, where every later read is empty.
+    let end = len(s);
+    let c = if (p < end) { s[p] } else { ':' };
+    while (c != ':') {
         n = n * 10 + c - '0';
         p = p + 1;
-        c = s[p];
+        c = if (p < end) { s[p] } else { ':' };
     };
-    cur.p = p + 1;
+    cur.p = if (p < end) { p + 1 } else { p };
     n
 };
 

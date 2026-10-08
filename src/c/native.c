@@ -16036,23 +16036,33 @@ static Yv *gc_users(Yv *labels, Yv *refs, Yv *keep, Yv *ps) {
         }
         i = i + 1;
     }
+    /* A breadth-first walk up the reverse edges from y_alloc, in the order it
+     * reaches them. `seen` is by the name's index, and `out` doubles as the
+     * queue (`wi` its head): a name list searched per edge was quadratic, 3.7%
+     * of a self-compile. */
     Yv *out = yav(0);
-    Yv *work = yav(0);
-    if (namemap_get(ix, ys("y_alloc")) >= 0) {
+    ylong a0 = namemap_get(ix, ys("y_alloc"));
+    if (a0 >= 0) {
+        Yv *seen = yav(0);
+        i = 0;
+        while (i < yv_len(names)) {
+            seen = ya_push(seen, yv_bool(0));
+            i = i + 1;
+        }
+        ya_set(seen, a0, yv_bool(1));
         out = ya_push(out, ys("y_alloc"));
-        work = ya_push(work, ys("y_alloc"));
-        while (yv_len(work) > 0) {
-            Yv *w = ya_get(work, 0);
-            work = ya_slice(work, 1, yv_len(work));
-            ylong j = namemap_get(ix, w);
+        ylong wi = 0;
+        while (wi < yv_len(out)) {
+            ylong j = namemap_get(ix, ya_get(out, wi));
+            wi = wi + 1;
             if (j >= 0) {
                 Yv *rs = ya_get(rev, j);
                 ylong k = 0;
                 while (k < yv_len(rs)) {
-                    Yv *r = ya_get(rs, k);
-                    if (!name_in(out, r)) {
-                        out = ya_push(out, r);
-                        work = ya_push(work, r);
+                    ylong m = namemap_get(ix, ya_get(rs, k));
+                    if (!yv_b(ya_get(seen, m))) {
+                        ya_set(seen, m, yv_bool(1));
+                        out = ya_push(out, ya_get(rs, k));
                     }
                     k = k + 1;
                 }
@@ -16344,11 +16354,35 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog, ylong gcmode) {
         gcpi = gcpi + 1;
     }
     Yv *gcdead = yav(0);
-    ylong gcci = 0;
-    while (gcci < yv_len(gccells)) {
-        Yv *cell = ya_get(gccells, gcci);
-        if (!name_in(reads, cell)) { gcdead = ya_push(gcdead, cell); }
-        gcci = gcci + 1;
+    /* Every cell against every read was 3.5% of a self-compile: past a
+     * million comparisons the CELLS are indexed (there are far fewer of them
+     * than reads, and an index costs a record a name) and each read marks
+     * its cell. Below that the scan is cheaper than any hashing. */
+    if (yv_len(gccells) * yv_len(reads) > 1000000) {
+        Yv *cix = namemap_build(gccells);
+        Yv *read = yav(0);
+        ylong gcci = 0;
+        while (gcci < yv_len(gccells)) { read = ya_push(read, yv_bool(0)); gcci = gcci + 1; }
+        ylong gcri = 0;
+        while (gcri < yv_len(reads)) {
+            ylong k = namemap_get(cix, ya_get(reads, gcri));
+            if (k >= 0) { ya_set(read, k, yv_bool(1)); }
+            gcri = gcri + 1;
+        }
+        gcci = 0;
+        while (gcci < yv_len(gccells)) {
+            Yv *cell = ya_get(gccells, gcci);
+            ylong k = namemap_get(cix, cell);
+            if (k < 0 || !yv_b(ya_get(read, k))) { gcdead = ya_push(gcdead, cell); }
+            gcci = gcci + 1;
+        }
+    } else {
+        ylong gcci = 0;
+        while (gcci < yv_len(gccells)) {
+            Yv *cell = ya_get(gccells, gcci);
+            if (!name_in(reads, cell)) { gcdead = ya_push(gcdead, cell); }
+            gcci = gcci + 1;
+        }
     }
     if (yv_len(gcdead) > 0) {
         ylong gcdj = 0;
@@ -17586,13 +17620,17 @@ ylong pack_len(Yv *cur) {
     Yv *s = yr_get(cur, "s");
     ylong p = yv_l(yr_get(cur, "p"));
     ylong n = 0;
-    ylong c = ys_byte_at(s, p);
-    while (c != 58 && p < yv_len(s)) {
+    /* The bound FIRST: a cut-off object (ycc build's cache) can end right
+     * after a complete field, and reading the next byte was past the end. With
+     * no ':' the cursor stops at the end, where every later read is empty. */
+    ylong end = yv_len(s);
+    ylong c = p < end ? ys_byte_at(s, p) : 58;
+    while (c != 58) {
         n = n * 10 + c - 48;
         p = p + 1;
-        c = ys_byte_at(s, p);
+        c = p < end ? ys_byte_at(s, p) : 58;
     }
-    yr_set(cur, "p", yv_long(p + 1));
+    yr_set(cur, "p", yv_long(p < end ? p + 1 : p));
     return n;
 }
 

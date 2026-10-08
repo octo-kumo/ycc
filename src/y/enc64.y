@@ -867,6 +867,17 @@ def enc_imul(buf: [byte], at: long, dst: Operand, src: Operand) -> Encoded {
     }
 };
 
+// bsr r64, r64 (REX.W 0F BD /r): the index of the highest set bit. The
+// collector's resolve finds a candidate's block as the nearest start bit at or
+// below it, a word of the start map at a time.
+def enc_bsr(buf: [byte], at: long, dst: Operand, src: Operand) -> Encoded {
+    if (dst.k == K.reg && op_size(dst) == 64 && src.k == K.reg && op_size(src) == 64) {
+        enc_ok(put3(buf, (put_rex(buf, at, rex(true, dst.n, -1, src.n))), 15, 189, modrm(3, dst.n, src.n)), [])
+    } else {
+        enc_err(at, "bsr form")
+    }
+};
+
 def enc_unary(buf: [byte], at: long, op: str, o: Operand) -> Encoded {
     if (o.k == K.mem) {
         enc_unary_mem(buf, at, op, o)
@@ -1086,6 +1097,9 @@ def enc_insn(buf: [byte], at: long, mn: str, ops: [Operand], lng: bool) -> Encod
     } else if (mn == "imul") {
         let e = need2(mn, ops);
         if (e != "") { enc_err(at, e) } else { enc_imul(buf, at, ops[1], ops[0]) }
+    } else if (mn == "bsr") {
+        let e = need2(mn, ops);
+        if (e != "") { enc_err(at, e) } else { enc_bsr(buf, at, ops[1], ops[0]) }
     } else if (mn in ["neg", "not", "idiv", "div", "dec", "inc"]) {
         let e = need1(mn, ops);
         if (e != "") { enc_err(at, e) } else { enc_unary(buf, at, mn, ops[0]) }

@@ -163,17 +163,35 @@ def p_call_note(callee: Node, args: [Node]) -> void {
 };
 
 def p_infer_finish() -> void {
-    pcall_names.foreach((el, c) => {
-        pfunc_names.foreach((e, fi) => {
-            if (e == el) {
-                let f = pfunc_nodes[fi];
-                let ix = pcall_idxs[c];
-                if (ix < len(f.ptypes) && f.ptypes[ix].k == K.tnone) {
-                    f.ptypes[ix] = pcall_typs[c];
-                };
+    // The functions by name, a name's indices chained in order through `next`:
+    // every call against every function was quadratic, 9% of a self-compile.
+    let nf = len(pfunc_names);
+    let fix = nameix_new(16);
+    let next: [long] = [];
+    for i in 0..nf { next += -1; };
+    let fi = nf - 1;
+    while (fi >= 0) {
+        let e: str = pfunc_names[fi];
+        if (e != "") {
+            next[fi] = nameix_get(fix, e);
+            nameix_put(fix, e, fi);
+        };
+        fi--;
+    };
+    let c = 0;
+    while (c < len(pcall_names)) {
+        let n: str = pcall_names[c];
+        let j = if (n == "") { -1 } else { nameix_get(fix, n) };
+        while (j >= 0) {
+            let f = pfunc_nodes[j];
+            let ix = pcall_idxs[c];
+            if (ix < len(f.ptypes) && f.ptypes[ix].k == K.tnone) {
+                f.ptypes[ix] = pcall_typs[c];
             };
-        });
-    });
+            j = next[j];
+        };
+        c++;
+    };
 };
 
 // AST nodes have one type per shape; kinds with a shared shape use one

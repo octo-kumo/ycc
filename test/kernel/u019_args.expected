@@ -1,4 +1,4 @@
-fs ok=true ino=2 size=6293
+fs ok=true ino=2 size=6198
 
 sh n=3 a1=/prog
 

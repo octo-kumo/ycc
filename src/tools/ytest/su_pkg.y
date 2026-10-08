@@ -191,6 +191,15 @@ def diamond() {
     fs.write_bytes(app + "/build/obj/c.yo", cyo[0:30]);
     yt.write(app + "/build/obj/a.yo", "garbage\n");
     same_text("a damaged object is rebuilt", "compiling c\ncompiling a\nbuilt build/app\nbuilt build/tool", yb(ycc_bin(), app, []).out);
+    // Cut right after a complete field (the key's), wherever that falls: the
+    // reader once indexed the byte after it, and whether a fixed cut landed
+    // there depended on the key's length.
+    let ct = yt.read(app + "/build/obj/c.yo");
+    let kf = ct.index_of("\n") + 1;
+    let kc = ct.index_of(":", kf);
+    yt.write(app + "/build/obj/c.yo", ct[:kc + 1 + yt.num(ct[kf:kc], 0)]);
+    same_text("an object cut after a whole field is rebuilt", "compiling c\nbuilt build/app\nbuilt build/tool",
+        yb(ycc_bin(), app, []).out);
     fs.remove_all(app + "/build");
     yb(ycc_bin(), app, []);
     yt.check("a fresh build gives the same bytes as a cached one", yt.bytes_of(app + "/build/app") == app2, "");

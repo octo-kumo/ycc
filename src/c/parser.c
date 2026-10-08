@@ -244,17 +244,35 @@ static void p_call_note(Yv *callee, Yv *args) {
 }
 
 static void p_infer_finish(void) {
-    for (ylong c = 0; c < yv_len(pcall_names); c++) {
-        for (ylong fi = 0; fi < yv_len(pfunc_names); fi++) {
-            if (ys_eq(ya_get(pfunc_names, fi), ya_get(pcall_names, c))) {
-                Yv *f = ya_get(pfunc_nodes, fi);
-                ylong ix = yv_l(ya_get(pcall_idxs, c));
-                Yv *fpt = yr_get(f, "ptypes");
-                if (ix < yv_len(fpt) && yv_l(yr_get(ya_get(fpt, ix), "k")) == K_tnone) {
-                    ya_set(fpt, ix, ya_get(pcall_typs, c));
-                }
-            }
+    /* The functions by name, a name's indices chained in order through `next`:
+     * every call against every function was quadratic, 9% of a self-compile. */
+    ylong nf = yv_len(pfunc_names);
+    Yv *fix = nameix_new(16);
+    Yv *next = yav(0);
+    for (ylong i = 0; i < nf; i++) { next = ya_push(next, yv_long(-1)); }
+    ylong fi = nf - 1;
+    while (fi >= 0) {
+        Yv *e = ya_get(pfunc_names, fi);
+        if (!ys_eq_lit(e, "")) {
+            ya_set(next, fi, yv_long(nameix_get(fix, e)));
+            nameix_put(fix, e, fi);
         }
+        fi = fi - 1;
+    }
+    ylong c = 0;
+    while (c < yv_len(pcall_names)) {
+        Yv *n = ya_get(pcall_names, c);
+        ylong j = ys_eq_lit(n, "") ? -1 : nameix_get(fix, n);
+        while (j >= 0) {
+            Yv *f = ya_get(pfunc_nodes, j);
+            ylong ix = yv_l(ya_get(pcall_idxs, c));
+            Yv *fpt = yr_get(f, "ptypes");
+            if (ix < yv_len(fpt) && yv_l(yr_get(ya_get(fpt, ix), "k")) == K_tnone) {
+                ya_set(fpt, ix, ya_get(pcall_typs, c));
+            }
+            j = yv_l(ya_get(next, j));
+        }
+        c = c + 1;
     }
 }
 

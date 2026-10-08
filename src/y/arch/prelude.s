@@ -752,9 +752,6 @@ ygm_no:
     ret
 
 # y_gc_resolve(w): conservatively mark the block w points into, if any.
-# w-8 (a value at its block's payload) and w-16 (a str's value) are the two
-# offsets every Y value uses; anything else -- pointer arithmetic, a false
-# candidate -- falls back to a linear walk of the chunk, which is rare.
 y_gc_resolve:
     mov y_gc_lo(%rip), %rax
     cmp %rax, %rdi
@@ -783,76 +780,45 @@ ygr_next:
     mov 0(%rcx), %rcx
     jmp ygr_chain
 ygr_chunk:
+# The block w points into is the nearest block start at or below w: pass1 has
+# just rebuilt the start map (a bit per 8 bytes, set at every block), so it is
+# the highest set bit at or below w's, found a 64-bit word of the map at a
+# time. Probing w-8 and w-16 and walking the chunk from its start for anything
+# else cost 174 instructions a candidate over a self-compile, a fifth of it.
+# A w past the last block's end (the chunk's unused tail) points at nothing.
     mov 16(%r8), %rdx
-    mov $8, %r10d
-ygr_d:
-    cmp %r10, %rdi
-    jb ygr_linear
-    mov %rdi, %rax
-    sub %r10, %rax
-# A block starts on an 8-byte boundary, and the start map has one bit per 8
-# bytes: an unaligned candidate (a false pointer a byte or two past a payload)
-# would alias its block's bit, pass, and have a mark bit OR'd into the middle
-# of a header word.
-    mov %rax, %r11
-    and $7, %r11
-    jnz ygr_dnext
-    cmp %r9, %rax
-    jb ygr_dnext
-    mov %rax, %r11
+    mov %rdi, %r11
     sub %r9, %r11
     shr $3, %r11
     mov %r11, %rcx
-    and $7, %ecx
-    mov $1, %rsi
-    shl %cl, %rsi
-    mov %r11, %rcx
-    shr $3, %rcx
-    movzbq (%rdx,%rcx,1), %rcx
-    test %rsi, %rcx
-    jz ygr_dnext
-    mov (%rax), %rcx
-    test $1, %rcx
-    jz ygr_dnext
-    mov %rcx, %rsi
-    and $-8, %rsi
-    add %rax, %rsi
-    cmp %rsi, %rdi
-    jae ygr_dnext
-    mov %rax, %rdi
-    call y_gc_mark
-    ret
-ygr_dnext:
-    test %r10, %r10
-    jz ygr_linear
-    cmp $8, %r10
-    jne ygr_d0
-    mov $16, %r10d
-    jmp ygr_d
-ygr_d0:
-    xor %r10d, %r10d
-    jmp ygr_d
-ygr_linear:
-    mov 8(%r8), %rsi
-    mov 0(%r8), %rcx
-ygr_lin:
-    cmp %rsi, %rcx
-    jae ygr_no
-    mov (%rcx), %rax
-    test %rax, %rax
+    and $63, %ecx
+    shr $6, %r11
+# the bits at and below w's in its own word: (2 << b) - 1 is all ones for b = 63
+    mov $2, %rax
+    shl %cl, %rax
+    dec %rax
+    mov (%rdx,%r11,8), %rcx
+    and %rcx, %rax
+    jnz ygr_found
+ygr_back:
+    test %r11, %r11
     jz ygr_no
-    mov %rax, %r11
-    and $-8, %r11
-    add %rcx, %r11
-    cmp %r11, %rdi
-    jb ygr_lin_hit
-    mov %r11, %rcx
-    jmp ygr_lin
-ygr_lin_hit:
+    dec %r11
+    mov (%rdx,%r11,8), %rax
+    test %rax, %rax
+    jz ygr_back
+ygr_found:
+    bsr %rax, %rax
+    shl $6, %r11
+    add %rax, %r11
+    lea (%r9,%r11,8), %rax
+    mov (%rax), %rcx
+    and $-8, %rcx
+    add %rax, %rcx
     cmp %rcx, %rdi
-    jb ygr_no
-    mov %rcx, %rdi
-    call y_gc_mark
+    jae ygr_no
+    mov %rax, %rdi
+    jmp y_gc_mark
 ygr_no:
     ret
 

@@ -68,6 +68,7 @@ static Yv *enc_cvtsi2sd(Yv *buf, ylong at, Yv *dst, Yv *src);
 static Yv *enc_cvttsd2si(Yv *buf, ylong at, Yv *dst, Yv *src);
 static Yv *enc_movq(Yv *buf, ylong at, Yv *dst, Yv *src);
 static Yv *enc_imul(Yv *buf, ylong at, Yv *dst, Yv *src);
+static Yv *enc_bsr(Yv *buf, ylong at, Yv *dst, Yv *src);
 static Yv *enc_unary(Yv *buf, ylong at, Yv *op, Yv *o);
 static Yv *enc_unary_mem(Yv *buf, ylong at, Yv *op, Yv *o);
 static Yv *enc_jmp(Yv *buf, ylong at, Yv *o, int lng);
@@ -1051,6 +1052,19 @@ static Yv *enc_imul(Yv *buf, ylong at, Yv *dst, Yv *src) {
     }
 }
 
+/* bsr r64, r64 (REX.W 0F BD /r): the index of the highest set bit. The
+   collector's resolve finds a candidate's block as the nearest start bit at or
+   below it, a word of the start map at a time. */
+static Yv *enc_bsr(Yv *buf, ylong at, Yv *dst, Yv *src) {
+    if (yv_l(yr_get(dst, "k")) == K_reg && op_size(dst) == 64
+        && yv_l(yr_get(src, "k")) == K_reg && op_size(src) == 64) {
+        ylong n = put_rex(buf, at, rex(1, yv_l(yr_get(dst, "n")), -1, yv_l(yr_get(src, "n"))));
+        return enc_ok(put3(buf, n, 15, 189, modrm(3, yv_l(yr_get(dst, "n")), yv_l(yr_get(src, "n")))), yav(0));
+    } else {
+        return enc_err(at, ys("bsr form"));
+    }
+}
+
 static Yv *enc_unary(Yv *buf, ylong at, Yv *op, Yv *o) {
     if (yv_l(yr_get(o, "k")) == K_mem) {
         return enc_unary_mem(buf, at, op, o);
@@ -1291,6 +1305,9 @@ Yv *enc_insn(Yv *buf, ylong at, Yv *mn, Yv *ops, int lng) {
     } else if (ys_eq_lit(mn, "imul")) {
         Yv *e = need2(mn, ops);
         if (!ys_eq_lit(e, "")) { return enc_err(at, e); } else { return enc_imul(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }
+    } else if (ys_eq_lit(mn, "bsr")) {
+        Yv *e = need2(mn, ops);
+        if (!ys_eq_lit(e, "")) { return enc_err(at, e); } else { return enc_bsr(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }
     } else if (ys_eq_lit(mn, "neg") || ys_eq_lit(mn, "not") || ys_eq_lit(mn, "idiv") || ys_eq_lit(mn, "div") || ys_eq_lit(mn, "dec") || ys_eq_lit(mn, "inc")) {
         Yv *e = need1(mn, ops);
         if (!ys_eq_lit(e, "")) { return enc_err(at, e); } else { return enc_unary(buf, at, mn, ya_get(ops, 0)); }
