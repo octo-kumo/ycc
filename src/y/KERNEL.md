@@ -2171,3 +2171,31 @@ So the whole function is assembly, with no new helpers and no 8-byte poke loops:
 
 That is the entire plan in one place, using names that exist.  test/kernel is 63
 passed, 0 failed / 63 total.
+
+### Round 137: the append reports success but the file does not grow
+
+Wired fd_write to call yfs_append when a write lands exactly at the end of a file
+(a write past the end leaving a gap stays unsupported and is caught by yfs_store's
+clamp), built a driver whose image has four blocks of SLACK, and ran a ring-3
+program that seeks to the file's end (12), writes 4 bytes, seeks back to 0 and reads
+16:
+
+    grow seek=12 nw=4 n=0 text=<32 NULs>
+
+nw=4 says yfs_append returned len, so it did attach blocks, move the size and store
+the bytes -- and yet the read-back returned NOTHING, and yfs_read only answers 0 when
+off >= size.  So the size the reader sees is not the size the appender set, and the
+candidates are worth listing because the next run should print them:
+
+  * yfs_append writes the size at yfs_phys + base + 4 with poke32 -- the same field
+    yfs_size reads -- so either base differs between the two calls (an inode number
+    that changed?) or the store overwrote it;
+  * fd_write advanced the fd's offset to 16 and the lseek back to 0 did not take
+    (sys_lseek passes whence but ignores it: syscall(8, f, 0, 0) sets off=0, which
+    should be right);
+  * or yfs_store's clamp ran against a size that was still 12 and truncated the
+    store to nothing while yfs_append still returned len.
+
+Reverted rather than committed (the working tree is back to the last green state, 67
+passed, 0 failed / 67 total); the measurement above is the round's result, and it
+narrows a whole subsystem to three candidates that one print each will settle.
