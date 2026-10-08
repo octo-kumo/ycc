@@ -790,6 +790,13 @@ ygr_d:
     jb ygr_linear
     mov %rdi, %rax
     sub %r10, %rax
+# A block starts on an 8-byte boundary, and the start map has one bit per 8
+# bytes: an unaligned candidate (a false pointer a byte or two past a payload)
+# would alias its block's bit, pass, and have a mark bit OR'd into the middle
+# of a header word.
+    mov %rax, %r11
+    and $7, %r11
+    jnz ygr_dnext
     cmp %r9, %rax
     jb ygr_dnext
     mov %rax, %r11
