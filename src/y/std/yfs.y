@@ -280,7 +280,7 @@ def yfs_append(ino: long, buf: long, len: long) -> long {
 // gets mode/size/empty block list, and the directory gains one entry at the end of
 // its entry list (its size field is the ENTRY COUNT for a directory), reusing the
 // 4-byte stride rule the reader walks.
-def yfs_create(name: str) -> long {
+def yfs_add_entry(dir: long, name: str, mode: long) -> long {
     if (yfs_ok == 0) { return 0 - 1; };
     // a free inode: mode 0, never used
     let ino = 0 - 1;
@@ -290,10 +290,10 @@ def yfs_create(name: str) -> long {
     };
     if (ino < 0) { return 0 - 1; };
     let base = yfs_inode_off(ino);
-    kernel.poke32(yfs_phys + base, 1);          // mode: a file
+    kernel.poke32(yfs_phys + base, mode);
     kernel.poke32(yfs_phys + base + 4, 0);      // size 0
     // the root directory's entry list: walk past the entries already there
-    let rbase = yfs_inode_off(yfs_root);
+    let rbase = yfs_inode_off(dir);
     let count = yfs_u32(rbase + 4);
     let blk = yfs_u32(rbase + 8);
     if (blk == 0) {
@@ -359,4 +359,14 @@ def yfs_unlink(name: str) -> long {
         idx = idx + 1;
     };
     0 - 1
+};
+
+// A file, and a directory, in the root.  A directory's size field is its ENTRY COUNT,
+// so it starts at 0 like a file's byte count does.
+def yfs_create(name: str) -> long {
+    yfs_add_entry(yfs_root, name, 1)
+};
+
+def yfs_mkdir(name: str) -> long {
+    yfs_add_entry(yfs_root, name, 2)
 };

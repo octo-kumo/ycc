@@ -2534,3 +2534,25 @@ the same one-line change (data at block 3 rather than 2), and it is worth making
 whole fixture set uses a layout the kernel's own scan accepts.
 
 test/kernel is 69 passed, 0 failed / 69 total.
+
+### Round 156: yfs_add_entry(dir, name, mode) -- and mkdir is now real
+
+yfs_create's body became yfs_add_entry(dir, name, mode): the PARENT is a parameter
+rather than always the root, and the mode is the caller's.  Two wrappers keep the
+names the callers already use:
+
+    yfs_create(name) = yfs_add_entry(yfs_root, name, 1)
+    yfs_mkdir(name)  = yfs_add_entry(yfs_root, name, 2)
+
+so a directory is an inode whose mode is 2 and whose size field is its ENTRY COUNT --
+the same field a file uses for bytes -- and it gets its entry block lazily, on its first
+child, through the `blk == 0` path the create code already had.
+
+The refactor is behaviour-preserving, checked rather than assumed: t019_unlink
+reproduces its transcript exactly (unlink rm=0 gone=-1 / create ok=true made=2 w=4
+found=2 n=4 text=979899100) and the suite is 73 passed, 0 failed / 73 total.
+
+The fixture mkdir wants: mkdir("d"), then create a file INSIDE it, then look the child
+up through the path "/d/child" -- which needs one more thing from yfs_add_entry's
+caller, since the wrappers still parent everything at the root.  That composition is the
+next step, and it is small: the path walk already descends directories.
