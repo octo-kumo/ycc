@@ -46,6 +46,11 @@ import su_lsp;
 import lsp_e2e;
 import mpairs;
 import mstatic;
+import mgen;
+import gexp;
+import glog;
+import gsin;
+import gpow;
 import su_math;
 import su_coverage;
 import pe;
@@ -193,11 +198,38 @@ def run_suites(names: [str], jobs: long) -> long {
     if (FAILED.length == 0) { 0 } else { 1 }
 };
 
+let GENS = ["exp", "log", "sin", "pow"];
+
+def gen_one(name: str, stage: str) -> str {
+    if (name == "exp") { gexp.gen(stage) } else if (name == "log") { glog.gen(stage) } else if (name == "sin") { gsin.gen(stage) } else if (name == "pow") { gpow.gen(stage) } else { mgen.die("math-gen: no generator " + name); "" }
+};
+
+// `ytest math-gen` checks that math.s holds what every generator writes;
+// `ytest math-gen NAME [STAGE]` prints one routine (or one intermediate).
+def math_gen(av: [str]) -> long {
+    if (av.length > 0) {
+        puts(gen_one(av[0], if (av.length > 1) { av[1] } else { "full" }));
+        return 0;
+    };
+    let maths = yt.read(yc.ROOT + "/src/y/arch/math.s");
+    let bad: [str] = [];
+    foreach (n in GENS) {
+        if (!maths.contains(gen_one(n, "full").trim())) { bad += n; };
+    };
+    if (bad.length == 0) {
+        print("  math.s matches the generators (" + join(GENS, ", ") + ")");
+        0
+    } else {
+        print("math.s has drifted from the generator: " + join(bad, ", ") + "\n  regenerate (ytest math-gen NAME) and write it over the block");
+        1
+    }
+};
+
 let USAGE = "usage: ytest [-j N] [SUITE...]     run the suites (all of them by default)
        ytest list                     the suite names
 suites' tools:  deadcode pack-stats pty-test check-refs check-names lsp-e2e coverage-list
                 os-build os-run os-session
-math:           math-pairs math-repeats math-thresholds math-coverage math-unroll
+math:           math-gen math-pairs math-repeats math-thresholds math-coverage math-unroll
 windows:        pe-gate pe-packinv pe-fixtures cycc-win w-sysno
 development:    check corpus-diff bench bench-run bench-ir profile fuzz fmt fmt-check
                 run-parity meta-identity mem gcov
@@ -231,6 +263,8 @@ def main(av: [str]) -> long {
             return yos.main_run(av[i + 1:]);
         } else if (a == "os-session") {
             return yos.main_session(av[i + 1:]);
+        } else if (a == "math-gen") {
+            return math_gen(av[i + 1:]);
         } else if (a.starts_with("math-") && a != "math-pairs") {
             return mstatic.main(a[5:], av[i + 1:]);
         } else if (a == "check") {

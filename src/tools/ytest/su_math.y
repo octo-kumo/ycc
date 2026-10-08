@@ -8,8 +8,9 @@
 // say the same, and every name in the table must be one the harness dispatches
 // on, or a function nobody tested would pass silently.
 //
-// Then: the eight unrolled kernels are what the generator writes (mstatic.y
-// math-unroll) and agree with poly_split to the bit (t328, both compilers); no
+// Then: the four assembly kernels in arch/math.s are what their generators
+// write from math.y's own constants (`ytest math-gen`); the eight unrolled
+// kernels are what the generator writes (mstatic.y math-unroll) and agree with poly_split to the bit (t328, both compilers); no
 // new repeated computation (math-repeats); every seam a comparison branches on
 // has a table case beside it (math-thresholds); every def is reachable from a
 // checked root (math-coverage); each detector finds a planted defect; and
@@ -88,6 +89,13 @@ def cases() -> [yt.Case] {
          let ok = [false];
          let out = mstatic.unroll_report(m, ok);
          if (!ok[0]) { yt.fail("the generated kernels have drifted from the generator", out); };
+     }),
+     yt.case_of(s, "math-gen", () => {
+         let c = yt.cmd([yt.self_exe(), "math-gen"]);
+         c.merge = true;
+         let r = yt.run(c);
+         yt.check("y_exp, y_log, y_sin/y_cos and y_pow in math.s are what the generators write", r.code == 0,
+             yt.clip(r.out, 400));
      }),
      yt.case_of(s, "t328 cycc", () => t328(yc.CYCC)),
      yt.case_of(s, "t328 ycc", () => t328(yc.YCC)),
