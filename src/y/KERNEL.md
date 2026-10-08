@@ -2259,3 +2259,29 @@ sys_write, and the prints did not appear because the INSTRUMENTED BUILD was not 
 one that produced /tmp/u16.img (it was built earlier in the session).
 
 test/kernel is 67 passed, 0 failed / 67 total; nothing is committed but this note.
+
+### Round 140: the append is CORRECT -- the bug is in the read-back after lseek
+
+Printed in the gap between the size poke and the store, having rebuilt EVERY artifact
+first (the lesson from round 139: an instrumented build that no run uses shows
+nothing). With a driver image that has slack:
+
+    YA base=4288 poked=16 readback=16 next=9
+    YA stored=4 want=4 size_now=16
+    P seek=12 nw=4 n=0 b0=0
+
+So the whole append path is right: the inode's size field is updated and READS BACK
+as 16, the bytes were stored (4 of 4), and the allocator's next free block is 9.  The
+failure is entirely in what comes after -- `lseek(fd, 0, 0)` then `read(fd, buf, 16)`
+returning n=0 -- and fd_read only answers 0 when the offset it passes to yfs_read is
+>= the file's size.  Since the size reads back as 16, the offset must not be 0: the
+lseek did not take.
+
+That reorders the whole investigation, again by measurement rather than inference:
+rounds 137-139 chased yfs_append, yfs_store's clamp and the size field, and all three
+are correct.  The next two prints are at the TOP of sys_lseek (the fd and offset it
+is handed) and at the top of fd_read (fd, ino, off, size) -- and note fd_lseek already
+returns the offset it set, which the program prints as seek=12, so the question is
+whether the SECOND lseek (to 0) is reaching it at all.
+
+Reverted; test/kernel is 67 passed, 0 failed / 67 total.
