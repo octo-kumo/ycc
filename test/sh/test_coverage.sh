@@ -28,7 +28,7 @@ VERBOSE=0
 [ "$1" = "-v" ] && VERBOSE=1
 MATRIX="$ROOT/test/COVERAGE.md"
 SRC="$ROOT/src/y"
-TMP=$(mktemp -d /tmp/ycov_XXXXXX)
+TMP=$(mktemp -d -t ycov_XXXXXX)
 trap 'rm -rf "$TMP"' EXIT
 
 if [ ! -f "$MATRIX" ]; then
@@ -126,10 +126,10 @@ done < "$TMP/builtins"
 [ $nmiss -eq 0 ] && pass "builtins: all $nb documented builtins and methods called"
 
 # ---------------------------------------------------------------- 3. keywords
-# The lexer's keywords: its `word == "..." ) { ty = "kw"` chain. (The
+# The lexer's keywords: its `word == "..." ) { ty = K.kw` chain. (The
 # contextual words — match, type, self, none, import, embed — are grammar,
 # covered by the matrix rows.)
-grep -o 'word == "[a-z_]*") { ty = "kw"' "$SRC/lexer.y" |
+grep -o 'word == "[a-z_]*") { ty = K.kw' "$SRC/lexer.y" |
     sed 's/word == "//; s/").*//' | sort -u > "$TMP/keywords"
 if [ ! -s "$TMP/keywords" ]; then
     fail "keywords" "found no keyword chain in src/y/lexer.y"
@@ -205,6 +205,10 @@ while IFS=$'\t' read -r doc title feature tests; do
             # same thing here as naming native/tNNN_*.y.
             lsp/test/t*.y) [ -f "$ROOT/src/tools/$ref" ] && [ -f "$ROOT/src/tools/${ref%.y}.expected" ] && ok=1 ;;
             lsp/test/test-*.sh) [ -f "$ROOT/src/tools/$ref" ] && ok=1 ;;
+            # The node drivers (client-check.js, activation-check.js) are run by
+            # lsp/test/test-e2e.sh (make lsp-e2e), which checks them against the
+            # built server and the extension manifest.
+            lsp/test/*-check.js) [ -f "$ROOT/src/tools/$ref" ] && grep -qF -- "$(basename "$ref")" "$ROOT/src/tools/lsp/test/test-e2e.sh" && ok=1 ;;
         esac
         if [ $ok -eq 0 ]; then
             nmiss=$((nmiss + 1))

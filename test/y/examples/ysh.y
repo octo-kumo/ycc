@@ -1,7 +1,8 @@
 import fs;
 const VERSION = { major: 6, minor: 7 };
-const SRC_PATH = "/tmp/_ysh_eval.y";
-const OUT_PATH = "/tmp/_ysh_out";
+// scratch files live in the working directory, which the test harness makes a temp dir
+const SRC_PATH = "_ysh_eval.y";
+const OUT_PATH = "./_ysh_out";
 
 // exec() gives sh no environment (it falls back to its default PATH), so
 // a ysh started by path runs the ycc next to it; otherwise plain `ycc`.

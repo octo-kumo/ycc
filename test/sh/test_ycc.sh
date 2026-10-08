@@ -9,6 +9,10 @@ source "$(dirname "$0")/lib.sh"   # ROOT, YBOOT, PASS/FAIL/SKIP, colors
 # The built ycc (override with $YCC, e.g. the ASan build for make test-asan).
 YCC_BIN="${YCC:-$ROOT/ycc}"
 
+# One scratch directory for the whole run (under $TMPDIR), removed on exit.
+W=$(mktemp -d -t ycc_test.XXXXXX)
+trap 'rm -rf "$W"' EXIT
+
 echo "═══════════════════════════════════════════"
 echo "  ycc self-hosted compiler check"
 echo "═══════════════════════════════════════════"
@@ -29,14 +33,13 @@ for prog in 'def f(n: long) -> long { if (n < 2) { n } else { self(n-1) + self(n
             'let m = 0; let i = 1; while (i <= 10) { m = m + i; i = i + 1; }; print(m);' \
             'def add(a: long, b: long) -> long { a + b }; print(add(20, 22));' \
             'def outer() -> long { def h(x: long) -> long { x * 2 }; h(21) }; print(outer());'; do
-    echo "$prog" > /tmp/sh.y
-    c_out=$(timeout $(( 10 * YTIMEOUT_SCALE )) "$YBOOT" -q /tmp/sh.y </dev/null 2>&1)
-    if timeout $(( 120 * YTIMEOUT_SCALE )) "$YCC_BIN" -o /tmp/sh_bin /tmp/sh.y </dev/null >/dev/null 2>&1; then
-        y_out=$(run_bin 10 /tmp/sh_bin </dev/null 2>&1)
+    echo "$prog" > $W/sh.y
+    c_out=$(timeout $(( 10 * YTIMEOUT_SCALE )) "$YBOOT" -q $W/sh.y </dev/null 2>&1)
+    if timeout $(( 120 * YTIMEOUT_SCALE )) "$YCC_BIN" -o $W/sh_bin $W/sh.y </dev/null >/dev/null 2>&1; then
+        y_out=$(run_bin 10 $W/sh_bin </dev/null 2>&1)
     else
         y_out="(ycc failed)"
     fi
-    rm -f /tmp/sh.y /tmp/sh_bin
     if [ "$c_out" = "$y_out" ]; then
         echo -e "${GREEN}PASS${NC} self-hosted: $(echo "$prog" | cut -c1-40)..."
         PASS=$((PASS + 1))
@@ -51,11 +54,11 @@ done
 # test/y/examples/ysh.y's `eval` shells out to the `ycc` next to the ysh
 # binary; the examples suite runs ysh with stdin at EOF, so this is the
 # only place it is driven.
-YSH_DIR=$(mktemp -d /tmp/ysh_test.XXXXXX)
+YSH_DIR=$(mktemp -d -t ysh_test.XXXXXX)
 ln -s "$YCC_BIN" "$YSH_DIR/ycc"
 if timeout $(( 120 * YTIMEOUT_SCALE )) "$YCC_BIN" -o "$YSH_DIR/ysh" "$ROOT/test/y/examples/ysh.y" </dev/null >/dev/null 2>&1; then
-    ysh_out=$(timeout $(( 60 * YTIMEOUT_SCALE )) "$YSH_DIR/ysh" -c 'eval print(6 * 7)' </dev/null 2>&1)
-    ysh_bad=$(timeout $(( 60 * YTIMEOUT_SCALE )) "$YSH_DIR/ysh" -c 'eval exec("true")' </dev/null 2>&1)
+    ysh_out=$(cd "$YSH_DIR" && timeout $(( 60 * YTIMEOUT_SCALE )) "$YSH_DIR/ysh" -c 'eval print(6 * 7)' </dev/null 2>&1)
+    ysh_bad=$(cd "$YSH_DIR" && timeout $(( 60 * YTIMEOUT_SCALE )) "$YSH_DIR/ysh" -c 'eval exec("true")' </dev/null 2>&1)
 else
     ysh_out="(ycc failed on ysh.y)"
     ysh_bad=""
@@ -83,7 +86,7 @@ fi
 # file's directory, the main file's own bare; the build goes on. -w drops
 # them without changing a byte, and -S keeps them out of the listing. The
 # self-hosted compiler and the C copy print the same.
-WARN_DIR=$(mktemp -d /tmp/ycc_warn.XXXXXX)
+WARN_DIR=$(mktemp -d -t ycc_warn.XXXXXX)
 mkdir "$WARN_DIR/sub"
 printf 'def f(x: long) -> long {\n    let u = 1;\n    x\n};\nexport { f };\n' > "$WARN_DIR/sub/lib.y"
 printf 'import lib from "./sub/lib.y";\ndef g() -> long {\n    let v = 2;\n    lib.f(3)\n};\nprint(g());\n' > "$WARN_DIR/main.y"
@@ -127,9 +130,9 @@ rm -rf "$WARN_DIR"
 # installed copy with std/ beside it both have to find fs, and both copies of
 # the compiler have to agree. Run from a neutral cwd, so nothing can be picked
 # up out of the source tree by accident.
-PATH_DIR=$(mktemp -d /tmp/ycc_path.XXXXXX)
+PATH_DIR=$(mktemp -d -t ycc_path.XXXXXX)
 mkdir -p "$PATH_DIR/work"
-printf 'import fs;\nprint(fs.exists("/tmp"));\n' > "$PATH_DIR/work/prog.y"
+printf 'import fs;\nprint(fs.exists("/"));\n' > "$PATH_DIR/work/prog.y"
 for compiler in "$YCC_BIN" "$CYCC"; do
     tag="${compiler##*/}"
     bindir=$(dirname "$compiler")
@@ -201,14 +204,14 @@ expect_cli_error "unknown flag" "ycc: unknown flag '--bad' (see ycc -h)" --bad
 expect_cli_error "-o with an empty path" "ycc: -o needs a path, got ''" \
     -o "" "$ROOT/test/y/native/t01_arith.y"
 expect_cli_error "-W without a level" "ycc: -W needs a warning level (0, 1 or 2)" \
-    -o /tmp/ycc_wlevel.out "$ROOT/test/y/native/t01_arith.y" -W
+    -o $W/wlevel.out "$ROOT/test/y/native/t01_arith.y" -W
 expect_cli_error "-W with a bad level" "ycc: -W needs a warning level (0, 1 or 2), got 'x'" \
-    -W x -o /tmp/ycc_wlevel.out "$ROOT/test/y/native/t01_arith.y"
+    -W x -o $W/wlevel.out "$ROOT/test/y/native/t01_arith.y"
 expect_cli_error "-W above 2" "ycc: -W needs a warning level (0, 1 or 2), got '3'" \
-    -W 3 -o /tmp/ycc_wlevel.out "$ROOT/test/y/native/t01_arith.y"
+    -W 3 -o $W/wlevel.out "$ROOT/test/y/native/t01_arith.y"
 expect_cli_error "-W that would wrap the scan" \
     "ycc: -W needs a warning level (0, 1 or 2), got '99999999999999999999'" \
-    -W 99999999999999999999 -o /tmp/ycc_wlevel.out "$ROOT/test/y/native/t01_arith.y"
+    -W 99999999999999999999 -o $W/wlevel.out "$ROOT/test/y/native/t01_arith.y"
 # --target: the one global the whole compiler branches on (target.y), written
 # before anything reads it. Both spellings are accepted and both are checked,
 # because a flag that works in one form and not the other is a flag nobody can
@@ -217,9 +220,9 @@ expect_cli_error "-W that would wrap the scan" \
 # branch: anything after --target is its name, so `--target -o out` is an
 # unknown TARGET called -o, not a missing one.
 expect_cli_error "--target without a name" "ycc: --target needs a name (linux, windows)" \
-    -o /tmp/ycc_target.out "$ROOT/test/y/native/t01_arith.y" --target
+    -o $W/target.out "$ROOT/test/y/native/t01_arith.y" --target
 expect_cli_error "--target with an unknown name" "ycc: unknown target 'plan9' (linux, windows, kernel)" \
-    --target=plan9 -o /tmp/ycc_target.out "$ROOT/test/y/native/t01_arith.y"
+    --target=plan9 -o $W/target.out "$ROOT/test/y/native/t01_arith.y"
 expect_cli_error "no input file" "error: no input file (see ycc -h)"
 expect_cli_error "multiple input files" "error: ycc compiles one program; use imports to combine files" \
     "$ROOT/test/y/native/t01_arith.y" "$ROOT/test/y/native/t02_recursion.y"
@@ -228,7 +231,7 @@ expect_cli_error "cannot read input" "error: cannot read file '/no-such-cov-ycc-
 # A directory opens for reading but read(2) refuses it, so it used to read as
 # "" and compile into an empty executable. fs.read_file now answers none for
 # one (std/fs.y read_bytes).
-expect_cli_error "input is a directory" "error: cannot read file '/tmp'" /tmp
+expect_cli_error "input is a directory" "error: cannot read file '$W'" "$W"
 expect_cli_error "assembly write failure" "error: writing '/nonexistent/dir/out' failed" \
     -S -o /nonexistent/dir/out "$ROOT/test/y/native/t01_arith.y"
 expect_cli_error "executable write failure" "error: writing '/nonexistent/dir/out' failed" \
@@ -246,7 +249,7 @@ expect_cli_error "executable write failure at the flush" "error: writing '/dev/f
 
 # Import depth: a chain of 33 nested imports is fatal. Only a chain reaches
 # the limit -- the resolver's `seen` list stops a cycle first.
-DEPTH_DIR=$(mktemp -d /tmp/ycc_depth.XXXXXX)
+DEPTH_DIR=$(mktemp -d -t ycc_depth.XXXXXX)
 for i in $(seq 0 31); do
     echo "import d$((i + 1));" > "$DEPTH_DIR/d$i.y"
 done
@@ -256,6 +259,12 @@ expect_cli_error "import depth" "error: native import depth exceeded (cycle?)" \
     -o "$DEPTH_DIR/a.out" "$DEPTH_DIR/main.y"
 rm -rf "$DEPTH_DIR"
 
+GC_DIR=$(mktemp -d -t ycc_gc.XXXXXX)
+printf 'print(1);\n' > "$GC_DIR/p.y"
+expect_cli_error "gc mode" "ycc: --gc wants auto, always or never, got 'bogus'" \
+    --gc=bogus -o "$GC_DIR/a.out" "$GC_DIR/p.y"
+rm -rf "$GC_DIR"
+
 # The compiler running out of memory must look the same from both copies: the
 # same text, on the same stream, with the same status. The port gate cannot see
 # this -- it compares output, not exits -- and lib.sh's 3.5 GB cap never gets
@@ -263,7 +272,7 @@ rm -rf "$DEPTH_DIR"
 # input: 120 000 tiny functions need well over 400 MB to check and emit.
 # 400 MB leaves a dynamically linked cycc enormous headroom, so this fails in
 # the allocator rather than in the loader on any machine.
-OOM_DIR=$(mktemp -d /tmp/ycc_oom.XXXXXX)
+OOM_DIR=$(mktemp -d -t ycc_oom.XXXXXX)
 {
     for i in $(seq 0 119999); do
         echo "def f$i(a: long) -> long { let s = 0; s += a; s * 2; }"
@@ -292,7 +301,7 @@ rm -rf "$OOM_DIR"
 # file with 300 distinct undefined variables answers with 300 lines, one each,
 # in position order, from both compilers (the dedup is keyed by position, so a
 # regression that dropped or repeated one shows up as a count or a first line).
-MANY_DIR=$(mktemp -d /tmp/ycc_many.XXXXXX)
+MANY_DIR=$(mktemp -d -t ycc_many.XXXXXX)
 {
     for i in $(seq 0 299); do
         echo "def f$i() -> long { missing$i }"
@@ -323,7 +332,7 @@ rm -rf "$MANY_DIR"
 # would block with no writer to feed it -- and the two assemblies must match.
 fifo_asm() {
     local d
-    d=$(mktemp -d /tmp/ycc_fifo.XXXXXX)
+    d=$(mktemp -d -t ycc_fifo.XXXXXX)
     mkfifo "$d/in.y"
     (cat "$ROOT/test/y/native/t01_arith.y" > "$d/in.y" &)
     timeout $(( 60 * YTIMEOUT_SCALE )) "$1" -S "$d/in.y" -o "$2" </dev/null
@@ -333,17 +342,16 @@ fifo_asm() {
 }
 fifo_ec=0
 for compiler in "$YCC_BIN" "$CYCC"; do
-    if fifo_asm "$compiler" "/tmp/ycc_fifo_$(basename "$compiler").s"; then
+    if fifo_asm "$compiler" "$W/fifo_$(basename "$compiler").s"; then
         fifo_ec=$((fifo_ec + 1))
     else
         fail "read a fifo (${compiler##*/})" "exit $? from -S on a fifo"
     fi
 done
-if [ "$fifo_ec" -eq 2 ] && cmp -s "/tmp/ycc_fifo_$(basename "$YCC_BIN").s" \
-    "/tmp/ycc_fifo_$(basename "$CYCC").s"; then
+if [ "$fifo_ec" -eq 2 ] && cmp -s "$W/fifo_$(basename "$YCC_BIN").s" \
+    "$W/fifo_$(basename "$CYCC").s"; then
     pass "fifo read identical from both copies"
 fi
-rm -f /tmp/ycc_fifo_*.s
 
 # `ycc -E` (ideas/meta.md, "Debuggability") dumps the source the lexer sees,
 # with origin markers as comments. It has to be usable: re-compiling the dump
@@ -352,7 +360,7 @@ rm -f /tmp/ycc_fifo_*.s
 # rescans.
 meta_dump() {
     local prog="$1" tag="$2" dir ec
-    dir=$(mktemp -d /tmp/ycc_meta_XXXXXX)
+    dir=$(mktemp -d -t ycc_meta_XXXXXX)
     timeout $(( 120 * YTIMEOUT_SCALE )) "$YCC_BIN" "$prog" -o "$dir/a" \
         >"$dir/a.err" 2>&1 </dev/null
     if [ $? -ne 0 ]; then
@@ -398,7 +406,7 @@ meta_dump "$ROOT/test/y/native/t200_meta_mid_token.y" "-E dump of a mid-token me
 # flags as its own. argv[0] is the source path the run was asked for.
 run_args() {
     local compiler="$1" tag="$2" dir out
-    dir=$(mktemp -d /tmp/ycc_run.XXXXXX)
+    dir=$(mktemp -d -t ycc_run.XXXXXX)
     printf 'let a = argv();\nprint(tostring(len(a)));\nlet i = 1;\nwhile (i < len(a)) { print(a[i]); i = i + 1; };\n' > "$dir/p.y"
     out=$(cd "$dir" && timeout $((60 * YTIMEOUT_SCALE)) "$compiler" run p.y -- one "two three" </dev/null 2>&1)
     if [ "$out" = "3
@@ -421,7 +429,7 @@ done
 # binary, three spellings, one number.
 run_heap_paths() {
     local compiler="$1" tag="$2" dir a b c long
-    dir=$(mktemp -d /tmp/ycc_heap.XXXXXX)
+    dir=$(mktemp -d -t ycc_heap.XXXXXX)
     printf 'print(heap_used());\n' > "$dir/p.y"
     (cd "$dir" && timeout $((60 * YTIMEOUT_SCALE)) "$compiler" p.y -o p </dev/null >/dev/null 2>&1)
     if [ ! -x "$dir/p" ]; then
