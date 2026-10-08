@@ -2782,3 +2782,25 @@ run, therefore the number is not evidence about the kernel's exit path -- and ch
 further needs a qemu trace, not another print in the kernel.
 
 test/kernel is 80 passed, 0 failed / 80 total.
+
+### Round 170: unlinkat says "not found" for a name openat just found
+
+    rm first=3 unlink=-1 again=4
+
+openat resolves /msg and returns fd 3; unlinkat on the SAME path returns -1; the second
+open returns 4 -- so the file was never removed.  yfs_unlink answers -1 only when its walk
+does not match the name, while yfs_lookup_path (same image, same syscall layer, moments
+earlier) matched it, and both go through yfs_name_is.
+
+That is the whole question now, and it is narrow: yfs_unlink's walk and yfs_find_in's walk
+read the same entries with the same stride, so the difference must be in what they are asked
+to match or in an early return.  The candidates worth printing: len(name) as yfs_unlink sees
+it, the first entry's name_len, the entry offset it starts at (blk * block_size), and
+whether the loop is entered at all.
+
+The fixture is kept as _u021_rm.*.keep, outside the harness's glob; test/kernel is 80 passed,
+0 failed / 80 total.
+
+(The relation the guard checked -- positive fd, zero from unlinkat, negative from the second
+open -- is exactly right, and it refused to commit on this result, which is what a relational
+guard is for.)
