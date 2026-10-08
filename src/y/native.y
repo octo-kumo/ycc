@@ -2953,15 +2953,22 @@ def pushable(ir: [long], p: long) -> bool {
     }
 };
 
+// The runtime helpers the emitter calls most that take every argument on the
+// stack and do not read %rax before writing it (each begins `push %rbp`, or
+// loads %rax from the stack). Others are not assumed: some take arguments in
+// registers. A helper on this list must keep that entry.
+let STACK_ARGS: [str] = ["y_str_cat", "y_str_eq", "y_arr_push", "y_str_slice", "y_long_tostr",
+    "y_arr_extend", "y_put_hstr", "y_arr_slice", "y_str_index", "y_str_join", "y_arr_cat",
+    "y_str_app", "y_str_trim"];
+
 // Does the instruction at p overwrite %rax without reading it first? A load
-// into %rax that does not read it, or a direct call to a Y function: a callee
-// takes its arguments (and a closure its record) on the stack, so %rax is
-// dead at the call and holds the result after it. Runtime helpers are not
-// assumed: some take arguments in registers.
+// into %rax that does not read it, or a direct call to a Y function or a
+// STACK_ARGS helper: a callee takes its arguments (and a closure its record)
+// on the stack, so %rax is dead at the call and holds the result after it.
 def rax_dead_at(ir: [long], p: long) -> bool {
     if (ir[p] == insn.F_CALL_L) {
         let nm = lname(ir[p + 1]);
-        len(nm) > 4 && nm[:4] == "yfn_"
+        nm.starts_with("yfn_") || nm in STACK_ARGS
     } else {
         rax_load(ir, p, true)
     }
@@ -3135,6 +3142,22 @@ def pop_fold(ir: [long]) -> bool {
 // `.loc` marker may sit between the two (it is not code, so -g leaves the code
 // as it was); a label is a place control can arrive at with another %rax, and
 // it ends the match. 10,500 sites in ycc's own output (`x = e; ... x`).
+// `mov %rax, %rcx`, the next instruction a load that overwrites %rax (the
+// right operand of gen_int_fast and gen_cmp_flags, a leaf): when the item
+// before it loaded %rax, that load writes %rcx instead and the move goes. A
+// `.loc` marker may sit between; a label ends the match.
+def rax_into_rcx(st: EmitSt) -> EmitSt {
+    let ir = st.ir;
+    let p = len(ir) - insn.IR_W;
+    while (p >= 0 && ir[p] == insn.IR_LOC) { p = p - insn.IR_W; };
+    if (p >= 0 && rax_load(ir, p, false)) {
+        if (ir[p] == insn.F_MOV_I_R) { ir[p + 2] = insn.R_RCX; } else { ir[p + 6] = insn.R_RCX; };
+        st
+    } else {
+        emit_insn(st, insn.F_MOV_R_R, insn.R_RAX, 64, insn.R_RCX, 64, 0, 0, 0)
+    }
+};
+
 def is_reload(ir: [long], a: long, b: long, c: long, d: long, e: long, g: long, h: long) -> bool {
     if (g != insn.R_RAX || h != 64) { false } else {
         let p = len(ir) - insn.IR_W;
@@ -6443,7 +6466,8 @@ def int_fast_op(op: str, lt: Type, rt: Type, r: Node, st: EmitSt) -> bool {
     let lk: long = lt.k;
     let rk: long = rt.k;
     if ((lk == K.tlong || lk == K.tbyte) && (rk == K.tlong || rk == K.tbyte)) {
-        if (op in ["+", "-", "*", "&", "|", "^", "==", "!=", "<", ">", "<=", ">="]) {
+        if (op == "+" || op == "-" || op == "*" || op == "&" || op == "|" || op == "^" || op == "==" || op == "!="
+            || op == "<" || op == ">" || op == "<=" || op == ">=") {
             imm_lit(r) >= 0 || rcx_free_leaf(st, r)
         } else { false }
     } else { false }
@@ -6468,7 +6492,7 @@ def gen_int_fast(st: EmitSt, node: Bin, op: str) -> EmitSt {
             gen_setcc(st, op)
         }
     } else {
-        st = emit_insn(st, insn.F_MOV_R_R, insn.R_RAX, 64, insn.R_RCX, 64, 0, 0, 0);
+        st = rax_into_rcx(st);
         st = gen(st, node.r);
         if (op == "+") { emit_insn(st, insn.F_ADD_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0) }
         else if (op == "*") { emit_insn(st, insn.F_IMUL_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0) }
@@ -8405,7 +8429,7 @@ def gen_cmp_flags(st: EmitSt, node: Bin) -> EmitSt {
     if (imm >= 0) {
         emit_insn(st, insn.F_CMP_I_R, imm, insn.R_RAX, 64, 0, 0, 0, 0)
     } else if (rcx_free_leaf(st, node.r)) {
-        st = emit_insn(st, insn.F_MOV_R_R, insn.R_RAX, 64, insn.R_RCX, 64, 0, 0, 0);
+        st = rax_into_rcx(st);
         st = gen(st, node.r);
         emit_insn(st, insn.F_CMP_R_R, insn.R_RAX, 64, insn.R_RCX, 64, 0, 0, 0)
     } else {

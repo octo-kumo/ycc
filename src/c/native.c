@@ -3939,6 +3939,27 @@ static Yv *st_temp(Yv *st, ylong n) {
  * `.loc` marker may sit between the two (it is not code, so -g leaves the code
  * as it was); a label is a place control can arrive at with another %rax, and
  * it ends the match. 10,500 sites in ycc's own output (`x = e; ... x`). */
+/* `mov %rax, %rcx`, the next instruction a load that overwrites %rax (native.y
+ * rax_into_rcx): when the item before it loaded %rax, that load writes %rcx
+ * instead and the move goes. */
+static int rax_load(Yv *ir, ylong p, int first);
+static Yv *emit_insn(Yv *st, ylong f, ylong a, ylong b, ylong c, ylong d, ylong e, ylong g, ylong h);
+
+static Yv *rax_into_rcx(Yv *st) {
+    Yv *ir = yr_get(st, "ir");
+    ylong p = yv_len(ir) - IR_W;
+    while (p >= 0 && yv_l(ya_get(ir, p)) == IR_LOC) { p = p - IR_W; }
+    if (p >= 0 && rax_load(ir, p, 0)) {
+        if (yv_l(ya_get(ir, p)) == F_MOV_I_R) {
+            ya_set(ir, p + 2, yv_long(R_RCX));
+        } else {
+            ya_set(ir, p + 6, yv_long(R_RCX));
+        }
+        return st;
+    }
+    return emit_insn(st, F_MOV_R_R, R_RAX, 64, R_RCX, 64, 0, 0, 0);
+}
+
 static int is_reload(Yv *ir, ylong a, ylong b, ylong c, ylong d, ylong e, ylong g, ylong h) {
     if (g != R_RAX || h != 64) { return 0; }
     ylong p = yv_len(ir) - IR_W;
@@ -3965,10 +3986,22 @@ static int rax_load(Yv *ir, ylong p, int first);
 
 /* Does the instruction at p overwrite %rax without reading it first? (native.y
  * rax_dead_at) */
+/* The runtime helpers the emitter calls most that take every argument on the
+ * stack and do not read %rax before writing it (each begins `push %rbp`, or
+ * loads %rax from the stack). Others are not assumed: some take arguments in
+ * registers. A helper on this list must keep that entry. */
+static const char *const STACK_ARGS[] = {"y_str_cat", "y_str_eq", "y_arr_push", "y_str_slice", "y_long_tostr",
+    "y_arr_extend", "y_put_hstr", "y_arr_slice", "y_str_index", "y_str_join", "y_arr_cat",
+    "y_str_app", "y_str_trim"};
+
 static int rax_dead_at(Yv *ir, ylong p) {
     if (yv_l(ya_get(ir, p)) == F_CALL_L) {
         Yv *nm = lname(ya_get(ir, p + 1));
-        return yv_len(nm) > 4 && ys_eq_lit(ys_slice(nm, 0, 4), "yfn_");
+        if (ys_starts_with(nm, ys("yfn_"))) return 1;
+        for (size_t i = 0; i < sizeof STACK_ARGS / sizeof STACK_ARGS[0]; i++) {
+            if (ys_eq_lit(nm, STACK_ARGS[i])) return 1;
+        }
+        return 0;
     } else {
         return rax_load(ir, p, 1);
     }
@@ -6934,6 +6967,7 @@ static ylong jcc_flip(ylong j) {
 
 ylong int_cmp_jcc(Yv *st, Yv *node);
 Yv *gen_cmp_flags(Yv *st, Yv *node);
+static Yv *rax_into_rcx(Yv *st);
 
 /* Jump to `label` when `cond` is true (`on_true`) or false, and fall through
  * otherwise (native.y gen_branch). */
@@ -7871,7 +7905,7 @@ Yv *gen_int_fast(Yv *st, Yv *node, Yv *op) {
             return gen_setcc(st, op);
         }
     } else {
-        st = emit_insn(st, F_MOV_R_R, R_RAX, 64, R_RCX, 64, 0, 0, 0);
+        st = rax_into_rcx(st);
         st = gen(st, yr_get(node, "r"));
         if (ys_eq_lit(op, "+")) { return emit_insn(st, F_ADD_R_R, R_RCX, 64, R_RAX, 64, 0, 0, 0); }
         else if (ys_eq_lit(op, "*")) { return emit_insn(st, F_IMUL_R_R, R_RCX, 64, R_RAX, 64, 0, 0, 0); }
@@ -9861,7 +9895,7 @@ Yv *gen_cmp_flags(Yv *st, Yv *node) {
     if (imm >= 0) {
         return emit_insn(st, F_CMP_I_R, imm, R_RAX, 64, 0, 0, 0, 0);
     } else if (rcx_free_leaf(st, r)) {
-        st = emit_insn(st, F_MOV_R_R, R_RAX, 64, R_RCX, 64, 0, 0, 0);
+        st = rax_into_rcx(st);
         st = gen(st, r);
         return emit_insn(st, F_CMP_R_R, R_RAX, 64, R_RCX, 64, 0, 0, 0);
     } else {
