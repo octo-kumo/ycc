@@ -215,14 +215,24 @@ def y_str_case(s: str, lo: long, hi: long, d: long) -> str {
 };
 
 // n copies of s back to back (empty for n <= 0).
+// prelude.s: a zeroed [byte] of n bytes, and a front-to-back copy that
+// repeats what it has just written when its source is closer than its length.
+ndef y_bytes_zero(n: long) -> [byte] = "y_bytes_zero";
+ndef y_copy_fwd(dst: *byte, src: *byte, n: long) -> long = "y_copy_fwd";
+
+// n copies of s: one copy of its bytes, then one forward copy over the rest
+// of the buffer from its start, which repeats them. A count whose bytes do not
+// fit a long is out of memory, like any other request that large.
 def y_str_repeat(s: str, n: long) -> str {
-    let parts: [str] = [];
-    let i = 0;
-    while (i < n) {
-        parts += s;
-        i = i + 1;
-    };
-    join(parts, s[0:0])
+    let m = len(s);
+    if (n <= 0 || m == 0) { return s[0:0]; };
+    let total = n * m;
+    if (total / m != n) { total = -1; };
+    let out = y_bytes_zero(total);
+    let b = bytes(s);
+    y_copy_fwd(out.ptr, b.ptr, m);
+    y_copy_fwd(out.ptr + m, out.ptr, total - m);
+    from_bytes(out)
 };
 
 // `fill` repeated and cut to exactly k bytes (k > 0, fill not empty).

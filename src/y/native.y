@@ -14868,17 +14868,6 @@ def lbl_w(b: [byte], at: long) -> long {
     if (b[at] == 0) { 1 } else { 1 + word_w(b, at + 1) + unpack_word(b, at + 1) }
 };
 
-// The name of a packed label field, or "" for tag 0 (no label). unpack_lbl
-// interns the name into an id; a reference set is names, so read them here.
-def blob_lbl(b: [byte], at: long) -> str {
-    if (b[at] == 0) {
-        ""
-    } else {
-        let w = word_w(b, at + 1);
-        let n = unpack_word(b, at + 1);
-        from_bytes(b[at + 1 + w:at + 1 + w + n])
-    }
-};
 
 // A body's references, read out of its packed items: the mirror of ir_refs_item
 // (every label operand, the label of a memory operand, both of a diff) over the
@@ -14895,46 +14884,52 @@ def blob_refs(blob: str) -> [str] {
         let f = b[at];
         at++;
         if (f == insn.IR_LABEL) {
-            at += lbl_w(b, at);
+            at = blob_ref(blob, b, at, out, false);
         } else if (f == insn.IR_LOC) {
             at += word_w(b, at);
             at += word_w(b, at);
         } else if (f == insn.IR_TEXT) {
             at += word_w(b, at);
         } else {
+            // a word is one byte below 126, nine after 255, three otherwise
+            // (pack_word); spelled out here, where every item pays for it
             let kinds = insn.ir_form(f).kinds;
-            let ki = 0;
-            while (ki < len(kinds)) {
+            for ki in 0..len(kinds) {
                 let k = kinds[ki];
-                let nw = insn.ir_kind_words(k);
                 if (k == insn.O_LBL) {
-                    let nm = blob_lbl(b, at);
-                    if (len(nm) > 0) { out += nm; };
-                    at += lbl_w(b, at);
+                    at = blob_ref(blob, b, at, out, true);
                 } else if (k == insn.O_DIFF) {
-                    let n1 = blob_lbl(b, at);
-                    if (len(n1) > 0) { out += n1; };
-                    at += lbl_w(b, at);
-                    let n2 = blob_lbl(b, at);
-                    if (len(n2) > 0) { out += n2; };
-                    at += lbl_w(b, at);
+                    at = blob_ref(blob, b, blob_ref(blob, b, at, out, true), out, true);
                 } else if (k == insn.O_MEM || k == insn.O_MEM0) {
-                    at += word_w(b, at);
-                    at += word_w(b, at);
-                    at += word_w(b, at);
-                    at += word_w(b, at);
-                    let nm = blob_lbl(b, at);
-                    if (len(nm) > 0) { out += nm; };
-                    at += lbl_w(b, at);
+                    for q in 0..4 {
+                        let t = b[at];
+                        at += if (t < 126) { 1 } else if (t == 255) { 9 } else { 3 };
+                    };
+                    at = blob_ref(blob, b, at, out, true);
                 } else {
-                    at += word_w(b, at);
-                    if (nw > 1) { at += word_w(b, at); };
+                    let t = b[at];
+                    at += if (t < 126) { 1 } else if (t == 255) { 9 } else { 3 };
+                    if (k == insn.O_REG || k == insn.O_IND) {
+                        let t2 = b[at];
+                        at += if (t2 < 126) { 1 } else if (t2 == 255) { 9 } else { 3 };
+                    };
                 };
-                ki++;
             };
         };
     };
     out
+};
+
+// The label field at `at` of a packed body (b is blob's bytes): its name
+// appended to out when it has one and `keep`, sliced once out of the blob; the
+// position after the field.
+def blob_ref(blob: str, b: [byte], at: long, out: [str], keep: bool) -> long {
+    if (b[at] == 0) { at + 1 } else {
+        let s = at + 1 + word_w(b, at + 1);
+        let e = s + unpack_word(b, at + 1);
+        if (keep && e > s) { out += blob[s:e]; };
+        e
+    }
 };
 
 // A type as text (for a pack or an object): a letter per kind, then its

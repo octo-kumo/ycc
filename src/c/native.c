@@ -17496,23 +17496,23 @@ static ylong lbl_w(Yv *b, ylong at) {
     }
 }
 
-/* The name of a packed label field, or "" for tag 0 (no label). unpack_lbl
- * interns the name into an id; a reference set is names (native.y blob_lbl). */
-static Yv *blob_lbl(Yv *b, ylong at) {
-    if (yv_l(ya_get(b, at)) == 0) {
-        return ys("");
-    } else {
-        ylong w = word_w(b, at + 1);
-        ylong n = unpack_word(b, at + 1);
-        return from_bytes(ya_slice(b, at + 1 + w, at + 1 + w + n));
-    }
-}
 
 /* A body's references, read out of its packed items: the mirror of
  * ir_refs_item over the blob encoding pack_body writes, so the pack need not
  * carry the list (native.y blob_refs). Duplicates are kept and empty names
  * dropped, as ir_refs_push does; IR_LABEL/IR_LOC/IR_TEXT contribute nothing but
  * their operands still have to be stepped over. */
+/* The label field at `at` of a packed body (native.y blob_ref): its name
+ * appended to *out when it has one and `keep`; the position after it. */
+static ylong blob_ref(Yv *blob, Yv *b, ylong at, Yv **out, int keep) {
+    if (yv_l(ya_get(b, at)) == 0) { return at + 1; }
+    ylong s = at + 1 + word_w(b, at + 1);
+    ylong e = s + unpack_word(b, at + 1);
+    if (keep && e > s) { *out = ya_push(*out, ys_slice(blob, s, e)); }
+    return e;
+}
+
+
 static Yv *blob_refs(Yv *blob) {
     Yv *b = bytes_of(blob);
     ylong n = yv_len(b);
@@ -17522,7 +17522,7 @@ static Yv *blob_refs(Yv *blob) {
         ylong f = yv_l(ya_get(b, at));
         at = at + 1;
         if (f == IR_LABEL) {
-            at = at + lbl_w(b, at);
+            at = blob_ref(blob, b, at, &out, 0);
         } else if (f == IR_LOC) {
             at = at + word_w(b, at);
             at = at + word_w(b, at);
@@ -17530,34 +17530,26 @@ static Yv *blob_refs(Yv *blob) {
             at = at + word_w(b, at);
         } else {
             Yv *kinds = yr_get(ir_form(f), "kinds");
-            ylong ki = 0;
-            while (ki < yv_len(kinds)) {
+            for (ylong ki = 0; ki < yv_len(kinds); ki++) {
                 ylong k = yv_l(ya_get(kinds, ki));
-                ylong nw = ir_kind_words(k);
                 if (k == O_LBL) {
-                    Yv *nm = blob_lbl(b, at);
-                    if (yv_len(nm) > 0) { out = ya_push(out, nm); }
-                    at = at + lbl_w(b, at);
+                    at = blob_ref(blob, b, at, &out, 1);
                 } else if (k == O_DIFF) {
-                    Yv *n1 = blob_lbl(b, at);
-                    if (yv_len(n1) > 0) { out = ya_push(out, n1); }
-                    at = at + lbl_w(b, at);
-                    Yv *n2 = blob_lbl(b, at);
-                    if (yv_len(n2) > 0) { out = ya_push(out, n2); }
-                    at = at + lbl_w(b, at);
+                    at = blob_ref(blob, b, blob_ref(blob, b, at, &out, 1), &out, 1);
                 } else if (k == O_MEM || k == O_MEM0) {
-                    at = at + word_w(b, at);
-                    at = at + word_w(b, at);
-                    at = at + word_w(b, at);
-                    at = at + word_w(b, at);
-                    Yv *nm = blob_lbl(b, at);
-                    if (yv_len(nm) > 0) { out = ya_push(out, nm); }
-                    at = at + lbl_w(b, at);
+                    for (int q = 0; q < 4; q++) {
+                        ylong t = yv_l(ya_get(b, at));
+                        at = at + (t < 126 ? 1 : (t == 255 ? 9 : 3));
+                    }
+                    at = blob_ref(blob, b, at, &out, 1);
                 } else {
-                    at = at + word_w(b, at);
-                    if (nw > 1) { at = at + word_w(b, at); }
+                    ylong t = yv_l(ya_get(b, at));
+                    at = at + (t < 126 ? 1 : (t == 255 ? 9 : 3));
+                    if (k == O_REG || k == O_IND) {
+                        ylong t2 = yv_l(ya_get(b, at));
+                        at = at + (t2 < 126 ? 1 : (t2 == 255 ? 9 : 3));
+                    }
                 }
-                ki = ki + 1;
             }
         }
     }

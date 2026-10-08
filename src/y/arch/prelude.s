@@ -3004,6 +3004,50 @@ yax_copy:
     pop %rbx
     pop %rbp
     ret
+# y_bytes_zero(n): a new [byte] of n zero bytes (len = cap = n), its data
+# block pointer-free, in one allocation and one word loop. A negative n, or
+# one of 2^47 bytes or more (past any address space, and where y_alloc's own
+# rounding would wrap), is out of memory. The stack convention: n at 16(%rbp)
+# here, the caller pops.
+y_bytes_zero:
+    push %rbp
+    mov %rsp, %rbp
+    push %rbx
+    push %r12
+    mov 16(%rbp), %rbx
+    mov $140737488355328, %rax
+    cmp %rax, %rbx
+    jae y_alloc_fail
+    lea 7(%rbx), %rdi
+    and $-8, %rdi
+    cmp $8, %rdi
+    jge ybz_size
+    mov $8, %rdi
+ybz_size:
+    mov %rdi, %r12
+    call y_alloc_pf
+    mov %rax, %rdx
+    mov %r12, %rcx
+    shr $3, %rcx
+    xor %r8d, %r8d
+ybz_zero:
+    mov %r8, (%rdx)
+    add $8, %rdx
+    dec %rcx
+    jnz ybz_zero
+    push %rax
+    mov $32, %rdi
+    call y_alloc
+    pop %rdx
+    mov %rbx, (%rax)
+    mov %rbx, 8(%rax)
+    mov %rdx, 16(%rax)
+    xor %ecx, %ecx
+    mov %rcx, 24(%rax)
+    pop %r12
+    pop %rbx
+    pop %rbp
+    ret
 # y_copy_fwd(dst, src, n), the stack convention (n at 8(%rsp), src at 16, dst
 # at 24; the caller pops): n bytes front to back. When the destination starts
 # less than eight bytes after the source the copy goes a byte at a time, so it
