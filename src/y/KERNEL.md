@@ -2285,3 +2285,30 @@ returns the offset it set, which the program prints as seek=12, so the question 
 whether the SECOND lseek (to 0) is reaching it at all.
 
 Reverted; test/kernel is 67 passed, 0 failed / 67 total.
+
+### Round 141: the write is what varies -- and sys_write is the one place never printed
+
+Instrumented sys_lseek (fd, off, result, offset after) and fd_read (fd, ino, off,
+size, len), rebuilt every artifact, and ran the append-then-read program with the same
+slack driver round 140 used:
+
+    SL fd=3 off=12 r=12 now=12        <- the first lseek, to the end
+    FR fd=3 ino=3 off=12 size=12 len=16
+    P seek=12 nw=0 n=0 b0=0
+
+Three facts, and together they move the target again:
+
+ * the SECOND lseek (to 0) never printed, so that statement did not reach the syscall
+   (the program survived to print P, so it was not a fault -- and its result is
+   unused, which is worth checking against dead-code elimination);
+ * fd_read ran with off=12 AND size=12, i.e. THE APPEND DID NOT HAPPEN in this run --
+   contradicting round 140, where the same driver produced readback=16 and stored=4;
+ * nw=0, so sys_write returned 0 -- and neither round has yet printed INSIDE sys_write,
+   which is the one place that decides whether the fd ever reaches the broker.
+
+So the append is right (round 140) and the write is what varies (round 141), and the
+next print is at the TOP of sys_write: the fd, the length, and which branch it takes.
+Until that prints, every conclusion about the append is about a path the run may not
+even have entered.
+
+Reverted; test/kernel is 67 passed, 0 failed / 67 total.
