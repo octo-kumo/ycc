@@ -2804,3 +2804,34 @@ The fixture is kept as _u021_rm.*.keep, outside the harness's glob; test/kernel 
 (The relation the guard checked -- positive fd, zero from unlinkat, negative from the second
 open -- is exactly right, and it refused to commit on this result, which is what a relational
 guard is for.)
+
+### Round 172: renameat was written, and REVERTED -- cp's transcript moved for a reason I did not find
+
+yfs_link(dir, name, ino) -- the entry-writing half of yfs_add_entry without allocating an
+inode -- plus yfs_rename(old, new) as link + unlink, and sys_renameat(264) wired to it.  All
+of it is additive on paper: new functions, a new syscall, nothing that existing callers
+reach.
+
+The suite disagreed: u020_cp reported "serial output differs", 81 passed / 1 failed / 82.
+That is a transcript change in a fixture whose driver and program were not touched, so it is
+exactly the kind of signal this run has learned not to wave away -- and with the context
+left, chasing it honestly was not possible.  Reverted, per the guard, and the tree is back
+to the committed 82/82.
+
+Candidates for whoever picks it up, in the order they deserve:
+
+  * the two engines were paired fresh-against-fresh (ycc2 and cycc, both rebuilt in the same
+    command), so a stale binary is unlikely -- but `make rebless` first and re-run, because
+    that is the cheapest way to eliminate the pairing entirely;
+  * u020's driver builds an image with the allocator's free-block cursor in play (the cp
+    fixture creates a file), and a NEW function in yfs.y shifts nothing at runtime but does
+    change the emitted image size -- and the driver PRINTS that size ("size=NNNN"), so a
+    changed image means a changed first line of the transcript.  That is very likely the
+    whole of it: u020's .expected begins with the driver's size line, and adding code to the
+    kernel changes it.  The fix would be to compare from the second line, or to accept the
+    new size -- not to leave the change uncommitted.
+
+The work itself is in this note and in the reverted diff's shape (link = walk to the end of
+the directory's entry list and write name_len/type/inode/name, skipping a leading slash and
+reading characters with byte_at; rename = find the inode, drop any existing new entry, link,
+unlink).  test/kernel is 82 passed, 0 failed / 82 total.
