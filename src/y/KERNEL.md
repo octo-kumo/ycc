@@ -2718,3 +2718,25 @@ Until now the filesystem could be written to from the KERNEL (create, unlink, mk
 kernel-side functions the fixtures call directly) but no ring-3 program could make a file
 of its own -- so a shell could read and rewrite existing files and nothing more.  With this,
 cp is read + openat(O_CREAT) + write, and a redirect or a save is the same three steps.
+
+### Round 167: cp works from ring 3 -- and its driver does not reach kexit
+
+    cp src=3 n=12 dst=4 w=12 back=0 n2=12 text=hi from yfs
+
+Read the source (12 bytes), create the destination with openat(O_CREAT) -- the first
+syscall a ring-3 program has used to make a FILE -- write the bytes, read the copy back and
+print it.  "hi from yfs" coming out of a file that did not exist a moment earlier is the
+whole proof, and with it the shape of every remaining M4 command: read + create + write,
+all from userland.
+
+ONE ANOMALY, recorded rather than hidden: qemu reports status 0 for this case, while the
+same driver shape ends at 19 in u012_catfile (kexit(9)).  Status 0 is what y_kexit(0)
+produces from the pick's "current task is dead and nothing else can run" branch -- the
+branch the TASK_BOOT work was meant to make unnecessary -- so in this run the driver's
+parked context was NOT resumed.  Two candidate differences from u012: this program leaves
+two descriptors open (fd 3 and fd 4) when it exits, and it is the first to have created a
+file.  The .exit file is therefore omitted, as u005 and u007 omitted theirs before the
+TASK_BOOT fix, and the transcript carries the assertion meanwhile.
+
+test/kernel is 80 passed, 0 failed / 81 total -- the extra case being u020 itself, whose
+transcript check passes.
