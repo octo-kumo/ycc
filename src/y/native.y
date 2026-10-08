@@ -93,6 +93,10 @@ let dbg_line: [long] = [];
 let res_pkgs: [str] = [];
 let res_roots: [str] = [];
 let res_used: [str] = [];
+// std library units the resolver saw imported BY NAME (math, args, ...):
+// they are linked units now, not spliced text, so native_resolve_x appends
+// them to the program's `std` (see std_lib_names).
+let res_std_lib: [str] = [];
 // The packages the unit being compiled imports (compile_unit): strip_ns
 // turns `json.parse` into the QUALIFIED name `json.parse` -- an id no Y
 // source can spell, bound to the package's export -- not into `parse`.
@@ -269,6 +273,13 @@ def resolve_unit(src: str, base_dir: str, depth: long, allow_exec: bool, root: s
     // so there is no name to test for. Unused helpers cost nothing in the
     // output -- prune_bodies drops them at link time.
     std += "rt";
+    // The library units the resolver saw imported by name; std_order keeps
+    // only the ones a program needs, so this is the whole selection.
+    let li = 0;
+    while (li < len(res_std_lib)) {
+        if (!name_in(std, res_std_lib[li])) { std += res_std_lib[li]; };
+        li = li + 1;
+    };
     // ogen is EMPTY for a unit with no blocks, which is what tells lint there is
     // no generator whose top level is this one (see lint_meta_top): a file with
     // blocks whose pieces happen to add no lines is still such a file.
@@ -902,11 +913,17 @@ def native_resolve_seen(src: str, base_dir: str, depth: long, seen: [str], smods
                         name = trim(name[:len(name) - 1]);
                     };
                     path = name;
-                    if (name_in(res_pkgs, name)) {
+                    if (name_in(res_pkgs, name) || std_lib_index(name) >= 0) {
                         // a dependency (ycc build): a unit of its own,
-                        // linked -- strip_ns qualifies its names
+                        // linked -- strip_ns qualifies its names. A std
+                        // library module takes the same path: the pack
+                        // carries its unit (std_lib_names), so nothing is
+                        // spliced and its `import`s are the pack's problem.
                         is_pkg = true;
                         if (!name_in(res_used, name)) { res_used += name; }
+                        if (std_lib_index(name) >= 0 && !name_in(res_std_lib, name)) {
+                            res_std_lib += name;
+                        }
                     } else {
                         full = std_resolve(name, base_dir);
                         // A std library module (args, net, math, ...) is spliced
@@ -12001,9 +12018,68 @@ def std_unit_src(name: str) -> str {
         EXEC_SRC
     } else if (name == "str") {
         STR_SRC
-    } else {
+    } else if (name == "rt") {
         RT_SRC
+    } else {
+        // a library unit: the same embedded text the splicer would have used
+        std_text(std_mod_src(name))
     }
+};
+
+// Blank the `export { ... };` lines a std module carries for the splicer (which
+// drops them before the lexer sees the text, see the splice); a unit compiled
+// straight from the same text has no splicer in the way. They are blanked, not
+// removed, so every line number below -- and so every `.loc` marker -- stays.
+def std_drop_exports(src: str) -> str {
+    let out: [str] = [];
+    let n = len(src);
+    let i = 0;
+    let start = 0;
+    let dropping = false;
+    while (i <= n) {
+        if (i == n || src[i] == '\n') {
+            let line = src[start:i];
+            let t = trim(line);
+            if (dropping) {
+                out += "";
+                if (index_of(line, "}") >= 0) { dropping = false; };
+            } else if (t[:7] == "export ") {
+                out += "";
+                if (index_of(line, "{") >= 0 && index_of(line, "}") < 0) { dropping = true; };
+            } else {
+                out += line;
+            };
+            start = i + 1;
+        };
+        i = i + 1;
+    };
+    join(out, "\n")
+};
+
+// A library std unit's place in the order below: its uids and global cells
+// start in a range of their own, past the packages' 5e9 + k*1e9 (ycc.y), so a
+// program linking both cannot collide. -1 is not a library unit.
+def std_lib_index(name: str) -> long {
+    let xs = std_lib_names();
+    let i = 0;
+    let found = -1;
+    while (i < len(xs)) {
+        if (xs[i] == name) { found = i; };
+        i = i + 1;
+    };
+    found
+};
+
+// Every std library unit, in the order std_unit_names appends them. A module
+// that imports another must come after it (fs after sort, tls after crypto/
+// x509/net): a unit's imports bind units, never splices.
+def std_lib_names() -> [str] {
+    // math first: it imports nothing, so it is the one library module the pack
+    // can compile without resolving a unit's own imports (fs imports sort,
+    // net imports fs, x509 crypto/fs/struct, tls crypto/x509/net, http
+    // net/tls, json sort -- that order is where the rest go, once
+    // std_compile resolves a library unit the way a package is resolved).
+    ["math"]
 };
 
 // The source of a std LIBRARY module (args, net, math, ...) as embedded in this
@@ -12059,19 +12135,28 @@ def std_unit_base(name: str) -> long {
         2000000000
     } else if (name == "str") {
         3000000000
-    } else {
+    } else if (name == "rt") {
         4000000000
+    } else {
+        let i = std_lib_index(name);
+        if (i < 0) { 0 } else { 1000000000000 + i * 1000000000 }
     }
 };
 
 // A library unit: the program sees its exports (see the section note).
 def std_unit_bound(name: str) -> bool {
-    name == "prelude" || name == "exec"
+    // the two units a program calls by bare name, and every library unit: those
+    // are referenced qualified (math.pi), see unit_externs
+    name == "prelude" || name == "exec" || std_lib_index(name) >= 0
 };
 
 // Every std unit, in link order (see native_resolve_x).
 def std_unit_names() -> [str] {
-    ["prelude", "exec", "str", "rt"]
+    let out = ["prelude", "exec", "str", "rt"];
+    std_lib_names().foreach((n) => {
+        out += n;
+    });
+    out
 };
 
 // The std units `names` (link order, see native_resolve_x): from `pack`
@@ -12104,7 +12189,7 @@ def std_units(names: [str], pack: str) -> [Unit] {
 // as one, and the run ends.
 def std_compile(name: str, ext: [Sym]) -> Unit {
     let path = "std/" + name + ".y";
-    let ssrc = std_text(std_unit_src(name));
+    let ssrc = std_drop_exports(std_text(std_unit_src(name)));
     // A std unit is tokenized straight from its embedded bytes, so it never
     // goes through meta_scan: a `#{` here would reach the lexer as a bare `#`
     // and be reported as an expression error. A block in a std source is a
@@ -14150,13 +14235,40 @@ def unit_iface(u: Unit) -> str {
 def unit_externs(std: [Unit], snames: [str], deps: [Unit], pkgs: [str]) -> Externs {
     let xt = externs_none();
     let ext: [Sym] = [];
+    let dfl: [Dfl] = [];
     let i = 0;
     while (i < len(std)) {
         let u = std[i];
-        if (std_unit_bound(u.name) && name_in(snames, u.name)) { ext += u.exports; }
+        if (std_unit_bound(u.name) && name_in(snames, u.name)) {
+            if (std_lib_index(u.name) < 0) {
+                ext += u.exports;
+            } else {
+                // a library unit is referenced through its namespace, exactly
+                // as a package is (see pkg_ns): math.pi, and strip_ns keeps the
+                // dot because the name is in xt.pkgs
+                let xs = u.exports;
+                let j = 0;
+                while (j < len(xs)) {
+                    let x = xs[j];
+                    ext += { name: u.name + "." + x.name, label: x.label, typ: x.typ };
+                    j++;
+                };
+                let ds = u.dfl;
+                j = 0;
+                while (j < len(ds)) {
+                    let d = ds[j];
+                    let dv = d.vals;
+                    let vals: [Node] = [];
+                    dv.foreach((e) => {
+                        vals += lit_decode(e);
+                    });
+                    dfl += { name: u.name + "." + d.name, vals: vals };
+                    j++;
+                };
+            };
+        };
         i++;
     };
-    let dfl: [Dfl] = [];
     i = 0;
     while (i < len(deps)) {
         let u = deps[i];

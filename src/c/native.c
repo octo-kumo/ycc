@@ -140,6 +140,10 @@ static Yv *dbg_line;
 static Yv *res_pkgs;
 static Yv *res_roots;
 static Yv *res_used;
+/* std library units the resolver saw imported BY NAME (math, args, ...): they
+ * are linked units now, not spliced text, so native_resolve_x appends them to
+ * the program's `std` (native.y res_std_lib). */
+static Yv *res_std_lib;
 static Yv *pkg_ns;
 /* tcode's and tdecode's recursive aliases (trefs) being spelled out and
  * read back, and the count behind the unit ids tdecode gives them. */
@@ -668,6 +672,8 @@ Yv *unit_obj(Yv *unit, Yv *key);
 Yv *unit_unobj(Yv *text, Yv *key);
 Yv *unit_iface(Yv *unit);
 Yv *unit_externs(Yv *std, Yv *snames, Yv *deps, Yv *pkgs);
+Yv *std_lib_names(void);
+ylong std_lib_index(Yv *name);
 Yv *compile_package(Yv *ast, Yv *nr, Yv *name, ylong base, ylong wlevel,
                     Yv *std, Yv *deps);
 Yv *emit_program(Yv *ast, Yv *nr, int debug, ylong wlevel, Yv *std, Yv *deps);
@@ -722,6 +728,7 @@ Yv *native_resolve_pk(Yv *src, Yv *base_dir, int allow_exec, Yv *root,
 Yv *resolve_unit(Yv *src, Yv *base_dir, ylong depth, int allow_exec,
                  Yv *root) {
     res_used = yav(0);
+    res_std_lib = yav(0);
     /* The program itself is de-duplicated by `self_path` and NOT by putting it in
      * `seen`. `seen` is also the file-id counter -- a nested call is handed
      * `len(seen)` -- so seeding it would shift every module's id in
@@ -828,6 +835,15 @@ Yv *resolve_unit(Yv *src, Yv *base_dir, ylong depth, int allow_exec,
      * so there is no name to test for. Unused helpers cost nothing in the
      * output -- prune_bodies drops them at link time. */
     std = ya_push(std, ys("rt"));
+    /* the library units the resolver saw imported by name; std_order keeps
+     * only the ones a program needs */
+    ylong li = 0;
+    while (li < yv_len(res_std_lib)) {
+        if (!name_in(std, ya_get(res_std_lib, li))) {
+            std = ya_push(std, ya_get(res_std_lib, li));
+        }
+        li = li + 1;
+    }
     /* ogen is EMPTY for a unit with no blocks, which is what tells lint there is
      * no generator whose top level is this one (see lint_meta_top): a file with
      * blocks whose pieces happen to add no lines is still such a file. */
@@ -1637,7 +1653,13 @@ Yv *native_resolve_seen(Yv *src, Yv *base_dir, ylong depth, Yv *seen,
                         ;
                     }
                     path = name;
-                    if (name_in(res_pkgs, name)) {
+                    if (name_in(res_pkgs, name) || std_lib_index(name) >= 0) {
+                        /* a std library module takes the package path too: the
+                         * pack carries its unit, nothing is spliced, and
+                         * strip_ns qualifies its names (native.y) */
+                        if (std_lib_index(name) >= 0 && !name_in(res_std_lib, name)) {
+                            res_std_lib = ya_push(res_std_lib, name);
+                        }
                         is_pkg = 1;
                         if (!name_in(res_used, name)) {
                             res_used = ya_push(res_used, name);
@@ -14077,6 +14099,44 @@ Yv *std_mod_src(Yv *name) {
     }
 }
 
+/* Blank the `export { ... };` lines a std module carries for the splicer (which
+ * drops them before the lexer sees the text); a unit compiled straight from the
+ * same text has no splicer in the way. Blanked, not removed, so every line
+ * number below -- and every `.loc` marker -- stays (native.y std_drop_exports).
+ * Std export lines start at column 0, so a prefix test is enough here. */
+Yv *std_drop_exports(Yv *src) {
+    Yv *out = yav(0);
+    ylong n = yv_len(src);
+    ylong i = 0;
+    ylong start = 0;
+    int dropping = 0;
+    while (i <= n) {
+        if (i == n || ys_byte_at(src, i) == 10) {
+            Yv *line = ys_slice(src, start, i);
+            ylong p = 0;
+            while (p < yv_len(line)
+                   && (ys_byte_at(line, p) == 32 || ys_byte_at(line, p) == 9)) {
+                p = p + 1;
+            }
+            if (dropping) {
+                out = ya_push(out, ys(""));
+                if (ys_index_of(line, ys("}")) >= 0) { dropping = 0; }
+            } else if (yv_len(line) - p >= 7
+                       && ys_eq(ys_slice(line, p, p + 7), ys("export "))) {
+                out = ya_push(out, ys(""));
+                if (ys_index_of(line, ys("{")) >= 0 && ys_index_of(line, ys("}")) < 0) {
+                    dropping = 1;
+                }
+            } else {
+                out = ya_push(out, line);
+            }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    return ys_join(out, ys("\n"));
+}
+
 Yv *std_unit_src(Yv *name) {
     if (ys_eq_lit(name, "prelude")) {
         return PRELUDE_SRC();
@@ -14084,9 +14144,33 @@ Yv *std_unit_src(Yv *name) {
         return EXEC_SRC();
     } else if (ys_eq_lit(name, "str")) {
         return STR_SRC();
-    } else {
+    } else if (ys_eq_lit(name, "rt")) {
         return RT_SRC();
+    } else {
+        /* a library unit: the same embedded text the splicer would have used.
+         * The C copy's std_mod_src already applies std_text (the Y twin's does
+         * not), so this is the one place the two idioms differ. */
+        return std_mod_src(name);
     }
+}
+
+/* A library std unit's place in the list below; -1 is not a library unit. */
+ylong std_lib_index(Yv *name) {
+    Yv *xs = std_lib_names();
+    ylong i = 0;
+    ylong found = -1;
+    while (i < yv_len(xs)) {
+        if (ys_eq(ya_get(xs, i), name)) { found = i; }
+        i = i + 1;
+    }
+    return found;
+}
+
+/* Every std library unit, in the order std_unit_names appends them. math first:
+ * it imports nothing, so it is the one the pack can compile before std_compile
+ * resolves a library unit's own imports the way a package's are resolved. */
+Yv *std_lib_names(void) {
+    return yav(1, ys("math"));
 }
 
 ylong std_unit_base(Yv *name) {
@@ -14096,17 +14180,31 @@ ylong std_unit_base(Yv *name) {
         return 2000000000L;
     } else if (ys_eq_lit(name, "str")) {
         return 3000000000L;
-    } else {
+    } else if (ys_eq_lit(name, "rt")) {
         return 4000000000L;
+    } else {
+        ylong i = std_lib_index(name);
+        if (i < 0) { return 0; }
+        return 1000000000000L + i * 1000000000L;
     }
 }
 
 int std_unit_bound(Yv *name) {
-    return ys_eq_lit(name, "prelude") || ys_eq_lit(name, "exec");
+    /* the two units a program calls by bare name, and every library unit:
+     * those are referenced qualified (math.pi), see unit_externs */
+    return ys_eq_lit(name, "prelude") || ys_eq_lit(name, "exec")
+        || std_lib_index(name) >= 0;
 }
 
 Yv *std_unit_names(void) {
-    return yav(4, ys("prelude"), ys("exec"), ys("str"), ys("rt"));
+    Yv *out = yav(4, ys("prelude"), ys("exec"), ys("str"), ys("rt"));
+    Yv *lib = std_lib_names();
+    ylong i = 0;
+    while (i < yv_len(lib)) {
+        out = ya_push(out, ya_get(lib, i));
+        i = i + 1;
+    }
+    return out;
 }
 
 Yv *std_units(Yv *names, Yv *pack) {
@@ -14151,7 +14249,7 @@ Yv *std_units(Yv *names, Yv *pack) {
  * as one, and the run ends. */
 Yv *std_compile(Yv *name, Yv *ext) {
     Yv *path = ys_cat(ys_cat(ys("std/"), name), ys(".y"));
-    Yv *ssrc = std_text(std_unit_src(name));
+    Yv *ssrc = std_drop_exports(std_text(std_unit_src(name)));
     /* A std unit is tokenized straight from its embedded bytes, so it never
      * goes through meta_scan: a `#{` here would reach the lexer as a bare `#`
      * and be reported as an expression error. A block in a std source is a
@@ -16772,22 +16870,53 @@ Yv *unit_iface(Yv *unit) {
 Yv *unit_externs(Yv *std, Yv *snames, Yv *deps, Yv *pkgs) {
     Yv *xt = externs_none();
     Yv *ext = yav(0);
+    Yv *dfl = yav(0);
     ylong i = 0;
     while (i < yv_len(std)) {
         Yv *u = ya_get(std, i);
         Yv *un = yr_get(u, "name");
         if (std_unit_bound(un) && name_in(snames, un)) {
-            Yv *exports = yr_get(u, "exports");
-            ylong j = 0;
-            while (j < yv_len(exports)) {
-                ext = ya_push(ext, ya_get(exports, j));
-                j = j + 1;
+            if (std_lib_index(un) < 0) {
+                Yv *exports = yr_get(u, "exports");
+                ylong j = 0;
+                while (j < yv_len(exports)) {
+                    ext = ya_push(ext, ya_get(exports, j));
+                    j = j + 1;
+                }
+                ;
+            } else {
+                /* a library unit is referenced through its namespace, exactly
+                 * as a package is (see pkg_ns): math.pi, and strip_ns keeps the
+                 * dot because the name is in xt.pkgs */
+                Yv *xs = yr_get(u, "exports");
+                ylong j = 0;
+                while (j < yv_len(xs)) {
+                    Yv *x = ya_get(xs, j);
+                    ext = ya_push(ext, yr(3, "name",
+                        ys_cat(ys_cat(un, ys(".")), yr_get(x, "name")),
+                        "label", yr_get(x, "label"), "typ", yr_get(x, "typ")));
+                    j = j + 1;
+                }
+                Yv *ds = yr_get(u, "dfl");
+                j = 0;
+                while (j < yv_len(ds)) {
+                    Yv *d = ya_get(ds, j);
+                    Yv *dv = yr_get(d, "vals");
+                    Yv *vals = yav(0);
+                    ylong k = 0;
+                    while (k < yv_len(dv)) {
+                        vals = ya_push(vals, lit_decode(ya_get(dv, k)));
+                        k = k + 1;
+                    }
+                    dfl = ya_push(dfl, yr(2, "name",
+                        ys_cat(ys_cat(un, ys(".")), yr_get(d, "name")),
+                        "vals", vals));
+                    j = j + 1;
+                }
             }
-            ;
         }
         i = i + 1;
     }
-    Yv *dfl = yav(0);
     i = 0;
     while (i < yv_len(deps)) {
         Yv *u = ya_get(deps, i);
