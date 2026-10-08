@@ -846,7 +846,7 @@ that wrote it — `[ycc][pack][pack length, 8 digits][YCCPACK1]` (the
 Makefile's `PACK`). Each compile reads the pack back from
 `/proc/self/exe` (`self_pack` in ycc.y) and links the units it needs
 straight from it. The pack is netstrings: a version line
-(`ycc-std-pack 6`), then each unit's name and fields as netstrings —
+(`ycc-std-pack 7`), then each unit's name and fields as netstrings —
 its bodies, each body's label and the labels it references (so linking
 never rescans std code), rodata, globals, init label, and its exports
 with their types in a prefix code (`tcode`/`tdecode`: total over every
