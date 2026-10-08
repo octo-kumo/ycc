@@ -866,6 +866,46 @@ What is precompiled is therefore everything up to the encoder: the std
 units are stored as items, not machine code, and the assembler still
 encodes the std bodies a program keeps along with the program's own.
 
+### Packing a library unit: what a spike proved
+
+Making the pack carry a library module instead of splicing it was spiked twice,
+by adding the module to `std_unit_names` and reading the errors out of
+`--std-pack`:
+
+    ycc: internal error: std/args.y:524:1: undefined variable 'export'
+    ycc: internal error: std/args.y:524:8: expected ';', got '{'
+    ycc: internal error: std/fs.y:33:1: undefined variable 'import'
+    ycc: internal error: std/fs.y:33:8: expected ';', got 'sort'
+
+Two obstacles, in order:
+
+1. A library module ends with `export { ... };` for the *splicer*, which drops
+   those lines before the lexer sees the text (`native.y`, the splice's
+   `trimmed[:7] != "export "` rule, through the line that closes the list).
+   `std_compile` lexes the embedded text directly, so the same lines must be
+   blanked there -- blanked, not removed, so every line number below them and
+   every `.loc` marker stays what it was. With that, `args` compiles.
+
+2. Then a module that imports another fails on its own `import` line, because
+   `std_compile` passes `noimports` and feeds raw text: `fs` imports `sort`,
+   `json` imports `sort`, `net` imports `fs`, `x509` imports `crypto`/`fs`/
+   `struct`, `tls` imports `crypto`/`x509`/`net` and `http` imports `net`/`tls`
+   (`math` imports nothing). A library unit therefore has to be resolved the way
+   a package is: its `import X;` lines bind `X` as a unit namespace
+   (`unit_externs`' package arm, `pkg_ns`), never a splice, and the units are
+   compiled in dependency order with the earlier ones' exports passed in. That
+   is `native_resolve_pk`/`compile_package`'s shape, and it is the bulk of the
+   work this section's plan calls Workstream 3.
+
+Both obstacles were reproduced from a clean build and the spike was reverted;
+the scaffolding is small (the source dispatch, a library base range past the
+packages' `5e9 + k*1e9`, and the blanking) but it belongs in a change that also
+portals to `src/c`, so it lands with the resolution work rather than before it.
+
+Read the answer to obstacle 1 off the error's column (`524:1`): a std export
+line starts at column 0, which is why the splicer's `trim` is not load-bearing
+there and a prefix test is enough.
+
 ### The pack's size, and what is left to the codec
 
 `test/sh/pack_stats.py` parses the pack field by field and now knows the
