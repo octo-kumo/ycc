@@ -2083,3 +2083,31 @@ TWO GAPS the table makes explicit, both real work rather than detail:
 Neither gap is a surprise: the milestone order put the read side first so that the
 loader, the broker and the syscall layer could be proven with fixtures (they are,
 from ring 3), and write support is what the fs server will need anyway.
+
+### Round 127: moving elfload into std does not work -- and a guard that lied
+
+Attempted the move that execve needs (os/kernel/elfload.y -> src/y/std/elfload.y,
+imported by std/kernel.y, fixtures calling elf_map unqualified) and it FAILED for a
+language-level reason worth recording:
+
+    src/y/std/elfload.y:41: error: undefined variable 'kernel.PTE_U'
+    (then, with the qualifications removed)
+    src/y/std/elfload.y:41: error: undefined variable 'PTE_U'
+
+A std unit imported BY the kernel cannot see the kernel's constants -- not
+qualified, and not through the "imported files share one namespace" rule either,
+because the unit is checked on its own before the splice.  So a std unit the kernel
+imports must be SELF-CONTAINED: yfs.y and fd.y are (they use only peek/poke, which
+they inherited the same way... and which is exactly why the rule worked for them),
+while elfload.y needs PTE_U/PTE_W from the kernel and cannot have them.
+
+Reverted; test/kernel is 61 passed, 0 failed / 61 total.  execve therefore needs a
+different route -- either elfload's constants move into the loader, or the kernel
+gets its own minimal mapping routine.
+
+THE PROCESS FAILURE, and the worst of this session: the bad commit went in because
+my commit guard matched "0 failed" inside the suite's SKIP summary --
+"0 passed, 0 failed / 0 total (plus 1 skipped)" -- where the kernel probe had failed
+because this same error made every kernel program uncompilable.  A guard must assert
+that cases RAN: check a PASS COUNT, never the absence of a failure count.  The retry
+used exactly that and correctly refused to commit a second time.
