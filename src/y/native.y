@@ -14728,10 +14728,19 @@ def lz_decode(s: str) -> str {
             if (at + ll > n) {
                 ok = false;
             } else {
-                let q = 0;
-                while (q < ll) {
-                    out += b[at + q];
-                    q = q + 1;
+                // A run of 8 or more appended whole: a push a byte was half of
+                // a small compile (lz_decode and y_arr_push, hello.y). A
+                // shorter one is pushed: a slice is a temporary array, and with
+                // every piece sliced the garbage cost tmath.y a collection
+                // cycle (+10%); measured at 8, 16 and 32, 8 is best throughout.
+                if (ll >= 8) {
+                    out += b[at:at + ll];
+                } else {
+                    let q = 0;
+                    while (q < ll) {
+                        out += b[at + q];
+                        q = q + 1;
+                    };
                 };
                 at = at + ll;
             };
@@ -14761,11 +14770,23 @@ def lz_decode(s: str) -> str {
                     ok = false;
                 };
                 if (ok) {
-                    let src = len(out) - moff;
-                    let k = 0;
-                    while (k < mlen) {
-                        out += out[src + k];
-                        k = k + 1;
+                    // A copy may overlap what it produces (moff < mlen repeats
+                    // the last moff bytes), so it goes a chunk of at most moff
+                    // bytes at a time, each one already there.
+                    let left = mlen;
+                    while (left > 0) {
+                        let src = len(out) - moff;
+                        let take = if (left < moff) { left } else { moff };
+                        if (take >= 8) {
+                            out += out[src:src + take];
+                        } else {
+                            let k = 0;
+                            while (k < take) {
+                                out += out[src + k];
+                                k = k + 1;
+                            };
+                        };
+                        left = left - take;
                     };
                 };
             };

@@ -71,7 +71,9 @@ while (k < msize) { p8(img + bsrc + k, kernel.peek8(mphys + k)); k = k + 1; };
 let ok = yfs.yfs_init(img);
 let ino = yfs.yfs_lookup_path("/prog");
 let size = yfs.yfs_size(ino);
-print("fs ok=" + tostring(ok) + " ino=" + tostring(ino) + " size=" + tostring(size) + "\n");
+// the size the file system reports is the module's (a size printed as a
+// number changed with every runtime change)
+print("fs ok=" + tostring(ok) + " ino=" + tostring(ino) + " size_ok=" + tostring(size == msize) + "\n");
 let dir = kernel.vm_new_dir();
 kernel.vm_switch(dir);
 let entry = elf.elf_map(img + bsrc, size);

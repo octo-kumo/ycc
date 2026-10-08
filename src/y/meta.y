@@ -1233,7 +1233,9 @@ def sg_next(i: long, n: long) -> long {
     let found = false;
     while (j < n && !found) {
         let c = sg_src[j];
-        if ([35, 34, 39, 47, 123, 125, 59, 10].index(c) >= 0) {
+        // compares, not `[...].index(c)`: the literal was an array allocated
+        // for every byte of every file with a '#' in it
+        if (c == 35 || c == 34 || c == 39 || c == 47 || c == 123 || c == 125 || c == 59 || c == 10) {
             found = true;
         } else if (sg_depth > 0 && m_word(c)) {
             found = true;

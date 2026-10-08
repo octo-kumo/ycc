@@ -17405,11 +17405,10 @@ static Yv *lz_decode(Yv *s) {
             if (at + ll > n) {
                 ok = 0;
             } else {
-                ylong q = 0;
-                while (q < ll) {
-                    out = ya_push(out, ya_get(b, at + q));
-                    q = q + 1;
-                }
+                /* the run appended whole (native.y): a push a byte was half
+                   of a small compile there */
+                Yv *run = ya_slice(b, at, at + ll);
+                for (ylong q = 0; q < yv_len(run); q++) { out = ya_push(out, ya_get(run, q)); }
                 at = at + ll;
             }
         }
@@ -17439,11 +17438,16 @@ static Yv *lz_decode(Yv *s) {
                     ok = 0;
                 }
                 if (ok) {
-                    ylong src = yv_len(out) - moff;
-                    ylong k = 0;
-                    while (k < mlen) {
-                        out = ya_push(out, ya_get(out, src + k));
-                        k = k + 1;
+                    /* A copy may overlap what it produces (moff < mlen repeats
+                       the last moff bytes), so it goes a chunk of at most moff
+                       bytes at a time, each one already there. */
+                    ylong left = mlen;
+                    while (left > 0) {
+                        ylong src = yv_len(out) - moff;
+                        ylong take = left < moff ? left : moff;
+                        Yv *chunk = ya_slice(out, src, src + take);
+                        for (ylong q = 0; q < take; q++) { out = ya_push(out, ya_get(chunk, q)); }
+                        left = left - take;
                     }
                 }
             }

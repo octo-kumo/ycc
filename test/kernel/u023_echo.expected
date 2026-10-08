@@ -1,4 +1,4 @@
-fs ok=true ino=2 size=4884
+fs ok=true ino=2 size_ok=true
 
 hello world
 

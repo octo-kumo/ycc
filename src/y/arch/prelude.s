@@ -759,6 +759,8 @@ y_gc_resolve:
     mov y_gc_hi(%rip), %rax
     cmp %rax, %rdi
     jae ygr_no
+# y_gc_resolve_in: the same, for a caller that has checked the bounds
+y_gc_resolve_in:
     mov %rdi, %rax
     shr $22, %rax
     and $16383, %rax
@@ -844,7 +846,7 @@ ygsw_loop:
     jb ygsw_loop
     cmp %r14, %rdi
     jae ygsw_loop
-    call y_gc_resolve
+    call y_gc_resolve_in
     jmp ygsw_loop
 ygsw_done:
     pop %r14
@@ -905,6 +907,7 @@ ygp1_chunk:
     jz ygp1_next
     mov %r11, %r12
     mov 16(%rbx), %r13
+    mov 8(%rbx), %r10
 # Rebuild the start map from scratch: a bit left over from a block that has
 # since been coalesced into a larger free run would otherwise resolve a
 # candidate to the middle of that run -- and shadow the real block, so a
@@ -925,34 +928,33 @@ ygp1_zmap:
     dec %rdx
     jnz ygp1_zmap
 ygp1_block:
-    mov 8(%rbx), %rcx
-    cmp %rcx, %r12
+    cmp %r10, %r12
     jae ygp1_next
-    mov (%r12), %r14
-    test %r14, %r14
-    jz ygp1_next
-    mov %r14, %r15
+    mov (%r12), %r15
     and $-8, %r15
-    test %r15, %r15
-    jz y_bad_trap
-    mov %r12, %rdx
-    add %r15, %rdx
-    cmp %rcx, %rdx
+    jz ygp1_hdr0
+    lea (%r12,%r15,1), %r14
+    cmp %r10, %r14
     ja y_bad_trap
-    mov %r12, %r8
-    sub %r11, %r8
-    shr $3, %r8
-    mov %r8, %r9
+    mov %r12, %rcx
+    sub %r11, %rcx
+    shr $3, %rcx
+    mov %rcx, %r9
     shr $3, %r9
     movzbq (%r13,%r9,1), %rdx
-    mov %r8, %rcx
     and $7, %ecx
     mov $1, %rax
     shl %cl, %rax
     or %rax, %rdx
     mov %dl, (%r13,%r9,1)
-    add %r15, %r12
+    mov %r14, %r12
     jmp ygp1_block
+# a zero size: the end of the chunk's blocks when the whole header is 0, a
+# broken header otherwise
+ygp1_hdr0:
+    mov (%r12), %rax
+    test %rax, %rax
+    jnz y_bad_trap
 ygp1_next:
     mov 24(%rbx), %rbx
     jmp ygp1_chunk
@@ -1282,20 +1284,24 @@ ygc_sweep_block:
     jz ygc_sweep_runend
     mov %rax, %rsi
     and $-8, %rsi
-    test %rsi, %rsi
     jz y_bad_trap
-    mov %r13, %rcx
-    add %rsi, %rcx
+    lea (%r13,%rsi,1), %rcx
     cmp %r10, %rcx
     ja y_bad_trap
-    test $1, %rax
-    jz ygc_sweep_dead
-    test $2, %rax
-    jz ygc_sweep_dead
+# live is allocated (bit 0) and marked (bit 1): both, in one test
+    mov %rax, %rcx
+    and $3, %rcx
+    cmp $3, %rcx
+    jne ygc_sweep_dead
+# a live block closes the open free run, if there is one; the call returned
+# at once when there was not, and that was most of the calls
+    test %r14, %r14
+    jz ygc_sweep_live
     call y_gc_flush_run
     mov (%r13), %rax
     mov %rax, %rsi
     and $-8, %rsi
+ygc_sweep_live:
     and $-3, %rax
     mov %rax, (%r13)
     add %rsi, %r12
