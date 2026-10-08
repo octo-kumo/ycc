@@ -29,15 +29,17 @@ import su_gc;
 import su_eof;
 import su_treeshake;
 import su_std;
+import su_net;
+import su_pkg;
 import pack;
 import deadcode;
 import pty;
 
-let ALL = ["port", "pe-port", "native", "native-examples", "examples", "audit", "ycc-units", "loops", "comprehensive", "ycc", "fixpoint", "debug", "link", "gc", "stdin-eof", "treeshake", "std-suites"];
+let ALL = ["port", "pe-port", "native", "native-examples", "examples", "audit", "ycc-units", "loops", "comprehensive", "ycc", "fixpoint", "debug", "link", "gc", "stdin-eof", "treeshake", "std-suites", "net", "pkg"];
 
 // Suites that drive the built ./ycc; skipped without it.
 def needs_ycc(name: str) -> bool {
-    name == "native" || name == "native-examples" || name == "ycc" || name == "fixpoint" || name == "debug" || name == "link"
+    name == "native" || name == "native-examples" || name == "ycc" || name == "fixpoint" || name == "debug" || name == "link" || name == "pkg"
 };
 
 def suite_cases(name: str) -> [yt.Case] {
@@ -56,6 +58,8 @@ def suite_cases(name: str) -> [yt.Case] {
     if (name == "stdin-eof") { return su_eof.cases(); };
     if (name == "treeshake") { return su_treeshake.cases(); };
     if (name == "std-suites") { return su_std.cases(); };
+    if (name == "net") { return su_net.cases(); };
+    if (name == "pkg") { return su_pkg.cases(); };
     if (name == "loops") { return su_inline.loops(); };
     if (name == "comprehensive") { return su_inline.comprehensive(); };
     []

@@ -115,6 +115,7 @@ type Cmd = {
     env: [str],     // "K=V" overrides
     merge: bool,    // stderr into stdout (2>&1)
     out: str,       // write stdout to this file instead of capturing it
+    nofile: long,   // RLIMIT_NOFILE (ulimit -n); 0 leaves the inherited one
 };
 
 /** How it went: the exit code (128 + signal; 124 on a timeout), the output. */
@@ -127,7 +128,7 @@ let SCALE = 1;
 
 def cmd(argv: [str]) -> Cmd {
     { argv: argv, cwd: "", stdin: "", input: "", timeout: 60 * SCALE, mem_kb: MEM_KB,
-      env: [], merge: false, out: "" }
+      env: [], merge: false, out: "", nofile: 0 }
 };
 
 def cz(s: str) -> [byte] {
@@ -155,7 +156,12 @@ def ch_die(msg: str) -> void {
     syscall(231, 127);
 };
 
-def run(c: Cmd) -> Res {
+/** A started command: its pid, files, and once reaped its exit code. */
+type Proc = { pid: long, t0: long, deadline: long, outp: str, errp: str, inp: str, keep_out: bool,
+              done: bool, code: long, timed_out: bool };
+
+/** Start `c` and return at once; `wait` or `kill` it later. */
+def start(c: Cmd) -> Proc {
     let t0 = clock_us();
     let search = env("PATH", "/usr/bin:/bin");
     foreach (e in c.env) {
@@ -195,10 +201,14 @@ def run(c: Cmd) -> Res {
         let want = c.mem_kb * 1024;
         if (rl[1] < 0 || want < rl[1]) { rl[0] = want; } else { rl[0] = rl[1]; };
     };
+    let nf: [long; 2] = [0; 2];
+    nf[0] = c.nofile;
+    nf[1] = c.nofile;
     let pid = syscall(57);
     if (pid == 0) {
         syscall(109, 0, 0);
         if (c.mem_kb > 0) { syscall(160, 9, &rl[0]); };
+        if (c.nofile > 0) { syscall(160, 7, &nf[0]); };
         ch_redirect(inp, 0, 0);
         ch_redirect(outp, 577, 1);
         if (c.merge) { syscall(33, 1, 2); } else { ch_redirect(errp, 577, 2); };
@@ -206,38 +216,59 @@ def run(c: Cmd) -> Res {
         if (path != "") { syscall(59, &pz[0], ptr_addr(&av[0]), ptr_addr(&ev[0])); };
         ch_die("ytest: cannot run " + c.argv[0]);
     };
-    if (pid < 0) {
-        return { code: -1, out: "", err: "ytest: fork failed", timed_out: false, ms: 0 };
-    };
-    let st: [long; 1] = [0; 1];
     let deadline = if (c.timeout > 0) { t0 + c.timeout * 1000000 } else { 0 };
+    { pid: pid, t0: t0, deadline: deadline, outp: outp, errp: errp, inp: if (inp != c.stdin && inp != "/dev/null") { inp } else { "" },
+      keep_out: c.out != "", done: pid < 0, code: if (pid < 0) { -1 } else { 0 }, timed_out: false }
+};
+
+// Reap p if it has ended (`block`: wait for it); true once it has.
+def reap(p: Proc, block: bool) -> bool {
+    if (p.done) { return true; };
+    let st: [long; 1] = [0; 1];
+    let r = syscall(61, p.pid, &st[0], if (block) { 0 } else { 1 }, 0);
+    if (r == 0) { return false; };
+    let s = st[0] & 65535;
+    p.code = if (r < 0) { -1 } else if ((s & 127) == 0) { (s >> 8) & 255 } else { 128 + (s & 127) };
+    p.done = true;
+    true
+};
+
+/** Is p still running? */
+def alive(p: Proc) -> bool { !reap(p, false) };
+
+/** Kill p's whole process group and reap it. */
+def kill(p: Proc) {
+    if (!p.done) {
+        syscall(62, 0 - p.pid, 9);
+        syscall(62, p.pid, 9);
+        reap(p, true);
+    };
+};
+
+/** Wait for p (up to its deadline, then kill it: code 124) and collect its output. */
+def wait(p: Proc) -> Res {
     let nap = 20;
-    let timed_out = false;
-    let go = true;
-    while (go) {
-        let r = syscall(61, pid, &st[0], 1, 0);
-        if (r != 0) {
-            go = false;
-        } else if (deadline > 0 && clock_us() > deadline) {
-            syscall(62, 0 - pid, 9);
-            syscall(62, pid, 9);
-            syscall(61, pid, &st[0], 0, 0);
-            timed_out = true;
-            go = false;
+    while (!reap(p, false)) {
+        if (p.deadline > 0 && clock_us() > p.deadline) {
+            kill(p);
+            p.code = 124;
+            p.timed_out = true;
         } else {
             sleep_us(nap);
             if (nap < 2000) { nap = nap * 2; };
         };
     };
-    let s = st[0] & 65535;
-    let code = if (timed_out) { 124 } else if ((s & 127) == 0) { (s >> 8) & 255 } else { 128 + (s & 127) };
-    let out = if (c.out != "") { "" } else { read(outp) };
-    let err = read(errp);
-    if (c.out == "") { fs.remove_file(outp); };
-    fs.remove_file(errp);
-    if (inp != c.stdin && inp != "/dev/null") { fs.remove_file(inp); };
-    { code: code, out: out, err: err, timed_out: timed_out, ms: (clock_us() - t0) / 1000 }
+    let out = if (p.keep_out) { "" } else { read(p.outp) };
+    let err = read(p.errp);
+    if (!p.keep_out) { fs.remove_file(p.outp); };
+    fs.remove_file(p.errp);
+    if (p.inp != "") { fs.remove_file(p.inp); };
+    let res: Res = { code: p.code, out: out, err: err, timed_out: p.timed_out, ms: (clock_us() - p.t0) / 1000 };
+    if (p.pid < 0) { res.err = "ytest: fork failed"; };
+    res
 };
+
+def run(c: Cmd) -> Res { wait(start(c)) };
 
 /** Run argv with the defaults, stderr kept apart. */
 def exe(argv: [str]) -> Res { run(cmd(argv)) };
@@ -533,7 +564,7 @@ def init() {
     COLOR = syscall(16, 1, 21505, &tio[0]) == 0 && env("NO_COLOR", "") == "";
 };
 
-export { Cmd, Res, Case, Done, self_exe, scratch, tmp, tmp_dir, cleanup, environ, env, which,
+export { Cmd, Res, Proc, start, reap, alive, kill, wait, Case, Done, self_exe, scratch, tmp, tmp_dir, cleanup, environ, env, which,
     cmd, run, exe, exe2, sh, q, read, write, concat, same_file, size, ls, files, num, le, bytes_of, have, hex, sleep_us, tree, clip, lines,
     first_line, words, has_line, cz, sleep_us, say, pass, fail, skip, check, case_of, run_cases, init, paint, getpid,
     MEM_KB, SCALE, QUIET };
