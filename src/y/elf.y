@@ -111,14 +111,21 @@ def elf_build(code: [byte], rodata: [byte], entry_off: long, bss_len: long, syms
     if (bss_len > 0) {
         // PHDR: PT_LOAD, R+W, nothing from the file (the kernel maps
         // zeroed pages; -g: a few zero bytes, see elf_debug), on the page
-        // after the file mapping.
+        // after the file mapping. The .bss itself starts code_off bytes into
+        // that page -- asm.y places its labels from the CODE's start
+        // (elf_bss_from_ro), and the code starts code_off into the file -- so
+        // the segment spans code_off + bss_len. Mapping only bss_len left the
+        // last code_off bytes outside it: harmless while they shared the
+        // segment's last page, a SIGSEGV once they crossed into the next (the
+        // collector's root scan reading y_bss_hi's last word, in the language
+        // server's t015_xref).
         out = push_le32(out, 1);
         out = push_le32(out, 6);
         out = push_le64(out, dbg.bss_foff);
         out = push_le64(out, bss_vaddr);
         out = push_le64(out, bss_vaddr);
         out = push_le64(out, dbg.bss_fsz);
-        out = push_le64(out, bss_len);
+        out = push_le64(out, code_off + bss_len);
         out = push_le64(out, 4096);
     }
     out = push_bytes(out, code);
@@ -150,7 +157,10 @@ def elf_debug(code_off: long, codesz: long, ro_len: long, filesz: long, bss_vadd
     } else {
         let base = 4194304;
         let ro_off = code_off + codesz;
-        let bss_addr = base + bss_vaddr;
+        // where the labels put the .bss (see the R+W PHDR in elf_build):
+        // bss_vaddr already holds the base, and adding it again put every -g
+        // .bss symbol 4 MiB away from its object
+        let bss_addr = bss_vaddr + code_off;
         let bss_idx = 0;
         let symtab_idx = 3;
         if (bss_len > 0) {

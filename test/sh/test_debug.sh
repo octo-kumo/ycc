@@ -119,6 +119,16 @@ else
     else
         fail "sections .text .rodata .bss .symtab .strtab .shstrtab" "got: $secs"
     fi
+    # The .bss must lie inside the R+W segment that maps it: it starts code_off
+    # bytes into the segment's page (elf.y elf_build), and a segment of only
+    # bss_len bytes left its tail unmapped -- the collector's root scan faulted on
+    # it once it crossed a page. The section header (where -g says the .bss is)
+    # once added the load base twice, too. Both show here.
+    if bss_rng=$(python3 "$ROOT/test/sh/elf_bss_check.py" "$TMPD/dbg" 2>&1); then
+        pass "the .bss lies inside the R+W segment ($bss_rng)"
+    else
+        fail "the .bss lies inside the R+W segment" "$bss_rng"
+    fi
     dsecs=$(readelf -S -W "$TMPD/dbg" | grep -oE '\.debug_[a-z]+ ' | tr -d ' ' | tr '\n' ' ')
     if [ "$dsecs" = ".debug_info .debug_abbrev .debug_line " ]; then
         pass "sections .debug_info .debug_abbrev .debug_line"

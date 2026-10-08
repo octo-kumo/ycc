@@ -125,7 +125,9 @@ Yv *elf_build(Yv *code, Yv *rodata, ylong entry_off, ylong bss_len,
         out = push_le64(out, bss_vaddr);
         out = push_le64(out, bss_vaddr);
         out = push_le64(out, yv_l(yr_get(dbg, "bss_fsz")));
-        out = push_le64(out, bss_len);
+        /* the .bss starts code_off into the page: asm places its labels from
+         * the CODE's start (elf.y) */
+        out = push_le64(out, code_off + bss_len);
         out = push_le64(out, 4096);
         ;
     }
@@ -162,7 +164,9 @@ Yv *elf_debug(ylong code_off, ylong codesz, ylong ro_len, ylong filesz,
     } else {
         ylong base = 4194304;
         ylong ro_off = code_off + codesz;
-        ylong bss_addr = base + bss_vaddr;
+        /* where the labels put the .bss: bss_vaddr already holds the base
+         * (elf.y) */
+        ylong bss_addr = bss_vaddr + code_off;
         ylong bss_idx = 0;
         ylong symtab_idx = 3;
         if (bss_len > 0) {
