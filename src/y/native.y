@@ -4748,7 +4748,7 @@ def bind_own(st: EmitSt, name: str, t: Type) -> EmitSt {
 
 // A statement nobody takes the value of. `s += x` on an appendable string
 // (an "own" local, or a global with a companion cell) goes through
-// gen_sappend (the checker made x a str); anything else is plain gen.
+// gen_sappend (the checker made x a str or a byte); anything else is plain gen.
 def gen_stmt(st: EmitSt, node: Node) -> EmitSt {
     if (node.k == K.id) {
         // A local read as a statement is one `mov %rbp`-relative nobody reads:
@@ -4810,6 +4810,12 @@ def gen_sappend(st: EmitSt, v: Node, var_lbl: long, var_disp: long,
     st = emit_insn(st, insn.F_MOV_R_P, insn.R_RAX, 64, ca[0], ca[1], ca[2],
         ca[3], ca[4]);
     st = gen(st, v);
+    if (infer(st, v).k == K.tbyte) {
+        // `s += b` appends the character, as `s + b` does (gen_cat)
+        st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_chr"), 0, 0, 0, 0, 0, 0);
+        st = emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0);
+    };
     st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
     st = emit_insn(st, insn.F_MOV_P_R, ca[0], ca[1], ca[2], ca[3], ca[4],
         insn.R_RAX, 64);
@@ -5279,17 +5285,17 @@ def gen_cat(st: EmitSt, node: Bin, lt: Type, rt: Type) -> EmitSt {
             st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_cat"), 0, 0, 0, 0, 0, 0);
             st = emit_insn(st, insn.F_ADD_I_R, 16, insn.R_RSP, 64, 0, 0, 0, 0)
         } else if (rt.k == K.tbyte) {
-            // A byte stringifies as the number it holds: `s[i]` is a byte, so
-            // this is the shape a glyph ramp or a lookup table builds a string
-            // with. Without the arm a byte fell through to the unknown-
-            // operand arm below, which pushes the VALUE where y_str_cat
-            // wants a pointer -- a dereference of 65, and SIGSEGV. `gen` leaves
-            // a byte zero-extended in %rax, so y_long_tostr takes it as it is.
+            // A byte is a character here, not a number: `s + b` appends the
+            // one-byte string chr(b) (`s[i]` is a byte, so `out + s[i]` copies
+            // a character). `gen` leaves a byte zero-extended in %rax, which
+            // is what y_str_chr takes. Without the arm a byte fell through to
+            // the unknown-operand arm below, which pushes the VALUE where
+            // y_str_cat wants a pointer -- a dereference of 65, and SIGSEGV.
             st = gen(st, node.l);
             st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
             st = gen(st, node.r);
             st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
-            st = emit_insn(st, insn.F_CALL_L, lbl_new("y_long_tostr"), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_chr"), 0, 0, 0, 0, 0, 0);
             st = emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0);
             st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
             st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_cat"), 0, 0, 0, 0, 0, 0);
@@ -5347,10 +5353,10 @@ def gen_cat(st: EmitSt, node: Bin, lt: Type, rt: Type) -> EmitSt {
             st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_cat"), 0, 0, 0, 0, 0, 0);
             st = emit_insn(st, insn.F_ADD_I_R, 16, insn.R_RSP, 64, 0, 0, 0, 0)
         } else if (lt.k == K.tbyte) {
-            // the mirror of the right-operand byte arm
+            // the mirror of the right-operand byte arm: `b + s` prepends chr(b)
             st = gen(st, node.l);
             st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
-            st = emit_insn(st, insn.F_CALL_L, lbl_new("y_long_tostr"), 0, 0, 0, 0, 0, 0);
+            st = emit_insn(st, insn.F_CALL_L, lbl_new("y_str_chr"), 0, 0, 0, 0, 0, 0);
             st = emit_insn(st, insn.F_ADD_I_R, 8, insn.R_RSP, 64, 0, 0, 0, 0);
             st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
             st = gen(st, node.r);

@@ -1,6 +1,8 @@
-// `+` on a string auto-stringifies the non-string side, and a `byte` is a
-// number like any other: `s[i]` yields one, so building a string from a
-// glyph ramp or a digit table is the shape this file is. The emitter had
+// `+` on a string auto-stringifies a number, but a `byte` is a character:
+// `s + b` and `b + s` add the one-byte string chr(b), so building a string
+// from a glyph ramp or a digit table copies characters (the `+=` form is
+// t400_str_byte_char.y). `s[i]` yields a byte, which is the shape this file
+// is. Before the byte arm the emitter had
 // arms for `long`, `float` and `bool` and none for `byte`, which fell
 // through to the unknown-operand arm and pushed the byte's *value* where
 // `y_str_cat` wants a pointer -- a dereference of 65, and SIGSEGV, with no

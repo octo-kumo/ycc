@@ -3482,7 +3482,10 @@ def opassign_check(st: TcSt, node: OpAssign, tt: Type, vt: Type) -> TcRes {
         }
     } else if (tt.k == K.tstr) {
         if (op == "+") {
-            st = expect_type(st, vt, type_node({ k: K.tstr }), "'+=' string", node.line, node.col);
+            // a byte appends as a character, like `s + b`
+            if (vt.k != K.tbyte) {
+                st = expect_type(st, vt, type_node({ k: K.tstr }), "'+=' string", node.line, node.col);
+            };
             tc_res(tt, st)
         } else {
             st = fail(st, "strings support only '+=' (concatenate), not '" + op + "='", node.line, node.col);

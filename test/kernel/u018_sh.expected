@@ -1,4 +1,4 @@
-fs ok=true ino=2 size=5484
+fs ok=true ino=2 size=5496
 
 sh run /prog
 

@@ -309,6 +309,20 @@ def cwd() -> str {
     if (n <= 0) { "" } else { from_bytes(buf[0:n - 1]) }
 };
 
+/** The value of environment variable `name`, or `none` if it is unset. Read from
+/proc/self/environ, so it is the environment the process started with (there
+is no setenv) and, with no /proc, `none` -- on Windows too. */
+def getenv(name: str) -> str? {
+    let all = read_file("/proc/self/environ");
+    if (all == none) { return none; };
+    let pre = name + "=";
+    let n = len(pre);
+    foreach (e in split(all!, chr(0))) {
+        if (len(e) >= n && e[0:n] == pre) { return some(e[n:]); };
+    };
+    none
+};
+
 def chdir(path: str) -> bool { os_call("y_os_chdir", path, len(path)) == 0 };
 
 // ── paths ───────────────────────────────────────────────────────────────
@@ -366,4 +380,4 @@ def path_join(a: str, b: str) -> str {
     else { a + "/" + b }
 };
 
-export { open_file, close_file, read_some, read_all, read_all_bytes, write_text, write_data, seek, read_file, read_bytes, read_lines, write_file, write_bytes, append_file, append_bytes, copy_file, set_mode, exists, is_file, is_dir, file_size, rename, remove_file, remove_dir, remove_all, make_dir, make_dirs, list_dir, cwd, chdir, path_dirname, path_basename, path_extension, path_stem, path_join };
+export { open_file, close_file, read_some, read_all, read_all_bytes, write_text, write_data, seek, read_file, read_bytes, read_lines, write_file, write_bytes, append_file, append_bytes, copy_file, set_mode, exists, is_file, is_dir, file_size, rename, remove_file, remove_dir, remove_all, make_dir, make_dirs, list_dir, cwd, getenv, chdir, path_dirname, path_basename, path_extension, path_stem, path_join };

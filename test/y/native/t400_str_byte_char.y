@@ -1,0 +1,36 @@
+// A byte is a character in string concatenation: `s + b`, `b + s` and `s += b`
+// add the one-byte string chr(b); a long still stringifies as its digits.
+let src = "hello";
+let out = "";
+for i in 0..len(src) { out += src[i]; };
+print(out);
+print("<" + src[1] + ">");
+print(src[0] + "!");
+let up = "";
+let ramp = "abc";
+for i in 0..3 { up += ramp[2 - i]; };
+print(up);
+let n = 65;
+print("n=" + n);
+let g = "g";
+def add_g(b: byte) -> long { g += b; len(g) };
+add_g(104);
+add_g(105);
+print(g);
+type Box = { s: str };
+let box: Box = { s: "box:" };
+box.s += src[4];
+box.s += src[4];
+print(box.s);
+let parts = ["a", "b"];
+parts[1] += src[0];
+print(parts[1]);
+let z = "" + 0 + src[0];
+print(len(z));
+let raw: [byte] = [200, 0, 255];
+let high = "x";
+for i in 0..3 { high += raw[i]; };
+print(len(high));
+let sum = 0;
+for i in 0..4 { sum += high[i]; };
+print(sum);

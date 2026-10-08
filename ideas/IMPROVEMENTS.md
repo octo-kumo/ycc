@@ -42,14 +42,9 @@ goal is the language's: short, intuitive, safe, fast.
   AST exists, so the resolver needs a diagnostic channel.
 - **`match o { T c => .., none => .. }`** on an option still errors (`none` is
   read as a parameter name). `if let T c = o` works now.
-- **No `getenv`**, so a test cannot be told where its scratch directory is;
-  fixtures that write files need a working directory the harness chose.
 
 ## Short, intuitive
 
-- `str += byte` is rejected (`e90`) while `"x" + byte` stringifies the number;
-  the two siblings disagree. `utf8.Builder` is the answer for rendering; the
-  language question (should `+=` follow `+`?) is open.
 - `0 - n` is common in the compiler's own source (the new level-2 rule counts
   ~100). If `-1` has a parsing hazard somewhere, fix the parser; if not, the
   habit goes.
@@ -58,11 +53,6 @@ goal is the language's: short, intuitive, safe, fast.
 
 ## Test infrastructure
 
-- Fixtures hard-code paths (`/tmp/...`); the native suite now runs fixtures
-  marked `// scratch` in a scratch directory with relative paths. Finish the
-  rest, and `test/y/examples/ysh.y`, which writes `/tmp/_ysh_eval.y`.
-- Every suite script re-implements pass/fail counters; `lib.sh` has them.
-  `test_pkg.sh` (974 lines) and `test_comprehensive.sh` (601) are the largest
-  and the least shared.
-- `coverage` fails on a clean tree: two LSP checks need `npm`, and `ysh eval`
-  needs `exec`. They should skip, not fail.
+- `test_pkg.sh` (974 lines) and `test_comprehensive.sh` (601) are the largest
+  and the least shared with `lib.sh`'s helpers; every suite script now uses its
+  pass/fail counters.

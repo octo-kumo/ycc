@@ -4642,9 +4642,12 @@ static Yv *opassign_check(Yv *st, Yv *node, Yv *tt, Yv *vt) {
         }
     } else if (yv_l(yr_get(tt, "k")) == K_tstr) {
         if (ys_eq_lit(op, "+")) {
-            st = expect_type(st, vt, yr(1, "k", yv_long(K_tstr)), ys("'+=' string"),
-                             yv_l(yr_get(node, "line")),
-                             yv_l(yr_get(node, "col")));
+            /* a byte appends as a character, like `s + b` */
+            if (yv_l(yr_get(vt, "k")) != K_tbyte) {
+                st = expect_type(st, vt, yr(1, "k", yv_long(K_tstr)), ys("'+=' string"),
+                                 yv_l(yr_get(node, "line")),
+                                 yv_l(yr_get(node, "col")));
+            }
             return yr(2, "typ", tt, "st", st);
         } else {
             st = fail(st,

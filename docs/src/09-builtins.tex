@@ -1132,6 +1132,11 @@ octal permission number, written as one (\ic{0o644}, \ic{0o755});
   not this path's to delete, as with \ic{rm -rf}. A trailing slash is a
   different path, and names what the link names.
 \item[\ic{fs.cwd()}] The working directory.
+\item[\ic{fs.getenv(name)}] The value of an environment variable, or
+  \ic{none} if it is unset; \ic{str?}. It is read from
+  \ic{/proc/self/environ}, so it is the environment the process started with
+  (there is no \ic{setenv}), and it is \ic{none} for every name where there is
+  no \ic{/proc}, on Windows included.
 \item[\ic{fs.chdir(path)}] Change it; \ic{bool}.
 \item[\ic{fs.open\_file(path, how, mode = 0o644)}] Open with a mode string:
   \ic{"r"} read, \ic{"w"} write (create, truncate), \ic{"a"} append
