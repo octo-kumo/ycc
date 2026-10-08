@@ -28,6 +28,7 @@ Yv *ycc_assemble(Yv *parts, int debug);
  * export in asm.y is for the Y side's callers. */
 Yv *part_ir(Yv *ir, Yv *txt, ylong fno, int loc);
 Yv *part_text(Yv *text);
+Yv *ir_parse_line(Yv *line);
 
 Yv *labmap_new(ylong cap);
 ylong hash_str(Yv *s);   /* the name hash, and an object's checksum */

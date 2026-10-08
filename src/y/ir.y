@@ -294,6 +294,12 @@ def ir_form(f: long) -> IrForm {
     ir_tab[f]
 };
 
+// How many forms there are (form ids run 0 .. ir_nforms() - 1).
+def ir_nforms() -> long {
+    if (!ir_ready) { ir_init(); };
+    len(ir_tab)
+};
+
 // One item: `f` and its seven field words. Fields an operand does not have
 // are 0 (and a memory operand's disp -1 means "none written", base/index -1
 // "no register", its label field -1 "not a rip-relative label" -- see

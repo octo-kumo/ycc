@@ -32,6 +32,12 @@ netstring and do NOT wrap the run in an outer length. Reading a run as a
 single netstring (as an earlier hand parse did) consumes only the count and
 leaves the cursor inside the run, and every later field then reads garbage.
 
+From pack 10 the frame ends with the arch runtime's block sets, entries named
+`arch.<set>` (native.y std_pack): a count, then per block a tag netstring --
+"r" and the index of the same block in arch.linux (the Windows prelude shares
+most of its blocks), or "b" and the block: name, falls ("0"/"1"), refs
+(pack_strs), items (one netstring, pack_ir) and raw lines (pack_strs).
+
 A unit's `refs` is NOT in the pack: refs[i] is exactly ir_refs(bodies[i]), so
 the reader recomputes it from each body's item blob (native.y blob_refs).
 
@@ -171,6 +177,34 @@ def parse_fields(payload, fields=None):
     return got, p
 
 
+def arch_set(body):
+    """Walk one arch block set; return (blocks, shared, item bytes, line bytes)
+    and fail unless it is consumed exactly."""
+    n, p = num(body, 0, "arch blocks")
+    shared = 0
+    irb = 0
+    txtb = 0
+    for _ in range(n):
+        tag, p = nstr(body, p)
+        if tag == b"r":
+            _, p = num(body, p, "arch shared index")
+            shared += 1
+        elif tag == b"b":
+            _, p = nstr(body, p)            # name
+            _, p = nstr(body, p)            # falls
+            p = run(body, p, "put")         # refs
+            ir, p = nstr(body, p)           # items
+            irb += len(ir)
+            t0 = p
+            p = run(body, p, "put")         # raw lines
+            txtb += p - t0
+        else:
+            raise Bad("arch block tag %r" % tag[:10])
+    if p != len(body):
+        raise Bad("arch set: %d of %d bytes used" % (p, len(body)))
+    return n, shared, irb, txtb
+
+
 def target(pack):
     """What an in-tree codec has to be measured against: gzip and xz of the
     same payload. Not a gate -- the codec is deterministic and has no
@@ -209,18 +243,20 @@ def main():
             vnum = int(w)
     fields = FIELDS8 if vnum >= 8 else FIELDS
     cnt, p = num(pack, p, "unit count")
-    print("version %s" % version.decode(errors="replace").strip())
-    print("payload %d bytes, %d units\n" % (len(pack), cnt))
-
     totals = dict((f, 0) for f in fields)
     rows = []
+    arch = []
     unit_stored = 0
     for _ in range(cnt):
         name, p = nstr(pack, p)
         body, p = nstr(pack, p)
         unit_stored += len(body)
+        stored = len(body)
         if vnum >= 9 and body[:1] == b"\x01":
             body = lz_decode(body[1:])
+        if name.startswith(b"arch."):
+            arch.append((name.decode(), stored, len(body)) + arch_set(body))
+            continue
         got, end = parse_fields(body, fields)
         if end != len(body):
             raise Bad("unit %s: %d of %d field bytes used"
@@ -231,8 +267,15 @@ def main():
     if p != len(pack):
         raise Bad("%d bytes left after the units" % (len(pack) - p))
 
+    print("version %s" % version.decode(errors="replace").strip())
+    print("payload %d bytes, %d units, %d arch sets\n" % (len(pack), len(rows), len(arch)))
     if vnum >= 9:
         print("units stored in %d bytes (frame %d)\n" % (unit_stored, len(pack) - unit_stored))
+    for name, stored, dec, nb, shared, irb, txtb in arch:
+        print("%-16s stored %7d  decoded %7d  blocks %4d (%d shared)  items %6d  text %6d"
+              % (name, stored, dec, nb, shared, irb, txtb))
+    if arch:
+        print("")
     for name, total, got in rows:
         big = "  ".join("%s=%d" % (f, sz) for f, sz in got if sz > 200)
         print("%-10s %8d   %s" % (name, total, big))

@@ -102,16 +102,29 @@ def w_sysno(name: str) -> long {
     else { -1 }
 };
 
-// The Windows syscall self-test (ideas/WINDOWS.md W3), its lines in
-// arch/wselftest.s: one Nt call per class -- memory, time, file -- with its
-// NTSTATUS checked once at program start, so a number that drifted on a
-// different Windows build fails loudly instead of calling some other real Nt
-// function. native.y feeds these lines to the prelude (so the shaker keeps
-// y_os_write/y_os_exit for them) and the _start prologue calls
-// y_w_self_test, both on the Windows target only: on Linux this returns no
-// lines and no call is emitted.
-def w_self_test_lines() -> [str] {
-    if (target_is_windows()) { arch_asm_lines(WSELFTEST_ASM) } else {[] }
+// The lines of arch block set `which` (native.y arch_set builds its blocks
+// from them, once, when the std pack is written or when a compiler has none):
+//   linux, windows  the prelude for that target (windows: prelude.s with the
+//                   blocks wsys.s replaces and adds, arch_windows_lines)
+//   wselftest       the Windows syscall self-test (ideas/WINDOWS.md W3,
+//                   arch/wselftest.s): one Nt call per class -- memory, time,
+//                   file -- with its NTSTATUS checked once at program start, so
+//                   a number that drifted on a different Windows build fails
+//                   loudly instead of calling some other real Nt function. The
+//                   Windows prelude carries it, and _start calls y_w_self_test
+//                   on that target only.
+//   threads, math   the thread runtime and the float primitives (below)
+def arch_set_lines(which: str) -> [str] {
+    if (which == "linux") { arch_asm_lines(PRELUDE_ASM) }
+    else if (which == "windows") { arch_windows_lines() }
+    else if (which == "wselftest") { arch_asm_lines(WSELFTEST_ASM) }
+    else if (which == "threads") { arch_asm_lines(THREADS_ASM) }
+    else if (which == "math") { arch_asm_lines(MATH_ASM) }
+    else {
+        puts("ycc: internal error: no arch block set '" + which + "'\n");
+        exit(1);
+        []
+    }
 };
 
 def arch_fn_label(uid: long, name: str) -> str {
@@ -277,22 +290,6 @@ def arch_exit() -> str {
     else { "    mov \$231, %rax\n    xor %edi, %edi\n    syscall\n" }
 };
 
-// The prelude as its lines: labels alone at column 0, everything else
-// indented (native.y prelude_blocks relies on it).
-def arch_prelude_lines() -> [str] {
-    // Runtime PRIMITIVES — everything with a specific behaviour lives in
-    // std/rt.y as ordinary Y code (tree shaking drops what a program does
-    // not use, here and there: native.y's shake_prelude prunes these lines
-    // block by block, prune_bodies does the same for rt.y's functions).
-    // What stays here is what only raw machine state can do: the bump
-    // allocator (y_alloc, over 4 MB mmap chunks, its state in the y_heap
-    // .bss cells), the trap stubs, the byte-moving
-    // string/array cores
-    // (eq/cmp/cat/join/slice, arr push/prepend/slice/cat/eq), long and
-    // float formatting, str<->[byte] conversion and argv materialization.
-    if (target_is_windows()) { arch_windows_lines() } else { arch_asm_lines(PRELUDE_ASM) }
-};
-
 // ── the Windows half of the prelude ─────────────────────────────────────
 // Everything in prelude.s that reaches the kernel carries a SysV `syscall`
 // inline, so those blocks are wrong on Windows and everything else in the
@@ -430,29 +427,6 @@ def arch_is_label_line(l: str) -> bool {
     else { index_of(l, " ") < 0 }
 };
 
-// `lines` walked; at a label a replacing block claims, that block's lines and
-// not the prelude's. The new blocks go after the last replaced one.
-// Replace the block that starts at the column-0 label `name` (through the line
-// before the next label) with `repl`.
-def arch_block_sub(lines: [str], name: str, repl: [str]) -> [str] {
-    let out: [str] = [];
-    let i = 0;
-    while (i < len(lines)) {
-        let l = lines[i];
-        if (arch_is_label_line(l) && trim(l[0:len(l) - 1]) == name) {
-            repl.foreach((r) => {
-                out += r;
-            });
-            i++;
-            while (i < len(lines) && !(arch_is_label_line(lines[i]))) { i++; };
-        } else {
-            out += l;
-            i++;
-        };
-    };
-    out
-};
-
 // The GC-free runtime: a program whose heap cannot grow does not link the
 // collector at all (--gc, or the auto analysis). The allocator itself is
 // UNCHANGED -- only the collector's three entry points become stubs -- so the
@@ -462,17 +436,25 @@ def arch_block_sub(lines: [str], name: str, repl: [str]) -> [str] {
 //   y_gc_maybe      never runs a cycle
 //   y_gc_alloc_free never recycles a block (0 = none)
 //   y_gc_chunk_add  returns the base the allocator wants and registers nothing
+// Each substitution is [block name, its replacement lines...]: native.y's
+// arch_blocks_sub replaces the block of that name with the blocks of the lines.
+def arch_nogc_subs() -> [[str]] {
+    [["y_gc_maybe", "y_gc_maybe:", "    ret"],
+     ["y_gc_alloc_free", "y_gc_alloc_free:", "    xor %eax, %eax", "    ret"],
+     ["y_gc_chunk_add", "y_gc_chunk_add:", "    mov %rdi, %rax", "    ret"]]
+};
+
 // --gc-stress: a cycle at every allocating slow path. The collector is correct
 // either way, so this is the tool for finding where it is not: a missed root
 // shows up as a crash or a wrong answer in minutes instead of days. It is also
 // the strongest check the threaded stop-the-world has.
-def arch_gc_stress_lines(lines: [str]) -> [str] {
-    let out = arch_block_sub(lines, "y_gc_maybe", ["y_gc_maybe:", "    call y_gc_collect", "    ret"]);
-    // The invariant trap reports the walking state in the fields a reader needs:
-    // chunk base, chunk end, the block, the word there, its two neighbours, then
-    // the map/block register and its word. The neighbours are what separate "the
-    // walk is misaligned" from "one block's header was overwritten".
-    arch_block_sub(out, "y_bad_trap", [
+// The invariant trap reports the walking state in the fields a reader needs:
+// chunk base, chunk end, the block, the word there, its two neighbours, then
+// the map/block register and its word. The neighbours are what separate "the
+// walk is misaligned" from "one block's header was overwritten".
+def arch_gc_stress_subs() -> [[str]] {
+    [["y_gc_maybe", "y_gc_maybe:", "    call y_gc_collect", "    ret"],
+     ["y_bad_trap",
         "y_bad_trap:",
         "    push %rbx",
         "    push %r12",
@@ -514,16 +496,7 @@ def arch_gc_stress_lines(lines: [str]) -> [str] {
         "    pop %rbx",
         "    mov $1, %rax",
         "    mov $1, %rdi",
-        "    syscall"
-    ])
-};
-
-def arch_nogc_lines(lines: [str]) -> [str] {
-    let out = arch_block_sub(lines, "y_gc_maybe", ["y_gc_maybe:", "    ret"]);
-    out = arch_block_sub(out, "y_gc_alloc_free",
-        ["y_gc_alloc_free:", "    xor %eax, %eax", "    ret"]);
-    arch_block_sub(out, "y_gc_chunk_add",
-        ["y_gc_chunk_add:", "    mov %rdi, %rax", "    ret"])
+        "    syscall"]]
 };
 
 def arch_win_sub(lines: [str], blocks: [[str]]) -> [str] {
@@ -579,21 +552,12 @@ def arch_win_push(out: [str], l: str) -> void {
     out
 };
 
-// The thread runtime (CHOICES_MADE.md 33), linked only when a program's
-// code calls into it (native.y uses_threads): every compile looks at
-// each line of the prelude it is given.
-def arch_prelude_threads_lines() -> [str] {
-    arch_asm_lines(THREADS_ASM)
-};
-
-// The floating-point primitives (src/y/arch/math.s): the four a std module
-// reaches through `ndef`, and the only machine code between Y and a
-// numeric library -- Y has no float-to-long conversion and no way to read a
-// float's bits. Always given to the shaking (they are a few lines, unlike the
-// thread runtime, so there is nothing to save by looking first).
-def arch_math_lines() -> [str] {
-    arch_asm_lines(MATH_ASM)
-};
+// threads.s is the thread runtime (CHOICES_MADE.md 33), linked only when a
+// program's code calls into it (native.y uses_threads); math.s the
+// floating-point primitives: the four a std module reaches through `ndef`, and
+// the only machine code between Y and a numeric library -- Y has no
+// float-to-long conversion and no way to read a float's bits. Both are block
+// sets (arch_set_lines).
 
 def arch_consts() -> str {
     // rodata literals emitted once at the end of the file (string headers,
@@ -622,4 +586,4 @@ def arch_consts() -> str {
         ], "\n") + "\n"
 };
 
-export { WImport, w_imports, w_iat_label, w_iat_term_label, w_iat_bss_lines, w_iat_offset, arch_id, arch_word, arch_sysno, arch_fn_label, arch_global_label, arch_loc_label, arch_str_label, arch_header, arch_rodata, arch_text, arch_bss, arch_global_cell, arch_heap_cells, arch_prelude_lines, arch_prelude_threads_lines, arch_math_lines, w_self_test_lines, arch_consts, arch_frame, arch_exit };
+export { WImport, w_imports, w_iat_label, w_iat_term_label, w_iat_bss_lines, w_iat_offset, arch_id, arch_word, arch_sysno, arch_fn_label, arch_global_label, arch_loc_label, arch_str_label, arch_header, arch_rodata, arch_text, arch_bss, arch_global_cell, arch_heap_cells, arch_set_lines, arch_nogc_subs, arch_gc_stress_subs, arch_consts, arch_frame, arch_exit };

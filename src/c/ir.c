@@ -150,6 +150,12 @@ Yv *ir_form(ylong f) {
     return ya_get(ir_tab, f);
 }
 
+/* How many forms there are (ir.y ir_nforms). */
+ylong ir_nforms(void) {
+    if (!ir_ready) { ir_init(); }
+    return yv_len(ir_tab);
+}
+
 /* One item: `f` and its seven field words. Fields an operand does not have
  * are 0 (and a memory operand's disp is signed, base/index -1 "no register",
  * its label field -1 "not a rip-relative label" -- see ir_render_mem). A

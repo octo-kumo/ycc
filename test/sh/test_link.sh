@@ -286,8 +286,8 @@ fi
 # is how an earlier hand parse misread the shapes. It also prints the per-field
 # byte split, the measurement the pack work is planned from.
 if python3 "$ROOT/test/sh/pack_stats.py" "$TMPD/y.pack" >"$TMPD/pstats" 2>&1 \
-    && grep -q "version ycc-std-pack 9" "$TMPD/pstats" \
-    && grep -q "20 units" "$TMPD/pstats"; then
+    && grep -q "version ycc-std-pack 10" "$TMPD/pstats" \
+    && grep -q "20 units, 5 arch sets" "$TMPD/pstats"; then
     pass "the pack decodes and parses field by field, $(grep -o '[0-9]* units' "$TMPD/pstats" | head -1) ($(grep -c '=' "$TMPD/pstats") field totals)"
 else
     fail "the pack parses field by field" "$(head -c 160 "$TMPD/pstats")"

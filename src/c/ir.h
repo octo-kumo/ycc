@@ -157,6 +157,7 @@ Yv *ir_push(Yv *ir, ylong f, ylong a, ylong b, ylong c, ylong d, ylong e, ylong 
             ylong h);
 Yv *ir_cat(Yv *a, Yv *b);        /* a + b, the array concat (yv.h has none) */
 Yv *ir_form(ylong f);
+ylong ir_nforms(void);
 Yv *ir_render(Yv *ir, Yv *txt, ylong at, ylong fno);
 Yv *ir_render_all(Yv *ir, Yv *txt, int locs, ylong fno);
 Yv *ir_render_op(ylong k, Yv *ir, ylong at);

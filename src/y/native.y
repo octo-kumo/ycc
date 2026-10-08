@@ -1860,18 +1860,26 @@ def shake_refs(text: str, root_refs: [str]) -> str {
     }
 };
 
-// ── the arch prelude, shaken by lines ────────────────────────────────────
-// The prelude is ~1.7k lines of which a program keeps a few dozen, and
-// shaking it as text scanned all of it on every compile: two thirds of a
-// small program's compile. It comes as its lines (arch_prelude_lines):
-// labels alone at column 0, everything else indented, so its blocks are
-// found by each line's first byte, and only the blocks a program reaches
-// are scanned for references. Blocks and rules are shake_refs'.
-type PBlocks = { lines: [str], starts: [long], names: [str], ix: [AsmLabel] };
-// The kept text, and every reference the kept blocks make.
-// The kept prelude: its text, every reference the kept blocks make, and the
-// per-block [name, direct refs] the --gc analysis closes over.
-type PShake = { text: str, refs: [str], bnames: [str], brefs: [[str]] };
+// ── the arch prelude, shaken by blocks ──────────────────────────────────
+// The runtime assembly (src/y/arch/*.s) is ~5,600 lines of which a program
+// keeps a few dozen. It is cut into BLOCKS -- one per column-0 label, a local
+// label included, so a block that runs into the next says so (`falls`) -- and
+// each block is built once: its references and whether it falls through
+// (lines_refs/lines_fall, the rules the text shaker always used), and its
+// lines as IR items (asm.ir_parse_line; a line no form reproduces exactly is
+// an IR_TEXT item). The std pack carries the blocks built (arch_pack_set), so a
+// compile neither splits nor lexes the assembly; a compiler with no pack
+// builds them from the text (arch_blocks). Only the blocks a program reaches
+// are emitted (shake_prelude).
+// `blob`: a block read from the pack keeps its items packed (pack_ir) until the
+// shake keeps it -- a small program keeps a few dozen of ~350, and decoding
+// every one cost hello.y 7% of its compile. `ir` is then empty.
+type PBlk = { name: str, falls: bool, refs: [str], ir: [long], blob: str, txt: [str] };
+type PBlocks = { blks: [PBlk], ix: [AsmLabel] };
+// The kept prelude: its items (and the raw lines their IR_TEXT items index),
+// every reference the kept blocks make, and the per-block [name, direct refs]
+// the --gc analysis closes over.
+type PShake = { ir: [long], txt: [str], refs: [str], bnames: [str], brefs: [[str]] };
 
 // Every name in types.y's os_call_names must be a label in the arch lines
 // that were actually emitted. This runs on both targets, and it is here rather
@@ -1891,11 +1899,11 @@ type PShake = { text: str, refs: [str], bnames: [str], brefs: [[str]] };
 // ~1900-line prelude it cost 2.59% of a small compile (bench-ir, hello.y) for a
 // check that runs once. The C copy did not have the check at all; PORTING.md
 // says it must, so it is here twice now.
-def check_os_call_names(lines: [str]) -> [str] {
+def check_os_call_names(blks: [PBlk]) -> [PBlk] {
     let labels: [str] = [];
-    lines.foreach((e) => {
-        let nm = arch_label_name(e);
-        if (nm != "") { labels += nm; };
+    blks.foreach((e) => {
+        let bk: PBlk = e;
+        if (bk.name != "") { labels += bk.name; };
     });
     types.os_call_names().foreach((e) => {
         let found = false;
@@ -1910,7 +1918,7 @@ def check_os_call_names(lines: [str]) -> [str] {
             exit(1);
         };
     });
-    lines
+    blks
 };
 
 // The name of a column-0 `label:` line and NOTHING else, or "" -- an indented
@@ -1933,7 +1941,8 @@ def arch_label_name(l: str) -> str {
     }
 };
 
-def prelude_blocks(lines: [str]) -> PBlocks {
+// `lines` (one per element, labels at column 0) as blocks.
+def arch_blocks(lines: [str]) -> [PBlk] {
     let starts: [long] = [];
     let names: [str] = [];
     lines.foreach((e, i) => {
@@ -1951,7 +1960,62 @@ def prelude_blocks(lines: [str]) -> PBlocks {
             starts += 0;
         };
     });
-    { lines: lines, starts: starts, names: names, ix: namemap_build(names) }
+    let out: [PBlk] = [];
+    let nb = len(starts);
+    for b in 0..nb {
+        let lo = starts[b];
+        let hi = len(lines);
+        if (b + 1 < nb) { hi = starts[b + 1]; };
+        let nm: str = names[b];
+        let ir: [long] = [];
+        let txt: [str] = [];
+        for i in lo..hi {
+            let l: str = lines[i];
+            if (i == lo && nm != "" && arch_label_name(l) == nm) {
+                ir = insn.ir_push(ir, insn.IR_LABEL, labels.lbl_new(nm), 0, 0, 0, 0, 0, 0);
+            } else {
+                let it = asm.ir_parse_line(l);
+                if (len(it) > 0) {
+                    ir += it;
+                } else {
+                    txt += l;
+                    ir = insn.ir_push(ir, insn.IR_TEXT, len(txt) - 1, 0, 0, 0, 0, 0, 0);
+                };
+            };
+        };
+        out += { name: nm, falls: lines_fall(lines, lo, hi), refs: lines_refs(lines, lo, hi), ir: ir, blob: "", txt: txt };
+    };
+    out
+};
+
+def arch_index(blks: [PBlk]) -> PBlocks {
+    let names: [str] = [];
+    blks.foreach((e) => {
+        let bk: PBlk = e;
+        names += bk.name;
+    });
+    { blks: blks, ix: namemap_build(names) }
+};
+
+// `blks` with each block a substitution names replaced by the blocks of its
+// lines (`subs`: [name, line, line, ...] each) -- the --gc stubs and the
+// --gc-stress cycle (arch_x64.y).
+def arch_blocks_sub(blks: [PBlk], subs: [[str]]) -> [PBlk] {
+    let out: [PBlk] = [];
+    blks.foreach((e) => {
+        let bk: PBlk = e;
+        let at = -1;
+        subs.foreach((sb, si) => {
+            if (sb[0] == bk.name) { at = si; };
+        });
+        if (at < 0) {
+            out += bk;
+        } else {
+            let sl = subs[at];
+            out += arch_blocks(sl[1:len(sl)]);
+        };
+    });
+    out
 };
 
 // Every reference the lines [lo, hi) make.
@@ -1997,20 +2061,15 @@ def lines_fall(lines: [str], lo: long, hi: long) -> bool {
 // Keep the blocks `roots` (the kept bodies' references) or a kept block
 // reaches, as shake_keep does, scanning only those.
 def shake_prelude(pb: PBlocks, roots: [str]) -> PShake {
-    let lines = pb.lines;
-    let starts = pb.starts;
-    let names = pb.names;
-    let nb = len(starts);
+    let blks = pb.blks;
+    let nb = len(blks);
     let keep: [bool] = [];
     let scanned: [bool] = [];
-    let brefs: [[str]] = [];
     let k = 0;
     while (k < nb) {
-        let nm: str = names[k];
-        keep += len(nm) == 0;
+        let bk: PBlk = blks[k];
+        keep += len(bk.name) == 0;
         scanned += false;
-        let none: [str] = [];
-        brefs += [none];
         k++;
     };
     roots.foreach((e) => {
@@ -2024,40 +2083,47 @@ def shake_prelude(pb: PBlocks, roots: [str]) -> PShake {
             if (keep[b] && !(scanned[b])) {
                 scanned[b] = true;
                 more = true;
-                let lo = starts[b];
-                let hi = len(lines);
-                if (b + 1 < nb) { hi = starts[b + 1]; };
-                let rs = lines_refs(lines, lo, hi);
-                brefs[b] = rs;
-                if (b + 1 < nb && lines_fall(lines, lo, hi)) { keep[b + 1] = true; };
-                rs.foreach((e) => {
+                let bk: PBlk = blks[b];
+                if (b + 1 < nb && bk.falls) { keep[b + 1] = true; };
+                bk.refs.foreach((e) => {
                     let idx = namemap_get(pb.ix, e);
                     if (idx >= 0) { keep[idx] = true; };
                 });
             };
         };
     };
-    let pieces: [str] = [];
+    let ir: [long] = [];
+    let txt: [str] = [];
     let out: [str] = [];
     let knames: [str] = [];
     let krefs: [[str]] = [];
     k = 0;
     while (k < nb) {
         if (keep[k]) {
-            let lo = starts[k];
-            let hi = len(lines);
-            if (k + 1 < nb) { hi = starts[k + 1]; };
-            for i in lo..hi {
-                pieces += lines[i];
-                pieces += "\n";
+            let bk: PBlk = blks[k];
+            // the block's IR_TEXT items index its own lines: moved past the
+            // lines already taken
+            let base = len(txt);
+            txt += bk.txt;
+            let bir = bk.ir;
+            if (len(bir) == 0 && len(bk.blob) > 0) { bir = unpack_body(bk.blob); };
+            let at = 0;
+            while (at < len(bir)) {
+                let f = bir[at];
+                if (f == insn.IR_TEXT) {
+                    ir = insn.ir_push(ir, f, bir[at + 1] + base, 0, 0, 0, 0, 0, 0);
+                } else {
+                    ir = insn.ir_push(ir, f, bir[at + 1], bir[at + 2], bir[at + 3], bir[at + 4], bir[at + 5], bir[at + 6], bir[at + 7]);
+                };
+                at += insn.IR_W;
             };
-            out += brefs[k];
-            knames += names[k];
-            krefs += brefs[k];
+            out += bk.refs;
+            knames += bk.name;
+            krefs += [bk.refs];
         };
         k++;
     };
-    { text: join(pieces, ""), refs: out, bnames: knames, brefs: krefs }
+    { ir: ir, txt: txt, refs: out, bnames: knames, brefs: krefs }
 };
 
 // The prelude's lines, then the thread runtime's and the float primitives'
@@ -2067,11 +2133,51 @@ def shake_prelude(pb: PBlocks, roots: [str]) -> PShake {
 // so concatenating unconditionally copied the prelude's ~1500 lines for every
 // compile that wanted neither -- 52K instructions on hello.y, which is 99.9%
 // of what this module cost before the branches (callgrind, bench/compile_ir.sh).
-def prelude_with(core: [str], threads: bool, mathasm: bool) -> [str] {
-    let out: [str] = core;
-    if (threads) { out = out + arch.arch_prelude_threads_lines(); };
-    if (mathasm) { out = out + arch.arch_math_lines(); };
-    out
+def prelude_with(core: [PBlk], threads: bool, mathasm: bool) -> PBlocks {
+    let out: [PBlk] = core;
+    if (threads) { out = out + arch_set("threads"); };
+    if (mathasm) { out = out + arch_set("math"); };
+    arch_index(out)
+};
+
+// The block set `which` -- "linux" or "windows" (the prelude for that
+// target), "wselftest", "threads", "math" -- from the std pack when this
+// compile read one (arch_pack), else built from the assembly text. Built once
+// per process either way.
+let arch_pack = "";
+let arch_cache_names: [str] = [];
+let arch_cache_sets: [[PBlk]] = [];
+
+def arch_set(which: str) -> [PBlk] {
+    let at = -1;
+    let i = 0;
+    while (i < len(arch_cache_names)) {
+        if (arch_cache_names[i] == which) { at = i; };
+        i++;
+    };
+    if (at >= 0) {
+        arch_cache_sets[at]
+    } else {
+        let got = arch_unpack(arch_pack, "arch." + which);
+        let blks: [PBlk] = [];
+        if (got.ok) { blks = got.blks; } else { blks = arch_blocks(arch.arch_set_lines(which)); };
+        arch_cache_names += which;
+        arch_cache_sets += [blks];
+        blks
+    }
+};
+
+// This target's prelude, its os_call names checked.
+def arch_core() -> [PBlk] {
+    let core: [PBlk] = [];
+    if (target_is_windows()) {
+        core = check_os_call_names(arch_set("windows"));
+        // the NT syscall self-test (arch/wselftest.s), which _start calls
+        core = core + arch_set("wselftest");
+    } else {
+        core = check_os_call_names(arch_set("linux"));
+    };
+    core
 };
 
 // The references (a kept prelude's) that name a body not kept.
@@ -12194,6 +12300,8 @@ def std_units(names: [str], pack: str) -> [Unit] {
     if (len(pack) > 0) {
         out = std_unpack(pack, names);
     }
+    // the arch blocks come from the same pack when it was read (arch_set)
+    if (len(out) > 0) { arch_pack = pack; } else { arch_pack = ""; };
     if (len(out) == 0) {
         names.foreach((el) => {
             let nm: str = el;
@@ -13189,14 +13297,13 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit, gcmode: long) -> [LinkPart
     let shaken = prune_bodies(labels, refs, extra);
     let keep = shaken.keep;
     let body_refs = shaken.refs;
-    let core_lines = check_os_call_names(arch.arch_prelude_lines());
-    // The Windows syscall self-test (arch/wselftest.s): no lines off Windows,
-    // and on Windows the _start prologue below calls the label it defines. It
-    // goes through the prelude so the shaker sees what it references.
-    core_lines += arch.w_self_test_lines();
+    // The target's prelude (on Windows with the NT syscall self-test, which
+    // the _start prologue calls: it goes through the prelude so the shaker sees
+    // what it references).
+    let core_lines = arch_core();
     let thr = uses_threads(body_refs);
     let mth = uses_math(body_refs);
-    let pb = prelude_blocks(prelude_with(core_lines, thr, mth));
+    let pb = prelude_with(core_lines, thr, mth);
     let ps = shake_prelude(pb, body_refs);
     // A cell no kept code reads, whose initializer only allocates, is dead:
     // dropping that range is what keeps the allocator -- and with it the whole
@@ -13251,7 +13358,7 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit, gcmode: long) -> [LinkPart
         shaken = prune_bodies(labels, refs, extra);
         keep = shaken.keep;
         body_refs = shaken.refs;
-        pb = prelude_blocks(prelude_with(core_lines, thr, mth));
+        pb = prelude_with(core_lines, thr, mth);
         ps = shake_prelude(pb, body_refs);
     };
     // A kept prelude block may call a Y helper (none does today): the
@@ -13266,7 +13373,7 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit, gcmode: long) -> [LinkPart
         if ((!thr && uses_threads(body_refs)) || (!mth && uses_math(body_refs))) {
             if (uses_threads(body_refs)) { thr = true; };
             if (uses_math(body_refs)) { mth = true; };
-            pb = prelude_blocks(prelude_with(core_lines, thr, mth));
+            pb = prelude_with(core_lines, thr, mth);
         };
         ps = shake_prelude(pb, body_refs);
         more = unkept_refs(ps.refs, bmap, keep);
@@ -13275,14 +13382,14 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit, gcmode: long) -> [LinkPart
     // stubs, so the registry, metadata arena, marker, sweeper and free lists go
     // unreachable and shake out. The allocator and heap_used() are untouched.
     if (!(gc_decide(gcmode, labels, refs, keep, all, allblob, ps, thr))) {
-        core_lines = arch.arch_nogc_lines(core_lines);
-        pb = prelude_blocks(prelude_with(core_lines, thr, mth));
+        core_lines = arch_blocks_sub(core_lines, arch.arch_nogc_subs());
+        pb = prelude_with(core_lines, thr, mth);
         ps = shake_prelude(pb, body_refs);
     };
     // --gc-stress: every slow-path allocation runs a cycle.
     if (gc_stress) {
-        core_lines = arch.arch_gc_stress_lines(core_lines);
-        pb = prelude_blocks(prelude_with(core_lines, thr, mth));
+        core_lines = arch_blocks_sub(core_lines, arch.arch_gc_stress_subs());
+        pb = prelude_with(core_lines, thr, mth);
         ps = shake_prelude(pb, body_refs);
     };
     // Everything the kept code can reach: the kept bodies' own references
@@ -13329,7 +13436,9 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit, gcmode: long) -> [LinkPart
     if (dbg_lines) {
         head = file_dirs(files) + head;
     }
-    parts += [part_text(head + arch.arch_text() + ps.text)];
+    parts += [part_text(head + arch.arch_text())];
+    // the kept prelude blocks, as items
+    parts += [part_ir(ps.ir, ps.txt, 0, false)];
     // The bodies, kept, as parts: their items, with the `.loc` markers moved
     // to the unit's place in the program's file table. Every body is items
     // now -- a unit read from a pack came with them (pack_body).
@@ -13412,7 +13521,7 @@ def link_text(parts: [LinkPart]) -> str {
 // unit's fields the same way.
 
 def pack_version() -> str {
-    "ycc-std-pack 9\n"
+    "ycc-std-pack 10\n"
 };
 
 def pack_put(out: [str], s: str) -> [str] {
@@ -13506,7 +13615,11 @@ def pack_lbl(out: [str], id: long) -> [str] {
 
 // One body as the pack carries it: the items above, item by item.
 def pack_body(u: Unit, b: long) -> str {
-    let ir = u.bodies[b];
+    pack_ir(u.bodies[b])
+};
+
+// Items as the pack carries them (pack_body, and the arch blocks).
+def pack_ir(ir: [long]) -> str {
     let out: [str] = [];
     let at = 0;
     while (at < len(ir)) {
@@ -14156,12 +14269,141 @@ def pack_store(s: str) -> str {
 def std_pack(units: [Unit]) -> str {
     let out: [str] = [];
     out += pack_version();
-    out = pack_put(out, tostring(len(units)));
+    let sets = arch_set_names();
+    out = pack_put(out, tostring(len(units) + len(sets)));
     units.foreach((u) => {
         out = pack_put(out, u.name);
         out = pack_put(out, pack_store(pack_unit_fields(u)));
     });
+    // The arch runtime's blocks (arch_blocks), one entry per set, after the
+    // units: `arch.linux` cannot be a unit's name, and std_unpack reads only
+    // the names it is asked for. Built from the text here and read back by
+    // every compile (arch_set), so no compile parses the assembly.
+    // The Windows prelude is the Linux one with the blocks wsys.s replaces and
+    // adds, so a block the two share travels once (arch_pack_set's `base`).
+    let linux = arch_blocks(arch.arch_set_lines("linux"));
+    let none: [PBlk] = [];
+    sets.foreach((w) => {
+        out = pack_put(out, "arch." + w);
+        if (w == "linux") {
+            out = pack_put(out, pack_store(arch_pack_set(linux, none)));
+        } else if (w == "windows") {
+            out = pack_put(out, pack_store(arch_pack_set(arch_blocks(arch.arch_set_lines(w)), linux)));
+        } else {
+            out = pack_put(out, pack_store(arch_pack_set(arch_blocks(arch.arch_set_lines(w)), none)));
+        };
+    });
     join(out, "")
+};
+
+// Every arch block set the pack carries (arch_set).
+def arch_set_names() -> [str] {
+    ["linux", "windows", "wselftest", "threads", "math"]
+};
+
+// A block set's fields: the count, then per block a tag and the block. Tag
+// "b": the block -- its name, whether it falls through, its references, its
+// items and the raw lines their IR_TEXT items index. Tag "r": block N of
+// `base` (the Linux prelude, for the Windows one), given by N alone.
+def arch_pack_set(blks: [PBlk], base: [PBlk]) -> str {
+    let bkeys: [str] = [];
+    base.foreach((e) => {
+        let bb: PBlk = e;
+        bkeys += arch_block_key(bb);
+    });
+    let out: [str] = [];
+    out = pack_put(out, tostring(len(blks)));
+    blks.foreach((e) => {
+        let bk: PBlk = e;
+        let key = arch_block_key(bk);
+        let at = -1;
+        let i = 0;
+        while (at < 0 && i < len(bkeys)) {
+            if (bkeys[i] == key) { at = i; };
+            i++;
+        };
+        if (at >= 0) {
+            out = pack_put(out, "r");
+            out = pack_put(out, tostring(at));
+        } else {
+            out = pack_put(out, "b");
+            out = pack_put(out, bk.name);
+            out = pack_put(out, bk.falls ? "1" : "0");
+            out = pack_strs(out, bk.refs);
+            out = pack_put(out, arch_block_items(bk));
+            out = pack_strs(out, bk.txt);
+        };
+    });
+    join(out, "")
+};
+
+// A block's items as the pack carries them, whether it holds them decoded or
+// still packed.
+def arch_block_items(bk: PBlk) -> str {
+    if (len(bk.ir) == 0 && len(bk.blob) > 0) { bk.blob } else { pack_ir(bk.ir) }
+};
+
+// Everything a block is, as one string: two blocks with the same key are the
+// same block.
+def arch_block_key(bk: PBlk) -> str {
+    let out: [str] = [];
+    out = pack_put(out, bk.name);
+    out = pack_put(out, bk.falls ? "1" : "0");
+    out = pack_strs(out, bk.refs);
+    out = pack_put(out, arch_block_items(bk));
+    out = pack_strs(out, bk.txt);
+    join(out, "")
+};
+
+type ArchGot = { ok: bool, blks: [PBlk] };
+
+// Entry `entry` of `pack` as blocks; ok is false when the pack is not this
+// version's, lacks the entry, or does not decode (the caller builds the
+// blocks from the text).
+def arch_unpack(pack: str, entry: str) -> ArchGot {
+    let blks: [PBlk] = [];
+    let ok = false;
+    let ver = pack_version();
+    if (len(pack) > 0 && pack[:len(ver)] == ver) {
+        let cur = { s: pack, p: len(ver) };
+        let n = pack_num(cur);
+        let i = 0;
+        while (!ok && i < n) {
+            let nm = pack_get(cur);
+            let ul = pack_len(cur);
+            let at = cur.p;
+            if (nm == entry) {
+                let raw = pack[at:at + ul];
+                if (len(raw) > 0 && raw[0] == 1) { raw = lz_decode(raw[1:]); };
+                if (len(raw) > 0) {
+                    let c = { s: raw, p: 0 };
+                    let nb = pack_num(c);
+                    // a Windows block shared with the Linux prelude is a
+                    // reference to it (arch_pack_set)
+                    let base: [PBlk] = [];
+                    if (entry == "arch.windows") { base = arch_set("linux"); };
+                    ok = true;
+                    for b in 0..nb {
+                        if (pack_get(c) == "r") {
+                            let k = pack_num(c);
+                            if (k >= 0 && k < len(base)) { blks += base[k]; } else { ok = false; };
+                        } else {
+                            let bn = pack_get(c);
+                            let bf = pack_get(c) == "1";
+                            let br = pack_get_strs(c);
+                            let bb = pack_get(c);
+                            let bt = pack_get_strs(c);
+                            let noir: [long] = [];
+                            blks += { name: bn, falls: bf, refs: br, ir: noir, blob: bb, txt: bt };
+                        };
+                    };
+                };
+            };
+            cur.p = at + ul;
+            i++;
+        };
+    };
+    { ok: ok, blks: blks }
 };
 
 // Reading a pack: `cur` is the text and the position in it. pack_len

@@ -60,10 +60,9 @@ Yv *arch_bss(void);
 Yv *arch_global_cell(Yv *label);
 Yv *arch_heap_cells(void);
 ylong arch_frame(ylong slots);
-Yv *arch_prelude_lines(void);
-Yv *arch_prelude_threads_lines(void);
-Yv *arch_math_lines(void);
-Yv *w_self_test_lines(void);
+Yv *arch_set_lines(Yv *which);
+Yv *arch_nogc_subs(void);
+Yv *arch_gc_stress_subs(void);
 Yv *arch_consts(void);
 /* src/y/types.y */
 Yv *os_call_names(void);
@@ -267,7 +266,11 @@ Yv *labmap_put(Yv *m, Yv *name, ylong sec, ylong off);
 Yv *labmap_get(Yv *m, Yv *name);
 Yv *shake_keep(Yv *names, Yv *refs, Yv *falls, Yv *keep, Yv *roots);
 Yv *shake_refs(Yv *text, Yv *root_refs);
-Yv *prelude_blocks(Yv *lines);
+Yv *arch_blocks(Yv *lines);
+Yv *arch_index(Yv *blks);
+Yv *arch_blocks_sub(Yv *blks, Yv *subs);
+Yv *arch_set(Yv *which);
+Yv *arch_core(void);
 Yv *lines_refs(Yv *lines, ylong lo, ylong hi);
 int lines_fall(Yv *lines, ylong lo, ylong hi);
 Yv *shake_prelude(Yv *pb, Yv *roots);
@@ -633,7 +636,7 @@ void unit_prep(Yv *xt);
 Yv *compile_unit(Yv *ast, Yv *imports, Yv *origin, int debug, ylong wlevel,
                  Yv *name, ylong base, Yv *xt, Yv *ogen);
 Yv *link_locs(Yv *body, ylong file);
-Yv *check_os_call_names(Yv *lines);
+Yv *check_os_call_names(Yv *blks);
 Yv *arch_label_name(Yv *l);
 Yv *rodata_intern(Yv *pieces, Yv *allrod, Yv *refs);
 Yv *relabel_dups(Yv *body, Yv *m, Yv *dup_new);
@@ -2052,6 +2055,19 @@ Yv *tok_push(Yv *out, Yv *t) {
     }
 }
 
+/* An SSE scalar-double mnemonic (native.y sse_mnemonic): five letters or more
+ * ending in `sd` (movsd, ucomisd, cvtsi2sd, ...) or `ds`. A fixed list used to
+ * stand here and missed ucomisd and the conversions, so the two twins
+ * disagreed on a block's references (harmless while they were only a set the
+ * shaker read; the arch blocks in the std pack carry them). */
+static int sse_mnemonic(Yv *w) {
+    ylong n = yv_len(w);
+    if (n < 5) { return 0; }
+    ylong a = ys_byte_at(w, n - 2);
+    ylong b = ys_byte_at(w, n - 1);
+    return (a == 115 && b == 100) || (a == 100 && b == 115);
+}
+
 /* Every symbol one line [lo, hi) references: call/lea/jump operands and
  * both labels of a computed immediate (`mov $A-B, ...`). Dispatch on the
  * mnemonic — this walks every line of the emitted text, so no searching. */
@@ -2069,10 +2085,7 @@ Yv *line_refs_b(Yv *text, Yv *b, ylong lo, ylong hi, Yv *out, int want_jumps) {
         } else if (ys_eq_lit(w, "lea")) {
             out = tok_push(out, tok_at_b(text, b, op, hi));
             ;
-        } else if (ys_eq_lit(w, "mov") || ys_eq_lit(w, "movsd") || ys_eq_lit(w, "movss")
-                   || ys_eq_lit(w, "movapd") || ys_eq_lit(w, "addsd") || ys_eq_lit(w, "subsd")
-                   || ys_eq_lit(w, "mulsd") || ys_eq_lit(w, "divsd") || ys_eq_lit(w, "addss")
-                   || ys_eq_lit(w, "subss") || ys_eq_lit(w, "mulss") || ys_eq_lit(w, "divss")) {
+        } else if (ys_eq_lit(w, "mov") || sse_mnemonic(w)) {
             ylong q = p;
             int go = 1;
             while (go) {
@@ -2817,15 +2830,15 @@ Yv *shake_refs(Yv *text, Yv *root_refs) {
     }
 }
 
-/* ── the arch prelude, shaken by lines ──────────────────────────────────
- * The prelude is ~1.7k lines of which a program keeps a few dozen, and
- * shaking it as text scanned all of it on every compile: two thirds of a
- * small program's compile. It comes as its lines (arch_prelude_lines):
- * labels alone at column 0, everything else indented, so its blocks are
- * found by each line's first byte, and only the blocks a program reaches
- * are scanned for references. Blocks and rules are shake_refs'.
- * PBlocks = { lines, starts, names, ix }; PShake = { text, refs }. */
-Yv *prelude_blocks(Yv *lines) {
+/* ── the arch prelude, shaken by blocks (native.y) ──────────────────────
+ * The runtime assembly cut into blocks, one per column-0 label, each built
+ * once: its references and whether it falls through (lines_refs/lines_fall),
+ * and its lines as IR items (ir_parse_line; anything else an IR_TEXT item).
+ * The std pack carries the blocks built; a compiler with no pack builds them
+ * from the text.
+ * PBlk = { name, falls, refs, ir, txt }; PBlocks = { blks, ix };
+ * PShake = { ir, txt, refs, bnames, brefs }. */
+Yv *arch_blocks(Yv *lines) {
     Yv *starts = yav(0);
     Yv *names = yav(0);
     ylong i = 0;
@@ -2845,8 +2858,76 @@ Yv *prelude_blocks(Yv *lines) {
         }
         i = i + 1;
     }
-    return yr(4, "lines", lines, "starts", starts, "names", names, "ix",
-              namemap_build(names));
+    Yv *out = yav(0);
+    ylong nb = yv_len(starts);
+    ylong b = 0;
+    while (b < nb) {
+        ylong lo = yv_l(ya_get(starts, b));
+        ylong hi = yv_len(lines);
+        if (b + 1 < nb) { hi = yv_l(ya_get(starts, b + 1)); }
+        Yv *nm = ya_get(names, b);
+        Yv *ir = yav(0);
+        Yv *txt = yav(0);
+        ylong li = lo;
+        while (li < hi) {
+            Yv *l = ya_get(lines, li);
+            if (li == lo && !ys_eq_lit(nm, "") && ys_eq(arch_label_name(l), nm)) {
+                ir = ir_push(ir, IR_LABEL, yv_l(lbl_new(nm)), 0, 0, 0, 0, 0, 0);
+            } else {
+                Yv *it = ir_parse_line(l);
+                if (yv_len(it) > 0) {
+                    ylong q = 0;
+                    while (q < yv_len(it)) { ir = ya_push(ir, ya_get(it, q)); q = q + 1; }
+                } else {
+                    txt = ya_push(txt, l);
+                    ir = ir_push(ir, IR_TEXT, yv_len(txt) - 1, 0, 0, 0, 0, 0, 0);
+                }
+            }
+            li = li + 1;
+        }
+        int falls = lines_fall(lines, lo, hi);
+        Yv *refs = lines_refs(lines, lo, hi);
+        out = ya_push(out, yr(6, "name", nm, "falls", yv_bool(falls), "refs", refs,
+                              "ir", ir, "blob", ys(""), "txt", txt));
+        b = b + 1;
+    }
+    return out;
+}
+
+Yv *arch_index(Yv *blks) {
+    Yv *names = yav(0);
+    ylong i = 0;
+    while (i < yv_len(blks)) {
+        names = ya_push(names, yr_get(ya_get(blks, i), "name"));
+        i = i + 1;
+    }
+    return yr(2, "blks", blks, "ix", namemap_build(names));
+}
+
+/* `blks` with each block a substitution names replaced by the blocks of its
+ * lines (`subs`: [name, line, ...] each; native.y arch_blocks_sub). */
+Yv *arch_blocks_sub(Yv *blks, Yv *subs) {
+    Yv *out = yav(0);
+    ylong i = 0;
+    while (i < yv_len(blks)) {
+        Yv *bk = ya_get(blks, i);
+        ylong at = -1;
+        ylong si = 0;
+        while (si < yv_len(subs)) {
+            if (ys_eq(ya_get(ya_get(subs, si), 0), yr_get(bk, "name"))) { at = si; }
+            si = si + 1;
+        }
+        if (at < 0) {
+            out = ya_push(out, bk);
+        } else {
+            Yv *sl = ya_get(subs, at);
+            Yv *nb = arch_blocks(ya_slice(sl, 1, yv_len(sl)));
+            ylong q = 0;
+            while (q < yv_len(nb)) { out = ya_push(out, ya_get(nb, q)); q = q + 1; }
+        }
+        i = i + 1;
+    }
+    return out;
 }
 
 /* Every reference the lines [lo, hi) make. */
@@ -2899,21 +2980,17 @@ int lines_fall(Yv *lines, ylong lo, ylong hi) {
 }
 
 /* Keep the blocks `roots` (the kept bodies' references) or a kept block
- * reaches, as shake_keep does, scanning only those. */
+ * reaches, as shake_keep does (native.y). */
 Yv *shake_prelude(Yv *pb, Yv *roots) {
-    Yv *lines = yr_get(pb, "lines");
-    Yv *starts = yr_get(pb, "starts");
-    Yv *names = yr_get(pb, "names");
-    ylong nb = yv_len(starts);
+    Yv *blks = yr_get(pb, "blks");
+    ylong nb = yv_len(blks);
     Yv *keep = yav(0);
     Yv *scanned = yav(0);
-    Yv *brefs = yav(0);
     ylong k = 0;
     while (k < nb) {
-        Yv *nm = ya_get(names, k);
+        Yv *nm = yr_get(ya_get(blks, k), "name");
         keep = ya_push(keep, yv_bool(yv_len(nm) == 0));
         scanned = ya_push(scanned, yv_bool(0));
-        brefs = ya_push(brefs, yav(0));
         k = k + 1;
     }
     ylong r = 0;
@@ -2932,16 +3009,11 @@ Yv *shake_prelude(Yv *pb, Yv *roots) {
             if (yv_b(ya_get(keep, b)) && !yv_b(ya_get(scanned, b))) {
                 ya_set(scanned, b, yv_bool(1));
                 more = 1;
-                ylong lo = yv_l(ya_get(starts, b));
-                ylong hi = yv_len(lines);
-                if (b + 1 < nb) {
-                    hi = yv_l(ya_get(starts, b + 1));
-                }
-                Yv *rs = lines_refs(lines, lo, hi);
-                ya_set(brefs, b, rs);
-                if (b + 1 < nb && lines_fall(lines, lo, hi)) {
+                Yv *bk = ya_get(blks, b);
+                if (b + 1 < nb && yv_b(yr_get(bk, "falls"))) {
                     ya_set(keep, b + 1, yv_bool(1));
                 }
+                Yv *rs = yr_get(bk, "refs");
                 ylong j = 0;
                 while (j < yv_len(rs)) {
                     ylong idx = namemap_get(yr_get(pb, "ix"), ya_get(rs, j));
@@ -2954,42 +3026,54 @@ Yv *shake_prelude(Yv *pb, Yv *roots) {
             b = b + 1;
         }
     }
-    Yv *pieces = yav(0);
+    Yv *ir = yav(0);
+    Yv *txt = yav(0);
     Yv *out = yav(0);
     Yv *knames = yav(0);
     Yv *krefs = yav(0);
     k = 0;
     while (k < nb) {
         if (yv_b(ya_get(keep, k))) {
-            ylong lo = yv_l(ya_get(starts, k));
-            ylong hi = yv_len(lines);
-            if (k + 1 < nb) {
-                hi = yv_l(ya_get(starts, k + 1));
+            Yv *bk = ya_get(blks, k);
+            /* the block's IR_TEXT items index its own lines: moved past the
+             * lines already taken */
+            ylong base = yv_len(txt);
+            Yv *bt = yr_get(bk, "txt");
+            ylong q = 0;
+            while (q < yv_len(bt)) { txt = ya_push(txt, ya_get(bt, q)); q = q + 1; }
+            Yv *bir = yr_get(bk, "ir");
+            /* a block read from the pack keeps its items packed until kept */
+            if (yv_len(bir) == 0 && yv_len(yr_get(bk, "blob")) > 0) {
+                bir = unpack_body(yr_get(bk, "blob"));
             }
-            ylong i = lo;
-            while (i < hi) {
-                pieces = ya_push(pieces, ya_get(lines, i));
-                pieces = ya_push(pieces, ys("\n"));
-                i = i + 1;
+            ylong at = 0;
+            while (at < yv_len(bir)) {
+                ylong f = yv_l(ya_get(bir, at));
+                if (f == IR_TEXT) {
+                    ir = ir_push(ir, f, yv_l(ya_get(bir, at + 1)) + base, 0, 0, 0, 0, 0, 0);
+                } else {
+                    ir = ir_push(ir, f, yv_l(ya_get(bir, at + 1)), yv_l(ya_get(bir, at + 2)),
+                                 yv_l(ya_get(bir, at + 3)), yv_l(ya_get(bir, at + 4)),
+                                 yv_l(ya_get(bir, at + 5)), yv_l(ya_get(bir, at + 6)),
+                                 yv_l(ya_get(bir, at + 7)));
+                }
+                at = at + IR_W;
             }
-            Yv *bk = ya_get(brefs, k);
+            Yv *bk_refs = yr_get(bk, "refs");
             ylong j = 0;
-            while (j < yv_len(bk)) {
-                out = ya_push(out, ya_get(bk, j));
+            while (j < yv_len(bk_refs)) {
+                out = ya_push(out, ya_get(bk_refs, j));
                 j = j + 1;
             }
-            knames = ya_push(knames, ya_get(names, k));
-            krefs = ya_push(krefs, bk);
+            knames = ya_push(knames, yr_get(bk, "name"));
+            krefs = ya_push(krefs, bk_refs);
         }
         k = k + 1;
     }
-    return yr(4, "text", ys_join(pieces, ys("")), "refs", out,
-              "bnames", knames, "brefs", krefs);
+    return yr(5, "ir", ir, "txt", txt, "refs", out, "bnames", knames, "brefs", krefs);
 }
 
-/* The prelude's lines, the thread runtime's after them when it is used. */
-/* a, then b: a NEW array (the Y `+` on arrays), which is the copy the loop
- * needs anyway. */
+/* a, then b: a NEW array (the Y `+` on arrays). */
 static Yv *lines_appended(Yv *a, Yv *b) {
     Yv *out = ya_slice(a, 0, yv_len(a));
     ylong i = 0;
@@ -3000,25 +3084,54 @@ static Yv *lines_appended(Yv *a, Yv *b) {
     return out;
 }
 
+/* The prelude's blocks, the thread runtime's and the float primitives' after
+ * them when a program's code calls into them (native.y). */
 Yv *prelude_with(Yv *core, int threads, int mathasm) {
-    /* The thread runtime's and the float primitives' lines only when a
-     * program's code calls into them (uses_threads / uses_math): a `native
-     * def` names one of those as its body, so the call is a reference like
-     * any other and the shaking keeps the block.
-     *
-     * Appending one at a time is not just tidier: `+` on an array makes a NEW
-     * one, so concatenating unconditionally copied the prelude's ~1500 lines
-     * for every compile that wanted neither -- 52K instructions on hello.y,
-     * which is 99.9% of what this module cost before the branches (callgrind,
-     * bench/compile_ir.sh). */
     Yv *out = core;
     if (threads) {
-        out = lines_appended(core, arch_prelude_threads_lines());
+        out = lines_appended(out, arch_set(ys("threads")));
     }
     if (mathasm) {
-        out = lines_appended(out, arch_math_lines());
+        out = lines_appended(out, arch_set(ys("math")));
     }
-    return out;
+    return arch_index(out);
+}
+
+/* The block set `which` (native.y arch_set): from the std pack this compile
+ * read (arch_pack), else built from the assembly text; once per process. */
+static Yv *arch_pack;
+static Yv *arch_cache_names;
+static Yv *arch_cache_sets;
+Yv *arch_unpack(Yv *pack, Yv *entry);
+
+Yv *arch_set(Yv *which) {
+    if (!arch_cache_names) { arch_cache_names = yav(0); arch_cache_sets = yav(0); }
+    if (!arch_pack) { arch_pack = ys(""); }
+    ylong at = -1;
+    ylong i = 0;
+    while (i < yv_len(arch_cache_names)) {
+        if (ys_eq(ya_get(arch_cache_names, i), which)) { at = i; }
+        i = i + 1;
+    }
+    if (at >= 0) {
+        return ya_get(arch_cache_sets, at);
+    }
+    Yv *got = arch_unpack(arch_pack, ys_cat(ys("arch."), which));
+    Yv *blks = yv_b(yr_get(got, "ok")) ? yr_get(got, "blks") : arch_blocks(arch_set_lines(which));
+    arch_cache_names = ya_push(arch_cache_names, which);
+    arch_cache_sets = ya_push(arch_cache_sets, blks);
+    return blks;
+}
+
+/* This target's prelude, its os_call names checked (native.y arch_core). */
+Yv *arch_core(void) {
+    if (target_is_windows()) {
+        Yv *core = check_os_call_names(arch_set(ys("windows")));
+        /* the NT syscall self-test (arch/wselftest.s), which _start calls */
+        return lines_appended(core, arch_set(ys("wselftest")));
+    } else {
+        return check_os_call_names(arch_set(ys("linux")));
+    }
 }
 
 /* The references (a kept prelude's) that name a body not kept. */
@@ -14257,6 +14370,8 @@ Yv *std_units(Yv *names, Yv *pack) {
         out = std_unpack(pack, names);
         ;
     }
+    /* the arch blocks come from the same pack when it was read (arch_set) */
+    arch_pack = yv_len(out) > 0 ? pack : ys("");
     if (yv_len(out) == 0) {
         ylong i = 0;
         while (i < yv_len(names)) {
@@ -15140,11 +15255,11 @@ Yv *arch_label_name(Yv *l) {
     return nm;
 }
 
-Yv *check_os_call_names(Yv *lines) {
+Yv *check_os_call_names(Yv *blks) {
     Yv *labels = yav(0);
     ylong j = 0;
-    while (j < yv_len(lines)) {
-        Yv *nm = arch_label_name(ya_get(lines, j));
+    while (j < yv_len(blks)) {
+        Yv *nm = yr_get(ya_get(blks, j), "name");
         if (!ys_eq_lit(nm, "")) { labels = ya_push(labels, nm); }
         j = j + 1;
     }
@@ -15169,7 +15284,7 @@ Yv *check_os_call_names(Yv *lines) {
         }
         i = i + 1;
     }
-    return lines;
+    return blks;
 }
 
 Yv *rodata_intern(Yv *pieces, Yv *allrod, Yv *refs) {
@@ -15660,19 +15775,12 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog, ylong gcmode) {
     Yv *shaken = prune_bodies(labels, refs, extra);
     Yv *keep = yr_get(shaken, "keep");
     Yv *body_refs = yr_get(shaken, "refs");
-    Yv *core_lines = check_os_call_names(arch_prelude_lines());
-    /* The Windows syscall self-test (arch/wselftest.s): no lines off Windows,
-       and on Windows the _start prologue below calls the label it defines. It
-       goes through the prelude so the shaker sees what it references. */
-    Yv *self_test_lines = w_self_test_lines();
-    ylong sti = 0;
-    while (sti < yv_len(self_test_lines)) {
-        core_lines = ya_push(core_lines, ya_get(self_test_lines, sti));
-        sti = sti + 1;
-    }
+    /* The target's prelude (on Windows with the NT syscall self-test, which
+       the _start prologue calls). */
+    Yv *core_lines = arch_core();
     int thr = uses_threads(body_refs);
     int mth = uses_math(body_refs);
-    Yv *pb = prelude_blocks(prelude_with(core_lines, thr, mth));
+    Yv *pb = prelude_with(core_lines, thr, mth);
     Yv *ps = shake_prelude(pb, body_refs);
     /* A cell no kept code reads, whose initializer only allocates, is dead:
        dropping that range is what keeps the allocator -- and with it the whole
@@ -15758,7 +15866,7 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog, ylong gcmode) {
         shaken = prune_bodies(labels, refs, extra);
         keep = yr_get(shaken, "keep");
         body_refs = yr_get(shaken, "refs");
-        pb = prelude_blocks(prelude_with(core_lines, thr, mth));
+        pb = prelude_with(core_lines, thr, mth);
         ps = shake_prelude(pb, body_refs);
     }
     /* A kept prelude block may call a Y helper (none does today): the
@@ -15777,7 +15885,7 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog, ylong gcmode) {
         if ((!thr && uses_threads(body_refs)) || (!mth && uses_math(body_refs))) {
             if (uses_threads(body_refs)) { thr = 1; }
             if (uses_math(body_refs)) { mth = 1; }
-            pb = prelude_blocks(prelude_with(core_lines, thr, mth));
+            pb = prelude_with(core_lines, thr, mth);
         }
         ps = shake_prelude(pb, body_refs);
         more = unkept_refs(yr_get(ps, "refs"), bmap, keep);
@@ -15786,14 +15894,14 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog, ylong gcmode) {
        stubs, so the registry, metadata arena, marker, sweeper and free lists go
        unreachable and shake out. The allocator and heap_used() are untouched. */
     if (!gc_decide(gcmode, labels, refs, keep, all, allblob, ps, thr)) {
-        core_lines = arch_nogc_lines(core_lines);
-        pb = prelude_blocks(prelude_with(core_lines, thr, mth));
+        core_lines = arch_blocks_sub(core_lines, arch_nogc_subs());
+        pb = prelude_with(core_lines, thr, mth);
         ps = shake_prelude(pb, body_refs);
     }
     /* --gc-stress: every slow-path allocation runs a cycle. */
     if (gc_stress) {
-        core_lines = arch_gc_stress_lines(core_lines);
-        pb = prelude_blocks(prelude_with(core_lines, thr, mth));
+        core_lines = arch_blocks_sub(core_lines, arch_gc_stress_subs());
+        pb = prelude_with(core_lines, thr, mth);
         ps = shake_prelude(pb, body_refs);
     }
     /* Everything the kept code can reach: the kept bodies' own references plus
@@ -15868,8 +15976,9 @@ Yv *link_units(Yv *std, Yv *deps, Yv *prog, ylong gcmode) {
         head = ys_cat(file_dirs(files), head);
         ;
     }
-    parts = ya_push(parts, part_text(ys_cat(ys_cat(head, arch_text()),
-                                           yr_get(ps, "text"))));
+    parts = ya_push(parts, part_text(ys_cat(head, arch_text())));
+    /* the kept prelude blocks, as items */
+    parts = ya_push(parts, part_ir(yr_get(ps, "ir"), yr_get(ps, "txt"), 0, 0));
     /* The bodies, kept, as parts: their items, with the `.loc` markers moved
        to the unit's place in the program's file table. Every body is items
        now -- a unit read from a pack came with them (pack_body). */
@@ -15969,7 +16078,7 @@ Yv *link_text(Yv *parts) {
  * reuse the same unit-field encoding. */
 
 Yv *pack_version(void) {
-    return ys("ycc-std-pack 9\n");
+    return ys("ycc-std-pack 10\n");
 }
 
 Yv *obj_version(void) {
@@ -16072,8 +16181,13 @@ static Yv *pack_lbl(Yv *out, ylong id) {
 }
 
 /* One body as the pack carries it: the items above, item by item. */
+static Yv *pack_ir(Yv *ir);
 static Yv *pack_body(Yv *u, ylong b) {
-    Yv *ir = ya_get(yr_get(u, "bodies"), b);
+    return pack_ir(ya_get(yr_get(u, "bodies"), b));
+}
+
+/* Items as the pack carries them (pack_body, and the arch blocks). */
+static Yv *pack_ir(Yv *ir) {
     Yv *out = yav(0);
     ylong at = 0;
     while (at < yv_len(ir)) {
@@ -16790,10 +16904,16 @@ static Yv *pack_store(Yv *s) {
 }
 
 /* The pack of `units`. */
+static Yv *arch_pack_set(Yv *blks, Yv *base);
+static Yv *arch_set_names(void) {
+    return yav(5, ys("linux"), ys("windows"), ys("wselftest"), ys("threads"), ys("math"));
+}
+
 Yv *std_pack(Yv *units) {
     Yv *out = yav(0);
     out = ya_push(out, pack_version());
-    out = pack_put(out, ys_long(yv_len(units)));
+    Yv *sets = arch_set_names();
+    out = pack_put(out, ys_long(yv_len(units) + yv_len(sets)));
     ylong i = 0;
     while (i < yv_len(units)) {
         Yv *u = ya_get(units, i);
@@ -16803,7 +16923,136 @@ Yv *std_pack(Yv *units) {
         out = pack_put(out, pack_store(pack_unit_fields(u)));
         i = i + 1;
     }
+    /* the arch runtime's blocks, one entry per set, after the units; the
+     * Windows prelude's blocks shared with the Linux one by reference
+     * (native.y std_pack) */
+    Yv *lin = arch_blocks(arch_set_lines(ys("linux")));
+    ylong w = 0;
+    while (w < yv_len(sets)) {
+        Yv *nm = ya_get(sets, w);
+        out = pack_put(out, ys_cat(ys("arch."), nm));
+        if (ys_eq_lit(nm, "linux")) {
+            out = pack_put(out, pack_store(arch_pack_set(lin, yav(0))));
+        } else if (ys_eq_lit(nm, "windows")) {
+            out = pack_put(out, pack_store(arch_pack_set(arch_blocks(arch_set_lines(nm)), lin)));
+        } else {
+            out = pack_put(out, pack_store(arch_pack_set(arch_blocks(arch_set_lines(nm)), yav(0))));
+        }
+        w = w + 1;
+    }
     return ys_join(out, ys(""));
+}
+
+/* A block's items as the pack carries them (native.y arch_block_items). */
+static Yv *arch_block_items(Yv *bk) {
+    if (yv_len(yr_get(bk, "ir")) == 0 && yv_len(yr_get(bk, "blob")) > 0) {
+        return yr_get(bk, "blob");
+    }
+    return pack_ir(yr_get(bk, "ir"));
+}
+
+/* Everything a block is, as one string (native.y arch_block_key). */
+static Yv *arch_block_key(Yv *bk) {
+    Yv *out = yav(0);
+    out = pack_put(out, yr_get(bk, "name"));
+    out = pack_put(out, yv_b(yr_get(bk, "falls")) ? ys("1") : ys("0"));
+    out = pack_strs(out, yr_get(bk, "refs"));
+    out = pack_put(out, arch_block_items(bk));
+    out = pack_strs(out, yr_get(bk, "txt"));
+    return ys_join(out, ys(""));
+}
+
+/* A block set's fields: per block "b" and the block, or "r" and the index of
+ * the same block in `base` (native.y arch_pack_set). */
+static Yv *arch_pack_set(Yv *blks, Yv *base) {
+    Yv *bkeys = yav(0);
+    ylong i = 0;
+    while (i < yv_len(base)) {
+        bkeys = ya_push(bkeys, arch_block_key(ya_get(base, i)));
+        i = i + 1;
+    }
+    Yv *out = yav(0);
+    out = pack_put(out, ys_long(yv_len(blks)));
+    i = 0;
+    while (i < yv_len(blks)) {
+        Yv *bk = ya_get(blks, i);
+        Yv *key = arch_block_key(bk);
+        ylong at = -1;
+        ylong k = 0;
+        while (at < 0 && k < yv_len(bkeys)) {
+            if (ys_eq(ya_get(bkeys, k), key)) { at = k; }
+            k = k + 1;
+        }
+        if (at >= 0) {
+            out = pack_put(out, ys("r"));
+            out = pack_put(out, ys_long(at));
+        } else {
+            out = pack_put(out, ys("b"));
+            out = pack_put(out, yr_get(bk, "name"));
+            out = pack_put(out, yv_b(yr_get(bk, "falls")) ? ys("1") : ys("0"));
+            out = pack_strs(out, yr_get(bk, "refs"));
+            out = pack_put(out, arch_block_items(bk));
+            out = pack_strs(out, yr_get(bk, "txt"));
+        }
+        i = i + 1;
+    }
+    return ys_join(out, ys(""));
+}
+
+/* Entry `entry` of `pack` as blocks: { ok, blks } (native.y arch_unpack). */
+Yv *arch_unpack(Yv *pack, Yv *entry) {
+    Yv *blks = yav(0);
+    int ok = 0;
+    Yv *ver = pack_version();
+    if (yv_len(pack) > 0 && ys_eq(ys_slice(pack, 0, yv_len(ver)), ver)) {
+        Yv *cur = yr(2, "s", pack, "p", yv_long(yv_len(ver)));
+        ylong n = pack_num(cur);
+        ylong i = 0;
+        while (!ok && i < n) {
+            Yv *nm = pack_get(cur);
+            ylong ul = pack_len(cur);
+            ylong at = yv_l(yr_get(cur, "p"));
+            if (ys_eq(nm, entry)) {
+                Yv *raw = ys_slice(pack, at, at + ul);
+                if (yv_len(raw) > 0 && ys_byte_at(raw, 0) == 1) {
+                    raw = lz_decode(ys_slice(raw, 1, yv_len(raw)));
+                }
+                if (yv_len(raw) > 0) {
+                    Yv *c = yr(2, "s", raw, "p", yv_long(0));
+                    ylong nb = pack_num(c);
+                    /* a Windows block shared with the Linux prelude is a
+                     * reference to it */
+                    Yv *base = yav(0);
+                    if (ys_eq_lit(entry, "arch.windows")) { base = arch_set(ys("linux")); }
+                    ok = 1;
+                    ylong b = 0;
+                    while (b < nb) {
+                        if (ys_eq_lit(pack_get(c), "r")) {
+                            ylong k = pack_num(c);
+                            if (k >= 0 && k < yv_len(base)) {
+                                blks = ya_push(blks, ya_get(base, k));
+                            } else {
+                                ok = 0;
+                            }
+                        } else {
+                            Yv *bn = pack_get(c);
+                            int bf = ys_eq_lit(pack_get(c), "1");
+                            Yv *br = pack_get_strs(c);
+                            Yv *bb = pack_get(c);
+                            Yv *bt = pack_get_strs(c);
+                            blks = ya_push(blks, yr(6, "name", bn, "falls", yv_bool(bf),
+                                                    "refs", br, "ir", yav(0), "blob", bb,
+                                                    "txt", bt));
+                        }
+                        b = b + 1;
+                    }
+                }
+            }
+            yr_set(cur, "p", yv_long(at + ul));
+            i = i + 1;
+        }
+    }
+    return yr(2, "ok", yv_bool(ok), "blks", blks);
 }
 
 /* Reading a pack: `cur` is the text and the position in it. pack_len

@@ -125,22 +125,21 @@ static ylong w_sysno(Yv *name) {
     else { return -1; }
 }
 
-/* The Windows syscall self-test is NOT implemented. The design is in
-   ideas/WINDOWS.md (Risks): one Nt call per class -- memory, file, time,
-   thread -- with its NTSTATUS checked once at program start, so a number that
-   drifted on a different Windows build fails loudly instead of calling some
-   other real Nt function. It is a real gap rather than a postponed detail:
-   w_sysno's numbers are pinned to one ntdll sample and nothing verifies them
-   at runtime. This stub returns no lines, and says so, because a comment that
-   promises a probe nobody runs is worse than no comment.
-
-   Not `static`, and not in arch_x64.h either: a Y `def` is callable from
-   anywhere in its module and nothing warns when nothing calls it, whereas an
-   unused static is a -Wunused-function warning. Leaving the definition with
-   external linkage keeps the twin honest; leaving it out of the header keeps
-   the header matching the Y export list exactly. */
-Yv *w_self_test_lines(void) {
-    if (target_is_windows()) { return arch_asm_lines(WSELFTEST_ASM()); } else { return yav(0); }
+/* The lines of arch block set `which` (arch_x64.y arch_set_lines): native.c
+   arch_set builds its blocks from them, once, when the std pack is written or
+   when a compiler has none. `wselftest` is the Windows syscall self-test
+   (arch/wselftest.s), which the Windows prelude carries and _start calls. */
+Yv *arch_set_lines(Yv *which) {
+    if (ys_eq_lit(which, "linux")) { return arch_asm_lines(PRELUDE_ASM()); }
+    else if (ys_eq_lit(which, "windows")) { return arch_windows_lines(); }
+    else if (ys_eq_lit(which, "wselftest")) { return arch_asm_lines(WSELFTEST_ASM()); }
+    else if (ys_eq_lit(which, "threads")) { return arch_asm_lines(THREADS_ASM()); }
+    else if (ys_eq_lit(which, "math")) { return arch_asm_lines(MATH_ASM()); }
+    else {
+        puts_(ys_cat(ys_cat(ys("ycc: internal error: no arch block set '"), which), ys("'\n")));
+        exit_(1);
+        return yav(0);
+    }
 }
 
 Yv *arch_fn_label(ylong uid, Yv *name) {
@@ -314,40 +313,10 @@ Yv *arch_exit(void) {
     else { return ys("    mov $231, %rax\n    xor %edi, %edi\n    syscall\n"); }
 }
 
-// The prelude as its lines: labels alone at column 0, everything else
-// indented (native.c prelude_blocks relies on it).
-Yv *arch_prelude_lines(void) {
-    // Runtime PRIMITIVES — everything with a specific behaviour lives in
-    // std/rt.y as ordinary Y code (tree shaking drops what a program does
-    // not use, here and there: native.y's shake_prelude prunes these lines
-    // block by block, prune_bodies does the same for rt.y's functions).
-    // What stays here is what only raw machine state can do: the bump
-    // allocator (y_alloc, over 4 MB mmap chunks, its state in the y_heap
-    // .bss cells), the trap stubs, the byte-moving
-    // string/array cores
-    // (eq/cmp/cat/join/slice, arr push/prepend/slice/cat/eq), long and
-    // float formatting, str<->[byte] conversion and argv materialization.
-    if (target_is_windows()) { return arch_windows_lines(); }
-    else { return arch_asm_lines(PRELUDE_ASM()); }
-}
-
-// The thread runtime (CHOICES_MADE.md 33), linked only when a program's
-// code calls into it (native.y uses_threads): every compile looks at
-// each line of the prelude it is given.
-Yv *arch_prelude_threads_lines(void) {
-    return arch_asm_lines(THREADS_ASM());
-}
-
-
-/* The floating-point primitives (src/y/arch/math.s): the four a std module
- * reaches through `native def`, and the only machine code between Y and a
- * numeric library -- Y has no float-to-long conversion and no way to read a
- * float's bits. Always given to the shaking (they are a few lines, unlike the
- * thread runtime, so there is nothing to save by looking first). */
-Yv *arch_math_lines(void) {
-    return arch_asm_lines(MATH_ASM());
-}
-
+/* threads.s is the thread runtime (CHOICES_MADE.md 33), linked only when a
+ * program's code calls into it (native.y uses_threads); math.s the
+ * floating-point primitives a std module reaches through `ndef`. Both are
+ * block sets (arch_set_lines). */
 
 Yv *arch_consts(void) {
     // rodata literals emitted once at the end of the file (string headers,
@@ -524,32 +493,6 @@ static int arch_is_label_line(Yv *l) {
 
 // `lines` walked; at a label a replacing block claims, that block's lines and
 // not the prelude's. The new blocks go after the last replaced one.
-/* Replace the block that starts at the column-0 label `name` (through the line
-   before the next label) with `repl`. */
-static Yv *arch_block_sub(Yv *lines, Yv *name, Yv *repl) {
-    Yv *out = yav(0);
-    ylong i = 0;
-    while (i < yv_len(lines)) {
-        Yv *l = ya_get(lines, i);
-        if (arch_is_label_line(l)
-            && ys_eq(ys_trim(ys_slice(l, 0, yv_len(l) - 1)), name)) {
-            ylong r = 0;
-            while (r < yv_len(repl)) {
-                out = ya_push(out, ya_get(repl, r));
-                r = r + 1;
-            }
-            i = i + 1;
-            while (i < yv_len(lines) && !arch_is_label_line(ya_get(lines, i))) {
-                i = i + 1;
-            }
-        } else {
-            out = ya_push(out, l);
-            i = i + 1;
-        }
-    }
-    return out;
-}
-
 /* The GC-free runtime: a program whose heap cannot grow does not link the
    collector at all (--gc, or the auto analysis). The allocator itself is
    UNCHANGED -- only the collector's three entry points become stubs -- so the
@@ -558,27 +501,26 @@ static Yv *arch_block_sub(Yv *lines, Yv *name, Yv *repl) {
    becomes unreachable and is shaken out.
      y_gc_maybe      never runs a cycle
      y_gc_alloc_free never recycles a block (0 = none)
-     y_gc_chunk_add  returns the base the allocator wants, registers nothing */
-/* --gc-stress: a cycle at every allocating slow path (native.y). */
-Yv *arch_gc_stress_lines(Yv *lines) {
-    Yv *out = arch_block_sub(lines, ys("y_gc_maybe"),
-        yav(3, ys("y_gc_maybe:"), ys("    call y_gc_collect"), ys("    ret")));
-    /* The invariant trap reports chunk base/end, the block, the word there, its
-       two neighbours and the map register, because "bad block header" alone
-       names nothing and the neighbours separate a misaligned walk from an
-       overwritten header. */
-    return arch_block_sub(out, ys("y_bad_trap"), yav(42, ys("y_bad_trap:"), ys("    push %rbx"), ys("    push %r12"), ys("    push %r13"), ys("    mov 0(%rbx), %rax"), ys("    push %rax"), ys("    call y_os_print_int"), ys("    add $8, %rsp"), ys("    mov 8(%rbx), %rax"), ys("    push %rax"), ys("    call y_os_print_int"), ys("    add $8, %rsp"), ys("    mov %r12, %rax"), ys("    push %rax"), ys("    call y_os_print_int"), ys("    add $8, %rsp"), ys("    mov 0(%r12), %rax"), ys("    push %rax"), ys("    call y_os_print_int"), ys("    add $8, %rsp"), ys("    mov -8(%r12), %rax"), ys("    push %rax"), ys("    call y_os_print_int"), ys("    add $8, %rsp"), ys("    mov 8(%r12), %rax"), ys("    push %rax"), ys("    call y_os_print_int"), ys("    add $8, %rsp"), ys("    mov %r13, %rax"), ys("    push %rax"), ys("    call y_os_print_int"), ys("    add $8, %rsp"), ys("    mov 0(%r13), %rax"), ys("    push %rax"), ys("    call y_os_print_int"), ys("    add $8, %rsp"), ys("    pop %r13"), ys("    pop %r12"), ys("    pop %rbx"), ys("    mov $1, %rax"), ys("    mov $1, %rdi"), ys("    syscall")));
+     y_gc_chunk_add  returns the base the allocator wants, registers nothing
+   Each substitution is [block name, its replacement lines...] (native.c
+   arch_blocks_sub). */
+Yv *arch_nogc_subs(void) {
+    return yav(3,
+               yavs(ys("y_gc_maybe"), ys("y_gc_maybe:"), ys("    ret"), NULL),
+               yavs(ys("y_gc_alloc_free"), ys("y_gc_alloc_free:"), ys("    xor %eax, %eax"),
+                    ys("    ret"), NULL),
+               yavs(ys("y_gc_chunk_add"), ys("y_gc_chunk_add:"), ys("    mov %rdi, %rax"),
+                    ys("    ret"), NULL));
 }
 
-Yv *arch_nogc_lines(Yv *lines) {
-    Yv *out = arch_block_sub(lines, ys("y_gc_maybe"),
-                             yavs(ys("y_gc_maybe:"), ys("    ret"), NULL));
-    out = arch_block_sub(out, ys("y_gc_alloc_free"),
-                         yavs(ys("y_gc_alloc_free:"), ys("    xor %eax, %eax"),
-                              ys("    ret"), NULL));
-    return arch_block_sub(out, ys("y_gc_chunk_add"),
-                          yavs(ys("y_gc_chunk_add:"), ys("    mov %rdi, %rax"),
-                               ys("    ret"), NULL));
+/* --gc-stress: a cycle at every allocating slow path (native.y). The invariant
+   trap reports chunk base/end, the block, the word there, its two neighbours
+   and the map register, because "bad block header" alone names nothing and
+   the neighbours separate a misaligned walk from an overwritten header. */
+Yv *arch_gc_stress_subs(void) {
+    return yav(2,
+               yavs(ys("y_gc_maybe"), ys("y_gc_maybe:"), ys("    call y_gc_collect"), ys("    ret"), NULL),
+               yav(43, ys("y_bad_trap"), ys("y_bad_trap:"), ys("    push %rbx"), ys("    push %r12"), ys("    push %r13"), ys("    mov 0(%rbx), %rax"), ys("    push %rax"), ys("    call y_os_print_int"), ys("    add $8, %rsp"), ys("    mov 8(%rbx), %rax"), ys("    push %rax"), ys("    call y_os_print_int"), ys("    add $8, %rsp"), ys("    mov %r12, %rax"), ys("    push %rax"), ys("    call y_os_print_int"), ys("    add $8, %rsp"), ys("    mov 0(%r12), %rax"), ys("    push %rax"), ys("    call y_os_print_int"), ys("    add $8, %rsp"), ys("    mov -8(%r12), %rax"), ys("    push %rax"), ys("    call y_os_print_int"), ys("    add $8, %rsp"), ys("    mov 8(%r12), %rax"), ys("    push %rax"), ys("    call y_os_print_int"), ys("    add $8, %rsp"), ys("    mov %r13, %rax"), ys("    push %rax"), ys("    call y_os_print_int"), ys("    add $8, %rsp"), ys("    mov 0(%r13), %rax"), ys("    push %rax"), ys("    call y_os_print_int"), ys("    add $8, %rsp"), ys("    pop %r13"), ys("    pop %r12"), ys("    pop %rbx"), ys("    mov $1, %rax"), ys("    mov $1, %rdi"), ys("    syscall")));
 }
 
 static Yv *arch_win_sub(Yv *lines, Yv *blocks) {

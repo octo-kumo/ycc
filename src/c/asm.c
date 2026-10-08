@@ -1673,6 +1673,155 @@ static Yv *ir_enc_item(Yv *ir, ylong at, ylong sec, Yv *offs, Yv *where) {
     }
 }
 
+/* ── a line of hand-written assembly, as an item (asm.y ir_parse_line) ──
+   The item, or [] when no form reproduces the line exactly: the same text
+   under -S and the same bytes, fixups and branch class out of the assembler.
+   The caller keeps such a line as an IR_TEXT item. */
+static Yv *ir_item_of(ylong f, Yv *kinds, Yv *ops);
+static int ir_same_as_line(Yv *item, Yv *line);
+
+Yv *ir_parse_line(Yv *line) {
+    Yv *t = ys_trim(line);
+    if (yv_len(line) == 0 || (ys_byte_at(line, 0) != 32 && ys_byte_at(line, 0) != 9)
+        || yv_len(t) == 0 || ys_byte_at(t, 0) == '.') {
+        return yav(0);
+    }
+    ylong sp = ys_index_of(t, ys(" "));
+    Yv *mn = t;
+    Yv *rest = ys("");
+    if (sp >= 0) {
+        mn = ys_slice(t, 0, sp);
+        rest = ys_trim(ys_slice_from(t, sp + 1));
+    }
+    Yv *ops = yav(0);
+    int ok = 1;
+    if (!ys_eq_lit(rest, "")) {
+        Yv *texts = split_ops(rest);
+        ylong i = 0;
+        while (ok && i < yv_len(texts)) {
+            Yv *r = parse_operand(ya_get(texts, i));
+            if (yv_b(yr_get(r, "ok"))) { ops = ya_push(ops, yr_get(r, "op")); } else { ok = 0; }
+            i = i + 1;
+        }
+    }
+    Yv *out = yav(0);
+    if (ok) {
+        ylong nf = ir_nforms();
+        ylong f = 0;
+        while (yv_len(out) == 0 && f < nf) {
+            Yv *fo = ir_form(f);
+            if (ys_eq(yr_get(fo, "mn"), mn) && yv_len(yr_get(fo, "kinds")) == yv_len(ops)) {
+                Yv *item = ir_item_of(f, yr_get(fo, "kinds"), ops);
+                if (yv_len(item) > 0 && ir_same_as_line(item, line)) { out = item; }
+            }
+            f = f + 1;
+        }
+    }
+    return out;
+}
+
+/* Form `f`'s item for `ops`, or [] when an operand is not of the kind the
+   form takes (asm.y ir_item_of). */
+static Yv *ir_item_of(ylong f, Yv *kinds, Yv *ops) {
+    ylong w[7] = {0, 0, 0, 0, 0, 0, 0};
+    ylong wp = 0;
+    int ok = 1;
+    ylong i = 0;
+    while (ok && i < yv_len(kinds)) {
+        ylong k = yv_l(ya_get(kinds, i));
+        Yv *o = ya_get(ops, i);
+        ylong ok_ = yv_l(yr_get(o, "k"));
+        if (k == O_REG && ok_ == K_reg) {
+            w[wp] = yv_l(yr_get(o, "n"));
+            w[wp + 1] = yv_l(yr_get(o, "size"));
+        } else if (k == O_IND && ok_ == K_ind) {
+            w[wp] = yv_l(yr_get(o, "n"));
+            w[wp + 1] = yv_l(yr_get(o, "size"));
+        } else if (k == O_IMM && ok_ == K_imm) {
+            w[wp] = yv_l(yr_get(o, "v"));
+        } else if (k == O_LBL && ok_ == K_lbl) {
+            w[wp] = yv_l(lbl_new(yr_get(o, "name")));
+        } else if (k == O_DIFF && ok_ == K_diff) {
+            w[wp] = yv_l(lbl_new(yr_get(o, "a")));
+            w[wp + 1] = yv_l(lbl_new(yr_get(o, "b")));
+        } else if ((k == O_MEM || k == O_MEM0) && ok_ == K_mem) {
+            if (yv_b(yr_get(o, "rip"))) {
+                w[wp] = -1;
+                w[wp + 1] = -1;
+                w[wp + 2] = 1;
+                w[wp + 3] = yv_l(yr_get(o, "disp"));
+                w[wp + 4] = yv_l(lbl_new(yr_get(o, "lbl")));
+            } else {
+                w[wp] = yv_l(yr_get(o, "base"));
+                w[wp + 1] = yv_l(yr_get(o, "idx"));
+                w[wp + 2] = yv_l(yr_get(o, "scale"));
+                w[wp + 3] = k == O_MEM0 ? -1 : yv_l(yr_get(o, "disp"));
+                w[wp + 4] = -1;
+            }
+        } else if (k == O_FS && ok_ == K_fs && yv_l(yr_get(o, "n")) == 0) {
+            w[wp] = yv_l(yr_get(o, "disp"));
+        } else {
+            ok = 0;
+        }
+        wp = wp + ir_kind_words(k);
+        i = i + 1;
+    }
+    if (ok) {
+        return ir_push(yav(0), f, w[0], w[1], w[2], w[3], w[4], w[5], w[6]);
+    } else {
+        return yav(0);
+    }
+}
+
+/* The item stands for the line (asm.y ir_same_as_line). */
+static int ir_same_as_line(Yv *item, Yv *line) {
+    /* trailing blanks say nothing (math.s has some); -S drops them */
+    Yv *tl = line;
+    while (yv_len(tl) > 0 && (ys_byte_at(tl, yv_len(tl) - 1) == 32
+                              || ys_byte_at(tl, yv_len(tl) - 1) == 9)) {
+        tl = ys_slice(tl, 0, yv_len(tl) - 1);
+    }
+    if (!ys_eq(ir_render(item, yav(0), 0, 0), tl)) {
+        return 0;
+    }
+    Yv *st = asm_assemble_line(yav(1, line), 0, 0, 0, yav(3, yv_long(0), yv_long(0), yv_long(0)),
+                               yav(0), yav(0), ys(""));
+    Yv *r = ir_enc_item(item, 0, 0, yav(3, yv_long(0), yv_long(0), yv_long(0)), ys(""));
+    if (!ys_eq_lit(yr_get(st, "err"), "") || !ys_eq_lit(yr_get(r, "err"), "")
+        || yv_len(yr_get(st, "items")) != 1 || yv_len(yr_get(st, "labels")) != 0) {
+        return 0;
+    }
+    Yv *a = ya_get(yr_get(st, "items"), 0);
+    Yv *b = yr_get(r, "item");
+    Yv *ab = yr_get(a, "bytes");
+    Yv *bb = yr_get(b, "bytes");
+    Yv *af = yr_get(a, "fix");
+    Yv *bf = yr_get(b, "fix");
+    int same = yv_l(yr_get(a, "sec")) == yv_l(yr_get(b, "sec"))
+        && yv_l(yr_get(a, "len")) == yv_l(yr_get(b, "len"))
+        && ys_eq(yr_get(a, "kind"), yr_get(b, "kind"))
+        && yv_l(yr_get(a, "br")) == yv_l(yr_get(b, "br"))
+        && yv_len(af) == yv_len(bf) && yv_len(ab) == yv_len(bb);
+    ylong i = 0;
+    while (same && i < yv_len(ab)) {
+        if (yv_l(ya_get(ab, i)) != yv_l(ya_get(bb, i))) { same = 0; }
+        i = i + 1;
+    }
+    i = 0;
+    while (same && i < yv_len(af)) {
+        Yv *fa = ya_get(af, i);
+        Yv *fb = ya_get(bf, i);
+        if (yv_l(yr_get(fa, "off")) != yv_l(yr_get(fb, "off"))
+            || !ys_eq(yr_get(fa, "kind"), yr_get(fb, "kind"))
+            || !ys_eq(yr_get(fa, "lbl"), yr_get(fb, "lbl"))
+            || !ys_eq(yr_get(fa, "lbl2"), yr_get(fb, "lbl2"))) {
+            same = 0;
+        }
+        i = i + 1;
+    }
+    return same;
+}
+
 /* A label definition (IR_LABEL): the AsmLabel asm_labdef_go builds, with the
    name from the label table rather than from the line. */
 static Yv *asm_ir_label(ylong id, ylong sec, Yv *offs, Yv *items, Yv *labels) {
