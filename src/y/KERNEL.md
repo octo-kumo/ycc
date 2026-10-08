@@ -2740,3 +2740,24 @@ TASK_BOOT fix, and the transcript carries the assertion meanwhile.
 
 test/kernel is 80 passed, 0 failed / 81 total -- the extra case being u020 itself, whose
 transcript check passes.
+
+### Round 168: the exit does NOT come from the pick -- so another path exits the machine
+
+Instrumented the pick's nothing-runnable fallback (printing cur_task and every task's
+state/frame before it looks for a parked TASK_BOOT) and ran u020_cp:
+
+    fs ok=true msg=3
+    cp src=3 n=12 dst=4 w=12 back=0 n2=12 text=hi from yfs
+    (status 0, and NOT ONE PICK line)
+
+So the fallback never ran, and yet the machine left with y_kexit(0) -- status 0 is what
+that produces.  The exit therefore came from somewhere else entirely, and the candidates
+are now a short list rather than a theory: the driver's own kernel.kexit(9) would give 19,
+sys_exit_group's `if (len(tasks) <= 1)` branch needs a single task (there are two), and the
+remaining callers are in the syscall/exit path itself.
+
+That is the next step: the exits are few enough to enumerate, and the grep that lists them
+is one command -- which is exactly how this round should have started, after the lesson
+that reading the reference beat inferring it.
+
+test/kernel is 80 passed, 0 failed / 80 total.
