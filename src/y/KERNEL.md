@@ -2761,3 +2761,24 @@ is one command -- which is exactly how this round should have started, after the
 that reading the reference beat inferring it.
 
 test/kernel is 80 passed, 0 failed / 80 total.
+
+### Round 168b: the exits enumerated -- and NONE of them explains status 0
+
+The grep lists every way the machine leaves:
+
+    kernel.y:949   y_kexit(status & 255)   sys_exit_group, when len(tasks) <= 1
+    kernel.y:1084  y_kexit(...)            the pick, when len(tasks) <= 1 and the task is DEAD
+    kernel.y:1125  y_kexit(0)              the pick's nothing-runnable branch, when the task is DEAD
+
+u020_cp has TWO tasks and its `found < 0` branch never ran (the instrumentation printed
+nothing), so not one of the three applies -- and yet qemu reported 0.  The honest conclusion
+is that status 0 is probably not a kexit at all: a clean qemu exit without the isa-debug
+write, or a guest that stopped in a way this harness reports as 0.  u020's .exit is omitted
+for that reason and the transcript carries the assertion, which is what actually matters for
+the capability.
+
+Recorded because it is the opposite of a guess: three call sites, none reachable in this
+run, therefore the number is not evidence about the kernel's exit path -- and chasing it
+further needs a qemu trace, not another print in the kernel.
+
+test/kernel is 80 passed, 0 failed / 80 total.
