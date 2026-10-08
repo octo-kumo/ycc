@@ -3942,6 +3942,90 @@ static int is_reload(Yv *ir, ylong a, ylong b, ylong c, ylong d, ylong e, ylong 
         && yv_l(ya_get(ir, p + 3)) == a && yv_l(ya_get(ir, p + 4)) == b && yv_l(ya_get(ir, p + 5)) == c && yv_l(ya_get(ir, p + 6)) == d && yv_l(ya_get(ir, p + 7)) == e;
 }
 
+/* A load into %rax a push can take instead (native.y pushable). */
+static int pushable(Yv *ir, ylong p) {
+    ylong f = yv_l(ya_get(ir, p));
+    if (f == F_MOV_I_R) {
+        ylong v = yv_l(ya_get(ir, p + 1));
+        return yv_l(ya_get(ir, p + 2)) == R_RAX && yv_l(ya_get(ir, p + 3)) == 64 && v >= -2147483648LL && v <= 2147483647LL;
+    } else if (f == F_MOV_D_R || f == F_MOV_P_R || f == F_MOV_0_R) {
+        return yv_l(ya_get(ir, p + 6)) == R_RAX && yv_l(ya_get(ir, p + 7)) == 64
+            && yv_l(ya_get(ir, p + 1)) != R_RSP && yv_l(ya_get(ir, p + 2)) != R_RSP;
+    } else {
+        return 0;
+    }
+}
+
+static int rax_load(Yv *ir, ylong p, int first);
+
+/* Does the instruction at p overwrite %rax without reading it first? (native.y
+ * rax_dead_at) */
+static int rax_dead_at(Yv *ir, ylong p) {
+    if (yv_l(ya_get(ir, p)) == F_CALL_L) {
+        Yv *nm = lname(ya_get(ir, p + 1));
+        return yv_len(nm) > 4 && ys_eq_lit(ys_slice(nm, 0, 4), "yfn_");
+    } else {
+        return rax_load(ir, p, 1);
+    }
+}
+
+/* `<load into %rax>; push %rax` as one push of the load's operand when the
+ * instruction after it overwrites %rax without reading it (native.y
+ * push_fold); the body is compacted in place. */
+static Yv *push_fold(Yv *ir) {
+    ylong w = IR_W;
+    ylong n = yv_len(ir);
+    ylong wp = 0;
+    ylong at = 0;
+    while (at < n) {
+        ylong next = at + w;
+        int folded = 0;
+        if (pushable(ir, at)) {
+            ylong j = at + w;
+            while (j < n && yv_l(ya_get(ir, j)) == IR_LOC) { j = j + w; }
+            if (j < n && yv_l(ya_get(ir, j)) == F_PUSH_R && yv_l(ya_get(ir, j + 1)) == R_RAX && yv_l(ya_get(ir, j + 2)) == 64) {
+                ylong k = j + w;
+                while (k < n && yv_l(ya_get(ir, k)) == IR_LOC) { k = k + w; }
+                if (k < n && rax_dead_at(ir, k)) {
+                    ylong item[8];
+                    if (yv_l(ya_get(ir, at)) == F_MOV_I_R) {
+                        item[0] = F_PUSH_I; item[1] = yv_l(ya_get(ir, at + 1));
+                        for (int i = 2; i < 8; i++) { item[i] = 0; }
+                    } else {
+                        item[0] = F_PUSH_M;
+                        for (int i = 1; i < 6; i++) { item[i] = yv_l(ya_get(ir, at + i)); }
+                        /* `(%base)` keeps -1 in its displacement ("none written");
+                           the push's operand writes one, so 0 */
+                        if (yv_l(ya_get(ir, at)) == F_MOV_0_R) { item[4] = 0; }
+                        item[6] = 0; item[7] = 0;
+                    }
+                    Yv *locs = yav(0);
+                    ylong q = at + w;
+                    while (q < k) {
+                        if (yv_l(ya_get(ir, q)) == IR_LOC) {
+                            for (ylong i = 0; i < w; i++) { locs = ya_push(locs, ya_get(ir, q + i)); }
+                        }
+                        q = q + w;
+                    }
+                    for (ylong i = 0; i < w; i++) { ya_set(ir, wp + i, yv_long(item[i])); }
+                    wp = wp + w;
+                    for (ylong i = 0; i < yv_len(locs); i++) { ya_set(ir, wp + i, ya_get(locs, i)); }
+                    wp = wp + yv_len(locs);
+                    next = k;
+                    folded = 1;
+                }
+            }
+        }
+        if (!folded) {
+            if (wp != at) { for (ylong i = 0; i < w; i++) { ya_set(ir, wp + i, ya_get(ir, at + i)); } }
+            wp = wp + w;
+        }
+        at = next;
+    }
+    ir->u.a.len = (size_t)wp;
+    return ir;
+}
+
 /* `pop %rcx; <store through %rcx>; push %rcx`, the push about to be emitted
  * (native.y repush_fold): the pop becomes `mov (%rsp), %rcx` and the push
  * goes. */
@@ -14299,7 +14383,7 @@ Yv *emit_one_fn(Yv *st, Yv *label, ylong fuid, Yv *func, int is_main,
         body = ir_push(body, F_SUB_I_R, frame, R_RSP, 64, 0, 0, 0, 0);
         ;
     }
-    body = ir_cat(body, yr_get(f, "ir"));
+    body = ir_cat(body, push_fold(yr_get(f, "ir")));
     body = ir_push(body, IR_LABEL, yv_l(yr_get(f, "end_label")), 0, 0, 0, 0, 0,
                    0);
     if (is_main) {

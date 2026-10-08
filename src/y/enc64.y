@@ -356,7 +356,20 @@ def enc_branch_long(buf: [byte], at: long, br: long, lbl: str) -> Encoded {
 };
 
 def enc_push(buf: [byte], at: long, o: Operand) -> Encoded {
-    if (o.k != K.reg) {
+    if (o.k == K.imm) {
+        // 6A ib for a byte's worth, 68 id otherwise; either is sign-extended
+        if (fits8(o.v)) {
+            enc_ok(put2(buf, at, 106, o.v & 255), [])
+        } else if (o.v >= -2147483648 && o.v <= 2147483647) {
+            enc_ok(put_le32(buf, put(buf, at, 104), o.v), [])
+        } else {
+            enc_err(at, "push needs imm32")
+        }
+    } else if (o.k == K.mem) {
+        // FF /6, without REX.W: the operand is 64 bits already
+        let t = mem_tail(o, 6);
+        enc_mem_result(buf, mem_tail_put(buf, (put2(buf, (put_rex(buf, at, rex_rm(false, 6, o))), 255, t.modrm)), t), t)
+    } else if (o.k != K.reg) {
         enc_err(at, "push needs r64")
     } else if (op_size(o) != 64) {
         enc_err(at, "push needs r64")

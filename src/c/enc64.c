@@ -458,7 +458,23 @@ Yv *enc_branch_long(Yv *buf, ylong at, ylong br, Yv *lbl) {
 }
 
 static Yv *enc_push(Yv *buf, ylong at, Yv *o) {
-    if (yv_l(yr_get(o, "k")) != K_reg) {
+    if (yv_l(yr_get(o, "k")) == K_imm) {
+        /* 6A ib for a byte's worth, 68 id otherwise; either is sign-extended */
+        ylong v = yv_l(yr_get(o, "v"));
+        if (fits8(v)) {
+            return enc_ok(put2(buf, at, 106, v & 255), yav(0));
+        } else if (v >= -2147483648LL && v <= 2147483647LL) {
+            return enc_ok(put_le32(buf, put(buf, at, 104), v), yav(0));
+        } else {
+            return enc_err(at, ys("push needs imm32"));
+        }
+    } else if (yv_l(yr_get(o, "k")) == K_mem) {
+        /* FF /6, without REX.W: the operand is 64 bits already */
+        Yv *t = mem_tail(o, 6);
+        ylong n = put_rex(buf, at, rex_rm(0, 6, o));
+        ylong m = put2(buf, n, 255, yv_l(yr_get(t, "modrm")));
+        return enc_mem_result(buf, mem_tail_put(buf, m, t), t);
+    } else if (yv_l(yr_get(o, "k")) != K_reg) {
         return enc_err(at, ys("push needs r64"));
     } else if (op_size(o) != 64) {
         return enc_err(at, ys("push needs r64"));

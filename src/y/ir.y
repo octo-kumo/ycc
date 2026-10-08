@@ -180,6 +180,10 @@ const F_UCOMISD_D_R = 121;
 const F_UCOMISD_0_R = 122;
 const F_CVTTSD2SI_R_R = 123;
 const F_SQRTSD_R_R = 124;
+// `push $imm` and `push mem`: native.y push_fold turns `mov X, %rax; push %rax`
+// into one of these when nothing reads %rax after it (an argument list).
+const F_PUSH_I = 125;
+const F_PUSH_M = 126;
 
 // Register numbers, x86 encoding order (enc64's reg_num is the same table:
 // %rax %rcx %rdx %rbx %rsp %rbp %rsi %rdi %r8..%r15, and %xmm0..).
@@ -337,6 +341,8 @@ def ir_init() -> void {
     t += { id: F_UCOMISD_0_R, mn: "ucomisd", kinds: [O_MEM0, O_REG] };
     t += { id: F_CVTTSD2SI_R_R, mn: "cvttsd2si", kinds: [O_REG, O_REG] };
     t += { id: F_SQRTSD_R_R, mn: "sqrtsd", kinds: [O_REG, O_REG] };
+    t += { id: F_PUSH_I, mn: "push", kinds: [O_IMM] };
+    t += { id: F_PUSH_M, mn: "push", kinds: [O_MEM] };
     // The ids above are positions in this list; a form added in the wrong
     // place would decode and print as a different instruction, so check it.
     t.foreach((e, i) => {

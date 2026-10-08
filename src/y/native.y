@@ -2880,6 +2880,90 @@ def emit_insn(st: EmitSt, f: long, a: long, b: long, c: long, d: long, e: long, 
     }
 };
 
+// `<load into %rax>; push %rax` as one push of the load's operand -- `push
+// $imm` or `push mem` -- when the instruction after it overwrites %rax without
+// reading it, so the value lived in %rax for nothing. Argument lists are made
+// of it: 15,889 + 9,823 sites in ycc's own output. Run over a finished body
+// (emit_one_fn); the body is compacted in place, so one with nothing to fold
+// costs a scan and no copy. `.loc` markers are stepped over and kept.
+def push_fold(ir: [long]) -> [long] {
+    let w = insn.IR_W;
+    let n = len(ir);
+    let wp = 0;
+    let at = 0;
+    while (at < n) {
+        let next = at + w;
+        let folded = false;
+        if (pushable(ir, at)) {
+            let j = at + w;
+            while (j < n && ir[j] == insn.IR_LOC) { j = j + w; };
+            if (j < n && ir[j] == insn.F_PUSH_R && ir[j + 1] == insn.R_RAX && ir[j + 2] == 64) {
+                let k = j + w;
+                while (k < n && ir[k] == insn.IR_LOC) { k = k + w; };
+                if (k < n && rax_dead_at(ir, k)) {
+                    // the push, with the load's operand; then the markers
+                    let f = ir[at];
+                    let item: [long] = [];
+                    if (f == insn.F_MOV_I_R) {
+                        item = [insn.F_PUSH_I, ir[at + 1], 0, 0, 0, 0, 0, 0];
+                    } else {
+                        // `(%base)` keeps -1 in its displacement ("none
+                        // written"); the push's operand writes one, so 0
+                        let d = if (f == insn.F_MOV_0_R) { 0 } else { ir[at + 4] };
+                        item = [insn.F_PUSH_M, ir[at + 1], ir[at + 2], ir[at + 3], d, ir[at + 5], 0, 0];
+                    };
+                    let locs: [long] = [];
+                    let q = at + w;
+                    while (q < k) {
+                        if (ir[q] == insn.IR_LOC) { for i in 0..w { locs += ir[q + i]; }; };
+                        q = q + w;
+                    };
+                    for i in 0..w { ir[wp + i] = item[i]; };
+                    wp = wp + w;
+                    for i in 0..len(locs) { ir[wp + i] = locs[i]; };
+                    wp = wp + len(locs);
+                    next = k;
+                    folded = true;
+                };
+            };
+        };
+        if (!folded) {
+            if (wp != at) { for i in 0..w { ir[wp + i] = ir[at + i]; }; };
+            wp = wp + w;
+        };
+        at = next;
+    };
+    while (len(ir) > wp) { ir.pop(); };
+    ir
+};
+
+// A load into %rax a push can take instead: `mov $imm32, %rax` or a 64-bit
+// `mov mem, %rax` whose address is not %rsp-relative.
+def pushable(ir: [long], p: long) -> bool {
+    let f = ir[p];
+    if (f == insn.F_MOV_I_R) {
+        ir[p + 2] == insn.R_RAX && ir[p + 3] == 64 && ir[p + 1] >= -2147483648 && ir[p + 1] <= 2147483647
+    } else if (f == insn.F_MOV_D_R || f == insn.F_MOV_P_R || f == insn.F_MOV_0_R) {
+        ir[p + 6] == insn.R_RAX && ir[p + 7] == 64 && ir[p + 1] != insn.R_RSP && ir[p + 2] != insn.R_RSP
+    } else {
+        false
+    }
+};
+
+// Does the instruction at p overwrite %rax without reading it first? A load
+// into %rax that does not read it, or a direct call to a Y function: a callee
+// takes its arguments (and a closure its record) on the stack, so %rax is
+// dead at the call and holds the result after it. Runtime helpers are not
+// assumed: some take arguments in registers.
+def rax_dead_at(ir: [long], p: long) -> bool {
+    if (ir[p] == insn.F_CALL_L) {
+        let nm = lname(ir[p + 1]);
+        len(nm) > 4 && nm[:4] == "yfn_"
+    } else {
+        rax_load(ir, p, true)
+    }
+};
+
 // `pop %rcx; <store through %rcx>; push %rcx`, the push about to be emitted:
 // a record or array literal storing a field through the pointer it keeps on the
 // stack. The pop becomes `mov (%rsp), %rcx` and the push goes -- the same value
@@ -12257,7 +12341,7 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
     if (frame > 0) {
         body = insn.ir_push(body, insn.F_SUB_I_R, frame, insn.R_RSP, 64, 0, 0, 0, 0);
     }
-    body = body + f.ir;
+    body = body + push_fold(f.ir);
     body = insn.ir_push(body, insn.IR_LABEL, f.end_label, 0, 0, 0, 0, 0, 0);
     if (is_main) {
         body = ir_terminate(body);

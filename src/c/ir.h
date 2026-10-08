@@ -182,6 +182,8 @@
 #define F_UCOMISD_0_R 122
 #define F_CVTTSD2SI_R_R 123
 #define F_SQRTSD_R_R 124
+#define F_PUSH_I 125
+#define F_PUSH_M 126
 
 Yv *ir_push(Yv *ir, ylong f, ylong a, ylong b, ylong c, ylong d, ylong e, ylong g,
             ylong h);
