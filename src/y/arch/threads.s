@@ -10,10 +10,30 @@ y_threads_on:
     mov $128, %rdi
     call y_alloc
     lea y_heap(%rip), %rcx
+# y_heap+32 is set while the block is the rest of a recycled free run (y_alloc_nt),
+# with live blocks after it. Then the tail gets a free header and the thread an
+# empty block at 0, outside every chunk, so the sweep's clamp at `cur` never hides
+# what follows. A fresh chunk's tail is handed over as it is.
+    mov 32(%rcx), %rdx
+    test %rdx, %rdx
+    jz ythr_copy
+    mov (%rcx), %rdx
+    mov 8(%rcx), %rsi
+    cmp %rsi, %rdx
+    jae ythr_nc
+    sub %rdx, %rsi
+    mov %rsi, (%rdx)
+ythr_nc:
+    xor %edx, %edx
+    mov %rdx, 0(%rax)
+    mov %rdx, 8(%rax)
+    jmp ythr_copied
+ythr_copy:
     mov (%rcx), %rdx
     mov %rdx, 0(%rax)
     mov 8(%rcx), %rdx
     mov %rdx, 8(%rax)
+ythr_copied:
     mov 16(%rcx), %rdx
     mov %rdx, 16(%rax)
     mov %rax, 24(%rax)

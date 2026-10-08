@@ -367,6 +367,17 @@ y_alloc_slow:
     je y_alloc_more
     mov %fs:24, %rcx
     jmp y_alloc_go
+# y_gc_close(%rcx = a bump block {cur, end}): a free header over its unused
+# tail, so the heap walk steps over it. Clobbers rdx and r11 only.
+y_gc_close:
+    mov (%rcx), %rdx
+    mov 8(%rcx), %r11
+    cmp %r11, %rdx
+    jae ygcl_out
+    sub %rdx, %r11
+    mov %r11, (%rdx)
+ygcl_out:
+    ret
 # Every register that can hold a live value is pushed before the collector
 # runs: the stack scan is the collector's root set, and a pointer in a
 # callee-saved register (an asm helper holding a fresh block in %r14, say)
@@ -432,6 +443,14 @@ yam_free_done:
 yam_chunk1_lk:
     call *%rax
 yam_chunk1_done:
+    lea y_heap(%rip), %rdx
+    cmp %rdx, %r12
+    jne yam_nc
+    xor %ecx, %ecx
+    mov %rcx, 32(%r12)
+    mov %r12, %rcx
+    call y_gc_close
+yam_nc:
     mov %rax, %rdx
     add %rbx, %rdx
     mov %rdx, 0(%r12)
@@ -765,7 +784,7 @@ ygr_next:
     jmp ygr_chain
 ygr_chunk:
     mov 16(%r8), %rdx
-    xor %r10d, %r10d
+    mov $8, %r10d
 ygr_d:
     cmp %r10, %rdi
     jb ygr_linear
@@ -797,9 +816,15 @@ ygr_d:
     call y_gc_mark
     ret
 ygr_dnext:
-    add $8, %r10
-    cmp $16, %r10
-    jbe ygr_d
+    test %r10, %r10
+    jz ygr_linear
+    cmp $8, %r10
+    jne ygr_d0
+    mov $16, %r10d
+    jmp ygr_d
+ygr_d0:
+    xor %r10d, %r10d
+    jmp ygr_d
 ygr_linear:
     mov 8(%r8), %rsi
     mov 0(%r8), %rcx
@@ -831,16 +856,26 @@ y_gc_scan_words:
     mov %rsp, %rbp
     push %rbx
     push %r12
+    push %r13
+    push %r14
     mov %rdi, %rbx
     mov %rsi, %r12
+    mov y_gc_lo(%rip), %r13
+    mov y_gc_hi(%rip), %r14
 ygsw_loop:
     cmp %r12, %rbx
     jae ygsw_done
     mov (%rbx), %rdi
-    call y_gc_resolve
     add $8, %rbx
+    cmp %r13, %rdi
+    jb ygsw_loop
+    cmp %r14, %rdi
+    jae ygsw_loop
+    call y_gc_resolve
     jmp ygsw_loop
 ygsw_done:
+    pop %r14
+    pop %r13
     pop %r12
     pop %rbx
     pop %rbp
@@ -1061,7 +1096,7 @@ y_gc_stw_begin:
     mov $1, %rax
     xchg %rax, y_gc_stw(%rip)
     test %rax, %rax
-    jnz ygsb_lose
+    jnz ygsb_other
     mov $16777216, %r13
 ygsb_wait:
     xor %r12d, %r12d
@@ -1095,6 +1130,7 @@ ygsb_ok:
 ygsb_lose:
     mov $0, %rax
     mov %rax, y_gc_stw(%rip)
+ygsb_other:
     xor %eax, %eax
     pop %r13
     pop %r12
@@ -1196,6 +1232,16 @@ y_gc_collect:
     test %rax, %rax
     jz ygc_out
 ygc_run:
+    lea y_heap(%rip), %rcx
+    mov 24(%rcx), %rax
+    test %rax, %rax
+    jnz ygc_noclose
+    xor %esi, %esi
+    mov %rsi, 32(%rcx)
+    call y_gc_close
+    mov 8(%rcx), %rsi
+    mov %rsi, 0(%rcx)
+ygc_noclose:
     mov $1, %rax
     mov %rax, y_gc_run(%rip)
     mov y_gc_ms_seg(%rip), %rax
@@ -1217,7 +1263,8 @@ ygc_drain:
     mov y_gc_free(%rip), %rcx
     test %rcx, %rcx
     jz ygc_clear_done
-    mov $524289, %rdx
+    mov y_gc_tabn(%rip), %rdx
+    inc %rdx
     xor %eax, %eax
 ygc_clear:
     mov %rax, (%rcx)
@@ -1355,6 +1402,11 @@ y_gc_flush_run:
     mov %rax, %rdx
 ygfr_tab:
     mov %r15, (%r14)
+# A run of one word (a bump block's last 8 bytes, closed by y_gc_close) has no
+# room for the list link: its header stays, off every list, and the next cycle's
+# walk coalesces it.
+    cmp $16, %r15
+    jb ygfr_clear
     mov %r15, %rcx
     shr $3, %rcx
     mov (%rdx,%rcx,8), %r8
@@ -1444,6 +1496,36 @@ ygaf_hi:
     cmp $32, %r10
     jl ygaf_whole
     lea (%rax,%rdi,1), %r11
+    lea y_heap(%rip), %rcx
+    mov 24(%rcx), %r8
+    test %r8, %r8
+    jnz ygaf_list
+# Single-threaded: the remainder becomes the bump block, so the allocations
+# that follow are plain y_alloc bumps instead of one list pop and one split
+# each. The old block's unused tail is closed first (a free header over it:
+# a bump block inside a recycled run is followed by live blocks, and the heap
+# walk must step over what is left of it); y_heap+32 records that the block is
+# a recycled run (y_threads_on). The remainder is zeroed as a recycled block is.
+    mov %r11, %r8
+    call y_gc_close
+    mov %r8, (%rcx)
+    add %r10, %r8
+    mov %r8, 8(%rcx)
+    mov $1, %r11
+    mov %r11, 32(%rcx)
+    mov (%rcx), %r11
+    xor %r9d, %r9d
+ygaf_rz:
+    cmp %r8, %r11
+    jae ygaf_rzd
+    mov %r9, (%r11)
+    add $8, %r11
+    jmp ygaf_rz
+ygaf_rzd:
+    lea 1(%rdi), %r8
+    mov %r8, (%rax)
+    jmp ygaf_zero
+ygaf_list:
     mov %r10, (%r11)
     mov %r10, %rcx
     shr $3, %rcx
@@ -1464,13 +1546,12 @@ ygaf_lower:
     mov %r9, y_gc_tabn(%rip)
     jmp ygaf_hi
 ygaf_zero:
-    lea 8(%rax), %rsi
+    lea 8(%rax), %r8
     lea (%rax,%rdi,1), %r9
-    mov %rsi, %r8
+    xor %ecx, %ecx
 ygaf_z:
     cmp %r9, %r8
     jae ygaf_zdone
-    xor %ecx, %ecx
     mov %rcx, (%r8)
     add $8, %r8
     jmp ygaf_z

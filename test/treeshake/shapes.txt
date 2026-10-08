@@ -14,11 +14,13 @@
 # locked halves of the slow path both moved to the thread runtime, reached
 # through pointers (ideas/OPTIMIZE.md A9); what is left is the metadata lock,
 # which a single-threaded collector still takes).
+# The single-threaded slow path hands the largest free run to the bump allocator
+# (y_gc_alloc_free, y_gc_close): about +225 B in every program that links the collector.
 hello.y 381
 minimal.y 440
-forloop.y 4110
-foreach.y 3946
-dead.y 1639
-alloc_once.y 1400
-foreach_local.y 3932
-foreach_capture.y 4614
+forloop.y 4331
+foreach.y 4165
+dead.y 1683
+alloc_once.y 1446
+foreach_local.y 4147
+foreach_capture.y 4800
