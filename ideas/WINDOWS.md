@@ -37,23 +37,23 @@ These are repo rules, not preferences (`AGENTS.md`, `PORTING.md`).
 | # | Requirement | Enforced by |
 |---|---|---|
 | R1 | **The C twin is 1:1.** `src/c/` mirrors `src/y/` statement for statement; both compilers emit byte-identical programs. Every line of new compiler code lands **twice**. | `PORTING.md`, `make ycc` (`cmp ycc refs/ycc.ref`) |
-| R2 | **The fixpoint holds.** Three generations of self-compilation byte-identical. | `test_fixpoint.sh`, `make ynew` |
-| R3 | **`make check` before `make rebless`.** verify → compare (what changed vs `BASE`) → time. | `test/sh/check.sh` |
-| R4 | **No warnings** from `src/y` or `src/y/std`. | `test_fixpoint.sh` |
-| R5 | **Deterministic output.** No hash-map iteration order; byte-identical from `cycc` and the reference. | `test_port.sh` |
-| R6 | **`-g` keeps `.text`/`.rodata` addresses identical** to the plain build. | `test_debug.sh` |
-| R7 | **Warnings are not output** — `-w` suppresses, bytes unchanged. | `test_native.sh` |
+| R2 | **The fixpoint holds.** Three generations of self-compilation byte-identical. | `src/tools/ytest/su_fixpoint.y`, `make ynew` |
+| R3 | **`make check` before `make rebless`.** verify → compare (what changed vs `BASE`) → time. | `ytest check` |
+| R4 | **No warnings** from `src/y` or `src/y/std`. | `src/tools/ytest/su_fixpoint.y` |
+| R5 | **Deterministic output.** No hash-map iteration order; byte-identical from `cycc` and the reference. | `src/tools/ytest/su_port.y` |
+| R6 | **`-g` keeps `.text`/`.rodata` addresses identical** to the plain build. | `src/tools/ytest/su_debug.y` |
+| R7 | **Warnings are not output** — `-w` suppresses, bytes unchanged. | `src/tools/ytest/su_native.y` |
 | R8 | **Every process under `ulimit -v 3670016`.** Needing more address space is a bug, not a reason to raise the cap. | `test/sh/capped.sh` |
 | R9 | **Bench at the end.** Compile time, output size and program speed get `make bench` + `make bench-ir`; numbers in the commit. **Caveat on Windows: `perf` and `callgrind` cannot read a PE at all**, so the program-side half of this rule — profiling a compiled program — has no equivalent for any `--target=windows` binary, and only the compiler-side half survives (`ycc --time`, and `make bench` against a Linux-hosted `ycc` that emits PEs). | `AGENTS.md` |
 | R10 | **Y code style** — empty blocks void, a block's value is its last statement *without* a trailing `;`, recursion via `self`, no unknown types, records exact, a `type` alias for any record/union used twice, no unused locals. | `AGENTS.md` |
-| R11 | **Every diagnostic has a test**, every manual section a `COVERAGE.md` row. **Note `test/sh/test_coverage.sh:70-71` hard-codes the scanned file list** (`lexer.y parser.y rename.y types.y native.y ycc.y pkg.y lint.y arch_x64.y std/*.y`) — a new source file is invisible to it unless that list is edited, so a new diagnostic would ship untested. | `test_coverage.sh` |
+| R11 | **Every diagnostic has a test**, every manual section a `COVERAGE.md` row. **Note `src/tools/ytest/su_coverage.y` hard-codes the scanned file list** (`lexer.y parser.y rename.y types.y native.y ycc.y pkg.y lint.y arch_x64.y std/*.y`) — a new source file is invisible to it unless that list is edited, so a new diagnostic would ship untested. | `src/tools/ytest/su_coverage.y` |
 | R12 | **No new closures in `src/y`** — the C twin's value model has no function value to store one in. | `yv.h` |
 
 ### Tooling that already exists (no new tooling needed)
 
 - `ycc --time FILE` — per-phase elapsed ms, heap KB, `asm_bytes`, `out_bytes`.
 - `ycc -g` + `nm` / `addr2line` / `objdump -dl` / `gdb` / `valgrind` / `perf`.
-- `make check`, `make bench`, `make bench-ir`, `test/fuzz/fuzz.sh`.
+- `make check`, `make bench`, `make bench-ir`, `ytest fuzz`.
 
 ---
 
@@ -265,10 +265,10 @@ compiler can be produced before any Windows machine is involved.
 
   Two consequences remain, neither a change to `--std-pack` itself: `make ycc` must append
   a **second pack to `ycc.exe`** (the Makefile's `PACK` at `Makefile:71` does this once,
-  for one binary), and `test_link.sh` needs a **cross-target pack fixture** that diffs a
+  for one binary), and `src/tools/ytest/su_link.y` needs a **cross-target pack fixture** that diffs a
   PE's std bodies against the ELF's and fails on any difference outside the units declared
   per-target (W5's `std/win/*` overrides) — which is the test that would have caught this.
-  `test_coverage.sh`'s hard-coded file list (R11) also does not see the new `std/win/*.y`
+  `src/tools/ytest/su_coverage.y`'s hard-coded file list (R11) also does not see the new `std/win/*.y`
   until it is edited.
 - **`exec` is not a builtin** — a std unit spliced in only when mentioned and
   `--no-exec` permits (`resolve_unit`'s std-unit selection; `std/exec.y:1-5`). The
@@ -285,8 +285,8 @@ compiler can be produced before any Windows machine is involved.
   Measured: `./ycc --time src/y/ycc.y` → `TOTAL 367.541 ms 820001 KB`,
   `VmPeak 821964 kB`. So **one compiler-scale compile is ~822 MB VSZ** — under the
   cap that is ~4× headroom, not 10×, and a *second* arena is not free.
-- **Test harness is Linux-shaped**: bash + `ulimit -v` (`lib.sh:40-47`),
-  `readelf`/`nm`/`addr2line`/`gdb`/`as` (`test_debug.sh:107-137`, `:155-177`,
+- **Test harness is Linux-shaped**: bash + `ulimit -v` (`yt.y:40-47`),
+  `readelf`/`nm`/`addr2line`/`gdb`/`as` (`src/tools/ytest/su_debug.y`, `:155-177`,
   `:181-208`, `:249-271`), `/tmp`, `stat -c%s`.
 - **No target parameter exists anywhere.** The only host/target-ish parameter in the
   whole pipeline is `allow_exec`; arch selection is a compile-time
@@ -735,7 +735,7 @@ of which an earlier draft called unsolvable and is not:
   irrelevant here, because every mapping this compiler makes is read-write committed
   (`NtAllocateVirtualMemory` with `MEM_COMMIT|MEM_RESERVE`, 4 MiB chunks), so the two
   coincide. `JOB_OBJECT_LIMIT_JOB_VM_SIZE` on the job therefore reproduces exactly
-  what the OOM fixture checks (`test/sh/test_ycc.sh:239-264`: its own
+  what the OOM fixture checks (`src/tools/ytest/su_ycc.y`: its own
   `ulimit -S -v 409600` at `:252`, then exit 1, `runtime error: out of memory` on
   stdout and nothing on stderr). What is missing is not an exemption but a ~40-line
   launcher — `CreateJobObject` + `STARTUPINFOEX` with
@@ -744,9 +744,9 @@ of which an earlier draft called unsolvable and is not:
   a target can quietly opt out of.
 - `as` and `readelf --debug-dump=decodedline` have no drop-in; `llvm-mc` and
   `llvm-dwarfdump` cover them.
-- `test_debug.sh` is ELF-specific throughout, and this is a **new branch, not a tool
+- `src/tools/ytest/su_debug.y` is ELF-specific throughout, and this is a **new branch, not a tool
   swap**. Its `readelf`/`nm`/`addr2line`/`objdump` assertions
-  (`test_debug.sh:107-137`, `:155-177`, `:181-208`, `:249-271`) are spelled in ELF
+  (`src/tools/ytest/su_debug.y`, `:155-177`, `:181-208`, `:249-271`) are spelled in ELF
   terms — sections, `STT_FUNC` sizes, `decodedline` rows. A PE branch has to assert
   the COFF symbol table, the presence and shape of `.pdata`/`.xdata`, and the section
   layout (`.text` R+X holding code+rodata, `.bss` R+W with `SizeOfRawData = 0`),
@@ -814,12 +814,12 @@ of which an earlier draft called unsolvable and is not:
 | **NT syscall numbers drift between Windows versions, and the failure mode is silent-wrong, not loud.** An earlier draft claimed a wrong number yields `STATUS_INVALID_SYSCALL`; it is worse than that. The Windows x64 syscall index range is dense and live, so a leftover Linux number does not land on "no such syscall" — it lands on a *different, real* `Nt*` function, and the symptom is wrong memory or wrong I/O much later, with nothing at the call site to say so. | Pin a documented target version (Windows 10 1607+ / 11) and record it in the manual; keep every number in **one** table in `arch_x64.y`'s dispatch (`arch_sysno`) so a future version is a small diff and a review can see the whole surface at once; and add the **startup self-test** of W3 — one `Nt*` call per class (memory, file, thread, process) with its status checked — so a bad table fails loudly at `ycc` startup on a Windows build instead of misbehaving later. Consider resolving a handful of names through `LdrGetProcedureAddress` if a specific call proves unstable. |
 | **`src/c` doubles every line** of W2–W5. | Inherent (R1). The arch half is string data, so its twin is mechanical and `make port-check` is low-risk. |
 | **The ABI estimate may be low.** An earlier draft said "7 emitter sites"; the measured set is 90 `F_CALL_L`/`F_CALL_IND` sites, and while only `gen_syscall`'s 5+-argument path has arguments that move, the hand-written `src/y/arch/*.s` routines make their own calls (`call y_alloc`, `call y_arr_push`, …) and are in no count at all. | Do W2 first and hand-inspect a real 4-argument call, a closure call and a 6-argument `syscall` under `--target=windows` before committing to W3's size. |
-| **`refs/ycc.ref` must be reblessed per phase**; the tree is red in between. | One phase → `make check` → `make rebless` → commit with numbers (R3). Do not stack. **Not done on this branch**: `refs/ycc.ref` stays the original bootstrap compiler so that `make ynew`'s three-generation fixpoint still means something, and the gate is "the C copy and `./ynew` agree with each other", not "either matches the reference". The measured cost is larger than it was in Phase A and that is upstream's doing, not this branch's: the reference predates `ndef` and `std/math.y`, so after the merge it **cannot build the tree at all** and every suite run with the default `YREF` is red on the reference side (87 of 127 port cases, all of `examples`, 59 of 65 `audit`, …). `run_all.sh` therefore has to be given `YREF=$PWD/ynew` for a meaningful run on this branch, and `make ycc` still stops at `cmp ycc refs/ycc.ref`. `refs/` is a real copy in each worktree, not a symlink, so a stray rebless cannot overwrite the main checkout's blessed binary. |
+| **`refs/ycc.ref` must be reblessed per phase**; the tree is red in between. | One phase → `make check` → `make rebless` → commit with numbers (R3). Do not stack. **Not done on this branch**: `refs/ycc.ref` stays the original bootstrap compiler so that `make ynew`'s three-generation fixpoint still means something, and the gate is "the C copy and `./ynew` agree with each other", not "either matches the reference". The measured cost is larger than it was in Phase A and that is upstream's doing, not this branch's: the reference predates `ndef` and `std/math.y`, so after the merge it **cannot build the tree at all** and every suite run with the default `YREF` is red on the reference side (87 of 127 port cases, all of `examples`, 59 of 65 `audit`, …). `./ytest` therefore has to be given `YREF=$PWD/ynew` for a meaningful run on this branch, and `make ycc` still stops at `cmp ycc refs/ycc.ref`. `refs/` is a real copy in each worktree, not a symlink, so a stray rebless cannot overwrite the main checkout's blessed binary. |
 | **`argv()` on PE needs a command-line splitter, not a UTF-16 fixup**, and the W2 gate cannot see any of it (a hello-world that never calls `argv()` exercises none of it). | Build the parser in W4 — `RtlCommandLineToArgvW` or the MSVC rules, plus the UTF-16→UTF-8 policy for `y_cstr_to_str` — assert it in W5, and size W4 for it rather than leaving it as a footnote. |
 | **`ulimit -v` has no equivalent** (W6). | Decided, and cheaper than the exemption it replaces: `JOB_OBJECT_LIMIT_JOB_VM_SIZE` reproduces the fixture, because every mapping here is read-write committed. It costs a ~40-line job-object launcher, not a rule change. |
 | **Wine is not Windows.** Good enough to prove a PE loads and runs; not good enough to trust `CreateProcess`, console handles, or the TLS-free thread scheme. | W6 on a real runner; Wine only as a fast inner loop. |
 | **The no-`.reloc` claim is load-bearing and silent if violated.** | Guarded now: `asm.y`/`asm.c`'s `pe_no_abs` refuses any fixup kind that is not a displacement or a difference of two labels (`rel32`, `rel8`, `rip32`, `imm32diff`), by name, so a future absolute kind fails at assembly time rather than truncating. |
-| **SETTLED — the std pack bakes ONE target into every program built from it, and no flag on the consuming compiler can undo it.** `ycc --std-pack` never passes a target, so a target test compiled into `rt.y`/`fs.y`/`net.y`/… is baked into the pack and served to every program that links it. Measured both ways: with a conditional in `rt.y`, a PE built from the pack carried the ELF inline `write(2)` and printed nothing, while `--std-src` (which recompiles the units) worked. | **Hard rule, no exceptions: a std entry point names a label and none branches on the target.** `os_write` calls `y_os_write`, `exit` calls `y_os_exit`; the Windows bodies live in `src/y/arch/wsys.s` and the ELF bodies in `src/y/arch/prelude.s`, so the pack carries text correct for whichever compiler wrote it. The corollary for the port: `cycc` carries **no** pack at all, so it compiles the std units from source with its own `res_target` — which is why on the Windows path `cycc` and a pack-carrying `ynew` can differ byte-for-byte on fixtures whose std code still has raw `syscall(` sites, and `cycc` is the correct one of the two. Those raw sites are the W5 work; the divergence disappears when they are gone. **Done for the four packed units** (rt, prelude, exec, str): the named syscall layer B1 replaced every `syscall(` in them, and `test/sh/pe-packinv.sh` measures the invariant — a PE built from the pack and a PE built with `--std-src`, over every fixture, **210 identical and 0 different** (177 before the master merge; master added fixtures). The other std files (fs, net, tls, crypto, http, **math**, tui, test, args, json, random) are compiled per target from source, so they were never at risk from the pack; they are still raw-`syscall` sites, which is B2's `std/win/*` split. |
+| **SETTLED — the std pack bakes ONE target into every program built from it, and no flag on the consuming compiler can undo it.** `ycc --std-pack` never passes a target, so a target test compiled into `rt.y`/`fs.y`/`net.y`/… is baked into the pack and served to every program that links it. Measured both ways: with a conditional in `rt.y`, a PE built from the pack carried the ELF inline `write(2)` and printed nothing, while `--std-src` (which recompiles the units) worked. | **Hard rule, no exceptions: a std entry point names a label and none branches on the target.** `os_write` calls `y_os_write`, `exit` calls `y_os_exit`; the Windows bodies live in `src/y/arch/wsys.s` and the ELF bodies in `src/y/arch/prelude.s`, so the pack carries text correct for whichever compiler wrote it. The corollary for the port: `cycc` carries **no** pack at all, so it compiles the std units from source with its own `res_target` — which is why on the Windows path `cycc` and a pack-carrying `ynew` can differ byte-for-byte on fixtures whose std code still has raw `syscall(` sites, and `cycc` is the correct one of the two. Those raw sites are the W5 work; the divergence disappears when they are gone. **Done for the four packed units** (rt, prelude, exec, str): the named syscall layer B1 replaced every `syscall(` in them, and `ytest pe-packinv` measures the invariant — a PE built from the pack and a PE built with `--std-src`, over every fixture, **210 identical and 0 different** (177 before the master merge; master added fixtures). The other std files (fs, net, tls, crypto, http, **math**, tui, test, args, json, random) are compiled per target from source, so they were never at risk from the pack; they are still raw-`syscall` sites, which is B2's `std/win/*` split. |
 
 ## What the Windows assembly halves cost, measured
 
@@ -844,7 +844,7 @@ distinction has to be re-derived for each new name.
 
 `master` (`b556e58`) merged in whole: 100 commits, including `ndef`, the
 `native` keyword, `break`/`continue`, **`src/y/arch/math.s` and `src/y/std/math.y`**,
-the LSP, `test_math.sh`, and a path import that flattens *types* as well as
+the LSP, `src/tools/ytest/su_math.y`, and a path import that flattens *types* as well as
 expressions. Thirteen files conflicted. Four of the resolutions are the whole
 reason this section exists:
 
@@ -875,7 +875,7 @@ reason this section exists:
   Both traps now go through the NAMED layer — `call y_os_write` / `call
   y_os_exit`, which prelude.s and wsys.s each define — so the block is correct on
   both targets and the shaker keeps those two labels because it references them.
-  Measured: `pe-fixtures.sh ./cycc t307_math_trap` went from `0 PASS, 1 PE-only
+  Measured: `ytest pe-fixtures ./cycc t307_math_trap` went from `0 PASS, 1 PE-only
   failure` to `1 PASS both targets, 0 PE-only`, and the ELF still prints the
   message and exits 1. The rule for every future `src/y/arch/*.s`: name a label,
   never a number.
@@ -919,8 +919,8 @@ reason this section exists:
   `FILE_DIRECTORY_FILE` there now), then `NtQueryInformationFile`
   FileStandardInformation for `EndOfFile` (+8) and the `Directory` byte (+21,
   not +20 -- that is `DeletePending`, and reading it called every directory a
-  file). `pe-gate.sh` now compiles and runs a second program
-  (`test/sh/pe-fs.y`) under wine and diffs its output against the same
+  file). `ytest pe-gate` now compiles and runs a second program
+  (`test/pe/fs.y`) under wine and diffs its output against the same
   program's Linux output, so the file path is a checked gate rather than a
   manual test. `make_dir`/`make_dirs` and `remove_file`/`remove_dir` are named
   too (`y_os_mkdir` = `NtCreateFile` with FILE_DIRECTORY_FILE and O_EXCL, so a
@@ -975,9 +975,9 @@ coverage numbers are current), and the branch's copies were the state it forked 
 
 | gate | before the merge | after |
 |---|---|---|
-| `test/sh/pe-gate.sh` | ok (4100 bytes, wine exit 0) | ok (4100 bytes, wine exit 0) |
-| `test/sh/pe-packinv.sh` | 177 identical, 0 differ | **210 identical, 0 differ** |
-| `test/sh/pe-fixtures.sh ./ynew` | 133/162 pass, 28 PE-only, 1 baseline | **161/195 pass, 32 PE-only, 2 baseline** |
+| `ytest pe-gate` | ok (4100 bytes, wine exit 0) | ok (4100 bytes, wine exit 0) |
+| `ytest pe-packinv` | 177 identical, 0 differ | **210 identical, 0 differ** |
+| `ytest pe-fixtures ./ynew` | 133/162 pass, 28 PE-only, 1 baseline | **161/195 pass, 32 PE-only, 2 baseline** |
 | `make port-check` | 904/904 | **1010/1010** |
 
 The pass rate moves the right way (133/162 = 82% → 161/195 = 83%) and the four
@@ -1012,7 +1012,7 @@ Every remaining PE failure has one of these causes, and none of them is a Window
 
 Two **baseline** failures are *not* ELF defects: `t200_std_args` and
 `t73_builtins_misc` write their `args.parse` / `eputs` diagnostics to **stderr**,
-`test_native.sh` merges stderr into what it diffs (`2>&1`), and `pe-fixtures.sh`
+`src/tools/ytest/su_native.y` merges stderr into what it diffs (`2>&1`), and `ytest pe-fixtures`
 deliberately compares stdout only — it has to, because wine fills stderr with
 MESA noise. With stderr merged, both match `.expected` byte for byte.
 

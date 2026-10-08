@@ -16,7 +16,7 @@
 // author's line breaks KEPT. src/y/ has lines up to 533 columns, so there is no
 // wrap column to honour -- re-wrapping would be inventing structure.
 //
-// The acceptance test is that reformatting src/y/ is a no-op. See test-fmt.sh.
+// The acceptance test is that reformatting src/y/ is a no-op. See the lsp suite (src/tools/ytest/su_lsp.y).
 //
 // REFUSES anything scan.y flagged K_error: a buffer with an unterminated
 // literal is left exactly as it is rather than half-reformatted.

@@ -111,7 +111,7 @@ initializer range of a global cell no kept body reads, and that includes a
 **std** unit's cells (rt.y's `CLK_TS` was `[0; 2]`, and its startup allocation
 was the only thing naming `y_alloc` in a hello world). A program that never
 allocates therefore carries neither the allocator nor the collector --
-`bench/y/hello.y` is 390 bytes, and `test/sh/test_treeshake.sh` fails if a
+`bench/y/hello.y` is 390 bytes, and `src/tools/ytest/su_treeshake.y` fails if a
 `y_alloc` call or a `collector:` string comes back. `print(<integer>)` formats
 into a stack buffer too (`y_print_long` -> arch `y_os_print_int`, through the
 checker's named `os_call` layer so the documented override still works), so
@@ -120,7 +120,7 @@ checker's named `os_call` layer so the documented override still works), so
 collector's three entry points in the arch module when no loop or recursion can
 reach `y_alloc`, so the rest of the runtime goes unreachable and shakes out.
 `let a = [1, 2, 3]; print(a[0]);` is 3,428 B with `--gc=always` and 1,312 B with
-the default; `test/sh/test_treeshake.sh` gates auto/always/never and the corpus
+the default; `src/tools/ytest/su_treeshake.y` gates auto/always/never and the corpus
 still carries the collector.
 
 `make ynew` (generations 2 and 3 byte-identical), `make cycc`,
@@ -156,7 +156,7 @@ or died).
    * the allocation side is shared, so `y_gc_lk` guards the free lists and the
      chunk registry and `y_gc_mlk` guards the metadata arena (always in that
      order, and never held while parked -- the safepoint comes first).
-   `test/sh/test_gc.sh` is the measurement: two threads of 300k allocations
+   `src/tools/ytest/su_gc.y` is the measurement: two threads of 300k allocations
    (~90 MB of garbage) inside a **64 MiB** cap, with `--gc=never` as the
    control, which does not fit. Scaled up, two threads of **2,000,000**
    allocations (~600 MB of garbage) still run in 64 MiB and print the same
@@ -238,7 +238,7 @@ or died).
 3. Optional knobs: `--gc-stress` (collect on every slow path) is DONE, with
    `--no-gc` as an alias for `--gc=never`; both are checked by the `gc` suite.
    What is left of this item is nothing; and `--no-gc`,
-   plus a `test/sh/test_gc.sh` suite that runs the corpus under a small cap.
+   plus a `src/tools/ytest/su_gc.y` suite that runs the corpus under a small cap.
 
 
 ## Round 19: two attempts on the --gc-stress trap, and where it actually is

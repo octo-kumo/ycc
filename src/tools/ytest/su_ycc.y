@@ -139,13 +139,14 @@ def cli_errors() -> [[str]] {
     let t01 = yc.ROOT + "/test/y/native/t01_arith.y";
     let w = yt.scratch() + "/wlevel.out";
     let tg = yt.scratch() + "/target.out";
-    let range_ = "ycc: -W needs a warning level (0, 1 or 2)";
     [["unknown flag", "ycc: unknown flag '--bad' (see ycc -h)", "--bad"],
      ["-o with an empty path", "ycc: -o needs a path, got ''", "-o", "", t01],
-     ["-W without a level", range_, "-o", w, t01, "-W"],
-     ["-W with a bad level", range_ + ", got 'x'", "-W", "x", "-o", w, t01],
-     ["-W above 2", range_ + ", got '3'", "-W", "3", "-o", w, t01],
-     ["-W that would wrap the scan", range_ + ", got '99999999999999999999'", "-W", "99999999999999999999", "-o", w, t01],
+     ["-o last, with no path", "ycc: -o needs an argument", t01, "-o"],
+     ["-W without a level", "ycc: -W needs a warning level (0, 1 or 2)", "-o", w, t01, "-W"],
+     ["-W with a bad level", "ycc: -W needs a warning level (0, 1 or 2), got 'x'", "-W", "x", "-o", w, t01],
+     ["-W above 2", "ycc: -W needs a warning level (0, 1 or 2), got '3'", "-W", "3", "-o", w, t01],
+     ["-W that would wrap the scan", "ycc: -W needs a warning level (0, 1 or 2), got '99999999999999999999'", "-W",
+      "99999999999999999999", "-o", w, t01],
      // --target: both spellings; anything after --target is its name, so only
      // the flag LAST reaches "needs a name"
      ["--target without a name", "ycc: --target needs a name (linux, windows)", "-o", tg, t01, "--target"],

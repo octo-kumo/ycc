@@ -929,7 +929,7 @@ static ylong lint_unused_expr(LintSt st, Yv *node, int used) {
  * drew a spurious "the value computed here is not used" from the C copy
  * only, at the `match` keyword. The port gate could not see it: it compares
  * the two compilers' warnings at the default level, where every level-1
- * check draws nothing (test/sh/test_port.sh now also runs a `-W 1` pass). */
+ * check draws nothing (src/tools/ytest/su_port.y now also runs a `-W 1` pass). */
 static ylong lint_one(LintSt st, Yv *node, int used) {
     Yv *k = yr_get(node, "k");
     if (yv_l(k) == K_un) {

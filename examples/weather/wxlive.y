@@ -6,7 +6,7 @@
 // tls.y is CLIENT-ONLY: it has client_hello, server_hello and cert_list but
 // no accept, so a TLS server in Y is not possible and the hermetic TLS leg
 // has to borrow one. openssl s_server is it -- the same precedent
-// test_net.sh already uses for std/tls.y. No internet, and the certificate
+// src/tools/ytest/su_net.y already uses for std/tls.y. No internet, and the certificate
 // is generated at run time.
 //
 // The client verifies it with `anchors:`, which is PEM TEXT, not a path: it

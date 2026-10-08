@@ -1,4 +1,4 @@
-// A fake DNS server for test_net.sh, on UDP and TCP port argv[1] of
+// A fake DNS server for src/tools/ytest/su_net.y, on UDP and TCP port argv[1] of
 // 127.0.0.1: two.test is a CNAME of real.test, which has 10.1.2.3 and
 // 10.4.5.6; trunc.test answers truncated over UDP, then in full (10.7.8.9)
 // over TCP; garbage.test gets a packet that claims answers it does not

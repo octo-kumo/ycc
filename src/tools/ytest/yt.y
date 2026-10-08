@@ -117,10 +117,11 @@ type Cmd = {
     out: str,       // write stdout to this file instead of capturing it
     nofile: long,   // RLIMIT_NOFILE (ulimit -n); 0 leaves the inherited one
     tty: bool,      // keep this process's stdin, stdout and stderr (interactive)
+    fixed: bool,    // no address-space randomization (setarch -R): a count repeats exactly
 };
 
 /** How it went: the exit code (128 + signal; 124 on a timeout), the output. */
-type Res = { code: long, out: str, err: str, timed_out: bool, ms: long };
+type Res = { code: long, out: str, err: str, timed_out: bool, ms: long, us: long };
 
 // YMEM_KB caps every command (the machine goes down past 4 GB); a sanitized
 // compiler reserves terabytes, so YTIMEOUT_SCALE > 1 drops the cap.
@@ -129,7 +130,7 @@ let SCALE = 1;
 
 def cmd(argv: [str]) -> Cmd {
     { argv: argv, cwd: "", stdin: "", input: "", timeout: 60 * SCALE, mem_kb: MEM_KB,
-      env: [], merge: false, out: "", nofile: 0, tty: false }
+      env: [], merge: false, out: "", nofile: 0, tty: false, fixed: false }
 };
 
 def cz(s: str) -> [byte] {
@@ -158,7 +159,7 @@ def ch_die(msg: str) -> void {
 };
 
 /** A started command: its pid, files, and once reaped its exit code. */
-type Proc = { pid: long, t0: long, deadline: long, outp: str, errp: str, inp: str, keep_out: bool,
+type Proc = { pid: long, t0: long, t1: long, deadline: long, outp: str, errp: str, inp: str, keep_out: bool,
               done: bool, code: long, timed_out: bool };
 
 /** Start `c` and return at once; `wait` or `kill` it later. */
@@ -205,9 +206,11 @@ def start(c: Cmd) -> Proc {
     let nf: [long; 2] = [0; 2];
     nf[0] = c.nofile;
     nf[1] = c.nofile;
+    let tf = clock_us();
     let pid = syscall(57);
     if (pid == 0) {
         syscall(109, 0, 0);
+        if (c.fixed) { syscall(135, 262144); };
         if (c.mem_kb > 0) { syscall(160, 9, &rl[0]); };
         if (c.nofile > 0) { syscall(160, 7, &nf[0]); };
         if (!c.tty) {
@@ -220,7 +223,7 @@ def start(c: Cmd) -> Proc {
         ch_die("ytest: cannot run " + c.argv[0]);
     };
     let deadline = if (c.timeout > 0) { t0 + c.timeout * 1000000 } else { 0 };
-    { pid: pid, t0: t0, deadline: deadline, outp: outp, errp: errp, inp: if (inp != c.stdin && inp != "/dev/null") { inp } else { "" },
+    { pid: pid, t0: tf, t1: tf, deadline: deadline, outp: outp, errp: errp, inp: if (inp != c.stdin && inp != "/dev/null") { inp } else { "" },
       keep_out: c.out != "", done: pid < 0, code: if (pid < 0) { -1 } else { 0 }, timed_out: false }
 };
 
@@ -232,6 +235,7 @@ def reap(p: Proc, block: bool) -> bool {
     if (r == 0) { return false; };
     let s = st[0] & 65535;
     p.code = if (r < 0) { -1 } else if ((s & 127) == 0) { (s >> 8) & 255 } else { 128 + (s & 127) };
+    p.t1 = clock_us();
     p.done = true;
     true
 };
@@ -251,6 +255,8 @@ def kill(p: Proc) {
 /** Wait for p (up to its deadline, then kill it: code 124) and collect its output. */
 def wait(p: Proc) -> Res {
     let nap = 20;
+    // no deadline: one blocking wait, so a timed run carries no polling slack
+    if (p.deadline == 0) { reap(p, true); };
     while (!reap(p, false)) {
         if (p.deadline > 0 && clock_us() > p.deadline) {
             kill(p);
@@ -266,7 +272,7 @@ def wait(p: Proc) -> Res {
     if (!p.keep_out) { fs.remove_file(p.outp); };
     fs.remove_file(p.errp);
     if (p.inp != "") { fs.remove_file(p.inp); };
-    let res: Res = { code: p.code, out: out, err: err, timed_out: p.timed_out, ms: (clock_us() - p.t0) / 1000 };
+    let res: Res = { code: p.code, out: out, err: err, timed_out: p.timed_out, ms: (p.t1 - p.t0) / 1000, us: p.t1 - p.t0 };
     if (p.pid < 0) { res.err = "ytest: fork failed"; };
     res
 };
@@ -565,6 +571,17 @@ def run_cases(cs: [Case], jobs: long, on_done: (long, Done) -> void) -> [Done] {
     res
 };
 
+/** f(0) .. f(n - 1), each in a child of its own, `jobs` at once, in order. */
+def par_map(n: long, jobs: long, f: (long) -> str) -> [str] {
+    let cs: [Case] = [];
+    for i in 0..n { cs += case_of("", tostring(i), () => { REPORT = f(i); }); };
+    let quiet = QUIET;
+    let out: [str] = [];
+    foreach (d in run_cases(cs, jobs, (k: long, d: Done) => { })) { out += d.text; };
+    QUIET = quiet;
+    out
+};
+
 /** Set the knobs from the environment: YQUIET, YMEM_KB, YTIMEOUT_SCALE, colors. */
 def init() {
     QUIET = env("YQUIET", "") != "";
@@ -576,5 +593,5 @@ def init() {
 
 export { Cmd, Res, Proc, start, reap, alive, kill, wait, Case, Done, self_exe, scratch, tmp, tmp_dir, cleanup, environ, env, which,
     cmd, run, exe, exe2, sh, q, read, write, concat, same_file, size, ls, files, num, le, bytes_of, have, hex, sleep_us, tree, clip, lines,
-    first_line, first_diff, words, has_line, cz, sleep_us, say, pass, fail, skip, check, case_of, run_cases, init, paint, getpid,
+    first_line, first_diff, par_map, words, has_line, cz, sleep_us, say, pass, fail, skip, check, case_of, run_cases, init, paint, getpid,
     MEM_KB, SCALE, QUIET };

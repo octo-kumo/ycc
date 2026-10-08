@@ -3,7 +3,7 @@
 // than an absence, and the depth limit truncating on the way OUT.
 //
 // Every name the manual's json section documents is called here. That is not
-// tidiness: test_coverage.sh extracts the name out of each \ic{name( in the
+// tidiness: src/tools/ytest/su_coverage.y extracts the name out of each \ic{name( in the
 // manual and requires a checked test to call <module>.<name>(, so a name
 // documented but never called is reported as uncovered. The LSP's own fixtures
 // (src/tools/lsp/test/t001, t002) cover the same ground from the other side --

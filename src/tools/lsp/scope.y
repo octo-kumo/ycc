@@ -6,7 +6,7 @@
 // module called `index` silently rewrote the compiler's own `index.idx` and
 // `index.arr` -- 42 such reads in src/y -- into module-qualified names that
 // do not exist, and every one became "undefined variable".
-// check-names.py now tests each module's basename for this (LSP.md section 5).
+// `ytest check-names` now tests each module's basename for this (LSP.md section 5).
 //
 // The foundation for go-to-definition, hover and completion (M4, R4/R5/R6). All
 // three are the same question asked three ways: *at this position, what does this

@@ -95,36 +95,38 @@ yserve: $(LSP_SRC) $(STD_SRCS) $(ARCH_SRCS) cycc
 	fi
 	@rm -f _yserve0 _yserve1 _yserve1p
 
-## ytest       the suite timer and coverage reporter (not a gate)
-ytest: ycc
-	./ycc src/tools/ytest/ytest.y -o ytest
+## ytest       the test runner and the development tools, written in Y
+##             (src/tools/ytest; `./ytest help`); cycc builds it
+YTEST_SRCS = $(wildcard src/tools/ytest/*.y)
+ytest: cycc $(YTEST_SRCS) $(STD_SRCS)
+	$(call CAP,$(CYCC_MEM_KB)) ./cycc -o ytest src/tools/ytest/ytest.y
 
-## cycc.exe    the C copy cross-built for Windows (gate: test/sh/cycc-win.sh)
+## cycc.exe    the C copy cross-built for Windows (gate: ./ytest cycc-win)
 MINGW ?= x86_64-w64-mingw32-gcc
 cycc.exe: $(CYC_SRCS) $(CY_HDRS)
 	$(MINGW) $(CFLAGS) -o cycc.exe $(CYC_SRCS)
 
 ## os          Y-OS image and filesystem in os/build/; run-os boots it
-os/build/os.img os/build/os.fs: ycc $(OS_SRCS) $(STD_SRCS) os/build.sh
-	bash os/build.sh ./ycc
+os/build/os.img os/build/os.fs: ycc ytest $(OS_SRCS) $(STD_SRCS)
+	./ytest os-build ./ycc
 os: os/build/os.img
 run-os: os
-	bash os/run.sh
+	./ytest os-run
 
 ## ── the development loop ─────────────────────────────────────────────────
 ## check       C copy builds NEW byte for byte, every suite passes, then NEW
 ##             is compared with BASE (programs, instruction counts, timings)
-check: cycc $(NEW_DEP)
-	./test/sh/check.sh $(BASE) $(NEW) $(or $(ROUNDS),3)
+check: cycc ytest $(NEW_DEP)
+	./ytest check $(BASE) $(NEW) $(or $(ROUNDS),3)
 
 ## rebless     accept the C copy's build as refs/ycc.ref (and ./ycc), once it
 ##             rebuilds itself and passes both halves of the port gate
-rebless: cycc
+rebless: cycc ytest
 	$(call CAP,$(CYCC_MEM_KB)) ./cycc -o _rb1 src/y/ycc.y
 	$(call CAP,$(YCC_MEM_KB)) ./_rb1 -o _rb2 src/y/ycc.y
 	cmp _rb1 _rb2
 	$(call PACK,_rb1,_rbp)
-	YREF=$(CURDIR)/_rbp YQUIET=1 YPORT_SELF=0 ./test/sh/run_all.sh -j $(JOBS) port pe-port
+	YREF=$(CURDIR)/_rbp YQUIET=1 YPORT_SELF=0 ./ytest -j $(JOBS) port pe-port
 	cp _rbp refs/ycc.ref
 	cd refs && sha256sum *.ref > SHA256SUMS
 	mv _rbp ycc
@@ -132,30 +134,28 @@ rebless: cycc
 	@echo "blessed refs/ycc.ref $$(sha256sum refs/ycc.ref | cut -c1-16)"
 
 ## port-check  the C copy against ./ynew (lists only programs that differ)
-port-check: cycc ynew
-	YREF=$(CURDIR)/ynew YQUIET=1 ./test/sh/run_all.sh -j $(JOBS) port
+port-check: cycc ytest ynew
+	YREF=$(CURDIR)/ynew YQUIET=1 ./ytest -j $(JOBS) port
 
 ## corpus-diff programs in test/y and src/y/ycc.y (or FILES="a.y b.y") that
 ##             BASE and NEW compile differently
-corpus-diff: $(NEW_DEP)
-	./test/sh/corpus_diff.sh $(BASE) $(NEW) $(FILES)
+corpus-diff: ytest $(NEW_DEP)
+	./ytest corpus-diff $(BASE) $(NEW) $(FILES)
 
 ## bench       timings of BASE against NEW (ROUNDS pairs, default 5)
 ## bench-ir    exact instruction counts of the compiles
-bench: $(NEW_DEP)
-	@d=$$(mktemp -d -t ybench-bin.XXXXXX) && cp $(BASE) $$d/base && cp $(NEW) $$d/new \
-	  && echo "bench: base = $(BASE), new = $(NEW)" \
-	  && bench/compare.sh $$d/base $$d/new $(or $(ROUNDS),5); rc=$$?; rm -rf $$d; exit $$rc
-bench-ir: $(NEW_DEP)
-	bench/compile_ir.sh $(BASE) $(NEW)
+bench: ytest $(NEW_DEP)
+	./ytest bench $(BASE) $(NEW) $(or $(ROUNDS),5)
+bench-ir: ytest $(NEW_DEP)
+	./ytest bench-ir $(BASE) $(NEW)
 
-## ── tests (test/sh/run_all.sh; SUITES="port native" narrows) ─────────────
+## ── tests (./ytest; SUITES="port native" narrows, ./ytest list names them) ─
 ## test        every suite, with the built ./ycc
 ## test-fast   the same with only ./cycc (the suites that need ./ycc skip)
-test: ycc
-	YPORT_SELF=0 ./test/sh/run_all.sh -j $(JOBS) $(SUITES)
-test-fast: cycc
-	./test/sh/run_all.sh -j $(JOBS) $(SUITES)
+test: ycc ytest
+	YPORT_SELF=0 ./ytest -j $(JOBS) $(SUITES)
+test-fast: cycc ytest
+	./ytest -j $(JOBS) $(SUITES)
 
 ## test-compile  compile and run one example with both compilers
 test-compile: cycc ycc
@@ -168,9 +168,9 @@ ASAN_FLAGS = -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-fr
 cycc-asan: $(CYC_SRCS) $(CY_HDRS)
 	$(GCC) $(CFLAGS) $(ASAN_FLAGS) -o cycc-asan $(CYC_SRCS)
 asan: cycc-asan
-test-asan: cycc-asan
+test-asan: cycc-asan ytest
 	CYCC=$(CURDIR)/cycc-asan YCC=$(CURDIR)/cycc-asan ASAN_OPTIONS=detect_leaks=0:hard_rss_limit_mb=$(ASAN_RSS_MB) \
-	    ./test/sh/run_all.sh $(SUITES_ASAN)
+	    ./ytest $(SUITES_ASAN)
 
 ## valgrind    memcheck errors (not leaks: the value model never frees)
 valgrind: cycc
@@ -191,19 +191,10 @@ asm-check:
 ## ── formatting, language server, docs ────────────────────────────────────
 ## fmt         format src/y, src/y/std and src/tools/lsp in place
 ## fmt-check   idempotence over the tree (the gate) + the fixed-point count
-FMT_DRV   = src/tools/lsp/test/drv_fmt_fixedpoint.y
-FMT_FILES = $(wildcard src/y/*.y src/y/std/*.y src/tools/lsp/*.y)
-yfmt: $(LSP_SRC) $(FMT_DRV) cycc
-	$(call CAP,$(CYCC_MEM_KB)) ./cycc -o yfmt $(FMT_DRV)
-fmt: yfmt
-	@n=0; for f in $(FMT_FILES); do \
-	  r=`./yfmt "$$f" "$$f.fmt"`; \
-	  if [ "$$r" = "DIFFERS" ]; then mv "$$f.fmt" "$$f"; echo "  formatted $$f"; n=$$((n + 1)); \
-	  else rm -f "$$f.fmt"; fi; \
-	done; echo "fmt: $$n file(s) rewritten"
-fmt-check: cycc
-	@mkdir -p _check/fmt
-	OUT=$(CURDIR)/_check/fmt YCC=$(CURDIR)/cycc sh src/tools/lsp/test/test-fmt.sh
+fmt: cycc ytest
+	./ytest fmt
+fmt-check: cycc ytest
+	./ytest fmt-check
 
 ## lsp-ext / lsp-vsix / lsp-e2e   the VS Code extension (needs node), its
 ##             package, and the server driven as a process
@@ -213,8 +204,8 @@ lsp-ext:
 lsp-vsix: lsp-ext
 	cd src/tools/lsp/vscode-y-lang && \
 	  npx -y @vscode/vsce package --no-git-tag-version --allow-missing-repository
-lsp-e2e: yserve
-	sh src/tools/lsp/test/test-e2e.sh
+lsp-e2e: ycc ytest
+	./ytest lsp-e2e
 
 ## docs        the manual, docs/build/manual.pdf (needs tectonic; fails on any
 ##             LaTeX error or over/underfull box)
@@ -235,7 +226,7 @@ $(DOC_PDF): $(wildcard docs/src/*.tex) docs/Tectonic.toml
 	@echo "manual: $(DOC_PDF) ($$(stat -c%s $(DOC_PDF)) bytes), no errors and no warnings"
 
 clean:
-	rm -f $(CYC_SRCS:src/c/%.c=src/c/%.o) cycc cycc.exe cycc-asan ycc ynew yfmt ytest ytest-report.md a.out
+	rm -f $(CYC_SRCS:src/c/%.c=src/c/%.o) cycc cycc.exe cycc-asan ycc ynew ytest a.out
 	rm -f _ycc _ycc0 _ycc0.pack ycc.pack _ynew1 _ynew2 _ynew3 _ynewp _ynewp.pack _rb1 _rb2 _rbp _rbp.pack
 	rm -rf _check docs/build
 

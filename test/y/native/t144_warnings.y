@@ -1,6 +1,6 @@
 // Warnings (src/y/lint.y; `ycc -w` turns them off). Each line marked
 // `expect-warning` draws the warning it quotes, and no other line draws
-// one (test_native.sh). A warning never stops the build: this runs.
+// one (src/tools/ytest/su_native.y). A warning never stops the build: this runs.
 
 // types, as written
 type Point = { x: long, y: long };
@@ -81,7 +81,7 @@ def locals(x: long) -> long {
 // pass cannot see the import list (it is handed a spliced AST and, per line,
 // the module that line came from). It costs binary space rather than being
 // free -- 6705 bytes for `import math;`, TODO.md #9 -- and
-// test/sh/test_treeshake.sh is what measures that. When the warning lands it
+// src/tools/ytest/su_treeshake.y is what measures that. When the warning lands it
 // has to keep `// For its alias X.` modules quiet: a module imported only for
 // a type alias has no identifier to see.
 import math;

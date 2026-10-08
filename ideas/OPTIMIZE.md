@@ -23,14 +23,14 @@ These are repo rules, not preferences. Any change here must satisfy all of them.
 | # | Requirement | Where it is enforced |
 |---|---|---|
 | R1 | **The C twin is 1:1.** `src/c/` mirrors `src/y/` statement for statement; both compilers must emit byte-identical programs. | `PORTING.md`, `make ycc` (`cmp ycc refs/ycc.ref`) |
-| R2 | **The fixpoint holds.** Three generations of self-compilation are byte-identical. | `test_fixpoint.sh`, `make ynew` |
-| R3 | **`make check` before `make rebless`.** verify (all suites green) → compare (what changed vs `BASE`) → time. | `AGENTS.md`, `test/sh/check.sh` |
-| R4 | **No warnings** from `src/y` or `src/y/std`. | `test_fixpoint.sh` |
-| R5 | **Deterministic output.** No dependence on hash-map iteration order; `test_port.sh` demands byte-identical binaries from `cycc` and the reference. | `test_port.sh` |
-| R6 | **`ycc -g` keeps `.text`/`.rodata` addresses identical to the plain build.** | `test_debug.sh` |
-| R7 | **Warnings are not output.** `-w` suppresses them; the binary is the same bytes either way. | `AGENTS.md`, `test_native.sh` |
+| R2 | **The fixpoint holds.** Three generations of self-compilation are byte-identical. | `src/tools/ytest/su_fixpoint.y`, `make ynew` |
+| R3 | **`make check` before `make rebless`.** verify (all suites green) → compare (what changed vs `BASE`) → time. | `AGENTS.md`, `ytest check` |
+| R4 | **No warnings** from `src/y` or `src/y/std`. | `src/tools/ytest/su_fixpoint.y` |
+| R5 | **Deterministic output.** No dependence on hash-map iteration order; `src/tools/ytest/su_port.y` demands byte-identical binaries from `cycc` and the reference. | `src/tools/ytest/su_port.y` |
+| R6 | **`ycc -g` keeps `.text`/`.rodata` addresses identical to the plain build.** | `src/tools/ytest/su_debug.y` |
+| R7 | **Warnings are not output.** `-w` suppresses them; the binary is the same bytes either way. | `AGENTS.md`, `src/tools/ytest/su_native.y` |
 | R8 | **Every process runs under `ulimit -v 3670016`.** A change that needs more address space is a bug, not a reason to raise the cap. | `AGENTS.md`, `test/sh/capped.sh` |
-| R9 | **Bench at the end.** Any change that can affect compile time, output size, or program speed gets `make bench` + `make bench-ir` + `bench/profile.sh`, and the numbers go in the commit message. | `AGENTS.md` |
+| R9 | **Bench at the end.** Any change that can affect compile time, output size, or program speed gets `make bench` + `make bench-ir` + `ytest profile`, and the numbers go in the commit message. | `AGENTS.md` |
 | R10 | **Y code style** (AGENTS.md, "Y code style"): empty blocks are void, a block's value is its last statement *without* a trailing `;`, postfix binds tighter than unary, recursion uses `self`, no unknown types, records are exact, a `type` alias wherever a record/union is used twice, no unused locals. | `AGENTS.md` |
 
 ### Tooling that already exists (no new tooling needed)
@@ -39,7 +39,7 @@ These are repo rules, not preferences. Any change here must satisfy all of them.
   including **`asm_bytes`** and **`out_bytes`** — the size ratchet for free.
 - `make bench` scores compile time, run time and binary size (SCORE 100 = unchanged;
   within 100 ± 2.5 is noise).
-- `make bench-ir` / `bench/profile.sh` give **exact** instruction counts.
+- `make bench-ir` / `ytest profile` give **exact** instruction counts.
 - `make corpus-diff FILES="a.y b.y"` lists every program whose exit code, messages or
   binary changed.
 
@@ -168,7 +168,7 @@ Compressing the pack is worth it; deleting it is not.
 ## Part 1 — Binary size
 
 Three items, none of which touch codegen semantics. **Requirement: each must leave
-`test_debug.sh` and `test_link.sh` green, and each moves every golden binary.**
+`src/tools/ytest/su_debug.y` and `src/tools/ytest/su_link.y` green, and each moves every golden binary.**
 
 ### A1. Stop writing page padding into the file
 
@@ -316,8 +316,8 @@ label; `json`, `x509` and `tls` unused-import cost `25/94/94 → 0`. A program t
 allocate (`print(1)`, whose number formatting allocates) still carries the collector --
 that is the `--gc` work below.
 
-**Gate.** `test/sh/test_treeshake.sh` grew three checks: a hello world may not name the
-allocator or a collector block; `test/sh/deadcode.py` counts instructions that cannot
+**Gate.** `src/tools/ytest/su_treeshake.y` grew three checks: a hello world may not name the
+allocator or a collector block; `ytest deadcode` counts instructions that cannot
 execute (`test/treeshake/deadcode.txt` ratchet); `test/treeshake/shapes.txt` records the
 size of the shapes a runtime addition moves first. The same dead-code tool gates the
 foreach/raw-loop instruction ratio (`test/treeshake/foreach.y` vs `forloop.y`).
@@ -336,7 +336,7 @@ interleaving is unchanged). It is reached through the checker's named layer --
 `os_call_names()` gained `y_os_print_int` and `std/rt.y`'s `y_print_long` is now
 `os_call("y_os_print_int", v)` -- which keeps the documented override: a program's own
 `y_print_long` still shadows the runtime's and intercepts `print(int)`
-(`test/sh/test_link.sh`, "a program's `y_print_long` replaces the runtime's").
+(`src/tools/ytest/su_link.y`, "a program's `y_print_long` replaces the runtime's").
 
 **Result.** `minimal.y` **3,120 → 440 B**, no `y_alloc` and no collector; `t73`'s
 `heap_used() > 0` is now `false` (printing no longer allocates) and the fixture says so.
@@ -434,7 +434,7 @@ unbounded heap; a wrong "yes" is a few KB.
 `test/treeshake/dead.y` **3,667 → 1,551 B**, both with no `y_gc_collect` in the
 listing, while every `ideas/oom/` program keeps the collector and stays bounded
 under a 256 MiB cap (recursion, a `foreach` whose lambda allocates, and `s01`/`s05`/
-`s12` were checked by hand). `test/sh/test_treeshake.sh` gates all three: auto must
+`s12` were checked by hand). `src/tools/ytest/su_treeshake.y` gates all three: auto must
 omit it for a one-shot allocation, always must keep it, never must drop it, and the
 two builds must print the same thing.
 
@@ -667,7 +667,7 @@ with an `id → name` side table kept only for `-S`, `-g` symbols and diagnostic
 
 Walk the buffer; for each form, look up the mnemonic name and format the operands from
 the table. ~60 lines, run **only** under `-S`. It must reproduce today's formatting
-**byte for byte** (`bench/compare.sh` diffs assembly, and users diff it by hand), including
+**byte for byte** (`ytest bench` diffs assembly, and users diff it by hand), including
 the 4-space indent and the fact that `emit` (`native.y:1591`) appends one array element
 per line, so each line is its own line.
 
@@ -706,7 +706,7 @@ implementation, no pack-version churn beyond what the IR already needs.
 4. **Error paths change shape.** `asm.y:625` treats an unrecognised line as "a loud error
    with a line number — never a silent miscompile". A structured IR makes that class
    impossible (a genuine improvement), but tests asserting assembler diagnostics need
-   re-expressing. `test/fuzz/fuzz.sh` still works because it mutates *source*.
+   re-expressing. `ytest fuzz` still works because it mutates *source*.
 5. **Every binary's bytes move**, so the first `make check` re-blesses everything. The
    fixpoint gate (R2) is the real safety net here, and it is a good one.
 
@@ -718,7 +718,7 @@ Do **not** do this as one commit.
 |---|---|---|
 | **1** | **Labels as integers.** `next_loc`, `env_find`, `link_units`, `prune_bodies`. Deletes `body_label`/`label_at`; prepares structural refs. Also fixes a latent sharp edge: `line_refs_b`'s `mov` arm must reconstruct `mov $A-B` from a text scan, which integer labels make exact. | **Zero byte changes.** `make check` must report an empty diff. Smallest, riskiest seam — a good pilot. |
 | **2** | **Operand IR and direct encode.** Where the 201 ms → ~70 ms and 593 MB → ~65 MB land. Retires the text lexer, `line_refs_b`, `link_locs`. Adds the `-S` renderer. Decide the prelude question here. | `make check` green; `make bench` shows the compile-time and memory win. |
-| **3** | **Pack in IR form.** Retires C5/C6. | `test_link.sh` and `test_fixpoint.sh` green; `make corpus-diff` empty. |
+| **3** | **Pack in IR form.** Retires C5/C6. | `src/tools/ytest/su_link.y` and `src/tools/ytest/su_fixpoint.y` green; `make corpus-diff` empty. |
 
 ### One thing *not* worth doing first
 
@@ -739,10 +739,10 @@ IR.
 | **E2** | **Frame-slot reuse by lexical scope.** `EmitSt.slots` (`native.y:1582`) is a monotonic counter that never returns a slot; **one ycc function has a 186-slot / 1,488-byte frame**. Save/restore `st.slots` around block boundaries. | **max stack depth**, not size | medium-high | Every `box_bound` site (`native.y:5165`, `5183`) must be audited first: a captured variable's heap cell outlives the scope, so freeing its slot is unsound. Prerequisite for the deferred copy-propagation work. |
 | **E3** | **Loop-invariant hoisting.** `gen_foreach` (`native.y:5129`) takes **three** frame slots `[x][arr][i]` and re-reads `len(arr)` every iteration; `gen_forrange` (`native.y:5093`) takes two. Across **537 generated loops**: 5,727 slot loads, **1,312 beyond** what a counter needs. | ~1,300 instructions | medium | Do together with B5's loop-slot handling, and prefer the `inc -8(%rbp)` form B1 unlocks (3-instruction step → 1). Must not hoist past anything that can change the length (`y_arr_push` in the body). |
 | **E4** | **Compress the std pack.** gzip -9: 174,498 → **16,180 B**. | **−158 KB, −13% of ycc** | medium | Needs an inflate implementation in Y (~250 lines), applied at `self_pack` (`ycc.y:132`) and `std_units` (`native.y:8962`). **Superseded by Part 4 Stage 3** (~65 KB with no new code) — only do this if Stage 3 is abandoned. Budget ~1–3 ms/compile against the 0.429 ms hello-world floor. |
-| **E5** | **Denser pack text.** `emit` output is indented 4 spaces (~6,700 × 4 = 27 KB of the pack). | −26 to −50 KB | medium | Requires a `pack_version` bump (`native.y:9666`, currently `ycc-std-pack 5`); touches `test_link.sh`, `test_fixpoint.sh`, and the object cache in `pkg.y`. **Superseded by Part 4 Stage 3.** |
+| **E5** | **Denser pack text.** `emit` output is indented 4 spaces (~6,700 × 4 = 27 KB of the pack). | −26 to −50 KB | medium | Requires a `pack_version` bump (`native.y:9666`, currently `ycc-std-pack 5`); touches `src/tools/ytest/su_link.y`, `src/tools/ytest/su_fixpoint.y`, and the object cache in `pkg.y`. **Superseded by Part 4 Stage 3.** |
 | **E6** | **Tail calls beyond direct self-recursion.** `is_self_call` (`native.y:5188`) only matches `self` or the function's own label. Mutual recursion, tail calls to other functions, and calls through closures all grow the stack per iteration. | runtime + max stack | medium | Needs a general tail-call decision (frame shapes differ per callee). Part of the deferred register-allocation territory. |
 | **E7** | **Inline tiny functions.** Every Y-level function is `call` + `add $N,%rsp` (`gen_direct`, `native.y:4982`), even `y_heap_used` (8 instructions, `arch_x64.y:498`). | runtime | medium | Requires a cost model and a call-site budget. |
-| **E8** | **Literal closures inlined into the array methods (done).** `a.foreach((x) => ...)`, `map`, `filter`, `all`, `some`, `find`, `reduce` and `sort(cmp)` used to call their literal closure through the record (push it, load its code pointer, `call *%r10`), and then directly (`call <lambda>`, `64f7556`). Now `arr_can_inline` (`native.y`/`native.c`) emits the body **inside the loop** for a literal that captures nothing, does not call `self`, has no nested function literal and does not append to a parameter: `gen_lambda_inline` promotes the caller's live temporaries to block slots, binds the parameters to fresh slots and emits the body with `st.end_label` pointing at a local return label, so the value lands in `%rax` exactly like the call it replaces. Nothing else can be inlined and the fallbacks stay (a capturing literal still goes through the record). | the closure record, the separate body, the call/ret and the frame, per element | done | **Capturing literals are inlined too**: `arr_box_caps` boxes each enclosing binding, and `gen_lambda_inline` builds the closure record the body expects **on the stack** for the loop (word j+1 is capture j's cell pointer). Two subtleties cost a debugging session each: the record must be built at the inline point, after the live temporaries are promoted to block slots (building it at the creation site hands out slots in the temporaries' range), and `env_define` APPENDS to the env array in place (arrays are references), so the capture entries are shadowed back with the saved bindings after the body -- otherwise a program whose loop body never ran read the capture through a record that was never stored and crashed. `test/treeshake/foreach_local.y` (3319 B, 856 instructions, no indirect call; the record path was 3443 B/896) and `foreach_capture.y` (5, 6, 9: the zero-iteration read, a plain capture and a nested-literal body) pin both. `test/sh/test_treeshake.sh` gates foreach **below** the raw loop (854 vs 866 instructions) with no `call *%r10`; `foreach.y` 3,384 -> 3,333 B against the raw loop's 3,497; callgrind on the foreach fixture 772 -> 675. The nested-closure and appended-parameter guards are checked by `test/treeshake/print_var.y`-style cases (a `str` parameter appended inside the lambda still gets its own copy). |
+| **E8** | **Literal closures inlined into the array methods (done).** `a.foreach((x) => ...)`, `map`, `filter`, `all`, `some`, `find`, `reduce` and `sort(cmp)` used to call their literal closure through the record (push it, load its code pointer, `call *%r10`), and then directly (`call <lambda>`, `64f7556`). Now `arr_can_inline` (`native.y`/`native.c`) emits the body **inside the loop** for a literal that captures nothing, does not call `self`, has no nested function literal and does not append to a parameter: `gen_lambda_inline` promotes the caller's live temporaries to block slots, binds the parameters to fresh slots and emits the body with `st.end_label` pointing at a local return label, so the value lands in `%rax` exactly like the call it replaces. Nothing else can be inlined and the fallbacks stay (a capturing literal still goes through the record). | the closure record, the separate body, the call/ret and the frame, per element | done | **Capturing literals are inlined too**: `arr_box_caps` boxes each enclosing binding, and `gen_lambda_inline` builds the closure record the body expects **on the stack** for the loop (word j+1 is capture j's cell pointer). Two subtleties cost a debugging session each: the record must be built at the inline point, after the live temporaries are promoted to block slots (building it at the creation site hands out slots in the temporaries' range), and `env_define` APPENDS to the env array in place (arrays are references), so the capture entries are shadowed back with the saved bindings after the body -- otherwise a program whose loop body never ran read the capture through a record that was never stored and crashed. `test/treeshake/foreach_local.y` (3319 B, 856 instructions, no indirect call; the record path was 3443 B/896) and `foreach_capture.y` (5, 6, 9: the zero-iteration read, a plain capture and a nested-literal body) pin both. `src/tools/ytest/su_treeshake.y` gates foreach **below** the raw loop (854 vs 866 instructions) with no `call *%r10`; `foreach.y` 3,384 -> 3,333 B against the raw loop's 3,497; callgrind on the foreach fixture 772 -> 675. The nested-closure and appended-parameter guards are checked by `test/treeshake/print_var.y`-style cases (a `str` parameter appended inside the lambda still gets its own copy). |
 
 ---
 
@@ -793,7 +793,7 @@ Each line is a separate `make check` → `make rebless`.
 2. `make corpus-diff` — empty except for intended byte/size changes. Every behaviour
    difference listed must be accounted for.
 3. `make bench` — compile time, run time, binary size. `make bench-ir` and
-   `bench/profile.sh` for exact instruction counts (the ground truth for Part 2's claims).
+   `ytest profile` for exact instruction counts (the ground truth for Part 2's claims).
 4. `ycc --time` before/after — `asm_bytes` and `out_bytes` are the size ratchet.
 5. `make rebless` — every item moves `refs/ycc.ref`.
 
@@ -817,7 +817,7 @@ carries the real numbers (R9).
 | risk | items | mitigation |
 |---|---|---|
 | A wrong constant fold changes program behaviour | B3 | `make corpus-diff` must show size-only changes; run the full suite twice |
-| Warning output changes (types feeding `lint.y`) | B3, B4 | `test_native.sh` checks every `expect-warning`; R7 |
+| Warning output changes (types feeding `lint.y`) | B3, B4 | `src/tools/ytest/su_native.y` checks every `expect-warning`; R7 |
 | Assembler diagnostics change shape | Part 4 | update the affected fixtures explicitly; note them in the commit |
 | `-S` output drifts | Part 4 | diff `ycc -S` output for the whole corpus before/after |
 | Fixpoint breaks | all | R2 is checked by `make ynew` on every `make check` |

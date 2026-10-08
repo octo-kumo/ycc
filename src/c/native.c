@@ -2582,7 +2582,7 @@ static Yv *ir_refs_item(Yv *ir, ylong at, Yv *out) {
  * all count, so only a plain `mov <src>, <cell>` is not a read. That is what
  * an unused `import math;` costs -- 6705 bytes of `const pi` and coefficient
  * tables, spliced into the program's own unit, built at startup and read by
- * nobody (test/sh/test_treeshake.sh is the gate, test/treeshake/costs.txt the
+ * nobody (src/tools/ytest/su_treeshake.y is the gate, test/treeshake/costs.txt the
  * ratchet). */
 static Yv *cell_reads(Yv *ir, Yv *out) {
     ylong at = 0;
@@ -5003,7 +5003,7 @@ int uses_threads(Yv *refs) {
  * runtime: a `native def` names one as its body, so the call is a reference
  * like any other and the block stays. Looking first is what makes this cheap
  * -- split()ing the lines for every compile measured +2.6% instructions on
- * hello.y, against a few dozen lines (bench/compile_ir.sh). */
+ * hello.y, against a few dozen lines (`ytest bench-ir`). */
 int uses_math(Yv *refs) {
     ylong i = 0;
     int found = 0;

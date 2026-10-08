@@ -181,12 +181,12 @@ make lsp-e2e
 - `src/tools/lsp/test/client-check.js` — drives `yserve` with `vscode-jsonrpc`,
   the JSON-RPC library VS Code itself uses, through the exact message sequence an
   editor sends. This is what proved the server agrees with a real LSP
-  implementation rather than only with the hand-written driver in `test-e2e.sh`.
+  implementation rather than only with the hand-written driver in `ytest lsp-e2e`.
   It **behaves like the editor**: when the server advertises the
   pull-diagnostics capability it pulls, because a server that claims pull and
   answers only push makes VS Code ignore the push notifications and show no
   diagnostics at all — which is what happened, and what this driver now catches.
-- `src/tools/lsp/check-names.py` — no two path-imported modules may define the
+- `ytest check-names` — no two path-imported modules may define the
   same name. A Y path import *flattens* into the caller's namespace, so a shared
   name is either a duplicate-definition error pointing at the wrong file or one
   definition silently shadowing the other.

@@ -27,17 +27,17 @@ Repo rules, not preferences. Any implementation must satisfy all of them.
 | # | Requirement | Where it is enforced |
 |---|---|---|
 | R1 | **The C twin is 1:1.** `src/c/` mirrors `src/y/`; both compilers must emit byte-identical programs. Assembly is the exception in *representation* only: it lives once in `src/y/arch/*.s`, embedded by both (`embed` / `.incbin`). | `PORTING.md`, `make ycc` (`cmp ycc refs/ycc.ref`) |
-| R2 | **The fixpoint holds.** Three generations of self-compilation byte-identical. | `test_fixpoint.sh` |
-| R3 | **`make check` before `make rebless`.** verify → compare → time. | `AGENTS.md`, `test/sh/check.sh` |
-| R4 | **No warnings** from `src/y` or `src/y/std`. | `test_fixpoint.sh` |
-| R5 | **Deterministic output** — no hash-map iteration order in the emitter. | `test_port.sh` |
-| R6 | **`ycc -g` keeps `.text`/`.rodata` identical to the plain build.** | `test_debug.sh` |
-| R7 | **The std pack and tree shaking keep working**: `math.y` is an optional unit, resolved from `std/` next to the binary, shaken per def, and packs nothing. | `NATIVE.md` "Compilation units and the std pack", `test_link.sh` |
+| R2 | **The fixpoint holds.** Three generations of self-compilation byte-identical. | `src/tools/ytest/su_fixpoint.y` |
+| R3 | **`make check` before `make rebless`.** verify → compare → time. | `AGENTS.md`, `ytest check` |
+| R4 | **No warnings** from `src/y` or `src/y/std`. | `src/tools/ytest/su_fixpoint.y` |
+| R5 | **Deterministic output** — no hash-map iteration order in the emitter. | `src/tools/ytest/su_port.y` |
+| R6 | **`ycc -g` keeps `.text`/`.rodata` identical to the plain build.** | `src/tools/ytest/su_debug.y` |
+| R7 | **The std pack and tree shaking keep working**: `math.y` is an optional unit, resolved from `std/` next to the binary, shaken per def, and packs nothing. | `NATIVE.md` "Compilation units and the std pack", `src/tools/ytest/su_link.y` |
 | R8 | **Every process under `ulimit -v 3670016`.** | `AGENTS.md`, `test/sh/capped.sh` |
 | R9 | **Bench at the end**; numbers in the commit message. | `AGENTS.md` |
 | R10 | **Y code style** — no unknown types, exact records, a `type` alias for anything used twice, no unused locals, `self` for recursion. | `AGENTS.md` "Y code style" |
-| R11 | **Coverage gates**: every diagnostic has an `e*.y` marker, every keyword appears in a `t*.y`, every manual section has a `test/COVERAGE.md` row. | `test_coverage.sh` |
-| R12 | **Every 4th call is fuzzed** once the lexer/parser/checker/emitter are touched: `test/fuzz/fuzz.sh` must exit 0, and each finding becomes an `e*.y` fixture. | `AGENTS.md` "Fuzzing" |
+| R11 | **Coverage gates**: every diagnostic has an `e*.y` marker, every keyword appears in a `t*.y`, every manual section has a `test/COVERAGE.md` row. | `src/tools/ytest/su_coverage.y` |
+| R12 | **Every 4th call is fuzzed** once the lexer/parser/checker/emitter are touched: `ytest fuzz` must exit 0, and each finding becomes an `e*.y` fixture. | `AGENTS.md` "Fuzzing" |
 
 ### What already exists (do not rebuild it)
 
@@ -191,7 +191,7 @@ programs that never print a float.
 | `rename.y` | Set `label` from the declared name; no body to walk. Nothing else — a top-level def is already registered. |
 | `native.y` | A per-unit index of native decls (`name → label`), filled from the top-level defs before emission (~15 entries; it holds only natives). The call path consults it, so `f(x)` emits `call y_exp` instead of the derived `yfn_…` label. `emit_fns` emits no body for a ndef. |
 | `lint.y` | Nothing. A top-level declaration is not an unused local. |
-| `dwarf.y` | The call site keeps its `.loc`; the callee has no line info. `test_debug.sh` must confirm `nm`/`addr2line` still name the label and gdb/callgrind do not choke on a bodyless function. |
+| `dwarf.y` | The call site keeps its `.loc`; the callee has no line info. `src/tools/ytest/su_debug.y` must confirm `nm`/`addr2line` still name the label and gdb/callgrind do not choke on a bodyless function. |
 | `src/c/*` | The same changes, mechanically (R1). |
 
 ### Alternatives considered
@@ -281,7 +281,7 @@ leading `#` is *"unexpected comment (backend bug)"*, `asm.y:626`) while letting 
 700-line hand-written `y_exp` carry the prose it needs.
 
 **`make asm-check`** assembles `src/y/arch/*.s` with GNU `as` and fails on a
-syntax error. `test_debug.sh:249` already runs `as` over a program's `-S -g`
+syntax error. `src/tools/ytest/su_debug.y` already runs `as` over a program's `-S -g`
 text, so the assembler is available and the common path is proven — but only over
 the blocks a test program happens to keep. `asm-check` is the first *exhaustive*
 check, which is what 700 lines of new hand-written asm wants. ycc's own assembler
@@ -410,8 +410,8 @@ useful and fast, and the assembly is a follow-up.
   three forms (derived label, explicit label, a label in another module), a
   native taken as a value and called through it, a native whose label is
   referenced but unused elsewhere (the shaking case, checked with `nm`),
-  `-g` (`test_debug.sh` covers the DWARF side).
-- **New `test/sh/test_math.sh`** (suite 16 → 17: `run_all.sh`, `lib.sh`,
+  `-g` (`src/tools/ytest/su_debug.y` covers the DWARF side).
+- **New `src/tools/ytest/su_math.y`** (suite 16 → 17: `./ytest`, `yt.y`,
   Makefile, `AGENTS.md`) for the ulp harness.
 - For P0 specifically: `PORTING.md` gets a rule for an embedded **assembly**
   file next to rule 10 (same `.incbin` mechanism, different file kind), and
@@ -482,7 +482,7 @@ table-initialisation cost, `let T: [float] = [...]` compiled with `-S` and the
 total line count compared against a 212-line `print(1)` program (64 → 547, 256 →
 1507, 1024 → 5347); `y_fmod` at 2691 µs/1e6 = 2.69 ns.
 
-The `valgrind --tool=callgrind` instruction counts from `bench/profile.sh` are
+The `valgrind --tool=callgrind` instruction counts from `ytest profile` are
 the exact version of this table, and are the right tool for the P4/P5 numbers —
 wall clock on a shared machine will not resolve a 2x on a 40 µs row.
 
@@ -582,7 +582,7 @@ byte-identical binaries for every program except under `-g`, where the C
 compiler's line table is 27 bytes of CU where the Y compiler's has the file
 table and every `std/rt.y` row. **`make check` does not see it**: the port gate
 builds `ycc.y` *without* `-g`, so the two copies agree on every byte it looks
-at. Only `test_debug.sh`'s "cycc -g and ycc -g emit identical binaries" caught it,
+at. Only `src/tools/ytest/su_debug.y`'s "cycc -g and ycc -g emit identical binaries" caught it,
 which is a point in that suite's favour.
 
 The cause is that `asm_loc`/`asm_file` build **four**-field records for the DWARF

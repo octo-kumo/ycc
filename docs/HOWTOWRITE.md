@@ -177,7 +177,7 @@ practice:
 ## The matrix contract
 
 `test/COVERAGE.md` is the only document here that a suite reads line by line,
-and `test/sh/test_coverage.sh` (`make test`, [coverage]) enforces four things:
+and `src/tools/ytest/su_coverage.y` (`make test`, [coverage]) enforces four things:
 
 1. every diagnostic message a compiler site can print appears in some test
    expectation, or is listed in `COVERAGE.md` with a reason it cannot be
@@ -202,8 +202,8 @@ So a new subsection is not finished until it has a row:
   them with ``grep -o '`[^`]*`' ``, so `` `a.y, b.y` `` is one reference named
   `a.y, b.y` and fails.
 - Accepted references: `native/NAME.y` (a `t*.y` also needs its `.expected`;
-  an `e*.y` needs its `// expect-error:` markers), `sh/test_NAME.sh`,
-  `lsp/test/NAME.y` (with its `.expected`) and `lsp/test/test-NAME.sh`,
+  an `e*.y` needs its `// expect-error:` markers), `ytest/su_NAME.y`,
+  `lsp/test/NAME.y` (with its `.expected`) and `lsp/test/NAME-check.js`,
   `comprehensive: NAME`, `loops: NAME` (a case whose name starts with NAME).
 - A section that specifies nothing a program can do gets one row whose Tests
   cell is ``none: `` and a reason of at least ten characters. **A stale excuse
@@ -223,7 +223,7 @@ enumerated, which is why a paragraph can name a dozen functions safely.
 
 ## The prose documents that are checked
 
-- **`src/tools/lsp/LSP.md`** — `test_lsp.sh` runs `check-refs.py`, which fails
+- **`src/tools/lsp/LSP.md`** — `src/tools/ytest/su_lsp.y` runs `ytest check-refs`, which fails
   when the document cites a symbol that does not exist. A rename in the server
   is a documentation change.
 - **`src/y/NATIVE.md`** — other documents and code comments cite its sections
@@ -261,11 +261,11 @@ suggestion. Two rules from it that a writer will otherwise violate:
    title matching exactly and the tests in their own backticks.
 2. If you documented a builtin in a description list: it is **qualified** with
    its module, and a checked test calls it.
-3. `./test/sh/run_all.sh coverage` — the manual ↔ matrix ↔ tests contract.
+3. `./ytest coverage` — the manual ↔ matrix ↔ tests contract.
 4. `make docs`, or the XeTeX fallback above; check that no error names the file
    you touched. If you cannot run either, **say so in the commit message** —
    "the manual was not typeset" is a fact the next reader needs.
-5. `./test/sh/run_all.sh lsp` if you touched something the LSP fixtures
+5. `./ytest lsp` if you touched something the LSP fixtures
    enumerate — the std unit symbol lists in `t018_reported` and
    `t020_sorttext` are golden files that change when a std module gains a
    function.

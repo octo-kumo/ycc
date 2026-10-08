@@ -36,7 +36,7 @@ measured) and about 512 lines of Y (`std/kernel.y`).  Two of the largest
 assembly blocks are init sequences that any OS writes once (the 16550's
 23 instructions, the 8259's 32) — not primitives.
 
-Working, booted by `test/sh/test_kernel.sh` under qemu:
+Working, booted by `src/tools/ytest/su_kernel.y` under qemu:
 
 * `puts`/`print` to serial, and `tostring`, arrays, records, maps, floats
   (SSE), the allocator — the ordinary language, unchanged;

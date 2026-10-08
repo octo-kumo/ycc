@@ -8,7 +8,7 @@
 //
 // That is the last item on a list this work built by asking which comparisons in
 // std/math.y are made against something OTHER than a bare parameter -- a length,
-// an array element, a field. audit_thresholds.py deliberately skips those,
+// an array element, a field. `ytest math-thresholds` deliberately skips those,
 // because "is there an argument near this threshold" is the wrong question for a
 // derived value, and a gate that answers a question nobody asked is worse than no
 // gate. Enumerating what it skips is the other half of the answer, and this is

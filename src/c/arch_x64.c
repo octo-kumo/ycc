@@ -129,7 +129,7 @@ static ylong w_sysno(Yv *name) {
     /* 196 is NOT what the public Windows 10 table suggests (it lists 62, whose
        neighbour NtQueryAttributesFile really is 61); 62 answers
        STATUS_INVALID_HANDLE. Read out of the installed ntdll's own stub by
-       test/sh/w_sysno.py, which is the only authority for what a probe under
+       `ytest w-sysno`, which is the only authority for what a probe under
        this wine will do. */
     else if (ys_eq_lit(name, "attrs")) { return 196; }  /* NtQueryFullAttributesFile */
     else { return -1; }

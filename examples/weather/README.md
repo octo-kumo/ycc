@@ -98,7 +98,7 @@ count the *client* received.
 
 **TLS.** `std/tls` is client-only: it has `client_hello`, `server_hello` and
 `cert_list` but no accept, so a TLS server in Y is not possible. The leg
-borrows `openssl s_server`, the same precedent `test/sh/test_net.sh` already
+borrows `openssl s_server`, the same precedent `src/tools/ytest/su_net.y` already
 uses for `std/tls.y`. A self-signed certificate is generated at run time
 into `/tmp/opencode/wx-tls/` and the client verifies it with
 `anchors: <PEM text>` — **`anchors` is PEM text, not a file path**; it goes

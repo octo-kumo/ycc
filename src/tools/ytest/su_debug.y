@@ -234,7 +234,7 @@ def body() {
     if (build(yc.YCC, ["-g"], "q", "q.y").code == 0) {
         let q = yc.run_bin(D + "/q", [], "", 10);
         let re = if (yt.have("readelf")) { tool(["readelf", "-a", "-W", "--debug-dump=info,abbrev,line", D + "/q"]) }
-            else { { code: 0, out: "", err: "", timed_out: false, ms: 0 } };
+            else { { code: 0, out: "", err: "", timed_out: false, ms: 0, us: 0 } };
         yt.check("-g on a minimal program", q.code == 3 && re.code == 0 && re.err == "",
             "exit " + tostring(q.code) + " " + yt.clip(re.err, 200));
     } else {

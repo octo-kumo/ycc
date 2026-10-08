@@ -32,10 +32,10 @@ references into it are by **function name** (`native_resolve_seen`, `gen_push_ar
 | # | Requirement | Enforced by |
 |---|---|---|
 | R1 | **The C twin is 1:1.** Every line of new compiler code lands **twice**. | `PORTING.md`, `make ycc` |
-| R4 | **No warnings** from `src/y` and `src/y/std`. A meta block in compiler source would put a synthesized statement in a top level that has none, so `src/y` uses no blocks. | `test_fixpoint.sh`, `lint.y` |
-| R5 | **Deterministic output** — no hash-map iteration order. | `test_port.sh` |
+| R4 | **No warnings** from `src/y` and `src/y/std`. A meta block in compiler source would put a synthesized statement in a top level that has none, so `src/y` uses no blocks. | `src/tools/ytest/su_fixpoint.y`, `lint.y` |
+| R5 | **Deterministic output** — no hash-map iteration order. | `src/tools/ytest/su_port.y` |
 | R8 | **Every process under `ulimit -v 3670016`.** | `test/sh/capped.sh` |
-| R11 | **Every diagnostic has a test**, every manual section a `COVERAGE.md` row. **`test/sh/test_coverage.sh:70-71` hard-codes the scanned file list**, so a new `src/y/meta.y` must be added there or it is invisible. | `test_coverage.sh` |
+| R11 | **Every diagnostic has a test**, every manual section a `COVERAGE.md` row. **`src/tools/ytest/su_coverage.y` hard-codes the scanned file list**, so a new `src/y/meta.y` must be added there or it is invisible. | `src/tools/ytest/su_coverage.y` |
 | R12 | **No new closures in `src/y`** — the C twin's value model has no function value to store one in. | `yv.h` |
 | R13 | **Line numbers stay honest.** Not "preserved" — a block may emit any number of lines, so the rule is *mapped*, not *equal*. See [Line mapping](#line-mapping). | the pass's line map |
 
@@ -343,7 +343,7 @@ A block with **no nested block pays nothing**: the loop is only entered when the
 collecting scan found nesting (`mg_nest`), a block with nothing inside it is never even
 *held* (its text is written straight into `G`, `sg_hold` is for a block that may have to
 give its text up), and its `G` is byte for byte the one the pass has always built —
-`test/sh/meta-identity.py` checks the weaker, sharper claim that the pass is the identity
+`ytest meta-identity` checks the weaker, sharper claim that the pass is the identity
 on a file with no blocks at all (393/393 after the merge of master `d35af36`, which grew
 the corpus from 381), and `make test` checks the rest.
 
@@ -632,14 +632,14 @@ everything:
   required, and it works.
 
 **The pass lives in a new `src/y/meta.y`.** Not inside `native_resolve_seen`, for two
-reasons: `test/sh/test_coverage.sh:70-71` hard-codes the scanned file list, so a new
+reasons: `src/tools/ytest/su_coverage.y` hard-codes the scanned file list, so a new
 file is invisible unless the list is edited (cheap, but it must be *remembered*); and
 `src/tools/lsp/check.y` is a **second checker** that runs the lexer and types itself,
 so it will report `expected an expression, got '#'` for every meta file unless it can
 reach the same pass. One module, two callers, one implementation.
 
 **Both halves of that are now done rather than intended.** `meta.y` is in the scanned
-list, and `test_coverage.sh` passes with **all 488 diagnostic sites tested or excused**,
+list, and `src/tools/ytest/su_coverage.y` passes with **all 488 diagnostic sites tested or excused**,
 175 builtins called, 15 keywords used, 85 manual sections with rows and 502 test
 references resolving — so the R11 chain (code → fixture → `COVERAGE.md` row) holds for
 all 23 meta fixtures. (Those counts moved when master merged: it brought diagnostics,
@@ -648,7 +648,7 @@ merge, they were 409 / 113 / 12 / 84 / 454, and the nesting work moved the last 
 502 with three more rows.)
 
 The gap this paragraph used to call pre-existing is **closed**.
-`test_coverage.sh:70-73` scans `ir.y`, `asm.y`, `enc64.y`, `elf.y` and `dwarf.y`
+`src/tools/ytest/su_coverage.y` scans `ir.y`, `asm.y`, `enc64.y`, `elf.y` and `dwarf.y`
 alongside everything else. Adding a file to that list was **not sufficient on its
 own**: `coverage_diag.awk` matches **per file**, so `asm.y` (`asm_state_err`) and
 `enc64.y` (`enc_err`) each needed a rule of their own before those files contributed
@@ -783,7 +783,7 @@ problem, and the line map points the error at the block.
 all — and builds an `Origin` with empty `file`/`line`, so a block in a std source has
 no origin to point at. `std_units` is called at `ycc.y:651`, which is **after**
 `tokenize` (`:638`) and `parse` (`:641`), so a std block would arrive after the
-program's pass has run. And `test_fixpoint.sh:82` compiles each `src/y/std/*.y` as its
+program's pass has run. And `src/tools/ytest/su_fixpoint.y` compiles each `src/y/std/*.y` as its
 own standalone program.
 
 So **a `#{` in a std source is a diagnostic** in v1. Revisiting it means moving
@@ -836,7 +836,7 @@ Two of these are only checkable for text the pass *sees*: a generator that emits
 `def ycc_meta_expr` collides silently, like any other duplicate top-level name, and no
 amount of checking in the pass can diagnose it. The manual has to say so.
 
-`test/fuzz/fuzz.sh` mutations: splice a bare `#`, splice a `#{`, splice an
+`ytest fuzz` mutations: splice a bare `#`, splice a `#{`, splice an
 unterminated `#{`, and `/* }# */`.
 
 ---
@@ -927,7 +927,7 @@ the line map. Then: build `G`, compile it for the host with the pass off, run it
 forked child via M1, splice the pieces into `P`, rebuild origins, hand `P` to the
 existing lexer — unchanged.
 
-*Gate:* every diagnostic above has a fixture; the fuzz cases pass; `test_coverage.sh`'s
+*Gate:* every diagnostic above has a fixture; the fuzz cases pass; `src/tools/ytest/su_coverage.y`'s
 file list updated with `meta.y`; `test/COVERAGE.md` rows; a manual section (short — one
 construct); byte-identity from both compilers and across two consecutive runs; the LSP
 reports no error on a meta file; and `ycc -E` dumps a program containing a literal `#{`

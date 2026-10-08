@@ -1,4 +1,4 @@
-// The TLS 1.3 client (std/tls.y) for test_net.sh: to localhost-or-not
+// The TLS 1.3 client (std/tls.y) for src/tools/ytest/su_net.y: to localhost-or-not
 // argv[3] on port argv[1], trusting the PEM certificate in file argv[2],
 // asking for ALPN http/1.1; it GETs / from an `openssl s_server -www`
 // and says which suite it got and what came back.

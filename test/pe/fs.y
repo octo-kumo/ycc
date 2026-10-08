@@ -1,8 +1,8 @@
-// The Windows file path, end to end, in a program pe-gate.sh compiles and runs
+// The Windows file path, end to end, in a program `ytest pe-gate` compiles and runs
 // under wine: open/read/write/append/seek/close and the stat half
 // (exists/is_file/is_dir/file_size), with RELATIVE paths -- which is what the
 // PEB's CurrentDirectory resolution exists for, and what no fixture could do
-// before it. Every line must match pe-fs.expected, which is the same program's
+// before it. Every line must match fs.expected, which is the same program's
 // output on Linux, so this is also a portable-path check rather than a
 // Windows-only one.
 //

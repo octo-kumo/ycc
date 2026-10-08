@@ -1,4 +1,4 @@
-// mutate.y — the fuzzer's input generator (driven by fuzz.sh).
+// mutate.y — the fuzzer's input generator (driven by `ytest fuzz`).
 //   mutate SEED OTHER RNG OUT
 // Reads two corpus programs, applies 1-4 random edits to SEED and writes
 // the result to OUT: delete, duplicate or truncate a span, splice in a

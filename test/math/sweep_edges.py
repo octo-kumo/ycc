@@ -30,7 +30,7 @@ ulp); any other NaN, against a number, is the worst gap there is.
 Nothing here is a gate on its own: a function may legitimately differ from libm
 (it is allowed to be BETTER), and the thresholds below are what this audit
 found rather than what the module promises. The module's promise is 1 ulp, and
-test/sh/test_math.sh enforces that on the table.
+src/tools/ytest/su_math.y enforces that on the table.
 """
 import ctypes
 import math

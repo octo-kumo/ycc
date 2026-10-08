@@ -1866,7 +1866,7 @@ def arr_lit_adopts_go(got: Type, want: Type, n: long) -> bool {
 //
 // OFF by default. A module-level `bool` cannot be hoisted, so this costs the
 // hot loop one predictable branch that is never taken in a real compile.
-// bench/compile_ir.sh is what says what that is worth.
+// `ytest bench-ir` is what says what that is worth.
 let tc_index: bool = false;
 let tci_keys: [long] = [];
 let tci_typs: [Type] = [];
@@ -3362,7 +3362,7 @@ def const_store(st: TcSt, tgt: Node, line: long, col: long) -> TcSt {
 
 // `++`/`--` and `op=` store back into their target. A plain const name keeps
 // the message it always had (a package's globals are consts, and
-// test_pkg.sh pins all three forms); a name reached through a place says
+// src/tools/ytest/su_pkg.y pins all three forms); a name reached through a place says
 // which name it was.
 def const_check(st: TcSt, tgt: Node, tt: Type, op: str, line: long, col: long) -> TcSt {
     let root = const_root(st, tgt);

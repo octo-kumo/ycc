@@ -124,8 +124,8 @@ no std pack attached, so it always compiles the std units from source
 | `src/c/` | the 1:1 copy in C (`PORTING.md` is the contract; `yv.c` is the value model) |
 | `docs/` | the formal language definition (LaTeX/Tectonic) |
 | `refs/` | reference binaries for the byte-identical port gate (currently `cycc`'s own output with its std pack attached — see `PORTING.md`) |
-| `test/` | `test/sh/` suites + `test/y/` programs (`native/`, `audit/`, `examples/`, `ycc/`) |
-| `bench/` | compile-time/runtime benchmarks + `compare.sh` |
+| `test/` | `test/y/` programs (`native/`, `audit/`, `examples/`, `ycc/`) |
+| `bench/` | compile-time/runtime benchmarks (`ytest bench`) |
 
 ## Building and testing
 
@@ -133,7 +133,7 @@ no std pack attached, so it always compiles the std units from source
 $ make              # gcc -> cycc (the C copy)
 $ make ycc          # cycc -> ycc (+ its std pack), then: cmp ycc refs/ycc.ref + fixpoint
 $ make test         # the port gate + all the suites in test/sh/
-$ ./test/sh/run_all.sh port native   # a subset (suite names: port native
+$ ./ytest port native   # a subset (suite names: port native
                                      # native-examples examples audit ycc-units
                                      # ycc fixpoint loops comprehensive debug
                                      # link pkg stdin-eof net coverage)
@@ -149,7 +149,7 @@ are kept in lockstep — that is what "1:1 copy" means, see
 
 `AGENTS.md` is the project guide (workflow, style rules, benchmarking
 policy). A change that can affect performance gets a thorough bench and
-profiling at the end (`make bench`, `bench/compare.sh`), with the numbers
+profiling at the end (`make bench`, `ytest bench`), with the numbers
 in its commit message.
 
 See refs/ycc.ref for the pin.

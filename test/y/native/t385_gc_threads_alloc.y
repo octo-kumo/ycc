@@ -1,6 +1,6 @@
 // Two threads that allocate hard. Before the stop-the-world collector a cycle
 // was refused once a thread existed (y_heap+24), so every byte either thread
-// allocated stayed: test/sh/test_gc.sh runs this under a small cap, where the
+// allocated stayed: src/tools/ytest/su_gc.y runs this under a small cap, where the
 // committed runtime runs out of memory and this one does not.
 def work(n: long) -> long {
     let i = 0;

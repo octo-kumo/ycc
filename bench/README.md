@@ -16,7 +16,7 @@ it is done:
   run `make ycc` on it and save the binary.
 - `make check` measures as part of checking the change (see AGENTS.md,
   "Changing the compiler"). `make bench` on its own runs
-  `bench/compare.sh` on copies of the two under `/tmp`, and
+  `ytest bench` on copies of the two under `/tmp`, and
   `make bench-ir` counts the compilers' instructions.
 - Explain what moved with the per-function tables (below), `perf` on a
   `-g` build, or `ycc --time`. Rework a regression unless it is a
@@ -31,13 +31,13 @@ make bench ROUNDS=9                    # more pairs = less noise
 make bench-ir                          # exact compile instruction counts
 make ycc && cp ycc /tmp/ycc-base       # another base: build it there
 make bench BASE=/tmp/ycc-base NEW=./ycc
-bench/compare.sh /tmp/ycc-base ./ycc 9 # the script itself
+`ytest bench` /tmp/ycc-base ./ycc 9 # the script itself
 ```
 
 ## What is measured
 
-`bench/run.sh YCC [runs]` benchmarks one build and prints TSV
-(`bench metric value`). `bench/compare.sh BASE NEW [runs]` measures the
+`ytest bench-run YCC [runs]` benchmarks one build and prints TSV
+(`bench metric value`). `ytest bench BASE NEW [runs]` measures the
 two in **pairs** — a run of base and a run of new back to back, the order
 flipping every pair — and compares each side's median. Load on a shared
 machine comes in bursts of seconds: measured in separate passes, one side
@@ -59,7 +59,7 @@ slower there). Per program in `bench/y/`:
 | `asm_bytes` | size of `ycc -S` output |
 | `self` (extra) | compiling `src/y/ycc.y`: also `asm_lines` and `heap_kb` |
 
-`BENCH_SELF=0 bench/compare.sh BASE NEW` leaves out the `self` rows, for
+`BENCH_SELF=0 ytest bench BASE NEW` leaves out the `self` rows, for
 a base build that cannot compile the current sources at all (one that
 ran out of memory there, say); the score then covers `bench/y/` only.
 
@@ -85,7 +85,7 @@ informative on `self`.
 
 ## Per-function profiles
 
-`bench/profile.sh BASE NEW` — the last section of `compare.sh`
+`ytest profile BASE NEW` — the last section of `ytest bench`
 (`BENCH_PROFILE=0` leaves it out; `make check` runs it beside the tests)
 — builds every benchmark with **`ycc -g`** (symbols and line info) on both sides,
 runs each once under valgrind's **callgrind**, all side by side (`YJOBS`
@@ -114,7 +114,7 @@ only to executables with a read+write file mapping.
 
 `compile_us` is wall time: on a small program its noise (see above) is
 larger than most changes in compile work.
-`bench/compile_ir.sh BASE NEW` (`make bench-ir`) runs both compilers under
+`ytest bench-ir BASE NEW` (`make bench-ir`) runs both compilers under
 valgrind's cachegrind (`--cache-sim=no`: the instruction count alone) on
 every `bench/y/` program and on `src/y/ycc.y`, and prints the
 instructions each executed with the delta (here: the map read cache,

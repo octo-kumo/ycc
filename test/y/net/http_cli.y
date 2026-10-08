@@ -1,5 +1,5 @@
 // The http client (std/http.y) against test/y/net/http_srv.y on port
-// argv[1] (test_net.sh): one-shot requests, then a session (a base URL,
+// argv[1] (src/tools/ytest/su_net.y): one-shot requests, then a session (a base URL,
 // a header for every request, cookies, one kept connection).
 import http;
 

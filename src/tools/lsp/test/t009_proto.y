@@ -3,7 +3,7 @@
 // handle_one is a plain string function, so the whole protocol can be exercised
 // with no process, no pipe and no fork. What is NOT tested here is whether the
 // server SURVIVES a handler that dies -- that needs a real process and is
-// test-e2e.sh's job. The split is deliberate: this file pins the answers, that
+// `ytest lsp-e2e`'s job. The split is deliberate: this file pins the answers, that
 // one pins the containment.
 
 import json;

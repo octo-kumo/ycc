@@ -19,11 +19,11 @@ reference was unusable (it trapped with "index out of bounds" on every
 input, so the old `ref → s1 → s2 → s3` Y-bootstrap chain could not be
 run at all); the replacement was accepted only after the self-compile
 fixpoint was verified across three generations (`cycc → y1 == y2 == y3`,
-`test/sh/test_fixpoint.sh`). Consequence for the gate: `cmp ycc
+`src/tools/ytest/su_fixpoint.y`). Consequence for the gate: `cmp ycc
 refs/ycc.ref` now proves the C copy reproduces *its own* last
 self-consistent output, not that it reproduces a separately bootstrapped
 compiler — the twin agreement itself is what the port gate rests on
-(`test_port.sh` compiles every test program with both compilers and
+(`src/tools/ytest/su_port.y` compiles every test program with both compilers and
 requires byte-identical binaries).
 
 ## Module map
@@ -48,7 +48,7 @@ requires byte-identical binaries).
 | —                       | `src/c/yv.c`/`yv.h`   | the value model (no Y twin; the runtime of *compiled* programs is `src/y/std/rt.y`) |
 | `src/y/std/rt.y`, `prelude.y`, `exec.y`, `str.y` | (stay Y)  | the core std units, compiled separately and linked into programs (std_units; precompiled in ycc's std pack). Not embedded: both twins read the source from disk (`std_lib_src`) when they compile a unit |
 | `src/y/std/fs.y`, `net.y`, `struct.y`, ... (all sixteen) | (stay Y)  | the library std units: every one travels in the std pack, linked as a unit of its own rather than spliced text, and none is embedded -- the source is read from disk (`std_lib_src`) only to build the pack, under `--std-src`, or by a compiler with no pack. A project-local module of the same name is spliced instead (`res_local_mod`); `STD_SRCS` makes an edit rebuild the pack |
-| `src/tools/lsp/*.y`    | (none — stays Y)  | the language server (`yserve`), the VS Code extension and `LSP.md`. **Not ported, and not to be**: it is a tool, not the compiler, and it is the only program that imports the compiler's own modules **by path** — `types.y`, `native.y`, `parser.y`, `rename.y`, `lint.y`. A path import *flattens* (no namespace), so every name `src/tools/lsp/` defines lands in the compiler's vocabulary and two of them colliding is a duplicate-definition error reported against the wrong file. `src/tools/lsp/check-names.py` is what keeps that from happening, and it runs in `test/sh/test_lsp.sh`; it also checks each module's **basename**, because `strip_ns` rewrites any `name.field` in the whole program as a module reference — a module called `index.y` turned the compiler's own 42 `index.idx` reads into names that do not exist. Add a module there and the checker has to pass before the port gate means anything |
+| `src/tools/lsp/*.y`    | (none — stays Y)  | the language server (`yserve`), the VS Code extension and `LSP.md`. **Not ported, and not to be**: it is a tool, not the compiler, and it is the only program that imports the compiler's own modules **by path** — `types.y`, `native.y`, `parser.y`, `rename.y`, `lint.y`. A path import *flattens* (no namespace), so every name `src/tools/lsp/` defines lands in the compiler's vocabulary and two of them colliding is a duplicate-definition error reported against the wrong file. `ytest check-names` is what keeps that from happening, and it runs in `src/tools/ytest/su_lsp.y`; it also checks each module's **basename**, because `strip_ns` rewrites any `name.field` in the whole program as a module reference — a module called `index.y` turned the compiler's own 42 `index.idx` reads into names that do not exist. Add a module there and the checker has to pass before the port gate means anything |
 
 ## Translation rules
 
@@ -68,7 +68,7 @@ requires byte-identical binaries).
    `native.c`'s `INTRINSICS` and every f-string in the corpus broke at once.
    `yavs(a, b, ..., NULL)` ends in a sentinel, so there is no count to get
    wrong; use it for any list of values. (`native.c`'s `INTRINSICS` is the one
-   that matters, and `test/sh/test_lsp.sh`'s `t013_m4` checks the count
+   that matters, and `src/tools/ytest/su_lsp.y`'s `t013_m4` checks the count
    against the compiler's own list, so a regression there fails loudly.)
 
 2. **Type map**: `long` → `ylong`, `float` → `double`, `bool` → `int`,
@@ -194,7 +194,7 @@ requires byte-identical binaries).
    `fclose`'s return, and did not — `cycc -o /dev/full` exited 0 having
    written nothing. Where the Y side's answer comes from a syscall return,
    the C side's must come from the call that flushes (`yv.c`'s
-   `close_written`), and the port gate's twin cases (`test_ycc.sh`'s
+   `close_written`), and the port gate's twin cases (`src/tools/ytest/su_ycc.y`'s
    `expect_cli_error`) run against both compilers so a divergence like this
    fails there rather than in a user's build.
 

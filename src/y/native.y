@@ -764,7 +764,7 @@ def meta_compile_gen() -> [byte] {
     //
     // "linux" is the host by construction: the compiler in src/y is a Linux
     // binary, and src/c's cycc is too except for cycc.exe, whose meta gap is
-    // already recorded (AGENTS.md, cycc-win.sh).
+    // already recorded (AGENTS.md, `ytest cycc-win`).
     let saved_target = res_target;
     res_target = "linux";
     let r = emit_program(ast, nr, false, 0, su, []);
@@ -1585,7 +1585,7 @@ def ir_refs_item(ir: [long], at: long, out: [str]) -> [str] {
 // all count, so only a plain `mov <src>, <cell>` is not a read. That is what
 // an unused `import math;` costs -- 6705 bytes of `const pi` and coefficient
 // tables, spliced into the program's own unit, built at startup and read by
-// nobody (test/sh/test_treeshake.sh is the gate, test/treeshake/costs.txt the
+// nobody (src/tools/ytest/su_treeshake.y is the gate, test/treeshake/costs.txt the
 // ratchet).
 def cell_reads(ir: [long], out: [str]) -> [str] {
     let at = 0;
@@ -2310,7 +2310,7 @@ def shake_prelude(pb: PBlocks, roots: [str]) -> PShake {
 // Appending one at a time is not just tidier: `+` on an array makes a NEW one,
 // so concatenating unconditionally copied the prelude's ~1500 lines for every
 // compile that wanted neither -- 52K instructions on hello.y, which is 99.9%
-// of what this module cost before the branches (callgrind, bench/compile_ir.sh).
+// of what this module cost before the branches (callgrind, `ytest bench-ir`).
 def prelude_with(core: [PBlk], threads: bool, mathasm: bool) -> PBlocks {
     let out: [PBlk] = core;
     if (threads) { out = out + arch_set("threads"); };
@@ -3852,7 +3852,7 @@ def uses_threads(refs: [str]) -> bool {
 // runtime: a `ndef` names one as its body, so the call is a reference
 // like any other and the block stays. Looking first is what makes this cheap
 // -- split()ing the lines for every compile measured +2.6% instructions on
-// hello.y, against a few dozen lines (bench/compile_ir.sh).
+// hello.y, against a few dozen lines (`ytest bench-ir`).
 def uses_math(refs: [str]) -> bool {
     let i = 0;
     let found = false;

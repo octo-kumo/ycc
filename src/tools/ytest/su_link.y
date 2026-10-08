@@ -214,6 +214,8 @@ def lone() {
     let b = in_dir(run, [bin + "/ycc", "mb.y", "-o", "mb"]);
     let ob = if (b.code == 0) { in_dir(run, ["./mb"]).out } else { b.out };
     yt.check("lone ycc: a meta block's generator links the std from the pack", ob == "42 from a block\n", yt.clip(ob, 160));
+    // the line, its unit the first one the program needs:
+    // error: std module 'str': not in this compiler's std pack, and no src/y/std/str.y beside it or in the working directory
     let e = in_dir(run, [bin + "/ycc", "--std-src", "m.y", "-o", "m2"]);
     let l = yt.first_line(e.out);
     let pre = "error: std module '";

@@ -15,7 +15,7 @@ def copy_run(file: str) -> yt.Res {
     let b = yt.tmp("bin");
     let r = yc.compile(yc.CYCC, [], file, b, 60);
     if (r.code != 0) {
-        return { code: 1, out: r.out, err: "", timed_out: false, ms: 0 };
+        return { code: 1, out: r.out, err: "", timed_out: false, ms: 0, us: 0 };
     };
     let o = yc.run_bin(b, [], "", 10);
     fs.remove_file(b);

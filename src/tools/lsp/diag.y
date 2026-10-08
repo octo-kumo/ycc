@@ -150,7 +150,7 @@ def missing_imports(text: str, dir: str, path: str) -> [Finding] {
 
 // Diagnostics for one document. Named `diagnose`, not `check`, because src/y/std/regex.y
 // already defines `check` and a path import flattens both into one namespace
-// (check-names.py).
+// (`ytest check-names`).
 //
 //   text      the buffer as the editor holds it, unsaved edits included
 //   dir       the directory imports resolve against

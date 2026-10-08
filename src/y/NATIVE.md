@@ -430,7 +430,7 @@ per parameter, and the imprecision is one token's worth.
 **`types.type_index_on()` / `expr_type(line, col)`** — the type inferred for every
 EXPRESSION, keyed by position. **Off by default**, because `typeof_expr` is the
 checker's hottest loop and an ordinary compile has no use for the table; the flag
-costs it one predictable branch, and `bench/compile_ir.sh` says what that is worth
+costs it one predictable branch, and `ytest bench-ir` says what that is worth
 (+0.09% on `ycc.y`). The table is shaped like `inferred_ret`'s — 1024 buckets of
 indices into parallel key/type arrays, keyed `line * 65536 + col` — because that
 one is read by `native.y` on every compile and the shape is therefore proven at
@@ -615,7 +615,7 @@ All of these are lowered early, so the checker and emitter see little new:
 `cycc → _ycc0 → _ycc`: `_ycc0` plus its own std pack (*Compilation
 units* below) is `ycc`, gated by `cmp ycc refs/ycc.ref` (the pack
 included) and `cmp _ycc0 _ycc` (`make ycc`), and
-`test/sh/test_fixpoint.sh` re-checks it from an already-built `./ycc`,
+`src/tools/ytest/su_fixpoint.y` re-checks it from an already-built `./ycc`,
 including a third generation (compiled from the std sources, not the
 pack) and a smoke compile with the self-built binary.
 
@@ -908,7 +908,7 @@ there and a prefix test is enough.
 
 ### The pack's size, and what is left to the codec
 
-`test/sh/pack_stats.py` parses the pack field by field and now knows the
+`ytest pack-stats` parses the pack field by field and now knows the
 shapes (almost every field is "count, then items"; only `init` is one
 netstring). Measured on the payload after `refs` became derived (126,614 B):
 
@@ -939,7 +939,7 @@ too, and the codec must be reachable from both.
 `--std-src` ignores the pack and compiles the std units from their
 sources on disk (`src/y/std`; none is embedded in the compiler), as does a ycc whose pack is missing (cycc, or a ycc
 just written by a self-compile) or of another version: the output is the
-same bytes either way (`test/sh/test_link.sh` checks it over programs
+same bytes either way (`src/tools/ytest/su_link.y` checks it over programs
 that link every unit; `make ycc`, `ynew` and the fixpoint suite each
 compile the compiler with the pack and compare with a build from source).
 A hello world compiles in 5.1 ms instead of 13.8 ms from source (the
@@ -1014,7 +1014,7 @@ cloned into `build/git` and pinned in `y.lock` (`pk_fetch`,
 Limits: a package's type aliases stay its own (an importer spells the
 type out); its globals are read-only to importers; objects are keyed by
 the paths the build saw, so building the same project from another
-directory compiles its packages again. `test/sh/test_pkg.sh` covers the
+directory compiles its packages again. `src/tools/ytest/su_pkg.y` covers the
 format's every error, the graph, the cache, git and vendoring, and
 checks that the C copy builds the same bytes.
 
@@ -1057,13 +1057,13 @@ copying, plus allocation-free character classification in the lexers.
 What remained on the table was chiefly the allocator: two `brk` syscalls
 per allocation, because the ELF had no writable segment to cache the
 break in. Globals moving to `.bss` gave it one; `y_alloc` is now a bump
-over `mmap` chunks with its state in `.bss` (bench/compare.sh against
+over `mmap` chunks with its state in `.bss` (`ytest bench` against
 `d2ffa81`: SCORE 176.73 — compiles 60-70% faster, self-compile 7.09 s ->
 2.16 s; allocation-heavy output up to 12x faster, closures 105 -> 8.6 ms,
 strings 158 -> 27 ms; peak heap and output unchanged but for one program
 header).
 
-Measured against the pre-tree-shaking compiler (bench/compare.sh of this
+Measured against the pre-tree-shaking compiler (`ytest bench` of this
 work against commit `ae6cff1`, same benchmark programs on both sides):
 output is 33–50% smaller and the asm is 55–79% smaller for small
 programs, at a cost — compiling is 17–25% slower (every program now
@@ -1179,7 +1179,7 @@ PACKAGE-qualified name is left alone: a package is linked as a unit of
 its own, so `pkg_ns` keeps its qualification on purpose.
 
 Cost: one extra walk of every annotation the program writes, whether or
-not any of them is qualified. `bench/compile_ir.sh` on the fix:
+not any of them is qualified. `ytest bench-ir` on the fix:
 +0.03% of the instructions `ycc.y` takes to compile itself, +0.05% at
 the most (std_struct.y), +0.01% at the least. `native/t216_strip_ns_types.y`
 checks every arm.
@@ -1250,7 +1250,7 @@ Finished checked, ALPN, KeyUpdate; no HelloRetryRequest, resumption or
 client certificates. Rough speeds: X25519 5 ms, ChaCha20-Poly1305 13
 MB/s, AES-GCM 7 MB/s, SHA-256 21 MB/s; a chain verifies in 10-80 ms. The
 fixtures `t158_crypto.y` (known answers) and `t159_x509.y` (a chain made
-for it, at fixed times) run offline; test_net.sh runs the client against
+for it, at fixed times) run offline; src/tools/ytest/su_net.y runs the client against
 `openssl s_server` when there is one.
 
 `src/y/std/regex.y` is regular expressions (`import regex;`): a Pike VM --- a
@@ -1331,7 +1331,7 @@ prelude and `_start`'s entry have no source line.
 
 It changes nothing that runs: the tables and headers are appended past
 the loaded image, and the code, rodata and every address are those of the
-plain build (`test/sh/test_debug.sh` checks it). One difference is
+plain build (`src/tools/ytest/su_debug.y` checks it). One difference is
 invisible to the program: valgrind reads an executable's symbols only once
 it has seen a file-backed read+write mapping, so a `-g` build takes the
 first 8 bytes of its `.bss` from zeros in the file.
@@ -1362,7 +1362,7 @@ per-phase profile (time, heap, counters).
 ## Benchmarks
 
 `bench/` holds benchmarks for the compiler and for what it produces —
-none of it runs in the test suites. `bench/compare.sh BASE_YCC NEW_YCC`
+none of it runs in the test suites. `ytest bench BASE_YCC NEW_YCC`
 scores two builds (100 = unchanged) over compile time, run time and
 binary size — asm bytes and asm lines are reported as detail but are
 **not** part of the score — then runs every benchmark's `-g` build of
@@ -1372,7 +1372,7 @@ at the end (AGENTS.md); the details are in `bench/README.md`.
 
 ## Testing
 
-`test/sh/test_native.sh` compiles `test/y/native/t*.y` and `e*.y`
+`src/tools/ytest/su_native.y` compiles `test/y/native/t*.y` and `e*.y`
 straight to executables with the built `./ycc` (`ycc -o bin prog.y`, no
 `-S`) and checks stdout/exit. `t*.y` assert behavior
 (`.expected` stdout, `.exit` code, `.stdin` for input); `e*.y` assert rejection (first line
@@ -1382,7 +1382,7 @@ it, and no unmarked line may draw one. Native
 programs must also keep passing if the C path ever learns the feature — one
 behavior, two backends.
 
-`test/sh/test_native_examples.sh` is the ratchet on the example corpus:
+`src/tools/ytest/su_corpus.y` is the ratchet on the example corpus:
 every `test/y/examples/*.y` the built `./ycc` accepts must print what the
 reference compiler's output prints. Its `UNSUPPORTED` map is currently
 **empty** — every example compiles — and the suite fails as soon as one of

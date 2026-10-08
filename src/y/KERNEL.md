@@ -63,7 +63,7 @@ is the chronological log (round by round); **this file is the summary you want f
 
     # the kernel suite: builds every test/kernel case with BOTH engines, compares the
     # images, boots them under qemu, compares serial output and the exit status
-    YCC=$PWD/ycc CYCC=$PWD/cycc bash test/sh/test_kernel.sh
+    YCC=$PWD/ycc CYCC=$PWD/cycc bash src/tools/ytest/su_kernel.y
 
     # one case by hand
     ./ycc --kernel test/kernel/u007_fsexec.driver.y -o /tmp/a.img
@@ -276,7 +276,7 @@ delete-on-failure guards destroyed fixtures that the next step needed.
     os/kernel/elfload.y      the program-side loader still lives here (wired through kernel)
     os/tools/mkfs.y          the host-side image builder (direct slots + indirect block)
     test/kernel/             the fixtures, .expected/.exit/.stdin
-    test/sh/test_kernel.sh   the harness
+    src/tools/ytest/su_kernel.y   the harness
     src/y/KERNEL.md          the round-by-round log and every elimination
     BUGS.md (main tree)      compiler bugs found and filed
 
@@ -311,10 +311,10 @@ it is 151/151.
 * Master's compiler changed the bytes of the hosted user programs, so every `u*` fixture whose
   `.expected` prints `size=` / `bytes=` (the ELF size) was updated -- 9 files, size only. Expect
   that to happen again whenever codegen moves; the number is the user ELF's length.
-* `test/sh/test_fixpoint.sh` skips `kernel.y`/`yfs.y`/`fd.y` in the hosted std loop and compiles
+* `src/tools/ytest/su_fixpoint.y` skips `kernel.y`/`yfs.y`/`fd.y` in the hosted std loop and compiles
   two kernel fixtures with `--kernel` instead.
 * Done since: `kmem`, `yfs`, `fd` and `kernel` are std-pack units (24 in all), and
-  `ycc --kernel` needs no checkout. The hosted std loop of `test_fixpoint.sh` skips the four;
+  `ycc --kernel` needs no checkout. The hosted std loop of `src/tools/ytest/su_fixpoint.y` skips the four;
   two kernel fixtures compiled with `--kernel` stand in for them.
 
 
@@ -560,7 +560,7 @@ only if it reaches the end without matching.
 
 ## Testing
 
-`test/sh/test_kernel.sh` (`test/kernel/`), in `make test` as the `kernel`
+`src/tools/ytest/su_kernel.y` (`test/kernel/`), in `make test` as the `kernel`
 suite.  Each `t*` case is compiled by both the built compiler and the C
 copy (byte-identical images and `-S` listings), then **booted** under
 qemu with its `.stdin` fed a second in, and its serial output compared to
@@ -906,7 +906,7 @@ M1's ring 3 / syscall entry / ELF64 loader, and M2's processes, address spaces,
 scheduler, timer preemption, `fork`, `wait4` and exit teardown.  Every one of
 these was green -- `test/kernel` 33 passed, 0 failed, 33 total -- with the
 pre-merge blessed compiler after the last real change to them.  The suite is
-self-driving (`test/sh/test_kernel.sh`), the fixtures are committed (t001-t011,
+self-driving (`src/tools/ytest/su_kernel.y`), the fixtures are committed (t001-t011,
 x001, u001-u004), the C twin is maintained (PORTING.md), and this file plus
 BUGS.md record the design, the dead ends and the open questions.
 
@@ -1482,7 +1482,7 @@ corpus, and the ratchets say the tree shake's costs did not move.
 
 ### Round 75: the ycc suite's one failure, named
 
-Round 74's log grep missed the suite's summary line; run directly, `test_ycc.sh`
+Round 74's log grep missed the suite's summary line; run directly, `src/tools/ytest/su_ycc.y`
 is **56 passed, 1 failed / 57**, and the failure is one case:
 
     FAIL ysh eval compiles and runs through ycc
@@ -1520,7 +1520,7 @@ not the same thing as the builtin call that just worked.
 
 ### Round 77: what the ycc/ysh failure is NOT, and where it must be
 
-Read the fixture (test/sh/test_ycc.sh, around line 52): it builds
+Read the fixture (src/tools/ytest/su_ycc.y, around line 52): it builds
 test/y/examples/ysh.y with $YCC_BIN, symlinks that same binary into a temp dir as
 `ycc`, and then runs `ysh -c 'eval print(6 * 7)'`, which compiles that STRING at
 runtime by forking the symlinked compiler.  The plain case must print 42; the

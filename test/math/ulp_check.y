@@ -250,7 +250,7 @@ def main() -> long {
 //
 // That is worth being precise about, because everything upstream believed the
 // opposite: this file's own header says "a kernel that drifts past it fails
-// here", test_math.sh reads the exit code and decides PASS or FAIL from it, and
+// here", src/tools/ytest/su_math.y reads the exit code and decides PASS or FAIL from it, and
 // the number it printed -- "0 over 1", the promise this whole module is held to
 // -- was a number the harness counted correctly and then threw away. Adding 768
 // cases to the table is what exposed it: the summary line said 4 over 1 and the

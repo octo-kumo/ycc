@@ -25,6 +25,16 @@ def init() {
     YREF = abs_path(yt.env("YREF", "refs/ycc.ref"));
     YCC = abs_path(yt.env("YCC", "ycc"));
     PROG_MEM_KB = yt.num(yt.env("YPROG_MEM_KB", "3670016"), 3670016);
+    // A sanitized COMPILER runs ~15x slower and reserves terabytes of address
+    // space: its timeouts scale and its cap is ASan's own RSS limit instead
+    // (ASAN_OPTIONS=hard_rss_limit_mb). The programs it emits are plain static
+    // ELFs and keep PROG_MEM_KB.
+    foreach (s in ["asan", "msan", "ubsan"]) {
+        if ((CYCC + YREF + YCC).contains(s)) {
+            yt.SCALE = yt.num(yt.env("YTIMEOUT_SCALE", "15"), 15);
+            yt.MEM_KB = 0;
+        };
+    };
 };
 
 def have_ycc() -> bool { fs.is_file(YCC) };
@@ -132,7 +142,7 @@ def ref_run(file: str, stdin: str, secs: long) -> yt.Res {
     let b = yt.tmp("rr");
     let r = compile(YREF, [], file, b, 60);
     if (r.code != 0) {
-        return { code: 1, out: r.out, err: "", timed_out: r.timed_out, ms: r.ms };
+        return { code: 1, out: r.out, err: "", timed_out: r.timed_out, ms: r.ms, us: r.us };
     };
     let o = run_bin(b, [], stdin, secs);
     fs.remove_file(b);

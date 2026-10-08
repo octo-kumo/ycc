@@ -132,7 +132,7 @@ y_w_self_test:
 #    whose Buffer is at +64 -- with a trailing backslash.
 #
 #    The number is 196 and is NOT what the public Windows 10 table says (62,
-#    whose neighbour NtQueryAttributesFile really is 61). test/sh/w_sysno.py
+#    whose neighbour NtQueryAttributesFile really is 61). `ytest w-sysno`
 #    reads it from the installed ntdll's stub, and this check is where it is
 #    verified at run time like the other ten.
 #

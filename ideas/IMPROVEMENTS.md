@@ -38,6 +38,6 @@ goal is the language's: short, intuitive, safe, fast.
 
 ## Test infrastructure
 
-- `test_pkg.sh` (974 lines) and `test_comprehensive.sh` (601) are the largest
-  and the least shared with `lib.sh`'s helpers; every suite script now uses its
+- `src/tools/ytest/su_pkg.y` (974 lines) and `src/tools/ytest/su_inline.y` (601) are the largest
+  and the least shared with `yt.y`'s helpers; every suite script now uses its
   pass/fail counters.

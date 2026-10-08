@@ -1148,7 +1148,7 @@ yomk_fail:
 # A directory has to be empty, which is also what rmdir(2) requires -- and the
 # set-information STATUS IS THE RESULT. The first version of this block threw it
 # away and returned success unconditionally, which deleted a NON-EMPTY directory
-# and reported true where rmdir(2) fails; pe-gate.sh's round-trip fixture caught
+# and reported true where rmdir(2) fails; `ytest pe-gate`'s round-trip fixture caught
 # it, because its expected output is the Linux one and `false` came back as
 # `true`. The status is saved, the handle is closed, and the status is what the
 # caller sees.

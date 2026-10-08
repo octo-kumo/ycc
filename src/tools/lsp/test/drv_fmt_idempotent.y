@@ -1,7 +1,7 @@
 // fmt.y -- idempotence over every file given in argv.
 //
 // format(format(x)) must equal format(x) byte for byte (LSP.md R3.5). The file
-// list comes from test-fmt.sh, because std has no recursive directory walk.
+// list comes from the lsp suite (src/tools/ytest/su_lsp.y), because std has no recursive directory walk.
 //
 // A buffer that does not lex is refused rather than formatted (R3.4), and a
 // refusal is not a failure: a file with a deliberately unterminated literal is

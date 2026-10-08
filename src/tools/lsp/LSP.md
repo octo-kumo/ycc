@@ -46,16 +46,16 @@ the prelude into `src/y/arch/*.s`) for a cumulative drift of over 600 lines on
 some references. A line citation is stale the day it is written, and a stale one
 is worse than none: it reads as authoritative and points at unrelated code.
 Where a line number remains — a handful, mostly into the LaTeX manual, which
-changes rarely — `check-refs.py` next to this file resolves every citation and
+changes rarely — `ytest check-refs` next to this file resolves every citation and
 prints what it finds there:
 
 ```sh
-python3 src/tools/lsp/check-refs.py -v
+`ytest check-refs` -v
 ```
 
 Run it after touching `src/y`. It used to say it was not wired into `make test`
 because that is the compiler agent's file; it is wired now, into
-`test/sh/test_lsp.sh` alongside `check-names.py`, so `make test` runs it.
+`src/tools/ytest/su_lsp.y` alongside `ytest check-names`, so `make test` runs it.
 
 It supersedes the sketch at the end of `future.y`:
 
@@ -214,7 +214,7 @@ field reads and map assignments. That property is what makes fork-per-request
 work at all — the parent has to be unkillable, because it is the only process
 that survives.
 
-`test-e2e.sh` pins this: it formats a document in one message, then formats it
+`ytest lsp-e2e` pins this: it formats a document in one message, then formats it
 again in the next, and requires both to answer identically. A child-local store
 fails that.
 
@@ -234,7 +234,7 @@ frame, loses its place, and drops the connection. So before forking, the parent
 client's log, where it belongs, and the reply goes to fd 200. 200 is high because
 the runtime hands out low fds for files.
 
-`test-e2e.sh` asserts that every frame the server emits parses as JSON, which is
+`ytest lsp-e2e` asserts that every frame the server emits parses as JSON, which is
 what catches this class of bug: an unframed line fails immediately.
 
 ### 4.4 A missing import is diagnosed, not survived
@@ -287,7 +287,7 @@ src/tools/lsp/serve.y         the server: methods, pipeline       §7
 # `index` turned the compiler's own 42 `index.idx` / `index.arr` reads in
 # src/y/types.y into module-qualified names that do not exist, and every one came
 # back as "undefined variable" from inside types.y with nothing pointing at the
-# server. `check-names.py` now tests each module's basename for this.
+# server. `ytest check-names` now tests each module's basename for this.
 
 src/tools/lsp/vscode-y-lang/  the VS Code extension (existing)
 
@@ -301,7 +301,7 @@ parallel directory.
 ### 5.0 Why not `src/y/lsp.y`
 
 `PORTING.md` requires `src/c/` to be a **1:1 copy** of `src/y/`, enforced by
-`test_port.sh`, which compiles every `test/y/**.y` with both compilers and
+`src/tools/ytest/su_port.y`, which compiles every `test/y/**.y` with both compilers and
 requires byte-identical binaries. A module in `src/y/` therefore implies a
 `src/c/` twin — and, per `AGENTS.md`, a twin written under the C value model
 (`yv.h`: `none|bool|long|float|str|array|record`) which has **no function
@@ -349,7 +349,7 @@ name a span. `kind_of` is the whole of it.
 This replaced a second, hand-written scanner that had to be compared against
 the lexer to stay honest, and did not. It lexed `0o755` as `0` then `o755`
 (the compiler's lexer had learned octal, this had not) and `5.` as `5` then
-`.`, so `make fmt` wrote `0 o755` back to disk. `test-agree.sh` caught the
+`.`, so `make fmt` wrote `0 o755` back to disk. the lsp suite (`src/tools/ytest/su_lsp.y`) caught the
 class, but a comparison is a weaker guarantee than not having two things to
 compare — the drift is silent until someone runs the test, and every new
 literal spelling has to be remembered in two places.
@@ -361,7 +361,7 @@ the document still checks. The editor's buffer is never modified. `repair`
 works from the error spans `tokenize_lsp` produces, which is why an
 unterminated literal must be a *span* with a real end and not just a flag.
 
-`test-agree.sh` remains as the check that the adapter's classification is
+the lsp suite (`src/tools/ytest/su_lsp.y`) remains as the check that the adapter's classification is
 faithful: `scan_full`'s spans are compared with `tokenize`'s tokens over the
 corpus (comments and f-strings excluded from the token side, since the
 compiler's stream has no such regions), and text the lexer cannot lex at all
@@ -1212,12 +1212,12 @@ extension's README.
 
 ### 10.3 `make test-fast`
 
-`run_all.sh` skips the seven suites that need a built `./ycc`. The `lsp` suite
+`./ytest` skips the seven suites that need a built `./ycc`. The `lsp` suite
 does **not**: its fixtures compile under `./cycc` and `$(YREF)`, neither of which
 needs a build. So `lsp` runs under `make test-fast`, which is intended — it is
 the same shape as every other fixture suite.
 
-`make lsp-e2e` builds `yserve` and runs `test-e2e.sh`. It is a separate target
+`make lsp-e2e` builds `yserve` and runs `ytest lsp-e2e`. It is a separate target
 because it needs a process per case.
 
 ### 10.3a TextMate is the highlighter
@@ -1281,7 +1281,7 @@ on, and `std_resolve` already finds `src/y/std/` relative to the executable.
 
 #### Two Node tests, and why a hand-written driver is not enough
 
-`test-e2e.sh`'s python driver speaks the protocol by hand. That proves the server
+`ytest lsp-e2e`'s python driver speaks the protocol by hand. That proves the server
 does what *its author* thinks the protocol says — and it was perfectly happy
 with a missing URI slash and a `version: 0` the spec does not allow. So:
 
@@ -1310,32 +1310,32 @@ a moment. It now only reports a stop after a start.
 
 ### 11.1 Diagnostics sweep — registered in `make test`
 
-`test/sh/test_lsp.sh`, added to `run_all.sh`'s `ALL` and sharded with
+`src/tools/ytest/su_lsp.y`, added to `./ytest`'s `ALL` and sharded with
 `next_case`. For every fixture, drive `yserve` with scripted frames and assert
 it reports **every** marker in the file:
 
 - all **144** `test/y/native/e*.y` against their `// expect-error:` lines;
 - all **145** `test/y/native/t*.y` against their `// expect-warning:` lines.
 
-The marker syntax is what `test/sh/test_native.sh` already parses: `grep -o`
+The marker syntax is what `src/tools/ytest/su_native.y` already parses: `grep -o`
 for `// expect-error: `, a trailing-`LINE:`-anchored `// expect-warning: `, both
 substring-matched, with the warning side requiring the count of markers to
 equal the count of warnings.
 
-This is ~3 s of CPU — the existing `test_native.sh` takes 3.7 s for the same
-289 fixtures across both compilers — and `run_all.sh` runs suites with `-j`
+This is ~3 s of CPU — the existing `src/tools/ytest/su_native.y` takes 3.7 s for the same
+289 fixtures across both compilers — and `./ytest` runs suites with `-j`
 and shards the long ones, so `make test`'s wall clock barely moves. It is a
 legitimate gate because it asserts a real compiler property: that the checker
 and the linter still report all their diagnostics.
 
-`test/COVERAGE.md` needs a row, or `test_coverage.sh` fails on a manual
+`test/COVERAGE.md` needs a row, or `src/tools/ytest/su_coverage.y` fails on a manual
 section with no coverage.
 
 ### 11.2 Formatter — deliberately **not** in `make test`
 
 Idempotence over `test/y/**.y` and `bench/y/*.y` lives in its own
 `make test-fmt`. A formatter bug is not a compiler bug and must not block a
-rebless of `ycc`. Registering it in `run_all.sh` would couple the two.
+rebless of `ycc`. Registering it in `./ytest` would couple the two.
 
 ### 11.3 Scanner, encoding, tokens
 
@@ -1350,7 +1350,7 @@ rebless of `ycc`. Registering it in `run_all.sh` would couple the two.
 
 ### 11.4 Fuzzing
 
-`test/fuzz/fuzz.sh` gains the LSP entry points. A crash, timeout,
+`ytest fuzz` gains the LSP entry points. A crash, timeout,
 `runtime error:` trap, `INTERNAL`, or divergence between `yserve` and the
 reference becomes a saved finding, as it already does for `ycc`. The
 formatter's crash/hang surface is much larger than the compiler's — it runs on
@@ -1365,12 +1365,12 @@ Each ends green on `make test`.
 | | | Acceptance |
 |---|---|---|
 | **M-sugar** | C3 then C5: recursive aliases through `[T]`/`T?`/`{K=>T}`, then `json{ }` / `json[ ]` literal syntax (§16) | **The only milestone not done, and it is a compiler feature rather than LSP work** — nothing in this document is blocked on it, and no requirement above needs it. Literals must parse, typecheck as `json.Val`, and agree with `parse`/`stringify` of themselves; **no existing program may change meaning** (`make corpus-diff`, which measured 503 programs and 0 differences for every change in this document); manual + `COVERAGE.md` + fixtures. C3 first: without it `json` cannot appear inside its own type, so the literal has nothing to be. §16.5 has the cost and §16.6 says why C3 is the separable one. |
-| **M-json** | `src/y/std/json.y` (§15) | **Done.** All four acceptance criteria are met and each is checkable: parses and emits every shape (`test/y/native/t204_std_json.y`, plus `lsp/test/t001_json_shapes.y` and `t002_json_parse.y`), round-trips losslessly (the same fixtures assert `parse(stringify(v)) == v`), compiles warning-free (`test_fixpoint.sh` builds every `src/y/std` file), and the manual section (`docs/src/09-builtins.tex`, "JSON (the json module)"), the `COVERAGE.md` row and the fixtures all exist. It blocked M1, which is done — M1 could not have landed without it, because `yserve` needs a parser and an emitter and Y programs at large need the same. **Not extended:** §16's `json{ }` / `json[ ]` sugar is M-sugar's C5, not this. |
+| **M-json** | `src/y/std/json.y` (§15) | **Done.** All four acceptance criteria are met and each is checkable: parses and emits every shape (`test/y/native/t204_std_json.y`, plus `lsp/test/t001_json_shapes.y` and `t002_json_parse.y`), round-trips losslessly (the same fixtures assert `parse(stringify(v)) == v`), compiles warning-free (`src/tools/ytest/su_fixpoint.y` builds every `src/y/std` file), and the manual section (`docs/src/09-builtins.tex`, "JSON (the json module)"), the `COVERAGE.md` row and the fixtures all exist. It blocked M1, which is done — M1 could not have landed without it, because `yserve` needs a parser and an emitter and Y programs at large need the same. **Not extended:** §16's `json{ }` / `json[ ]` sugar is M-sugar's C5, not this. |
 | ~~**M0**~~ | ~~C1: the two exports~~ | **Dropped** — M1 does not need them (§9.1). Nothing was blocked on this, so no reblessing was needed. |
 | **M1** | R1 — errors and warnings | **Done, end to end.** `yserve` answers errors *and* warnings together, live, on an unsaved buffer, for the file **and each import** (one `publishDiagnostics` per file); survives an unterminated literal, a missing import and a 4000-line file; the VS Code extension activates, spawns it and reaches `Running` (`activation-check.js` **26/26**), and the same server is driven by the JSON-RPC library VS Code uses (`client-check.js` **78/78**, and `activation-check.js` **26/26** against a stubbed VS Code). Registered in `make test` as the `lsp` suite. |
 | **M2** | R2 — syntax highlighting | **Done.** The TextMate grammar in `vscode-y-lang/syntaxes/y.tmLanguage.json` is contributed by `package.json` as `source.y`; the server advertises no `semanticTokensProvider` and answers `textDocument/semanticTokens/*` with `MethodNotFound`. `client-check.js` asserts the grammar is contributed, is valid JSON with the right scope, and keeps `#strings` before `#comments`; `t018_reported` asserts the ordering from a fixture. The old server-side semantic-token module and its fixtures are removed. **Nothing is left undone in this row.** There is deliberately no setting to turn highlighting off: TextMate is editor-side and a theme is the user's control. |
 | **M3** | R3 — formatting | **Done** (idempotent over every `.y` file in
-the tree — `test-fmt.sh` compares the number of files that are NOT idempotent,
+the tree — the lsp suite (`src/tools/ytest/su_lsp.y`) compares the number of files that are NOT idempotent,
 which must be zero, and only *prints* the total, so the total moves as `src/y`
 moves without anything failing; this row used to quote 487, a number nothing
 checks; no edits on an unlexable buffer; no edits when already formatted). The
@@ -1380,7 +1380,7 @@ itself is registered from the server's advertised capability, so "no formatter
 available" and a Format Document that silently does nothing are the two reports
 this prevents. |
 | **M4** | R4–R6 + C2 — hover, go-to-def, completion | **Done.** Stage A and Stage B both. `scope.y` + `nav.y` answer all three from the declarations of the open buffer: definition points at the name (not the keyword), hover shows the signature as written plus the comment above it, completion offers the visible names and the builtins with `isIncomplete: true`. `strm.y` answers the member position from the compiler's own `types.str_method`; `xref.y` + `nav.find_decl_named` close the cross-file half. `t012_scope`, `t013_m4`, `t014_strm`, `t015_xref`, `t016_types` and `client-check.js` pin the shapes. `scope-coverage.y` measures what the index resolves over `src/y`; `request-cost.y` measures one request per phase. **Nothing is left undone in this row.** |
-| **M5** | packaging and docs | **Done.** All three: `PORTING.md`'s module map carries the LSP row with the reason it is *not* ported and the two checks that keep a path-importing tool from breaking the compiler; `AGENTS.md` gains the layout bullet, the suite-list entry (`test_lsp.sh [lsp]`) and the description of `make yserve`; and the extension README documents `yserve` placement — `make yserve` at the repository root, then the search order, then `y.lsp.serverPath` alone — and **every** setting in a table (`serverPath`, `rootPath`, `trace.server`, which is all three of them). |
+| **M5** | packaging and docs | **Done.** All three: `PORTING.md`'s module map carries the LSP row with the reason it is *not* ported and the two checks that keep a path-importing tool from breaking the compiler; `AGENTS.md` gains the layout bullet, the suite-list entry (`src/tools/ytest/su_lsp.y [lsp]`) and the description of `make yserve`; and the extension README documents `yserve` placement — `make yserve` at the repository root, then the search order, then `y.lsp.serverPath` alone — and **every** setting in a table (`serverPath`, `rootPath`, `trace.server`, which is all three of them). |
 
 ### 11.1 Two bugs the work found in the compiler
 
@@ -1397,7 +1397,7 @@ Both are in `BUGS.md` with reproductions; the second is the expensive one.
    *without* the fix — shadowed the new one on every call. Every read of the source
    showed the correct code and every run used the other one.
 
-The second one is why `check-names.py` exists, and why it checks names rather than
+The second one is why `ytest check-names` exists, and why it checks names rather than
 just definitions.
 
 ### 11.3 The Stage B decision, on the number
@@ -1505,7 +1505,7 @@ own fields after a `.` — and neither the renamer nor the splicer carries types
 But "cross-file navigation is Stage B" was wrong, and it was wrong because the
 gap was measured on Stage A's index while the data was sitting in the next
 function. §9.2 is now scoped to types alone, and its measured cost (§9.2's own
-site counts, and the `bench/compile_ir.sh` baseline) stands for that much.
+site counts, and the `ytest bench-ir` baseline) stands for that much.
 
 **The lesson, since it cost a milestone's worth of work to get wrong:** a
 "missing capability" measured against one implementation is a statement about
@@ -1531,7 +1531,7 @@ ceiling, which is the subject of §11.4, and much smaller.
 The order mattered, and the measurement is what set it: fix Stage A's two bugs
 first, because that was free by comparison and moved 15 points. **Then check
 where the remaining gap actually lives before paying for it** — which is what
-§11.4 does, and what this decision got wrong. `bench/compile_ir.sh` is still the
+§11.4 does, and what this decision got wrong. `ytest bench-ir` is still the
 instrument for it, and it says what it says: +0.00% on all thirteen benchmarks,
 `ycc.y` at 4,705,071,230 instructions.
 
@@ -1572,20 +1572,20 @@ recognising.
 
 All four landed, and are part of the working tree:
 
-1. **`import json;` in `test/sh/test_fixpoint.sh`** — so `std/json.y` is compiled
+1. **`import json;` in `src/tools/ytest/su_fixpoint.y`** — so `std/json.y` is compiled
    by the suite that exists to keep std warning-free.
-2. **`test/sh/test_lsp.sh` [lsp]**, registered in `run_all.sh`, so `make test`
-   runs the fixtures, `check-refs.py` and the formatter.
-3. **`test/COVERAGE.md`** rows for the LSP, and `test_coverage.sh` taught to
+2. **`src/tools/ytest/su_lsp.y` [lsp]**, registered in `./ytest`, so `make test`
+   runs the fixtures, `ytest check-refs` and the formatter.
+3. **`test/COVERAGE.md`** rows for the LSP, and `src/tools/ytest/su_coverage.y` taught to
    recognise `lsp/test/t*.y` as a checked test (it requires the fixture **and**
    its `.expected`, exactly as it does for a native fixture).
 
-`test_lsp.sh` also runs two static checks of its own, because both were once
+`src/tools/ytest/su_lsp.y` also runs two static checks of its own, because both were once
 sources of silent breakage:
 
-- **`check-refs.py`** resolves every symbol `LSP.md` cites, so the design's
+- **`ytest check-refs`** resolves every symbol `LSP.md` cites, so the design's
   references survive the line-number drift in `src/y`.
-- **`check-names.py`** asserts that no two path-imported modules define the same
+- **`ytest check-names`** asserts that no two path-imported modules define the same
   name, across the LSP's own modules *and* the compiler's 1 947. A path import
   flattens, so a shared name is either a duplicate-definition error pointing at
   the wrong file or — worse — one definition silently shadowing the other. Five
@@ -1604,7 +1604,7 @@ fail with whatever the compiler's own state happened to be. It compares against
 1. **C2's branch in the checker's hot loop.** The one genuinely expensive
    requirement. Measured with `make bench-ir` before anything is blessed.
 2. **One scanner, so no divergence is possible.** `scan.y` is an adapter over
-   `lexer.tokenize_lsp`; `test-agree.sh` checks its classification over the
+   `lexer.tokenize_lsp`; the lsp suite (`src/tools/ytest/su_lsp.y`) checks its classification over the
    corpus. A mistake there is a formatting or outline bug, not a parsing one.
 3. **Grammar drift.** The TextMate grammar is hand-kept, so a language change can
    leave a scope stale until the grammar is updated. `t018_reported` and
@@ -1624,7 +1624,7 @@ fail with whatever the compiler's own state happened to be. It compares against
    top). This is the single biggest ongoing coordination cost between this work
    and anyone else changing the compiler: a document that cites `native.y:NNNN`
    needs reconciling after every refactor, and the reconciliation is always
-   somebody's afternoon. `check-refs.py` catches the residue.
+   somebody's afternoon. `ytest check-refs` catches the residue.
 
 ## 14. Reference — what exists today
 
@@ -1649,7 +1649,7 @@ Reusable as-is, no compiler change:
 
 Must be built, all under `src/tools/lsp/`: `scan.y`, `json.y`, `rpc.y`,
 `pos.y`, `fmt.y`, `sym.y`, `serve.y`, `yserve.y`, the VS Code client, the
-Makefile target, `test_lsp.sh`.
+Makefile target, `src/tools/ytest/su_lsp.y`.
 
 The old `check.y` / `check_main.y` / `test_check.y` / `build.sh` that used to sit
 here are **gone** (removed 2026-10-04; they targeted `./yboot`,
@@ -1674,7 +1674,7 @@ same thing, and there is none. So it is a std module, not LSP-private.
 | Twin | **none.** A std module stays Y (`PORTING.md`, module map). |
 | Sibling precedent | `struct.y` — a pure encode/decode module over `[byte]`, no I/O, no platform. The closest existing thing. |
 | Also available | `regex.y` (a Pike VM over bytes) is a peer std module and a good model for a self-contained pure module; `fs`, `net`, `struct`, `crypto`, `x509`, `tls`, `http` and `regex` are the eight importable units. Only `fs` matters to `yserve` beyond the embedded four (`rt`, `str`, `prelude`, `exec`). |
-| Warning-free | `test_fixpoint.sh` compiles every `src/y/std` file with no warning. Compiled as a program its unit has no name, so `lint_unit` **does** run on it (`compile_unit`'s lint guard). Unused locals are errors here. |
+| Warning-free | `src/tools/ytest/su_fixpoint.y` compiles every `src/y/std` file with no warning. Compiled as a program its unit has no name, so `lint_unit` **does** run on it (`compile_unit`'s lint guard). Unused locals are errors here. |
 
 ### 15.2 The value type, and why objects are bare maps
 

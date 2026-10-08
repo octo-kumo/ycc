@@ -7,9 +7,9 @@ suites, and four of those five test the standard library rather than a
 sibling copy. A verification harness is not an example, and the examples
 corpus says so in its own `.gitignore`: "a verification harness is not an
 example and does not belong in the examples tree" — which is why
-`term_pty_test.py` sat there untracked, denied by the `**/*.py` rule. The
+`ytest pty-test` sat there untracked, denied by the `**/*.py` rule. The
 suites are a gate, so they live under `test/` now, and
-`test/sh/test_std_suites.sh` runs them.
+`src/tools/ytest/su_std.y` runs them.
 
 The other four modules now live in **std**, and the examples import them:
 
@@ -67,7 +67,7 @@ All five are run by one suite, which builds each with **both** compilers and
 requires them to agree:
 
 ```
-(ulimit -S -v 3670016; bash test/sh/test_std_suites.sh) </dev/null
+(ulimit -S -v 3670016; bash src/tools/ytest/su_std.y) </dev/null
 ```
 
 How each is gated was measured, because the three cases are genuinely
@@ -84,7 +84,7 @@ different and guessing would make the gate a coin flip:
 * `term_test.y` needs a **real pty**. `ioctl(2)` `TCGETS` and `TIOCGWINSZ`
   both return `ENOTTY` on a pipe and a pipe's `read()` hits EOF at once, so
   run headless it declines to run and every "the keyboard works" claim would
-  be vacuous. `term_pty_test.py` forks the pty, sizes the slave before
+  be vacuous. `ytest pty-test` forks the pty, sizes the slave before
   `execv`, and relays the master.
 
 The PASS markers are **not uniform** and were read off real runs:

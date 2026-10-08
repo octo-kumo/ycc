@@ -1425,7 +1425,7 @@ def module_members(st: State, d: Doc, off: long) -> [Sym] {
 // `math.` had nothing to offer and fell through to the string methods.
 //
 // So the file is found by its BASENAME: a module is named after its file, which is
-// the same rule `check-names.py` polices because `strip_ns` rewrites any
+// the same rule `ytest check-names` polices because `strip_ns` rewrites any
 // `name.field` as a module reference. `math` -> `math.y`, `helper` -> `helper.y`.
 // It is a text match on a real path, and when two modules share a basename in one
 // buffer the first is taken -- which is stated rather than pretended away, and is

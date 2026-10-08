@@ -2387,7 +2387,7 @@ static int arr_lit_adopts_go(Yv *got, Yv *want, Yv *n) {
  *
  * OFF by default. A file-scope `int` cannot be hoisted, so this costs the hot
  * loop one predictable branch that is never taken in a real compile;
- * bench/compile_ir.sh is what says what that is worth. */
+ * `ytest bench-ir` is what says what that is worth. */
 static int tc_index;
 static Yv *tci_keys;
 static Yv *tci_typs;
@@ -4471,7 +4471,7 @@ static Yv *const_store(Yv *st, Yv *tgt, ylong line, ylong col) {
 
 /* `++`/`--` and `op=` store back into their target. A plain const name keeps
  * the message it always had (a package's globals are consts, and
- * test_pkg.sh pins all three forms); a name reached through a place says
+ * src/tools/ytest/su_pkg.y pins all three forms); a name reached through a place says
  * which name it was. */
 static Yv *const_check(Yv *st, Yv *tgt, Yv *tt, Yv *op, ylong line, ylong col) {
     (void)tt;   /* the target's type; kept so the signature matches the Y side */

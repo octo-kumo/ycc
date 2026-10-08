@@ -27,7 +27,7 @@ the bug list is the one place to look:
 * `-g` is refused for a kernel image (the debug writers are ELF64/DWARF64);
 * there is no user mode, no syscall entry, no scheduler, no filesystem.
 
-**Why this class is still here.** `test/fuzz/fuzz.sh` cannot find it: it
+**Why this class is still here.** `ytest fuzz` cannot find it: it
 looks for crashes and for the two compilers disagreeing, and both compilers
 agree on this (they share the emitter's logic). It also cannot be found by
 comparing against a reference program, because the wrong answer is silent.

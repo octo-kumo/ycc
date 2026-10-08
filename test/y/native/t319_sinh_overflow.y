@@ -18,7 +18,7 @@
 // promise is 1 ulp -- 36 of the 58 are bit-identical to libm and 22 are one
 // ulp away, which is within the promise and fatal to a diff.
 //
-// That certification is test/sh/test_math.sh's job, with the tolerance it
+// That certification is src/tools/ytest/su_math.y's job, with the tolerance it
 // enforces: test/math/ulp_table.txt carries sinh and cosh at 709.78, 709.9,
 // 710.0, 710.4, 710.47, 710.4758 and the edge, against libm, failing above
 // 1 ulp. The two gates together are why this file can hold its own output

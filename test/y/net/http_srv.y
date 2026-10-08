@@ -1,4 +1,4 @@
-// An HTTP/1.1 server for test_net.sh's http client checks, on port
+// An HTTP/1.1 server for src/tools/ytest/su_net.y's http client checks, on port
 // argv[1]: one connection at a time, each kept open for request after
 // request. Routes: /hello (Content-Length), /chunked, /redirect (302 to
 // /hello), /sredirect (302 to /hdrs, same origin), /xredirect (302 to

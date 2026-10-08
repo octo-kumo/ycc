@@ -16,8 +16,8 @@ semantics. **Every change to `src/y/*.y` gets the same change in `src/c/*.c`.**
   `cmp ycc refs/ycc.ref` (byte-identical to the last blessed compiler, pack
   included) and that `./ycc` self-compiles to the same bytes. The gate.
 - `make cycc.exe` → Windows cross-build (mingw-w64), gated by
-  `test/sh/cycc-win.sh` under wine; `--target=windows` by `pe-gate.sh`,
-  `pe-packinv.sh`, `pe-fixtures.sh`. The four `t34{1,2,3,4}_threads_*` and four
+  `ytest cycc-win` under wine; `--target=windows` by `ytest pe-gate`,
+  `ytest pe-packinv`, `ytest pe-fixtures`. The four `t34{1,2,3,4}_threads_*` and four
   `ELF-OUTPUT-DIFF` cases are known PE gaps, not regressions, and so is anything
   importing `net` or `tui` (or `http`/`tls` through them): those two modules are
   the only std sources with raw `syscall` sites, and a raw `syscall` is expanded
@@ -29,8 +29,9 @@ semantics. **Every change to `src/y/*.y` gets the same change in `src/c/*.c`.**
   a drifted `w_sysno` fails loudly instead of calling the wrong Nt function.
 - `make yserve` → the language server; both compilers must produce it
   byte-identically. `make lsp-ext` / `lsp-vsix` build the VS Code extension.
-- `make ytest` → `./ytest` (`suites`, `coverage`, `report`). A measurement tool,
-  not a gate.
+- `make ytest` → `./ytest`, built by `cycc` (`src/tools/ytest/`): every suite,
+  gate and measurement tool in the repo, in Y — `./ytest help` lists them. No
+  shell drivers remain besides `test/sh/capped.sh`.
 - Never commit artifacts: `*.o`, `cycc`, `cycc.exe`, `cycc-asan`, `ycc`, `_ycc*`,
   `ynew`, `ytest*`, `*.pack`, `a.out`, `_check/`, `_ktmp/`. `refs/` is gitignored
   and is **not** disposable: it is the port's ground truth.
@@ -125,8 +126,8 @@ moved with the callgrind table, `perf`, or `ycc --time`.
 
 ## Tests
 
-`make test` runs all 24 suites (`test/sh/run_all.sh`; `-j N`, `YSHARD=k/n`,
-`./run_all.sh -j4 port native` for a subset). They take `CYCC`, `YREF`, `YCC`,
+`make test` runs all 24 suites (`./ytest`; `-j N`; `./ytest -j4 port native`
+for a subset). They take `CYCC`, `YREF`, `YCC`,
 `YSELF`, `YQUIET` and `YPORT_SELF` from the environment.
 
 | suite | what it pins |
@@ -140,19 +141,19 @@ moved with the callgrind table, `perf`, or `ycc --time`.
 | fixpoint | three self-compiles byte-identical; `src/y` and `src/y/std` warning-free |
 | debug, link, pkg | `-g` output; the std pack; `ycc build`/`vendor` over real projects |
 | stdin-eof, net | stdin/EOF; loopback HTTP/TCP, DNS and TLS |
-| lsp | the server's fixtures under both compilers, `check-refs.py`, `check-names.py`, formatter idempotence |
+| lsp | the server's fixtures under both compilers, `ytest check-refs`, `ytest check-names`, formatter idempotence |
 | math | `test/math/ulp_table.txt` within 1 ulp, plus the kernel and threshold audits |
 | coverage | every diagnostic and manual section has a checked test (`test/COVERAGE.md`) |
 | gc | the collector under a cap: two threads of 300k allocations must run in 64 MiB (`test/y/native/t385_gc_threads_alloc.y`), with `--gc=never` as the control that does not fit, and two threads of 20k under `--gc-stress` (a cycle at every allocation, `test/y/native/t389_gc_stress_threads.y`) |
-| kernel | `test/kernel/`: each fixture built with both engines (`--kernel`), images compared, booted under qemu, serial output and exit status checked (`test/sh/test_kernel.sh`; needs `qemu-system-x86_64`) |
-| os | `test/os/`: Y-OS (`make os`, `os/README.md`) built by both compilers (identical images), then scripted shell sessions booted under qemu and compared with their transcripts (`test/sh/test_os.sh`, `os/session.py`) |
-| treeshake, std-suites | the unused-code cost ratchets, plus four checks a runtime addition must pass: a program that allocates nothing names no `y_alloc` and no collector block, `--gc=auto` omits the collector for a one-shot allocation while `always` keeps and `never` drops it (same output), `test/sh/deadcode.py` counts instructions the shake leaves unreachable (`test/treeshake/deadcode.txt`), and `test/treeshake/shapes.txt` records the size of the shapes a runtime change moves first; the `test/std/` self-test suites |
+| kernel | `test/kernel/`: each fixture built with both engines (`--kernel`), images compared, booted under qemu, serial output and exit status checked (`src/tools/ytest/su_kernel.y`; needs `qemu-system-x86_64`) |
+| os | `test/os/`: Y-OS (`make os`, `os/README.md`) built by both compilers (identical images), then scripted shell sessions booted under qemu and compared with their transcripts (`src/tools/ytest/yos.y`, `ytest os-session`) |
+| treeshake, std-suites | the unused-code cost ratchets, plus four checks a runtime addition must pass: a program that allocates nothing names no `y_alloc` and no collector block, `--gc=auto` omits the collector for a one-shot allocation while `always` keeps and `never` drops it (same output), `ytest deadcode` counts instructions the shake leaves unreachable (`test/treeshake/deadcode.txt`), and `test/treeshake/shapes.txt` records the size of the shapes a runtime change moves first; the `test/std/` self-test suites |
 
-Run by hand (not in `make test`): `test/sh/cycc-win.sh` (wine),
-`test/sh/w_sysno.py`, `test/sh/run-parity.sh` (`ycc run` == compile + execute),
-`test/sh/mem-meta.sh`, `./ytest`, `make lsp-e2e`.
+Run by hand (not in `make test`): `ytest cycc-win` (wine),
+`ytest w-sysno`, `ytest run-parity` (`ycc run` == compile + execute),
+`ytest mem`, `ytest gcov`, `make lsp-e2e`.
 
-Fuzzing (`test/fuzz/fuzz.sh [ITER] [SEED]`): mutates corpus programs and compiles
+Fuzzing (`ytest fuzz [ITER] [SEED]`): mutates corpus programs and compiles
 each with both compilers under the cap and a timeout; a crash or a divergence is
 saved with its input. Run it after touching the lexer, parser, checker or
 emitter, and turn each finding into a `test/y/native/e*.y` fixture. Malformed
@@ -197,7 +198,7 @@ under its bare name because generated code calls it by label, and a program's ow
   read after a cast (`let c: Call = node;`, or a `match` binding); a cast copies
   when the layouts differ, so never write through one expecting the union to
   change.
-- **No warnings** in `src/y` or `src/y/std` (`test_fixpoint.sh`). An unused
+- **No warnings** in `src/y` or `src/y/std` (`src/tools/ytest/su_fixpoint.y`). An unused
   parameter is fine, an unused local is not. A record or union type used in more
   than one place gets a `type` alias in the module that owns it.
 - `/** … */` is a **doc comment**: the scanner marks it and the server shows the
@@ -241,11 +242,12 @@ under its bare name because generated code calls it by label, and a program's ow
   drivers, and two measurement programs, `scope-coverage.y` and
   `request-cost.y`). Syntax highlighting is the **TextMate grammar** the extension
   ships; the server does diagnostics, hover, definition, completion and
-  formatting. `check-names.py` also tests each module's basename, because
+  formatting. `ytest check-names` also tests each module's basename, because
   `strip_ns` rewrites any `name.field` program-wide as a module reference.
 - `os/` — Y-OS: the boot program, the shell and its programs, `mkfs`, the session driver (`os/README.md`).
-- `src/tools/ytest/` — the suite timer and gcov coverage reporter.
-- `refs/` — reference binaries for the port gate. `test/` — `sh/` drivers, `y/`
+- `src/tools/ytest/` — `ytest`: the test framework, every suite, and the tools
+  (`README.md` there).
+- `refs/` — reference binaries for the port gate. `test/` — `sh/capped.sh`, `y/`
   fixtures (`native/`, `audit/`, `examples/`, `ycc/`, `net/`), `std/`, `math/`,
   `fuzz/` and `COVERAGE.md`. `bench/` — benchmarks and the compare/profile
   scripts. `docs/` — the manual (`make docs`). `ideas/` — designs not yet built.

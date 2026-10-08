@@ -61,7 +61,7 @@ def sp(off: long, end: long, kind: long, line: long, col: long) -> Span {
 // There is no second scanner here any more. There used to be, and it drifted:
 // it lexed `0o755` as `0` then `o755` (the compiler's lexer had learned octal
 // and this had not), which the formatter then wrote back to disk as `0 o755`.
-// A test (test-agree.sh) compared the two, and a comparison is a weaker
+// A test (the lsp suite's scanner agreement) compared the two, and a comparison is a weaker
 // guarantee than not having two things to compare (LSP.md section 5.1).
 
 // The twelve reserved words, and the words the parser gives a meaning to in

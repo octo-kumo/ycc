@@ -43,11 +43,11 @@ The filesystem lives in RAM: what you make is gone when the machine stops.
 
 ## Tests
 
-`test/sh/test_os.sh` (suite `os`) builds the system with both compilers and checks
+`src/tools/ytest/yos.y` (suite `os`) builds the system with both compilers and checks
 the images are identical, then boots scripted sessions (`test/os/*.cmds`) with
-`os/session.py` -- which sends each command only after the shell has printed its
+`ytest os-session` -- which sends each command only after the shell has printed its
 prompt -- and compares the whole serial transcript with `test/os/*.expected`.
-`os/session.py CMD...` is also the way to script a session by hand.
+`ytest os-session CMD...` is also the way to script a session by hand.
 
 ## What is missing
 

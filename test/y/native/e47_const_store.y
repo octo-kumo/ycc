@@ -10,7 +10,7 @@
 // a `let`.
 //
 // The plain-name forms keep their own message ("cannot assign to constant
-// 'A' ('+=')", which e46 and test_pkg.sh pin); a form that goes through an
+// 'A' ('+=')", which e46 and src/tools/ytest/su_pkg.y pin); a form that goes through an
 // element, a field or a slice names the const it went through and says why.
 const A: [long] = [1, 2];
 const R = {x: 1};

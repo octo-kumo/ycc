@@ -359,7 +359,7 @@ TWO = {
 }
 
 # Every single-argument function the table knows, so a name cannot go missing
-# without the table noticing (test_math.sh checks the harness dispatches it).
+# without the table noticing (src/tools/ytest/su_math.y checks the harness dispatches it).
 ONE_ARG_FNS = sorted(set(ONE))
 
 # The references for the functions whose ANSWER is a rule rather than a
@@ -732,7 +732,7 @@ EXTRA = {name: spread(1000 + i, 60) for i, name in enumerate(
     ["exp", "expm1", "log", "log1p", "sinh", "cosh", "tanh", "asin", "acos",
      "atan", "sin", "cos", "tan"])}
 
-# THE SEAMS test/math/audit_thresholds.py found, by the rule rather than by
+# THE SEAMS `ytest math-thresholds` found, by the rule rather than by
 # reading. That tool extracts every comparison std/math.y makes against one of its
 # own float PARAMETERS and asks how far the nearest table argument is, in ulps of
 # the threshold. Two came back with nothing within 1e6:

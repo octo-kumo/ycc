@@ -2,11 +2,15 @@
 //
 //   ytest [-j N] [SUITE...]   run the suites (all by default), N cases at once
 //   ytest list                the suite names
-//   ytest coverage [FILE...]  gcov line coverage of src/c over a corpus (cov.y)
+//   ytest check|corpus-diff|bench|bench-run|bench-ir|profile|fuzz|fmt|fmt-check|
+//         run-parity|meta-identity|mem     the development loop's tools (ydev.y)
+//   ytest gcov [FILE...]      gcov line coverage of src/c over a corpus (cov.y)
 //   ytest deadcode [-v] F.s   unreachable instructions in a listing (deadcode.y)
 //   ytest os-build|os-run|os-session   Y-OS: build, boot, script a session (yos.y)
 //   ytest math-pairs [N] | math-repeats | math-thresholds | math-coverage | math-unroll
 //                             the std/math.y audits (mpairs.y, mstatic.y)
+//   ytest pe-gate|pe-packinv|pe-fixtures|cycc-win|w-sysno   the Windows gates (pe.y; wine)
+//   ytest coverage-list       every diagnostic site and whether a test expects it
 //   ytest lsp-e2e             the language server as a process (lsp_e2e.y)
 //   ytest check-refs|check-names   the language server's static checks (su_lsp.y)
 //   ytest pty-test PROG       test/std/term_test.y on a real pty (pty.y)
@@ -43,11 +47,14 @@ import lsp_e2e;
 import mpairs;
 import mstatic;
 import su_math;
+import su_coverage;
+import pe;
+import ydev;
 import pack;
 import deadcode;
 import pty;
 
-let ALL = ["port", "pe-port", "native", "native-examples", "examples", "audit", "ycc-units", "loops", "comprehensive", "ycc", "fixpoint", "debug", "link", "gc", "stdin-eof", "treeshake", "std-suites", "net", "pkg", "kernel", "os", "lsp", "math"];
+let ALL = ["port", "pe-port", "native", "native-examples", "examples", "audit", "ycc-units", "loops", "comprehensive", "ycc", "fixpoint", "debug", "link", "gc", "stdin-eof", "treeshake", "std-suites", "net", "pkg", "kernel", "os", "lsp", "math", "coverage"];
 
 // Suites that drive the built ./ycc; skipped without it.
 def needs_ycc(name: str) -> bool {
@@ -76,6 +83,7 @@ def suite_cases(name: str) -> [yt.Case] {
     if (name == "os") { return yos.cases(); };
     if (name == "lsp") { return su_lsp.cases(); };
     if (name == "math") { return su_math.cases(); };
+    if (name == "coverage") { return su_coverage.cases(); };
     if (name == "loops") { return su_inline.loops(); };
     if (name == "comprehensive") { return su_inline.comprehensive(); };
     []
@@ -185,6 +193,17 @@ def run_suites(names: [str], jobs: long) -> long {
     if (FAILED.length == 0) { 0 } else { 1 }
 };
 
+let USAGE = "usage: ytest [-j N] [SUITE...]     run the suites (all of them by default)
+       ytest list                     the suite names
+suites' tools:  deadcode pack-stats pty-test check-refs check-names lsp-e2e coverage-list
+                os-build os-run os-session
+math:           math-pairs math-repeats math-thresholds math-coverage math-unroll
+windows:        pe-gate pe-packinv pe-fixtures cycc-win w-sysno
+development:    check corpus-diff bench bench-run bench-ir profile fuzz fmt fmt-check
+                run-parity meta-identity mem gcov
+environment:    CYCC YREF YCC (the compilers), YJOBS, YQUIET, YMEM_KB, YTIMEOUT_SCALE, NO_COLOR
+";
+
 def main(av: [str]) -> long {
     yt.init();
     yc.init();
@@ -201,6 +220,9 @@ def main(av: [str]) -> long {
         } else if (a == "list") {
             print(join(ALL, "\n"));
             return 0;
+        } else if (a == "help" || a == "-h" || a == "--help") {
+            puts(USAGE);
+            return 0;
         } else if (a == "deadcode") {
             return deadcode.main(av[i + 1:]);
         } else if (a == "os-build") {
@@ -211,6 +233,42 @@ def main(av: [str]) -> long {
             return yos.main_session(av[i + 1:]);
         } else if (a.starts_with("math-") && a != "math-pairs") {
             return mstatic.main(a[5:], av[i + 1:]);
+        } else if (a == "check") {
+            return ydev.main_check(av[i + 1:]);
+        } else if (a == "corpus-diff") {
+            return ydev.main_corpus_diff(av[i + 1:]);
+        } else if (a == "bench") {
+            return ydev.main_bench(av[i + 1:]);
+        } else if (a == "bench-run") {
+            return ydev.main_bench_run(av[i + 1:]);
+        } else if (a == "bench-ir") {
+            return ydev.main_bench_ir(av[i + 1:]);
+        } else if (a == "profile") {
+            return ydev.main_profile(av[i + 1:]);
+        } else if (a == "fuzz") {
+            return ydev.main_fuzz(av[i + 1:]);
+        } else if (a == "fmt") {
+            return ydev.main_fmt(av[i + 1:]);
+        } else if (a == "fmt-check") {
+            return ydev.main_fmt_check(av[i + 1:]);
+        } else if (a == "run-parity") {
+            return ydev.main_run_parity(av[i + 1:]);
+        } else if (a == "meta-identity") {
+            return ydev.main_meta_identity(av[i + 1:]);
+        } else if (a == "mem") {
+            return ydev.main_mem(av[i + 1:]);
+        } else if (a == "pe-gate") {
+            return pe.gate(av[i + 1:]);
+        } else if (a == "pe-packinv") {
+            return pe.packinv(av[i + 1:]);
+        } else if (a == "pe-fixtures") {
+            return pe.fixtures(av[i + 1:]);
+        } else if (a == "cycc-win") {
+            return pe.cycc_win(av[i + 1:]);
+        } else if (a == "w-sysno") {
+            return pe.w_sysno(av[i + 1:]);
+        } else if (a == "coverage-list") {
+            return su_coverage.main_list(av[i + 1:]);
         } else if (a == "math-pairs") {
             return mpairs.main(av[i + 1:]);
         } else if (a == "lsp-e2e") {
@@ -223,7 +281,7 @@ def main(av: [str]) -> long {
             return pty.main(av[i + 1:]);
         } else if (a == "pack-stats") {
             return pack.main(av[i + 1:]);
-        } else if (a == "coverage") {
+        } else if (a == "gcov") {
             return cov.coverage(av[i + 1:]);
         } else {
             names += a;

@@ -59,7 +59,7 @@ const MIRROR: [str] = ["split", "join", "trim", "strip", "trim_start", "lstrip",
 //
 // Named `method_of` rather than `find`: a path import flattens, and the compiler
 // already has a `find` (regex.y) and a `has` (args.y), so either name is a
-// duplicate definition the moment anything imports both. check-names.py is what
+// duplicate definition the moment anything imports both. `ytest check-names` is what
 // catches it, and it is in this suite.
 def method_of(name: str) -> StrMethod? {
     let out: StrMethod? = none;

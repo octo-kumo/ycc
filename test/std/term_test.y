@@ -5,9 +5,9 @@ import tui;
 //
 //     (ulimit -S -v 3670016; \
 //      ../../refs/ycc.ref term_test.y -o /tmp/tt && \
-//      python3 term_pty_test.py /tmp/tt 31 97) </dev/null
+//      `ytest pty-test` /tmp/tt 31 97) </dev/null
 //
-// term_pty_test.py forks a pty, sets a 31x97 window on it, runs /tmp/tt on
+// `ytest pty-test` forks a pty, sets a 31x97 window on it, runs /tmp/tt on
 // the slave, and feeds it keystrokes on the master in response to the
 // `<<FEED ..>>` markers this program prints. ioctl(TCGETS) returns ENOTTY on
 // a pipe, so there is no honest way to test a terminal module outside a pty;
@@ -247,7 +247,7 @@ puts("\n");
 
 if (!tui.is_tty(0) || !tui.is_tty(1)) {
     puts("not running under a pty: there is no termios to test, so this\n");
-    puts("is the documented graceful path. Run term_pty_test.py, which gives\n");
+    puts("is the documented graceful path. Run `ytest pty-test`, which gives\n");
     puts("this program a real pty. exit 0.\n");
     exit(0);
 };

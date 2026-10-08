@@ -1,6 +1,6 @@
 // client-check.js -- drive yserve with the SAME JSON-RPC library VS Code uses.
 //
-// The python driver in test-e2e.sh speaks the protocol by hand, which proves the
+// The driver in `ytest lsp-e2e` speaks the protocol by hand, which proves the
 // server does what this file's author thinks the protocol says. It does not
 // prove the server agrees with an actual LSP implementation -- and the two have
 // differed before (this is how the `version: 0` and the missing-slash-URI bugs

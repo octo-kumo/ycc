@@ -503,8 +503,7 @@ def y_names() {
         let r = yb(ycc_bin(), p + "/app", ["."]);
         // the whole message, verbatim: what a user reads, and what the coverage
         // suite matches the diagnostic against
-        let msg = "error: duplicate y_ name 'y_who': '" + o[0] + "' and '" + o[1]
-            + "' both define it -- a y_ name is a fixed label generated code calls by, not a name in a namespace, so only one body could be linked; rename one";
+        let msg = "error: duplicate y_ name 'y_who': '" + o[0] + "' and '" + o[1] + "' both define it -- a y_ name is a fixed label generated code calls by, not a name in a namespace, so only one body could be linked; rename one";
         yt.check("two packages defining one y_ name is an error (" + o[0] + ", " + o[1] + ")",
             !fs.exists(p + "/app/build/app") && yt.has_line(r.out, msg), yt.clip(r.out, 200));
         fs.remove_all(p + "/app/build");

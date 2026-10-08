@@ -311,7 +311,7 @@ def rex_rm(w: bool, reg: long, m: Operand) -> long {
 // NOTE: do not add a field here. `asm_loc`/`asm_file` build four-field records
 // for the DWARF markers and hand them back where a Fixup is expected; the C
 // twin passes records straight through, and the port gate builds ycc.y WITHOUT
-// -g, so nothing compares the two shapes until test_debug.sh sees that cycc and
+// -g, so nothing compares the two shapes until src/tools/ytest/su_debug.y sees that cycc and
 // ycc write different .debug_line tables. The table offset for `tab+8(%rip)`
 // rides in `lbl` instead, and asm.y's label_addr evaluates it.
 type Fixup = { off: long, kind: str, lbl: str, lbl2: str };
