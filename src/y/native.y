@@ -13750,6 +13750,193 @@ def pack_unit_fields(u: Unit) -> str {
     join(out, "")
 };
 
+// ── the pack's LZ codec ─────────────────────────────────────────────────
+// A pack is mostly the same names, labels and type codes repeated, so it is
+// stored compressed: an LZ4-block stream -- a method byte, then tokens of
+// [literal length | match length-4], the literals, a 2-byte little-endian
+// match offset, then the match-length extension -- over a 4 KiB hash of 4-byte
+// sequences, offsets <= 65535 and no dictionary beyond the window. Determinism
+// is the point: the bytes depend on the input alone, so two builds agree (the
+// link suite compares the C copy's pack with the Y compiler's).
+//
+// A payload that does not shrink is stored plain, and a stream that does not
+// decode -- truncated, corrupted, mismatched -- answers "" so the reader falls
+// back to compiling the std units from source (std_unpack).
+def lz_method() -> str {
+    chr(1)
+};
+
+// 12 bits of a Knuth multiplier over four bytes: 4096 slots, first match wins,
+// the table always holds the most recent position.
+def lz_hash(b: [byte], at: long) -> long {
+    let v = b[at] + b[at + 1] * 256 + b[at + 2] * 65536 + b[at + 3] * 16777216;
+    ((v * 2654435761) >> 12) & 4095
+};
+
+// The 15+ extension of a length: 255s while it lasts, then the remainder.
+def lz_more(out: [str], v: long) -> [str] {
+    let left = v;
+    while (left >= 255) {
+        out += chr(255);
+        left = left - 255;
+    };
+    out += chr(left);
+    out
+};
+
+def lz_encode(s: str) -> str {
+    let b = bytes(s);
+    let n = len(b);
+    let out: [str] = [];
+    let tab: [long] = [];
+    let i = 0;
+    while (i < 4096) {
+        tab += -1;
+        i = i + 1;
+    };
+    let at = 0;
+    let lit = 0;
+    while (at < n) {
+        let hit = false;
+        let mlen = 0;
+        let moff = 0;
+        if (at + 4 <= n) {
+            let h = lz_hash(b, at);
+            let cand = tab[h];
+            tab[h] = at;
+            if (cand >= 0 && at - cand <= 65535) {
+                let k = 0;
+                while (at + k < n && b[cand + k] == b[at + k]) {
+                    k = k + 1;
+                };
+                if (k >= 4) {
+                    hit = true;
+                    mlen = k;
+                    moff = at - cand;
+                };
+            };
+        };
+        if (hit) {
+            let ll = at - lit;
+            let lh = ll;
+            if (lh > 15) { lh = 15; };
+            let mh = mlen - 4;
+            if (mh > 15) { mh = 15; };
+            out += chr(lh * 16 + mh);
+            if (ll >= 15) { out = lz_more(out, ll - 15); };
+            let q = lit;
+            while (q < at) {
+                out += chr(b[q]);
+                q = q + 1;
+            };
+            out += chr(moff & 255);
+            out += chr((moff >> 8) & 255);
+            if (mh == 15) { out = lz_more(out, mlen - 4 - 15); };
+            at = at + mlen;
+            lit = at;
+        } else {
+            at = at + 1;
+        };
+    };
+    // The last run is literals only, which is how the reader knows to stop.
+    let ll = n - lit;
+    let lh = ll;
+    if (lh > 15) { lh = 15; };
+    out += chr(lh * 16);
+    if (ll >= 15) { out = lz_more(out, ll - 15); };
+    let q = lit;
+    while (q < n) {
+        out += chr(b[q]);
+        q = q + 1;
+    };
+    join(out, "")
+};
+
+// The inverse; "" for anything that does not decode (the caller falls back to
+// source). Every step is bounds-checked: the pack is read from the compiler's
+// own tail, but a truncated or edited binary must not crash the compiler.
+def lz_decode(s: str) -> str {
+    let b = bytes(s);
+    let n = len(b);
+    let out: [byte] = [];
+    let at = 0;
+    let ok = true;
+    while (ok && at < n) {
+        let t = b[at];
+        at = at + 1;
+        let ll = t >> 4;
+        let mh = t & 15;
+        if (ll == 15) {
+            let more = true;
+            while (more && ok) {
+                if (at >= n) {
+                    ok = false;
+                } else {
+                    let x = b[at];
+                    at = at + 1;
+                    ll = ll + x;
+                    if (x != 255) { more = false; };
+                };
+            };
+        };
+        if (ok) {
+            if (at + ll > n) {
+                ok = false;
+            } else {
+                let q = 0;
+                while (q < ll) {
+                    out += b[at + q];
+                    q = q + 1;
+                };
+                at = at + ll;
+            };
+        };
+        // A match follows unless this was the final literal run.
+        if (ok && at < n) {
+            if (at + 2 > n) {
+                ok = false;
+            } else {
+                let moff = b[at] + b[at + 1] * 256;
+                at = at + 2;
+                let mlen = mh + 4;
+                if (mh == 15) {
+                    let more = true;
+                    while (more && ok) {
+                        if (at >= n) {
+                            ok = false;
+                        } else {
+                            let x = b[at];
+                            at = at + 1;
+                            mlen = mlen + x;
+                            if (x != 255) { more = false; };
+                        };
+                    };
+                };
+                if (ok && (moff == 0 || moff > len(out) || len(out) + mlen > 16777216)) {
+                    ok = false;
+                };
+                if (ok) {
+                    let src = len(out) - moff;
+                    let k = 0;
+                    while (k < mlen) {
+                        out += out[src + k];
+                        k = k + 1;
+                    };
+                };
+            };
+        };
+    };
+    if (ok) { from_bytes(out) } else { "" }
+};
+
+// The payload as it is stored: compressed when that is smaller, method byte
+// first. A plain pack starts with the version line's `y`, so the two cannot be
+// confused and an older reader sees a pack it does not know (and falls back).
+def pack_store(s: str) -> str {
+    let z = lz_encode(s);
+    if (len(z) + 1 < len(s)) { lz_method() + z } else { s }
+};
+
 // The pack of `units`.
 def std_pack(units: [Unit]) -> str {
     let out: [str] = [];
@@ -13759,7 +13946,7 @@ def std_pack(units: [Unit]) -> str {
         out = pack_put(out, u.name);
         out = pack_put(out, pack_unit_fields(u));
     });
-    join(out, "")
+    pack_store(join(out, ""))
 };
 
 // Reading a pack: `cur` is the text and the position in it. pack_len
@@ -13860,6 +14047,10 @@ def unit_read(cur: Cursor, name: str, bound: bool) -> Unit {
 // version, or one missing any of them.
 def std_unpack(pack: str, names: [str]) -> [Unit] {
     let out: [Unit] = [];
+    // Stored compressed? The method byte says so; a failed decode leaves ""
+    // and the version check below rejects it, so the caller compiles from
+    // source rather than reading a corrupt stream.
+    if (len(pack) > 0 && pack[0] == 1) { pack = lz_decode(pack[1:]); };
     let ver = pack_version();
     if (pack[:len(ver)] == ver) {
         let cur = { s: pack, p: len(ver) };
@@ -14056,7 +14247,7 @@ def emit_program(ast: Block, nr: Resolved, debug: bool, wlevel: long, std: [Unit
 // needs to KNOW whether a word is a builtin, and the list it keeps of them is
 // the one this predicate tests. Inert like the rest of the names here -- the
 // splicer deletes the export line, so nothing reaches codegen (LSP.md 9.1).
-export { emit_program, compile_package, std_units, std_unit_names, std_pack, unit_obj, unit_unobj, unit_iface, native_resolve, native_resolve_x, native_resolve_pk, origin_at, strip_ns, strip_list, strip_decl, phase_end, link_text, is_intrinsic_name, intrinsic_names };
+export { emit_program, compile_package, std_units, std_unit_names, std_pack, pack_store, unit_obj, unit_unobj, unit_iface, native_resolve, native_resolve_x, native_resolve_pk, origin_at, strip_ns, strip_list, strip_decl, phase_end, link_text, is_intrinsic_name, intrinsic_names };
 
 // ── maps: dynamic {K => V} ────────────────────────────────────────────
 // A map value is a two-field record -- {keys: [K], vals: [V]} -- and

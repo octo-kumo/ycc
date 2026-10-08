@@ -38,6 +38,54 @@ the pack's end and each unit must consume its fields byte for byte.
 
 import sys
 
+def lz_decode(b):
+    """The in-tree codec's inverse (native.y lz_decode), for the audit: an
+    independent implementation of the same format, so a reader that agrees with
+    this one on the real pack is not agreeing with itself."""
+    out = bytearray()
+    at = 0
+    n = len(b)
+    while at < n:
+        t = b[at]; at += 1
+        ll = t >> 4
+        mh = t & 15
+        if ll == 15:
+            while True:
+                if at >= n: raise Bad("truncated literal length")
+                x = b[at]; at += 1
+                ll += x
+                if x != 255: break
+        if at + ll > n: raise Bad("literals past end")
+        out += b[at:at + ll]; at += ll
+        if at >= n: break
+        if at + 2 > n: raise Bad("truncated match offset")
+        moff = b[at] | (b[at + 1] << 8); at += 2
+        mlen = mh + 4
+        if mh == 15:
+            while True:
+                if at >= n: raise Bad("truncated match length")
+                x = b[at]; at += 1
+                mlen += x
+                if x != 255: break
+        if moff == 0 or moff > len(out): raise Bad("match offset %d" % moff)
+        for _ in range(mlen):
+            out.append(out[len(out) - moff])
+    return bytes(out)
+
+
+def payload_of(raw):
+    """The pack payload: the last [8 digits][YCCPACK1] frame, decoded when the
+    method byte says the store compressed it."""
+    if len(raw) < 16 or raw[-8:] != b"YCCPACK1":
+        raise Bad("no YCCPACK1 trailer")
+    n = int(raw[-16:-8])
+    pack = raw[len(raw) - 16 - n:len(raw) - 16]
+    stored = len(pack)
+    if pack[:1] == b"\x01":
+        pack = lz_decode(pack[1:])
+    return pack, stored
+
+
 FIELDS = ["files", "iface", "init", "bodies", "btext", "labels", "rodata", "globals"]
 
 
@@ -128,9 +176,8 @@ def target(pack):
 
 def main():
     if len(sys.argv) == 3 and sys.argv[1] == "--target":
-        raw = open(sys.argv[2], "rb").read()
-        n = int(raw[-16:-8])
-        pack = raw[len(raw) - 16 - n:len(raw) - 16]
+        pack, stored = payload_of(open(sys.argv[2], "rb").read())
+        print("stored %d" % stored)
         g, x = target(pack)
         print("payload %d  gzip -9 %d (%.2fx)  xz -9 %d (%.2fx)"
               % (len(pack), g, float(len(pack)) / g, x, float(len(pack)) / x))
@@ -138,19 +185,9 @@ def main():
     if len(sys.argv) != 2:
         sys.stderr.write(__doc__.split("\n\n")[0] + "\n")
         return 2
-    raw = open(sys.argv[1], "rb").read()
-    if len(raw) < 16 or raw[-8:] != b"YCCPACK1":
-        sys.stderr.write("not a pack: no YCCPACK1 trailer\n")
-        return 2
-    head = raw[-16:-8]
-    if not head.isdigit():
-        sys.stderr.write("not a pack: %r is not an 8-digit length\n" % head)
-        return 2
-    n = int(head)
-    pack = raw[len(raw) - 16 - n:len(raw) - 16]
-    if len(pack) != n:
-        sys.stderr.write("pack is %d bytes, trailer says %d\n" % (len(pack), n))
-        return 2
+    pack, stored = payload_of(open(sys.argv[1], "rb").read())
+    if stored != len(pack):
+        print("stored %d bytes, decoded to %d" % (stored, len(pack)))
 
     nl = pack.find(b"\n")
     if nl < 0:

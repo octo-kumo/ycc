@@ -48,10 +48,10 @@ if [ "$(tail -c 8 "$YCC")" = "YCCPACK1" ] && [[ "$plen" =~ ^[0-9]{8}$ ]] \
     pass "ycc carries a std pack ($((10#$plen)) bytes)"
     plen=$((10#$plen))
     tail -c $((plen + 16)) "$YCC" >"$TMPD/attached.pack"
-    if [ "$(head -c 15 "$TMPD/attached.pack" | tr '\n' '|')" = "ycc-std-pack 7|" ]; then
-        pass "the pack opens with its version line"
+    if [ "$(head -c 1 "$TMPD/attached.pack" | od -An -tu1 | tr -d ' ')" = "1" ]; then
+        pass "the attached pack is stored compressed (method byte 1)"
     else
-        fail "the pack opens with its version line" "$(head -c 20 "$TMPD/attached.pack" | od -c | head -2)"
+        fail "the attached pack is stored compressed (method byte 1)" "$(head -c 20 "$TMPD/attached.pack" | od -c | head -2)"
     fi
 else
     fail "ycc carries a std pack" "trailer: $(tail -c 16 "$YCC" | od -c | head -1)"
@@ -102,18 +102,22 @@ else
 fi
 
 # 4. a pack ycc cannot read, or none: the std units compile from source
-python3 - "$YCC" "$TMPD/stale" "$TMPD/bare" <<'EOF'
+python3 - "$YCC" "$TMPD/stale" "$TMPD/junk" "$TMPD/bare" <<'EOF'
 import sys
 d = open(sys.argv[1], "rb").read()
 n = int(d[-16:-8])
 i = len(d) - 16 - n
-v = b"ycc-std-pack 7\n"
-assert d[i:i + len(v)] == v
-open(sys.argv[2], "wb").write(d[:i] + b"ycc-std-pack 0\n" + d[i + len(v):])
-open(sys.argv[3], "wb").write(d[:i])
+assert d[i:i + 1] == b"\x01", d[i:i + 1]
+tail = d[len(d) - 16:]
+# stale: the frame says a length that is not there
+open(sys.argv[2], "wb").write(d[:i] + b"99999999" + tail[8:])
+# junk: a stream the decoder must refuse (a length byte with nothing behind it)
+open(sys.argv[3], "wb").write(d[:i] + b"\x01\xff" + b"00000002" + tail[8:])
+# bare: no pack at all
+open(sys.argv[4], "wb").write(d[:i])
 EOF
-chmod 755 "$TMPD/stale" "$TMPD/bare" 2>/dev/null
-for alt in stale bare; do
+chmod 755 "$TMPD/stale" "$TMPD/junk" "$TMPD/bare" 2>/dev/null
+for alt in stale junk bare; do
     if [ -x "$TMPD/$alt" ] \
         && timeout "$CTO" "$TMPD/$alt" -o "$TMPD/alt.bin" "$TMPD/all.y" </dev/null >"$TMPD/err" 2>&1 \
         && timeout "$CTO" "$YCC" -o "$TMPD/all" "$TMPD/all.y" </dev/null >>"$TMPD/err" 2>&1 \
@@ -243,8 +247,9 @@ fi
 # consumes its fields exactly and the cursor ends at the pack's end — a desync
 # is how an earlier hand parse misread the shapes. It also prints the per-field
 # byte split, the measurement the pack work is planned from.
-if python3 "$ROOT/test/sh/pack_stats.py" "$TMPD/y.pack" >"$TMPD/pstats" 2>&1; then
-    pass "the pack parses field by field ($(grep -c '=' "$TMPD/pstats") field totals)"
+if python3 "$ROOT/test/sh/pack_stats.py" "$TMPD/y.pack" >"$TMPD/pstats" 2>&1 \
+    && grep -q "version ycc-std-pack 7" "$TMPD/pstats"; then
+    pass "the pack decodes and parses field by field ($(grep -c '=' "$TMPD/pstats") field totals)"
 else
     fail "the pack parses field by field" "$(head -c 160 "$TMPD/pstats")"
 fi

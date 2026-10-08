@@ -16359,6 +16359,187 @@ Yv *pack_unit_fields(Yv *unit) {
     return ys_join(out, ys(""));
 }
 
+/* -- the pack's LZ codec (native.y lz_*) ----------------------------------
+ * A pack is mostly the same names, labels and type codes repeated, so it is
+ * stored as an LZ4-block stream: a method byte, then tokens of [literal
+ * length | match length-4], the literals, a 2-byte little-endian match offset,
+ * then the match-length extension, over a 4 KiB hash of 4-byte sequences and
+ * offsets <= 65535. Determinism is the point: the bytes depend on the input
+ * alone, so the C copy's pack compares equal to the Y compiler's. A stream
+ * that does not decode answers "" and std_unpack falls back to source. */
+static Yv *lz_method(void) {
+    return ys_chr(1);
+}
+
+static ylong lz_hash(Yv *b, ylong at) {
+    ylong v = yv_l(ya_get(b, at)) + yv_l(ya_get(b, at + 1)) * 256
+            + yv_l(ya_get(b, at + 2)) * 65536
+            + yv_l(ya_get(b, at + 3)) * 16777216;
+    return ((v * 2654435761L) >> 12) & 4095;
+}
+
+static Yv *lz_more(Yv *out, ylong v) {
+    ylong left = v;
+    while (left >= 255) {
+        out = ys_cat(out, ys_chr(255));
+        left = left - 255;
+    }
+    return ys_cat(out, ys_chr(left));
+}
+
+static Yv *lz_encode(Yv *s) {
+    Yv *b = bytes_of(s);
+    ylong n = yv_len(b);
+    Yv *out = ys("");
+    Yv *tab = yav(0);
+    ylong i = 0;
+    while (i < 4096) {
+        tab = ya_push(tab, yv_long(-1));
+        i = i + 1;
+    }
+    ylong at = 0;
+    ylong lit = 0;
+    while (at < n) {
+        int hit = 0;
+        ylong mlen = 0;
+        ylong moff = 0;
+        if (at + 4 <= n) {
+            ylong h = lz_hash(b, at);
+            ylong cand = yv_l(ya_get(tab, h));
+            ya_set(tab, h, yv_long(at));
+            if (cand >= 0 && at - cand <= 65535) {
+                ylong k = 0;
+                while (at + k < n && yv_l(ya_get(b, cand + k)) == yv_l(ya_get(b, at + k))) {
+                    k = k + 1;
+                }
+                if (k >= 4) {
+                    hit = 1;
+                    mlen = k;
+                    moff = at - cand;
+                }
+            }
+        }
+        if (hit) {
+            ylong ll = at - lit;
+            ylong lh = ll;
+            if (lh > 15) { lh = 15; }
+            ylong mh = mlen - 4;
+            if (mh > 15) { mh = 15; }
+            out = ys_cat(out, ys_chr(lh * 16 + mh));
+            if (ll >= 15) { out = lz_more(out, ll - 15); }
+            ylong q = lit;
+            while (q < at) {
+                out = ys_cat(out, ys_chr(yv_l(ya_get(b, q))));
+                q = q + 1;
+            }
+            out = ys_cat(out, ys_chr(moff & 255));
+            out = ys_cat(out, ys_chr((moff >> 8) & 255));
+            if (mh == 15) { out = lz_more(out, mlen - 4 - 15); }
+            at = at + mlen;
+            lit = at;
+        } else {
+            at = at + 1;
+        }
+    }
+    /* The last run is literals only, which is how the reader knows to stop. */
+    ylong ll = n - lit;
+    ylong lh = ll;
+    if (lh > 15) { lh = 15; }
+    out = ys_cat(out, ys_chr(lh * 16));
+    if (ll >= 15) { out = lz_more(out, ll - 15); }
+    ylong q = lit;
+    while (q < n) {
+        out = ys_cat(out, ys_chr(yv_l(ya_get(b, q))));
+        q = q + 1;
+    }
+    return out;
+}
+
+static Yv *lz_decode(Yv *s) {
+    Yv *b = bytes_of(s);
+    ylong n = yv_len(b);
+    Yv *out = yav(0);
+    ylong at = 0;
+    int ok = 1;
+    while (ok && at < n) {
+        ylong t = yv_l(ya_get(b, at));
+        at = at + 1;
+        ylong ll = t >> 4;
+        ylong mh = t & 15;
+        if (ll == 15) {
+            int more = 1;
+            while (more && ok) {
+                if (at >= n) {
+                    ok = 0;
+                } else {
+                    ylong x = yv_l(ya_get(b, at));
+                    at = at + 1;
+                    ll = ll + x;
+                    if (x != 255) { more = 0; }
+                }
+            }
+        }
+        if (ok) {
+            if (at + ll > n) {
+                ok = 0;
+            } else {
+                ylong q = 0;
+                while (q < ll) {
+                    out = ya_push(out, ya_get(b, at + q));
+                    q = q + 1;
+                }
+                at = at + ll;
+            }
+        }
+        /* A match follows unless this was the final literal run. */
+        if (ok && at < n) {
+            if (at + 2 > n) {
+                ok = 0;
+            } else {
+                ylong moff = yv_l(ya_get(b, at)) + yv_l(ya_get(b, at + 1)) * 256;
+                at = at + 2;
+                ylong mlen = mh + 4;
+                if (mh == 15) {
+                    int more = 1;
+                    while (more && ok) {
+                        if (at >= n) {
+                            ok = 0;
+                        } else {
+                            ylong x = yv_l(ya_get(b, at));
+                            at = at + 1;
+                            mlen = mlen + x;
+                            if (x != 255) { more = 0; }
+                        }
+                    }
+                }
+                if (ok && (moff == 0 || moff > yv_len(out)
+                           || yv_len(out) + mlen > 16777216)) {
+                    ok = 0;
+                }
+                if (ok) {
+                    ylong src = yv_len(out) - moff;
+                    ylong k = 0;
+                    while (k < mlen) {
+                        out = ya_push(out, ya_get(out, src + k));
+                        k = k + 1;
+                    }
+                }
+            }
+        }
+    }
+    if (ok) { return from_bytes(out); }
+    return ys("");
+}
+
+/* The payload as it is stored: compressed when that is smaller, method byte
+ * first (native.y pack_store). A plain pack starts with the version line's
+ * `y`, so the two cannot be confused. */
+static Yv *pack_store(Yv *s) {
+    Yv *z = lz_encode(s);
+    if (yv_len(z) + 1 < yv_len(s)) { return ys_cat(lz_method(), z); }
+    return s;
+}
+
 /* The pack of `units`. */
 Yv *std_pack(Yv *units) {
     Yv *out = yav(0);
@@ -16371,7 +16552,7 @@ Yv *std_pack(Yv *units) {
         out = pack_put(out, pack_unit_fields(u));
         i = i + 1;
     }
-    return ys_join(out, ys(""));
+    return pack_store(ys_join(out, ys("")));
 }
 
 /* Reading a pack: `cur` is the text and the position in it. pack_len
@@ -16477,6 +16658,12 @@ Yv *unit_read(Yv *cur, Yv *name, int bound) {
  * version, or one missing any of them. */
 Yv *std_unpack(Yv *pack, Yv *names) {
     Yv *out = yav(0);
+    /* Stored compressed? The method byte says so; a failed decode leaves ""
+     * and the version check below rejects it, so the caller compiles from
+     * source rather than reading a corrupt stream. */
+    if (yv_len(pack) > 0 && ys_byte_at(pack, 0) == 1) {
+        pack = lz_decode(ys_slice(pack, 1, yv_len(pack)));
+    }
     Yv *ver = pack_version();
     if (ys_eq(ys_slice(pack, 0, yv_len(ver)), ver)) {
         Yv *cur = yr(2, "s", pack, "p", yv_long(yv_len(ver)));
