@@ -12,7 +12,7 @@ is the chronological log (round by round); **this file is the summary you want f
 | HEAD at handover | see `git log -1` (the last commit is "u021_rm -- rm from ring 3") |
 | kernel suite | **86 passed, 0 failed / 86 total** with `./ycc` and `./cycc`, after the merge of master |
 | blessed compiler | `refs/ycc.ref` = `495c8127b96579aa` (re-run `make rebless` after any `src/y/std/*.y` or `arch/*.s` change) |
-| merged into master | master's pack model: `arch.kernel` is the fifth-plus block set, `fs`/`net`/... denial happens for pack library units too (native.y import walk) |
+| merged into master | master's pack model: `arch.kernel` is one of the pack's six arch block sets, `fs`/`net`/... denial happens for pack library units too (native.y import walk) |
 | pre-merge fallback | `git tag pre-unmerge` (the pre-merge 33/33 line) |
 
 ## 2. How to build and run

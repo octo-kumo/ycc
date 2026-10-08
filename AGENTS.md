@@ -112,10 +112,16 @@ moved with the callgrind table, `perf`, or `ycc --time`.
   copy in an empty directory compiles `import fs`/`net`/`args`-style programs
   with no source anywhere. A lone `ycc --std-src` has nothing to compile from and
   says so.
-- Branches and worktrees: `master`, plus `std-pack-units`. The microkernel
-  (`ycc --kernel`, `YOS-HANDOVER.md`) is merged into `master`; `mem-lifetime` and
-  `bigint-math` were merged and their worktrees removed. Never rewrite a branch
-  another worktree has checked out.
+  **Exception: `--kernel`.** `std/kernel.y`, `yfs.y` and `fd.y` are not pack
+  units: `import kernel` splices them from disk (`std_resolve`), so a kernel
+  build needs a checkout (or `std/` beside the binary). Only the kernel's arch
+  prelude (`arch.kernel`) travels in the pack.
+- Branches and worktrees: `master`, plus `kernel` (`.worktrees/kernel`, the
+  microkernel: `ycc --kernel`, `YOS-HANDOVER.md`), which is merged into `master`
+  and kept for further kernel work. `mem-lifetime` and `bigint-math` were merged
+  and their worktrees removed; `std-pack-units` and `backup-master` are merged
+  too. Merge forward into `master`; never rewrite a branch another worktree has
+  checked out.
 
 ## Tests
 
