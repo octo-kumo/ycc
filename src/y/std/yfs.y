@@ -332,10 +332,14 @@ def yfs_unlink(name: str) -> long {
     if (blk == 0) { return 0 - 1; };
     let e = blk * yfs_block_size;
     let idx = 0;
+    // A leading slash is not part of the name -- the entries hold "msg", not "/msg" --
+    // and byte_at is how a str's characters are read (indexing yields the length).
+    let st = 0;
+    if (len(name) > 0 && byte_at(name, 0) == 47) { st = 1; };
     while (idx < count) {
         let nl = yfs_u16(e);
         if (nl == 0) { return 0 - 1; };
-        if (nl == len(name) && yfs_name_is(e, name, 0, len(name))) {
+        if (nl == len(name) - st && yfs_name_is(e, name, st, len(name))) {
             kernel.poke32(yfs_phys + yfs_inode_off(yfs_u32(e + 4)), 0);
             let src = e + ((8 + nl + 3) & (0 - 4));
             let j = idx + 1;

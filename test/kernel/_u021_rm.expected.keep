@@ -1,4 +1,0 @@
-fs ok=true msg=3
-
-rm first=3 unlink=-1 again=4
-
