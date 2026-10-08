@@ -2595,3 +2595,26 @@ That is the piece the earlier shell fixture lacked: it could run a program but n
 arguments, which meant every M4 command would have had to read its input from somewhere
 else.  The fixture for it is next -- sh passing a word that the program prints -- and the
 stack layout is the only thing that could still be wrong, which the transcript will say.
+
+### Round 161: argc crosses execve; the second STRING does not
+
+The argv fixture printed:
+
+    sh n=3 a1=/prog
+    sh n=2 a1=
+    done
+
+so the count is right in the replacement -- argc crossed -- but argv[1] is an EMPTY
+string.  That is a precise half-result: the pointer array is read correctly (two entries)
+while the bytes at one of them are not there.
+
+What the build does, for the record: strings are placed downward from 4096-16 with the
+physical pokes, each recording `EXEC_STACK + top` in ptrs; then the array is laid out at
+`sp = top - 8 - 8*argc` rounded down to 8, with argc in the slot below it.  For "prog"
+(4 chars) and "hello" (5) that gives strings at 4075 and 4069, the array at 4040..4064 --
+all inside the page and non-overlapping, so the arithmetic is not obviously wrong, which
+is exactly why the next step is to PRINT rather than re-derive: ptrs[k], the resolved VA,
+and the byte at each, in the same run.
+
+The fixture is kept as _u019_args.*.keep (outside the harness's [txu]* glob) and
+test/kernel is 77 passed, 0 failed / 77 total.
