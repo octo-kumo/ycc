@@ -397,13 +397,17 @@ def enc_mov(buf: [byte], at: long, dst: Operand, src: Operand) -> Encoded {
         }
     } else if (dst.k == K.reg && src.k == K.imm) {
         if (op_size(dst) == 64) {
-            if (src.v >= -2147483648 && src.v <= 2147483647) {
+            if (src.v >= 0 && src.v <= 4294967295) {
+                // B8+r id: the 32-bit move zero-extends, so a value that fits
+                // unsigned in 32 bits costs five bytes rather than C7's seven
+                enc_ok(put_le32(buf, (put(buf, (put_rex(buf, at, rex(false, -1, -1, dst.n))), 184 + (dst.n % 8))), src.v), [])
+            } else if (src.v >= -2147483648 && src.v <= 2147483647) {
                 enc_ok(put_le32(buf, (put2(buf, (put_rex(buf, at, rex(true, -1, -1, dst.n))), 199, modrm(3, 0, dst.n))), src.v), [])
             } else {
                 enc_ok(put_le64(buf, (put(buf, (put_rex(buf, at, rex(true, -1, -1, dst.n))), 184 + (dst.n % 8))), src.v), [])
             }
         } else if (op_size(dst) == 32) {
-            enc_ok(put_le32(buf, (put2(buf, (put_rex(buf, at, rex(false, -1, -1, dst.n))), 199, modrm(3, 0, dst.n))), src.v), [])
+            enc_ok(put_le32(buf, (put(buf, (put_rex(buf, at, rex(false, -1, -1, dst.n))), 184 + (dst.n % 8))), src.v), [])
         } else {
             enc_err(at, "mov imm size")
         }

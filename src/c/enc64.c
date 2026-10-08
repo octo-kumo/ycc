@@ -505,7 +505,13 @@ static Yv *enc_mov(Yv *buf, ylong at, Yv *dst, Yv *src) {
         }
     } else if (yv_l(yr_get(dst, "k")) == K_reg && yv_l(yr_get(src, "k")) == K_imm) {
         if (op_size(dst) == 64) {
-            if (yv_l(yr_get(src, "v")) >= -2147483648L && yv_l(yr_get(src, "v")) <= 2147483647L) {
+            if (yv_l(yr_get(src, "v")) >= 0 && yv_l(yr_get(src, "v")) <= 4294967295L) {
+                /* B8+r id: the 32-bit move zero-extends, so a value that fits
+                 * unsigned in 32 bits costs five bytes rather than C7's seven */
+                ylong n = put_rex(buf, at, rex(0, -1, -1, yv_l(yr_get(dst, "n"))));
+                ylong m = put(buf, n, 184 + (yv_l(yr_get(dst, "n")) % 8));
+                return enc_ok(put_le32(buf, m, yv_l(yr_get(src, "v"))), yav(0));
+            } else if (yv_l(yr_get(src, "v")) >= -2147483648L && yv_l(yr_get(src, "v")) <= 2147483647L) {
                 ylong n = put_rex(buf, at, rex(1, -1, -1, yv_l(yr_get(dst, "n"))));
                 ylong m = put2(buf, n, 199, modrm(3, 0, yv_l(yr_get(dst, "n"))));
                 return enc_ok(put_le32(buf, m, yv_l(yr_get(src, "v"))), yav(0));
@@ -516,7 +522,7 @@ static Yv *enc_mov(Yv *buf, ylong at, Yv *dst, Yv *src) {
             }
         } else if (op_size(dst) == 32) {
             ylong n = put_rex(buf, at, rex(0, -1, -1, yv_l(yr_get(dst, "n"))));
-            ylong m = put2(buf, n, 199, modrm(3, 0, yv_l(yr_get(dst, "n"))));
+            ylong m = put(buf, n, 184 + (yv_l(yr_get(dst, "n")) % 8));
             return enc_ok(put_le32(buf, m, yv_l(yr_get(src, "v"))), yav(0));
         } else {
             return enc_err(at, ys("mov imm size"));
