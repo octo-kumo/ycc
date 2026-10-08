@@ -2444,3 +2444,28 @@ failed fixture is moved aside rather than committed, so the suite stays green wh
 work continues.
 
 test/kernel is 69 passed, 0 failed / 69 total.
+
+### Round 149: yfs_create WORKS -- the fault is inside yfs_append
+
+Instrumented the parked fixture between each step:
+
+    A made=2 size=0 blk=0
+    (then) trap vector=14 err=0 cr2=-130947386953472
+
+So the create half is correct: yfs_create returned inode 2, a fresh inode with size 0
+and no blocks -- exactly what the contract says.  The fault is in yfs_append(2, buf, 4),
+which never returned, and it happens before the size poke and the store, i.e. in the
+block-attach loop.  The whole wild-pointer question is therefore inside fifteen lines,
+and the numbers to print there are: base, size, have, want, yfs_next, and the block
+number b it is about to poke.
+
+One candidate deserves naming before the next run, because it is a contract mismatch
+and not a pointer bug: yfs_store begins `if (off >= size) { return 0; }`, and yfs_append
+calls it with off = the file's OLD size, which for a brand-new file is 0 -- so
+yfs_store answers 0, yfs_append sees `n != len` and returns -1.  That path is a return,
+not a fault, so it cannot be what panicked, but it IS a bug: appending to an empty file
+must work, and the clamp has to be written so that "off == size" (writing at the end)
+is allowed while "off > size" is refused.
+
+The fixture stays parked (_t018_create.y.keep), the instrumented copy is in /tmp, and
+test/kernel is 69 passed, 0 failed / 69 total.
