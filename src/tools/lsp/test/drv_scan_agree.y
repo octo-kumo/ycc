@@ -7,35 +7,36 @@
 // Comments are the one region where the compiler's own stream has nothing --
 // tokenize discards them -- so they are filtered out before comparing.
 //
-// The file list is passed in argv by test-agree.sh, because std has no
-// recursive directory walk; the shell finds the files.
+// The file list is passed in argv by the lsp suite (src/tools/ytest/su_lsp.y).
 
 import lexer from "../../../y/lexer.y";
 import scan from "../scan.y";
 import fs;
 
-// Byte offset of a token from its 1-based line and byte column.
+// Byte offset of a token from its 1-based line and byte column. Not the
+// token's own `off`: an f-string's desugared tokens carry none (0), while their
+// line and column point into the literal, which is the region they belong to.
 def tok_off(starts: [long], line: long, col: long) -> long {
     let r = 0 - 1;
     if (line >= 1 && line <= len(starts)) { r = starts[line - 1] + (col - 1); };
     r
 }
 
-// Does a token type correspond to a span kind? An `id` covers a plain name, a
-// contextual word and a keyword, since the lexer tells those apart by table
-// lookup while the scanner classifies the word itself.
-def kind_matches(t: str, k: long) -> bool {
-    let ok = false;
-    if (t == "id") { ok = k == scan.K_ident || k == scan.K_contextual || k == scan.K_keyword; }
-    if (t == "num") { ok = k == scan.K_number; }
-    if (t == "str") { ok = k == scan.K_string; }
-    if (t == "bstr") { ok = k == scan.K_bstring; }
-    if (t == "char") { ok = k == scan.K_char; }
-    if (t == "kw") { ok = k == scan.K_keyword; }
-    if (t == "op") { ok = k == scan.K_operator; }
-    if (t == "punct") { ok = k == scan.K_punct; }
-    if (t == "ferr") { ok = k == scan.K_error; }
-    ok
+// Does a token's kind (a K tag) correspond to a span kind? An `id` covers a
+// plain name, a contextual word and a keyword (and a char token a `7b` byte
+// literal, which the scanner calls a number), since the lexer tells those
+// apart by table lookup while the scanner classifies the word itself; a tag
+// that is none of the literal or symbol kinds is a keyword's own.
+def kind_matches(t: long, k: long) -> bool {
+    if (t == K.id) { k == scan.K_ident || k == scan.K_contextual || k == scan.K_keyword }
+    else if (t == K.num || t == K.bigint) { k == scan.K_number }
+    else if (t == K.str) { k == scan.K_string }
+    else if (t == K.bstr) { k == scan.K_bstring }
+    else if (t == K.char) { k == scan.K_char || k == scan.K_number }
+    else if (t == K.op) { k == scan.K_operator }
+    else if (t == K.punct) { k == scan.K_punct }
+    else if (t == K.ferr || t == K.stray) { k == scan.K_error }
+    else { k == scan.K_keyword || k == scan.K_contextual }
 }
 
 // Lexer survives this text? It calls exit(1) on an unterminated string or block
@@ -75,7 +76,7 @@ def check(src: str) -> { spans: long, toks: long, mismatch: long, first: str } {
     while (ti < len(toks)) {
         let t = toks[ti];
         let ty = t.t;
-        if (ty != "eof") {
+        if (ty != K.eof && ty != K.comment) {
             let off = tok_off(starts, t.line, t.col);
 
             // A token in a comment or an f-string is accounted for by that
@@ -100,7 +101,7 @@ def check(src: str) -> { spans: long, toks: long, mismatch: long, first: str } {
                         if (!kind_matches(ty, kinds[si])) {
                             mismatch = mismatch + 1;
                             if (first == "") {
-                                first = "kind " + ty + " vs " + scan.kind_name(kinds[si]) +
+                                first = "kind " + ktag(ty) + " vs " + scan.kind_name(kinds[si]) +
                                         " at " + tostring(off);
                             }
                         }
@@ -111,7 +112,7 @@ def check(src: str) -> { spans: long, toks: long, mismatch: long, first: str } {
             }
             if (!found) {
                 mismatch = mismatch + 1;
-                if (first == "") { first = "no span for " + ty + " at " + tostring(off); }
+                if (first == "") { first = "no span for " + ktag(ty) + " at " + tostring(off); }
             }
         }
         ti = ti + 1;

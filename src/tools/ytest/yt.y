@@ -403,12 +403,8 @@ def clip(s: str, n: long) -> str {
     t.replace("\n", "|")
 };
 
-/** The lines of s, without a trailing empty one. */
-def lines(s: str) -> [str] {
-    let r = s.split("\n");
-    if (r.length > 0 && r[r.length - 1] == "") { r = r[0:r.length - 1]; };
-    r
-};
+/** The lines of s (split already drops the one empty field a final newline leaves). */
+def lines(s: str) -> [str] { s.split("\n") };
 
 /** The whitespace-separated words of s. */
 def words(s: str) -> [str] {
@@ -425,6 +421,17 @@ def has_line(s: str, l: str) -> bool {
         if (x == l) { return true; };
     };
     false
+};
+
+// The first line where `want` and `got` part, as "-want|+got".
+def first_diff(want: str, got: str) -> str {
+    let a = want.split("\n");
+    let b = got.split("\n");
+    let i = 0;
+    while (i < a.length && i < b.length && a[i] == b[i]) { i += 1; };
+    let wa = if (i < a.length) { a[i] } else { "(end)" };
+    let gb = if (i < b.length) { b[i] } else { "(end)" };
+    clip("line " + tostring(i + 1) + ": -" + wa + " +" + gb, 300)
 };
 
 def first_line(s: str) -> str {
@@ -569,5 +576,5 @@ def init() {
 
 export { Cmd, Res, Proc, start, reap, alive, kill, wait, Case, Done, self_exe, scratch, tmp, tmp_dir, cleanup, environ, env, which,
     cmd, run, exe, exe2, sh, q, read, write, concat, same_file, size, ls, files, num, le, bytes_of, have, hex, sleep_us, tree, clip, lines,
-    first_line, words, has_line, cz, sleep_us, say, pass, fail, skip, check, case_of, run_cases, init, paint, getpid,
+    first_line, first_diff, words, has_line, cz, sleep_us, say, pass, fail, skip, check, case_of, run_cases, init, paint, getpid,
     MEM_KB, SCALE, QUIET };

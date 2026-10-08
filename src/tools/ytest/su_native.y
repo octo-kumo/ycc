@@ -143,19 +143,8 @@ def positive(file: str, base: str) {
     if (o.code == want_ec && same) {
         yt.pass(base);
     } else {
-        yt.fail(base, "exit=" + tostring(o.code) + " (want " + tostring(want_ec) + "), diff: " + first_diff(if (want == none) { "" } else { want! }, o.out));
+        yt.fail(base, "exit=" + tostring(o.code) + " (want " + tostring(want_ec) + "), diff: " + yt.first_diff(if (want == none) { "" } else { want! }, o.out));
     };
-};
-
-// The first line where `want` and `got` part, as "-want|+got".
-def first_diff(want: str, got: str) -> str {
-    let a = want.split("\n");
-    let b = got.split("\n");
-    let i = 0;
-    while (i < a.length && i < b.length && a[i] == b[i]) { i += 1; };
-    let wa = if (i < a.length) { a[i] } else { "(end)" };
-    let gb = if (i < b.length) { b[i] } else { "(end)" };
-    yt.clip("line " + tostring(i + 1) + ": -" + wa + " +" + gb, 300)
 };
 
 def cases() -> [yt.Case] {
@@ -172,4 +161,4 @@ def cases() -> [yt.Case] {
     cs
 };
 
-export { cases, markers, first_diff };
+export { cases, markers };
