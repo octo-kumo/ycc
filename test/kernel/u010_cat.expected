@@ -1,4 +1,4 @@
-fs ok=true ino=2 size=5761
+fs ok=true ino=2 size=5771
 
 cat /prog fd=3 n=16 b0=127
 

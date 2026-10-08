@@ -1430,7 +1430,10 @@ ygfr_done:
     ret
 
 # y_gc_maybe: collect when the bytes handed out since the last cycle reach
-# max(live, 8 MB). Called from the allocator's slow path.
+# 1.5 * max(live, 8 MB): a cycle walks every block of the heap, live or dead, so
+# the longer the gap the fewer walks per byte allocated (measured: -12% to -21%
+# of a compile's instructions against a gap of max(live, 8 MB), for ~7% more
+# peak memory). Called from the allocator's slow path.
 y_gc_maybe:
 # With threads on the global block is empty (y_threads_on moved its state into
 # the main thread's tcb), so the bytes handed out are the CO thread's: word 2
@@ -1453,6 +1456,9 @@ ygmb_have:
     jae ygmb_cmp
     mov $8388608, %rcx
 ygmb_cmp:
+    mov %rcx, %r8
+    shr $1, %r8
+    add %r8, %rcx
     cmp %rcx, %rdx
     jb ygmb_out
     call y_gc_collect

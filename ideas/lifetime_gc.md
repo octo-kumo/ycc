@@ -91,7 +91,7 @@ one-bit-per-8-bytes block-start map, conservative roots (stack + `y_bss` +
 every GPR `y_alloc_more` pushes), mark/sweep, coalescing free runs split
 largest-first, and `munmap` of unmarked dedicated large blocks.
 
-* **the trigger** is `used - y_gc_last >= max(y_gc_live, 8 MiB)` and is
+* **the trigger** is `used - y_gc_last >= 1.5 * max(y_gc_live, 8 MiB)` and is
   tested only in the allocator's slow path, so a cycle always starts at a
   point where every live value is on the stack or in a saved register;
 * **the sweep rebuilds the free lists from the walk** every cycle. That is

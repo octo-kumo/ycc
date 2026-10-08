@@ -18,9 +18,9 @@
 # (y_gc_alloc_free, y_gc_close): about +225 B in every program that links the collector.
 hello.y 381
 minimal.y 440
-forloop.y 4343
-foreach.y 4177
+forloop.y 4353
+foreach.y 4187
 dead.y 1683
 alloc_once.y 1446
-foreach_local.y 4159
-foreach_capture.y 4812
+foreach_local.y 4169
+foreach_capture.y 4822
