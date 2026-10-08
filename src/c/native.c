@@ -15740,11 +15740,11 @@ Yv *link_text(Yv *parts) {
  * reuse the same unit-field encoding. */
 
 Yv *pack_version(void) {
-    return ys("ycc-std-pack 6\n");
+    return ys("ycc-std-pack 7\n");
 }
 
 Yv *obj_version(void) {
-    return ys("ycc-unit 5\n");
+    return ys("ycc-unit 6\n");
 }
 
 Yv *pack_put(Yv *out, Yv *s) {
@@ -16025,6 +16025,74 @@ static ylong lbl_w(Yv *b, ylong at) {
     }
 }
 
+/* The name of a packed label field, or "" for tag 0 (no label). unpack_lbl
+ * interns the name into an id; a reference set is names (native.y blob_lbl). */
+static Yv *blob_lbl(Yv *b, ylong at) {
+    if (yv_l(ya_get(b, at)) == 0) {
+        return ys("");
+    } else {
+        ylong w = word_w(b, at + 1);
+        ylong n = unpack_word(b, at + 1);
+        return from_bytes(ya_slice(b, at + 1 + w, at + 1 + w + n));
+    }
+}
+
+/* A body's references, read out of its packed items: the mirror of
+ * ir_refs_item over the blob encoding pack_body writes, so the pack need not
+ * carry the list (native.y blob_refs). Duplicates are kept and empty names
+ * dropped, as ir_refs_push does; IR_LABEL/IR_LOC/IR_TEXT contribute nothing but
+ * their operands still have to be stepped over. */
+static Yv *blob_refs(Yv *blob) {
+    Yv *b = bytes_of(blob);
+    ylong n = yv_len(b);
+    Yv *out = yav(0);
+    ylong at = 0;
+    while (at < n) {
+        ylong f = yv_l(ya_get(b, at));
+        at = at + 1;
+        if (f == IR_LABEL) {
+            at = at + lbl_w(b, at);
+        } else if (f == IR_LOC) {
+            at = at + word_w(b, at);
+            at = at + word_w(b, at);
+        } else if (f == IR_TEXT) {
+            at = at + word_w(b, at);
+        } else {
+            Yv *kinds = yr_get(ir_form(f), "kinds");
+            ylong ki = 0;
+            while (ki < yv_len(kinds)) {
+                ylong k = yv_l(ya_get(kinds, ki));
+                ylong nw = ir_kind_words(k);
+                if (k == O_LBL) {
+                    Yv *nm = blob_lbl(b, at);
+                    if (yv_len(nm) > 0) { out = ya_push(out, nm); }
+                    at = at + lbl_w(b, at);
+                } else if (k == O_DIFF) {
+                    Yv *n1 = blob_lbl(b, at);
+                    if (yv_len(n1) > 0) { out = ya_push(out, n1); }
+                    at = at + lbl_w(b, at);
+                    Yv *n2 = blob_lbl(b, at);
+                    if (yv_len(n2) > 0) { out = ya_push(out, n2); }
+                    at = at + lbl_w(b, at);
+                } else if (k == O_MEM || k == O_MEM0) {
+                    at = at + word_w(b, at);
+                    at = at + word_w(b, at);
+                    at = at + word_w(b, at);
+                    at = at + word_w(b, at);
+                    Yv *nm = blob_lbl(b, at);
+                    if (yv_len(nm) > 0) { out = ya_push(out, nm); }
+                    at = at + lbl_w(b, at);
+                } else {
+                    at = at + word_w(b, at);
+                    if (nw > 1) { at = at + word_w(b, at); }
+                }
+                ki = ki + 1;
+            }
+        }
+    }
+    return out;
+}
+
 /* A complete type encoding for std packs and package objects. It keeps
  * every type kind and record shape, unlike the user-facing tstr format. */
 Yv *tcode(Yv *t) {
@@ -16280,16 +16348,9 @@ Yv *pack_unit_fields(Yv *unit) {
     out = pack_strs(out, pack_bodies(unit));
     out = pack_strss(out, yr_get(unit, "btext"));
     out = pack_strs(out, yr_get(unit, "labels"));
-    Yv *rf = yr_get(unit, "refs");
-    out = pack_put(out, ys_long(yv_len(rf)));
-    ylong j = 0;
-    while (j < yv_len(rf)) {
-        out = pack_strs(out, ya_get(rf, j));
-        j = j + 1;
-    }
     Yv *rd = yr_get(unit, "rodata");
     out = pack_put(out, ys_long(yv_len(rd)));
-    j = 0;
+    ylong j = 0;
     while (j < yv_len(rd)) {
         out = pack_strs(out, ya_get(rd, j));
         j = j + 1;
@@ -16392,11 +16453,11 @@ Yv *unit_read(Yv *cur, Yv *name, int bound) {
         bi = bi + 1;
     }
     Yv *labels = pack_get_strs(cur);
+    /* Refs are derived, not stored (blob_refs). */
     Yv *refs = yav(0);
-    ylong nr = pack_num(cur);
     j = 0;
-    while (j < nr) {
-        refs = ya_push(refs, pack_get_strs(cur));
+    while (j < yv_len(blob)) {
+        refs = ya_push(refs, blob_refs(ya_get(blob, j)));
         j = j + 1;
     }
     Yv *rodata = yav(0);

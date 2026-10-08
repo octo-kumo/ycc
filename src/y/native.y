@@ -13219,7 +13219,7 @@ def link_text(parts: [LinkPart]) -> str {
 // unit's fields the same way.
 
 def pack_version() -> str {
-    "ycc-std-pack 6\n"
+    "ycc-std-pack 7\n"
 };
 
 def pack_put(out: [str], s: str) -> [str] {
@@ -13466,6 +13466,75 @@ def lbl_w(b: [byte], at: long) -> long {
     if (b[at] == 0) { 1 } else { 1 + word_w(b, at + 1) + unpack_word(b, at + 1) }
 };
 
+// The name of a packed label field, or "" for tag 0 (no label). unpack_lbl
+// interns the name into an id; a reference set is names, so read them here.
+def blob_lbl(b: [byte], at: long) -> str {
+    if (b[at] == 0) {
+        ""
+    } else {
+        let w = word_w(b, at + 1);
+        let n = unpack_word(b, at + 1);
+        from_bytes(b[at + 1 + w:at + 1 + w + n])
+    }
+};
+
+// A body's references, read out of its packed items: the mirror of ir_refs_item
+// (every label operand, the label of a memory operand, both of a diff) over the
+// blob encoding pack_body writes, so the pack need not carry the list. Duplicates
+// are kept and empty names dropped, exactly as ir_refs_push does. IR_LABEL,
+// IR_LOC and IR_TEXT items contribute nothing there either, but their operands
+// still have to be stepped over to stay in step.
+def blob_refs(blob: str) -> [str] {
+    let b = bytes(blob);
+    let n = len(b);
+    let out: [str] = [];
+    let at = 0;
+    while (at < n) {
+        let f = b[at];
+        at++;
+        if (f == insn.IR_LABEL) {
+            at += lbl_w(b, at);
+        } else if (f == insn.IR_LOC) {
+            at += word_w(b, at);
+            at += word_w(b, at);
+        } else if (f == insn.IR_TEXT) {
+            at += word_w(b, at);
+        } else {
+            let kinds = insn.ir_form(f).kinds;
+            let ki = 0;
+            while (ki < len(kinds)) {
+                let k = kinds[ki];
+                let nw = insn.ir_kind_words(k);
+                if (k == insn.O_LBL) {
+                    let nm = blob_lbl(b, at);
+                    if (len(nm) > 0) { out += nm; };
+                    at += lbl_w(b, at);
+                } else if (k == insn.O_DIFF) {
+                    let n1 = blob_lbl(b, at);
+                    if (len(n1) > 0) { out += n1; };
+                    at += lbl_w(b, at);
+                    let n2 = blob_lbl(b, at);
+                    if (len(n2) > 0) { out += n2; };
+                    at += lbl_w(b, at);
+                } else if (k == insn.O_MEM || k == insn.O_MEM0) {
+                    at += word_w(b, at);
+                    at += word_w(b, at);
+                    at += word_w(b, at);
+                    at += word_w(b, at);
+                    let nm = blob_lbl(b, at);
+                    if (len(nm) > 0) { out += nm; };
+                    at += lbl_w(b, at);
+                } else {
+                    at += word_w(b, at);
+                    if (nw > 1) { at += word_w(b, at); };
+                };
+                ki++;
+            };
+        };
+    };
+    out
+};
+
 // A type as text (for a pack or an object): a letter per kind, then its
 // parts -- names as netstrings, lists as a count and their items. Unlike
 // types.tstr it spells every type a unit may export (none, unknown and
@@ -13670,16 +13739,9 @@ def pack_unit_fields(u: Unit) -> str {
     out = pack_strs(out, pack_bodies(u));
     out = pack_strss(out, u.btext);
     out = pack_strs(out, u.labels);
-    let rf = u.refs;
-    out = pack_put(out, tostring(len(rf)));
-    let j = 0;
-    while (j < len(rf)) {
-        out = pack_strs(out, rf[j]);
-        j++;
-    };
     let rd = u.rodata;
     out = pack_put(out, tostring(len(rd)));
-    j = 0;
+    let j = 0;
     while (j < len(rd)) {
         out = pack_strs(out, rd[j]);
         j++;
@@ -13771,11 +13833,14 @@ def unit_read(cur: Cursor, name: str, bound: bool) -> Unit {
         btext += [pack_get_strs(cur)];
     };
     let labels = pack_get_strs(cur);
+    // Refs are derived, not stored. refs[i] is exactly ir_refs(bodies[i]), and
+    // the pack already carries the item blob, so the names can be read straight
+    // out of it -- 27,374 bytes, 17.8% of the pack, for one byte-level scan per
+    // body that materializes no IR (blob_refs, the mirror of ir_refs_item).
     let refs: [[str]] = [];
-    let nr = pack_num(cur);
     j = 0;
-    while (j < nr) {
-        refs += [pack_get_strs(cur)];
+    while (j < len(blob)) {
+        refs += [blob_refs(blob[j])];
         j++;
     };
     let rodata: [[str]] = [];
@@ -13822,7 +13887,7 @@ def std_unpack(pack: str, names: [str]) -> [Unit] {
 // fields, after a version line and the key it was compiled under (ycc.y
 // build_key) -- an object of another key, or a cut-off one, is no hit.
 def obj_version() -> str {
-    "ycc-unit 5\n"
+    "ycc-unit 6\n"
 };
 
 // An object carries a checksum over its own bytes, after them.

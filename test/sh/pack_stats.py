@@ -21,7 +21,6 @@ Inside those fields, in order (native.y pack_unit_fields), the shapes are:
     bodies   pack_strs  -> count, then one netstring per body blob
     btext    pack_strss -> count, then per body a pack_strs of its raw lines
     labels   pack_strs  -> count, then one netstring per body label
-    refs     count, then per body a pack_strs of its references
     rodata   count, then per entry a pack_strs
     globals  pack_strs  -> count, then one netstring per global
 
@@ -30,13 +29,16 @@ netstring and do NOT wrap the run in an outer length. Reading a run as a
 single netstring (as an earlier hand parse did) consumes only the count and
 leaves the cursor inside the run, and every later field then reads garbage.
 
+A unit's `refs` is NOT in the pack: refs[i] is exactly ir_refs(bodies[i]), so
+the reader recomputes it from each body's item blob (native.y blob_refs).
+
 The audit is only useful if it is exact, so the top level must end exactly at
 the pack's end and each unit must consume its fields byte for byte.
 """
 
 import sys
 
-FIELDS = ["files", "iface", "init", "bodies", "btext", "labels", "refs", "rodata", "globals"]
+FIELDS = ["files", "iface", "init", "bodies", "btext", "labels", "rodata", "globals"]
 
 
 class Bad(Exception):
