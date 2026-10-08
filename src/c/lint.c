@@ -44,7 +44,7 @@ static Yv *lint_disp(Yv *name);
 static ylong lint_num(Yv *name);
 static ylong lint_mark(LintSt st, Yv *name, ylong bit);
 static ylong lint_note(LintSt st, Yv *name, Yv *kind, ylong line, ylong col,
-                      int scal, int fresh, int strf, int vec);
+                      int scal, int fresh, int strf, int vec, int untyped);
 static ylong lint_note_top(LintSt st, Yv *node);
 static ylong lint_top_first(LintSt st, Yv *d, ylong fid);
 static ylong lint_file_of(ylong ln);
@@ -75,11 +75,25 @@ static int lint_pure(Yv *node);
 static ylong lint_short_empty_if(LintSt st, Yv *node);
 static ylong lint_short_if_ternary(LintSt st, Yv *node);
 static ylong lint_short_if(LintSt st, Yv *node);
+static ylong lint_short_if_chain(LintSt st, Yv *node);
+static Yv *lint_eq_name(Yv *cond);
+static int lint_is_lit(Yv *node);
+static ylong lint_short_foreach_elem(LintSt st, Yv *call);
+static ylong lint_short_none(LintSt st, Yv *stmts, ylong i);
+static Yv *lint_none_test(Yv *cond);
+static ylong lint_short_flag(LintSt st, Yv *stmts, ylong i);
+static int lint_flag_cond(Yv *cond, Yv *name);
+static Yv *lint_flat_body(Yv *body);
+static ylong lint_alias_param(LintSt st, Yv *node);
 static ylong lint_short_pair(LintSt st, Yv *stmts, ylong i);
 static ylong lint_short_while(LintSt st, Yv *loop);
 static int lint_find(Yv *node, Yv *name, ylong mask);
 static int lint_find_list(Yv *nodes, Yv *name, ylong mask);
 static int lint_resizes(Yv *node, Yv *name);
+static int lint_unwraps(Yv *node, Yv *name);
+static int lint_stores_index(Yv *node, Yv *name);
+static int lint_index_of(Yv *tgt, Yv *name);
+static int lint_resize_method(Yv *key);
 static int lint_find_from(Yv *nodes, ylong from, Yv *name, ylong mask);
 static int lint_step_one(Yv *body, Yv *iv);
 static Yv *lint_len_of(Yv *node);
@@ -202,12 +216,13 @@ Yv *lint_unit(Yv *ast, Yv *ast3, Yv *ofile, Yv *fmods, ylong wlevel, Yv *ogen) {
     Yv *vars = yav(0);
     Yv *flags = yav(0);
     Yv *rets = yav(0);
-    LintSt st = yr(15, "warns", warns, "vars", vars, "tops",
+    LintSt st = yr(18, "warns", warns, "vars", vars, "tops",
                    nameix_new(256), "flags", flags, "rets",
                    rets, "ridx", nameix_new(64), "self", ys(""), "wlevel",
                    yv_long(wlevel), "dropnext", yv_bool(0), "vused",
                    yv_bool(0), "loops", yv_long(0), "logic", yv_long(0),
-                   "voidfn", yv_bool(0), "tailflow", yv_bool(0), "chain", yv_long(0));
+                   "voidfn", yv_bool(0), "tailflow", yv_bool(0), "chain", yv_long(0),
+                   "reads", yav(0), "rline", yav(0), "rcol", yav(0));
     if (wlevel >= 1) {
         (void)lint_rets(st, yr_get(ast3, "stmts"));
     }
@@ -330,16 +345,17 @@ static ylong lint_mark(LintSt st, Yv *name, ylong bit) {
  * `scal`: it holds a number, string or bool, whose `+=` makes a new value
  * only it sees. `fresh`: it starts as an array literal no one else holds. */
 static ylong lint_note(LintSt st, Yv *name, Yv *kind, ylong line, ylong col,
-                       int scal, int fresh, int strf, int vec) {
+                       int scal, int fresh, int strf, int vec, int untyped) {
     Yv *d = lint_disp(name);
     if (!ys_eq_lit(d, "") && ys_byte_at(d, 0) != 95 &&
         ys_index_of(name, ys("$shadow")) < 0) {
         (void)ya_push(yr_get(st, "vars"),
-                      yr(10, "name", d, "kind", kind, "num",
+                      yr(11, "name", d, "kind", kind, "num",
                          yv_long(lint_num(name)), "line", yv_long(line),
                          "col", yv_long(col), "scal", yv_bool(scal),
                          "fresh", yv_bool(fresh), "strf", yv_bool(strf),
-                         "top", yv_bool(0), "vec", yv_bool(vec)));
+                         "top", yv_bool(0), "vec", yv_bool(vec),
+                         "untyped", yv_bool(untyped)));
     }
     return 0;
 }
@@ -665,6 +681,7 @@ static ylong lint_node(LintSt st, Yv *node, int used) {
         }
         if (yv_l(yr_get(st, "wlevel")) >= 2) {
             (void)lint_short_call(st, node);
+            (void)lint_short_foreach_elem(st, node);
         }
         return lint_unused_call(st, node, used, node);
     } else if (yv_l(k) == K_dot) {
@@ -937,6 +954,21 @@ static ylong lint_two(LintSt st, Yv *a, Yv *b) {
 static ylong lint_id(LintSt st, Yv *node, int used) {
     Yv *name = yr_get(node, "v");
     (void)lint_mark(st, name, 1);
+    /* How many times, and where the first read is (rule 2.10). */
+    ylong rn = lint_num(name);
+    if (rn > 0) {
+        Yv *rr = yr_get(st, "reads");
+        while (yv_len(rr) <= rn) {
+            (void)ya_push(rr, yv_long(0));
+            (void)ya_push(yr_get(st, "rline"), yv_long(0));
+            (void)ya_push(yr_get(st, "rcol"), yv_long(0));
+        }
+        ya_set(rr, rn, yv_long(yv_l(ya_get(rr, rn)) + 1));
+        if (yv_l(ya_get(rr, rn)) == 1) {
+            ya_set(yr_get(st, "rline"), rn, yr_get(node, "line"));
+            ya_set(yr_get(st, "rcol"), rn, yr_get(node, "col"));
+        }
+    }
     if (lint_droptail(st)) { return 0; }
     Yv *d = lint_disp(name);
     if (!used && !ys_eq_lit(d, "") && !ys_eq_lit(d, "none")) {
@@ -1401,6 +1433,12 @@ static ylong lint_short_empty_if(LintSt st, Yv *node) {
             st, ys("both branches of this 'if' are empty; it does nothing"),
             node);
     } else if (te) {
+        /* An `else if` chain has no shorter form here: the arm being dropped
+         * is the then, but what follows it is another condition. */
+        if (yv_b(yr_get(node, "has_else")) &&
+            yv_l(yr_get(yr_get(node, "els"), "k")) == K_kw_if) {
+            return 0;
+        }
         (void)lint_warn_at(
             st,
             ys("the 'if' branch is empty; invert the condition and drop the arm"),
@@ -1445,6 +1483,264 @@ static ylong lint_short_if_ternary(LintSt st, Yv *node) {
 static ylong lint_short_if(LintSt st, Yv *node) {
     (void)lint_short_empty_if(st, node);
     (void)lint_short_if_ternary(st, node);
+    (void)lint_short_if_chain(st, node);
+    return 0;
+}
+
+/* Rule 1.8: `if (x == A) { v } else if (x == B) { v } ... else { !v }` is
+ * one membership test, `x in [A, B, C]` (or the range of 1.7). */
+static ylong lint_short_if_chain(LintSt st, Yv *node) {
+    if (yv_l(yr_get(st, "chain")) != 0) { return 0; }
+    Yv *x = lint_eq_name(yr_get(node, "cond"));
+    if (ys_eq_lit(x, "")) { return 0; }
+    ylong v0 = lint_bool_lit(lint_single_stmt(yr_get(node, "then")));
+    if (v0 < 0) { return 0; }
+    ylong n = 1;
+    Yv *cur = node;
+    while (yv_b(yr_get(cur, "has_else")) &&
+           yv_l(yr_get(yr_get(cur, "els"), "k")) == K_kw_if) {
+        Yv *nx = yr_get(cur, "els");
+        if (!ys_eq(lint_eq_name(yr_get(nx, "cond")), x)) { return 0; }
+        if (lint_bool_lit(lint_single_stmt(yr_get(nx, "then"))) != v0) {
+            return 0;
+        }
+        cur = nx;
+        n++;
+    }
+    if (n < 2) { return 0; }
+    if (yv_b(yr_get(cur, "has_else"))) {
+        if (lint_bool_lit(lint_single_stmt(yr_get(cur, "els"))) == v0) {
+            return 0;
+        }
+    }
+    (void)lint_warn_at(
+        st,
+        ys("this 'if' chain tests one value against a set; write one "
+           "membership test"),
+        node);
+    return 0;
+}
+
+/* The name `L == <literal>` (either order), or "". */
+static Yv *lint_eq_name(Yv *cond) {
+    if (yv_l(yr_get(cond, "k")) != K_bin) { return ys(""); }
+    if (!ys_eq_lit(yr_get(cond, "op"), "==")) { return ys(""); }
+    Yv *l = yr_get(cond, "l");
+    Yv *r = yr_get(cond, "r");
+    if (yv_l(yr_get(r, "k")) == K_id && lint_is_lit(l)) { return yr_get(r, "v"); }
+    if (yv_l(yr_get(l, "k")) == K_id && lint_is_lit(r)) { return yr_get(l, "v"); }
+    return ys("");
+}
+
+static int lint_is_lit(Yv *node) {
+    ylong k = yv_l(yr_get(node, "k"));
+    return k == K_num || k == K_str || k == K_char || k == K_bool;
+}
+
+/* Rule 3.6: a `foreach` closure whose element parameter is unused while the
+ * body indexes the array again: `a.foreach((e, i) => { let x = a[i]; })` is
+ * `a.foreach((e2, i) => { let x = e2; })`, and the index goes when nothing
+ * else needs it. */
+static ylong lint_short_foreach_elem(LintSt st, Yv *call) {
+    Yv *callee = yr_get(call, "callee");
+    Yv *args = yr_get(call, "args");
+    if (yv_l(yr_get(callee, "k")) != K_dot || yv_len(args) != 1) { return 0; }
+    Yv *obj = yr_get(callee, "obj");
+    if (!ys_eq_lit(yr_get(callee, "key"), "foreach") ||
+        yv_l(yr_get(obj, "k")) != K_id ||
+        yv_l(yr_get(ya_get(args, 0), "k")) != K_func) {
+        return 0;
+    }
+    Yv *arr = yr_get(obj, "v");
+    Yv *f = ya_get(args, 0);
+    Yv *params = yr_get(f, "params");
+    if (yv_len(params) < 2) { return 0; }
+    Yv *el = ya_get(params, 0);
+    if (lint_find(yr_get(f, "body"), el, 0)) { return 0; }
+    if (!lint_find(yr_get(f, "body"), arr, 64)) { return 0; }
+    /* the element is not `a[i]` if the body writes a[i]: a store must keep
+     * the index */
+    if (lint_find(yr_get(f, "body"), arr, 128)) { return 0; }
+    (void)lint_warn_at(
+        st,
+        lint_cat(3,
+                 ys("the element parameter of this 'foreach' is unused; use it "
+                    "instead of indexing '"),
+                 lint_disp(arr), ys("' again")),
+        call);
+    return 0;
+}
+
+/* Rule 2.11: `let x = E; if (x == none) { A } else { B(x!) }` is
+ * `if let some(x) = E { B } else { A }`. */
+static ylong lint_short_none(LintSt st, Yv *stmts, ylong i) {
+    Yv *d = ya_get(stmts, i);
+    Yv *n = ya_get(stmts, i + 1);
+    if (!ys_eq_lit(yr_get(d, "kind"), "let") ||
+        yv_l(yr_get(yr_get(d, "typ"), "k")) != K_tnone) {
+        return 0;
+    }
+    if (!yv_b(yr_get(n, "has_else"))) { return 0; }
+    Yv *x = lint_none_test(yr_get(n, "cond"));
+    if (ys_eq_lit(x, "") || !ys_eq(x, yr_get(d, "name"))) { return 0; }
+    int tw = lint_find(yr_get(n, "then"), x, 16);
+    int ew = lint_find(yr_get(n, "els"), x, 16);
+    if (tw == ew) { return 0; }
+    Yv *some_arm = yr_get(n, "then");
+    Yv *none_arm = yr_get(n, "els");
+    if (ew) {
+        some_arm = yr_get(n, "els");
+        none_arm = yr_get(n, "then");
+    }
+    if (lint_find(some_arm, x, 32)) { return 0; }
+    if (lint_find(none_arm, x, 0)) { return 0; }
+    if (lint_find_from(stmts, i + 2, x, 0)) { return 0; }
+    (void)lint_warn_at(
+        st,
+        lint_cat(5, ys("'"), lint_disp(x),
+                 ys("' is tested for 'none' and unwrapped; write 'if let "
+                    "some("),
+                 lint_disp(x), ys(") = <expr> { ... } else { ... }'")),
+        d);
+    return 0;
+}
+
+/* The name compared against `none`, or "". */
+static Yv *lint_none_test(Yv *cond) {
+    if (yv_l(yr_get(cond, "k")) != K_bin) { return ys(""); }
+    Yv *op = yr_get(cond, "op");
+    if (!ys_eq_lit(op, "==") && !ys_eq_lit(op, "!=")) { return ys(""); }
+    Yv *l = yr_get(cond, "l");
+    Yv *r = yr_get(cond, "r");
+    if (yv_l(yr_get(l, "k")) == K_id && yv_l(yr_get(r, "k")) == K_id) {
+        if (ys_eq_lit(yr_get(r, "v"), "none")) { return yr_get(l, "v"); }
+        if (ys_eq_lit(yr_get(l, "v"), "none")) { return yr_get(r, "v"); }
+    }
+    return ys("");
+}
+
+/* Rule 2.5: a bool local that exists only to stop the loop.
+ *   `let f = true; while (f) { ...; f = false; ... };`
+ * is `while (true) { ...; break; ... };`. The flag must be written inside
+ * the loop, never read there (a read makes it real state), and never
+ * written after it. */
+static ylong lint_short_flag(LintSt st, Yv *stmts, ylong i) {
+    Yv *d = ya_get(stmts, i);
+    Yv *loop = ya_get(stmts, i + 1);
+    if (!ys_eq_lit(yr_get(d, "kind"), "let") ||
+        yv_l(yr_get(yr_get(d, "typ"), "k")) != K_tnone) {
+        return 0;
+    }
+    if (lint_bool_lit(yr_get(d, "v")) < 0) { return 0; }
+    Yv *f = yr_get(d, "name");
+    if (!lint_flag_cond(yr_get(loop, "cond"), f)) { return 0; }
+    if (lint_find(yr_get(loop, "body"), f, 0)) { return 0; }
+    if (!lint_find(yr_get(loop, "body"), f, 8)) { return 0; }
+    if (lint_find_from(stmts, i + 2, f, 8)) { return 0; }
+    (void)lint_warn_at(
+        st,
+        lint_cat(3, ys("'"), lint_disp(f),
+                 ys("' only stops this loop; write 'while (true)' and 'break' "
+                    "where it is set")),
+        d);
+    return 0;
+}
+
+/* The loop condition is `f`, `f == <bool>` or `f != <bool>`. */
+static int lint_flag_cond(Yv *cond, Yv *name) {
+    ylong k = yv_l(yr_get(cond, "k"));
+    if (k == K_id) { return ys_eq(yr_get(cond, "v"), name); }
+    if (k == K_un) {
+        if (ys_eq_lit(yr_get(cond, "op"), "!")) {
+            return lint_flag_cond(yr_get(cond, "e"), name);
+        }
+        return 0;
+    }
+    if (k == K_bin) {
+        Yv *op = yr_get(cond, "op");
+        if (ys_eq_lit(op, "==") || ys_eq_lit(op, "!=")) {
+            Yv *l = yr_get(cond, "l");
+            Yv *r = yr_get(cond, "r");
+            if (yv_l(yr_get(l, "k")) == K_id && ys_eq(yr_get(l, "v"), name)) {
+                return lint_bool_lit(r) >= 0;
+            }
+            if (yv_l(yr_get(r, "k")) == K_id && ys_eq(yr_get(r, "v"), name)) {
+                return lint_bool_lit(l) >= 0;
+            }
+        }
+    }
+    return 0;
+}
+
+/* The statement list of a function body. An arrow closure's body is
+ * `block1(parse_expr(...))`, so `{ ... }` lands as a block holding the
+ * block: unwrap those. */
+static Yv *lint_flat_body(Yv *body) {
+    Yv *sts = yr_get(body, "stmts");
+    while (yv_len(sts) == 1 &&
+           yv_l(yr_get(ya_get(sts, 0), "k")) == K_block) {
+        sts = yr_get(ya_get(sts, 0), "stmts");
+    }
+    return sts;
+}
+
+/* Rule 2.12: a closure that opens by renaming its own parameter.
+ *   `a.foreach((e) => { let l = e; BODY(l) });`
+ * is `a.foreach((l) => { BODY(l) });` -- the parameter carries the name. */
+static ylong lint_alias_param(LintSt st, Yv *node) {
+    Yv *params = yr_get(node, "params");
+    if (yv_len(params) == 0) { return 0; }
+    Yv *b = lint_flat_body(yr_get(node, "body"));
+    ylong di = -1;
+    ylong i = 0;
+    while (i < yv_len(b)) {
+        if (yv_l(yr_get(ya_get(b, i), "k")) != K_void) {
+            di = i;
+            break;
+        }
+        i = i + 1;
+    }
+    if (di < 0) { return 0; }
+    Yv *d = ya_get(b, di);
+    if (yv_l(yr_get(d, "k")) != K_decl) { return 0; }
+    /* an unwritten `let` only: `let f: TFunc = t;` is a cast, not an alias */
+    if (!ys_eq_lit(yr_get(d, "kind"), "let") ||
+        yv_l(yr_get(yr_get(d, "v"), "k")) != K_id ||
+        yv_l(yr_get(yr_get(d, "typ"), "k")) != K_tnone) {
+        return 0;
+    }
+    Yv *src = yr_get(d, "v");
+    Yv *p = ys("");
+    i = 0;
+    while (i < yv_len(params)) {
+        if (ys_eq(ya_get(params, i), yr_get(src, "v"))) { p = ya_get(params, i); }
+        i = i + 1;
+    }
+    if (ys_eq_lit(p, "") || ys_eq(yr_get(d, "name"), p)) { return 0; }
+    /* the new name must not be another parameter (it would collide) */
+    i = 0;
+    while (i < yv_len(params)) {
+        if (ys_eq(ya_get(params, i), yr_get(d, "name"))) { return 0; }
+        i = i + 1;
+    }
+    /* the parameter must not be mentioned after the alias, and the alias
+     * must never be written (that is a real copy, and 2.3's business) */
+    i = di + 1;
+    while (i < yv_len(b)) {
+        if (lint_find(ya_get(b, i), p, 0)) { return 0; }
+        if (lint_find(ya_get(b, i), yr_get(d, "name"), 8)) { return 0; }
+        i = i + 1;
+    }
+    /* and the alias must be read, or this is the unused-local rule's job */
+    if (!lint_find_list(ya_slice(b, di + 1, yv_len(b)), yr_get(d, "name"), 0)) {
+        return 0;
+    }
+    (void)lint_warn_at(
+        st,
+        lint_cat(5, ys("'"), lint_disp(yr_get(d, "name")),
+                 ys("' is only another name for the parameter '"),
+                 lint_disp(p), ys("'; rename the parameter")),
+        d);
     return 0;
 }
 
@@ -1456,7 +1752,9 @@ static ylong lint_short_pair(LintSt st, Yv *stmts, ylong i) {
     Yv *n = ya_get(stmts, i + 1);
     if (yv_l(yr_get(d, "k")) == K_decl && yv_l(yr_get(n, "k")) == K_kw_while) {
         (void)lint_short_index_loop(st, stmts, i);
+        (void)lint_short_flag(st, stmts, i);
     } else if (yv_l(yr_get(d, "k")) == K_decl && yv_l(yr_get(n, "k")) == K_kw_if) {
+        (void)lint_short_none(st, stmts, i);
         if (ys_eq_lit(yr_get(d, "kind"), "let") &&
             yv_l(yr_get(yr_get(d, "typ"), "k")) == K_tnone &&
             lint_pure(yr_get(d, "v")) && !yv_b(yr_get(n, "has_else")) &&
@@ -1523,11 +1821,32 @@ static ylong lint_short_while(LintSt st, Yv *loop) {
 static int lint_find(Yv *node, Yv *name, ylong mask) {
     ylong k = yv_l(yr_get(node, "k"));
     if (k == K_ret && (mask & 1) != 0) { return 1; }
+    if (k == K_ret && (mask & 256) != 0) {
+        if (yv_l(yr_get(yr_get(node, "e"), "k")) != K_void) { return 1; }
+    }
     if (k == K_kw_break && (mask & 2) != 0) { return 1; }
     if (k == K_kw_continue && (mask & 4) != 0) { return 1; }
     if ((mask & 8) != 0 && lint_resizes(node, name)) { return 1; }
+    if ((mask & 64) != 0 && k == K_index) {
+        Yv *ma = yr_get(node, "arr");
+        if (yv_l(yr_get(ma, "k")) == K_id && ys_eq(yr_get(ma, "v"), name)) {
+            return 1;
+        }
+    }
+    if ((mask & 128) != 0 && lint_stores_index(node, name)) { return 1; }
+    if (k == K_func && (mask & 1024) != 0) { return 1; }
+    if (k == K_func && (mask & 2048) != 0) {
+        if (lint_find(yr_get(node, "body"), ys(""), 256) ||
+            lint_find_list(yr_get(node, "defs"), ys(""), 256)) {
+            return 1;
+        }
+    }
+    if ((mask & 16) != 0 && lint_unwraps(node, name)) { return 1; }
     if (k == K_id) {
-        if (ys_eq_lit(name, "") || (mask & 8) != 0) { return 0; }
+        if (ys_eq_lit(name, "") || (mask & 8) != 0 || (mask & 64) != 0 ||
+            (mask & 128) != 0) {
+            return 0;
+        }
         return ys_eq(yr_get(node, "v"), name);
     } else if (k == K_bin) {
         return lint_find(yr_get(node, "l"), name, mask) ||
@@ -1535,6 +1854,8 @@ static int lint_find(Yv *node, Yv *name, ylong mask) {
     } else if (k == K_un) {
         return lint_find(yr_get(node, "e"), name, mask);
     } else if (k == K_call) {
+        /* `x!` is `unwrap(x)`: with mask 32 the argument is not a bare read */
+        if ((mask & 32) != 0 && lint_unwraps(node, name)) { return 0; }
         return lint_find(yr_get(node, "callee"), name, mask) ||
                lint_find_list(yr_get(node, "args"), name, mask);
     } else if (k == K_dot) {
@@ -1617,6 +1938,49 @@ static int lint_find_list(Yv *nodes, Yv *name, ylong mask) {
     return 0;
 }
 
+/* `x!` is `unwrap(x)`. */
+static int lint_unwraps(Yv *node, Yv *name) {
+    if (yv_l(yr_get(node, "k")) != K_call) { return 0; }
+    Yv *callee = yr_get(node, "callee");
+    Yv *args = yr_get(node, "args");
+    if (yv_l(yr_get(callee, "k")) != K_id || yv_len(args) != 1) { return 0; }
+    if (!ys_eq_lit(yr_get(callee, "v"), "unwrap")) { return 0; }
+    Yv *a = ya_get(args, 0);
+    if (yv_l(yr_get(a, "k")) != K_id) { return 0; }
+    return ys_eq(yr_get(a, "v"), name);
+}
+
+/* Whether this node stores through `name[...]` (a written element). The
+ * element form of 3.6 is wrong there: the closure's parameter is a copy
+ * while the store writes the array. */
+static int lint_stores_index(Yv *node, Yv *name) {
+    ylong k = yv_l(yr_get(node, "k"));
+    if (k == K_idxassign) {
+        Yv *arr = yr_get(node, "arr");
+        if (yv_l(yr_get(arr, "k")) != K_id) { return 0; }
+        return ys_eq(yr_get(arr, "v"), name);
+    } else if (k == K_opassign) {
+        return lint_index_of(yr_get(node, "tgt"), name);
+    } else if (k == K_incdec) {
+        return lint_index_of(yr_get(node, "tgt"), name);
+    }
+    return 0;
+}
+
+static int lint_index_of(Yv *tgt, Yv *name) {
+    if (yv_l(yr_get(tgt, "k")) != K_index) { return 0; }
+    Yv *arr = yr_get(tgt, "arr");
+    if (yv_l(yr_get(arr, "k")) != K_id) { return 0; }
+    return ys_eq(yr_get(arr, "v"), name);
+}
+
+static int lint_resize_method(Yv *key) {
+    return ys_eq_lit(key, "push") || ys_eq_lit(key, "pop") ||
+           ys_eq_lit(key, "remove") || ys_eq_lit(key, "insert") ||
+           ys_eq_lit(key, "shift") || ys_eq_lit(key, "unshift") ||
+           ys_eq_lit(key, "sort");
+}
+
 /* Whether this node changes what `name` holds as a whole (mask bit 8): a
  * whole-array assign or `op=`, `++`, or a length-changing method call. An
  * element store (`a[i] = x`) is not one. */
@@ -1638,11 +2002,7 @@ static int lint_resizes(Yv *node, Yv *name) {
         Yv *obj = yr_get(callee, "obj");
         if (yv_l(yr_get(obj, "k")) != K_id) { return 0; }
         Yv *key = yr_get(callee, "key");
-        return ys_eq(yr_get(obj, "v"), name) &&
-               (ys_eq_lit(key, "push") || ys_eq_lit(key, "pop") ||
-                ys_eq_lit(key, "remove") || ys_eq_lit(key, "insert") ||
-                ys_eq_lit(key, "shift") || ys_eq_lit(key, "unshift") ||
-                ys_eq_lit(key, "sort"));
+        return ys_eq(yr_get(obj, "v"), name) && lint_resize_method(key);
     }
     return 0;
 }
@@ -1947,6 +2307,7 @@ static ylong lint_func(LintSt st, Yv *node) {
         (void)lint_note_param(st, ya_get(params, i), ya_get(ptypes, i), line, col);
         i = i + 1;
     }
+    if (yv_l(yr_get(st, "wlevel")) >= 2) { (void)lint_alias_param(st, node); }
     Yv *body = yr_get(node, "body");
     int wt = yv_b(yr_get(st, "tailflow"));
     (void)yr_set(st, "tailflow", yv_bool(1));
@@ -1962,14 +2323,15 @@ static ylong lint_decl(LintSt st, Yv *node) {
     ylong col = yv_l(yr_get(node, "col"));
     if (ys_eq_lit(yr_get(node, "kind"), "def")) {
         (void)lint_note(st, yr_get(node, "name"), ys("def"), line, col, 0, 0,
-                        0, 0);
+                        0, 0, 0);
         return lint_def_body(st, yr_get(node, "name"), v);
     } else {
         (void)lint_note(st, yr_get(node, "name"), yr_get(node, "kind"), line,
                         col, lint_scal(yr_get(node, "typ"), v),
                         lint_fresh(v),
                         lint_strheld(yr_get(node, "typ"), v),
-                        lint_vec(yr_get(node, "typ"), v));
+                        lint_vec(yr_get(node, "typ"), v),
+                        yv_l(yr_get(yr_get(node, "typ"), "k")) == K_tnone);
         return lint_node(st, v, 1);
     }
 }
@@ -2129,6 +2491,22 @@ static ylong lint_vars(LintSt st) {
         name = yr_get(v, "name");
         line = yv_l(yr_get(v, "line"));
         col = yv_l(yr_get(v, "col"));
+        /* Rule 2.10: read exactly once, in the statement after its `let`, and
+         * never assigned again. Inline it there. */
+        if (yv_l(yr_get(st, "wlevel")) >= 2 &&
+            ys_eq_lit(yr_get(v, "kind"), "let") &&
+            yv_b(yr_get(v, "untyped")) && (f & 1) != 0 && (f & 6) == 0 &&
+            num < yv_len(yr_get(st, "reads")) &&
+            yv_l(ya_get(yr_get(st, "reads"), num)) == 1 &&
+            yv_l(ya_get(yr_get(st, "rline"), num)) == line + 1) {
+            Yv *at = yr(4, "k", yv_long(K_err), "msg", ys(""), "line",
+                        yv_long(line), "col", yv_long(col));
+            (void)lint_warn_at(
+                st,
+                lint_cat(3, ys("'"), name,
+                         ys("' is read once; write its value where it is used")),
+                at);
+        }
         if ((f & 1) != 0) {
             ;
         } else if ((f & 4) != 0 &&

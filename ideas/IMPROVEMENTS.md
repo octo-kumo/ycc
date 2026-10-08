@@ -30,10 +30,11 @@ goal is the language's: short, intuitive, safe, fast.
 
 ## Safe
 
-- **`src/c/lint.c` is not a copy of `lint.y` above level 0** (rules 1.8, 2.10
-  and the level-1 dropped-value check exist only in Y). Nothing notices: the
-  port suite compares default warnings only. Add `-W 2` to the port gate, then
-  close the gap.
+- **The C copy has no `--fix`**: `lint.c` now emits every warning `lint.y`
+  does (the port gate compares them at levels 0, 1 and 2), but the fixer
+  (`fx_*`, `lint_fix`, `ycc --fix`) exists only in Y. It never touches emitted
+  bytes, so the gate cannot see a drift there; a port would need `fix.y`'s text
+  rewrites as well.
 - **`-> void` accepts a body that has a value** and the value is still returned
   to callers (`lint_compound_op` was declared void and used as a predicate for
   years). Either make `-> void` discard, or warn on a void def whose last

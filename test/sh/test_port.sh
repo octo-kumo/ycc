@@ -66,4 +66,13 @@ while IFS= read -r f; do
 done < <(find "$ROOT/test/y" -name '*.y' | sort
          [ "${YPORT_SELF:-1}" = 0 ] || echo "$ROOT/src/y/ycc.y")
 
+# And at level 2, where the "shorten this" rules live (rules 1.x-3.x of
+# LINT_RULES.md). They were once Y-only, and nothing noticed: the C copy lacked
+# rules 1.8, 2.5, 2.10, 2.11 and 2.12 until this pass compared them.
+YFLAGS="-W 2"
+while IFS= read -r f; do
+    next_case && port_check "$f" "-W 2"
+done < <(find "$ROOT/test/y" -name '*.y' | sort
+         [ "${YPORT_SELF:-1}" = 0 ] || echo "$ROOT/src/y/ycc.y")
+
 print_summary "port"
