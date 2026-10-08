@@ -75,7 +75,7 @@ SKIP=0
 pass() { [ -n "${YQUIET:-}" ] || echo -e "${GREEN}PASS${NC} $1"; PASS=$((PASS + 1)); }
 fail() {
     echo -e "${RED}FAIL${NC} $1"
-    [ -n "$2" ] && echo "  $2"
+    [ -n "${2:-}" ] && echo "  $2"
     FAIL=$((FAIL + 1))
 }
 skip() { echo -e "${YELLOW}SKIP${NC} $1${2:+ ($2)}"; SKIP=$((SKIP + 1)); }

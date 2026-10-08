@@ -17,7 +17,7 @@
 # tested fails here rather than silently passing.
 set -uo pipefail
 
-ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+source "$(dirname "$0")/lib.sh"   # ROOT, CYCC, pass/fail counters, print_summary
 cd "$ROOT"
 
 CYCC="${CYCC:-$ROOT/cycc}"
@@ -29,14 +29,6 @@ PROG="$ROOT/test/math/ulp_check.y"
 [ -x "$YCC" ]  || { echo "test_math: $YCC not built (run 'make ycc')" >&2; exit 1; }
 [ -f "$TABLE" ] || { echo "test_math: no table at $TABLE" >&2; exit 1; }
 
-if [ ! -t 1 ] && [ -z "${VERBOSE:-}" ]; then
-    RED=$'\033[31m'; GREEN=$'\033[32m'; OFF=$'\033[0m'
-else
-    RED=''; GREEN=''; OFF=''
-fi
-pass() { echo "${GREEN}PASS${OFF} $1"; }
-fail() { echo "${RED}FAIL${OFF} $1"; rc=1; }
-rc=0
 TOL_ULP=1
 
 # Both compilers, and the two must say the same thing (the twin is 1:1, and a
@@ -229,4 +221,4 @@ if [ -n "$missing" ]; then
     fail "the harness does not dispatch: $(echo "$missing" | tr '\n' ' ')"
 fi
 
-exit $rc
+print_summary "math"

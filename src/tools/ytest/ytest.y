@@ -22,6 +22,7 @@
 // with the honest caveat that they are the C copy's lines (CLI shims and yv.c
 // have no Y twin, and are excluded from the total).
 import fs;
+import sort;
 
 // ── running a shell command and reading its answer ──────────────────────
 
@@ -110,32 +111,35 @@ type Cov = { name: str, pct: float, executed: long, total: long };
 // reached by a flag: `-g` is dwarf.y, `--target=windows` is pe.y, `-S` and
 // `-E` are two other exits from the driver, and an error fixture is the
 // diagnostic path. The self-compile is the single heaviest workload, first.
+// The coverage run's scratch directory, made by coverage() and removed at its end.
+let COV = "";
+
 def cov_default() -> [str] {
-    ["src/y/ycc.y -o /tmp/ytest-cov/out",
-     "-g test/y/examples/helloworld.y -o /tmp/ytest-cov/outg",
-     "--target=windows test/y/examples/helloworld.y -o /tmp/ytest-cov/out.exe",
+    ["src/y/ycc.y -o " + COV + "/out",
+     "-g test/y/examples/helloworld.y -o " + COV + "/outg",
+     "--target=windows test/y/examples/helloworld.y -o " + COV + "/out.exe",
      "-S test/y/native/t204_std_json.y > /dev/null",
      "-E src/tools/lsp/serve.y > /dev/null",
-     "-w test/y/native/t328_split_unrolled.y -o /tmp/ytest-cov/out2",
-     "test/y/native/t307_math_trap.y -o /tmp/ytest-cov/out3",
-     "test/y/native/t199_std_tui.y -o /tmp/ytest-cov/out4",
-     "test/y/native/t20_files_argv.y -o /tmp/ytest-cov/out5",
-     "test/y/native/t198_meta_basic.y -o /tmp/ytest-cov/out7",
-     "test/y/native/e110_lex_unterminated_string.y -o /tmp/ytest-cov/out8",
-     "test/y/native/e114_parse_expr_char.y -o /tmp/ytest-cov/out9",
-     "test/y/native/e01_badarith.y -o /tmp/ytest-cov/out6",
-     "--std-src test/y/native/t204_std_json.y -o /tmp/ytest-cov/out10",
-     "build /tmp/ytest-cov/proj"]
+     "-w test/y/native/t328_split_unrolled.y -o " + COV + "/out2",
+     "test/y/native/t307_math_trap.y -o " + COV + "/out3",
+     "test/y/native/t199_std_tui.y -o " + COV + "/out4",
+     "test/y/native/t20_files_argv.y -o " + COV + "/out5",
+     "test/y/native/t198_meta_basic.y -o " + COV + "/out7",
+     "test/y/native/e110_lex_unterminated_string.y -o " + COV + "/out8",
+     "test/y/native/e114_parse_expr_char.y -o " + COV + "/out9",
+     "test/y/native/e01_badarith.y -o " + COV + "/out6",
+     "--std-src test/y/native/t204_std_json.y -o " + COV + "/out10",
+     "build " + COV + "/proj"]
 };
 
 // The one-package project the `build` entry compiles, written before the
 // corpus runs. It is what reaches pkg.y and ycc.y's build path, which no
 // single-file compile does.
 def make_proj() -> long {
-    fs.make_dirs("/tmp/ytest-cov/proj");
-    fs.write_file("/tmp/ytest-cov/proj/y.toml",
+    fs.make_dirs(COV + "/proj");
+    fs.write_file(COV + "/proj/y.toml",
                         "[package]\nname = \"proj\"\nbin = \"main.y\"\n");
-    fs.write_file("/tmp/ytest-cov/proj/main.y", "print(\"cov\");\n");
+    fs.write_file(COV + "/proj/main.y", "print(\"cov\");\n");
     0
 };
 
@@ -148,12 +152,12 @@ def cov_corpus(argv: [str]) -> [str] {
         while (i < len(argv)) {
             // The EXISTENCE CHECK BELONGS HERE, on the path, and not in
             // coverage(): by the time the corpus is a command string it ends
-            // in " -o /tmp/ytest-cov/out", and testing THAT for existence
+            // in " -o " + COV + "/out", and testing THAT for existence
             // rejects every valid path too. (Tested: it did.)
             if (!fs.exists(argv[i])) {
                 eputs("ytest: no such program: " + argv[i]);
             } else {
-                out += argv[i] + " -o /tmp/ytest-cov/out";
+                out += argv[i] + " -o " + COV + "/out";
             };
             i = i + 1;
         };
@@ -173,7 +177,7 @@ def c_sources() -> [str] {
             };
         };
     };
-    fs.sort_names(out)
+    sort.sort_str(out)
 };
 
 // The number after `prefix` and before `%` in ONE line, or -1.
@@ -200,7 +204,7 @@ def num_after(line: str, marker: str) -> long {
 // build directory and the argument is the .gcno, so gcov never writes its
 // `.gcov` file into the tree.
 def one_cov(name: str) -> Cov {
-    let cmd = "cd /tmp/ytest-cov && gcov -o /tmp/ytest-cov /tmp/ytest-cov/cycc-cov-"
+    let cmd = "cd " + COV + " && gcov -o " + COV + " " + COV + "/cycc-cov-"
             + name + ".gcno 2>/dev/null";
     let r = sh(cmd);
     let lines = split(r.out, "\n");
@@ -217,7 +221,7 @@ def one_cov(name: str) -> Cov {
     };
     let hit = total;
     if (pct >= 0.0) {
-        hit = tolong(0.5 + (pct / 100.0) * tofloat(total))!;
+        hit = tolong(0.5 + (pct / 100.0) * tofloat(total)!)!;
     };
     return { name: name, pct: pct, executed: hit, total: total };
 };
@@ -226,13 +230,19 @@ def one_cov(name: str) -> Cov {
 // file's line coverage (a file gcov did not see comes back -1 / 0).
 def coverage(argv: [str]) -> long {
     let corpus = cov_corpus(argv);
-    let build = "rm -rf /tmp/ytest-cov && mkdir -p /tmp/ytest-cov && "
-              + "gcc --coverage -Wall -std=gnu99 -o /tmp/ytest-cov/cycc-cov src/c/*.c";
+    // a directory of its own (mktemp -t honours $TMPDIR), removed at the end
+    COV = trim(sh("mktemp -d -t ytest-cov.XXXXXX").out);
+    if (COV == "") {
+        eputs("ytest: cannot make a scratch directory");
+        return 1;
+    };
+    let build = "gcc --coverage -Wall -std=gnu99 -o " + COV + "/cycc-cov src/c/*.c";
     print("== coverage: building the instrumented C copy ==");
     let b = sh(build);
     if (b.status != 0) {
         print("build failed:");
         print(b.out);
+        sh("rm -rf " + COV);
         return 1;
     };
     make_proj();
@@ -246,12 +256,13 @@ def coverage(argv: [str]) -> long {
     // exists is an error.
     let c = 0;
     while (c < len(corpus)) {
-        sh("(ulimit -v 3670016; /tmp/ytest-cov/cycc-cov " + corpus[c]
+        sh("(ulimit -v 3670016; " + COV + "/cycc-cov " + corpus[c]
          + ") >/dev/null 2>&1");
         c = c + 1;
     };
     if (len(corpus) == 0) {
         eputs("ytest: nothing to measure -- every corpus path was missing");
+        sh("rm -rf " + COV);
         return 1;
     };
     let names = c_sources();
@@ -277,6 +288,7 @@ def coverage(argv: [str]) -> long {
     if (sum_t > 0) { whole = 100.0 * tofloat(sum_e)! / tofloat(sum_t)!; };
     print("coverage: " + tostring(sum_e) + "/" + tostring(sum_t) + " lines = "
         + fmt_pct(whole) + " over " + tostring(seen) + " files");
+    sh("rm -rf " + COV);
     0
 };
 

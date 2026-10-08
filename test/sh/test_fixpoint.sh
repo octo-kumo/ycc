@@ -20,17 +20,11 @@
 # Skips (exit 0) if ./ycc is not built; build it with `make ycc`. YSELF names
 # another self-hosted build to check instead (`make check`: ./ynew).
 
-PASS=0
-FAIL=0
-ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+source "$(dirname "$0")/lib.sh"   # ROOT, pass/fail counters, print_summary
 YCC_BIN="${YSELF:-$ROOT/ycc}"
 SRC="$ROOT/src/y/ycc.y"
 FP_MEM_KB="${FP_MEM_KB:-2097152}"
 ulimit -v "$FP_MEM_KB"
-
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-NC='\033[0m'
 
 echo "═══════════════════════════════════════════"
 echo "  ycc self-hosting fixpoint"
@@ -52,14 +46,7 @@ GEN2=$W/gen2
 GEN3=$W/gen3
 
 check() {
-    if [ "$2" = "ok" ]; then
-        echo -e "${GREEN}PASS${NC} $1"
-        PASS=$((PASS + 1))
-    else
-        echo -e "${RED}FAIL${NC} $1"
-        [ -n "$3" ] && echo "  $3"
-        FAIL=$((FAIL + 1))
-    fi
+    if [ "$2" = "ok" ]; then pass "$1"; else fail "$1" "${3:-}"; fi
 }
 
 # Generation 2: ./ycc (built by cycc) compiles its own source.
@@ -145,10 +132,4 @@ else
     check "self-built compiler produces working binaries" bad "compile failed"
 fi
 
-echo ""
-echo "═══════════════════════════════════════════"
-TOTAL=$((PASS + FAIL))
-echo -e "  Results: ${GREEN}$PASS passed${NC}, ${RED}$FAIL failed${NC} / $TOTAL total"
-echo "═══════════════════════════════════════════"
-
-[ $FAIL -eq 0 ] && exit 0 || exit 1
+print_summary "fixpoint"
