@@ -36,8 +36,10 @@ is the chronological log (round by round); **this file is the summary you want f
 **Rules that cost rounds here, every one of them:**
 
 * after an embedded `arch/*.s` change rebuild **both** engines before reading a suite number;
-* `src/y/std/*.y` is **embedded** in the compiler now, so a std edit needs both engines
-  rebuilt too — `make rebless` is how that is checked;
+* no std source is **embedded** in the compiler any more: every `src/y/std/*.y` is compiled
+  into the std pack attached to `ycc` (`STD_SRCS` in the Makefile forces the rebuild), so a
+  std edit is invisible to a packed `ycc` until it is rebuilt — test it with `cycc`,
+  `--std-src`, or `make rebless`, which is also the gate;
 * an instrumented build is only believed if the run that produced the transcript used it:
   a stale image makes a run say anything;
 * run the **main tree's** compiler as a control before believing this branch broke something.

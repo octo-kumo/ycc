@@ -47,3 +47,5 @@ examples/**
 !examples/**/*.*
 __pycache__/
 *.pyc
+_ktmp/
+ycc_t
