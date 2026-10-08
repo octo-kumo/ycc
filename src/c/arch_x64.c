@@ -5,21 +5,10 @@
 #include "arch_x64.h"
 #include "target.h"
 
-Y_EMBED(PRELUDE_ASM, "src/y/arch/prelude.s")
-Y_EMBED(THREADS_ASM, "src/y/arch/threads.s")
-/* The Windows half of the arch prelude: the blocks of prelude.s that reach
-   the kernel, replaced whole (see arch_windows_lines). It is DATA here, not a
-   second arch module — a path import is flattened into its importer, so a
-   second arch_x64.y could not coexist (arch_frame would be defined twice and
-   the second would win). */
-Y_EMBED(W_SYS_ASM, "src/y/arch/wsys.s")
-/* The float primitives std/math.y's kernels reach for (`native def`s with no
-   body -- see NATIVE.md, "Backend"), one embedded copy like the rest. */
-Y_EMBED(MATH_ASM, "src/y/arch/math.s")
-/* The Windows syscall self-test: the probe w_self_test_lines returns, run
-   from _start before anything else on that target. Its own file so GNU as
-   reads it (make asm-check) like the other arch assembly. */
-Y_EMBED(WSELFTEST_ASM, "src/y/arch/wselftest.s")
+/* The machine code lives in src/y/arch/*.s, read by both compilers and
+   embedded in neither: it travels in the std pack as blocks of IR, and the
+   files are read from disk (native.c arch_src) only to build the pack or by a
+   compiler with no pack (arch_x64.y's header has the file list). */
 
 /* imported */
 /* target.c's res_target / target_is_windows (target.y), the one other module
@@ -33,7 +22,7 @@ Y_EMBED(WSELFTEST_ASM, "src/y/arch/wselftest.s")
    it. */
 static ylong l_sysno(Yv *name);
 static ylong w_sysno(Yv *name);
-static Yv *arch_windows_lines(void);
+static Yv *arch_windows_lines(Yv *prelude, Yv *wsys);
 static Yv *arch_win_blocks(Yv *lines);
 static ylong arch_win_check(Yv *lines, Yv *blocks);
 static int arch_win_labeled(Yv *lines, Yv *nm);
@@ -129,13 +118,21 @@ static ylong w_sysno(Yv *name) {
    arch_set builds its blocks from them, once, when the std pack is written or
    when a compiler has none. `wselftest` is the Windows syscall self-test
    (arch/wselftest.s), which the Windows prelude carries and _start calls. */
-Yv *arch_set_lines(Yv *which) {
-    if (ys_eq_lit(which, "linux")) { return arch_asm_lines(PRELUDE_ASM()); }
-    else if (ys_eq_lit(which, "windows")) { return arch_windows_lines(); }
-    else if (ys_eq_lit(which, "wselftest")) { return arch_asm_lines(WSELFTEST_ASM()); }
-    else if (ys_eq_lit(which, "threads")) { return arch_asm_lines(THREADS_ASM()); }
-    else if (ys_eq_lit(which, "math")) { return arch_asm_lines(MATH_ASM()); }
-    else {
+/* The files each set is built from, under src/y/arch (arch_x64.y). */
+Yv *arch_set_files(Yv *which) {
+    if (ys_eq_lit(which, "linux")) { return yav(1, ys("prelude")); }
+    else if (ys_eq_lit(which, "windows")) { return yav(2, ys("prelude"), ys("wsys")); }
+    else { return yav(1, which); }
+}
+
+/* `texts` holds the files arch_set_files names, in that order. */
+Yv *arch_set_lines(Yv *which, Yv *texts) {
+    if (ys_eq_lit(which, "windows")) {
+        return arch_windows_lines(ya_get(texts, 0), ya_get(texts, 1));
+    } else if (ys_eq_lit(which, "linux") || ys_eq_lit(which, "wselftest")
+               || ys_eq_lit(which, "threads") || ys_eq_lit(which, "math")) {
+        return arch_asm_lines(ya_get(texts, 0));
+    } else {
         puts_(ys_cat(ys_cat(ys("ycc: internal error: no arch block set '"), which), ys("'\n")));
         exit_(1);
         return yav(0);
@@ -366,8 +363,8 @@ Yv *arch_consts(void) {
 // arch_win_find): it means the Windows half was written against a block that
 // moved, and the substitution would silently do nothing. `make asm-check`
 // gives GNU as a second opinion on wsys.s as well.
-static Yv *arch_windows_lines(void) {
-    Yv *blocks = arch_win_blocks(ys_split(W_SYS_ASM(), ys("\n")));
+static Yv *arch_windows_lines(Yv *prelude, Yv *wsys) {
+    Yv *blocks = arch_win_blocks(ys_split(wsys, ys("\n")));
     ylong i = 0;
     while (i < yv_len(blocks)) {
         if (ys_eq_lit(ya_get(ya_get(blocks, i), 1), "2")) {
@@ -378,7 +375,7 @@ static Yv *arch_windows_lines(void) {
         }
         i = i + 1;
     }
-    Yv *lines = arch_asm_lines(PRELUDE_ASM());
+    Yv *lines = arch_asm_lines(prelude);
     arch_win_check(lines, blocks);
     return arch_win_sub(lines, blocks);
 }

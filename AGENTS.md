@@ -41,9 +41,15 @@ semantics. **Every change to `src/y/*.y` gets the same change in `src/c/*.c`.**
   is rebuilt; test one with `cycc`, `--std-src`, or `make ynew`. A project-local
   `name.y` (beside the importer or in a package root) shadows the std unit
   `name`.
-- `src/y/arch/*.s` is embedded the same way, through `arch_x64.y`/`arch_x64.c`
-  (PORTING.md rules 11–12). Whole-line `#` comments are dropped before the
-  in-tree assembler sees them; `make asm-check` checks the files with GNU `as`.
+- **The runtime assembly is not embedded either.** `src/y/arch/*.s` is cut into
+  blocks of IR once (native.y `arch_blocks`: one per column-0 label, a line an IR
+  form reproduces exactly as an item, any other line as raw text) and the std pack
+  carries the blocks (`arch.linux`, `arch.windows`, `arch.wselftest`,
+  `arch.threads`, `arch.math`); a compile decodes only the blocks it keeps. The
+  files are read from disk (`arch_src`) only to build the pack or by a pack-less
+  compiler, so the same rebuild rule as for `std/` applies (`ARCH_SRCS`).
+  Whole-line `#` comments are dropped before the in-tree assembler sees them;
+  `make asm-check` checks the files with GNU `as`.
 - **Under 4 GB of memory, always** — the machine goes down past it. The Makefile
   runs recipes through `test/sh/capped.sh` (`ulimit -S -v 3670016`); by hand,
   `(ulimit -v 3670016; timeout … cmd)`, valgrind/gdb/perf included. Hitting the
@@ -218,7 +224,7 @@ under its bare name because generated code calls it by label, and a program's ow
   `native.y` (emitter), `meta.y`, `arch_x64.y`, `enc64.y`, `asm.y`, `elf.y`,
   `pe.y`, `dwarf.y`, `target.y`, `tags.y`; `std/` (the four core units, plus
   `fs`, `net`, `struct`, `math`, `crypto`, `x509`, `tls`, `regex`, `json`,
-  `args`, `tui`, `utf8`, … — all of them embedded, see Build); `arch/*.s`.
+  `args`, `tui`, `utf8`, … — all of them pack units, see Build); `arch/*.s`.
 - `src/c/` — the 1:1 copy, plus `yv.c`/`yv.h` (the value model; no Y twin).
   `PORTING.md` is the contract.
 - `src/tools/lsp/` — `yserve` and its modules (`LSP.md` is the design; the VS Code

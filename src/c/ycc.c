@@ -259,8 +259,17 @@ Yv *pack_magic(void) {
     return ys("YCCPACK1");
 }
 
-/* The pack attached to this binary, or "" when there is none. */
+/* The pack attached to this binary, or "" when there is none. Read once
+ * (ycc.y self_pack). */
+static Yv *self_pack_read(void);
+static Yv *self_pack_text;
+
 Yv *self_pack(void) {
+    if (!self_pack_text) { self_pack_text = self_pack_read(); }
+    return self_pack_text;
+}
+
+static Yv *self_pack_read(void) {
     int fd = open("/proc/self/exe", O_RDONLY);
     if (fd < 0) {
         return ys("");
@@ -1163,6 +1172,8 @@ ylong y_main(Yv *cmdline) {
         (ys_eq_lit(ya_get(cmdline, 1), "build") ||
          ys_eq_lit(ya_get(cmdline, 1), "vendor"))) {
         Yv *ba = build_args(cmdline);
+        /* a meta block's generator links the std units too (meta_compile_gen) */
+        if (!yv_b(yr_get(ba, "std_src"))) { set_meta_pack(self_pack()); }
         Yv *one = yr_get(ba, "one");
         if (ys_eq_lit(ya_get(cmdline, 1), "build") && yv_len(one) == 0) {
             build_project(yr_get(ba, "dir"), yv_b(yr_get(ba, "debug")),
@@ -1220,6 +1231,10 @@ ylong y_main(Yv *cmdline) {
              * meta_begin here and nothing else -- resolve_unit's meta_prepare
              * is what runs the generator. */
             (void)meta_begin();
+            /* A meta block's generator is compiled during the resolve below and
+             * links the std units as the program does: from this binary's pack
+             * (none under --std-src). */
+            if (!yv_b(yr_get(pargs, "std_src"))) { set_meta_pack(self_pack()); }
             /* get base dir from file path (use last slash, like C compiler's
              * strrchr) */
             ylong last_slash = ys_last_index_of(file, ys("/"));

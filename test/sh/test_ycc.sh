@@ -150,6 +150,8 @@ for compiler in "$YCC_BIN" "$CYCC"; do
     mkdir -p "$install"
     cp "$compiler" "$install/ycc-installed"
     cp -r "$ROOT/src/y/std" "$install/std"
+    # a compiler with no pack (cycc) builds the runtime from arch/ beside it too
+    cp -r "$ROOT/src/y/arch" "$install/arch"
     rm -f "$PATH_DIR/work/out"
     out=$(cd "$PATH_DIR/work" && PATH="$install:$PATH" timeout $(( 120 * YTIMEOUT_SCALE )) \
         ycc-installed prog.y -o out </dev/null 2>&1)

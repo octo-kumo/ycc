@@ -205,22 +205,19 @@ requires byte-identical binaries).
 10. **Errors and exits** behave like the Y code: `exit(n)` terminates;
    diagnostics go through `puts`/`eputs` unchanged.
 
-11. **Embedded files**: a top-level `embed NAME from "./arch/prelude.s";` (a
-    str const holding the file, read when the compiler is built) →
-    `Y_EMBED(NAME, "src/y/arch/prelude.s")` (yv.h: the assembler's `.incbin`,
-    path relative to the repo root, where the Makefile runs gcc), read as
-    `NAME()`. Only the arch assembly is embedded (rule 12); no std source is.
+11. **No embedded files.** Neither compiler embeds a file of its own: the std
+    units and the arch runtime travel compiled in the std pack attached to
+    `ycc`, and both twins read `src/y/std` and `src/y/arch` from disk only to
+    build that pack, under `--std-src`, or when they carry no pack (`cycc`
+    never does). A path lookup (`std_lib_path`, `arch_src`) is ported as one;
+    the language's own `embed NAME from "path";` for a *program* is unaffected.
 
-12. **Assembly files**, the same mechanism and the same reason: `src/y/arch/
-    *.s` holds the machine code (arch_x64.y `embed PRELUDE_ASM from
-    "./arch/prelude.s";` → `Y_EMBED(PRELUDE_ASM, "src/y/arch/prelude.s")`).
-    Unlike the std units this is not text either compiler reads — it is text
-    the compiler *emits*, line for line — so the asm exists ONCE instead of
-    once per copy, and the twin of `arch_prelude_lines` is a loop over the
-    embedded text, not 1500 string literals. Only `arch_asm_lines` (the split)
-    is ported; the lines themselves are not in the C source at all. Two
-    consequences: the Makefile lists them in `ARCH_EMBEDS` (every rule that
-    *builds* a compiler needs them, since they are read at build time), and a
+12. **Assembly files**: `src/y/arch/*.s` holds the machine code, ONCE for both
+    twins -- the lines are not in either compiler's source. Both cut them into
+    the same blocks of IR (`arch_blocks`, `asm.ir_parse_line`), and the std pack
+    each writes must be byte-identical, refs and raw lines included (that is
+    what found the C copy's fixed SSE-mnemonic list). The Makefile lists the
+    files in `ARCH_SRCS` so every packed binary is rebuilt when one changes. A
     `#` comment line in a `.s` file is legal and dropped by `arch_asm_lines`,
     so the in-tree assembler never sees one. `make asm-check` reads them with
     GNU `as`.

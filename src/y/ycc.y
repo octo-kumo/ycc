@@ -225,8 +225,20 @@ def pack_magic() -> str {
     "YCCPACK1"
 };
 
-// The pack attached to this binary, or "" when there is none.
+// The pack attached to this binary, or "" when there is none. Read once: the
+// driver hands it to the meta pass before the resolve and to std_units after.
+let self_pack_text = "";
+let self_pack_done = false;
+
 def self_pack() -> str {
+    if (!self_pack_done) {
+        self_pack_text = self_pack_read();
+        self_pack_done = true;
+    };
+    self_pack_text
+};
+
+def self_pack_read() -> str {
     let fd = syscall(257, -100, "/proc/self/exe", 0, 0);
     if (fd < 0) {
         ""
@@ -911,6 +923,8 @@ def main(cmdline: [str]) -> long {
     }
     if (len(cmdline) > 1 && (cmdline[1] == "build" || cmdline[1] == "vendor")) {
         let ba = build_args(cmdline);
+        // a meta block's generator links the std units too (meta_compile_gen)
+        if (!ba.std_src) { nativelib.set_meta_pack(self_pack()); };
         if (cmdline[1] == "build" && len(ba.one) == 0) {
             build_project(ba.dir, ba.debug, ba.nowarn, ba.wlevel, ba.allow_exec, ba.std_src);
         } else if (cmdline[1] == "build") {
@@ -950,6 +964,10 @@ def main(cmdline: [str]) -> long {
             // meta_begin here and nothing else -- resolve_unit's meta_prepare
             // is what runs the generator.
             meta.meta_begin();
+            // A meta block's generator is compiled during the resolve below and
+            // links the std units as the program does: from this binary's pack
+            // (none under --std-src, so from source).
+            if (!pargs.std_src) { nativelib.set_meta_pack(self_pack()); 0; }
             // get base dir from file path (use last slash, like C compiler's strrchr)
             let last_slash = last_index_of(file, "/");
             let base_dir = ".";

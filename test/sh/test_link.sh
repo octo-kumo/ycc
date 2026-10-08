@@ -269,6 +269,18 @@ if [ "$lone_out" = "3.141593" ]; then
 else
     fail "lone ycc: a std import resolves with no std/ on disk" "$(echo "$lone_out" | head -c 120)"
 fi
+# A meta block's generator is compiled and run during the resolve, and it links
+# the std units like any program -- from the compiler's own pack. It used to ask
+# for them from source, which only worked while sources were embedded: a lone
+# ycc then failed on every program with a block.
+printf 'let n = 6 * 7;\n#{ "print(\\"" + tostring(n) + " from a block\\");\\n" }#\n' > "$TMPD/lone/run/mb.y"
+mb_out=$( ( cd "$TMPD/lone/run" && timeout "$CTO" "$TMPD/lone/bin/ycc" mb.y -o mb && \
+            timeout "$CTO" ./mb </dev/null ) 2>&1 )
+if [ "$mb_out" = "42 from a block" ]; then
+    pass "lone ycc: a meta block's generator links the std from the pack"
+else
+    fail "lone ycc: a meta block's generator links the std from the pack" "$(echo "$mb_out" | head -c 160)"
+fi
 # No std source is embedded, so a lone ycc asked to compile the std from source
 # (--std-src) has nothing to compile from: a diagnostic naming the first unit it
 # needs, exit 1 -- never a crash or a silent fallback.
@@ -277,6 +289,27 @@ if [ "$lone_ec" -eq 1 ] && echo "$lone_err" | grep -qE "^error: std module '[a-z
     pass "lone ycc --std-src: a std unit with no source on disk is a diagnostic"
 else
     fail "lone ycc --std-src: a std unit with no source on disk is a diagnostic" "exit $lone_ec: $(echo "$lone_err" | head -c 160)"
+fi
+
+# A compiler with no pack (cycc) builds the arch runtime's blocks from
+# src/y/arch at run time -- nothing is embedded -- so one that finds the std
+# sources but no arch files must say which file it lacks, not crash or emit a
+# program without its runtime. The std sources are copied in so the std units
+# compile and the arch lookup is what fails.
+if [ -x "${CYCC:-}" ]; then
+    # its own copy: the one in the checkout finds src/y/arch beside itself
+    mkdir -p "$TMPD/noarch/src/y" "$TMPD/noarch/bin"
+    cp -R "$ROOT/src/y/std" "$TMPD/noarch/src/y/std"
+    cp "$CYCC" "$TMPD/noarch/bin/cycc"
+    printf 'print(1);\n' > "$TMPD/noarch/p.y"
+    na_err=$( ( cd "$TMPD/noarch" && timeout "$CTO" "$TMPD/noarch/bin/cycc" -o p p.y </dev/null ) 2>&1 ); na_ec=$?
+    if [ "$na_ec" -eq 1 ] && echo "$na_err" | grep -qF "error: the arch runtime 'prelude.s': not in this compiler's std pack, and no src/y/arch/prelude.s beside it or in the working directory"; then
+        pass "a pack-less compiler with no src/y/arch names the missing runtime file"
+    else
+        fail "a pack-less compiler with no src/y/arch names the missing runtime file" "exit $na_ec: $(echo "$na_err" | head -c 160)"
+    fi
+else
+    skip "a pack-less compiler with no src/y/arch" "CYCC not set"
 fi
 
 # The pack's framing must stay walkable field by field. pack_stats.py knows

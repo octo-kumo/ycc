@@ -684,6 +684,14 @@ def meta_run_generator(src: str, base_dir: str, allow_exec: bool, root: str,
     0
 };
 
+// The pack the driver read from its own binary (ycc.y self_pack), or "" under
+// --std-src: what a meta generator's std units come from.
+let meta_pack = "";
+
+def set_meta_pack(p: str) -> void {
+    meta_pack = p;
+};
+
 // Compile G the way ycc compiles a program, with the pass OFF, and hand back
 // its image. G's errors are reported with G's own origin map, so they read
 // `<file>.meta:<source line>` -- visibly about the synthesized text and not
@@ -697,7 +705,10 @@ def meta_compile_gen() -> [byte] {
     if (meta.mg_probe(nr.src, meta.mg_gbase)) {
         meta.mg_report("a meta block cannot appear in a module imported into the meta generator: the generator's text is compiled with the pass off, so nothing in it is scanned");
     };
-    let su = std_units(nr.std, "");
+    // the std units from the compiler's own pack, as the program's are: no std
+    // or arch source is embedded, so "" here (from source) failed in any ycc
+    // without src/y beside it
+    let su = std_units(nr.std, meta_pack);
     // nr.src, not gt: the hoisted imports were spliced in by the resolve above,
     // and tokenizing gt would hand the parser a literal `import` line
     let ast = parser.parse_program(lexer.tokenize(nr.src));
@@ -2160,11 +2171,51 @@ def arch_set(which: str) -> [PBlk] {
     } else {
         let got = arch_unpack(arch_pack, "arch." + which);
         let blks: [PBlk] = [];
-        if (got.ok) { blks = got.blks; } else { blks = arch_blocks(arch.arch_set_lines(which)); };
+        if (got.ok) { blks = got.blks; } else { blks = arch_blocks(arch_lines_of(which)); };
         arch_cache_names += which;
         arch_cache_sets += [blks];
         blks
     }
+};
+
+// The lines of block set `which`, from its files on disk (arch_src): only a
+// compile with no std pack, or the one writing the pack, reads them.
+def arch_lines_of(which: str) -> [str] {
+    let texts: [str] = [];
+    arch.arch_set_files(which).foreach((f) => {
+        texts += arch_src(f);
+    });
+    arch.arch_set_lines(which, texts)
+};
+
+// src/y/arch/<name>.s, searched like a std source (std_lib_path): in the
+// working directory's checkout, then beside the compiler. None is a hard
+// error: no program links without the runtime.
+def arch_src(name: str) -> str {
+    let cands: [str] = [];
+    cands += "src/y/arch/" + name + ".s";
+    let d = self_dir();
+    if (len(d) > 0) {
+        cands += d + "/arch/" + name + ".s";
+        cands += d + "/src/y/arch/" + name + ".s";
+        cands += d + "/../src/y/arch/" + name + ".s";
+    };
+    let out = "";
+    let found = false;
+    let i = 0;
+    while (!found && i < len(cands)) {
+        let t = fs.read_file(cands[i]);
+        if (!(t == none)) {
+            out = unwrap(t);
+            found = true;
+        };
+        i = i + 1;
+    };
+    if (!found) {
+        puts("error: the arch runtime '" + name + ".s': not in this compiler's std pack, and no src/y/arch/" + name + ".s beside it or in the working directory\n");
+        exit(1);
+    };
+    out
 };
 
 // This target's prelude, its os_call names checked.
@@ -14281,16 +14332,16 @@ def std_pack(units: [Unit]) -> str {
     // every compile (arch_set), so no compile parses the assembly.
     // The Windows prelude is the Linux one with the blocks wsys.s replaces and
     // adds, so a block the two share travels once (arch_pack_set's `base`).
-    let linux = arch_blocks(arch.arch_set_lines("linux"));
+    let linux = arch_blocks(arch_lines_of("linux"));
     let none: [PBlk] = [];
     sets.foreach((w) => {
         out = pack_put(out, "arch." + w);
         if (w == "linux") {
             out = pack_put(out, pack_store(arch_pack_set(linux, none)));
         } else if (w == "windows") {
-            out = pack_put(out, pack_store(arch_pack_set(arch_blocks(arch.arch_set_lines(w)), linux)));
+            out = pack_put(out, pack_store(arch_pack_set(arch_blocks(arch_lines_of(w)), linux)));
         } else {
-            out = pack_put(out, pack_store(arch_pack_set(arch_blocks(arch.arch_set_lines(w)), none)));
+            out = pack_put(out, pack_store(arch_pack_set(arch_blocks(arch_lines_of(w)), none)));
         };
     });
     join(out, "")
@@ -14749,7 +14800,7 @@ def emit_program(ast: Block, nr: Resolved, debug: bool, wlevel: long, std: [Unit
 // needs to KNOW whether a word is a builtin, and the list it keeps of them is
 // the one this predicate tests. Inert like the rest of the names here -- the
 // splicer deletes the export line, so nothing reaches codegen (LSP.md 9.1).
-export { emit_program, compile_package, unit_externs, unit_prep, std_lib_path, std_units, std_unit_names, std_lib_deps, std_pack, pack_store, unit_obj, unit_unobj, unit_iface, native_resolve, native_resolve_x, native_resolve_pk, origin_at, strip_ns, strip_list, strip_decl, phase_end, link_text, is_intrinsic_name, intrinsic_names };
+export { emit_program, compile_package, set_meta_pack, unit_externs, unit_prep, std_lib_path, std_units, std_unit_names, std_lib_deps, std_pack, pack_store, unit_obj, unit_unobj, unit_iface, native_resolve, native_resolve_x, native_resolve_pk, origin_at, strip_ns, strip_list, strip_decl, phase_end, link_text, is_intrinsic_name, intrinsic_names };
 
 // ── maps: dynamic {K => V} ────────────────────────────────────────────
 // A map value is a two-field record -- {keys: [K], vals: [V]} -- and

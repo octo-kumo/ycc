@@ -3,7 +3,8 @@
 // module's top-level defs, per its export list:
 //   export { arch_id, arch_word, arch_sysno, arch_fn_label, arch_loc_label,
 //            arch_str_label, arch_header, arch_rodata, arch_text,
-//            arch_bss, arch_global_cell, arch_heap_cells, arch_set_lines,
+//            arch_bss, arch_global_cell, arch_heap_cells, arch_set_files,
+//            arch_set_lines,
 //            arch_nogc_subs, arch_gc_stress_subs, arch_consts,
 //            arch_frame, arch_exit };
 #ifndef ARCH_X64_H
@@ -30,7 +31,8 @@ Yv *w_iat_term_label(Yv *dll);
 Yv *w_iat_bss_lines(void);
 ylong w_iat_offset(ylong d, ylong f);
 Yv *arch_heap_cells(void);
-Yv *arch_set_lines(Yv *which);
+Yv *arch_set_files(Yv *which);
+Yv *arch_set_lines(Yv *which, Yv *texts);
 Yv *arch_nogc_subs(void);
 Yv *arch_gc_stress_subs(void);
 Yv *arch_consts(void);

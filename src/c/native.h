@@ -19,6 +19,7 @@ Yv *native_resolve_x(Yv *src, Yv *base_dir, ylong depth, int allow_exec,
 Yv *native_resolve_pk(Yv *src, Yv *base_dir, int allow_exec, Yv *root,
                       Yv *pkgs, Yv *roots);
 Yv *std_units(Yv *names, Yv *pack);
+void set_meta_pack(Yv *p);
 Yv *std_unit_names(void);
 Yv *std_lib_deps(Yv *name);
 Yv *std_pack(Yv *units);

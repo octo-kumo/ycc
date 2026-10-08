@@ -60,7 +60,8 @@ Yv *arch_bss(void);
 Yv *arch_global_cell(Yv *label);
 Yv *arch_heap_cells(void);
 ylong arch_frame(ylong slots);
-Yv *arch_set_lines(Yv *which);
+Yv *arch_set_files(Yv *which);
+Yv *arch_set_lines(Yv *which, Yv *texts);
 Yv *arch_nogc_subs(void);
 Yv *arch_gc_stress_subs(void);
 Yv *arch_consts(void);
@@ -271,6 +272,7 @@ Yv *arch_index(Yv *blks);
 Yv *arch_blocks_sub(Yv *blks, Yv *subs);
 Yv *arch_set(Yv *which);
 Yv *arch_core(void);
+Yv *arch_lines_of(Yv *which);
 Yv *lines_refs(Yv *lines, ylong lo, ylong hi);
 int lines_fall(Yv *lines, ylong lo, ylong hi);
 Yv *shake_prelude(Yv *pb, Yv *roots);
@@ -1426,6 +1428,13 @@ static Yv *meta_gorigin(ylong nbody);
  * its image. G's errors are reported with G's own origin map, so they read
  * `<file>.meta:<source line>` -- visibly about the synthesized text and not
  * about the user's file, and still carrying a line through the line map. */
+/* The pack the driver read from its own binary, or "" under --std-src: what a
+ * meta generator's std units come from (native.y set_meta_pack). */
+static Yv *meta_pack;
+void set_meta_pack(Yv *p) {
+    meta_pack = p;
+}
+
 static Yv *meta_compile_gen(void) {
     Yv *gt = meta_gtext();
     ylong nbody = mg_glines();
@@ -1436,7 +1445,9 @@ static Yv *meta_compile_gen(void) {
     if (mg_probe(yr_get(nr, "src"), mg_gbase)) {
         (void)mg_report(ys("a meta block cannot appear in a module imported into the meta generator: the generator's text is compiled with the pass off, so nothing in it is scanned"));
     };
-    Yv *su = std_units(yr_get(nr, "std"), ys(""));
+    /* the std units from the compiler's own pack, as the program's are
+     * (native.y) */
+    Yv *su = std_units(yr_get(nr, "std"), meta_pack ? meta_pack : ys(""));
     /* nr.src, not gt: the hoisted imports were spliced in by the resolve above,
      * and tokenizing gt would hand the parser a literal `import` line */
     Yv *toks = tokenize(yr_get(nr, "src"));
@@ -3117,10 +3128,48 @@ Yv *arch_set(Yv *which) {
         return ya_get(arch_cache_sets, at);
     }
     Yv *got = arch_unpack(arch_pack, ys_cat(ys("arch."), which));
-    Yv *blks = yv_b(yr_get(got, "ok")) ? yr_get(got, "blks") : arch_blocks(arch_set_lines(which));
+    Yv *blks = yv_b(yr_get(got, "ok")) ? yr_get(got, "blks") : arch_blocks(arch_lines_of(which));
     arch_cache_names = ya_push(arch_cache_names, which);
     arch_cache_sets = ya_push(arch_cache_sets, blks);
     return blks;
+}
+
+/* src/y/arch/<name>.s, searched like a std source (native.y arch_src). */
+static Yv *arch_src(Yv *name) {
+    Yv *cands = yav(0);
+    Yv *file = ys_cat(name, ys(".s"));
+    cands = ya_push(cands, ys_cat(ys("src/y/arch/"), file));
+    Yv *d = self_dir();
+    if (yv_len(d) > 0) {
+        cands = ya_push(cands, ys_cat(ys_cat(d, ys("/arch/")), file));
+        cands = ya_push(cands, ys_cat(ys_cat(d, ys("/src/y/arch/")), file));
+        cands = ya_push(cands, ys_cat(ys_cat(d, ys("/../src/y/arch/")), file));
+    }
+    ylong i = 0;
+    while (i < yv_len(cands)) {
+        Yv *t = read_file(ya_get(cands, i));
+        if (!yv_is_none(t)) { return yv_unwrap(t); }
+        i = i + 1;
+    }
+    puts_(ys_cat(ys_cat(ys_cat(ys_cat(ys("error: the arch runtime '"), file),
+                               ys("': not in this compiler's std pack, and no src/y/arch/")),
+                        file),
+                 ys(" beside it or in the working directory\n")));
+    exit_(1);
+    return ys("");
+}
+
+/* The lines of block set `which`, from its files on disk (native.y
+ * arch_lines_of). */
+Yv *arch_lines_of(Yv *which) {
+    Yv *files = arch_set_files(which);
+    Yv *texts = yav(0);
+    ylong i = 0;
+    while (i < yv_len(files)) {
+        texts = ya_push(texts, arch_src(ya_get(files, i)));
+        i = i + 1;
+    }
+    return arch_set_lines(which, texts);
 }
 
 /* This target's prelude, its os_call names checked (native.y arch_core). */
@@ -16926,7 +16975,7 @@ Yv *std_pack(Yv *units) {
     /* the arch runtime's blocks, one entry per set, after the units; the
      * Windows prelude's blocks shared with the Linux one by reference
      * (native.y std_pack) */
-    Yv *lin = arch_blocks(arch_set_lines(ys("linux")));
+    Yv *lin = arch_blocks(arch_lines_of(ys("linux")));
     ylong w = 0;
     while (w < yv_len(sets)) {
         Yv *nm = ya_get(sets, w);
@@ -16934,9 +16983,9 @@ Yv *std_pack(Yv *units) {
         if (ys_eq_lit(nm, "linux")) {
             out = pack_put(out, pack_store(arch_pack_set(lin, yav(0))));
         } else if (ys_eq_lit(nm, "windows")) {
-            out = pack_put(out, pack_store(arch_pack_set(arch_blocks(arch_set_lines(nm)), lin)));
+            out = pack_put(out, pack_store(arch_pack_set(arch_blocks(arch_lines_of(nm)), lin)));
         } else {
-            out = pack_put(out, pack_store(arch_pack_set(arch_blocks(arch_set_lines(nm)), yav(0))));
+            out = pack_put(out, pack_store(arch_pack_set(arch_blocks(arch_lines_of(nm)), yav(0))));
         }
         w = w + 1;
     }

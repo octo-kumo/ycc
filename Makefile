@@ -41,16 +41,17 @@ YCC_SRCS=src/y/ycc.y src/y/tags.y src/y/target.y src/y/pkg.y src/y/lexer.y src/y
 # carry no pack, read them from src/y/std at run time.
 STD_SRCS=$(wildcard src/y/std/*.y)
 
-# The assembly the compiler hands to asm.y for every program, in src/y/arch/,
-# embedded the same way: arch_x64.y says `embed PRELUDE_ASM from
-# "./arch/prelude.s";`, the C copy Y_EMBED(PRELUDE_ASM, "src/y/arch/prelude.s").
-# One copy of the asm, read by both compilers (`make asm-check`).
-ARCH_EMBEDS=$(wildcard src/y/arch/*.s)
+# The runtime assembly, src/y/arch/*.s: one copy, read by both compilers and
+# embedded in neither. It travels in the std pack as blocks of IR (native.y
+# arch_set), so an edit to it must rebuild every packed binary -- like STD_SRCS.
+# cycc and a bootstrap generation, which carry no pack, read it from disk.
+# `make asm-check` gives GNU as a second opinion on it.
+ARCH_SRCS=$(wildcard src/y/arch/*.s)
 
 all: cycc
 
 # [1/3] gcc builds the C copy of the compiler.
-cycc: $(CYC_SRCS) $(CY_HDRS) $(ARCH_EMBEDS)
+cycc: $(CYC_SRCS) $(CY_HDRS)
 	$(GCC) $(CFLAGS) -o cycc $(CYC_SRCS)
 	@echo "cycc built: the C copy of the compiler ($$(stat -c%s cycc) bytes)"
 
@@ -66,7 +67,7 @@ cycc: $(CYC_SRCS) $(CY_HDRS) $(ARCH_EMBEDS)
 # `undefined label` from asm_link, which every suite hits immediately.
 asm-check:
 	@command -v as >/dev/null 2>&1 || { echo "asm-check: no GNU as, skipped"; exit 0; }
-	@rc=0; for f in $(ARCH_EMBEDS); do \
+	@rc=0; for f in $(ARCH_SRCS); do \
 	    sed -E 's/\$$[A-Za-z_0-9]+-[A-Za-z_0-9]+/$$0/g' $$f > /tmp/asm-check.s; \
 	    if as -o /dev/null /tmp/asm-check.s 2>/tmp/asm-check.err; then \
 	        echo "  ok   $$f"; \
@@ -92,7 +93,7 @@ YCC_MEM_KB=2097152
 ASAN_RSS_MB=3500
 # $(call PACK,BIN,OUT): OUT = BIN with its std pack attached.
 PACK = ./$(1) --std-pack $(2).pack && cat $(1) $(2).pack > $(2) && chmod 755 $(2) && rm -f $(2).pack
-ycc: cycc $(YCC_SRCS) $(CYC_SRCS) $(CY_HDRS) $(STD_SRCS) $(ARCH_EMBEDS)
+ycc: cycc $(YCC_SRCS) $(CYC_SRCS) $(CY_HDRS) $(STD_SRCS) $(ARCH_SRCS)
 	ulimit -v $(CYCC_MEM_KB); ./cycc -o _ycc0 src/y/ycc.y
 	$(call PACK,_ycc0,ycc)
 	cmp ycc refs/ycc.ref
@@ -117,7 +118,7 @@ ytest: ycc
 # embeds the host's own absolute cwd, which is a different string on Windows
 # by construction, so it is compared host-against-host, not across hosts.
 MINGW ?= x86_64-w64-mingw32-gcc
-cycc.exe: $(CYC_SRCS) $(CY_HDRS) $(ARCH_EMBEDS)
+cycc.exe: $(CYC_SRCS) $(CY_HDRS)
 	$(MINGW) $(CFLAGS) -o cycc.exe $(CYC_SRCS)
 	@echo "cycc.exe built: the C copy for Windows ($$(stat -c%s cycc.exe) bytes)"
 
@@ -126,7 +127,7 @@ cycc.exe: $(CYC_SRCS) $(CY_HDRS) $(ARCH_EMBEDS)
 # carry on, and a suite that compares outputs never sees a report it printed.
 ASAN_FLAGS=-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -g
 
-cycc-asan: $(CYC_SRCS) $(CY_HDRS) $(ARCH_EMBEDS)
+cycc-asan: $(CYC_SRCS) $(CY_HDRS)
 	$(GCC) $(CFLAGS) $(ASAN_FLAGS) -o cycc-asan $(CYC_SRCS)
 
 asan: cycc-asan
@@ -180,7 +181,7 @@ test-compile: cycc ycc
 LSP_SRC := $(wildcard src/tools/lsp/*.y)
 # The reference compiler, as the suites call it: the last blessed build.
 YREF ?= $(CURDIR)/refs/ycc.ref
-yserve: $(LSP_SRC) $(STD_SRCS) cycc
+yserve: $(LSP_SRC) $(STD_SRCS) $(ARCH_SRCS) cycc
 	@rm -f yserve _yserve0 _yserve1 _yserve1p
 	ulimit -v $(CYCC_MEM_KB); ./cycc -o _yserve0 src/tools/lsp/yserve.y
 	$(call PACK,_yserve0,yserve)
@@ -274,7 +275,7 @@ NEW_DEP = $(if $(filter ./ynew ynew,$(NEW)),ynew)
 # second and third must be byte-identical (the fixpoint); the third is
 # compiled with the second's std pack attached, so that is checked too.
 # Needs no C port.
-ynew: $(YCC_SRCS) $(BOOT) $(STD_SRCS) $(ARCH_EMBEDS)
+ynew: $(YCC_SRCS) $(BOOT) $(STD_SRCS) $(ARCH_SRCS)
 	ulimit -v $(YCC_MEM_KB); $(abspath $(BOOT)) -o _ynew1 src/y/ycc.y
 	ulimit -v $(YCC_MEM_KB); ./_ynew1 -o _ynew2 src/y/ycc.y
 	$(call PACK,_ynew2,_ynewp)

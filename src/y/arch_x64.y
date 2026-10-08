@@ -1,26 +1,26 @@
 // arch_x64.y — Linux x86_64 code emitters for the native backend (ycc).
 //
-// The machine code itself lives in src/y/arch/*.s, embedded here and
-// .incbin'd by the C twin (PORTING.md rules 10 and 11): ONE copy of the
-// assembly, not one per compiler. A whole-line '#' comment is documentation —
-// for whoever reads the .s, and for `make asm-check` (GNU as) — and
+// The machine code itself lives in src/y/arch/*.s: ONE copy of the assembly,
+// read by both compilers, and NOT embedded in either. It travels in the std
+// pack as blocks of IR (native.y arch_set); the files are read from disk
+// (native.y arch_src) only to build that pack, or by a compiler with no pack
+// (cycc, a bootstrap generation). This module turns their texts into a block
+// set's lines (arch_set_lines). A whole-line '#' comment is documentation --
+// for whoever reads the .s, and for `make asm-check` (GNU as) -- and
 // arch_asm_lines drops it, because the in-tree assembler treats a comment as a
-// backend bug and must never see one.
-embed PRELUDE_ASM from "./arch/prelude.s";
-embed THREADS_ASM from "./arch/threads.s";
-// The Windows half of the arch prelude: the blocks of prelude.s that reach
-// the kernel, replaced whole (see arch_windows_lines). It is DATA here, not a
-// second arch module -- a path import is flattened into its importer, so a
-// second arch_x64.y could not coexist (arch_frame would be defined twice and
-// the second would win).
-embed W_SYS_ASM from "./arch/wsys.s";
-// The float primitives std/math.y's kernels reach for (`ndef`s with no
-// body -- see NATIVE.md, "Backend"), one embedded copy like the rest.
-embed MATH_ASM from "./arch/math.s";
-// The Windows syscall self-test: the probe w_self_test_lines returns, run
-// from _start before anything else on that target. Its own file so GNU as
-// reads it (make asm-check) like the other arch assembly.
-embed WSELFTEST_ASM from "./arch/wselftest.s";
+// backend bug and must never see one. The files:
+//   prelude.s    the runtime primitives (the Linux prelude)
+//   wsys.s       the Windows half of the prelude: the blocks of prelude.s that
+//                reach the kernel, replaced whole (see arch_windows_lines). It
+//                is DATA, not a second arch module -- a path import is
+//                flattened into its importer, so a second arch_x64.y could not
+//                coexist (arch_frame would be defined twice and the second
+//                would win).
+//   wselftest.s  the Windows syscall self-test, run from _start before
+//                anything else on that target
+//   threads.s    the thread runtime
+//   math.s       the float primitives std/math.y's kernels reach for (`ndef`s
+//                with no body -- see NATIVE.md, "Backend")
 
 // `text` as prelude lines: one per line, indentation kept (the -S output
 // shows it). Dropped: a whole-line '#' comment (the in-tree assembler treats a
@@ -114,13 +114,19 @@ def w_sysno(name: str) -> long {
 //                   Windows prelude carries it, and _start calls y_w_self_test
 //                   on that target only.
 //   threads, math   the thread runtime and the float primitives (below)
-def arch_set_lines(which: str) -> [str] {
-    if (which == "linux") { arch_asm_lines(PRELUDE_ASM) }
-    else if (which == "windows") { arch_windows_lines() }
-    else if (which == "wselftest") { arch_asm_lines(WSELFTEST_ASM) }
-    else if (which == "threads") { arch_asm_lines(THREADS_ASM) }
-    else if (which == "math") { arch_asm_lines(MATH_ASM) }
-    else {
+// The files each set is built from, under src/y/arch (without the `.s`).
+def arch_set_files(which: str) -> [str] {
+    if (which == "linux") { ["prelude"] }
+    else if (which == "windows") { ["prelude", "wsys"] }
+    else { [which] }
+};
+
+// `texts` holds the files arch_set_files names, in that order.
+def arch_set_lines(which: str, texts: [str]) -> [str] {
+    if (which == "windows") { arch_windows_lines(texts[0], texts[1]) }
+    else if (which == "linux" || which == "wselftest" || which == "threads" || which == "math") {
+        arch_asm_lines(texts[0])
+    } else {
         puts("ycc: internal error: no arch block set '" + which + "'\n");
         exit(1);
         []
@@ -320,15 +326,15 @@ def arch_exit() -> str {
 // arch_win_find): it means the Windows half was written against a block that
 // moved, and the substitution would silently do nothing. `make asm-check`
 // gives GNU as a second opinion on wsys.s as well.
-def arch_windows_lines() -> [str] {
-    let blocks = arch_win_blocks(split(W_SYS_ASM, "\n"));
+def arch_windows_lines(prelude: str, wsys: str) -> [str] {
+    let blocks = arch_win_blocks(split(wsys, "\n"));
     blocks.foreach((e) => {
         if (e[1] == "2") {
             puts("error: arch/wsys.s: bad block marker ('" + e[0] + "'): want '#=== replace: NAME ===' or '#=== add: NAME ==='\n");
             exit(1);
         };
     });
-    let lines = arch_asm_lines(PRELUDE_ASM);
+    let lines = arch_asm_lines(prelude);
     arch_win_check(lines, blocks);
     arch_win_sub(lines, blocks)
 };
@@ -586,4 +592,4 @@ def arch_consts() -> str {
         ], "\n") + "\n"
 };
 
-export { WImport, w_imports, w_iat_label, w_iat_term_label, w_iat_bss_lines, w_iat_offset, arch_id, arch_word, arch_sysno, arch_fn_label, arch_global_label, arch_loc_label, arch_str_label, arch_header, arch_rodata, arch_text, arch_bss, arch_global_cell, arch_heap_cells, arch_set_lines, arch_nogc_subs, arch_gc_stress_subs, arch_consts, arch_frame, arch_exit };
+export { WImport, w_imports, w_iat_label, w_iat_term_label, w_iat_bss_lines, w_iat_offset, arch_id, arch_word, arch_sysno, arch_fn_label, arch_global_label, arch_loc_label, arch_str_label, arch_header, arch_rodata, arch_text, arch_bss, arch_global_cell, arch_heap_cells, arch_set_files, arch_set_lines, arch_nogc_subs, arch_gc_stress_subs, arch_consts, arch_frame, arch_exit };
