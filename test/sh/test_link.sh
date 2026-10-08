@@ -237,4 +237,16 @@ else
     fail "lone ycc: a std import resolves with no std/ on disk" "$(echo "$lone_out" | head -c 120)"
 fi
 
+# The pack's framing must stay walkable field by field. pack_stats.py knows
+# every field's shape (native.y pack_unit_fields: almost all are "count, then
+# items", with only `init` a single netstring) and fails unless each unit
+# consumes its fields exactly and the cursor ends at the pack's end — a desync
+# is how an earlier hand parse misread the shapes. It also prints the per-field
+# byte split, the measurement the pack work is planned from.
+if python3 "$ROOT/test/sh/pack_stats.py" "$TMPD/y.pack" >"$TMPD/pstats" 2>&1; then
+    pass "the pack parses field by field ($(grep -c '=' "$TMPD/pstats") field totals)"
+else
+    fail "the pack parses field by field" "$(head -c 160 "$TMPD/pstats")"
+fi
+
 print_summary "link"
