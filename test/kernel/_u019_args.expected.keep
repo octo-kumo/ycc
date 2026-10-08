@@ -1,8 +1,0 @@
-fs ok=true ino=2 size=4809
-
-sh n=3 a1=/prog
-
-sh n=2 a1=
-
-done
-

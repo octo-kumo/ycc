@@ -1389,40 +1389,51 @@ def sys_execve(pathp: long, argvp: long) -> long {
     // The strings go at the top of the stack, then the pointer array, then argc --
     // the shape elf_setup_stack builds and the runtime reads: argv() walks from the
     // argc slot up.  argvp == 0 means argv[0] is the path itself.
+    // A faithful port of elf_stack (os/kernel/elfload.y), which is the layout the
+    // runtime's argv() reads: the string BYTES come from byte_at -- indexing a Y str
+    // yields its length-prefixed value, not a character -- then sp is aligned to 8,
+    // then argv[argc] and envp are written as NULLs, then the pointers downward, then
+    // argc.  Writing it any other way leaves the letters behind.
     let top = 4096 - 16;
     let ptrs: [long] = [];
     let argc = 0;
-    if (argvp == 0 || peek_va64(argvp) == 0) {
-        let nl = len(path);
-        top = top - nl - 1;
-        let c = 0;
-        while (c < nl) { poke8(spage + top + c, path[c] & 255); c = c + 1; };
-        poke8(spage + top + nl, 0);
-        ptrs += EXEC_STACK + top;
-        argc = 1;
-    } else {
-        let i = 0;
-        while (i < 16) {
-            let up = peek_va64(argvp + i * 8);
-            if (up == 0) { i = 16; } else {
-                let arg = user_path(up);
-                let nl = len(arg);
-                top = top - nl - 1;
-                let c = 0;
-                while (c < nl) { poke8(spage + top + c, arg[c] & 255); c = c + 1; };
-                poke8(spage + top + nl, 0);
-                ptrs += EXEC_STACK + top;
-                argc = argc + 1;
-                i = i + 1;
+    let i = 0;
+    while (i < 17) {
+        let arg = "";
+        if (i == 0 && (argvp == 0 || peek_va64(argvp) == 0)) {
+            if (i == 0) { arg = path; };
+        };
+        if (i > 0 || !(argvp == 0 || peek_va64(argvp) == 0)) {
+            if (argvp == 0 || peek_va64(argvp) == 0) { i = 17; } else {
+                let up = peek_va64(argvp + i * 8);
+                if (up == 0) { i = 17; } else { arg = user_path(up); };
             };
         };
+        if (i < 17) {
+            let nl = len(arg);
+            top = top - nl - 1;
+            let c = 0;
+            while (c < nl) { poke8(spage + top + c, byte_at(arg, c)); c = c + 1; };
+            poke8(spage + top + nl, 0);
+            ptrs += EXEC_STACK + top;
+            argc = argc + 1;
+        };
+        i = i + 1;
     };
-    let sp = top - 8 - 8 * argc;
-    sp = sp - (sp % 8);
-    let k = 0;
-    while (k < argc) { poke64(spage + sp + 8 + k * 8, ptrs[k]); k = k + 1; };
-    poke64(spage + sp + 8 + argc * 8, 0);
-    poke64(spage + sp, argc);
+    top = top - (top % 8);
+    top = top - 8;
+    poke64(spage + top, 0);
+    top = top - 8;
+    poke64(spage + top, 0);
+    let k = argc - 1;
+    while (k >= 0) {
+        top = top - 8;
+        poke64(spage + top, ptrs[k]);
+        k = k - 1;
+    };
+    top = top - 8;
+    poke64(spage + top, argc);
+    let sp = top;
     vm_switch(dir);
     tasks[cur_task].cr3 = dir;
     let fr = y_cur_task_rsp_get();
