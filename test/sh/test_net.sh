@@ -7,7 +7,7 @@ set -u
 
 source "$(dirname "$0")/lib.sh"
 
-WORK=$(mktemp -d /tmp/ytest_net.XXXXXX)
+WORK=$(mktemp -d -t ytest_net.XXXXXX)
 PIDS=()
 SERVER_PID=""
 PORT=""

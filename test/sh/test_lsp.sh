@@ -35,13 +35,13 @@ LSP="$ROOT/src/tools/lsp"
 # (test-e2e.sh does), and only a directory we made is removed.
 SCRATCH=""
 if [ -z "${OUT:-}" ]; then
-    SCRATCH="$(mktemp -d /tmp/ylsp_test.XXXXXX)"
+    SCRATCH="$(mktemp -d -t ylsp_test.XXXXXX)"
     OUT="$SCRATCH/json"
 fi
 if [ -n "$SCRATCH" ]; then
     FMT_OUT="$SCRATCH/fmt"
 else
-    FMT_OUT="${FMT_OUT:-/tmp/opencode/fmt}"
+    FMT_OUT="${FMT_OUT:-$(mktemp -d -t ylsp_fmt.XXXXXX)}"
 fi
 cleanup_lsp() { [ -n "$SCRATCH" ] && rm -rf "$SCRATCH"; return 0; }
 trap cleanup_lsp EXIT

@@ -33,7 +33,7 @@ fi
 JOBS="${YJOBS:-$(nproc)}"
 cd "$ROOT" || exit 2   # where imports of std modules resolve (src/y/std/)
 
-TMP="$(mktemp -d /tmp/ycorpus.XXXXXX)"
+TMP="$(mktemp -d -t ycorpus.XXXXXX)"
 trap 'rm -rf "$TMP"' EXIT
 
 # diff_one <i> <file>: the report on one program goes to $TMP/<i>.out, its

@@ -24,7 +24,7 @@ set -u
 
 source "$(dirname "$0")/lib.sh"
 
-WORK=$(mktemp -d /tmp/ytree_XXXXXX)
+WORK=$(mktemp -d -t ytree_XXXXXX)
 trap 'rm -rf "$WORK"' EXIT
 
 MIN="$ROOT/test/treeshake/minimal.y"

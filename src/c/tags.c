@@ -17,7 +17,8 @@ static const char *const ktags[] = {
     "terr", "tfloat", "tfunc", "tinfer", "tlong", "tmap", "tname", "tnone",
     "topt", "tparams", "tpat", "tpend", "tptr", "trec", "tref", "tstr",
     "tunion", "tunk", "tvoid", "typedef", "un", "void", "while",
-    "break", "continue", "bignum", "tbigint"
+    "break", "continue", "bignum", "tbigint", "punct", "op", "bigint", "ferr",
+    "fstr", "eof", "comment", "stray", "doc"
 };
 
 Yv *ktag(ylong n) {
@@ -138,5 +139,14 @@ int tags_agree(void) {
     if (!ys_eq_lit(ktag(K_kw_continue), "continue")) { return 0; }
     if (!ys_eq_lit(ktag(K_bignum), "bignum")) { return 0; }
     if (!ys_eq_lit(ktag(K_tbigint), "tbigint")) { return 0; }
+    if (!ys_eq_lit(ktag(K_punct), "punct")) { return 0; }
+    if (!ys_eq_lit(ktag(K_op), "op")) { return 0; }
+    if (!ys_eq_lit(ktag(K_bigint), "bigint")) { return 0; }
+    if (!ys_eq_lit(ktag(K_ferr), "ferr")) { return 0; }
+    if (!ys_eq_lit(ktag(K_fstr), "fstr")) { return 0; }
+    if (!ys_eq_lit(ktag(K_eof), "eof")) { return 0; }
+    if (!ys_eq_lit(ktag(K_comment), "comment")) { return 0; }
+    if (!ys_eq_lit(ktag(K_stray), "stray")) { return 0; }
+    if (!ys_eq_lit(ktag(K_doc), "doc")) { return 0; }
     return 1;
 }

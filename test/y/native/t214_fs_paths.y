@@ -1,3 +1,4 @@
+// scratch: the harness runs this fixture in a scratch directory (relative paths)
 // std/fs.y's path helpers: the string half of a path, which every program
 // that walks a tree re-implemented (the audit measured three of its own
 // probes doing the same 14 lines). Nothing here touches the file system.
@@ -31,7 +32,7 @@ print(fs.path_join("/a/b/", "c/"), " ", fs.path_join(".", "x"));
 
 // and they compose with the rest of fs: a real file, built from parts and
 // taken apart again
-let d = "/tmp/ynative_t214_dir";
+let d = "ynative_t214_dir";
 let f = fs.path_join(d, "sub");
 print(fs.make_dirs(f), " ", fs.write_file(fs.path_join(f, "data.tar.gz"), "x"));
 print(fs.is_dir(f), " ", fs.path_dirname(fs.path_join(f, "data.tar.gz")));

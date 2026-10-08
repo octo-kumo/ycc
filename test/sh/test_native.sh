@@ -33,7 +33,7 @@ run_native() {
     base=$(basename "$prog" .y)
     local dir="$ROOT/test/y/native"
     local bin
-    bin=$(mktemp /tmp/ynative_bin_XXXXXX)
+    bin=$(mktemp -t ynative_bin_XXXXXX)
 
     if [[ "$base" == e* ]]; then
         # negative test: compilation must fail with every marked message
@@ -70,9 +70,6 @@ run_native() {
         return
     fi
 
-    # the one fixed path a fixture writes; only t10 may touch it, so a
-    # shard running beside this one never removes it mid-check
-    [ "$base" = "t10_filewrite" ] && rm -f /tmp/ynative_test.txt
     # `// flags: ...` adds compiler flags, for a fixture that tests a
     # warning the default level does not turn on (the -W ones).
     local flags
@@ -117,11 +114,19 @@ run_native() {
         return
     fi
     local outf
-    outf=$(mktemp /tmp/ynative_out_XXXXXX)
+    outf=$(mktemp -t ynative_out_XXXXXX)
     # stdin comes from <base>.stdin when present (t12 cat test), else /dev/null
     local inf="/dev/null"
     [ -f "$dir/$base.stdin" ] && inf="$dir/$base.stdin"
-    run_bin 10 "$bin" <"$inf" >"$outf" 2>&1
+    # a fixture marked `// scratch` runs in a scratch directory of its own, so
+    # the files it writes (relative paths) never collide or outlive the run;
+    # the others run from where the suite was started
+    local rundir="$PWD" scratch=0
+    if grep -q '^// scratch' "$prog"; then
+        scratch=1
+        rundir=$(mktemp -d -t ynative_run.XXXXXX)
+    fi
+    (cd "$rundir" && run_bin 10 "$bin" <"$inf" >"$outf" 2>&1)
     local ec=$?
     local want_ec=0
     [ -f "$dir/$base.exit" ] && want_ec=$(cat "$dir/$base.exit")
@@ -134,12 +139,13 @@ run_native() {
     fi
     # t10 writes a file; check its contents too
     if [ "$base" = "t10_filewrite" ]; then
-        if ! diff -u "$dir/$base.file" /tmp/ynative_test.txt >/dev/null 2>&1; then
-            fail "$base" "output file mismatch (want '$(cat "$dir/$base.file" | tr '\n' '|')', got '$(cat /tmp/ynative_test.txt 2>/dev/null | tr '\n' '|')')"
-            rm -f "$bin" "$outf" "$outf.diff"
+        if ! diff -u "$dir/$base.file" "$rundir/ynative_test.txt" >/dev/null 2>&1; then
+            fail "$base" "output file mismatch (want '$(tr '\n' '|' < "$dir/$base.file")', got '$(tr '\n' '|' < "$rundir/ynative_test.txt" 2>/dev/null)')"
+            rm -rf "$bin" "$outf" "$outf.diff"; [ $scratch = 1 ] && rm -rf "$rundir"
             return
         fi
     fi
+    [ $scratch = 1 ] && rm -rf "$rundir"
     if [ $ok -eq 1 ]; then
         pass "$base"
     else

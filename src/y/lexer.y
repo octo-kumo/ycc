@@ -11,7 +11,9 @@
 // compiler reads only t/v/line/col; the language server (src/tools/lsp/) reads
 // the span -- which is why there is one tokenizer and not two: highlighting,
 // the formatter and the compiler must never drift apart on what a token is.
-type Tok = { t: str, v: str, line: long, col: long, off: long, end: long };
+import tags from "./tags.y";
+
+type Tok = { t: long, v: str, line: long, col: long, off: long, end: long };
 type Cursor = { s: str, p: long };
 
 // NOTE: short underscore-free names (isdigit/isalpha/...) — see below.
@@ -35,11 +37,11 @@ def isalpha(c: byte) -> bool {
     // character is isalnum (letters + digits + "_"). The C twin's isalpha
     // /isalnum are the same two tests (src/c/lexer.c), so both lexers split
     // identifiers identically.
-    islower(c) || isupper(c) || c == '_' || isdigit(c)
+    (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' || (c >= '0' && c <= '9')
 };
 
 def isalnum(c: byte) -> bool {
-    isdigit(c) || isalpha(c)
+    isalpha(c)
 };
 
 // The radix a literal's own prefix names: 16 for 0x/0X, 8 for 0o/0O, 2 for
@@ -110,7 +112,7 @@ def lex_int_value(txt: str, radix: long) -> long {
 
 // A space, tab, newline or carriage return.
 def isspace(c: byte) -> bool {
-    [' ', '\t', '\n', '\r'].index(c) >= 0
+    c == ' ' || c == '\t' || c == '\n' || c == '\r'
 };
 
 // NOTE: these predicates keep the flat C spellings isdigit/isupper/islower/
@@ -124,7 +126,7 @@ def isspace(c: byte) -> bool {
 // is c one of the single-char punctuation symbols?
 // One of the nine punctuation characters Y uses.
 def ispunct(c: byte) -> bool {
-    c in ['(', ')', '{', '}', '[', ']', ',', ';', ':']
+    c == '(' || c == ')' || c == '{' || c == '}' || c == '[' || c == ']' || c == ',' || c == ';' || c == ':'
 };
 
 // Scan a quoted literal at src[i] (a `"` or `'` quote): returns the
@@ -470,19 +472,19 @@ def lex_fstring(src: str, q: long, line: long, col: long, toks: [Tok], lsp: bool
     // `str`: the highlighter must tell it from a plain string, and a broken one
     // is an error span like any other.
     if (lsp) {
-        let ty0 = "fstr";
-        if (w.err != "") { ty0 = "ferr"; };
+        let ty0 = K.fstr;
+        if (w.err != "") { ty0 = K.ferr; };
         toks += mktok(ty0, src[q - 1:w.end], line, col, q - 1, w.end);
         let e0 = fstr_adv(src, q - 1, w.end, line, col);
         return { end: w.end, line: e0.line, col: e0.col };
     };
     if (w.err != "") {
         let ep = fstr_adv(src, q - 1, w.at, line, col);
-        toks += mktok("ferr", w.err, ep.line, ep.col, 0, 0);
+        toks += mktok(K.ferr, w.err, ep.line, ep.col, 0, 0);
     } else if (len(fs) == 0) {
-        toks += mktok("str", unescape(src[q + qlen:w.end - qlen], true), line, col, 0, 0);
+        toks += mktok(K.str, unescape(src[q + qlen:w.end - qlen], true), line, col, 0, 0);
     } else {
-        toks += mktok("punct", "(", line, col, 0, 0);
+        toks += mktok(K.punct, "(", line, col, 0, 0);
         let from = q + qlen;
         let at = q - 1;
         let bl = line;
@@ -496,13 +498,13 @@ def lex_fstring(src: str, q: long, line: long, col: long, toks: [Tok], lsp: bool
             at = lo - 1;
             bl = bp.line;
             bc = bp.col;
-            if (k > 0) { toks += mktok("op", "+", bl, bc, 0, 0); }
+            if (k > 0) { toks += mktok(K.op, "+", bl, bc, 0, 0); }
             if (lo - 1 > from) {
-                toks += mktok("str", unescape(src[from:lo - 1], true), bl, bc, 0, 0);
-                toks += mktok("op", "+", bl, bc, 0, 0);
+                toks += mktok(K.str, unescape(src[from:lo - 1], true), bl, bc, 0, 0);
+                toks += mktok(K.op, "+", bl, bc, 0, 0);
             }
-            toks += mktok("id", "#fmt", bl, bc, 0, 0);
-            toks += mktok("punct", "(", bl, bc, 0, 0);
+            toks += mktok(K.id, "#fmt", bl, bc, 0, 0);
+            toks += mktok(K.punct, "(", bl, bc, 0, 0);
             let sub = tokenize(src[lo:hi]);
             let j = 0;
             while (j + 1 < len(sub)) {
@@ -514,28 +516,28 @@ def lex_fstring(src: str, q: long, line: long, col: long, toks: [Tok], lsp: bool
                 };
                 j++;
             };
-            toks += mktok("punct", ",", bl, bc, 0, 0);
+            toks += mktok(K.punct, ",", bl, bc, 0, 0);
             if (slo >= 0) {
-                toks += mktok("str", src[slo:fs[k + 3]], bl, bc, 0, 0);
+                toks += mktok(K.str, src[slo:fs[k + 3]], bl, bc, 0, 0);
                 from = fs[k + 3] + 1;
             } else {
-                toks += mktok("str", "", bl, bc, 0, 0);
+                toks += mktok(K.str, "", bl, bc, 0, 0);
                 from = hi + 1;
             };
-            toks += mktok("punct", ")", bl, bc, 0, 0);
+            toks += mktok(K.punct, ")", bl, bc, 0, 0);
             k += 4;
         };
         if (w.end - qlen > from) {
-            toks += mktok("op", "+", bl, bc, 0, 0);
-            toks += mktok("str", unescape(src[from:w.end - qlen], true), bl, bc, 0, 0);
+            toks += mktok(K.op, "+", bl, bc, 0, 0);
+            toks += mktok(K.str, unescape(src[from:w.end - qlen], true), bl, bc, 0, 0);
         }
-        toks += mktok("punct", ")", bl, bc, 0, 0);
+        toks += mktok(K.punct, ")", bl, bc, 0, 0);
     };
     let e = fstr_adv(src, q - 1, w.end, line, col);
     { end: w.end, line: e.line, col: e.col }
 };
 
-def mktok(t: str, v: str, line: long, col: long, off: long, end: long) -> Tok {
+def mktok(t: long, v: str, line: long, col: long, off: long, end: long) -> Tok {
     { t: t, v: v, line: line, col: col, off: off, end: end }
 };
 
@@ -559,26 +561,47 @@ def hexvalx(c: str) -> long {
 // in C.
 def multicharop(src: str, i: long, c: str) -> str {
     if (c == "<" || c == ">") {
-        let four = src[i:i + 4];
-        let three = src[i:i + 3];
-        if (four == ">>>=") { four }
-        else if (three in [">>>", ">>=", "<<="]) { three }
+        let a = src[i];
+        let b = peek(src, i + 1);
+        let d = peek(src, i + 2);
+        if (a == '>' && b == '>' && d == '>' && peek(src, i + 3) == '=') { ">>>=" }
+        else if (a == '>' && b == '>' && d == '>') { ">>>" }
+        else if (a == '>' && b == '>' && d == '=') { ">>=" }
+        else if (a == '<' && b == '<' && d == '=') { "<<=" }
         else { twocharop(src, i) }
     } else {
         twocharop(src, i)
     }
 };
 
+// The byte at i, or -1 past the end.
+def peek(src: str, i: long) -> long {
+    let v = -1;
+    if (i < len(src)) { v = src[i]; };
+    v
+};
+
 // Try to read a two-char operator at position i. Returns the operator or "".
+// The set: == != <= >= && || :: .. -> => ++ -- ?. += -= *= /= %= &= |= ^= << >>
 def twocharop(src: str, i: long) -> str {
-    let two = src[i:i + 2];
-    if (two in ["==", "!=", "<=", ">=", "&&", "||", "::", "..", "->", "=>", "++", "--", "?.", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<", ">>"]) { two }
-    else { "" }
+    let a = peek(src, i);
+    let b = peek(src, i + 1);
+    let ok = false;
+    if (b == '=') {
+        ok = a == '=' || a == '!' || a == '<' || a == '>' || a == '+' || a == '-' || a == '*' || a == '/' || a == '%' || a == '&' || a == '|' || a == '^';
+    } else if (a == b) {
+        ok = a == '&' || a == '|' || a == ':' || a == '.' || a == '+' || a == '-' || a == '<' || a == '>';
+    } else if (b == '>') {
+        ok = a == '-' || a == '=';
+    } else if (b == '.') {
+        ok = a == '?';
+    };
+    if (ok) { src[i:i + 2] } else { "" }
 };
 
 // A one-character operator.
 def issingleop(c: byte) -> bool {
-    c in ['+', '-', '*', '/', '%', '<', '>', '=', '.', '!', '&', '?', '|', '^', '~']
+    c == '+' || c == '-' || c == '*' || c == '/' || c == '%' || c == '<' || c == '>' || c == '=' || c == '.' || c == '!' || c == '&' || c == '?' || c == '|' || c == '^' || c == '~'
 };
 
 // The slash character, in one place: this file's own source contains no bare
@@ -589,7 +612,7 @@ def slash() -> str { "/" };
 
 def isdigitch(c: byte) -> bool {
     // single-char predicate on a 1-char string (native-safe: no ord()).
-    c in ['0', '1', '2', '3', '4', '5', '6', '7', '8']
+    c >= '0' && c <= '8'
 };
 
 // The compiler's entry point: comments dropped, f-strings desugared, a
@@ -742,11 +765,11 @@ def tokenize_go(src: str, lsp: bool) -> [Tok] {
             };
             let txt = src[start:i];
             if (err != "") {
-                toks += mktok("ferr", err, line, startcol, start, i);
+                toks += mktok(K.ferr, err, line, startcol, start, i);
             } else if (big) {
-                toks += mktok("bigint", strip_seps(src[start:i - 1]), line, startcol, start, i);
+                toks += mktok(K.bigint, strip_seps(src[start:i - 1]), line, startcol, start, i);
             } else if (bval >= 0) {
-                toks += mktok("char", chr(bval), line, startcol, start, i);
+                toks += mktok(K.char, chr(bval), line, startcol, start, i);
             } else if (src[i:i + 1] == "b" && !lex_word_slice(src[i + 1:i + 2])) {
                 // `129b`: a BYTE literal, and the same node `'a'` builds.
                 // A hex literal cannot take this suffix (`0x1Fb` is the hex
@@ -755,18 +778,18 @@ def tokenize_go(src: str, lsp: bool) -> [Tok] {
                 i++;
                 col++;
                 if (index_of(txt, ".") >= 0 || index_of(txt, "e") >= 0 || index_of(txt, "E") >= 0) {
-                    toks += mktok("ferr", "byte literal '" + src[start:i] + "' is a float; a byte is a whole number", line, startcol, start, i);
+                    toks += mktok(K.ferr, "byte literal '" + src[start:i] + "' is a float; a byte is a whole number", line, startcol, start, i);
                 } else {
                     let bv = lex_int_value(txt, radix);
                     if (bv > 255) {
-                        toks += mktok("ferr", "byte literal '" + src[start:i] + "' does not fit in a byte", line, startcol, start, i);
+                        toks += mktok(K.ferr, "byte literal '" + src[start:i] + "' does not fit in a byte", line, startcol, start, i);
                     } else {
-                        toks += mktok("char", chr(bv), line, startcol, start, i);
+                        toks += mktok(K.char, chr(bv), line, startcol, start, i);
                     };
                 };
             } else {
                 if (radix == 0) { txt = strip_seps(txt); };
-                toks += mktok("num", txt, line, startcol, start, i);
+                toks += mktok(K.num, txt, line, startcol, start, i);
             };
         } else if (isalpha(c)) {
             let start = i;
@@ -781,22 +804,22 @@ def tokenize_go(src: str, lsp: bool) -> [Tok] {
                 } else { break; };
             };
             let word = src[start:i];
-            let ty = "id";
-            if (word == "let") { ty = "kw"; }
-            else if (word == "const") { ty = "kw"; }
-            else if (word == "def") { ty = "kw"; }
-            else if (word == "ndef") { ty = "kw"; }
-            else if (word == "if") { ty = "kw"; }
-            else if (word == "else") { ty = "kw"; }
-            else if (word == "while") { ty = "kw"; }
-            else if (word == "for") { ty = "kw"; }
-            else if (word == "foreach") { ty = "kw"; }
-            else if (word == "in") { ty = "kw"; }
-            else if (word == "return") { ty = "kw"; }
-            else if (word == "true") { ty = "kw"; }
-            else if (word == "false") { ty = "kw"; }
-            else if (word == "break") { ty = "kw"; }
-            else if (word == "continue") { ty = "kw"; }
+            let ty = K.id;
+            if (word == "let") { ty = K.kw; }
+            else if (word == "const") { ty = K.kw; }
+            else if (word == "def") { ty = K.kw; }
+            else if (word == "ndef") { ty = K.kw; }
+            else if (word == "if") { ty = K.kw; }
+            else if (word == "else") { ty = K.kw; }
+            else if (word == "while") { ty = K.kw; }
+            else if (word == "for") { ty = K.kw; }
+            else if (word == "foreach") { ty = K.kw; }
+            else if (word == "in") { ty = K.kw; }
+            else if (word == "return") { ty = K.kw; }
+            else if (word == "true") { ty = K.kw; }
+            else if (word == "false") { ty = K.kw; }
+            else if (word == "break") { ty = K.kw; }
+            else if (word == "continue") { ty = K.kw; }
             ;
             if (word == "b") {
                 // b"..." / b'...' -- a byte-string literal: the same type
@@ -809,9 +832,9 @@ def tokenize_go(src: str, lsp: bool) -> [Tok] {
                     line = bq.line;
                     col = bq.col;
                     if (bq.err != "") {
-                        toks += mktok("ferr", bq.err, bline, startcol, start, i);
+                        toks += mktok(K.ferr, bq.err, bline, startcol, start, i);
                     } else {
-                        toks += mktok("bstr", bq.text, bline, startcol, start, i);
+                        toks += mktok(K.bstr, bq.text, bline, startcol, start, i);
                     };
                 } else {
                     toks += mktok(ty, word, line, startcol, start, i);
@@ -830,7 +853,7 @@ def tokenize_go(src: str, lsp: bool) -> [Tok] {
                 if (cq.err != "") {
                     cmsg = cmsg + " (and the quote is never closed)";
                 };
-                toks += mktok("ferr", cmsg, cline, startcol, start, i);
+                toks += mktok(K.ferr, cmsg, cline, startcol, start, i);
             } else if (word == "f" && src[i:i + 1] == "\"") {
                 // f"..." / f"""...""" -- an f-string (lex_fstring). The
                 // triple form spans lines and may hold a `"`.
@@ -853,9 +876,9 @@ def tokenize_go(src: str, lsp: bool) -> [Tok] {
             line = tq.line;
             col = tq.col;
             if (tq.err != "") {
-                toks += mktok("ferr", tq.err, startline, startcol, startoff, i);
+                toks += mktok(K.ferr, tq.err, startline, startcol, startoff, i);
             } else {
-                toks += mktok("str", tq.text, startline, startcol, startoff, i);
+                toks += mktok(K.str, tq.text, startline, startcol, startoff, i);
             };
         } else if (c == '\x22') {
             // string literal with escapes. NOTE: this arm precedes the slash
@@ -869,9 +892,9 @@ def tokenize_go(src: str, lsp: bool) -> [Tok] {
             line = q.line;
             col = q.col;
             if (q.err != "") {
-                toks += mktok("ferr", q.err, startline, startcol, startoff, i);
+                toks += mktok(K.ferr, q.err, startline, startcol, startoff, i);
             } else {
-                toks += mktok("str", q.text, startline, startcol, startoff, i);
+                toks += mktok(K.str, q.text, startline, startcol, startoff, i);
             };
 
         } else if (c == '/') {
@@ -895,7 +918,7 @@ def tokenize_go(src: str, lsp: bool) -> [Tok] {
                 };
                 // the server keeps it: the formatter and the highlighter both
                 // need the comment positions, which the compiler throws away
-                if (lsp) { toks += mktok("comment", src[cstart:i], line, ccol, cstart, i); };
+                if (lsp) { toks += mktok(K.comment, src[cstart:i], line, ccol, cstart, i); };
             } else if (src[i + 1:i + 2] == "*") {
                 let cstart = i;
                 let ccol = col;
@@ -934,9 +957,9 @@ def tokenize_go(src: str, lsp: bool) -> [Tok] {
                 // An unterminated block comment is an ERROR to the server: it
                 // has no end, so nothing can be painted or formatted around it.
                 if (lsp) {
-                    let ty = "comment";
-                    if (isdoc) { ty = "doc"; };
-                    if (!closed) { ty = "ferr"; };
+                    let ty = K.comment;
+                    if (isdoc) { ty = K.doc; };
+                    if (!closed) { ty = K.ferr; };
                     toks += mktok(ty, src[cstart:i], cline, ccol, cstart, i);
                 };
             } else {
@@ -946,11 +969,11 @@ def tokenize_go(src: str, lsp: bool) -> [Tok] {
                 // below never sees it.
                 let two = twocharop(src, i);
                 if (two == "/=") {
-                    toks += mktok("op", two, line, col, i, i + 2);
+                    toks += mktok(K.op, two, line, col, i, i + 2);
                     i += 2;
                     col += 2;
                 } else {
-                    toks += mktok("op", slash(), line, col, i, i + 1);
+                    toks += mktok(K.op, slash(), line, col, i, i + 1);
                     i++;
                     col++;
                 };
@@ -959,7 +982,7 @@ def tokenize_go(src: str, lsp: bool) -> [Tok] {
             // operator / punct / unknown-char dispatch.
             let op = multicharop(src, i, src[i:i + 1]);
             if (op != "") {
-                toks += mktok("op", op, line, col, i, i + len(op));
+                toks += mktok(K.op, op, line, col, i, i + len(op));
                 i += len(op);
                 col += len(op);
             } else if (c == '\x27') {
@@ -975,16 +998,16 @@ def tokenize_go(src: str, lsp: bool) -> [Tok] {
                 line = aq.line;
                 col = aq.col;
                 if (aq.err != "") {
-                    toks += mktok("ferr", aq.err, aline, acol, astart, i);
+                    toks += mktok(K.ferr, aq.err, aline, acol, astart, i);
                 } else {
-                    toks += mktok("char", aq.text, aline, acol, astart, i);
+                    toks += mktok(K.char, aq.text, aline, acol, astart, i);
                 };
             } else if (issingleop(c)) {
-                toks += mktok("op", src[i:i + 1], line, col, i, i + 1);
+                toks += mktok(K.op, src[i:i + 1], line, col, i, i + 1);
                 i++;
                 col++;
             } else if (ispunct(c)) {
-                toks += mktok("punct", src[i:i + 1], line, col, i, i + 1);
+                toks += mktok(K.punct, src[i:i + 1], line, col, i, i + 1);
                 i++;
                 col++;
             } else {
@@ -993,14 +1016,14 @@ def tokenize_go(src: str, lsp: bool) -> [Tok] {
                 // (skipping it compiled `5 @ 3` as `5 3`). The server marks
                 // it an error: nothing can be formatted around a byte that
                 // is not part of the language.
-                if (lsp) { toks += mktok("stray", src[i:i + 1], line, col, i, i + 1); }
-                else { toks += mktok("op", src[i:i + 1], line, col, i, i + 1); };
+                if (lsp) { toks += mktok(K.stray, src[i:i + 1], line, col, i, i + 1); }
+                else { toks += mktok(K.op, src[i:i + 1], line, col, i, i + 1); };
                 i++;
                 col++;
             };
         };
     };
-    toks += mktok("eof", "", line, col, i, i);
+    toks += mktok(K.eof, "", line, col, i, i);
     toks
 };
 

@@ -679,6 +679,7 @@ def lint_node(st: LintSt, node: Node, used: bool) -> void {
     } else if (k == K.kw_while) {
         let loop: While = node;
         lint_node(st, loop.cond, true);
+        if (st.wlevel >= 1 && lint_bool_lit(loop.cond) == 0) { lint_warn_at(st, "the condition is always false, so the loop never runs", loop.cond); };
         if (st.wlevel >= 2) { lint_short_while(st, loop); };
         lint_loop_body(st, loop.body)
     } else if (k == K.func) {
@@ -870,6 +871,9 @@ def lint_bin(st: LintSt, node: Bin, used: bool) -> void {
         if ((op == "/" || op == "%") && lint_zero(r)) {
             lint_warn_at(st, "division by zero", node);
         };
+        if (st.wlevel >= 1 && (op == "&" || op == "|" || op == "^" || op == "&&" || op == "||") && lint_same_node(l, r)) {
+            lint_warn_at(st, "both operands of '" + op + "' are the same expression", node);
+        };
         if (st.wlevel >= 2) { lint_short_bin(st, node); };
         st.logic = was;
     }
@@ -919,7 +923,7 @@ def lint_int_val(node: Node) -> long {
 };
 
 // The operator set that has a compound assignment.
-def lint_compound_op(op: str) -> void {
+def lint_compound_op(op: str) -> bool {
     op in ["+", "-", "*", "/", "%", "&", "|", "^", "<<", ">>", ">>>"]
 };
 
@@ -997,12 +1001,12 @@ def lint_operand(node: Node) -> str {
 
 // Rule 1.1/1.2: `x = x + e` is `x += e`.
 def lint_short_assign(st: LintSt, node: Assign, name: str, v: Node) -> void {
-    if (v.k != K.bin) { 0; return; };
+    if (v.k != K.bin) { return; };
     let b: Bin = v;
     let op: str = b.op;
-    if (b.l.k != K.id) { 0; return; };
+    if (b.l.k != K.id) { return; };
     let lid: Leaf = b.l;
-    if (lid.v != name) { 0; return; };
+    if (lid.v != name) { return; };
     let d = lint_disp(name);
     if (op == "+" && lint_int_val(b.r) == 1 && lint_var_scal(st, name)) {
         lint_warn_at(st, "'" + d + " = " + d + " + 1' can be written '" + d + "++'", node);
@@ -1021,14 +1025,17 @@ def lint_short_assign(st: LintSt, node: Assign, name: str, v: Node) -> void {
 // Rule 1.9: a comparison against a bool literal is the value or its not.
 def lint_short_bin(st: LintSt, node: Bin) -> void {
     let op: str = node.op;
-    if (op != "==" && op != "!=") { 0; return; };
+    if (op == "-" && node.l.k == K.num && node.r.k == K.num && lint_int_val(node.l) == 0) {
+        lint_warn_at(st, "'0 - n' is a negative literal; write it '-n'", node);
+    };
+    if (op != "==" && op != "!=") { return; };
     let lit = node.r;
     let other = node.l;
     if (node.l.k == K.bool) {
         lit = node.l;
         other = node.r;
     } else if (node.r.k != K.bool) {
-        0; return;
+        return;
     };
     let lb: Leaf = lit;
     let neg = (op == "!=") == (lb.v == "true");
@@ -1047,7 +1054,7 @@ def lint_short_bin(st: LintSt, node: Bin) -> void {
 // Rule 1.3: `byte_at(s, i)` is `s[i]`.
 def lint_short_call(st: LintSt, call: Call) -> void {
     let callee = call.callee;
-    if (callee.k != K.id) { 0; return; };
+    if (callee.k != K.id) { return; };
     let id: Leaf = callee;
     if (id.v == "byte_at" && len(call.args) == 2 && parser.nameix_get(st.ridx, "byte_at") < 0) {
         lint_warn_at(st, "'byte_at(s, i)' can be written 's[i]'", call);
@@ -1060,19 +1067,19 @@ def lint_short_call(st: LintSt, call: Call) -> void {
 // `a.foreach((e2, i) => { let x = e2; })`, and the index goes when nothing
 // else needs it.
 def lint_short_foreach_elem(st: LintSt, call: Call) -> void {
-    if (call.callee.k != K.dot || len(call.args) != 1) { 0; return; };
+    if (call.callee.k != K.dot || len(call.args) != 1) { return; };
     let d: Dot = call.callee;
-    if (d.key != "foreach" || d.obj.k != K.id || call.args[0].k != K.func) { 0; return; };
+    if (d.key != "foreach" || d.obj.k != K.id || call.args[0].k != K.func) { return; };
     let arr: Leaf = d.obj;
     let f: Func = call.args[0];
-    if (len(f.params) < 2) { 0; return; };
+    if (len(f.params) < 2) { return; };
     let el = f.params[0];
     let ix = f.params[1];
-    if (lint_find(f.body, el, 0)) { 0; return; };
-    if (!lint_find(f.body, arr.v, 64)) { 0; return; };
+    if (lint_find(f.body, el, 0)) { return; };
+    if (!lint_find(f.body, arr.v, 64)) { return; };
     // the element is not `a[i]` if the body writes a[i]: a store must keep
     // the index
-    if (lint_find(f.body, arr.v, 128)) { 0; return; };
+    if (lint_find(f.body, arr.v, 128)) { return; };
     lint_warn_at(st, "the element parameter of this 'foreach' is unused; use it instead of indexing '" + lint_disp(arr.v) + "' again", call);
     lint_fix(st, "3.6", call.line, call.col, lint_disp(arr.v), lint_disp(ix));
 };
@@ -1114,25 +1121,25 @@ def lint_short_slice(st: LintSt, slice: Slice) -> void {
 def lint_short_chain(st: LintSt, node: Bin) -> void {
     let leaves: [Node] = [];
     lint_chain_leaves(node, leaves);
-    if (len(leaves) < 3) { 0; return; };
+    if (len(leaves) < 3) { return; };
     let first = leaves[0];
-    if (first.k != K.bin) { 0; return; };
+    if (first.k != K.bin) { return; };
     let fb: Bin = first;
-    if (fb.op != "==" || !lint_pure(fb.l)) { 0; return; };
+    if (fb.op != "==" || !lint_pure(fb.l)) { return; };
     let l0 = fb.l;
     let vals: [long] = [];
     let allint = true;
     let allstr = true;
     for i in 0..len(leaves) {
         let leaf = leaves[i];
-        if (leaf.k != K.bin) { 0; return; };
+        if (leaf.k != K.bin) { return; };
         let b: Bin = leaf;
-        if (b.op != "==" || !lint_same_node(l0, b.l)) { 0; return; };
+        if (b.op != "==" || !lint_same_node(l0, b.l)) { return; };
         if (b.r.k == K.str) {
             allint = false;
         } else {
             let v = lint_int_val(b.r);
-            if (v < 0) { 0; return; };
+            if (v < 0) { return; };
             vals += v;
             allstr = false;
         };
@@ -1215,14 +1222,14 @@ def lint_pure(node: Node) -> bool {
 
 // Rule 2.1: an empty `if` arm.
 def lint_short_empty_if(st: LintSt, node: If) -> void {
-    if (st.chain != 0) { 0; return; };
+    if (st.chain != 0) { return; };
     let te = lint_empty_arm(node.then);
     if (te && (node.has_else && lint_empty_arm(node.els))) {
         lint_warn_at(st, "both branches of this 'if' are empty; it does nothing", node);
     } else if (te) {
         // An `else if` chain has no shorter form here: the arm being dropped
         // is the then, but what follows it is another condition.
-        if (node.has_else && node.els.k == K.kw_if) { 0; return; };
+        if (node.has_else && node.els.k == K.kw_if) { return; };
         lint_warn_at(st, "the 'if' branch is empty; invert the condition and drop the arm", node);
         // Only the invert is safe to apply: deleting the arm (or the whole
         // `if`) can leave the condition's names unused, a new warning.
@@ -1233,8 +1240,8 @@ def lint_short_empty_if(st: LintSt, node: If) -> void {
 // Rules 2.3/2.4: an `if`/`else` that only chooses a value.
 def lint_short_if_ternary(st: LintSt, node: If) -> void {
     // An `else if` arm has no block of its own to hold the rewrite.
-    if (st.chain != 0) { 0; return; };
-    if (!node.has_else) { 0; return; };
+    if (st.chain != 0) { return; };
+    if (!node.has_else) { return; };
     let a = lint_single_stmt(node.then);
     let b = lint_single_stmt(node.els);
     if (a.k == K.assign && b.k == K.assign) {
@@ -1264,23 +1271,23 @@ def lint_short_if(st: LintSt, node: If) -> void {
 // Rule 1.8: `if (x == A) { v } else if (x == B) { v } ... else { !v }` is
 // one membership test, `x in [A, B, C]` (or the range of 1.7).
 def lint_short_if_chain(st: LintSt, node: If) -> void {
-    if (st.chain != 0) { 0; return; };
+    if (st.chain != 0) { return; };
     let x = lint_eq_name(node.cond);
-    if (x == "") { 0; return; };
+    if (x == "") { return; };
     let v0 = lint_bool_lit(lint_single_stmt(node.then));
-    if (v0 < 0) { 0; return; };
+    if (v0 < 0) { return; };
     let n = 1;
     let cur = node;
     while (cur.has_else && cur.els.k == K.kw_if) {
         let nx: If = cur.els;
-        if (lint_eq_name(nx.cond) != x) { 0; return; };
-        if (lint_bool_lit(lint_single_stmt(nx.then)) != v0) { 0; return; };
+        if (lint_eq_name(nx.cond) != x) { return; };
+        if (lint_bool_lit(lint_single_stmt(nx.then)) != v0) { return; };
         cur = nx;
         n++;
     };
-    if (n < 2) { 0; return; };
+    if (n < 2) { return; };
     if (cur.has_else) {
-        if (lint_bool_lit(lint_single_stmt(cur.els)) == v0) { 0; return; };
+        if (lint_bool_lit(lint_single_stmt(cur.els)) == v0) { return; };
     };
     lint_warn_at(st, "this 'if' chain tests one value against a set; write one membership test", node);
     lint_fix(st, "1.8", node.line, node.col, lint_disp(x), tostring(v0));
@@ -1304,7 +1311,7 @@ def lint_is_lit(node: Node) -> bool {
 // A name set once after its `let`, under a condition (rule 2.2), or a
 // return chosen by a condition (rule 2.4's tail form).
 def lint_short_pair(st: LintSt, stmts: [Node], i: long) -> void {
-    if (i + 1 >= len(stmts)) { 0; return; };
+    if (i + 1 >= len(stmts)) { return; };
     let d = stmts[i];
     let n = stmts[i + 1];
     if (d.k == K.decl && n.k == K.kw_while) {
@@ -1344,11 +1351,11 @@ def lint_short_pair(st: LintSt, stmts: [Node], i: long) -> void {
 
 // Rule 2.6: `while (true) { if (!c) { break; } ... }` is `while (c) ...`.
 def lint_short_while(st: LintSt, loop: While) -> void {
-    if (lint_bool_lit(loop.cond) != 1) { 0; return; };
+    if (lint_bool_lit(loop.cond) != 1) { return; };
     let b = lint_first_stmt(loop.body);
-    if (b.k != K.kw_if) { 0; return; };
+    if (b.k != K.kw_if) { return; };
     let iff: If = b;
-    if (iff.has_else) { 0; return; };
+    if (iff.has_else) { return; };
     if (lint_single_stmt(iff.then).k == K.kw_break) {
         lint_warn_at(st, "'while (true)' with a leading 'break' guard can test the guard instead", b);
     };
@@ -1599,20 +1606,20 @@ def lint_short_none(st: LintSt, stmts: [Node], i: long) -> void {
     let d = stmts[i];
     let n = stmts[i + 1];
     let decl: Decl = d;
-    if (decl.kind != "let" || decl.typ.k != K.tnone) { 0; return; };
+    if (decl.kind != "let" || decl.typ.k != K.tnone) { return; };
     let iff: If = n;
-    if (!iff.has_else) { 0; return; };
+    if (!iff.has_else) { return; };
     let x = lint_none_test(iff.cond);
-    if (x == "" || x != decl.name) { 0; return; };
+    if (x == "" || x != decl.name) { return; };
     let tw = lint_find(iff.then, x, 16);
     let ew = lint_find(iff.els, x, 16);
-    if (tw == ew) { 0; return; };
+    if (tw == ew) { return; };
     let some_arm = iff.then;
     let none_arm = iff.els;
     if (ew) { some_arm = iff.els; none_arm = iff.then; };
-    if (lint_find(some_arm, x, 32)) { 0; return; };
-    if (lint_find(none_arm, x, 0)) { 0; return; };
-    if (lint_find_from(stmts, i + 2, x, 0)) { 0; return; };
+    if (lint_find(some_arm, x, 32)) { return; };
+    if (lint_find(none_arm, x, 0)) { return; };
+    if (lint_find_from(stmts, i + 2, x, 0)) { return; };
     lint_warn_at(st, "'" + lint_disp(x) + "' is tested for 'none' and unwrapped; write 'if let some(" + lint_disp(x) + ") = <expr> { ... } else { ... }'", d);
     lint_fix(st, "2.11", d.line, d.col, lint_disp(x), "");
 };
@@ -1677,14 +1684,14 @@ def lint_short_flag(st: LintSt, stmts: [Node], i: long) -> void {
     let d = stmts[i];
     let n = stmts[i + 1];
     let decl: Decl = d;
-    if (decl.kind != "let" || decl.typ.k != K.tnone) { 0; return; };
-    if (lint_bool_lit(decl.v) < 0) { 0; return; };
+    if (decl.kind != "let" || decl.typ.k != K.tnone) { return; };
+    if (lint_bool_lit(decl.v) < 0) { return; };
     let loop: While = n;
     let f = decl.name;
-    if (!lint_flag_cond(loop.cond, f)) { 0; return; };
-    if (lint_find(loop.body, f, 0)) { 0; return; };
-    if (!lint_find(loop.body, f, 8)) { 0; return; };
-    if (lint_find_from(stmts, i + 2, f, 8)) { 0; return; };
+    if (!lint_flag_cond(loop.cond, f)) { return; };
+    if (lint_find(loop.body, f, 0)) { return; };
+    if (!lint_find(loop.body, f, 8)) { return; };
+    if (lint_find_from(stmts, i + 2, f, 8)) { return; };
     lint_warn_at(st, "'" + lint_disp(f) + "' only stops this loop; write 'while (true)' and 'break' where it is set", d);
     if (!lint_find_from(stmts, i + 2, f, 0) && lint_flag_fixable(loop.body, f)) {
         lint_fix(st, "2.5", d.line, d.col, lint_disp(f), "");
@@ -1710,22 +1717,22 @@ def lint_flag_cond(cond: Node, name: str) -> bool {
 };
 
 def lint_short_index_loop(st: LintSt, stmts: [Node], i: long) -> void {
-    if (i + 1 >= len(stmts)) { 0; return; };
+    if (i + 1 >= len(stmts)) { return; };
     let d = stmts[i];
     let n = stmts[i + 1];
-    if (d.k != K.decl || n.k != K.kw_while) { 0; return; };
+    if (d.k != K.decl || n.k != K.kw_while) { return; };
     let decl: Decl = d;
-    if (decl.kind != "let" || decl.typ.k != K.tnone) { 0; return; };
+    if (decl.kind != "let" || decl.typ.k != K.tnone) { return; };
     let loop: While = n;
     let iv = decl.name;
-    if (loop.cond.k != K.bin) { 0; return; };
+    if (loop.cond.k != K.bin) { return; };
     let cb: Bin = loop.cond;
-    if ((cb.op != "<" && cb.op != "<=") || cb.l.k != K.id) { 0; return; };
+    if ((cb.op != "<" && cb.op != "<=") || cb.l.k != K.id) { return; };
     let cl: Leaf = cb.l;
-    if (cl.v != iv || !lint_step_one(loop.body, iv)) { 0; return; };
+    if (cl.v != iv || !lint_step_one(loop.body, iv)) { return; };
     // The loop variable must not be read after the loop: the rewrite
     // scopes it to the loop, so a later read would not compile.
-    if (lint_find_from(stmts, i + 2, iv, 0)) { 0; return; };
+    if (lint_find_from(stmts, i + 2, iv, 0)) { return; };
     let arr = lint_len_of(cb.r);
     // `foreach` starts at element 0 and needs an array, so the array form
     // is offered only for a start of 0 on a receiver not known to be a str,
@@ -1734,7 +1741,7 @@ def lint_short_index_loop(st: LintSt, stmts: [Node], i: long) -> void {
         lint_warn_at(st, "this index loop can be '" + lint_disp(arr) + ".foreach((e, i) => { ... })'", d);
         lint_fix(st, "3.1", d.line, d.col, lint_disp(iv), lint_disp(arr));
     } else {
-        if (lint_find(loop.body, "", 4)) { 0; return; };
+        if (lint_find(loop.body, "", 4)) { return; };
         lint_warn_at(st, "this index loop can be 'for " + lint_disp(iv) + " in <lo>..<hi> { ... }'", d);
         lint_fix(st, "2.8", d.line, d.col, lint_disp(iv), "");
     };
@@ -1743,7 +1750,7 @@ def lint_short_index_loop(st: LintSt, stmts: [Node], i: long) -> void {
 // Rule 3.5: `foreach (i in range(len(a)))` can iterate the array directly.
 def lint_short_range(st: LintSt, fe: Foreach) -> void {
     let arr = lint_range_arr(fe.iter);
-    if (arr == "" || !lint_var_vec(st, arr) || lint_find(fe.body, "", 7) || lint_find(fe.body, arr, 8)) { 0; return; };
+    if (arr == "" || !lint_var_vec(st, arr) || lint_find(fe.body, "", 7) || lint_find(fe.body, arr, 8)) { return; };
     lint_warn_at(st, "this range loop over an array's indices can be '<a>.foreach((e, i) => { ... })'", fe);
     lint_fix(st, "3.5", fe.line, fe.col, lint_disp(arr), "");
 };
@@ -3290,6 +3297,7 @@ def lint_zero_text(s: str) -> bool {
 // An `if` gives its arms' values only when it has both arms.
 def lint_if(st: LintSt, node: If, used: bool) -> void {
     lint_node(st, node.cond, true);
+    if (st.chain == 0) { lint_if_conds(st, node); };
     let arms = used && node.has_else;
     lint_node(st, node.then, arms);
     // An `else if` is an arm of the chain, not an arm of its own: its empty
@@ -3302,6 +3310,30 @@ def lint_if(st: LintSt, node: If, used: bool) -> void {
         lint_warn_at(st, "the 'else' branch is empty", node)
     } else { 0 };
     if (st.wlevel >= 2) { lint_short_if(st, node); };
+};
+
+// The conditions of a whole `if`/`else if` chain (checked once, at its head): a
+// constant one decides the branch at compile time, and one that repeats an
+// earlier condition of the chain can never be reached -- the earlier one took
+// every case it would.
+def lint_if_conds(st: LintSt, head: If) -> void {
+    let seen: [Node] = [];
+    let cur: Node = head;
+    while (cur.k == K.kw_if) {
+        let branch: If = cur;
+        let c = lint_bool_lit(branch.cond);
+        if (c >= 0) {
+            if (st.wlevel >= 1) { lint_warn_at(st, "the condition is always " + (if (c == 1) { "true" } else { "false" }), branch.cond); };
+        } else {
+            foreach (prev in seen) {
+                if (lint_same_node(prev, branch.cond)) {
+                    lint_warn_at(st, "this condition repeats an earlier one of the chain, so this branch never runs", branch.cond);
+                };
+            };
+        };
+        seen += branch.cond;
+        cur = branch.els;
+    };
 };
 
 // An arm holding nothing at all: an empty block. Only an `else` is worth a
@@ -3359,36 +3391,36 @@ def lint_flat_body(body: Node) -> [Node] {
 //   `a.foreach((e) => { let l = e; BODY(l) });`
 // is `a.foreach((l) => { BODY(l) });` -- the parameter carries the name.
 def lint_alias_param(st: LintSt, node: Func) -> void {
-    if (len(node.params) == 0) { 0; return; };
+    if (len(node.params) == 0) { return; };
     let b = lint_flat_body(node.body);
     let di = -1;
     for i in 0..len(b) {
         if (b[i].k != K.void) { di = i; break; };
     };
-    if (di < 0) { 0; return; };
+    if (di < 0) { return; };
     let d = b[di];
-    if (d.k != K.decl) { 0; return; };
+    if (d.k != K.decl) { return; };
     let decl: Decl = d;
     // an unwritten `let` only: `let f: TFunc = t;` is a cast, not an alias
-    if (decl.kind != "let" || decl.v.k != K.id || decl.typ.k != K.tnone) { 0; return; };
+    if (decl.kind != "let" || decl.v.k != K.id || decl.typ.k != K.tnone) { return; };
     let src: Leaf = decl.v;
     let p = "";
     foreach (nm in node.params) {
         if (nm == src.v) { p = nm; };
     };
-    if (p == "" || decl.name == p) { 0; return; };
+    if (p == "" || decl.name == p) { return; };
     // the new name must not be another parameter (it would collide)
     foreach (nm2 in node.params) {
-        if (nm2 == decl.name) { 0; return; };
+        if (nm2 == decl.name) { return; };
     };
     // the parameter must not be mentioned after the alias, and the alias
     // must never be written (that is a real copy, and 2.3's business)
     for i in di + 1..len(b) {
-        if (lint_find(b[i], p, 0)) { 0; return; };
-        if (lint_find(b[i], decl.name, 8)) { 0; return; };
+        if (lint_find(b[i], p, 0)) { return; };
+        if (lint_find(b[i], decl.name, 8)) { return; };
     };
     // and the alias must be read, or this is the unused-local rule's job
-    if (!lint_find_list(b[di + 1:], decl.name, 0)) { 0; return; };
+    if (!lint_find_list(b[di + 1:], decl.name, 0)) { return; };
     let dn = lint_disp(decl.name);
     let pn = lint_disp(p);
     lint_warn_at(st, "'" + dn + "' is only another name for the parameter '" + pn + "'; rename the parameter", d);

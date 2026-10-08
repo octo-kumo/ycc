@@ -20,7 +20,7 @@ The shortening rules are off by default and reported by `ycc -W 2`
 (level 1 is the dropped-value checks). The correctness rules of section 6
 are the default level 0.
 
-Implemented so far (level 2): 1.1-1.7, 1.9 (2.7 is its condition form),
+Implemented so far (level 2): 1.1-1.7, 1.9 (2.7 is its condition form), 5b (levels 0-2),
 1.8, 2.1-2.6, 2.8, 2.10-2.12, 3.1, 3.5, 3.6, 5.1, plus level 1's
 dropped-value checks as a `-> void` fix. The rest is the plan.
 
@@ -345,6 +345,24 @@ when the fixer rewrote the lexer's own bounds checks (round 9).
 - It is the rewrite target of 1.6 and 1.8; without it those rules can only
   suggest `index_of(...) >= 0`.
 
+## 5b. Conditions that decide nothing
+
+- **A repeated chain condition** (level 0). In `if (c) .. else if (c) ..` the
+  second `c` is false whenever it is reached, so its branch never runs.
+  **Detect** `lint_same_node` on the conditions of one chain (a name, a
+  literal, `!`/binary operators over them; never a call, which can differ).
+- **A constant condition** (level 1). `if (true)`, `else if (false)`,
+  `while (false)`: the branch is decided at compile time. `while (true)` is the
+  loop idiom and stays quiet.
+- **The same operand twice** (level 1). `x & x`, `x | x`, `x ^ x`, `x && x`,
+  `x || x` with the same pure expression on both sides.
+- **`0 - n`** (level 2). On a literal it is a negative literal; write `-n`.
+  No fix is offered.
+
+Not done, and why: *an unused `import`* needs a diagnostic channel in
+`resolve_unit` (imports are spliced as text before any AST exists), so it
+cannot be a `lint.y` rule as the others are.
+
 ## 6. Correctness (already warned)
 
 - `x = x` — assigned to itself.
@@ -362,12 +380,10 @@ when the fixer rewrote the lexer's own bounds checks (round 9).
 
 ## 7. TODO
 
-- **`mktok` token types are strings.** `mktok("op", ...)`,
-  `mktok("punct", ...)`, `mktok("id", ...)`, ... carry the token type as a
-  bare string, so a typo is a silently different token type rather than an
-  error. Give each type a `const` (e.g. `const TOK_OP = "op";`) and pass
-  the name, so a mistyped one is an undefined-variable error. The same for
-  every `t == "id"` / `tt(toks, p) == "punct"` comparison in the parser and
-  the lexer.
-- **`in`** (section 5) is itself unimplemented; rules 1.6 and 1.8 wait on
-  it.
+- **`src/c/lint.c` is not a full copy of `lint.y` above level 0.** The default
+  level (section 6) and the new section 5b rules are at parity; rules 1.8 and
+  2.10 and the level-1 dropped-value check exist only in `lint.y` (the C
+  record has no `reads`/`rets` state). `-W 1`/`-W 2` output therefore differs
+  between `cycc` and `ycc` on such programs. Port them, or state that the
+  C copy is level 0 only.
+- **Unused `import`** (see 5b).

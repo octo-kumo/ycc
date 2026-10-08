@@ -27,7 +27,7 @@ fi
 ulimit -S -v "${YMEM_CAP_KB:-3670016}" || exit 2
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 JOBS="${YJOBS:-$(nproc)}"
-TMP="$(mktemp -d /tmp/ybench-prof.XXXXXX)"
+TMP="$(mktemp -d -t ybench-prof.XXXXXX)"
 trap 'rm -rf "$TMP"' EXIT
 cd "$ROOT" || exit 2   # where imports of std modules resolve (src/y/std/)
 

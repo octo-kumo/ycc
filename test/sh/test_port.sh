@@ -16,8 +16,8 @@ port_check() {
     local file="$1"
     local name="${file#"$ROOT"/}${2:+ ($2)}"
     local binr binc
-    binr=$(mktemp /tmp/yport_ref_XXXXXX)
-    binc=$(mktemp /tmp/yport_cop_XXXXXX)
+    binr=$(mktemp -t yport_ref_XXXXXX)
+    binc=$(mktemp -t yport_cop_XXXXXX)
 
     # the compiler's own source is the heaviest input here by far
     local to=$(( 300 * YTIMEOUT_SCALE ))

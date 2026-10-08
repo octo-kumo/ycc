@@ -36,8 +36,8 @@ pe_port_check() {
     local file="$1" flags="$2"
     local name="${file#"$ROOT"/}${flags:+ ($flags)}"
     local binr binc rerr cerr rec cec
-    binr=$(mktemp /tmp/ype_ref_XXXXXX)
-    binc=$(mktemp /tmp/ype_cop_XXXXXX)
+    binr=$(mktemp -t ype_ref_XXXXXX)
+    binc=$(mktemp -t ype_cop_XXXXXX)
     local to=$(( 300 * YTIMEOUT_SCALE ))
     rerr=$(timeout "$to" "$YREF" --target=windows $flags -o "$binr" "$file" </dev/null 2>&1); rec=$?
     cerr=$(timeout "$to" "$CYCC" --target=windows $flags -o "$binc" "$file" </dev/null 2>&1); cec=$?

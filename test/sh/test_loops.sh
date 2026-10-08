@@ -19,7 +19,7 @@ run_test() {
     local name="$1"
     local file="$2"
     local bin
-    bin=$(mktemp /tmp/ylops_bin_XXXXXX)
+    bin=$(mktemp -t ylops_bin_XXXXXX)
 
     # Reference side: compile with the reference compiler, then run it.
     local vm_out vm_exit
@@ -75,8 +75,8 @@ inline_test() {
     local expected="$3"
 
     local tmpfile bin vm_out bin_out
-    tmpfile=$(mktemp /tmp/ylops_src_XXXXXX.y)
-    bin=$(mktemp /tmp/ylops_bin_XXXXXX)
+    tmpfile=$(mktemp -t ylops_src_XXXXXX.y)
+    bin=$(mktemp -t ylops_bin_XXXXXX)
     echo "$code" > "$tmpfile"
 
     # Reference side (quiet: only program output), then the C copy's build.

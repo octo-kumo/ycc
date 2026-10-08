@@ -13,7 +13,7 @@
 #   diverge    the two compilers disagree: exit code, messages, or output
 #              binary
 # Each distinct finding (keyed by kind + first line of output) is saved
-# once, with the input and both outputs, under $FUZZ_OUT (/tmp/yfuzz).
+# once, with the input and both outputs, under $FUZZ_OUT (_check/fuzz).
 # The corpus is every program under test/y/native, audit and examples;
 # mutate.y explains the edits. Inputs are reproducible from the seed line
 # printed for each finding.
@@ -21,7 +21,7 @@
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 YCC="${YCC:-$ROOT/ycc}"
 CYCC="${CYCC:-$ROOT/cycc}"
-OUT="${FUZZ_OUT:-/tmp/yfuzz}"
+OUT="${FUZZ_OUT:-$ROOT/_check/fuzz}"
 ITER="${1:-500}"
 SEED="${2:-$RANDOM}"
 MEM_KB="${FUZZ_MEM_KB:-2000000}"

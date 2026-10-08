@@ -1,6 +1,6 @@
 // bench/y/maps.y — map reads and writes: counting (m[k] == none, then
 // m[k] = m[k]! + 1), lookups whose option escapes into a variable, and
-// misses. Maps scan their keys, so the key set stays small (64 strings).
+// misses. The key set is small (64 strings), so this is the scan; bigmap.y is the hash index.
 def maps(n: long) -> long {
 let keys: [str] = [];
 let k = 0;

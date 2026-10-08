@@ -1,3 +1,4 @@
+// scratch: the harness runs this fixture in a scratch directory (relative paths)
 // std/fs.y at the fd level: every mode string, the errors (-1, false,
 // []), positions, NUL bytes, and the standard fds (1 is stdout).
 import fs;
@@ -6,12 +7,12 @@ print(fs.write_text(1, "fd 1 is stdout\n"));
 print(fs.write_text(1, ""));
 print(fs.open_file("t102_io_missing.txt", "r"));
 print(fs.open_file(".", "w"));
-print(fs.open_file("/tmp", "rw"));
+print(fs.open_file(".", "rw"));
 print(fs.set_mode("t102_io_missing.txt", 384));
 
-// /tmp, pid-unique: the repo may sit on a filesystem where a fresh file
+// The harness runs each fixture in a scratch directory; pid-unique: the repo may sit on a filesystem where a fresh file
 // can be briefly locked, and concurrent runs must not share the file.
-let path = "/tmp/ytest_t102_" + tostring(syscall(39)) + ".txt";
+let path = "ytest_t102_" + tostring(syscall(39)) + ".txt";
 let fd = fs.open_file(path, "w+", 384);
 print(fd > 2);
 print(fs.write_text(fd, "io:"));

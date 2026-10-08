@@ -1,3 +1,4 @@
+// scratch: the harness runs this fixture in a scratch directory (relative paths)
 // std/tui: the cell grid, colour arithmetic, the glyph ramps, the frame diff,
 // the capture, the pacer -- all checked with no terminal attached.
 //
@@ -460,7 +461,7 @@ def main() -> long {
     // out_flush, so it does not see them -- which is why these are checked by
     // pointing the descriptor at a file and reading it back.
     test.group("the sgr_* forms write to the descriptor");
-    let path = "/tmp/t199_sgr.txt";
+    let path = "t199_sgr.txt";
     let wfd = syscall(257, -100, path, 577, 420);   // AT_FDCWD, O_WRONLY|O_CREAT|O_TRUNC
     if (wfd < 0) {
         test.ck("could open a scratch file for the sgr_* check", false,
@@ -658,7 +659,7 @@ def main() -> long {
     // on an empty transcript, which is the vacuous-pass failure mode this file
     // exists to avoid.
     test.group("the screen and cursor controls, by the bytes they write");
-    let ctl_path = "/tmp/t199_ctl.txt";
+    let ctl_path = "t199_ctl.txt";
     let cfd = syscall(257, -100, ctl_path, 577, 420);   // O_WRONLY|O_CREAT|O_TRUNC
     if (cfd < 0) {
         test.ck("could open a scratch file for the control sequences", false,

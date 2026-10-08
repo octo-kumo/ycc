@@ -38,7 +38,7 @@ fi
 
 for f in "$ROOT"/test/y/examples/*.y; do
     name=$(basename "$f")
-    binf=$(mktemp /tmp/ynatex_XXXXXX)
+    binf=$(mktemp -t ynatex_XXXXXX)
     cc_out=$(timeout $(( 120 * YTIMEOUT_SCALE )) "$YCC" -o "$binf" "$f" </dev/null 2>&1)
     cc_ec=$?
     reason="${UNSUPPORTED[$name]}"

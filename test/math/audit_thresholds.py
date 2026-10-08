@@ -45,6 +45,7 @@ import os
 import re
 import struct
 import sys
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
@@ -237,10 +238,11 @@ def planted(x: float) -> float {
     if (x < 3.25e77) { 1.0 } else { 2.0 }
 };
 """
-    with open("/tmp/.y-thresholds-plant.y", "w", encoding="utf-8") as fh:
+    fd, path = tempfile.mkstemp(prefix="y-thresholds-plant.", suffix=".y")
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
         fh.write(plant)
     try:
-        found = [t for t in thresholds("/tmp/.y-thresholds-plant.y") if t[3] == 3.25e77]
+        found = [t for t in thresholds(path) if t[3] == 3.25e77]
         if not found:
             print("  FAILED  the extractor did not find a planted comparison")
             return 1
@@ -248,7 +250,7 @@ def planted(x: float) -> float {
               % (found[0][0], found[0][1]))
         return 0
     finally:
-        os.unlink("/tmp/.y-thresholds-plant.y")
+        os.unlink(path)
 
 
 def main():

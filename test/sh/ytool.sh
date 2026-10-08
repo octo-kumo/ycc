@@ -30,8 +30,8 @@ case "${1:-}" in
     # is the program's: a compile that succeeds keeps its warnings (lint.y,
     # on stderr) to itself; one that fails prints everything, as ever.
     file="${2:?ytool: -q needs a file}"
-    bin=$(mktemp /tmp/ytool_run_XXXXXX)
-    err=$(mktemp /tmp/ytool_err_XXXXXX)
+    bin=$(mktemp -t ytool_run_XXXXXX)
+    err=$(mktemp -t ytool_err_XXXXXX)
     if ! "$YREF" -o "$bin" "$file" </dev/null 2>"$err"; then
         cat "$err" >&2
         rm -f "$bin" "$err"

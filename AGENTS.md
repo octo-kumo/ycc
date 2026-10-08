@@ -7,6 +7,10 @@ semantics. **Every change to `src/y/*.y` gets the same change in `src/c/*.c`.**
 
 ## Build
 
+- `make help` lists every target. Scripts and recipes make their scratch space with
+  `mktemp -t` (so `$TMPDIR` is honoured) and clean it up; never a fixed `/tmp` name. A
+  `test/y/native` fixture that writes files starts with `// scratch` and uses relative
+  paths: the harness runs it in a scratch directory.
 - `make` → `./cycc` (the C copy).
 - `make ycc` → builds `./ycc` with `cycc`, attaches the std pack, then verifies
   `cmp ycc refs/ycc.ref` (byte-identical to the last blessed compiler, pack

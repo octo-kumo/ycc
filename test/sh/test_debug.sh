@@ -21,7 +21,7 @@ if [ ! -x "$YCC" ]; then
     exit 2
 fi
 
-TMPD="$(mktemp -d /tmp/ydebug_test.XXXXXX)"
+TMPD="$(mktemp -d -t ydebug_test.XXXXXX)"
 trap 'rm -rf "$TMPD"' EXIT
 
 cat >"$TMPD/p.y" <<'EOF'

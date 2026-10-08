@@ -50,7 +50,7 @@ typable builtins 49, missing from the list 0
 no `opt$test` in the list: true
 no `#fmt` in the list: true
 -- and the PREDICATE agrees with the list
-names 55, accepted by is_intrinsic_name 55, disagreed 0
+names 58, accepted by is_intrinsic_name 58, disagreed 0
 non-builtins wrongly accepted: 0
 -- the index the requests agree on
 definition and hover agree: true

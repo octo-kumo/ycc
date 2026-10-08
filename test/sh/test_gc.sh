@@ -15,7 +15,7 @@ set -u
 
 source "$(dirname "$0")/lib.sh"
 
-WORK=$(mktemp -d /tmp/ygc_XXXXXX)
+WORK=$(mktemp -d -t ygc_XXXXXX)
 trap 'rm -rf "$WORK"' EXIT
 
 THR="$ROOT/test/y/native/t385_gc_threads_alloc.y"

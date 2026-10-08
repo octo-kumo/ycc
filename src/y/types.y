@@ -1697,20 +1697,11 @@ def in_int_ok(lt: Type, of: Type) -> bool {
 
 // `"k" in m` -- is that key in the map (TODO.md item 14). A boolean, and the
 // scan a map read is (native.y gen_map_get's "has" mode), so it costs what a
-// read costs. Poison quietly on an unknown operand: whatever made it unknown
-// has already reported.
-def typeof_in_map(st: TcSt, op: str, lt: Type, rt: Type, line: long, col: long) -> TcRes {
-    let ru = unfold(rt);
-    if (ru.k == K.tmap || ru.k == K.tunk || rt.k == K.tnone) {
-        if (ru.k == K.tmap) {
-            let map: TMap = ru;
-            st = expect_type(st, lt, map.key, "'in' left operand", line, col);
-        };
-        tc_res(type_node({ k: K.tbool }), st)
-    } else {
-        st = fail(st, "'in' needs a map on the right, got " + tstr(rt), line, col);
-        tc_res(t_unk(), st)
-    }
+// read costs. Only called with a map on the right (the caller tests).
+def typeof_in_map(st: TcSt, lt: Type, rt: Type, line: long, col: long) -> TcRes {
+    let map: TMap = unfold(rt);
+    st = expect_type(st, lt, map.key, "'in' left operand", line, col);
+    tc_res(type_node({ k: K.tbool }), st)
 };
 
 def typeof_in(st: TcSt, lt: Type, rt: Type, line: long, col: long) -> TcRes {
@@ -2216,7 +2207,7 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
         else if (op == ">=") { typeof_cmp(st, op, l.typ, r.typ, bin.line, bin.col) }
         else if (op == "in") {
             if (unfold(r.typ).k == K.tmap) {
-                typeof_in_map(st, op, l.typ, r.typ, bin.line, bin.col)
+                typeof_in_map(st, l.typ, r.typ, bin.line, bin.col)
             } else {
                 typeof_in(st, l.typ, r.typ, bin.line, bin.col)
             }
@@ -2898,8 +2889,8 @@ def typeof_expr_go(st: TcSt, node: Node) -> TcRes {
 def typeof_rectest(st: TcSt, node: Narrow) -> TcRes {
     let r = typeof_expr(st, node.e);
     st = r.st;
-    let s = r.typ;
     let t = node.typ;
+    let s = pat_subject(r.typ, t);
     let sk: long = s.k;
     let tu = unfold(t);
     let tk: long = tu.k;
@@ -2943,6 +2934,20 @@ def typeof_rectest(st: TcSt, node: Narrow) -> TcRes {
     tc_res(type_node({ k: K.tbool }), st)
 };
 
+// The type a pattern is tested against. A record pattern on an option whose
+// payload is a record tests the payload (`if let Lvl c = o`, `o: Lvl?`: the
+// option's own none test, then the record), as a scalar pattern does
+// (scalar_pat_narrow); any other subject is itself.
+def pat_subject(s: Type, t: Type) -> Type {
+    let su = unfold(s);
+    if (su.k == K.topt && !is_prim_type(unfold(t))) {
+        let inner = scalar_pat_narrow(su);
+        if (unfold(inner).k == K.trec) { unfold(inner) } else { s }
+    } else {
+        s
+    }
+};
+
 // What a scalar pattern leaves bound: the subject with its option unwrapped,
 // so `if let long n = v` is `v != none and v is a long` -- the binding is the
 // payload, not the box (TODO.md item 13). A union member of the type matches
@@ -2977,7 +2982,7 @@ def typeof_narrow(st: TcSt, node: Narrow) -> TcRes {
         // the subject instead would bind the whole union.
         tc_res(tu, r.st)
     } else if (tk == K.trec || tk == K.tpat) {
-        tc_res(narrow_type(r.typ, t), r.st)
+        tc_res(narrow_type(pat_subject(r.typ, t), t), r.st)
     } else {
         tc_res(t_unk(), r.st)
     }
@@ -5419,4 +5424,4 @@ def def_sig(name: str, func: Func) -> Field {
     { name: name, opt: false, typ: type_node({ k: K.tfunc, args: args, ret: ret }) }
 };
 
-export { check_program, os_call_names, tstr, teq, leaf_of, field_pos, field_merge, narrow_type, union_member, unfold, members, union_parts, pat_members, lit_target, opt_wraps, t_mutex, t_sem, tcanon, tsig, inferred_ret, str_sorted, rec_names, type_names, member_fields, member_field_type, is_prim_type, is_boxable_type, box_field_name, str_method, fmt_spec, fmt_kind, expr_type, type_index_on, type_index_off, Sym };
+export { check_program, os_call_names, tstr, teq, leaf_of, field_pos, field_merge, narrow_type, pat_subject, union_member, unfold, members, union_parts, pat_members, lit_target, opt_wraps, t_mutex, t_sem, tcanon, tsig, inferred_ret, str_sorted, rec_names, type_names, member_fields, member_field_type, is_prim_type, is_boxable_type, box_field_name, str_method, fmt_spec, fmt_kind, expr_type, type_index_on, type_index_off, Sym };

@@ -22,7 +22,7 @@ command -v valgrind >/dev/null || { echo "bench: valgrind not found" >&2; exit 2
 ulimit -S -v "${YMEM_CAP_KB:-3670016}" || exit 2
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 JOBS="${YJOBS:-$(nproc)}"
-TMP="$(mktemp -d /tmp/ybench-ir.XXXXXX)"
+TMP="$(mktemp -d -t ybench-ir.XXXXXX)"
 trap 'rm -rf "$TMP"' EXIT
 # The compiler derives std search dirs from its own path, and a count
 # includes the instructions spent on them: both builds run as copies in

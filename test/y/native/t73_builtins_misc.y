@@ -1,3 +1,4 @@
+// scratch: the harness runs this fixture in a scratch directory (relative paths)
 import fs;
 let value: long = 7;
 print(byte_at("A", 0));
@@ -9,8 +10,8 @@ print(ptr_addr(&value) != 0);
 eputs("eputs-called\n");
 sleep(1);
 print("awake");
-// /tmp, pid-unique (see t102): syscall 39 is getpid.
-let path = "/tmp/ytest_t73_" + tostring(syscall(39)) + ".bin";
+// Scratch directory, pid-unique (see t102): syscall 39 is getpid.
+let path = "ytest_t73_" + tostring(syscall(39)) + ".bin";
 let written = fs.write_bytes(path, bytes("Y!"), 420);
 print(written);
 let data = fs.read_file(path);

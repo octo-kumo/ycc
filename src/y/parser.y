@@ -274,7 +274,7 @@ def tclamp(toks: [Tok], p: long) -> long {
     q
 };
 
-def tt(toks: [Tok], p: long) -> str {
+def tt(toks: [Tok], p: long) -> long {
     // NOTE: bind the token, then read its field. The inline form
     // `toks[p].t` parses fine today (index-then-dot is an ordinary postfix
     // chain — see parse_postfix), but it is a one-read-per-peek either way,
@@ -300,21 +300,21 @@ def is_kw(toks: [Tok], p: long, w: str) -> bool {
     // so this is style, not a rule.
     // NOTE: bound once (see tt note).
     let tok = toks[tclamp(toks, p)];
-    if (tok.t == "kw") {
+    if (tok.t == K.kw) {
         if (tok.v == w) { true } else { false }
     } else { false }
 };
 def is_punct(toks: [Tok], p: long, w: str) -> bool {
     // NOTE: bound once (see tt note).
     let tok = toks[tclamp(toks, p)];
-    if (tok.t == "punct") {
+    if (tok.t == K.punct) {
         if (tok.v == w) { true } else { false }
     } else { false }
 };
 def is_op(toks: [Tok], p: long, w: str) -> bool {
     // NOTE: bound once (see tt note).
     let tok = toks[tclamp(toks, p)];
-    if (tok.t == "op") {
+    if (tok.t == K.op) {
         if (tok.v == w) { true } else { false }
     } else { false }
 };
@@ -335,7 +335,7 @@ def tres(node: Type, p: long) -> PType {
 
 // The token at p, for a message: 'x', or end of input.
 def tok_desc(toks: [Tok], p: long) -> str {
-    if (tt(toks, p) == "eof") { "end of input" } else { "'" + tv(toks, p) + "'" }
+    if (tt(toks, p) == K.eof) { "end of input" } else { "'" + tv(toks, p) + "'" }
 };
 
 // "expected WHAT, got 'x'" at token p.
@@ -362,7 +362,7 @@ def skip_close(toks: [Tok], p: long, closer: str) -> long {
 // A name token (identifiers; keywords too, as record keys and fields).
 def is_name_tok(toks: [Tok], p: long) -> bool {
     let t = tt(toks, p);
-    t == "id" || t == "kw"
+    t == K.id || t == K.kw
 };
 
 // sep_by(one, close): parse a comma-separated list of `one(toks, pos)` results
@@ -449,7 +449,7 @@ def op_prec(op: str) -> long {
 // `json{` / `json[`. The lexer keeps `json` an identifier, so this test is
 // the whole disambiguation and existing programs cannot change meaning.
 def json_sigil_at(toks: [Tok], p: long, opener: str) -> bool {
-    if (tt(toks, p) != "id" || tv(toks, p) != "json") { false }
+    if (tt(toks, p) != K.id || tv(toks, p) != "json") { false }
     else if (!is_punct(toks, p + 1, opener)) { false }
     else if (tline(toks, p + 1) != tline(toks, p)) { false }
     else { tcol(toks, p + 1) == tcol(toks, p) + 4 }
@@ -492,17 +492,17 @@ def parse_json_value(toks: [Tok], p: long, top: bool) -> Parsed {
     let v = tv(toks, p);
     let ln = tline(toks, p);
     let cl = tcol(toks, p);
-    if (t == "str") {
+    if (t == K.str) {
         res(json_call1("str", { k: K.str, v: v, line: ln, col: cl }, ln, cl), p + 1)
-    } else if (t == "num") {
+    } else if (t == K.num) {
         res(json_call1("numtext", { k: K.str, v: v, line: ln, col: cl }, ln, cl), p + 1)
-    } else if (is_op(toks, p, "-") && tt(toks, p + 1) == "num") {
+    } else if (is_op(toks, p, "-") && tt(toks, p + 1) == K.num) {
         res(json_call1("numtext", { k: K.str, v: "-" + tv(toks, p + 1), line: ln, col: cl }, ln, cl), p + 2)
     } else if (is_kw(toks, p, "true")) {
         res(json_call1("boolean", { k: K.bool, v: "true", line: ln, col: cl }, ln, cl), p + 1)
     } else if (is_kw(toks, p, "false")) {
         res(json_call1("boolean", { k: K.bool, v: "false", line: ln, col: cl }, ln, cl), p + 1)
-    } else if (t == "id" && v == "null") {
+    } else if (t == K.id && v == "null") {
         res(json_call0("nul", ln, cl), p + 1)
     } else if (is_punct(toks, p, "{")) {
         let o = parse_json_object(toks, p);
@@ -514,7 +514,7 @@ def parse_json_value(toks: [Tok], p: long, top: bool) -> Parsed {
         parse_json_primary(toks, p, top)
     } else {
         let ce = json_err("expected a JSON value, got " + tok_desc(toks, p), ln, cl);
-        if (t == "eof" || is_punct(toks, p, ")") || is_punct(toks, p, "]") || is_punct(toks, p, "}") || is_punct(toks, p, ",") || is_punct(toks, p, ";")) {
+        if (t == K.eof || is_punct(toks, p, ")") || is_punct(toks, p, "]") || is_punct(toks, p, "}") || is_punct(toks, p, ",") || is_punct(toks, p, ";")) {
             res(ce, p)
         } else {
             res(ce, p + 1)
@@ -535,7 +535,7 @@ def parse_json_object(toks: [Tok], p: long) -> Parsed {
         if (is_punct(toks, pos, "}")) {
             pos = pos + 1;
             break;
-        } else if (tt(toks, pos) == "str") {
+        } else if (tt(toks, pos) == K.str) {
             let key = tv(toks, pos);
             pos = pos + 1;
             if (!is_punct(toks, pos, ":")) {
@@ -561,7 +561,7 @@ def parse_json_object(toks: [Tok], p: long) -> Parsed {
             // A key must be a string literal. Consume the offending token
             // (unless it is a closer) so the caller can make progress.
             bad = json_err("expected a string key in JSON object, got " + tok_desc(toks, pos), tline(toks, pos), tcol(toks, pos));
-            if (!is_punct(toks, pos, "}") && tt(toks, pos) != "eof") { pos = pos + 1; };
+            if (!is_punct(toks, pos, "}") && tt(toks, pos) != K.eof) { pos = pos + 1; };
             break;
         };
     };
@@ -647,7 +647,7 @@ def arrow_params_at(toks: [Tok], p: long) -> bool {
         } else {
             let go = true;
             while (go) {
-                if (tt(toks, pos) != "id") { ok = false; go = false; }
+                if (tt(toks, pos) != K.id) { ok = false; go = false; }
                 else {
                     pos = pos + 1;
                     if (is_punct(toks, pos, ":")) {
@@ -655,12 +655,12 @@ def arrow_params_at(toks: [Tok], p: long) -> bool {
                         let depth = 0;
                         while (true) {
                             let tk = tt(toks, pos);
-                            if (tk == "eof") { ok = false; break; }
-                            else if (tk == "punct" && (tv(toks, pos) == "(" || tv(toks, pos) == "[" || tv(toks, pos) == "{")) { depth++; pos = pos + 1; }
-                            else if (tk == "punct" && (tv(toks, pos) == ")" || tv(toks, pos) == "]" || tv(toks, pos) == "}")) {
+                            if (tk == K.eof) { ok = false; break; }
+                            else if (tk == K.punct && (tv(toks, pos) == "(" || tv(toks, pos) == "[" || tv(toks, pos) == "{")) { depth++; pos = pos + 1; }
+                            else if (tk == K.punct && (tv(toks, pos) == ")" || tv(toks, pos) == "]" || tv(toks, pos) == "}")) {
                                 if (depth == 0) { break; } else { depth--; pos = pos + 1; };
                             }
-                            else if (tk == "punct" && tv(toks, pos) == "," && depth == 0) { break; }
+                            else if (tk == K.punct && tv(toks, pos) == "," && depth == 0) { break; }
                             else { pos = pos + 1; };
                         };
                     };
@@ -688,7 +688,7 @@ def parse_arrow_func(toks: [Tok], p: long) -> Parsed {
         pos = p + 1;
         if (!is_punct(toks, pos, ")")) {
             while (true) {
-                if (tt(toks, pos) != "id") { break; }
+                if (tt(toks, pos) != K.id) { break; }
                 else {
                     names += tv(toks, pos);
                     ppos += tline(toks, pos) * 65536 + tcol(toks, pos);
@@ -732,28 +732,28 @@ def parse_primary(toks: [Tok], p: long) -> Parsed {
     let v = tv(toks, p);
     let ln = tline(toks, p);
     let cl = tcol(toks, p);
-    if (t == "num") {
+    if (t == K.num) {
         res({ k: K.num, v: v, line: ln, col: cl }, p + 1)
-    } else if (t == "bigint") {
+    } else if (t == K.bigint) {
         // 1000n -- an arbitrary-precision integer literal.
         res({ k: K.bignum, v: v, line: ln, col: cl }, p + 1)
-    } else if (t == "str") {
+    } else if (t == K.str) {
         res({ k: K.str, v: v, line: ln, col: cl }, p + 1)
-    } else if (t == "bstr") {
+    } else if (t == K.bstr) {
         // b"..." / b'...' -- a [byte] literal
         res({ k: K.bstr, v: v, line: ln, col: cl }, p + 1)
-    } else if (t == "char") {
+    } else if (t == K.char) {
         // 'a' -- one byte, typed `byte`; v holds its code in decimal
         if (len(v) == 1) {
             res({ k: K.char, v: tostring(ord(v)), line: ln, col: cl }, p + 1)
         } else {
             res({ k: K.err, msg: "character literal must be exactly one byte, got " + tostring(len(v)), line: ln, col: cl }, p + 1)
         }
-    } else if (t == "ferr") {
+    } else if (t == K.ferr) {
         // a malformed literal (a broken f-string, `0x` without digits):
         // the lexer's message, where it found the fault
         res({ k: K.err, msg: v, line: ln, col: cl }, p + 1)
-    } else if (t == "id") {
+    } else if (t == K.id) {
         if (json_sigil_at(toks, p, "{") || json_sigil_at(toks, p, "[")) {
             parse_json_primary(toks, p, true)
         } else if (v == "match") {
@@ -765,7 +765,7 @@ def parse_primary(toks: [Tok], p: long) -> Parsed {
             let args: [Node] = [];
             args += block_func(b.node, ln, cl);
             res({ k: K.call, callee: { k: K.id, v: v, line: ln, col: cl }, args: args, line: ln, col: cl }, b.pos)
-        } else if ((v == "lock" || v == "try_lock") && tt(toks, p + 1) == "id") {
+        } else if ((v == "lock" || v == "try_lock") && tt(toks, p + 1) == K.id) {
             // `lock m { ... }`: the mutex, then the block
             let m = parse_postfix(toks, p + 1);
             let args: [Node] = [];
@@ -778,7 +778,7 @@ def parse_primary(toks: [Tok], p: long) -> Parsed {
                 args += block_func(b.node, ln, cl);
                 res({ k: K.call, callee: { k: K.id, v: v, line: ln, col: cl }, args: args, line: ln, col: cl }, b.pos)
             }
-        } else if ((v in ["join", "post", "wait"]) && tt(toks, p + 1) == "id") {
+        } else if ((v in ["join", "post", "wait"]) && tt(toks, p + 1) == K.id) {
             // `join t`, `post s`, `wait s`: the builtin on the operand
             let e = parse_postfix(toks, p + 1);
             let args: [Node] = [];
@@ -854,7 +854,7 @@ def parse_primary(toks: [Tok], p: long) -> Parsed {
         // construct it belongs to (`f(1 +)` is one error, not two); any
         // other token is consumed, so every caller makes progress.
         let ce = expect_err(toks, p, "an expression");
-        if (t == "eof" || is_punct(toks, p, ")") || is_punct(toks, p, "]") || is_punct(toks, p, "}") || is_punct(toks, p, ",") || is_punct(toks, p, ";")) {
+        if (t == K.eof || is_punct(toks, p, ")") || is_punct(toks, p, "]") || is_punct(toks, p, "}") || is_punct(toks, p, ",") || is_punct(toks, p, ";")) {
             res(ce, p)
         } else {
             res(ce, p + 1)
@@ -948,7 +948,7 @@ def parse_postfix(toks: [Tok], p: long) -> Parsed {
             if (is_name_tok(toks, pos + 1)) {
                 node = { k: K.dot, obj: node, key: (tv(toks, pos + 1)), line: tline(toks, pos), col: tcol(toks, pos), nline: tline(toks, pos + 1), ncol: tcol(toks, pos + 1) };
                 pos = pos + 2;
-            } else if (tt(toks, pos + 1) == "num") {
+            } else if (tt(toks, pos + 1) == K.num) {
                 // `t.0` / `t.1`: tuple element access. The key is the tuple's
                 // hidden positional field name; a non-tuple record simply has
                 // no such field and the checker reports it.
@@ -1087,7 +1087,7 @@ def parse_binary(toks: [Tok], p: long, min_prec: long) -> Parsed {
     while (true) {
         let op = tv(toks, pos);
         let prec = 0;
-        if (tt(toks, pos) == "op") { prec = op_prec(op); }
+        if (tt(toks, pos) == K.op) { prec = op_prec(op); }
         // `in` is a KEYWORD -- `for x in xs`, `foreach (k in keys(m))` -- and
         // here it is an operator: `"k" in m` asks a map for a key (TODO.md
         // item 14). Both heads find their `in` before parsing an expression
@@ -1241,7 +1241,7 @@ def parse_array(toks: [Tok], p: long) -> Parsed {
             // else is parsed past and reported where it starts.
             let at = pos + 1;
             let n = -1;
-            if (tt(toks, at) == "num") { n = size_lit(tv(toks, at)); };
+            if (tt(toks, at) == K.num) { n = size_lit(tv(toks, at)); };
             if (n >= 0) {
                 close_res(toks, at + 1, "]", { k: K.arrrep, v: first.node, n: n, line: ln, col: cl })
             } else {
@@ -1283,13 +1283,13 @@ def brace_is_map(toks: [Tok], p: long) -> bool {
         true
     } else {
         let k = tt(toks, p + 1);
-        if (k == "id") {
+        if (k == K.id) {
             is_punct(toks, p + 2, ":") || is_punct(toks, p + 2, ",")
-        } else if (k == "str") {
+        } else if (k == K.str) {
             is_punct(toks, p + 2, ":")
-        } else if (k == "kw") {
+        } else if (k == K.kw) {
             is_punct(toks, p + 2, ":")
-        } else if (k == "num") {
+        } else if (k == K.num) {
             is_punct(toks, p + 2, ":")
         } else if (is_op(toks, p + 1, "..")) {
             // `...obj` (lexed as `..` + `.`) opens a record literal
@@ -1322,7 +1322,7 @@ def parse_map(toks: [Tok], p: long) -> Parsed {
                 // A quoted key makes a MAP literal ({k: K.map}); identifier
                 // keys stay record fields ({k: K.rec}).
                 if (!(is_map)) {
-                    is_map = tt(toks, pos) == "str";
+                    is_map = tt(toks, pos) == K.str;
                 };
                 // Spread `...obj` lexes as `..` + `.`; the entry is
                 // recorded under the "..." key with the source record as
@@ -1332,10 +1332,10 @@ def parse_map(toks: [Tok], p: long) -> Parsed {
                 if (key == "..") {
                     key = "...";
                     pos = pos + 2;
-                } else if (kt in ["id", "str", "kw", "num"]) {
+                } else if (kt in [K.id, K.str, K.kw, K.num]) {
                     if (is_punct(toks, pos + 1, ":")) {
                         pos = pos + 2;
-                    } else if (kt == "id" && (is_punct(toks, pos + 1, ",") || is_punct(toks, pos + 1, "}"))) {
+                    } else if (kt == K.id && (is_punct(toks, pos + 1, ",") || is_punct(toks, pos + 1, "}"))) {
                         // `{x, y}` is `{x: x, y: y}`: the name is parsed
                         // again below, as the value.
                     } else {
@@ -1428,7 +1428,7 @@ def parse_type_array(toks: [Tok], p: long) -> PType {
     if (is_punct(toks, inner.pos, ";")) {
         let np = inner.pos + 1;
         let n = -1;
-        if (tt(toks, np) == "num") { n = size_lit(tv(toks, np)); };
+        if (tt(toks, np) == K.num) { n = size_lit(tv(toks, np)); };
         if (n >= 0) {
             let fc = tclose_res(toks, np + 1, "]", { k: K.tarrfix, of: inner.node, n: n });
             parse_type_tail(toks, fc.pos, fc.node)
@@ -1630,7 +1630,7 @@ def type_word_names() -> [str] {
 def parse_type_atom2(toks: [Tok], p: long) -> PType {
     // simple type name (`int` is `long`) + shared postfix tail.
     let nm = tv(toks, p);
-    if (tt(toks, p) != "id") { tres(terr_at(toks, p, "a type"), p) }
+    if (tt(toks, p) != K.id) { tres(terr_at(toks, p, "a type"), p) }
     else if (nm == "long") { parse_type_tail(toks, p + 1, { k: K.tlong }) }
     else if (nm == "int") { parse_type_tail(toks, p + 1, { k: K.tlong }) }
     else if (nm == "byte") { parse_type_tail(toks, p + 1, { k: K.tbyte }) }
@@ -1640,7 +1640,7 @@ def parse_type_atom2(toks: [Tok], p: long) -> PType {
     else if (nm == "bigint") { parse_type_tail(toks, p + 1, { k: K.tbigint }) }
     else if (nm == "void") { parse_type_tail(toks, p + 1, { k: K.tvoid }) }
     else if (nm == "mutex" || nm == "sem") { parse_type_tail(toks, p + 1, sync_type(nm)) }
-    else if (is_op(toks, p + 1, ".") && tt(toks, p + 2) == "id") {
+    else if (is_op(toks, p + 1, ".") && tt(toks, p + 2) == K.id) {
         // `m.T`: alias T of the module imported as m
         parse_type_tail(toks, p + 3, { k: K.tname, name: nm + "." + tv(toks, p + 2) })
     }
@@ -1883,7 +1883,7 @@ def parse_func(toks: [Tok], p: long, isnat: bool) -> Parsed {
     // Only the optional-name branch changes `fname` and `pos`; both are
     // consumed by the common parsing path below.
     if (!is_punct(toks, pos, "(")) {
-        if (tt(toks, pos) == "id") {
+        if (tt(toks, pos) == K.id) {
             fname = tv(toks, pos);
             nln = tline(toks, pos);
             ncl = tcol(toks, pos);
@@ -1913,7 +1913,7 @@ def parse_func(toks: [Tok], p: long, isnat: bool) -> Parsed {
     let optname = "";
     if (!hbad && !is_punct(toks, pos, ")")) {
         while (true) {
-            if (tt(toks, pos) != "id") {
+            if (tt(toks, pos) != K.id) {
                 derrs += expect_err(toks, pos, "a parameter name");
                 hbad = true;
                 break;
@@ -2092,7 +2092,7 @@ def parse_block_go(toks: [Tok], p: long) -> Parsed {
         // void-typed (see parse_binary note).
         if (is_punct(toks, pos, "}")) {
             go = false;
-        } else if (tt(toks, pos) == "eof") {
+        } else if (tt(toks, pos) == K.eof) {
             stmts += { k: K.err, msg: "unclosed '{' (no matching '}' before end of input)", line: ln, col: cl };
             go = false;
         } else {
@@ -2119,7 +2119,7 @@ def parse_block_go(toks: [Tok], p: long) -> Parsed {
 def stmt_end(toks: [Tok], start: long, pos: long, sn: Node, stmts: [Node]) -> long {
     if (is_punct(toks, pos, ";")) {
         pos + 1
-    } else if (is_punct(toks, pos, "}") || tt(toks, pos) == "eof") {
+    } else if (is_punct(toks, pos, "}") || tt(toks, pos) == K.eof) {
         pos
     } else if (pos > start && is_punct(toks, pos - 1, "}")) {
         pos
@@ -2160,11 +2160,11 @@ def parse_stmt(toks: [Tok], p: long) -> Parsed {
         // An empty statement; the caller steps over the `;`.
         res({ k: K.void, line: tline(toks, p), col: tcol(toks, p) }, p)
     }
-    else if (target_is_kernel() && tt(toks, p) == "id" && tv(toks, p) == "irq" && tt(toks, p + 1) == "num") { parse_irq_def(toks, p) }
+    else if (target_is_kernel() && tt(toks, p) == K.id && tv(toks, p) == "irq" && tt(toks, p + 1) == K.num) { parse_irq_def(toks, p) }
     else if (is_kw(toks, p, "let")) { parse_decl(toks, p) }
     else if (is_kw(toks, p, "const")) { parse_decl(toks, p) }
     else if (is_typedef_start(toks, p)) { parse_typedef(toks, p) }
-    else if (tt(toks, p) == "id" && tv(toks, p) == "native" && is_kw(toks, p + 1, "def")) {
+    else if (tt(toks, p) == K.id && tv(toks, p) == "native" && is_kw(toks, p + 1, "def")) {
         // `native def` was the spelling until it became one keyword. `native`
         // is an ordinary identifier now, so without this the error is
         // "undefined variable 'native'" followed by "expected ';', got 'def'"
@@ -2195,7 +2195,7 @@ def parse_stmt(toks: [Tok], p: long) -> Parsed {
         kind = is_kw(toks, p, "break") ? K.kw_break : K.kw_continue;
         let label = "";
         let pos = p + 1;
-        if (tt(toks, pos) == "id") {
+        if (tt(toks, pos) == K.id) {
             label = tv(toks, pos);
             pos = pos + 1;
         };
@@ -2203,7 +2203,7 @@ def parse_stmt(toks: [Tok], p: long) -> Parsed {
         res({ k: kind, v: label, line: tline(toks, p), col: tcol(toks, p) }, pos)
     }
     else if (is_kw(toks, p, "return")) {
-        if (is_punct(toks, p + 1, ";") || is_punct(toks, p + 1, "}") || tt(toks, p + 1) == "eof") {
+        if (is_punct(toks, p + 1, ";") || is_punct(toks, p + 1, "}") || tt(toks, p + 1) == K.eof) {
             res({ k: K.ret, e: { k: K.void, line: tline(toks, p), col: tcol(toks, p) }, line: tline(toks, p), col: tcol(toks, p) }, p + 1)
         } else {
             let e = parse_expr(toks, p + 1);
@@ -2232,7 +2232,7 @@ def parse_stmt(toks: [Tok], p: long) -> Parsed {
 // `type Name = T;` -- a type alias (`type` is a keyword only here, so it
 // stays usable as an ordinary name everywhere else).
 def is_typedef_start(toks: [Tok], p: long) -> bool {
-    tt(toks, p) == "id" && tv(toks, p) == "type" && tt(toks, p + 1) == "id" && is_op(toks, p + 2, "=")
+    tt(toks, p) == K.id && tv(toks, p) == "type" && tt(toks, p + 1) == K.id && is_op(toks, p + 2, "=")
 };
 
 def parse_typedef(toks: [Tok], p: long) -> Parsed {
@@ -2370,7 +2370,7 @@ def parse_decl(toks: [Tok], p: long) -> Parsed {
     // is carried alongside rather than instead (LSP.md R5.4, 9.2 A5).
     let nln = tline(toks, p + 1);
     let ncl = tcol(toks, p + 1);
-    if (tt(toks, p + 1) != "id") {
+    if (tt(toks, p + 1) != K.id) {
         return res(expect_err(toks, p + 1, "a name after '" + kind + "'"), sync_stmt(toks, p + 1));
     };
     let pos = p + 2;
@@ -2403,9 +2403,9 @@ def sync_stmt(toks: [Tok], p: long) -> long {
     let depth = 0;
     while (true) {
         let t = tt(toks, pos);
-        if (t == "eof") {
+        if (t == K.eof) {
             break;
-        } else if (t == "punct") {
+        } else if (t == K.punct) {
             let v = tv(toks, pos);
             if (depth == 0 && (v == ";" || v == "}")) {
                 break;
@@ -2510,7 +2510,7 @@ def parse_foreach(toks: [Tok], p: long) -> Parsed {
     if (!is_punct(toks, p + 1, "(")) {
         return res(expect_err(toks, p + 1, "'(' after 'foreach'"), sync_stmt(toks, p + 1));
     };
-    if (tt(toks, p + 2) != "id") {
+    if (tt(toks, p + 2) != K.id) {
         return res(expect_err(toks, p + 2, "a loop variable name"), sync_stmt(toks, p + 1));
     };
     if (!is_kw(toks, p + 3, "in")) {
@@ -2532,7 +2532,7 @@ def parse_for_or_range(toks: [Tok], p: long) -> Parsed {
     let ln = tline(toks, p);
     let cl = tcol(toks, p);
     if (is_kw(toks, p + 2, "in")) {
-        if (tt(toks, p + 1) != "id") {
+        if (tt(toks, p + 1) != K.id) {
             return res(expect_err(toks, p + 1, "a loop variable name"), sync_stmt(toks, p + 1));
         };
         let name = tv(toks, p + 1);
@@ -2631,9 +2631,9 @@ def parse_match_try(toks: [Tok], p: long) -> Parsed {
     let cl = tcol(toks, p);
     let nt = tt(toks, p + 1);
     let plain = { k: K.id, v: "match", line: ln, col: cl };
-    if (nt == "op" || nt == "eof") {
+    if (nt == K.op || nt == K.eof) {
         res(plain, p + 1)
-    } else if (nt == "punct" && !is_punct(toks, p + 1, "(") && !is_punct(toks, p + 1, "[") && !is_punct(toks, p + 1, "{")) {
+    } else if (nt == K.punct && !is_punct(toks, p + 1, "(") && !is_punct(toks, p + 1, "[") && !is_punct(toks, p + 1, "{")) {
         res(plain, p + 1)
     } else {
         let subj = parse_expr(toks, p + 1);
@@ -2658,7 +2658,7 @@ def parse_match(toks: [Tok], subj: Node, bpos: long, ln: long, cl: long) -> Pars
     while (go) {
         if (is_punct(toks, pos, "}")) {
             go = false;
-        } else if (tt(toks, pos) == "eof") {
+        } else if (tt(toks, pos) == K.eof) {
             tests += { k: K.err, msg: "unclosed match (no '}' before end of input)", line: ln, col: cl };
             thens += block1({ k: K.void, line: ln, col: cl }, ln, cl);
             go = false;
@@ -2743,11 +2743,11 @@ def parse_pattern(toks: [Tok], p: long, tmp: str) -> PatRes {
     let v = tv(toks, p);
     let subj = { k: K.id, v: tmp, line: ln, col: cl };
     let nob: [Node] = [];
-    if (t == "id" && v == "_") {
+    if (t == K.id && v == "_") {
         pat_res({ k: K.void, line: ln, col: cl }, nob, { k: K.tnone }, true, p + 1)
-    } else if (t == "id" && v == "some" && is_punct(toks, p + 1, "(")) {
+    } else if (t == K.id && v == "some" && is_punct(toks, p + 1, "(")) {
         parse_some_pattern(toks, p, tmp)
-    } else if (t == "id" && v != "none") {
+    } else if (t == K.id && v != "none") {
         parse_type_pattern(toks, p, tmp)
     } else if (is_punct(toks, p, "{")) {
         let rm = parse_map(toks, p);
@@ -2775,7 +2775,7 @@ def parse_some_pattern(toks: [Tok], p: long, tmp: str) -> PatRes {
     let binds: [Node] = [];
     let pos = p + 2;  // past `some` and `(`
     if (!is_punct(toks, pos, ")")) {
-        if (tt(toks, pos) == "id") {
+        if (tt(toks, pos) == K.id) {
             let uargs: [Node] = [];
             uargs += subj;
             binds += let_node(tv(toks, pos), { k: K.call, callee: { k: K.id, v: "unwrap", line: ln, col: cl }, args: uargs, line: ln, col: cl }, ln, cl);
@@ -2789,7 +2789,7 @@ def parse_some_pattern(toks: [Tok], p: long, tmp: str) -> PatRes {
             // so the ')' below closes the pattern instead of reporting a
             // second error on the same mistake.
             binds += { k: K.err, msg: "'some' binds exactly one name", line: tline(toks, pos), col: tcol(toks, pos) };
-            while (!is_punct(toks, pos, ")") && tt(toks, pos) != "eof") { pos = pos + 1; };
+            while (!is_punct(toks, pos, ")") && tt(toks, pos) != K.eof) { pos = pos + 1; };
         };
     };
     if (is_punct(toks, pos, ")")) {
@@ -2837,7 +2837,7 @@ def parse_type_pattern(toks: [Tok], p: long, tmp: str) -> PatRes {
         if (is_punct(toks, pos, "}")) { pos = pos + 1; } else {
             binds += { k: K.err, msg: "expected '}' to close the field list, got '" + tv(toks, pos) + "'", line: tline(toks, pos), col: tcol(toks, pos) };
         };
-    } else if (tt(toks, pos) == "id") {
+    } else if (tt(toks, pos) == K.id) {
         binds += let_node(tv(toks, pos), { k: K.narrow, e: subj, typ: ty, line: ln, col: cl }, ln, cl);
         pos = pos + 1;
     };
@@ -2865,14 +2865,14 @@ def parse_value_pattern(toks: [Tok], node: Node, pos: long, tmp: str, ln: long, 
             };
         });
         let np = pos;
-        if (tt(toks, pos) == "id") {
+        if (tt(toks, pos) == K.id) {
             binds += let_node(tv(toks, pos), { k: K.narrow, e: subj, typ: ty, line: ln, col: cl }, ln, cl);
             np = pos + 1;
         };
         pat_res(test, binds, { k: K.tnone }, false, np)
     } else {
         let np = pos;
-        if (tt(toks, pos) == "id") {
+        if (tt(toks, pos) == K.id) {
             binds += let_node(tv(toks, pos), subj, ln, cl);
             np = pos + 1;
         };
@@ -2886,7 +2886,7 @@ def parse_program(toks: [Tok]) -> Block {
     p_infer_reset();
     let stmts: [Node] = [];
     let pos = 0;
-    while (tt(toks, pos) != "eof") {
+    while (tt(toks, pos) != K.eof) {
         let before = pos;
         let s = parse_stmt(toks, pos);
         stmts += s.node;

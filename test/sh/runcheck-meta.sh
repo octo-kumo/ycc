@@ -7,7 +7,7 @@ set -u
 cd "$(dirname "$0")/../.."
 K=${YCC_MEM_KB:-3670016}
 YNEW=${YCC:-./ynew}
-T=$(mktemp -d /tmp/opencode/rc_XXXXXX)
+T=$(mktemp -d -t opencode/rc_XXXXXX)
 trap 'rm -rf "$T"' EXIT
 dirs=${*:-test/y/examples}
 n=0; bad=0

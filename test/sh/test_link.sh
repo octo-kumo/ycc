@@ -26,7 +26,7 @@ if [ ! -x "$YCC" ]; then
     exit 2
 fi
 
-TMPD="$(mktemp -d /tmp/ylink_test.XXXXXX)"
+TMPD="$(mktemp -d -t ylink_test.XXXXXX)"
 trap 'rm -rf "$TMPD"' EXIT
 CTO=$(( 120 * YTIMEOUT_SCALE ))
 

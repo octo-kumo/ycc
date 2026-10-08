@@ -32,7 +32,7 @@ fi
 
 ok=0; skipped=0; bad=0
 for f in "${files[@]}"; do
-    a=$(mktemp /tmp/pepackinv_a.XXXXXX.exe); b=$(mktemp /tmp/pepackinv_b.XXXXXX.exe)
+    a=$(mktemp -t pepackinv_a.XXXXXX.exe); b=$(mktemp -t pepackinv_b.XXXXXX.exe)
     if ! timeout 300 "$YCC" --target=windows "$f" -o "$a" </dev/null >/dev/null 2>&1; then
         skipped=$((skipped+1)); rm -f "$a" "$b"; continue
     fi

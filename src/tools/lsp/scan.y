@@ -84,22 +84,22 @@ def is_contextual(w: str) -> bool {
 def kind_of(src: str, tk: Tok) -> long {
     let t = tk.t;
     let k = K_none;
-    if (t == "comment") { k = K_comment; }
-    if (t == "doc") { k = K_doc; }
-    if (t == "str") { k = K_string; }
-    if (t == "fstr") { k = K_fstring; }
-    if (t == "bstr") { k = K_bstring; }
-    if (t == "char") {
+    if (t == K.comment) { k = K_comment; }
+    if (t == K.doc) { k = K_doc; }
+    if (t == K.str) { k = K_string; }
+    if (t == K.fstr) { k = K_fstring; }
+    if (t == K.bstr) { k = K_bstring; }
+    if (t == K.char) {
         // `'a'` is a char; `129b` is the SAME token type in the lexer (both
         // build the byte node) and is a number to every reader
         if (tk.off < len(src) && byte_at(src, tk.off) == '\'') { k = K_char; } else { k = K_number; }
     }
-    if (t == "num" || t == "bigint") { k = K_number; }
-    if (t == "id") { if (is_contextual(tk.v)) { k = K_contextual; } else { k = K_ident; } }
-    if (t == "kw") { k = K_keyword; }
-    if (t == "op") { k = K_operator; }
-    if (t == "punct") { k = K_punct; }
-    if (t == "ferr" || t == "stray") { k = K_error; }
+    if (t == K.num || t == K.bigint) { k = K_number; }
+    if (t == K.id) { if (is_contextual(tk.v)) { k = K_contextual; } else { k = K_ident; } }
+    if (t == K.kw) { k = K_keyword; }
+    if (t == K.op) { k = K_operator; }
+    if (t == K.punct) { k = K_punct; }
+    if (t == K.ferr || t == K.stray) { k = K_error; }
     k
 }
 

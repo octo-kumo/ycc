@@ -7,8 +7,8 @@
 set -u
 cd "$(dirname "$0")/../.."
 K=${YCC_MEM_KB:-3670016}
-T=/tmp/opencode/mem
-mkdir -p $T
+T=$(mktemp -d -t ymem.XXXXXX)
+trap 'rm -rf "$T"' EXIT
 peak() {  # peak <label> <cmd...>
   local label="$1"; shift
   local out

@@ -97,7 +97,7 @@ if [ "$JOBS" -le 1 ]; then
         bash "$TESTS/${SCRIPT_FOR[$s]}" || FAILED="$FAILED $s"
     done
 else
-    OUT="$(mktemp -d /tmp/yrun_all.XXXXXX)"
+    OUT="$(mktemp -d -t yrun_all.XXXXXX)"
     trap 'rm -rf "$OUT"' EXIT
     # the sharded suites are the longest: they start first
     order=""

@@ -25,6 +25,7 @@ ylong field_pos(Yv *fs, Yv *name, ylong hint); /* a field's index by name */
 Yv *field_merge(Yv *fields, Yv *name, Yv *typ);  /* record-literal upsert */
 Yv *str_method(Yv *m);        /* string-method lowering/type table */
 Yv *narrow_type(Yv *s, Yv *t); /* static type of a match `narrow` node */
+Yv *pat_subject(Yv *s, Yv *t); /* the type a pattern t is tested against */
 Yv *union_member(Yv *u, Yv *t); /* the member of union u that is t */
 Yv *unfold(Yv *t);            /* a tref's type, one level */
 Yv *member_fields(Yv *m);     /* fields a union member contributes */

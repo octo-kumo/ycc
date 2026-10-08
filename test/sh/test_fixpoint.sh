@@ -46,9 +46,10 @@ if [ ! -x "$YCC_BIN" ]; then
     exit 0
 fi
 
-GEN2=$(mktemp /tmp/ycc_gen2.XXXXXX)
-GEN3=$(mktemp /tmp/ycc_gen3.XXXXXX)
-trap 'rm -f "$GEN2" "$GEN3" "$GEN2.pack" "$GEN2.packed" /tmp/yfp_probe.y /tmp/yfp_probe_bin /tmp/yfp_std.y /tmp/yfp_std_bin /tmp/yfp_std_err' EXIT
+W=$(mktemp -d -t yfp.XXXXXX)
+trap 'rm -rf "$W"' EXIT
+GEN2=$W/gen2
+GEN3=$W/gen3
 
 check() {
     if [ "$2" = "ok" ]; then
@@ -62,37 +63,37 @@ check() {
 }
 
 # Generation 2: ./ycc (built by cycc) compiles its own source.
-if timeout 600 "$YCC_BIN" -o "$GEN2" "$SRC" </dev/null >/tmp/yfp_err 2>&1; then
+if timeout 600 "$YCC_BIN" -o "$GEN2" "$SRC" </dev/null >$W/err 2>&1; then
     check "ycc compiles its own source" ok
 else
-    check "ycc compiles its own source" bad "$(head -c 200 /tmp/yfp_err)"
+    check "ycc compiles its own source" bad "$(head -c 200 $W/err)"
 fi
 
 # The compiler's source is lint-clean (lint.y): compiling it printed
 # nothing, not one warning. So are std's files, each compiled as a
 # program and the importable ones imported (a std unit linked into a
 # program is never linted, so this is where its warnings would show).
-if [ -s "$GEN2" ] && [ ! -s /tmp/yfp_err ]; then
+if [ -s "$GEN2" ] && [ ! -s $W/err ]; then
     check "ycc's own source compiles without a warning" ok
 else
-    check "ycc's own source compiles without a warning" bad "$(head -c 300 /tmp/yfp_err)"
+    check "ycc's own source compiles without a warning" bad "$(head -c 300 $W/err)"
 fi
-printf 'import fs;\nimport net;\nimport struct;\nimport crypto;\nimport x509;\nimport tls;\nimport http;\nimport regex;\nimport json;\nputs("ok\\n");\n' > /tmp/yfp_std.y
+printf 'import fs;\nimport net;\nimport struct;\nimport crypto;\nimport x509;\nimport tls;\nimport http;\nimport regex;\nimport json;\nputs("ok\\n");\n' > $W/std.y
 std_bad=""
-for f in /tmp/yfp_std.y "$ROOT"/src/y/std/*.y; do
+for f in $W/std.y "$ROOT"/src/y/std/*.y; do
     # kernel, kmem, yfs and fd are the microkernel's: `ndef`s into assembly only a
     # kernel image has, so they compile under --kernel (below), not hosted
     case "$(basename "$f")" in kernel.y|kmem.y|yfs.y|fd.y) continue ;; esac
-    if ! timeout 120 "$YCC_BIN" -o /tmp/yfp_std_bin "$f" </dev/null >/tmp/yfp_std_err 2>&1 \
-       || [ -s /tmp/yfp_std_err ]; then
-        std_bad="$std_bad $(basename "$f"): $(head -c 200 /tmp/yfp_std_err)"
+    if ! timeout 120 "$YCC_BIN" -o $W/std_bin "$f" </dev/null >$W/std_err 2>&1 \
+       || [ -s $W/std_err ]; then
+        std_bad="$std_bad $(basename "$f"): $(head -c 200 $W/std_err)"
     fi
 done
 # ... and the kernel's three, compiled the way they are used
 for f in "$ROOT"/test/kernel/t001_hello.y "$ROOT"/test/kernel/u007_fsexec.driver.y; do
-    if ! timeout 120 "$YCC_BIN" --kernel -o /tmp/yfp_std_bin "$f" </dev/null >/tmp/yfp_std_err 2>&1 \
-       || [ -s /tmp/yfp_std_err ]; then
-        std_bad="$std_bad kernel $(basename "$f"): $(head -c 200 /tmp/yfp_std_err)"
+    if ! timeout 120 "$YCC_BIN" --kernel -o $W/std_bin "$f" </dev/null >$W/std_err 2>&1 \
+       || [ -s $W/std_err ]; then
+        std_bad="$std_bad kernel $(basename "$f"): $(head -c 200 $W/std_err)"
     fi
 done
 if [ -z "$std_bad" ]; then
@@ -123,7 +124,7 @@ fi
 
 # A bit-stable compiler still has to work: compile and run a real program
 # with the self-built binary.
-cat > /tmp/yfp_probe.y <<'PROBE'
+cat > $W/probe.y <<'PROBE'
 def fib(n: long) -> long { if (n < 2) { n } else { self(n - 1) + self(n - 2) } };
 let xs: [long] = [];
 let i = 0;
@@ -132,8 +133,8 @@ print(len(xs));
 print(xs[7]);
 puts("ok\n");
 PROBE
-if [ -s "$GEN2" ] && timeout 120 "$GEN2" -o /tmp/yfp_probe_bin /tmp/yfp_probe.y </dev/null >/dev/null 2>&1; then
-    got=$(timeout 30 /tmp/yfp_probe_bin </dev/null 2>&1)
+if [ -s "$GEN2" ] && timeout 120 "$GEN2" -o $W/probe_bin $W/probe.y </dev/null >/dev/null 2>&1; then
+    got=$(timeout 30 $W/probe_bin </dev/null 2>&1)
     want=$(printf '8\n13\nok')
     if [ "$got" = "$want" ]; then
         check "self-built compiler produces working binaries" ok

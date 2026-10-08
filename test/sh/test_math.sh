@@ -41,50 +41,30 @@ TOL_ULP=1
 
 # Both compilers, and the two must say the same thing (the twin is 1:1, and a
 # divergence here is a bug in one of them rather than in the math).
-out_cycc=$(mktemp); out_ycc=$(mktemp)
-trap 'rm -f "$out_cycc" "$out_ycc" /tmp/ymath_bin_$$' EXIT
+W=$(mktemp -d -t ymath.XXXXXX)
+trap 'rm -rf "$W"' EXIT
 
-rc_cycc=0
-"$CYCC" -o /tmp/ymath_bin_$$ "$PROG" 2>"$out_cycc.err" </dev/null || rc_cycc=$?
-if [ "$rc_cycc" != 0 ]; then
-    fail "the C copy does not compile test/math/ulp_check.y"
-    cat "$out_cycc.err" >&2
-else
-    rm -f /tmp/ymath_bin_$$
-    "$CYCC" -o /tmp/ymath_bin_$$ "$PROG" 2>/dev/null </dev/null || rc_cycc=$?
-    /tmp/ymath_bin_$$ "$TABLE" >"$out_cycc" 2>&1
-    ec_cycc=$?
-    rm -f /tmp/ymath_bin_$$
-    if [ "$ec_cycc" = 0 ]; then
-        pass "the C copy: $(tail -1 "$out_cycc")"
-    else
-        fail "the C copy: $(tail -1 "$out_cycc")"
-        grep '^OVER' "$out_cycc" | head -20
+# ulp_run LABEL COMPILER: compile the harness, run it over the table, and leave
+# its output in $W/LABEL.out.
+ulp_run() {
+    local label=$1 cc=$2
+    if ! "$cc" -o "$W/$label.bin" "$PROG" 2>"$W/$label.err" </dev/null; then
+        fail "the $label does not compile test/math/ulp_check.y"
+        cat "$W/$label.err" >&2
+        return
     fi
-fi
-
-rc_ycc=0
-"$YCC" -o /tmp/ymath_bin_$$ "$PROG" 2>"$out_ycc.err" </dev/null || rc_ycc=$?
-if [ "$rc_ycc" != 0 ]; then
-    fail "the built compiler does not compile test/math/ulp_check.y"
-    cat "$out_ycc.err" >&2
-else
-    rm -f /tmp/ymath_bin_$$
-    "$YCC" -o /tmp/ymath_bin_$$ "$PROG" 2>/dev/null </dev/null || rc_ycc=$?
-    /tmp/ymath_bin_$$ "$TABLE" >"$out_ycc" 2>&1
-    ec_ycc=$?
-    rm -f /tmp/ymath_bin_$$
-    if [ "$ec_ycc" = 0 ]; then
-        pass "the built compiler: $(tail -1 "$out_ycc")"
+    if "$W/$label.bin" "$TABLE" >"$W/$label.out" 2>&1; then
+        pass "the $label: $(tail -1 "$W/$label.out")"
     else
-        fail "the built compiler: $(tail -1 "$out_ycc")"
-        grep '^OVER' "$out_ycc" | head -20
+        fail "the $label: $(tail -1 "$W/$label.out")"
+        grep '^OVER' "$W/$label.out" | head -20
     fi
-fi
-
-if [ -s "$out_cycc" ] && [ -s "$out_ycc" ] && ! cmp -s "$out_cycc" "$out_ycc"; then
+}
+ulp_run "C copy" "$CYCC"
+ulp_run "built compiler" "$YCC"
+if [ -s "$W/C copy.out" ] && [ -s "$W/built compiler.out" ] && ! cmp -s "$W/C copy.out" "$W/built compiler.out"; then
     fail "the two compilers disagree about the table"
-    diff "$out_cycc" "$out_ycc" | head -20
+    diff "$W/C copy.out" "$W/built compiler.out" | head -20
 fi
 
 # The GENERATED polynomial kernels, against src/y/std/math.y itself.
@@ -108,10 +88,7 @@ if ! python3 "$ROOT/test/math/gen_split_unroll.py" --verify; then
     fail "the generated kernels have drifted from the generator"
 fi
 
-# Under mktemp, not _check/: that directory belongs to `make check` and to
-# whatever else is running in this tree, and a suite must not write into it.
-t328_tmp=$(mktemp -d)
-trap 'rm -rf "$t328_tmp"' EXIT
+t328_tmp=$W
 for cc in "$CYCC" "$YCC"; do
     name=$(basename "$cc")
     # diffed as files, not compared as strings: $(cat) strips trailing newlines

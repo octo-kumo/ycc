@@ -9,6 +9,7 @@
 
 #include "ylong.h"
 #include "lexer.h"
+#include "tags.h"
 
 int isdigit(ylong c) {
     // On the byte itself, the way the Y copy reads it: `c` is the byte at
@@ -533,8 +534,8 @@ static Yv *lex_fstring(Yv *src, ylong q, ylong line, ylong col, Yv *toks, int ls
      * slice. `fstr`/`ferr`, not `str`: the highlighter must tell it from a
      * plain string, and a broken one is an error span like any other. */
     if (lsp) {
-        Yv *ty0 = ys("fstr");
-        if (!ys_eq_lit(yr_get(w, "err"), "")) { ty0 = ys("ferr"); }
+        Yv *ty0 = yv_long(K_fstr);
+        if (!ys_eq_lit(yr_get(w, "err"), "")) { ty0 = yv_long(K_ferr); }
         ylong we = yv_l(yr_get(w, "end"));
         toks = ya_push(toks, mktok(ty0, ys_slice(src, q - 1, we), line, col, q - 1, we));
         Yv *e0 = fstr_adv(src, q - 1, we, line, col);
@@ -542,18 +543,18 @@ static Yv *lex_fstring(Yv *src, ylong q, ylong line, ylong col, Yv *toks, int ls
     }
     if (!ys_eq_lit(yr_get(w, "err"), "")) {
         Yv *ep = fstr_adv(src, q - 1, yv_l(yr_get(w, "at")), line, col);
-        toks = ya_push(toks, mktok(ys("ferr"), yr_get(w, "err"),
+        toks = ya_push(toks, mktok(yv_long(K_ferr), yr_get(w, "err"),
                                   yv_l(yr_get(ep, "line")),
                                   yv_l(yr_get(ep, "col")), 0, 0));
         ;
     } else if (yv_len(fs) == 0) {
-        toks = ya_push(toks, mktok(ys("str"),
+        toks = ya_push(toks, mktok(yv_long(K_str),
                                    unescape(ys_slice(src, q + qlen,
                                                      yv_l(yr_get(w, "end")) - qlen), 1),
                                    line, col, 0, 0));
         ;
     } else {
-        toks = ya_push(toks, mktok(ys("punct"), ys("("), line, col, 0, 0));
+        toks = ya_push(toks, mktok(yv_long(K_punct), ys("("), line, col, 0, 0));
         ylong from = q + qlen;
         ylong at = q - 1;
         ylong bl = line;
@@ -567,16 +568,16 @@ static Yv *lex_fstring(Yv *src, ylong q, ylong line, ylong col, Yv *toks, int ls
             at = lo - 1;
             bl = yv_l(yr_get(bp, "line"));
             bc = yv_l(yr_get(bp, "col"));
-            if (k > 0) { toks = ya_push(toks, mktok(ys("op"), ys("+"), bl, bc, 0, 0)); ; }
+            if (k > 0) { toks = ya_push(toks, mktok(yv_long(K_op), ys("+"), bl, bc, 0, 0)); ; }
             if (lo - 1 > from) {
-                toks = ya_push(toks, mktok(ys("str"),
+                toks = ya_push(toks, mktok(yv_long(K_str),
                                            unescape(ys_slice(src, from, lo - 1), 1),
                                            bl, bc, 0, 0));
-                toks = ya_push(toks, mktok(ys("op"), ys("+"), bl, bc, 0, 0));
+                toks = ya_push(toks, mktok(yv_long(K_op), ys("+"), bl, bc, 0, 0));
                 ;
             }
-            toks = ya_push(toks, mktok(ys("id"), ys("#fmt"), bl, bc, 0, 0));
-            toks = ya_push(toks, mktok(ys("punct"), ys("("), bl, bc, 0, 0));
+            toks = ya_push(toks, mktok(yv_long(K_id), ys("#fmt"), bl, bc, 0, 0));
+            toks = ya_push(toks, mktok(yv_long(K_punct), ys("("), bl, bc, 0, 0));
             Yv *sub = tokenize(ys_slice(src, lo, hi));
             ylong j = 0;
             while (j + 1 < yv_len(sub)) {
@@ -596,32 +597,32 @@ static Yv *lex_fstring(Yv *src, ylong q, ylong line, ylong col, Yv *toks, int ls
                 j = j + 1;
                 ;
             };
-            toks = ya_push(toks, mktok(ys("punct"), ys(","), bl, bc, 0, 0));
+            toks = ya_push(toks, mktok(yv_long(K_punct), ys(","), bl, bc, 0, 0));
             if (slo >= 0) {
-                toks = ya_push(toks, mktok(ys("str"),
+                toks = ya_push(toks, mktok(yv_long(K_str),
                                            ys_slice(src, slo,
                                                     yv_l(ya_get(fs, k + 3))),
                                            bl, bc, 0, 0));
                 from = yv_l(ya_get(fs, k + 3)) + 1;
                 ;
             } else {
-                toks = ya_push(toks, mktok(ys("str"), ys(""), bl, bc, 0, 0));
+                toks = ya_push(toks, mktok(yv_long(K_str), ys(""), bl, bc, 0, 0));
                 from = hi + 1;
                 ;
             };
-            toks = ya_push(toks, mktok(ys("punct"), ys(")"), bl, bc, 0, 0));
+            toks = ya_push(toks, mktok(yv_long(K_punct), ys(")"), bl, bc, 0, 0));
             k = k + 4;
             ;
         };
         ylong end = yv_l(yr_get(w, "end"));
         if (end - qlen > from) {
-            toks = ya_push(toks, mktok(ys("op"), ys("+"), bl, bc, 0, 0));
-            toks = ya_push(toks, mktok(ys("str"),
+            toks = ya_push(toks, mktok(yv_long(K_op), ys("+"), bl, bc, 0, 0));
+            toks = ya_push(toks, mktok(yv_long(K_str),
                                        unescape(ys_slice(src, from, end - qlen), 1),
                                        bl, bc, 0, 0));
             ;
         }
-        toks = ya_push(toks, mktok(ys("punct"), ys(")"), bl, bc, 0, 0));
+        toks = ya_push(toks, mktok(yv_long(K_punct), ys(")"), bl, bc, 0, 0));
         ;
     };
     Yv *e = fstr_adv(src, q - 1, yv_l(yr_get(w, "end")), line, col);
@@ -884,12 +885,12 @@ Yv *tokenize_go(Yv *src, int lsp) {
             }
             Yv *txt = ys_slice(src, start, i);
             if (!ys_eq_lit(err, "")) {
-                toks = ya_push(toks, mktok(ys("ferr"), err, line, startcol, start, i));
+                toks = ya_push(toks, mktok(yv_long(K_ferr), err, line, startcol, start, i));
             } else if (big) {
-                toks = ya_push(toks, mktok(ys("bigint"),
+                toks = ya_push(toks, mktok(yv_long(K_bigint),
                     strip_seps(ys_slice(src, start, i - 1)), line, startcol, start, i));
             } else if (bval >= 0) {
-                toks = ya_push(toks, mktok(ys("char"), ys_chr(bval), line, startcol, start, i));
+                toks = ya_push(toks, mktok(yv_long(K_char), ys_chr(bval), line, startcol, start, i));
             } else if (ys_eq_lit(ys_slice(src, i, i + 1), "b") &&
                        !lex_word_slice(ys_slice(src, i + 1, i + 2))) {
                 /* `129b`: a BYTE literal, and the same node `'a'` builds. A hex
@@ -900,22 +901,22 @@ Yv *tokenize_go(Yv *src, int lsp) {
                 col = col + 1;
                 if (ys_index_of(txt, ys(".")) >= 0 || ys_index_of(txt, ys("e")) >= 0 ||
                     ys_index_of(txt, ys("E")) >= 0) {
-                    toks = ya_push(toks, mktok(ys("ferr"),
+                    toks = ya_push(toks, mktok(yv_long(K_ferr),
                         ys_cat(ys_cat(ys("byte literal '"), ys_slice(src, start, i)),
                                ys("' is a float; a byte is a whole number")), line, startcol, start, i));
                 } else {
                     ylong bv = lex_int_value(txt, radix);
                     if (bv > 255) {
-                        toks = ya_push(toks, mktok(ys("ferr"),
+                        toks = ya_push(toks, mktok(yv_long(K_ferr),
                             ys_cat(ys_cat(ys("byte literal '"), ys_slice(src, start, i)),
                                    ys("' does not fit in a byte")), line, startcol, start, i));
                     } else {
-                        toks = ya_push(toks, mktok(ys("char"), ys_chr(bv), line, startcol, start, i));
+                        toks = ya_push(toks, mktok(yv_long(K_char), ys_chr(bv), line, startcol, start, i));
                     }
                 }
             } else {
                 if (radix == 0) { txt = strip_seps(txt); }
-                toks = ya_push(toks, mktok(ys("num"), txt, line, startcol, start, i));
+                toks = ya_push(toks, mktok(yv_long(K_num), txt, line, startcol, start, i));
             }
             ;
         } else if (isalpha(c)) {
@@ -933,22 +934,22 @@ Yv *tokenize_go(Yv *src, int lsp) {
                 } else { inw = 1; ; }
             };
             Yv *word = ys_slice(src, start, i);
-            Yv *ty = ys("id");
-            if (ys_eq_lit(word, "let")) { ty = ys("kw"); ; }
-            else if (ys_eq_lit(word, "const")) { ty = ys("kw"); ; }
-            else if (ys_eq_lit(word, "def")) { ty = ys("kw"); ; }
-            else if (ys_eq_lit(word, "ndef")) { ty = ys("kw"); ; }
-            else if (ys_eq_lit(word, "if")) { ty = ys("kw"); ; }
-            else if (ys_eq_lit(word, "else")) { ty = ys("kw"); ; }
-            else if (ys_eq_lit(word, "while")) { ty = ys("kw"); ; }
-            else if (ys_eq_lit(word, "for")) { ty = ys("kw"); ; }
-            else if (ys_eq_lit(word, "foreach")) { ty = ys("kw"); ; }
-            else if (ys_eq_lit(word, "in")) { ty = ys("kw"); ; }
-            else if (ys_eq_lit(word, "return")) { ty = ys("kw"); ; }
-            else if (ys_eq_lit(word, "true")) { ty = ys("kw"); ; }
-            else if (ys_eq_lit(word, "false")) { ty = ys("kw"); ; }
-            else if (ys_eq_lit(word, "break")) { ty = ys("kw"); ; }
-            else if (ys_eq_lit(word, "continue")) { ty = ys("kw"); ; }
+            Yv *ty = yv_long(K_id);
+            if (ys_eq_lit(word, "let")) { ty = yv_long(K_kw); ; }
+            else if (ys_eq_lit(word, "const")) { ty = yv_long(K_kw); ; }
+            else if (ys_eq_lit(word, "def")) { ty = yv_long(K_kw); ; }
+            else if (ys_eq_lit(word, "ndef")) { ty = yv_long(K_kw); ; }
+            else if (ys_eq_lit(word, "if")) { ty = yv_long(K_kw); ; }
+            else if (ys_eq_lit(word, "else")) { ty = yv_long(K_kw); ; }
+            else if (ys_eq_lit(word, "while")) { ty = yv_long(K_kw); ; }
+            else if (ys_eq_lit(word, "for")) { ty = yv_long(K_kw); ; }
+            else if (ys_eq_lit(word, "foreach")) { ty = yv_long(K_kw); ; }
+            else if (ys_eq_lit(word, "in")) { ty = yv_long(K_kw); ; }
+            else if (ys_eq_lit(word, "return")) { ty = yv_long(K_kw); ; }
+            else if (ys_eq_lit(word, "true")) { ty = yv_long(K_kw); ; }
+            else if (ys_eq_lit(word, "false")) { ty = yv_long(K_kw); ; }
+            else if (ys_eq_lit(word, "break")) { ty = yv_long(K_kw); ; }
+            else if (ys_eq_lit(word, "continue")) { ty = yv_long(K_kw); ; }
 
             if (ys_eq_lit(word, "b")) {
                 // b"..." / b'...' -- a byte-string literal: the same type
@@ -961,10 +962,10 @@ Yv *tokenize_go(Yv *src, int lsp) {
                     line = yv_l(yr_get(bq, "line"));
                     col = yv_l(yr_get(bq, "col"));
                     if (!ys_eq_lit(yr_get(bq, "err"), "")) {
-                        toks = ya_push(toks, mktok(ys("ferr"), yr_get(bq, "err"), bline, startcol, start, i));
+                        toks = ya_push(toks, mktok(yv_long(K_ferr), yr_get(bq, "err"), bline, startcol, start, i));
                         ;
                     } else {
-                        toks = ya_push(toks, mktok(ys("bstr"), yr_get(bq, "text"), bline, startcol, start, i));
+                        toks = ya_push(toks, mktok(yv_long(K_bstr), yr_get(bq, "text"), bline, startcol, start, i));
                         ;
                     };
                     ;
@@ -990,7 +991,7 @@ Yv *tokenize_go(Yv *src, int lsp) {
                     cmsg = ys_cat(cmsg, ys(" (and the quote is never closed)"));
                     ;
                 }
-                toks = ya_push(toks, mktok(ys("ferr"), cmsg, cline, startcol, start, i));
+                toks = ya_push(toks, mktok(yv_long(K_ferr), cmsg, cline, startcol, start, i));
                 ;
             } else if (ys_eq_lit(word, "f") &&
                        ys_eq_lit(ys_slice(src, i, i + 1), "\"")) {
@@ -1017,10 +1018,10 @@ Yv *tokenize_go(Yv *src, int lsp) {
             line = yv_l(yr_get(tq, "line"));
             col = yv_l(yr_get(tq, "col"));
             if (!ys_eq_lit(yr_get(tq, "err"), "")) {
-                toks = ya_push(toks, mktok(ys("ferr"), yr_get(tq, "err"), startline, startcol, startoff, i));
+                toks = ya_push(toks, mktok(yv_long(K_ferr), yr_get(tq, "err"), startline, startcol, startoff, i));
                 ;
             } else {
-                toks = ya_push(toks, mktok(ys("str"), yr_get(tq, "text"), startline, startcol, startoff, i));
+                toks = ya_push(toks, mktok(yv_long(K_str), yr_get(tq, "text"), startline, startcol, startoff, i));
                 ;
             }
             ;
@@ -1036,10 +1037,10 @@ Yv *tokenize_go(Yv *src, int lsp) {
             line = yv_l(yr_get(q, "line"));
             col = yv_l(yr_get(q, "col"));
             if (!ys_eq_lit(yr_get(q, "err"), "")) {
-                toks = ya_push(toks, mktok(ys("ferr"), yr_get(q, "err"), startline, startcol, startoff, i));
+                toks = ya_push(toks, mktok(yv_long(K_ferr), yr_get(q, "err"), startline, startcol, startoff, i));
                 ;
             } else {
-                toks = ya_push(toks, mktok(ys("str"), yr_get(q, "text"), startline, startcol, startoff, i));
+                toks = ya_push(toks, mktok(yv_long(K_str), yr_get(q, "text"), startline, startcol, startoff, i));
                 ;
             }
             ;
@@ -1068,7 +1069,7 @@ Yv *tokenize_go(Yv *src, int lsp) {
                 };
                 /* the server keeps it: the formatter and the highlighter both
                  * need the comment positions, which the compiler throws away */
-                if (lsp) { toks = ya_push(toks, mktok(ys("comment"), ys_slice(src, cstart, i), line, ccol, cstart, i)); }
+                if (lsp) { toks = ya_push(toks, mktok(yv_long(K_comment), ys_slice(src, cstart, i), line, ccol, cstart, i)); }
             } else if (ys_eq_lit(ys_slice(src, i + 1, i + 2), "*")) {
                 ylong cstart = i;
                 ylong ccol = col;
@@ -1109,8 +1110,8 @@ Yv *tokenize_go(Yv *src, int lsp) {
                 /* An unterminated block comment is an ERROR to the server: it
                  * has no end, so nothing can be painted or formatted around it. */
                 if (lsp) {
-                    if (closed) { toks = ya_push(toks, mktok(ys("comment"), ys_slice(src, cstart, i), cline, ccol, cstart, i)); }
-                    else { toks = ya_push(toks, mktok(ys("ferr"), ys("unterminated block comment"), cline, ccol, cstart, i)); }
+                    if (closed) { toks = ya_push(toks, mktok(yv_long(K_comment), ys_slice(src, cstart, i), cline, ccol, cstart, i)); }
+                    else { toks = ya_push(toks, mktok(yv_long(K_ferr), ys("unterminated block comment"), cline, ccol, cstart, i)); }
                 }
                 ;
             } else {
@@ -1120,12 +1121,12 @@ Yv *tokenize_go(Yv *src, int lsp) {
                 // below never sees it.
                 Yv *two = twocharop(src, i);
                 if (ys_eq_lit(two, "/=")) {
-                    toks = ya_push(toks, mktok(ys("op"), two, line, col, i, i + 2));
+                    toks = ya_push(toks, mktok(yv_long(K_op), two, line, col, i, i + 2));
                     i = i + 2;
                     col = col + 2;
                     ;
                 } else {
-                    toks = ya_push(toks, mktok(ys("op"), slash(), line, col, i, i + 1));
+                    toks = ya_push(toks, mktok(yv_long(K_op), slash(), line, col, i, i + 1));
                     i = i + 1;
                     col = col + 1;
                     ;
@@ -1139,7 +1140,7 @@ Yv *tokenize_go(Yv *src, int lsp) {
             // as field access; see native.y strip_ns note).
             Yv *op = multicharop(src, i, ys_slice(src, i, i + 1));
             if (!ys_eq_lit(op, "")) {
-                toks = ya_push(toks, mktok(ys("op"), op, line, col, i, i + yv_len(op)));
+                toks = ya_push(toks, mktok(yv_long(K_op), op, line, col, i, i + yv_len(op)));
                 i = i + yv_len(op);
                 col = col + yv_len(op);
                 ;
@@ -1156,20 +1157,20 @@ Yv *tokenize_go(Yv *src, int lsp) {
                 line = yv_l(yr_get(aq, "line"));
                 col = yv_l(yr_get(aq, "col"));
                 if (!ys_eq_lit(yr_get(aq, "err"), "")) {
-                    toks = ya_push(toks, mktok(ys("ferr"), yr_get(aq, "err"), aline, acol, astart, i));
+                    toks = ya_push(toks, mktok(yv_long(K_ferr), yr_get(aq, "err"), aline, acol, astart, i));
                     ;
                 } else {
-                    toks = ya_push(toks, mktok(ys("char"), yr_get(aq, "text"), aline, acol, astart, i));
+                    toks = ya_push(toks, mktok(yv_long(K_char), yr_get(aq, "text"), aline, acol, astart, i));
                     ;
                 }
                 ;
             } else if (issingleop(c)) {
-                toks = ya_push(toks, mktok(ys("op"), ys_slice(src, i, i + 1), line, col, i, i + 1));
+                toks = ya_push(toks, mktok(yv_long(K_op), ys_slice(src, i, i + 1), line, col, i, i + 1));
                 i = i + 1;
                 col = col + 1;
                 ;
             } else if (ispunct(c)) {
-                toks = ya_push(toks, mktok(ys("punct"), ys_slice(src, i, i + 1), line, col, i, i + 1));
+                toks = ya_push(toks, mktok(yv_long(K_punct), ys_slice(src, i, i + 1), line, col, i, i + 1));
                 i = i + 1;
                 col = col + 1;
                 ;
@@ -1178,15 +1179,15 @@ Yv *tokenize_go(Yv *src, int lsp) {
                 // operator nothing accepts, so the parser reports it. The
                 // server marks it an error: nothing can be formatted around a
                 // byte that is not part of the language.
-                if (lsp) { toks = ya_push(toks, mktok(ys("stray"), ys_slice(src, i, i + 1), line, col, i, i + 1)); }
-                else { toks = ya_push(toks, mktok(ys("op"), ys_slice(src, i, i + 1), line, col, i, i + 1)); }
+                if (lsp) { toks = ya_push(toks, mktok(yv_long(K_stray), ys_slice(src, i, i + 1), line, col, i, i + 1)); }
+                else { toks = ya_push(toks, mktok(yv_long(K_op), ys_slice(src, i, i + 1), line, col, i, i + 1)); }
                 i = i + 1;
                 col = col + 1;
                 ;
             };
         }
     }
-    toks = ya_push(toks, mktok(ys("eof"), ys(""), line, col, i, i));
+    toks = ya_push(toks, mktok(yv_long(K_eof), ys(""), line, col, i, i));
     return toks;
 }
 

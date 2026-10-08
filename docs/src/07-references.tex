@@ -122,7 +122,7 @@ way (the last value wins, the first position stays). \ic{len(m)} and
 \ic{values(m)} list the keys and the values in that same order (each a
 copy), so \ic{keys(m)[i]} and \ic{values(m)[i]} are one entry:
 \ic{foreach (k in keys(m)) \{ ... \}} visits every entry. The
-map grows as needed (amortized doubling, like arrays). Values are homogeneous: storing a \ic{str} into a
+map grows as needed (amortized doubling, like arrays), and a \ic{str} or \ic{long} key is found through a hash index that appears once the map holds more than eight entries, so a lookup, a store and a miss are O(1) on average; a smaller map, and one keyed by \ic{byte}, \ic{bool} or \ic{float}, scans its keys. Values are homogeneous: storing a \ic{str} into a
 \ic{\{str => long\}} is a compile error, as is a key of the wrong type.
 
 \paragraph{\ic{m.k} --- the dot form.} On a map keyed by \ic{str}, a

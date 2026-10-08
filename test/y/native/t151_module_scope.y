@@ -22,6 +22,6 @@ print(f());
 // std modules too: fs's names are free for the program
 let exists = "mine";
 def cwd() -> str { "my cwd" };
-print(exists, " ", cwd(), " ", fs.exists("/tmp"), " ", fs.cwd().length > 0);
+print(exists, " ", cwd(), " ", fs.exists("."), " ", fs.cwd().length > 0);
 // parameter defaults go with the qualified name
 print(m151.greet("ann"), " ", m151.greet("bob", "hi"));

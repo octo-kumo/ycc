@@ -120,7 +120,7 @@ static int is_num_kind(Yv *t);
 static int num_eq_ok(Yv *lt, Yv *rt);
 static Yv *typeof_eq(Yv *st, Yv *op, Yv *lt, Yv *rt, ylong line, ylong col);
 static Yv *typeof_in(Yv *st, Yv *lt, Yv *rt, ylong line, ylong col);
-static Yv *typeof_in_map(Yv *st, Yv *op, Yv *lt, Yv *rt, ylong line, ylong col);
+static Yv *typeof_in_map(Yv *st, Yv *lt, Yv *rt, ylong line, ylong col);
 static Yv *typeof_logic(Yv *st, Yv *op, Yv *lt, Yv *rt, ylong line, ylong col);
 static int tcompat(Yv *got, Yv *want);
 static int arr_lit_adopts(Yv *got, Yv *want, Yv *n);
@@ -2196,22 +2196,10 @@ static int in_int_ok(Yv *lt, Yv *of) {
  * scan a map read is (native.y gen_map_get's "has" mode), so it costs what a
  * read costs. Poison quietly on an unknown operand: whatever made it unknown
  * has already reported. */
-static Yv *typeof_in_map(Yv *st, Yv *op __attribute__((unused)), Yv *lt,
-                          Yv *rt, ylong line, ylong col) {
-    Yv *ru = unfold(rt);
-    ylong ruk = yv_l(yr_get(ru, "k"));
-    if (ruk == K_tmap || ruk == K_tunk ||
-        yv_l(yr_get(rt, "k")) == K_tnone) {
-        if (ruk == K_tmap) {
-            Yv *map = ru;
-            st = expect_type(st, lt, yr_get(map, "key"),
-                             ys("'in' left operand"), line, col);
-        }
-        return tc_res(type_node(yr(1, "k", yv_long(K_tbool))), st);
-    }
-    return tc_res(t_unk(),
-                  fail(st, ys_cat(ys("'in' needs a map on the right, got "),
-                                  tstr(rt)), line, col));
+static Yv *typeof_in_map(Yv *st, Yv *lt, Yv *rt, ylong line, ylong col) {
+    Yv *map = unfold(rt);
+    st = expect_type(st, lt, yr_get(map, "key"), ys("'in' left operand"), line, col);
+    return tc_res(type_node(yr(1, "k", yv_long(K_tbool))), st);
 }
 
 static Yv *typeof_in(Yv *st, Yv *lt, Yv *rt, ylong line, ylong col) {
@@ -2846,7 +2834,7 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
                               yv_l(yr_get(node, "col")));
         } else if (ys_eq_lit(op, "in")) {
             if (yv_l(yr_get(unfold(yr_get(r, "typ")), "k")) == K_tmap) {
-                return typeof_in_map(st, op, yr_get(l, "typ"),
+                return typeof_in_map(st, yr_get(l, "typ"),
                                      yr_get(r, "typ"),
                                      yv_l(yr_get(node, "line")),
                                      yv_l(yr_get(node, "col")));
@@ -3827,8 +3815,8 @@ static Yv *typeof_expr_go(Yv *st, Yv *node) {
 static Yv *typeof_rectest(Yv *st, Yv *node) {
     Yv *r = typeof_expr(st, yr_get(node, "e"));
     st = yr_get(r, "st");
-    Yv *s = yr_get(r, "typ");
     Yv *t = yr_get(node, "typ");
+    Yv *s = pat_subject(yr_get(r, "typ"), t);
     Yv *sk = yr_get(s, "k");
     Yv *tu = unfold(t);
     Yv *tk = yr_get(tu, "k");
@@ -3889,6 +3877,19 @@ static Yv *scalar_pat_narrow(Yv *s) {
     return s;
 }
 
+/* The type a pattern is tested against. A record pattern on an option whose
+ * payload is a record tests the payload (`if let Lvl c = o`, `o: Lvl?`: the
+ * option's own none test, then the record), as a scalar pattern does
+ * (scalar_pat_narrow); any other subject is itself. */
+Yv *pat_subject(Yv *s, Yv *t) {
+    Yv *su = unfold(s);
+    if (yv_l(yr_get(su, "k")) == K_topt && !is_prim_type(unfold(t))) {
+        Yv *inner = scalar_pat_narrow(su);
+        if (yv_l(yr_get(unfold(inner), "k")) == K_trec) { return unfold(inner); }
+    }
+    return s;
+}
+
 static int pattern_fits(Yv *s, Yv *t) {
     if (yv_l(yr_get(s, "k")) == K_tunion) {
         Yv *m = union_member(s, t);
@@ -3911,7 +3912,7 @@ static Yv *typeof_narrow(Yv *st, Yv *node) {
          * Taking the subject instead would bind the whole union. */
         return yr(2, "typ", tu, "st", yr_get(r, "st"));
     } else if (yv_l(tk) == K_trec || yv_l(tk) == K_tpat) {
-        return yr(2, "typ", narrow_type(yr_get(r, "typ"), t), "st", yr_get(r, "st"));
+        return yr(2, "typ", narrow_type(pat_subject(yr_get(r, "typ"), t), t), "st", yr_get(r, "st"));
     } else {
         return yr(2, "typ", t_unk(), "st", yr_get(r, "st"));
     }

@@ -123,6 +123,7 @@ static int lint_effect_logic(Yv *node);
 static int lint_zero(Yv *node);
 static int lint_zero_text(Yv *s);
 static ylong lint_if(LintSt st, Yv *node, int used);
+static ylong lint_if_conds(LintSt st, Yv *head);
 static int lint_empty_arm(Yv *n);
 static ylong lint_for(LintSt st, Yv *node);
 static ylong lint_func(LintSt st, Yv *node);
@@ -201,12 +202,12 @@ Yv *lint_unit(Yv *ast, Yv *ast3, Yv *ofile, Yv *fmods, ylong wlevel, Yv *ogen) {
     Yv *vars = yav(0);
     Yv *flags = yav(0);
     Yv *rets = yav(0);
-    LintSt st = yr(14, "warns", warns, "vars", vars, "tops",
+    LintSt st = yr(15, "warns", warns, "vars", vars, "tops",
                    nameix_new(256), "flags", flags, "rets",
                    rets, "ridx", nameix_new(64), "self", ys(""), "wlevel",
                    yv_long(wlevel), "dropnext", yv_bool(0), "vused",
                    yv_bool(0), "loops", yv_long(0), "logic", yv_long(0),
-                   "voidfn", yv_bool(0), "tailflow", yv_bool(0));
+                   "voidfn", yv_bool(0), "tailflow", yv_bool(0), "chain", yv_long(0));
     if (wlevel >= 1) {
         (void)lint_rets(st, yr_get(ast3, "stmts"));
     }
@@ -699,6 +700,7 @@ static ylong lint_node(LintSt st, Yv *node, int used) {
         return lint_opassign(st, node, used);
     } else if (yv_l(k) == K_kw_while) {
         (void)lint_node(st, yr_get(node, "cond"), 1);
+        if (yv_l(yr_get(st, "wlevel")) >= 1 && lint_bool_lit(yr_get(node, "cond")) == 0) { (void)lint_warn_at(st, ys("the condition is always false, so the loop never runs"), yr_get(node, "cond")); }
         if (yv_l(yr_get(st, "wlevel")) >= 2) {
             (void)lint_short_while(st, node);
         }
@@ -1000,6 +1002,9 @@ static ylong lint_bin(LintSt st, Yv *node, int used) {
         if ((ys_eq_lit(op, "/") || ys_eq_lit(op, "%")) && lint_zero(r)) {
             (void)lint_warn_at(st, ys("division by zero"), node);
         }
+        if (yv_l(yr_get(st, "wlevel")) >= 1 && (ys_eq_lit(op, "&") || ys_eq_lit(op, "|") || ys_eq_lit(op, "^") || ys_eq_lit(op, "&&") || ys_eq_lit(op, "||")) && lint_same_node(l, r)) {
+            (void)lint_warn_at(st, lint_cat(3, ys("both operands of '"), op, ys("' are the same expression")), node);
+        }
         if (yv_l(yr_get(st, "wlevel")) >= 2) {
             (void)lint_short_bin(st, node);
         }
@@ -1173,6 +1178,9 @@ static ylong lint_short_assign(LintSt st, Yv *node, Yv *name, Yv *v) {
 /* Rule 1.9: a comparison against a bool literal is the value or its not. */
 static ylong lint_short_bin(LintSt st, Yv *node) {
     Yv *op = yr_get(node, "op");
+    if (ys_eq_lit(op, "-") && yv_l(yr_get(yr_get(node, "l"), "k")) == K_num && yv_l(yr_get(yr_get(node, "r"), "k")) == K_num && lint_int_val(yr_get(node, "l")) == 0) {
+        (void)lint_warn_at(st, ys("'0 - n' is a negative literal; write it '-n'"), node);
+    }
     if (!ys_eq_lit(op, "==") && !ys_eq_lit(op, "!=")) { return 0; }
     Yv *lit = yr_get(node, "r");
     Yv *other = yr_get(node, "l");
@@ -1385,6 +1393,7 @@ static int lint_pure(Yv *node) {
 
 /* Rule 2.1: an empty `if` arm. */
 static ylong lint_short_empty_if(LintSt st, Yv *node) {
+    if (yv_l(yr_get(st, "chain")) != 0) { return 0; }
     int te = lint_empty_arm(yr_get(node, "then"));
     int ee = yv_b(yr_get(node, "has_else")) && lint_empty_arm(yr_get(node, "els"));
     if (te && ee) {
@@ -1402,6 +1411,8 @@ static ylong lint_short_empty_if(LintSt st, Yv *node) {
 
 /* Rules 2.3/2.4: an `if`/`else` that only chooses a value. */
 static ylong lint_short_if_ternary(LintSt st, Yv *node) {
+    /* An `else if` arm has no block of its own to hold the rewrite. */
+    if (yv_l(yr_get(st, "chain")) != 0) { return 0; }
     if (!yv_b(yr_get(node, "has_else"))) { return 0; }
     Yv *a = lint_single_stmt(yr_get(node, "then"));
     Yv *b = lint_single_stmt(yr_get(node, "els"));
@@ -1843,15 +1854,46 @@ static int lint_zero_text(Yv *s) {
 /* An `if` gives its arms' values only when it has both arms. */
 static ylong lint_if(LintSt st, Yv *node, int used) {
     (void)lint_node(st, yr_get(node, "cond"), 1);
+    if (yv_l(yr_get(st, "chain")) == 0) { (void)lint_if_conds(st, node); }
     int arms = used && yv_b(yr_get(node, "has_else"));
     (void)lint_node(st, yr_get(node, "then"), arms);
+    /* An `else if` is an arm of the chain, not an arm of its own: its empty
+     * then cannot be dropped (that would make the next `else` the head). */
+    ylong wc = yv_l(yr_get(st, "chain"));
+    if (yv_l(yr_get(yr_get(node, "els"), "k")) == K_kw_if) { (void)yr_set(st, "chain", yv_long(1)); }
     (void)lint_node(st, yr_get(node, "els"), arms);
+    (void)yr_set(st, "chain", yv_long(wc));
     if (yv_l(yr_get(st, "wlevel")) >= 1 && yv_b(yr_get(node, "has_else")) &&
         lint_empty_arm(yr_get(node, "els"))) {
         (void)lint_warn_at(st, ys("the 'else' branch is empty"), node);
     }
     if (yv_l(yr_get(st, "wlevel")) >= 2) {
         (void)lint_short_if(st, node);
+    }
+    return 0;
+}
+
+/* The conditions of a whole `if`/`else if` chain (checked once, at its head): a
+ * constant one decides the branch at compile time, and one that repeats an
+ * earlier condition of the chain can never be reached -- the earlier one took
+ * every case it would. */
+static ylong lint_if_conds(LintSt st, Yv *head) {
+    Yv *seen = yav(0);
+    Yv *cur = head;
+    while (yv_l(yr_get(cur, "k")) == K_kw_if) {
+        Yv *cond = yr_get(cur, "cond");
+        ylong c = lint_bool_lit(cond);
+        if (c >= 0) {
+            if (yv_l(yr_get(st, "wlevel")) >= 1) { (void)lint_warn_at(st, ys_cat(ys("the condition is always "), c == 1 ? ys("true") : ys("false")), cond); }
+        } else {
+            for (ylong i = 0; i < yv_len(seen); i++) {
+                if (lint_same_node(ya_get(seen, i), cond)) {
+                    (void)lint_warn_at(st, ys("this condition repeats an earlier one of the chain, so this branch never runs"), cond);
+                }
+            }
+        }
+        seen = ya_push(seen, cond);
+        cur = yr_get(cur, "els");
     }
     return 0;
 }

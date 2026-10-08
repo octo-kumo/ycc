@@ -115,6 +115,16 @@ enum {
     /* Big integers: a literal node and the built-in type. */
     K_bignum         = 85,
     K_tbigint        = 86,
+    /* The lexer's token kinds that are not also a Node kind. */
+    K_punct          = 87,
+    K_op             = 88,
+    K_bigint         = 89,
+    K_ferr           = 90,
+    K_fstr           = 91,
+    K_eof            = 92,
+    K_comment        = 93,
+    K_stray          = 94,
+    K_doc            = 95,
 };
 
 #endif

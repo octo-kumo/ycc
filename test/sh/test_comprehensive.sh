@@ -20,8 +20,8 @@ run_test() {
     local expected="$3"
 
     local tmpfile binfile vm_out vm_exit compile_out bin_out bin_exit
-    tmpfile=$(mktemp /tmp/ycomp_src_XXXXXX.y)
-    binfile=$(mktemp /tmp/ycomp_bin_XXXXXX)
+    tmpfile=$(mktemp -t ycomp_src_XXXXXX.y)
+    binfile=$(mktemp -t ycomp_bin_XXXXXX)
     echo "$code" > "$tmpfile"
 
     # Reference side (quiet: only program output)
@@ -65,8 +65,8 @@ silent_test() {
     local code="$2"
 
     local tmpfile binfile vm_out vm_exit bin_out bin_exit
-    tmpfile=$(mktemp /tmp/ycomp_src_XXXXXX.y)
-    binfile=$(mktemp /tmp/ycomp_bin_XXXXXX)
+    tmpfile=$(mktemp -t ycomp_src_XXXXXX.y)
+    binfile=$(mktemp -t ycomp_bin_XXXXXX)
     echo "$code" > "$tmpfile"
 
     vm_out=$(timeout "$VM_TO" "$YBOOT" -q "$tmpfile" </dev/null 2>&1)

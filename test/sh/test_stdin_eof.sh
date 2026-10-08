@@ -9,8 +9,8 @@ set -u
 
 source "$(dirname "$0")/lib.sh"   # ROOT, YBOOT, YTIMEOUT_SCALE
 
-FIFO=$(mktemp -u /tmp/yeof_XXXXXX)
-PROG=$(mktemp /tmp/yeof_XXXXXX.y)
+FIFO=$(mktemp -u -t yeof_XXXXXX)
+PROG=$(mktemp -t yeof_XXXXXX.y)
 mkfifo "$FIFO"
 
 cat > "$PROG" <<'EOF'
@@ -52,7 +52,7 @@ rc=0
 check() {
     local name="$1"; shift
     local out
-    out=$(mktemp /tmp/yeof_out_XXXXXX)
+    out=$(mktemp -t yeof_out_XXXXXX)
     # The second write waits for phase a's count: written at a fixed delay
     # instead, it reached a program still being compiled (a busy machine)
     # and the two writes read as one stream.
@@ -81,7 +81,7 @@ check() {
 CTO=$(( 120 * YTIMEOUT_SCALE ))
 check "reference" "$YBOOT" -q "$PROG"
 
-BINC=$(mktemp /tmp/yeof_bin_XXXXXX)
+BINC=$(mktemp -t yeof_bin_XXXXXX)
 if timeout "$CTO" "$YBOOT" --compile "$PROG" -o "$BINC" </dev/null >/dev/null 2>&1; then
     check "C copy" "$BINC"
 else
@@ -90,7 +90,7 @@ fi
 
 YSELF_BIN="${YSELF:-$ROOT/ycc}"
 if [ -x "$YSELF_BIN" ]; then
-    BINN=$(mktemp /tmp/yeof_bin_XXXXXX)
+    BINN=$(mktemp -t yeof_bin_XXXXXX)
     if timeout "$CTO" "$YSELF_BIN" -o "$BINN" "$PROG" </dev/null >/dev/null 2>&1; then
         check "built ycc" "$BINN"
     else

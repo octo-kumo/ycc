@@ -306,6 +306,134 @@ def y_str_lastidx(hay: str, needle: str, from: long) -> long {
     found
 };
 
+// ── map lookup ──────────────────────────────────────────────────────────
+// A map is {boxes, keys, vals, zidx} (native.y gen_maplit): keys in insertion
+// order, plus -- for a str or long key -- zidx, an open-addressing index that
+// holds entry i as i+1 (0 = empty). A map of up to 8 entries has no index and
+// is scanned; the 9th insert builds it, and every insert after keeps it in
+// step (y_map_note_*). Reads never touch it. Nothing is ever deleted, so a
+// slot never needs a tombstone. The table stays at most half full.
+//
+// y_map_find_* give the entry index of k, or len(keys) when it is absent.
+
+def y_map_hash_str(k: str) -> long {
+    let h = -3750763034362895579;
+    let i = 0;
+    let n = k.length;
+    while (i < n) {
+        h = (h ^ k[i]) * 1099511628211;
+        i = i + 1;
+    };
+    h ^ (h >>> 29)
+};
+
+def y_map_find_long(ks: [long], ix: [long], k: long) -> long {
+    let n = len(ks);
+    let cap = len(ix);
+    let r = n;
+    if (cap == 0) {
+        let i = 0;
+        while (i < n) {
+            if (ks[i] == k) { r = i; i = n; } else { i = i + 1; };
+        };
+    } else {
+        let mask = cap - 1;
+        let s = ((k * -7046029254386353131) >>> 32) & mask;
+        let e = ix[s];
+        while (e != 0) {
+            if (ks[e - 1] == k) { r = e - 1; e = 0; } else {
+                s = (s + 1) & mask;
+                e = ix[s];
+            };
+        };
+    };
+    r
+};
+
+def y_map_find_str(ks: [str], ix: [long], k: str) -> long {
+    let n = len(ks);
+    let cap = len(ix);
+    let r = n;
+    if (cap == 0) {
+        let i = 0;
+        while (i < n) {
+            if (ks[i] == k) { r = i; i = n; } else { i = i + 1; };
+        };
+    } else {
+        let mask = cap - 1;
+        let s = y_map_hash_str(k) & mask;
+        let e = ix[s];
+        while (e != 0) {
+            if (ks[e - 1] == k) { r = e - 1; e = 0; } else {
+                s = (s + 1) & mask;
+                e = ix[s];
+            };
+        };
+    };
+    r
+};
+
+// Sets the table to `cap` zeroed slots, in place: the map record holds the
+// array's header, which never moves.
+def y_map_clear(ix: [long], cap: long) -> long {
+    while (len(ix) < cap) { ix += 0; };
+    let i = 0;
+    while (i < cap) { ix[i] = 0; i = i + 1; };
+    0
+};
+
+def y_map_cap_for(n: long) -> long {
+    let cap = 32;
+    while (cap < n * 4) { cap = cap * 2; };
+    cap
+};
+
+// Entry n-1 was just pushed onto ks: index it, building or growing the table
+// when the map has outgrown the scan or the table is half full.
+def y_map_note_long(ks: [long], ix: [long]) -> long {
+    let n = len(ks);
+    let cap = len(ix);
+    if (cap == 0 && n <= 8) { return 0; };
+    if (cap == 0 || n * 2 > cap) {
+        cap = y_map_cap_for(n);
+        y_map_clear(ix, cap);
+        let j = 0;
+        while (j < n) {
+            let s = ((ks[j] * -7046029254386353131) >>> 32) & (cap - 1);
+            while (ix[s] != 0) { s = (s + 1) & (cap - 1); };
+            ix[s] = j + 1;
+            j = j + 1;
+        };
+    } else {
+        let s = ((ks[n - 1] * -7046029254386353131) >>> 32) & (cap - 1);
+        while (ix[s] != 0) { s = (s + 1) & (cap - 1); };
+        ix[s] = n;
+    };
+    0
+};
+
+def y_map_note_str(ks: [str], ix: [long]) -> long {
+    let n = len(ks);
+    let cap = len(ix);
+    if (cap == 0 && n <= 8) { return 0; };
+    if (cap == 0 || n * 2 > cap) {
+        cap = y_map_cap_for(n);
+        y_map_clear(ix, cap);
+        let j = 0;
+        while (j < n) {
+            let s = y_map_hash_str(ks[j]) & (cap - 1);
+            while (ix[s] != 0) { s = (s + 1) & (cap - 1); };
+            ix[s] = j + 1;
+            j = j + 1;
+        };
+    } else {
+        let s = y_map_hash_str(ks[n - 1]) & (cap - 1);
+        while (ix[s] != 0) { s = (s + 1) & (cap - 1); };
+        ix[s] = n;
+    };
+    0
+};
+
 // range(n) = [0 .. n), empty for n <= 0.
 def y_range(n: long) -> [long] {
     let out: [long] = [];

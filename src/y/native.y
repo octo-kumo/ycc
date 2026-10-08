@@ -49,6 +49,11 @@ import lint from "./lint.y";
 import meta from "./meta.y";
 import fs;
 
+// What an environment entry (Slot) is. A number, so a test is an integer compare
+// and a misspelt kind is an undefined name, not a silently different kind.
+const SK = { none: 0, local: 1, param: 2, global: 3, func: 4, capture: 5, box: 6, own: 7,
+    frame: 8, boxmark: 10, appmark: 11, fnty: 12, env: 13, temp: 14, closure: 15 };
+
 // No std source is embedded in the compiler. Every std unit -- the four core
 // units and the library modules alike -- travels compiled in the std pack
 // attached to ycc (std_pack); a source is read from disk (std_lib_src) only to
@@ -363,6 +368,9 @@ def std_text(s: str) -> str {
     if (s[len(s) - 1:] == "\n") { s } else { s + "\n" }
 };
 
+// How many buckets words_seen's name table has (word_hash).
+const WORD_BUCKETS = 512;
+
 // Which trigger names the program mentions, in ONE pass over its text
 // however many names there are. seen[k] is 0 when names[k] does not occur
 // as a word of code, 1 when it does, and 2 when it also occurs in
@@ -393,14 +401,34 @@ def words_seen(code: str, names: [str]) -> [long] {
     for k in 0..len(names) + 1 {
         seen += 0;
     };
-    words_scan(code, 0, len(code), names, seen);
+    // the names by hash of their bytes (word_hash), so a word of the code is
+    // compared with the few names that share its bucket, not with all of them
+    let tab: [[long]] = [];
+    for b in 0..WORD_BUCKETS {
+        let one: [long] = [];
+        tab += one;
+    };
+    for k in 0..len(names) {
+        tab[word_hash(names[k], 0, len(names[k]))] += k;
+    };
+    words_scan(code, 0, len(code), names, tab, seen);
     seen
+};
+
+// A bucket of the table words_seen builds: the bytes of s[lo:hi) folded
+// together. No slice is made.
+def word_hash(s: str, lo: long, hi: long) -> long {
+    let h = hi - lo;
+    for i in lo..hi {
+        h = (h * 31 + s[i]) & 0x7fffffff;
+    };
+    h % WORD_BUCKETS
 };
 
 // words_seen's pass over code[lo:n], marking seen in place. The fields of
 // an f-string are code: lexer.y fstr_walk finds them as the lexer does,
 // and each is scanned on its own.
-def words_scan(code: str, lo: long, n: long, names: [str], seen: [long]) -> void {
+def words_scan(code: str, lo: long, n: long, names: [str], tab: [[long]], seen: [long]) -> void {
     let i = lo;
     // the first byte of the last token of code (blanks and comments skip),
     // and a name just seen after a `.`, waiting for its `(`
@@ -448,19 +476,21 @@ def words_scan(code: str, lo: long, n: long, names: [str], seen: [long]) -> void
                     let fs = w.fields;
                     let f = 0;
                     while (f < len(fs)) {
-                        words_scan(code, fs[f], fs[f + 1], names, seen);
+                        words_scan(code, fs[f], fs[f + 1], names, tab, seen);
                         if (fs[f + 3] > fs[f + 2]) { seen[len(names)] = 2; }
                         f += 4;
                     };
                     i = w.end;
                 } else {
-                    names.foreach((e, m) => {
-                        let nm: str = e;
+                    let bucket = tab[word_hash(code, i, j)];
+                    for b in 0..len(bucket) {
+                        let m = bucket[b];
+                        let nm = names[m];
                         if (len(nm) == j - i && word_at(code, i, nm)) {
                             if (seen[m] == 0) { seen[m] = 1; }
                             if (prev == '.') { pend = m; }
                         }
-                    });
+                    };
                     i = j;
                 };
             } else {
@@ -2688,7 +2718,7 @@ def strip_decl(node: Decl, imports: [str]) -> Node {
 // `label` is an id (see label identities); `mark` is the str a slot of kind
 // "boxmark"/"appmark" carries instead -- a name to match against -- and a
 // "capture"'s capture index (as text, see gen_addr).
-type Slot = { name: str, kind: str, off: long, label: long, mark: str, typ: Type };
+type Slot = { name: str, kind: long, off: long, label: long, mark: str, typ: Type };
 type ArrTy = TOf | TFix;
 type NodeE = Wrap | Un | Narrow | MatchEnd;
 type NodeV = ArrRep | Assign | Decl;
@@ -2787,7 +2817,25 @@ def st_temp(st: EmitSt, n: long) -> EmitSt {
 // emits -- `emit_insn(st, insn.F_MOV_0_R, insn.R_RBP, -1, 1, -24, -1, insn.R_RAX, 64)`
 // is `mov -24(%rbp), %rax`.
 def emit_insn(st: EmitSt, f: long, a: long, b: long, c: long, d: long, e: long, g: long, h: long) -> EmitSt {
-    st_ir(st, insn.ir_push(st.ir, f, a, b, c, d, e, g, h))
+    if (f == insn.F_MOV_D_R && is_reload(st.ir, a, b, c, d, e, g, h)) {
+        st
+    } else {
+        st_ir(st, insn.ir_push(st.ir, f, a, b, c, d, e, g, h))
+    }
+};
+
+// The load `mov mem, %rax` (64-bit) when the item before it stores %rax to the
+// same memory: %rax already holds the value, so the load is dropped. Only a
+// `.loc` marker may sit between the two (it is not code, so -g leaves the code
+// as it was); a label is a place control can arrive at with another %rax, and
+// it ends the match. 10,500 sites in ycc's own output (`x = e; ... x`).
+def is_reload(ir: [long], a: long, b: long, c: long, d: long, e: long, g: long, h: long) -> bool {
+    if (g != insn.R_RAX || h != 64) { false } else {
+        let p = len(ir) - insn.IR_W;
+        while (p >= 0 && ir[p] == insn.IR_LOC) { p = p - insn.IR_W; };
+        p >= 0 && ir[p] == insn.F_MOV_R_D && ir[p + 1] == insn.R_RAX && ir[p + 2] == 64
+            && ir[p + 3] == a && ir[p + 4] == b && ir[p + 5] == c && ir[p + 6] == d && ir[p + 7] == e
+    }
 };
 
 // A label definition (`yfn_3_foo:`), as an item carrying the label's id: the
@@ -2902,7 +2950,7 @@ let env_id = 0;
 // Open a fresh env: the sentinel that carries its id (its off field).
 def env_open(env: [Slot]) -> [Slot] {
     env_id++;
-    env += { name: "", kind: "env", off: env_id, label: -1, mark: "", typ: normtype({ k: K.tnone }) };
+    env += { name: "", kind: SK.env, off: env_id, label: -1, mark: "", typ: normtype({ k: K.tnone }) };
     env
 };
 
@@ -3000,7 +3048,7 @@ def env_find(st: EmitSt, name: str) -> Slot {
     if (at >= 0) {
         env[at]
     } else {
-        let found: Slot = { name: "", kind: "none", off: 0, label: -1, mark: "", typ: normtype({ k: K.tnone }) };
+        let found: Slot = { name: "", kind: SK.none, off: 0, label: -1, mark: "", typ: normtype({ k: K.tnone }) };
         let fns = st.fns;
         let j = namemap_get(fns.ix, name);
         if (j >= 0) {
@@ -3011,7 +3059,7 @@ def env_find(st: EmitSt, name: str) -> Slot {
     }
 };
 
-def env_define(st: EmitSt, name: str, kind: str, off: long, label: long, mark: str, typ: Type) -> EmitSt {
+def env_define(st: EmitSt, name: str, kind: long, off: long, label: long, mark: str, typ: Type) -> EmitSt {
     let env = st.env;
     if (len(env) == 0) { env = env_open(env); };
     st.env += { name: name, kind: kind, off: off, label: label, mark: mark, typ: typ };
@@ -3054,7 +3102,7 @@ def infer_go(st: EmitSt, node: Node) -> Type {
         let id: Leaf = node;
         if (id.v == "self") { normtype(cur_fn_type(st)) } else {
             let e = env_find(st, id.v);
-            if (e.kind == "none") {
+            if (e.kind == SK.none) {
                 if (id.v == "none") { normtype({ k: K.topt, of: normtype({ k: K.tunk }) }) } else { normtype({ k: K.tunk }) }
             } else { e.typ }
         }
@@ -3453,13 +3501,18 @@ def infer_call(st: EmitSt, node: Call) -> Type {
                 let km: TMap = kt;
                 normtype({ k: K.tarr, of: km.key })
             } else { normtype({ k: K.tarr, of: normtype({ k: K.tunk }) }) }
-        } else if (name == "map$keys" || name == "map$vals" || name == "map$boxes") {
-            // the emitter's own three fields (see map_field): [K], [V], [V?]
+        } else if (name == "map$find") {
+            normtype({ k: K.tlong })
+        } else if (name == "map$note") {
+            normtype({ k: K.tvoid })
+        } else if (name == "map$keys" || name == "map$vals" || name == "map$boxes" || name == "map$zidx") {
+            // the emitter's own fields (see map_field): [K], [V], [V?], [long]
             let margs: [Node] = node.args;
             let mt2 = infer(st, margs[0]);
             if (mt2.k == K.tmap) {
                 let map: TMap = mt2;
-                if (name == "map$keys") { normtype({ k: K.tarr, of: map.key }) }
+                if (name == "map$zidx") { normtype({ k: K.tarr, of: normtype({ k: K.tlong }) }) }
+                else if (name == "map$keys") { normtype({ k: K.tarr, of: map.key }) }
                 else if (name == "map$vals") { normtype({ k: K.tarr, of: map.of }) }
                 else { normtype({ k: K.tarr, of: normtype({ k: K.topt, of: map.of }) }) }
             } else { normtype({ k: K.tunk }) }
@@ -3493,7 +3546,7 @@ def infer_call(st: EmitSt, node: Call) -> Type {
             if (sret.k == K.tnone) { normtype({ k: K.tunk }) } else { sret }
         } else {
             let e = env_find(st, name);
-            if (e.kind == "none") {
+            if (e.kind == SK.none) {
                 normtype({ k: K.tunk })
             } else if (e.typ.k == K.tfunc) {
                 let func: TFunc = e.typ;
@@ -3520,9 +3573,9 @@ def infer_block(st: EmitSt, node: Block) -> Type {
         stmts.foreach((s) => {
             if (s.k == K.decl) {
                 let d: Decl = s;
-                if (d.kind == "let" && env_find(st, d.name).kind == "none") {
+                if (d.kind == "let" && env_find(st, d.name).kind == SK.none) {
                     if (len(st.env) == 0) { st.env = env_open(st.env); };
-                    st.env += { name: d.name, kind: "temp", off: 0, label: -1, mark: "", typ: infer(st, d.v) };
+                    st.env += { name: d.name, kind: SK.temp, off: 0, label: -1, mark: "", typ: infer(st, d.v) };
                     env_index_add(st.env);
                 };
             };
@@ -3796,7 +3849,7 @@ def name_in(xs: [str], n: str) -> bool {
 // is_intrinsic_name tests, so they are in the list.
 let INTRINSICS: [str] = ["print", "syscall", "len", "push", "some", "is_some", "unwrap",
     "opt$test", "opt$val", "values",
-    "map$keys", "map$vals", "map$boxes",
+    "map$keys", "map$vals", "map$boxes", "map$zidx", "map$find", "map$note",
     "trim", "ord", "byte_at", "chr", "tolong", "tofloat", "tostring", "index_of",
     "mod",
     "prepend",
@@ -4125,10 +4178,10 @@ def fn_names_of(fns: [Sym]) -> [str] {
 // st.fns holds the hoisted defs, then the externs (the top-level defs of
 // the units this one links against), then the globals (see
 // compile_unit); a global's label is its .bss cell.
-def fns_kind(label: str) -> str {
+def fns_kind(label: str) -> long {
     // starts_with, not label[:3] == "yg_": the slice allocated a throwaway
     // string on every call, and this runs once per identifier emitted.
-    if (label.starts_with("yg_")) { "global" } else { "func" }
+    if (label.starts_with("yg_")) { SK.global } else { SK.func }
 };
 
 // ── expression emission (value in %rax) ────────────────────────────────
@@ -4240,7 +4293,7 @@ def gen_go(st: EmitSt, node: Node) -> EmitSt {
         let narrow: Narrow = node;
         let src = infer(st, narrow.e);
         st = gen(st, narrow.e);
-        let dst = types.narrow_type(src, narrow.typ);
+        let dst = types.narrow_type(types.pat_subject(src, narrow.typ), narrow.typ);
         if (src.k == K.topt && dst.k != K.topt) {
             // `if let long n = v`: the binding is the option's payload -- the
             // deref `unwrap` does, trap and all (rectest proved it is there).
@@ -4274,7 +4327,7 @@ def gen_go(st: EmitSt, node: Node) -> EmitSt {
     } else if (k == K.map) {
         // map literal: the {keys, vals, boxes} record, heap address in %rax.
         let map: RecLit = node;
-        gen_maplit(st, map)
+        gen_maplit(st, map, true)
     } else if (k == K.arrrep) {
         // [v; n] anywhere (let/assign/call-arg): heap address in %rax.
         let rep: ArrRep = node;
@@ -4364,9 +4417,9 @@ def gen_id(st: EmitSt, node: Leaf) -> EmitSt {
         emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0)
     } else {
         let e = env_find(st, node.v);
-        if (e.kind == "none") {
+        if (e.kind == SK.none) {
             emit(st, "    # INTERNAL: undefined " + node.v)
-        } else if (e.kind == "func") {
+        } else if (e.kind == SK.func) {
             // A hoisted def used as a VALUE: wrap it in a closure record
             // with no captures (hoisted defs capture nothing). A capturing
             // function naming itself hands out its own record instead.
@@ -4379,23 +4432,23 @@ def gen_id(st: EmitSt, node: Leaf) -> EmitSt {
             } else {
                 gen_make_closure(st, e.label, [])
             }
-        } else if (e.kind == "global") {
+        } else if (e.kind == SK.global) {
             // An appendable global gives up its buffer on every read
             // (see gen_sappend).
             if (e.typ.k == K.tstr) {
                 let oe = env_find(st, node.v + "#o");
-                if (oe.kind == "none") { } else {
+                if (oe.kind == SK.none) { } else {
                     st = emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
                     st = emit_insn(st, insn.F_MOV_R_P, insn.R_RAX, 64, -1, -1, 1, 0, oe.label);
                 };
             }
             emit_insn(st, insn.F_MOV_P_R, -1, -1, 1, 0, e.label, insn.R_RAX, 64)
-        } else if (e.kind == "own") {
+        } else if (e.kind == SK.own) {
             // an appendable string: a read may let its buffer escape, so
             // the companion is cleared (see gen_sappend)
             st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, e.off, -1, insn.R_RAX, 64);
             emit_insn(st, insn.F_MOV_I_D, 0, insn.R_RBP, -1, 1, e.off - 8, -1, 0)
-        } else if (e.kind == "capture") {
+        } else if (e.kind == SK.capture) {
             // Captured by the enclosing closure: load the closure record
             // (at the frame offset recorded in `off`), read slot idx+1 —
             // the shared cell pointer — and deref it (see box_capture).
@@ -4405,7 +4458,7 @@ def gen_id(st: EmitSt, node: Leaf) -> EmitSt {
             st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, e.off, -1, insn.R_RCX, 64);
             st = emit_insn(st, insn.F_MOV_D_R, insn.R_RCX, -1, 1, 8 * (idx + 1), -1, insn.R_RAX, 64);
             emit_insn(st, insn.F_MOV_0_R, insn.R_RAX, -1, 1, -1, -1, insn.R_RAX, 64)
-        } else if (e.kind == "box") {
+        } else if (e.kind == SK.box) {
             // A captured variable's shared cell; the slot holds its pointer.
             st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, e.off, -1, insn.R_RAX, 64);
             emit_insn(st, insn.F_MOV_0_R, insn.R_RAX, -1, 1, -1, -1, insn.R_RAX, 64)
@@ -4430,7 +4483,7 @@ def gen_id(st: EmitSt, node: Leaf) -> EmitSt {
 // a "box" binding alike.
 def gen_cap_ptr(st: EmitSt, name: str) -> EmitSt {
     let e = env_find(st, name);
-    if (e.kind == "capture") {
+    if (e.kind == SK.capture) {
         // NOTE: the index rides in `label` (see gen_id's capture arm).
         let pidx = leading_long(e.mark);
         st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, e.off, -1, insn.R_RCX, 64);
@@ -4456,7 +4509,7 @@ def gen_cap_ptr(st: EmitSt, name: str) -> EmitSt {
 // variable declared before a loop shares one cell across iterations.
 def box_capture(st: EmitSt, name: str) -> EmitSt {
     let e = env_find(st, name);
-    if (e.kind == "box" || e.kind == "capture") {
+    if (e.kind == SK.box || e.kind == SK.capture) {
         st
     } else {
         st = gen_id(st, { k: K.id, v: name, line: 0, col: 0 });
@@ -4471,7 +4524,7 @@ def box_capture(st: EmitSt, name: str) -> EmitSt {
             fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 1, temp: st.temp,
             self_label: st.self_label, end_label: st.end_label, fns: st.fns,
             bodies: st.bodies, btext: st.btext, blabels: st.blabels };
-        env_define(st2, name, "box", boff, -1, "", e.typ)
+        env_define(st2, name, SK.box, boff, -1, "", e.typ)
     }
 };
 
@@ -4501,9 +4554,9 @@ def box_bound(st: EmitSt, name: str) -> EmitSt {
     let more = true;
     while (more && i >= 0) {
         let e = env[i];
-        if (e.kind == "frame") {
+        if (e.kind == SK.frame) {
             more = false;
-        } else if (e.kind == "boxmark" && e.mark == name) {
+        } else if (e.kind == SK.boxmark && e.mark == name) {
             want = true;
             more = false;
         }
@@ -4669,9 +4722,9 @@ def own_wanted(st: EmitSt, name: str) -> bool {
     let more = true;
     while (more && i >= 0) {
         let e = env[i];
-        if (e.kind == "frame") {
+        if (e.kind == SK.frame) {
             more = false;
-        } else if (e.kind == "appmark" && e.mark == name) {
+        } else if (e.kind == SK.appmark && e.mark == name) {
             want = true;
             more = false;
         }
@@ -4690,7 +4743,7 @@ def bind_own(st: EmitSt, name: str, t: Type) -> EmitSt {
         fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 2, temp: st.temp,
         self_label: st.self_label, end_label: st.end_label, fns: st.fns,
         bodies: st.bodies, btext: st.btext, blabels: st.blabels };
-    env_define(st2, name, "own", off, -1, "", t)
+    env_define(st2, name, SK.own, off, -1, "", t)
 };
 
 // A statement nobody takes the value of. `s += x` on an appendable string
@@ -4705,7 +4758,7 @@ def gen_stmt(st: EmitSt, node: Node) -> EmitSt {
         // the companion cell, "global" may have one, and "box"/"capture" read
         // through a cell.
         let id: Leaf = node;
-        if ((env_find(st, id.v)).kind == "local") { st } else { gen(st, node) }
+        if ((env_find(st, id.v)).kind == SK.local) { st } else { gen(st, node) }
     } else if (node.k == K.incdec) {
         // `x++` as a statement: the desugar's block value is the old x, and
         // nothing reads it (see gen_incdec's `dropped`).
@@ -4716,11 +4769,11 @@ def gen_stmt(st: EmitSt, node: Node) -> EmitSt {
         if (assign.op == "+" && assign.tgt.k == K.id) {
             let id: Leaf = assign.tgt;
             let e = env_find(st, id.v);
-            if (e.kind == "own") {
+            if (e.kind == SK.own) {
                 gen_sappend(st, assign.v, -1, e.off, -1, e.off - 8)
-            } else if (e.kind == "global" && e.typ.k == K.tstr) {
+            } else if (e.kind == SK.global && e.typ.k == K.tstr) {
                 let oe = env_find(st, id.v + "#o");
-                if (oe.kind == "none") {
+                if (oe.kind == SK.none) {
                     gen_opassign(st, assign, true)
                 } else {
                     gen_sappend(st, assign.v, e.label, 0, oe.label, 0)
@@ -5052,12 +5105,12 @@ def gen_addr(st: EmitSt, node: Wrap) -> EmitSt {
     } else {
         let id: Leaf = node.e;
         let e = env_find(st, id.v);
-        if (e.kind == "box") {
+        if (e.kind == SK.box) {
             // the shared cell IS the variable's address
             emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, e.off, -1, insn.R_RAX, 64)
-        } else if (e.kind == "global") {
+        } else if (e.kind == SK.global) {
             emit_insn(st, insn.F_LEA_P_R, -1, -1, 1, 0, e.label, insn.R_RAX, 64)
-        } else if (e.kind == "capture") {
+        } else if (e.kind == SK.capture) {
             let aidx = leading_long(e.mark);
             st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, e.off, -1, insn.R_RCX, 64);
             emit_insn(st, insn.F_MOV_D_R, insn.R_RCX, -1, 1, 8 * (aidx + 1), -1, insn.R_RAX, 64)
@@ -5819,6 +5872,8 @@ def gen_bin_rest(st: EmitSt, node: Bin) -> EmitSt {
         } else {
             st
         }
+    } else if (int_fast_op(op, lt, rt, node.r, st)) {
+        gen_int_fast(st, node, op)
     } else {
         st = gen(st, node.l);
         st = emit_insn(st, insn.F_PUSH_R, insn.R_RAX, 64, 0, 0, 0, 0, 0);
@@ -5903,6 +5958,68 @@ def gen_bin_rest(st: EmitSt, node: Bin) -> EmitSt {
         // No &&/|| arms here: gen_bin routes those to gen_logic (lazy jumps)
         // BEFORE calling this, so an eager and/or would be dead code.
     }
+};
+
+// Whether `l op r` can skip the stack: integer operands, an operator that has
+// a register or immediate form here, and a right operand that is a literal or a
+// leaf whose load leaves %rcx alone (rcx_free_leaf), so the left can wait there.
+def int_fast_op(op: str, lt: Type, rt: Type, r: Node, st: EmitSt) -> bool {
+    let lk: long = lt.k;
+    let rk: long = rt.k;
+    if ((lk == K.tlong || lk == K.tbyte) && (rk == K.tlong || rk == K.tbyte)) {
+        if (op in ["+", "-", "*", "&", "|", "^", "==", "!=", "<", ">", "<=", ">="]) {
+            imm_lit(r) >= 0 || rcx_free_leaf(st, r)
+        } else { false }
+    } else { false }
+};
+
+// `l op r` for int_fast_op. A literal right operand is the instruction's
+// immediate (`add $1, %rax`); a leaf right operand is loaded with the left held
+// in %rcx, and the operator is written with the operands that way round, so
+// neither push nor pop is needed. `*` has no immediate form here, so a literal
+// goes through the leaf path.
+def gen_int_fast(st: EmitSt, node: Bin, op: str) -> EmitSt {
+    st = gen(st, node.l);
+    let imm = imm_lit(node.r);
+    if (imm >= 0 && op != "*") {
+        if (op == "+") { emit_insn(st, insn.F_ADD_I_R, imm, insn.R_RAX, 64, 0, 0, 0, 0) }
+        else if (op == "-") { emit_insn(st, insn.F_SUB_I_R, imm, insn.R_RAX, 64, 0, 0, 0, 0) }
+        else if (op == "&") { emit_insn(st, insn.F_AND_I_R, imm, insn.R_RAX, 64, 0, 0, 0, 0) }
+        else if (op == "|") { emit_insn(st, insn.F_OR_I_R, imm, insn.R_RAX, 64, 0, 0, 0, 0) }
+        else if (op == "^") { emit_insn(st, insn.F_XOR_I_R, imm, insn.R_RAX, 64, 0, 0, 0, 0) }
+        else {
+            st = emit_insn(st, insn.F_CMP_I_R, imm, insn.R_RAX, 64, 0, 0, 0, 0);
+            gen_setcc(st, op)
+        }
+    } else {
+        st = emit_insn(st, insn.F_MOV_R_R, insn.R_RAX, 64, insn.R_RCX, 64, 0, 0, 0);
+        st = gen(st, node.r);
+        if (op == "+") { emit_insn(st, insn.F_ADD_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0) }
+        else if (op == "*") { emit_insn(st, insn.F_IMUL_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0) }
+        else if (op == "&") { emit_insn(st, insn.F_AND_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0) }
+        else if (op == "|") { emit_insn(st, insn.F_OR_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0) }
+        else if (op == "^") { emit_insn(st, insn.F_XOR_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0) }
+        else if (op == "-") {
+            st = emit_insn(st, insn.F_SUB_R_R, insn.R_RAX, 64, insn.R_RCX, 64, 0, 0, 0);
+            emit_insn(st, insn.F_MOV_R_R, insn.R_RCX, 64, insn.R_RAX, 64, 0, 0, 0)
+        } else {
+            // left in %rcx, right in %rax: rcx - rax is left - right
+            st = emit_insn(st, insn.F_CMP_R_R, insn.R_RAX, 64, insn.R_RCX, 64, 0, 0, 0);
+            gen_setcc(st, op)
+        }
+    }
+};
+
+// The 0/1 of the comparison the flags hold (left - right).
+def gen_setcc(st: EmitSt, op: str) -> EmitSt {
+    let f = insn.F_SETE_R;
+    if (op == "!=") { f = insn.F_SETNE_R; }
+    else if (op == "<") { f = insn.F_SETL_R; }
+    else if (op == ">") { f = insn.F_SETG_R; }
+    else if (op == "<=") { f = insn.F_SETLE_R; }
+    else if (op == ">=") { f = insn.F_SETGE_R; };
+    st = emit_insn(st, f, insn.R_RAX, 8, 0, 0, 0, 0, 0);
+    emit_insn(st, insn.F_MOVZBQ_R_R, insn.R_RAX, 8, insn.R_RAX, 64, 0, 0, 0)
 };
 
 // `x << n`, `x >> n` (arithmetic: the sign fills in) and `x >>> n`
@@ -6098,6 +6215,12 @@ def gen_as(st: EmitSt, node: Node, want0: Type) -> EmitSt {
         // want0 as declared: a recursive alias names the descriptor
         let rec: RecLit = node;
         st = gen_reclit(st, rec, want0);
+    } else if (nk == K.rec && wk == K.tmap && is_empty_rec(node)) {
+        // `{}` where a map is declared (an argument, a store, a return) IS
+        // the map, as under a `let` annotation (gen_decl): made as a record
+        // it crashed every reader (json.jobj({}))
+        let ml: RecLit = node;
+        st = gen_maplit(st, ml, map_hashed(map_key_of(want)));
     } else if (wk == K.topt && some_of_lit(node)) {
         // some({...}) where T? is declared: the literal made as T (types.y
         // typeof_want), then boxed
@@ -6117,6 +6240,12 @@ def gen_as(st: EmitSt, node: Node, want0: Type) -> EmitSt {
     } else {
         st
     }
+};
+
+// node is a record literal with no fields.
+def is_empty_rec(node: Node) -> bool {
+    let rec: RecLit = node;
+    len(rec.keys) == 0
 };
 
 // node is `some({...})`: a record literal boxed (an optional argument
@@ -6198,7 +6327,7 @@ def cur_fn_type(st: EmitSt) -> FuncTy {
     let looking = true;
     while (looking && i >= 0) {
         let e = env[i];
-        if (e.kind == "fnty") {
+        if (e.kind == SK.fnty) {
             let fty: FuncTy = e.typ;
             ft = fty;
             looking = false;
@@ -6378,7 +6507,11 @@ def gen_call(st: EmitSt, node: Call) -> EmitSt {
             let cl = node.col;
             let whole: Slice = { k: K.slice, arr: map_field(vargs[0], "vals", ln, cl), lo: { k: K.void, line: ln, col: cl }, hi: { k: K.void, line: ln, col: cl }, line: ln, col: cl };
             gen_slice(st, whole)
-        } else if (name == "map$keys" || name == "map$vals" || name == "map$boxes") {
+        } else if (name == "map$find") {
+            gen_map_find(st, node)
+        } else if (name == "map$note") {
+            gen_map_note(st, node)
+        } else if (name == "map$keys" || name == "map$vals" || name == "map$boxes" || name == "map$zidx") {
             gen_map_field(st, node, name)
         } else if (name == "sleep") {
             gen_sleep(st, node)
@@ -6569,7 +6702,7 @@ def gen_lambda_inline(st: EmitSt, fnode: Node, arg_regs: [long]) -> EmitSt {
     for i in 0..n {
         let off = (base + 1 + i) * -8;
         st = emit_insn(st, insn.F_MOV_R_D, arg_regs[i], 64, insn.R_RBP, -1, 1, off, -1);
-        st = env_define(st, f.params[i], "param", off, -1, "", f.ptypes[i]);
+        st = env_define(st, f.params[i], SK.param, off, -1, "", f.ptypes[i]);
     };
     // The stack closure record the captures read through: word j+1 is capture
     // j's cell pointer (word 0 is the code pointer, which an inlined body never
@@ -6601,7 +6734,7 @@ def gen_lambda_inline(st: EmitSt, fnode: Node, arg_regs: [long]) -> EmitSt {
             let cn: str = caps[cj];
             let oe = env_find(st, cn);
             origs += oe;
-            st = env_define(st, cn, "capture", rsoff, -1, tostring(cj), oe.typ);
+            st = env_define(st, cn, SK.capture, rsoff, -1, tostring(cj), oe.typ);
             cj++;
         };
     };
@@ -7644,7 +7777,7 @@ def capture_off(st: EmitSt) -> long {
     let res = -1;
     while (i < len(env)) {
         let e = env[i];
-        if (e.kind == "capture") {
+        if (e.kind == SK.capture) {
             res = e.off;
         }
         i++;
@@ -7661,9 +7794,9 @@ def gen_direct(st: EmitSt, node: Call, name: str) -> EmitSt {
         dptypes = fn_args_of(cur_fn_type(st));
     } else {
         let e = env_find(st, name);
-        if (e.kind == "none") {
+        if (e.kind == SK.none) {
             label = lbl_new("y_missing_" + name);
-        } else if (e.kind == "func") {
+        } else if (e.kind == SK.func) {
             label = e.label;
             dptypes = fn_args_of(e.typ);
         } else {
@@ -7740,6 +7873,38 @@ def int_cmp_jcc(st: EmitSt, node: Node) -> long {
     jcc
 };
 
+// The value of a plain decimal literal that fits an instruction's 32-bit
+// immediate (at most nine digits), else -1: `x + 1`, `i < 8`.
+def imm_lit(n: Node) -> long {
+    if (n.k == K.num) {
+        let num: Leaf = n;
+        let s = norm_num(num.v);
+        let ok = len(s) > 0 && len(s) < 10 && !lit_is_float(s);
+        for i in 0..len(s) {
+            let c = ord(s[i:i + 1]);
+            if (c < 48 || c > 57) { ok = false; }
+        };
+        if (ok) { leading_long(s) } else { -1 }
+    } else { -1 }
+};
+
+// leaf_expr, and also one whose load leaves %rcx alone. A captured id is a
+// leaf by shape but reads through the closure record in %rcx (gen_id), and a
+// hoisted def used as a value builds a closure; a left operand parked in %rcx
+// would be compared against that instead.
+def rcx_free_leaf(st: EmitSt, n: Node) -> bool {
+    if (n.k == K.id) {
+        let id: Leaf = n;
+        let e = env_find(st, id.v);
+        e.kind != SK.capture && e.kind != SK.func
+    } else if (n.k == K.un) {
+        let un: Un = n;
+        rcx_free_leaf(st, un.e)
+    } else {
+        leaf_expr(n)
+    }
+};
+
 // The operands the way the numeric path emits them -- left into %rax, right
 // into %rcx -- so the `cmp %rcx, %rax` that follows reads left - right and the
 // same setcc/jcc forms apply.
@@ -7757,7 +7922,10 @@ def gen_cmp_flags(st: EmitSt, node: Bin) -> EmitSt {
     // between the registers does not move the flags: left in %rcx and right in
     // %rax gives `cmp %rax, %rcx`, the same subtraction as `cmp %rcx, %rax`.
     st = gen(st, node.l);
-    if (leaf_expr(node.r)) {
+    let imm = imm_lit(node.r);
+    if (imm >= 0) {
+        emit_insn(st, insn.F_CMP_I_R, imm, insn.R_RAX, 64, 0, 0, 0, 0)
+    } else if (rcx_free_leaf(st, node.r)) {
         st = emit_insn(st, insn.F_MOV_R_R, insn.R_RAX, 64, insn.R_RCX, 64, 0, 0, 0);
         st = gen(st, node.r);
         emit_insn(st, insn.F_CMP_R_R, insn.R_RAX, 64, insn.R_RCX, 64, 0, 0, 0)
@@ -7926,7 +8094,7 @@ def gen_forrange(st: EmitSt, node: ForRange) -> EmitSt {
     st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, loff, -1);
     st = gen(st, node.lo);
     st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, voff, -1);
-    st = env_define(st, node.name, "local", voff, -1, "", normtype({ k: K.tlong }));
+    st = env_define(st, node.name, SK.local, voff, -1, "", normtype({ k: K.tlong }));
     let r1 = next_loc(st);
     st = r1.st;
     let r2 = next_loc(st);
@@ -8010,7 +8178,7 @@ def gen_foreach(st: EmitSt, node: Foreach) -> EmitSt {
     st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, aoff, -1);
     st = emit_insn(st, insn.F_XOR_R_R, insn.R_RAX, 32, insn.R_RAX, 32, 0, 0, 0);
     st = emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, ioff, -1);
-    st = env_define(st, node.name, "local", voff, -1, "", eltyp);
+    st = env_define(st, node.name, SK.local, voff, -1, "", eltyp);
     let r1 = next_loc(st);
     st = r1.st;
     let r2 = next_loc(st);
@@ -8100,7 +8268,7 @@ def is_self_call(st: EmitSt, node: Call) -> bool {
                 true
             } else {
                 let ee = env_find(st, cv);
-                ee.kind == "func" && ee.label == st.self_label
+                ee.kind == SK.func && ee.label == st.self_label
             }
         } else {
             false
@@ -9013,7 +9181,7 @@ def gen_closure_binding(st: EmitSt, name: str, func: Func, caps: [str]) -> EmitS
         fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 1,
         temp: st.temp, self_label: st.self_label, end_label: st.end_label,
         fns: st.fns, bodies: st.bodies, btext: st.btext, blabels: st.blabels };
-    st3 = env_define(st3, name, "closure", coff, -1, "", func_type_in(st3, func));
+    st3 = env_define(st3, name, SK.closure, coff, -1, "", func_type_in(st3, func));
     box_bound(st3, name)
 };
 
@@ -9030,7 +9198,7 @@ def gen_closure_binding(st: EmitSt, name: str, func: Func, caps: [str]) -> EmitS
 // minted like any other; an unreferenced label emits nothing.
 def gen_decl_marked(st: EmitSt, node: Decl) -> EmitSt {
     let ge = env_find(st, node.name);
-    if (ge.kind != "global") {
+    if (ge.kind != SK.global) {
         gen_decl(st, node)
     } else {
         let cell = lname(ge.label);
@@ -9101,7 +9269,7 @@ def gen_decl(st: EmitSt, node: Decl) -> EmitSt {
             // record literal: heap address (first-class value, plain slot).
             // An empty literal under a map annotation is the map itself
             // (the {keys, vals, boxes} shape the map ops expect).
-            st = unfold(node.typ).k == K.tmap && len(rec.keys) == 0 ? gen_maplit(st, rec) : gen_as(st, rec, node.typ);
+            st = unfold(node.typ).k == K.tmap && len(rec.keys) == 0 ? gen_maplit(st, rec, map_hashed(map_key_of(node.typ))) : gen_as(st, rec, node.typ);
             let t: Type = node.typ;
             if (t.k == K.tnone) {
                 t = infer(st, rec);
@@ -9129,9 +9297,9 @@ def gen_decl(st: EmitSt, node: Decl) -> EmitSt {
 // to its global cell (see emit_program), any other takes a fresh slot.
 def bind_decl(st: EmitSt, name: str, t: Type) -> EmitSt {
     let ge = env_find(st, name);
-    if (ge.kind == "global") {
+    if (ge.kind == SK.global) {
         st = emit_insn(st, insn.F_MOV_R_P, insn.R_RAX, 64, -1, -1, 1, 0, ge.label);
-        env_define(st, name, "global", 0, ge.label, "", t)
+        env_define(st, name, SK.global, 0, ge.label, "", t)
     } else if (t.k == K.tstr && own_wanted(st, name)) {
         bind_own(st, name, t)
     } else {
@@ -9141,7 +9309,7 @@ def bind_decl(st: EmitSt, name: str, t: Type) -> EmitSt {
             fuid: st.fuid, loc: st.loc, env: st.env, slots: st.slots + 1, temp: st.temp,
             self_label: st.self_label, end_label: st.end_label, fns: st.fns,
             bodies: st.bodies, btext: st.btext, blabels: st.blabels };
-        st2 = env_define(st2, name, "local", off, -1, "", t);
+        st2 = env_define(st2, name, SK.local, off, -1, "", t);
         box_bound(st2, name)
     }
 };
@@ -9154,17 +9322,17 @@ def gen_assign(st: EmitSt, node: Assign) -> EmitSt {
     // one shared heap cell (box_capture), so its store goes through the
     // cell and is visible in the capturing scope too.
     st = gen_as(st, node.v, e.typ);
-    if (e.kind == "capture") {
+    if (e.kind == SK.capture) {
         let idx = leading_long(e.mark);
         st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, e.off, -1, insn.R_RCX, 64);
         st = emit_insn(st, insn.F_MOV_D_R, insn.R_RCX, -1, 1, 8 * (idx + 1), -1, insn.R_RDX, 64);
         st = emit_insn(st, insn.F_MOV_R_0, insn.R_RAX, 64, insn.R_RDX, -1, 1, -1, -1);
         st
-    } else if (e.kind == "box") {
+    } else if (e.kind == SK.box) {
         st = emit_insn(st, insn.F_MOV_D_R, insn.R_RBP, -1, 1, e.off, -1, insn.R_RDX, 64);
         st = emit_insn(st, insn.F_MOV_R_0, insn.R_RAX, 64, insn.R_RDX, -1, 1, -1, -1);
         st
-    } else if (e.kind == "global") {
+    } else if (e.kind == SK.global) {
         emit_insn(st, insn.F_MOV_R_P, insn.R_RAX, 64, -1, -1, 1, 0, e.label)
     } else {
         emit_insn(st, insn.F_MOV_R_D, insn.R_RAX, 64, insn.R_RBP, -1, 1, e.off, -1)
@@ -10038,7 +10206,7 @@ def inplace_slot(st: EmitSt, node: Node) -> long {
     if (node.k == K.id) {
         let id: Leaf = node;
         let e = env_find(st, id.v);
-        if (e.kind == "local" && e.typ.k == K.tlong) { off = e.off; };
+        if (e.kind == SK.local && e.typ.k == K.tlong) { off = e.off; };
     };
     off
 };
@@ -10931,7 +11099,7 @@ def rec_field_idx(t: Type, key: str) -> long {
     } else if (t.k == K.tmap) {
         // a map is lowered to the {keys, vals, boxes} record (see
         // gen_maplit), laid out boxes, keys, vals
-        if (key == "boxes") { idx = 0; } else if (key == "keys") { idx = 1; } else if (key == "vals") { idx = 2; };
+        if (key == "boxes") { idx = 0; } else if (key == "keys") { idx = 1; } else if (key == "vals") { idx = 2; } else if (key == "zidx") { idx = 3; };
     };
     idx
 };
@@ -10943,8 +11111,54 @@ def gen_map_field(st: EmitSt, node: Call, name: str) -> EmitSt {
     let args: [Node] = node.args;
     st = gen(st, args[0]);
     let slot = 0;
-    if (name == "map$keys") { slot = 1 } else if (name == "map$vals") { slot = 2 };
+    if (name == "map$keys") { slot = 1 } else if (name == "map$vals") { slot = 2 } else if (name == "map$zidx") { slot = 3 };
     gen_slot_move(st, slot, false)
+};
+
+// Whether a map keyed by kt carries the hash index (zidx): str and long keys.
+// A byte, bool or float key has too few distinct values (or too rare a use) to
+// be worth the helper; those maps stay on the inline scan.
+def map_key_of(t: Type) -> Type {
+    let mt: TMap = unfold(t);
+    mt.key
+};
+
+def map_hashed(kt: Type) -> bool {
+    let k: long = unfold(kt).k;
+    k == K.tstr || k == K.tlong
+};
+
+// map$find(m, k): the entry index of key k in map m, or len(m) when absent.
+// The runtime helper (rt.y) probes the hash index once the map has one and
+// scans the keys before that.
+def gen_map_find(st: EmitSt, node: Call) -> EmitSt {
+    let args: [Node] = node.args;
+    let m = args[0];
+    let ln = node.line;
+    let cl = node.col;
+    let mt: TMap = unfold(infer(st, m));
+    let pushed: [Node] = [];
+    pushed += map_field(m, "keys", ln, cl);
+    pushed += map_field(m, "zidx", ln, cl);
+    pushed += args[1];
+    st = gen_push_args(st, pushed);
+    st = emit_insn(st, insn.F_CALL_L, lbl_new(unfold(mt.key).k == K.tstr ? "y_map_find_str" : "y_map_find_long"), 0, 0, 0, 0, 0, 0);
+    emit_insn(st, insn.F_ADD_I_R, 24, insn.R_RSP, 64, 0, 0, 0, 0)
+};
+
+// map$note(m): keep the hash index in step after a key was pushed.
+def gen_map_note(st: EmitSt, node: Call) -> EmitSt {
+    let args: [Node] = node.args;
+    let m = args[0];
+    let ln = node.line;
+    let cl = node.col;
+    let mt: TMap = unfold(infer(st, m));
+    let pushed: [Node] = [];
+    pushed += map_field(m, "keys", ln, cl);
+    pushed += map_field(m, "zidx", ln, cl);
+    st = gen_push_args(st, pushed);
+    st = emit_insn(st, insn.F_CALL_L, lbl_new(unfold(mt.key).k == K.tstr ? "y_map_note_str" : "y_map_note_long"), 0, 0, 0, 0, 0, 0);
+    emit_insn(st, insn.F_ADD_I_R, 16, insn.R_RSP, 64, 0, 0, 0, 0)
 };
 
 // Static type of field `key` in trec type t (tnone when there is none);
@@ -11734,27 +11948,27 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
         self_label: label, end_label: lbl_new(arch.arch_loc_label(fuid, 0)),
         fns: st.fns, bodies: st.bodies, btext: st.btext, blabels: st.blabels };
     // The names nested functions capture (see box_names / box_bound).
-    f = env_define(f, "", "frame", 0, -1, "", type_node({ k: K.tnone }));
+    f = env_define(f, "", SK.frame, 0, -1, "", type_node({ k: K.tnone }));
     // This function's type, for the conversions at its returns and its
     // self calls (cur_fn_type).
     let ftype: Type = type_node({ k: K.tfunc, args: func.ptypes, ret: fn_ret(func) });
-    f = env_define(f, "", "fnty", 0, -1, "", ftype);
+    f = env_define(f, "", SK.fnty, 0, -1, "", ftype);
     let bnames = box_names(func);
     bnames.foreach((e) => {
         let bnm: str = e;
-        f = env_define(f, "", "boxmark", 0, -1, bnm, type_node({ k: K.tnone }));
+        f = env_define(f, "", SK.boxmark, 0, -1, bnm, type_node({ k: K.tnone }));
     });
     // The names this body appends to (see own_wanted), the same way.
     (app_names(func.body, false, bnames)).foreach((e) => {
         let anm: str = e;
-        f = env_define(f, "", "appmark", 0, -1, anm, type_node({ k: K.tnone }));
+        f = env_define(f, "", SK.appmark, 0, -1, anm, type_node({ k: K.tnone }));
     });
     // A capturing named function is not in that table (see
     // capturing_defs): bind its own name to this body, so a call by name
     // passes the record along (gen_direct) and a value is the record.
     if (selfname != "") {
         let func_node: Func = func;
-        f = env_define(f, selfname, "func", 0, label, "", func_type_in(st, func_node));
+        f = env_define(f, selfname, SK.func, 0, label, "", func_type_in(st, func_node));
     }
     // bind params. Caller pushes args left-to-right, so the LAST arg sits
     // at rbp+16 and param k lives at rbp+16+8*(n-1-k) (arity-dependent).
@@ -11762,7 +11976,7 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
     let ptypes: [Type] = func.ptypes;
     let nargs = len(params);
     for i in 0..nargs {
-        f = env_define(f, params[i], "param", 16 + (nargs - 1 - i) * 8, -1, "", ptypes[i]);
+        f = env_define(f, params[i], SK.param, 16 + (nargs - 1 - i) * 8, -1, "", ptypes[i]);
     };
     // Captures: the caller pushed the closure record BEFORE the args, so it
     // lives just past them at rbp+16+8*nargs. Each capture reads slot idx+1
@@ -11782,7 +11996,7 @@ def emit_one_fn(st: EmitSt, label: long, fuid: long, func: EmitFunc, is_main: bo
             if (c < len(captypes)) {
                 ct = captypes[c];
             }
-            f = env_define(f, cn, "capture", cloff, -1, tostring(c), ct);
+            f = env_define(f, cn, SK.capture, cloff, -1, tostring(c), ct);
         });
     };
     // Captured parameters (and the own name) move into their cells
@@ -11915,7 +12129,7 @@ def infer_fn_ret(st: EmitSt, func: Func) -> Type {
     let ptypes: [Type] = func.ptypes;
     let n = len(params);
     for i in 0..n {
-        f = env_define(f, params[i], "param", 16 + (n - 1 - i) * 8, -1, "", ptypes[i]);
+        f = env_define(f, params[i], SK.param, 16 + (n - 1 - i) * 8, -1, "", ptypes[i]);
     };
     infer(f, func.body)
 };
@@ -12091,7 +12305,7 @@ def global_entries(st: EmitSt, gdecls: [Node], gbase: long) -> [Sym] {
         }
         let lbl = arch.arch_global_label(gbase + i, gn);
         out += { name: gn, label: lbl, typ: t };
-        f = env_define(f, gn, "global", 0, lbl_new(lbl), "", t);
+        f = env_define(f, gn, SK.global, 0, lbl_new(lbl), "", t);
     });
     out
 };
@@ -12739,7 +12953,7 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
                 let lid = lbl_new(label);
                 hsyms += { name: d.name, label: label, typ: func_type(d.func) };
                 hids += lid;
-                st = env_define(st, d.name, "func", 0, lid, "", func_type(d.func));
+                st = env_define(st, d.name, SK.func, 0, lid, "", func_type(d.func));
             };
             i++;
         };
@@ -15030,7 +15244,7 @@ def block_of(sts: [Node], ln: long, cl: long) -> Block {
 // later read shares it, and a write clears it (a reader may still hold
 // the old box -- it is never mutated). Reads allocate at most once per
 // entry and write.
-def gen_maplit(st: EmitSt, node: RecLit) -> EmitSt {
+def gen_maplit(st: EmitSt, node: RecLit, hashed: bool) -> EmitSt {
     let ln = node.line;
     let cl = node.col;
     let mkeys: [str] = node.keys;
@@ -15071,6 +15285,12 @@ def gen_maplit(st: EmitSt, node: RecLit) -> EmitSt {
     rvals += keysarr;
     rvals += valsarr;
     rvals += boxesarr;
+    if (hashed) {
+        // the hash index (rt.y y_map_note_*): empty until the map outgrows the scan
+        let zarr: ArrLit = { k: K.array, elems: [], line: ln, col: cl };
+        rkeys += "zidx";
+        rvals += zarr;
+    };
     let rec: RecLit = { k: K.rec, keys: rkeys, vals: rvals, line: ln, col: cl };
     gen(st, rec)
 };
@@ -15104,6 +15324,25 @@ def map_scan(t: str, ln: long, cl: long) -> While {
     n_while(n_bin("<", i, n_id(t + "j", ln, cl), ln, cl), block_of(body, ln, cl), ln, cl)
 };
 
+// The statements that find key t+"k" in map t+"m" (both bound by the caller):
+// t+"i" is its entry index, t+"n" the entry count, and t+"i" == t+"n" a miss.
+// A str or long key goes through the runtime probe (map$find), which uses the
+// hash index once the map has one; any other key scans inline (map_scan).
+def map_locate(st: EmitSt, marr: Node, t: str, sts: [Node], ln: long, cl: long) -> [Node] {
+    let m: Node = n_id(t + "m", ln, cl);
+    if (map_hashed(map_key_of(infer(st, marr)))) {
+        sts += n_decl(t + "n", n_call1("len", map_field(m, "keys", ln, cl), ln, cl), ln, cl);
+        sts += n_decl(t + "i", n_call2("map$find", m, n_id(t + "k", ln, cl), ln, cl), ln, cl);
+    } else {
+        sts += n_decl(t + "ks", map_field(m, "keys", ln, cl), ln, cl);
+        sts += n_decl(t + "i", n_num("0", ln, cl), ln, cl);
+        sts += n_decl(t + "n", n_call1("len", n_id(t + "ks", ln, cl), ln, cl), ln, cl);
+        sts += n_decl(t + "j", n_id(t + "n", ln, cl), ln, cl);
+        sts += map_scan(t, ln, cl);
+    };
+    sts
+};
+
 // m[k] read, by mode. "opt" is the read itself (V?): a hit hands out
 // boxes[i], boxing vals[i] first if no read since the last write has; a
 // miss is none. The reads whose option never escapes skip the box: "val"
@@ -15121,11 +15360,7 @@ def gen_map_get(st: EmitSt, node: Index, mode: str) -> EmitSt {
     let sts: [Node] = [];
     sts += n_decl(t + "m", node.arr, ln, cl);
     sts += n_decl(t + "k", node.idx, ln, cl);
-    sts += n_decl(t + "ks", map_field(m, "keys", ln, cl), ln, cl);
-    sts += n_decl(t + "i", n_num("0", ln, cl), ln, cl);
-    sts += n_decl(t + "n", n_call1("len", n_id(t + "ks", ln, cl), ln, cl), ln, cl);
-    sts += n_decl(t + "j", n, ln, cl);
-    sts += map_scan(t, ln, cl);
+    sts = map_locate(st, node.arr, t, sts, ln, cl);
     if (mode == "has") {
         sts += n_bin("<", i, n, ln, cl);
     } else if (mode == "none") {
@@ -15207,11 +15442,7 @@ def gen_map_set(st: EmitSt, node: IdxAssign) -> EmitSt {
     sts += n_decl(t + "m", node.arr, ln, cl);
     sts += n_decl(t + "k", node.idx, ln, cl);
     sts += n_decl_typ(t + "v", node.v, vt, ln, cl);
-    sts += n_decl(t + "ks", map_field(m, "keys", ln, cl), ln, cl);
-    sts += n_decl(t + "i", n_num("0", ln, cl), ln, cl);
-    sts += n_decl(t + "n", n_call1("len", n_id(t + "ks", ln, cl), ln, cl), ln, cl);
-    sts += n_decl(t + "j", n, ln, cl);
-    sts += map_scan(t, ln, cl);
+    sts = map_locate(st, node.arr, t, sts, ln, cl);
     let hit: [Node] = [];
     hit += { k: K.idxassign, arr: map_field(m, "vals", ln, cl), idx: i, v: v, line: ln, col: cl };
     hit += { k: K.idxassign, arr: map_field(m, "boxes", ln, cl), idx: i, v: n_id("none", ln, cl), line: ln, col: cl };
@@ -15220,6 +15451,7 @@ def gen_map_set(st: EmitSt, node: IdxAssign) -> EmitSt {
     grow += n_call2("push", map_field(m, "keys", ln, cl), k, ln, cl);
     grow += n_call2("push", map_field(m, "vals", ln, cl), v, ln, cl);
     grow += n_call2("push", map_field(m, "boxes", ln, cl), n_id("none", ln, cl), ln, cl);
+    if (map_hashed(map_key_of(mt))) { grow += n_call1("map$note", m, ln, cl); };
     grow += n_num("0", ln, cl);
     sts += n_if(n_bin("<", i, n, ln, cl), block_of(hit, ln, cl), block_of(grow, ln, cl), ln, cl);
     sts += v;

@@ -47,7 +47,7 @@ SJOBS=$((JOBS - 2 * CJOBS))
 LOG="$ROOT/_check"
 rm -rf "$LOG"
 mkdir -p "$LOG"
-T="$(mktemp -d /tmp/ycheck.XXXXXX)"
+T="$(mktemp -d -t ycheck.XXXXXX)"
 kill_tree() {
     local c
     for c in $(pgrep -P "$1"); do kill_tree "$c"; done

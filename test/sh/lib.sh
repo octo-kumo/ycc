@@ -130,15 +130,15 @@ run_parity() {
     local bin_to="${4:-10}"
 
     local binr binc
-    binr=$(mktemp /tmp/ytest_ref_XXXXXX)
-    binc=$(mktemp /tmp/ytest_cop_XXXXXX)
+    binr=$(mktemp -t ytest_ref_XXXXXX)
+    binc=$(mktemp -t ytest_cop_XXXXXX)
     # Each run's output goes to a FILE, not $(...): command substitution drops
     # NUL bytes (bash even warns about it), so a program that prints NULs
     # (test/y/audit/t61_null_byte2.y) was compared on truncated output. The
     # variables are filled in by reading those files afterwards.
     local outr outc
-    outr=$(mktemp /tmp/ytest_outr_XXXXXX)
-    outc=$(mktemp /tmp/ytest_outc_XXXXXX)
+    outr=$(mktemp -t ytest_outr_XXXXXX)
+    outc=$(mktemp -t ytest_outc_XXXXXX)
 
     compile_ref "$file" "$binr" "$cc_to"
     local rec=$?

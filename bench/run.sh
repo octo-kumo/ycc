@@ -27,7 +27,7 @@ YCC="$(readlink -f "$1")"
 RUNS="${2:-5}"
 [ -x "$YCC" ] || { echo "bench: $YCC is not an executable" >&2; exit 2; }
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-TMP="$(mktemp -d /tmp/ybench.XXXXXX)"
+TMP="$(mktemp -d -t ybench.XXXXXX)"
 trap 'rm -rf "$TMP"' EXIT
 
 median() {

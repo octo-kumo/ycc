@@ -439,9 +439,13 @@ def y_source(ps):
 def main():
     if check_references():
         return 2
+    with tempfile.TemporaryDirectory(prefix="y-pairs-") as tmp:
+        return sweep(tmp)
+
+
+def sweep(tmp):
 
     ps = pair_spread(NARGS)
-    tmp = tempfile.mkdtemp(prefix="y-pairs-")
     src = os.path.join(tmp, "pairs.y")
     exe = os.path.join(tmp, "pairs")
     with open(src, "w") as fh:

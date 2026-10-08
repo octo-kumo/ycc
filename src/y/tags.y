@@ -45,7 +45,10 @@ const K = {
     // `Bare` and no union member is needed.
     kw_break: 83, kw_continue: 84,
     // Big integers: a literal node and the built-in type.
-    bignum: 85, tbigint: 86
+    bignum: 85, tbigint: 86,
+    // The lexer's token kinds that are not also a Node kind (Tok.t is a tag).
+    punct: 87, op: 88, bigint: 89, ferr: 90, fstr: 91, eof: 92, comment: 93,
+    stray: 94, doc: 95
 };
 
 const KTAGS: [str] = [
@@ -59,7 +62,8 @@ const KTAGS: [str] = [
     "terr", "tfloat", "tfunc", "tinfer", "tlong", "tmap", "tname", "tnone",
     "topt", "tparams", "tpat", "tpend", "tptr", "trec", "tref", "tstr",
     "tunion", "tunk", "tvoid", "typedef", "un", "void", "while",
-    "break", "continue", "bignum", "tbigint"
+    "break", "continue", "bignum", "tbigint", "punct", "op", "bigint", "ferr",
+    "fstr", "eof", "comment", "stray", "doc"
 ];
 
 // The name of a tag, for a diagnostic. The argument is always a tag the
@@ -141,7 +145,10 @@ def tags_agree() -> bool {
     ktag(K.typedef) == "typedef" && ktag(K.un) == "un" && ktag(K.void) == "void" &&
     ktag(K.kw_while) == "while" &&
     ktag(K.kw_break) == "break" && ktag(K.kw_continue) == "continue" &&
-    ktag(K.bignum) == "bignum" && ktag(K.tbigint) == "tbigint"
+    ktag(K.bignum) == "bignum" && ktag(K.tbigint) == "tbigint" &&
+    ktag(K.punct) == "punct" && ktag(K.op) == "op" && ktag(K.bigint) == "bigint" &&
+    ktag(K.ferr) == "ferr" && ktag(K.fstr) == "fstr" && ktag(K.eof) == "eof" &&
+    ktag(K.comment) == "comment" && ktag(K.stray) == "stray" && ktag(K.doc) == "doc"
 };
 
 // MAX_NEST is the other number the two copies must hold the same: a limit

@@ -73,7 +73,7 @@ for f in "$ROOT"/test/y/audit/t*.y; do
             # Both compilers must refuse the file. There is no binary to
             # compare here, so this is a rejection-parity check only.
             ref_out=$(timeout $(( 10 * YTIMEOUT_SCALE )) "$YBOOT" -q "$f" </dev/null 2>&1); refec=$?
-            binf=$(mktemp /tmp/ytest_bin_XXXXXX)
+            binf=$(mktemp -t ytest_bin_XXXXXX)
             timeout $(( 60 * YTIMEOUT_SCALE )) "$YBOOT" --compile "$f" -o "$binf" >/dev/null 2>&1; copyec=$?
             rm -f "$binf"
             if [ $refec -ne 0 ] && [ $refec -le 1 ] && [ $copyec -ne 0 ]; then

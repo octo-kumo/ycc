@@ -32,7 +32,7 @@ fi
 case "$YCC" in /*) ;; *) YCC="$PWD/$YCC" ;; esac
 case "$CYCC" in /*) ;; *) CYCC="$PWD/$CYCC" ;; esac
 
-TMPD="$(mktemp -d /tmp/ypkg_test.XXXXXX)"
+TMPD="$(mktemp -d -t ypkg_test.XXXXXX)"
 trap 'rm -rf "$TMPD"' EXIT
 CTO=$(( 120 * YTIMEOUT_SCALE ))
 

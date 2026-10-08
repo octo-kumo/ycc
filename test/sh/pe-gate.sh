@@ -23,8 +23,7 @@
 set -u
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 YCC=${1:-$ROOT/ynew}
-OUT=${TMPDIR:-/tmp}/ycc-pe-gate.$$
-mkdir -p "$OUT"
+OUT=$(mktemp -d -t ycc-pe-gate.XXXXXX)
 trap 'rm -rf "$OUT"' EXIT
 SRC=${PE_GATE_SRC:-$ROOT/test/y/examples/helloworld.y}
 

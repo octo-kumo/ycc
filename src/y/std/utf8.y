@@ -95,3 +95,93 @@ def codes(s: str) -> [long] {
     };
     out
 };
+
+// ── a string builder ────────────────────────────────────────────────────
+// A render loop builds its frame one glyph at a time. `s += chr(n)` allocates a
+// string per glyph and `s += n` is a type error (a `str` takes a `str`), so the
+// loop wanted a byte buffer and its own encoder. A Builder is that buffer: the
+// pushes append in place (amortized O(1), nothing allocated per glyph) and
+// `build` makes the one `str` at the end.
+type Builder = { buf: [byte] };
+
+def builder() -> Builder {
+    let b: [byte] = [];
+    { buf: b }
+};
+
+// Appends the low eight bits of `n` as one byte.
+def push_byte(sb: Builder, n: long) -> long {
+    sb.buf += n & 255;
+    0
+};
+
+// Appends the UTF-8 of `cp` (chr's width table); a value that cannot be
+// encoded appends nothing.
+def push_cp(sb: Builder, cp: long) -> long {
+    if (cp < 0) {
+    } else if (cp < 128) {
+        sb.buf += cp;
+    } else if (cp < 2048) {
+        sb.buf += 192 + cp / 64;
+        sb.buf += 128 + cp % 64;
+    } else if (cp < 65536) {
+        sb.buf += 224 + cp / 4096;
+        sb.buf += 128 + (cp / 64) % 64;
+        sb.buf += 128 + cp % 64;
+    } else if (cp < 1114112) {
+        sb.buf += 240 + cp / 262144;
+        sb.buf += 128 + (cp / 4096) % 64;
+        sb.buf += 128 + (cp / 64) % 64;
+        sb.buf += 128 + cp % 64;
+    };
+    0
+};
+
+// Appends the bytes of `s`.
+def push_str(sb: Builder, s: str) -> long {
+    let n = len(s);
+    let i = 0;
+    while (i < n) {
+        sb.buf += byte_at(s, i);
+        i = i + 1;
+    };
+    0
+};
+
+// Appends `n` in decimal, as `tostring(n)` writes it, without making a string.
+// The digits are taken from the negative side so that the most negative long,
+// which has no positive twin, comes out right.
+def push_long(sb: Builder, n: long) -> long {
+    let v = n;
+    if (n < 0) { sb.buf += 45; } else { v = 0 - n; };
+    let start = len(sb.buf);
+    let go = true;
+    while (go) {
+        sb.buf += 48 - v % 10;
+        v = v / 10;
+        go = v != 0;
+    };
+    let lo = start;
+    let hi = len(sb.buf) - 1;
+    while (lo < hi) {
+        let t = sb.buf[lo];
+        sb.buf[lo] = sb.buf[hi];
+        sb.buf[hi] = t;
+        lo = lo + 1;
+        hi = hi - 1;
+    };
+    0
+};
+
+// The bytes pushed so far, as a str. The builder keeps its contents, so a
+// frame can be built, read and extended.
+def build(sb: Builder) -> str {
+    from_bytes(sb.buf)
+};
+
+// Forgets the contents: the next push starts an empty string.
+def reset(sb: Builder) -> long {
+    let b: [byte] = [];
+    sb.buf = b;
+    0
+};

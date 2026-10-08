@@ -34,7 +34,7 @@ RUNS="${3:-5}"
 # machine goes down (test/sh/capped.sh)
 ulimit -S -v "${YMEM_CAP_KB:-3670016}" || exit 2
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-TMP="$(mktemp -d /tmp/ybench-cmp.XXXXXX)"
+TMP="$(mktemp -d -t ybench-cmp.XXXXXX)"
 trap 'rm -rf "$TMP"' EXIT
 : >"$TMP/ratios.txt"   # the scored ratios; created up front so the awk below
                          # never has to read a file that does not exist yet

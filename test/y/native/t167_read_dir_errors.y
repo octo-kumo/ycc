@@ -1,3 +1,4 @@
+// scratch: the harness runs this fixture in a scratch directory (relative paths)
 import fs;
 
 // A directory is not a file. read(2) refuses one with EISDIR, which a read
@@ -6,8 +7,8 @@ import fs;
 // read_lines were some([])/some([]), and `ycc <a dir>` compiled nothing into
 // an empty executable. They now answer none, like a missing path does.
 
-let dir = "/tmp";
-let base = "/tmp/ytest_t167_" + tostring(syscall(39));
+let dir = ".";
+let base = "ytest_t167_" + tostring(syscall(39));
 print("is_dir ", fs.is_dir(dir), " exists ", fs.exists(dir), " is_file ", fs.is_file(dir));
 print("read_file none ", fs.read_file(dir) == none);
 print("read_bytes none ", fs.read_bytes(dir) == none);

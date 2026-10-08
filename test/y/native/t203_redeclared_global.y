@@ -34,4 +34,4 @@ let counter: long = 5;
 def param(shadowed: long) -> long { shadowed + 1 };
 import fs;
 import fs;
-print(f2() + ff() + counter + param(6) + len([1, 2]) + (if (fs.exists("/tmp")) { 1 } else { 0 }));
+print(f2() + ff() + counter + param(6) + len([1, 2]) + (if (fs.exists(".")) { 1 } else { 0 }));

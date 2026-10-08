@@ -1,3 +1,4 @@
+// scratch: the harness runs this fixture in a scratch directory (relative paths)
 // fs.remove_all decided "directory" with stat, which follows a symlink, so
 // on a link to a directory it walked and deleted the *target's* contents --
 // a path the caller never named -- and then answered false, because rmdir on
@@ -9,7 +10,7 @@ import fs;
 // symlinkat is 266, and its target comes FIRST -- unlike every other *at
 // syscall here, where the dirfd leads.
 def link_to(target: str, link: str) -> bool { syscall(266, target, -100, link) == 0 };
-let base = "/tmp/ytest_t177_" + tostring(syscall(39));
+let base = fs.cwd() + "/ytest_t177_" + tostring(syscall(39));
 fs.remove_all(base);
 print("tree ", fs.make_dirs(base + "/target/deep"), " ",
       fs.write_file(base + "/target/keep.txt", "keep\n"), " ",

@@ -1185,6 +1185,19 @@ and it builds a \ic{str}, so a frame of text can be assembled with
 \item[\ic{utf8.codes(s)}] The codepoints of \ty{s} as \ic{[long]}. An
   invalid byte decodes as U+FFFD and is consumed one byte at a time, so
   there is one codepoint per position and no trap.
+\item[\ic{utf8.builder()}] An empty \ic{utf8.Builder}: a byte buffer for
+  building one string from many small pieces. Each push below appends in place
+  and allocates nothing per piece (the buffer doubles), where
+  \ic{s += utf8.chr(cp)} makes a string per glyph.
+\item[\ic{utf8.push\_byte(sb, n)}, \ic{utf8.push\_cp(sb, cp)}] Append the low
+  eight bits of \ty{n}, or the UTF-8 encoding of \ty{cp} (nothing for a value
+  \ic{utf8.chr} would answer \ic{""} for).
+\item[\ic{utf8.push\_str(sb, s)}, \ic{utf8.push\_long(sb, n)}] Append the
+  bytes of \ty{s}, or \ty{n} in decimal as \ic{tostring(n)} writes it. All the
+  pushes return \ic{0}.
+\item[\ic{utf8.build(sb)}] The contents so far as a \ic{str}. The builder
+  keeps them, so it can be read and then extended.
+\item[\ic{utf8.reset(sb)}] Empties the builder.
 \end{description}
 
 \subsection{The web (the http, tls and net modules)}
@@ -1789,7 +1802,7 @@ the text away would have nothing to hand back.
   \ic{numtext} checks nothing at all:
   text that is not a number comes back out as text that is not a number.
 \item[\ic{json.parse(s)}] A whole document that must be an object, returned as
-  the bare map so it indexes directly. A perfectly good array, number, string,
+  an option holding the bare map, so \ic{json.parse(s)!} indexes directly. A perfectly good array, number, string,
   boolean or null document is \ic{none} here rather than an error ---
   \ic{json.parse\_val(s)} is the one that takes those.
 \item[\ic{json.parse\_val(s)}] A whole document as any value.
