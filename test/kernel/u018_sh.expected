@@ -1,0 +1,6 @@
+fs ok=true ino=2 size=4576
+
+sh run /prog
+
+sh: usage: sh <program>
+
