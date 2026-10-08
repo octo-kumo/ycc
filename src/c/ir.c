@@ -115,10 +115,37 @@ static void ir_init(void) {
     t = ya_push(t, yr(3, "id", yv_long(F_SUBSD_R_R), "mn", ys("subsd"), "kinds", yav(2, yv_long(O_REG), yv_long(O_REG))));
     t = ya_push(t, yr(3, "id", yv_long(F_UCOMISD_R_R), "mn", ys("ucomisd"), "kinds", yav(2, yv_long(O_REG), yv_long(O_REG))));
     t = ya_push(t, yr(3, "id", yv_long(F_JMP_IND), "mn", ys("jmp"), "kinds", yav(1, yv_long(O_IND))));
+    t = ya_push(t, yr(3, "id", yv_long(F_JAE_L), "mn", ys("jae"), "kinds", yav(1, yv_long(O_LBL))));
+    t = ya_push(t, yr(3, "id", yv_long(F_JP_L), "mn", ys("jp"), "kinds", yav(1, yv_long(O_LBL))));
+    t = ya_push(t, yr(3, "id", yv_long(F_JBE_L), "mn", ys("jbe"), "kinds", yav(1, yv_long(O_LBL))));
+    t = ya_push(t, yr(3, "id", yv_long(F_JA_L), "mn", ys("ja"), "kinds", yav(1, yv_long(O_LBL))));
+    t = ya_push(t, yr(3, "id", yv_long(F_JNP_L), "mn", ys("jnp"), "kinds", yav(1, yv_long(O_LBL))));
+    t = ya_push(t, yr(3, "id", yv_long(F_TEST_I_R), "mn", ys("test"), "kinds", yav(2, yv_long(O_IMM), yv_long(O_REG))));
+    t = ya_push(t, yr(3, "id", yv_long(F_OR_I_R), "mn", ys("or"), "kinds", yav(2, yv_long(O_IMM), yv_long(O_REG))));
+    t = ya_push(t, yr(3, "id", yv_long(F_CMP_I_D), "mn", ys("cmp"), "kinds", yav(2, yv_long(O_IMM), yv_long(O_MEM))));
+    t = ya_push(t, yr(3, "id", yv_long(F_XCHG_R_0), "mn", ys("xchg"), "kinds", yav(2, yv_long(O_REG), yv_long(O_MEM0))));
+    t = ya_push(t, yr(3, "id", yv_long(F_TEST_R_R_ANY), "mn", ys("test"), "kinds", yav(2, yv_long(O_REG), yv_long(O_REG))));
+    t = ya_push(t, yr(3, "id", yv_long(F_MOVSD_R_R), "mn", ys("movsd"), "kinds", yav(2, yv_long(O_REG), yv_long(O_REG))));
+    t = ya_push(t, yr(3, "id", yv_long(F_MOVSD_D_R), "mn", ys("movsd"), "kinds", yav(2, yv_long(O_MEM), yv_long(O_REG))));
+    t = ya_push(t, yr(3, "id", yv_long(F_MOVSD_0_R), "mn", ys("movsd"), "kinds", yav(2, yv_long(O_MEM0), yv_long(O_REG))));
+    t = ya_push(t, yr(3, "id", yv_long(F_MOVSD_R_D), "mn", ys("movsd"), "kinds", yav(2, yv_long(O_REG), yv_long(O_MEM))));
+    t = ya_push(t, yr(3, "id", yv_long(F_MOVSD_R_0), "mn", ys("movsd"), "kinds", yav(2, yv_long(O_REG), yv_long(O_MEM0))));
+    t = ya_push(t, yr(3, "id", yv_long(F_ADDSD_D_R), "mn", ys("addsd"), "kinds", yav(2, yv_long(O_MEM), yv_long(O_REG))));
+    t = ya_push(t, yr(3, "id", yv_long(F_ADDSD_0_R), "mn", ys("addsd"), "kinds", yav(2, yv_long(O_MEM0), yv_long(O_REG))));
+    t = ya_push(t, yr(3, "id", yv_long(F_SUBSD_D_R), "mn", ys("subsd"), "kinds", yav(2, yv_long(O_MEM), yv_long(O_REG))));
+    t = ya_push(t, yr(3, "id", yv_long(F_SUBSD_0_R), "mn", ys("subsd"), "kinds", yav(2, yv_long(O_MEM0), yv_long(O_REG))));
+    t = ya_push(t, yr(3, "id", yv_long(F_MULSD_D_R), "mn", ys("mulsd"), "kinds", yav(2, yv_long(O_MEM), yv_long(O_REG))));
+    t = ya_push(t, yr(3, "id", yv_long(F_MULSD_0_R), "mn", ys("mulsd"), "kinds", yav(2, yv_long(O_MEM0), yv_long(O_REG))));
+    t = ya_push(t, yr(3, "id", yv_long(F_DIVSD_D_R), "mn", ys("divsd"), "kinds", yav(2, yv_long(O_MEM), yv_long(O_REG))));
+    t = ya_push(t, yr(3, "id", yv_long(F_DIVSD_0_R), "mn", ys("divsd"), "kinds", yav(2, yv_long(O_MEM0), yv_long(O_REG))));
+    t = ya_push(t, yr(3, "id", yv_long(F_UCOMISD_D_R), "mn", ys("ucomisd"), "kinds", yav(2, yv_long(O_MEM), yv_long(O_REG))));
+    t = ya_push(t, yr(3, "id", yv_long(F_UCOMISD_0_R), "mn", ys("ucomisd"), "kinds", yav(2, yv_long(O_MEM0), yv_long(O_REG))));
+    t = ya_push(t, yr(3, "id", yv_long(F_CVTTSD2SI_R_R), "mn", ys("cvttsd2si"), "kinds", yav(2, yv_long(O_REG), yv_long(O_REG))));
+    t = ya_push(t, yr(3, "id", yv_long(F_SQRTSD_R_R), "mn", ys("sqrtsd"), "kinds", yav(2, yv_long(O_REG), yv_long(O_REG))));
     /* The ids above are positions in this list; a form added in the wrong
        place would decode and print as a different instruction, so check it. */
     ylong i = 0;
-    while (i < 98) {
+    while (i < yv_len(t)) {
         if (yv_l(yr_get(ya_get(t, i), "id")) != i) {
             eputs_(ys_cat(ys("INTERNAL: ir form table: "),
                           ys_long(yv_l(yr_get(ya_get(t, i), "id")))));

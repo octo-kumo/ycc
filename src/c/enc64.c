@@ -1508,6 +1508,7 @@ Yv *enc_form(Yv *buf, ylong at, ylong f, Yv *mn, Yv *ops, int lng) {
     else if (f == 96) { return enc_ucomisd(buf, at, ya_get(ops, 1), ya_get(ops, 0)); }  // ucomisd O_REG O_REG
     else if (f == 97) { return enc_jmp(buf, at, ya_get(ops, 0), lng); }  // jmp O_IND
     else {
-        return enc_err(at, ys_cat(ys_cat(ys("unknown form '"), mn), ys("'")));
+        /* the arch runtime's forms (ir.h, 98 on): the text path's encoder */
+        return enc_insn(buf, at, mn, ops, lng);
     }
 }

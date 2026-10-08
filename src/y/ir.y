@@ -39,9 +39,11 @@ const O_FS = 7;    // 1: the %fs:N offset (a thread's heap block)
 const O_MEM0 = 8;  // 5, like O_MEM, but `(%base)`: no displacement written
 
 // Not instructions (see the header).
-const IR_LABEL = 98;  // 1: a label id -- `yfn_3_foo:`
-const IR_LOC = 99;    // 2: file, line -- `.loc 1 42` (-g)
-const IR_TEXT = 100;  // 1: index into the body's raw lines
+// Numbered clear of the forms (which run 0 .. ir_nforms() - 1, under 200): a
+// test `f < IR_LABEL` says "a form", and the pack writes either as one byte.
+const IR_LABEL = 200;  // 1: a label id -- `yfn_3_foo:`
+const IR_LOC = 201;    // 2: file, line -- `.loc 1 42` (-g)
+const IR_TEXT = 202;   // 1: index into the body's raw lines
 
 // The forms. The table below is in this order and ir_init checks it, so a
 // form added in the wrong place is a startup error and not a wrong encoding.
@@ -146,6 +148,38 @@ const F_UCOMISD_R_R = 96;
 // forked child uses to enter a compiled image it mapped at a scratch address
 // (meta.y run_image) -- Y cannot spell a jump to an address it computed.
 const F_JMP_IND = 97;
+// The forms the arch runtime's hand-written lines take (asm.ir_parse_line) and
+// the emitter does not: they have no encoder of their own -- enc64's enc_form
+// hands each to the text path's enc_insn, so an item assembles to exactly what
+// its line did. F_TEST_R_R_ANY is test's general form: F_TEST_R_R encodes the
+// 64-bit test the emitter writes, and a 32-bit one (`test %eax, %eax`) is this.
+const F_JAE_L = 98;
+const F_JP_L = 99;
+const F_JBE_L = 100;
+const F_JA_L = 101;
+const F_JNP_L = 102;
+const F_TEST_I_R = 103;
+const F_OR_I_R = 104;
+const F_CMP_I_D = 105;
+const F_XCHG_R_0 = 106;
+const F_TEST_R_R_ANY = 107;
+const F_MOVSD_R_R = 108;
+const F_MOVSD_D_R = 109;
+const F_MOVSD_0_R = 110;
+const F_MOVSD_R_D = 111;
+const F_MOVSD_R_0 = 112;
+const F_ADDSD_D_R = 113;
+const F_ADDSD_0_R = 114;
+const F_SUBSD_D_R = 115;
+const F_SUBSD_0_R = 116;
+const F_MULSD_D_R = 117;
+const F_MULSD_0_R = 118;
+const F_DIVSD_D_R = 119;
+const F_DIVSD_0_R = 120;
+const F_UCOMISD_D_R = 121;
+const F_UCOMISD_0_R = 122;
+const F_CVTTSD2SI_R_R = 123;
+const F_SQRTSD_R_R = 124;
 
 // Register numbers, x86 encoding order (enc64's reg_num is the same table:
 // %rax %rcx %rdx %rbx %rsp %rbp %rsi %rdi %r8..%r15, and %xmm0..).
@@ -276,6 +310,33 @@ def ir_init() -> void {
     t += { id: F_SUBSD_R_R, mn: "subsd", kinds: [O_REG, O_REG] };
     t += { id: F_UCOMISD_R_R, mn: "ucomisd", kinds: [O_REG, O_REG] };
     t += { id: F_JMP_IND, mn: "jmp", kinds: [O_IND] };
+    t += { id: F_JAE_L, mn: "jae", kinds: [O_LBL] };
+    t += { id: F_JP_L, mn: "jp", kinds: [O_LBL] };
+    t += { id: F_JBE_L, mn: "jbe", kinds: [O_LBL] };
+    t += { id: F_JA_L, mn: "ja", kinds: [O_LBL] };
+    t += { id: F_JNP_L, mn: "jnp", kinds: [O_LBL] };
+    t += { id: F_TEST_I_R, mn: "test", kinds: [O_IMM, O_REG] };
+    t += { id: F_OR_I_R, mn: "or", kinds: [O_IMM, O_REG] };
+    t += { id: F_CMP_I_D, mn: "cmp", kinds: [O_IMM, O_MEM] };
+    t += { id: F_XCHG_R_0, mn: "xchg", kinds: [O_REG, O_MEM0] };
+    t += { id: F_TEST_R_R_ANY, mn: "test", kinds: [O_REG, O_REG] };
+    t += { id: F_MOVSD_R_R, mn: "movsd", kinds: [O_REG, O_REG] };
+    t += { id: F_MOVSD_D_R, mn: "movsd", kinds: [O_MEM, O_REG] };
+    t += { id: F_MOVSD_0_R, mn: "movsd", kinds: [O_MEM0, O_REG] };
+    t += { id: F_MOVSD_R_D, mn: "movsd", kinds: [O_REG, O_MEM] };
+    t += { id: F_MOVSD_R_0, mn: "movsd", kinds: [O_REG, O_MEM0] };
+    t += { id: F_ADDSD_D_R, mn: "addsd", kinds: [O_MEM, O_REG] };
+    t += { id: F_ADDSD_0_R, mn: "addsd", kinds: [O_MEM0, O_REG] };
+    t += { id: F_SUBSD_D_R, mn: "subsd", kinds: [O_MEM, O_REG] };
+    t += { id: F_SUBSD_0_R, mn: "subsd", kinds: [O_MEM0, O_REG] };
+    t += { id: F_MULSD_D_R, mn: "mulsd", kinds: [O_MEM, O_REG] };
+    t += { id: F_MULSD_0_R, mn: "mulsd", kinds: [O_MEM0, O_REG] };
+    t += { id: F_DIVSD_D_R, mn: "divsd", kinds: [O_MEM, O_REG] };
+    t += { id: F_DIVSD_0_R, mn: "divsd", kinds: [O_MEM0, O_REG] };
+    t += { id: F_UCOMISD_D_R, mn: "ucomisd", kinds: [O_MEM, O_REG] };
+    t += { id: F_UCOMISD_0_R, mn: "ucomisd", kinds: [O_MEM0, O_REG] };
+    t += { id: F_CVTTSD2SI_R_R, mn: "cvttsd2si", kinds: [O_REG, O_REG] };
+    t += { id: F_SQRTSD_R_R, mn: "sqrtsd", kinds: [O_REG, O_REG] };
     // The ids above are positions in this list; a form added in the wrong
     // place would decode and print as a different instruction, so check it.
     t.foreach((e, i) => {
