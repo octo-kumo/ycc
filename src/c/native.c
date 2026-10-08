@@ -16381,16 +16381,16 @@ static ylong lz_hash(Yv *b, ylong at) {
 static Yv *lz_more(Yv *out, ylong v) {
     ylong left = v;
     while (left >= 255) {
-        out = ys_cat(out, ys_chr(255));
+        out = ya_push(out, ys_chr(255));
         left = left - 255;
     }
-    return ys_cat(out, ys_chr(left));
+    return ya_push(out, ys_chr(left));
 }
 
 static Yv *lz_encode(Yv *s) {
     Yv *b = bytes_of(s);
     ylong n = yv_len(b);
-    Yv *out = ys("");
+    Yv *out = yav(0);
     Yv *tab = yav(0);
     ylong i = 0;
     while (i < 4096) {
@@ -16425,15 +16425,15 @@ static Yv *lz_encode(Yv *s) {
             if (lh > 15) { lh = 15; }
             ylong mh = mlen - 4;
             if (mh > 15) { mh = 15; }
-            out = ys_cat(out, ys_chr(lh * 16 + mh));
+            out = ya_push(out, ys_chr(lh * 16 + mh));
             if (ll >= 15) { out = lz_more(out, ll - 15); }
             ylong q = lit;
             while (q < at) {
-                out = ys_cat(out, ys_chr(yv_l(ya_get(b, q))));
+                out = ya_push(out, ys_chr(yv_l(ya_get(b, q))));
                 q = q + 1;
             }
-            out = ys_cat(out, ys_chr(moff & 255));
-            out = ys_cat(out, ys_chr((moff >> 8) & 255));
+            out = ya_push(out, ys_chr(moff & 255));
+            out = ya_push(out, ys_chr((moff >> 8) & 255));
             if (mh == 15) { out = lz_more(out, mlen - 4 - 15); }
             at = at + mlen;
             lit = at;
@@ -16445,14 +16445,14 @@ static Yv *lz_encode(Yv *s) {
     ylong ll = n - lit;
     ylong lh = ll;
     if (lh > 15) { lh = 15; }
-    out = ys_cat(out, ys_chr(lh * 16));
+    out = ya_push(out, ys_chr(lh * 16));
     if (ll >= 15) { out = lz_more(out, ll - 15); }
     ylong q = lit;
     while (q < n) {
-        out = ys_cat(out, ys_chr(yv_l(ya_get(b, q))));
+        out = ya_push(out, ys_chr(yv_l(ya_get(b, q))));
         q = q + 1;
     }
-    return out;
+    return ys_join(out, ys(""));
 }
 
 static Yv *lz_decode(Yv *s) {
