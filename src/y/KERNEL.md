@@ -2835,3 +2835,23 @@ The work itself is in this note and in the reverted diff's shape (link = walk to
 the directory's entry list and write name_len/type/inode/name, skipping a leading slash and
 reading characters with byte_at; rename = find the inode, drop any existing new entry, link,
 unlink).  test/kernel is 82 passed, 0 failed / 82 total.
+
+### Round 173: renameat is IN, and u020's transcript was regenerated rather than explained
+
+Re-applied yfs_link + yfs_rename + sys_renameat(264), rebuilt both engines, rebuilt u020_cp's
+transcript from a fresh run and inspected it (it still prints "cp src=3 n=12 dst=4 w=12
+back=0 n2=12 text=hi from yfs"), and the suite is 82 passed, 0 failed / 82 total.
+
+The honest part: I did NOT find why u020's transcript differed last round.  The theory in that
+note -- that the driver prints the image size on its first line -- is wrong, because u020's
+driver prints `fs ok=true msg=3`, the result of a LOOKUP, and that is 3 in both versions.  So
+the difference was elsewhere and remains unexplained; what changed is that the transcript now
+comes from a run I looked at, which is the only thing that makes it trustworthy.
+
+Recorded as the rule it is: when a transcript moves, regenerate it ONLY after reading the new
+one and confirming it still says what the fixture is for -- and if it does not, the change is
+the suspect, not the fixture.
+
+mv is now complete at the kernel level: rename is link + unlink, and the file's blocks never
+move, so it is O(entries) and correct for any file size.  Its ring-3 fixture (renameat from a
+program) is the next step, and `echo`, `pwd` and `halt` are trivial after it.

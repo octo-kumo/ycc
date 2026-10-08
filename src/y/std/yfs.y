@@ -374,3 +374,52 @@ def yfs_create(name: str) -> long {
 def yfs_mkdir(name: str) -> long {
     yfs_add_entry(yfs_root, name, 2)
 };
+
+// Put an entry for an EXISTING inode in `dir` -- the writing half of yfs_add_entry,
+// without allocating an inode.  A leading slash is not part of the name, and a str's
+// characters are read with byte_at.
+def yfs_link(dir: long, name: str, ino: long) -> long {
+    if (yfs_ok == 0) { return 0 - 1; };
+    let st = 0;
+    if (len(name) > 0 && byte_at(name, 0) == 47) { st = 1; };
+    let n = len(name) - st;
+    if (n <= 0) { return 0 - 1; };
+    let rbase = yfs_inode_off(dir);
+    let count = yfs_u32(rbase + 4);
+    let blk = yfs_u32(rbase + 8);
+    if (blk == 0) {
+        blk = yfs_next;
+        yfs_next = yfs_next + 1;
+        kernel.poke32(yfs_phys + rbase + 8, blk);
+    };
+    let e = blk * yfs_block_size;
+    let idx = 0;
+    while (idx < count) {
+        let nl = yfs_u16(e);
+        if (nl == 0) { return 0 - 1; };
+        e = e + ((8 + nl + 3) & (0 - 4));
+        idx = idx + 1;
+    };
+    kernel.poke8(yfs_phys + e, n & 255);
+    kernel.poke8(yfs_phys + e + 1, (n >> 8) & 255);
+    kernel.poke8(yfs_phys + e + 2, 1);
+    kernel.poke8(yfs_phys + e + 3, 0);
+    kernel.poke32(yfs_phys + e + 4, ino);
+    let k = 0;
+    while (k < n) { kernel.poke8(yfs_phys + e + 8 + k, byte_at(name, st + k)); k = k + 1; };
+    kernel.poke32(yfs_phys + rbase + 4, count + 1);
+    ino
+};
+
+// Rename in the root: link the inode under the new name, drop the old entry.  The
+// file's BLOCKS never move, which is what makes mv cheap.  Renaming onto an existing
+// name replaces it, as POSIX says.
+def yfs_rename(oldname: str, newname: str) -> long {
+    let ino = yfs_lookup_path(oldname);
+    if (ino < 0) { return 0 - 2; };
+    let ex = yfs_lookup_path(newname);
+    if (ex >= 0) { yfs_unlink(newname); };
+    let r = yfs_link(yfs_root, newname, ino);
+    if (r < 0) { return 0 - 1; };
+    yfs_unlink(oldname)
+};
