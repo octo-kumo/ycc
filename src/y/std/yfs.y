@@ -319,3 +319,44 @@ def yfs_create(name: str) -> long {
     kernel.poke32(yfs_phys + rbase + 4, count + 1);
     ino
 };
+
+// Remove a file from the root directory: free its inode and SHIFT the entries that
+// follow it down over it, then shrink the count.  Shifting rather than marking the
+// entry dead, because a reader stops at a zero name_len and would lose everything
+// after the hole.
+def yfs_unlink(name: str) -> long {
+    if (yfs_ok == 0) { return 0 - 1; };
+    let rbase = yfs_inode_off(yfs_root);
+    let count = yfs_u32(rbase + 4);
+    let blk = yfs_u32(rbase + 8);
+    if (blk == 0) { return 0 - 1; };
+    let e = blk * yfs_block_size;
+    let idx = 0;
+    while (idx < count) {
+        let nl = yfs_u16(e);
+        if (nl == 0) { return 0 - 1; };
+        if (nl == len(name) && yfs_name_is(e, name, 0, len(name))) {
+            kernel.poke32(yfs_phys + yfs_inode_off(yfs_u32(e + 4)), 0);
+            let src = e + ((8 + nl + 3) & (0 - 4));
+            let j = idx + 1;
+            while (j < count) {
+                let sl = yfs_u16(src);
+                if (sl == 0) { j = count; } else {
+                    let sstride = (8 + sl + 3) & (0 - 4);
+                    let k = 0;
+                    while (k < sstride) { kernel.poke8(yfs_phys + e + k, kernel.peek8(yfs_phys + src + k)); k = k + 1; };
+                    e = e + sstride;
+                    src = src + sstride;
+                    j = j + 1;
+                };
+            };
+            let t = 0;
+            while (t < 8) { kernel.poke8(yfs_phys + e + t, 0); t = t + 1; };
+            kernel.poke32(yfs_phys + rbase + 4, count - 1);
+            return 0;
+        };
+        e = e + ((8 + nl + 3) & (0 - 4));
+        idx = idx + 1;
+    };
+    0 - 1
+};
