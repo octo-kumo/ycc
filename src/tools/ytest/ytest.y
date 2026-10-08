@@ -4,6 +4,7 @@
 //   ytest list                the suite names
 //   ytest coverage [FILE...]  gcov line coverage of src/c over a corpus (cov.y)
 //   ytest deadcode [-v] F.s   unreachable instructions in a listing (deadcode.y)
+//   ytest os-build|os-run|os-session   Y-OS: build, boot, script a session (yos.y)
 //   ytest pty-test PROG       test/std/term_test.y on a real pty (pty.y)
 //   ytest pack-stats PACK     a std pack's bytes by unit and field (pack.y)
 //
@@ -31,15 +32,17 @@ import su_treeshake;
 import su_std;
 import su_net;
 import su_pkg;
+import su_kernel;
+import yos;
 import pack;
 import deadcode;
 import pty;
 
-let ALL = ["port", "pe-port", "native", "native-examples", "examples", "audit", "ycc-units", "loops", "comprehensive", "ycc", "fixpoint", "debug", "link", "gc", "stdin-eof", "treeshake", "std-suites", "net", "pkg"];
+let ALL = ["port", "pe-port", "native", "native-examples", "examples", "audit", "ycc-units", "loops", "comprehensive", "ycc", "fixpoint", "debug", "link", "gc", "stdin-eof", "treeshake", "std-suites", "net", "pkg", "kernel", "os"];
 
 // Suites that drive the built ./ycc; skipped without it.
 def needs_ycc(name: str) -> bool {
-    name == "native" || name == "native-examples" || name == "ycc" || name == "fixpoint" || name == "debug" || name == "link" || name == "pkg"
+    name == "native" || name == "native-examples" || name == "ycc" || name == "fixpoint" || name == "debug" || name == "link" || name == "pkg" || name == "kernel" || name == "os"
 };
 
 def suite_cases(name: str) -> [yt.Case] {
@@ -60,6 +63,8 @@ def suite_cases(name: str) -> [yt.Case] {
     if (name == "std-suites") { return su_std.cases(); };
     if (name == "net") { return su_net.cases(); };
     if (name == "pkg") { return su_pkg.cases(); };
+    if (name == "kernel") { return su_kernel.cases(); };
+    if (name == "os") { return yos.cases(); };
     if (name == "loops") { return su_inline.loops(); };
     if (name == "comprehensive") { return su_inline.comprehensive(); };
     []
@@ -187,6 +192,12 @@ def main(av: [str]) -> long {
             return 0;
         } else if (a == "deadcode") {
             return deadcode.main(av[i + 1:]);
+        } else if (a == "os-build") {
+            return yos.main_build(av[i + 1:]);
+        } else if (a == "os-run") {
+            return yos.main_run(av[i + 1:]);
+        } else if (a == "os-session") {
+            return yos.main_session(av[i + 1:]);
         } else if (a == "pty-test") {
             return pty.main(av[i + 1:]);
         } else if (a == "pack-stats") {

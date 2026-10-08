@@ -116,6 +116,7 @@ type Cmd = {
     merge: bool,    // stderr into stdout (2>&1)
     out: str,       // write stdout to this file instead of capturing it
     nofile: long,   // RLIMIT_NOFILE (ulimit -n); 0 leaves the inherited one
+    tty: bool,      // keep this process's stdin, stdout and stderr (interactive)
 };
 
 /** How it went: the exit code (128 + signal; 124 on a timeout), the output. */
@@ -128,7 +129,7 @@ let SCALE = 1;
 
 def cmd(argv: [str]) -> Cmd {
     { argv: argv, cwd: "", stdin: "", input: "", timeout: 60 * SCALE, mem_kb: MEM_KB,
-      env: [], merge: false, out: "", nofile: 0 }
+      env: [], merge: false, out: "", nofile: 0, tty: false }
 };
 
 def cz(s: str) -> [byte] {
@@ -209,9 +210,11 @@ def start(c: Cmd) -> Proc {
         syscall(109, 0, 0);
         if (c.mem_kb > 0) { syscall(160, 9, &rl[0]); };
         if (c.nofile > 0) { syscall(160, 7, &nf[0]); };
-        ch_redirect(inp, 0, 0);
-        ch_redirect(outp, 577, 1);
-        if (c.merge) { syscall(33, 1, 2); } else { ch_redirect(errp, 577, 2); };
+        if (!c.tty) {
+            ch_redirect(inp, 0, 0);
+            ch_redirect(outp, 577, 1);
+            if (c.merge) { syscall(33, 1, 2); } else { ch_redirect(errp, 577, 2); };
+        };
         if (c.cwd != "" && syscall(80, &cwdz[0]) != 0) { ch_die("ytest: cannot cd to " + c.cwd); };
         if (path != "") { syscall(59, &pz[0], ptr_addr(&av[0]), ptr_addr(&ev[0])); };
         ch_die("ytest: cannot run " + c.argv[0]);
