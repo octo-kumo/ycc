@@ -2111,3 +2111,33 @@ my commit guard matched "0 failed" inside the suite's SKIP summary --
 because this same error made every kernel program uncompilable.  A guard must assert
 that cases RAN: check a PASS COUNT, never the absence of a failure count.  The retry
 used exactly that and correctly refused to commit a second time.
+
+### Round 128: why elfload resists the move, and how execve should be built instead
+
+Measured instead of guessed this time, and the answer is structural: every one of
+elfload.y's kernel references is QUALIFIED -- kernel.peek32, kernel.vm_current,
+kernel.page_alloc, kernel.vm_map, kernel.poke_va8, kernel.poke_va64, kernel.peek64,
+kernel.peek8 -- so the file *needs* its "import kernel", and a unit imported BY the
+kernel cannot have that (round 108's duplicate-definition error) while one imported
+ALONGSIDE it still needs the import to resolve those names.  There is no placement
+that works, which is why round 127 failed twice: the constants were only the first
+symptom.
+
+The way out is not to import the loader at all.  execve should REWRITE THE CALLER'S
+FRAME, which needs no new task and no context switch:
+
+ 1. resolve the path (user_path + yfs_lookup_path, both already in the kernel);
+ 2. build a fresh address space (vm_new_dir) and map the ELF's PT_LOAD segments into
+    it with vm_map/page_alloc -- a compact loop over the program headers, which is
+    all a ycc image needs (no relocations, fixed vaddr);
+ 3. lay out the new user stack with argv (the shape elf_setup_stack already uses);
+ 4. switch CR3 and store it on the task;
+ 5. rewrite the CURRENT frame, whose address is y_cur_task_rsp: from the lowest slot
+    the layout is nine registers (0..64), the six callee-saved (72..112), RIP at
+    120, CS at 128, RFLAGS at 136, RSP at 144, SS at 152.  Set RIP to the new entry
+    and RSP to the new stack, and set rax (+48) to 0 -- then the syscall's own tail
+    iretqs straight into the new program.
+
+That is ~50 lines using primitives std/kernel.y already has, needs no import, and
+creates no second copy of anything.  It is the piece a shell cannot exist without,
+and the design is now explicit rather than inferred.
