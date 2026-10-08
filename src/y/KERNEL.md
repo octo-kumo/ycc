@@ -2703,3 +2703,18 @@ that has settled every one of these paths -- and the one I skipped here, twice.
 The fix is therefore small and known: use byte_at for the string copy, and mirror elf_stack's
 alignment and two-NULL layout.  The fixture stays parked until then; test/kernel is 77
 passed, 0 failed / 77 total.
+
+### Round 166: openat honours O_CREAT -- userland can create files
+
+The missing syscall behind cp, an editor's save and ycc's output files.  sys_openat now
+looks the path up, and when it is absent AND the flags carry O_CREAT (0100 = 64) it calls
+yfs_create and opens what that made; without the flag it still answers -2.  fd.y gained
+fd_open_ino(ino), the allocation half of fd_open, for a caller that already has the inode.
+
+Existing callers pass flags = 0 and are unchanged, which the suite confirms: 79 passed,
+0 failed / 79 total.
+
+Until now the filesystem could be written to from the KERNEL (create, unlink, mkdir are
+kernel-side functions the fixtures call directly) but no ring-3 program could make a file
+of its own -- so a shell could read and rewrite existing files and nothing more.  With this,
+cp is read + openat(O_CREAT) + write, and a redirect or a save is the same three steps.

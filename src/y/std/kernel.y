@@ -1283,7 +1283,16 @@ def user_path(ptr: long) -> str {
 
 def sys_openat(dirfd: long, pathp: long, flags: long) -> long {
     if (pathp == 0) { return E_FAULT; };
-    fd.fd_open(user_path(pathp))
+    let path = user_path(pathp);
+    let ino = yfs_lookup_path(path);
+    if (ino < 0) {
+        // O_CREAT is 0100 = 64: create it rather than failing, which is what cp, an
+        // editor's save and ycc's output files all need.
+        if ((flags & 64) == 0) { return 0 - 2; };
+        ino = yfs_create(path);
+        if (ino < 0) { return 0 - 2; };
+    };
+    fd.fd_open_ino(ino)
 };
 
 def sys_close(fdno: long) -> long { fd.fd_close(fdno) };

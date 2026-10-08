@@ -100,3 +100,19 @@ def fd_write(fd: long, buf: long, len: long) -> long {
     if (n > 0) { fd_off[i] = fd_off[i] + n; };
     n
 };
+
+// The fd allocation half of fd_open, for a caller that has the inode already -- which
+// is what openat needs after creating a file.
+def fd_open_ino(ino: long) -> long {
+    if (ino < 0) { return 0 - 1; };
+    let i = 0;
+    while (i < len(fd_used)) {
+        if (fd_used[i] == 0) { fd_used[i] = 1; fd_inode[i] = ino; fd_off[i] = 0; return i + 3; };
+        i = i + 1;
+    };
+    if (len(fd_used) >= FD_MAX) { return 0 - 1; };
+    fd_used += 1;
+    fd_inode += ino;
+    fd_off += 0;
+    len(fd_used) + 2
+};
