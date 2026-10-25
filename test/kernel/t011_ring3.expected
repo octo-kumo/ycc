@@ -1,0 +1,7 @@
+syscall entry: true
+user code page: true
+user stack page: true
+kernel memory is not the user's: true
+bytes in place: true
+entering ring 3
+ring3

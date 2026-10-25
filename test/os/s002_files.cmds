@@ -1,0 +1,13 @@
+write note.txt remember the milk
+cat note.txt
+wc note.txt
+head -n 1 note.txt
+cp note.txt copy.txt
+cat copy.txt
+mv copy.txt moved.txt
+cat copy.txt
+cat moved.txt
+rm note.txt
+rm note.txt
+cp nosuch x
+halt

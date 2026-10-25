@@ -1,0 +1,24 @@
+let xs = [3, 1, 2];
+let alias = xs;
+let calls = 0;
+print(xs.map((x, i) => x + i));
+print(xs.map(() => "fixed"));
+print(xs.filter((x, i) => i != 1));
+print(xs.all((x) => { calls++; x < 3 }));
+print(calls);
+let empty: [long] = [];
+print(empty.all(() => false), empty.some(() => true));
+print(empty.map((x) => x + 1));
+print(empty.filter((x) => true));
+print(xs.sorted((a, b) => a < b ? -1 : a > b ? 1 : 0));
+print(xs);
+xs.sort((a, b) => a > b ? -1 : a < b ? 1 : 0);
+print(alias);
+print(["bb", "a", "bb", "ccc"].sorted((a, b) => a < b ? -1 : a > b ? 1 : 0));
+let growing = [1];
+growing.foreach((x, i) => { if (i == 0) { growing += 2; }; });
+print(growing);
+
+def discard(f: (long) -> void) -> void { f(7); };
+discard((n: long) => { print(n); n + 1 });
+discard((n: long) => { });

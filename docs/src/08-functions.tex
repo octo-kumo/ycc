@@ -1,0 +1,252 @@
+\section{Functions, closures, options, pointers}
+\label{sec:functions}
+
+\subsection{Functions}
+
+A \ic{def} declares a function; parameters are typed, the return type is
+inferred or checked. Write recursion with \ic{self} --- that is the
+portable spelling, and it is what a function \emph{literal} (which has no
+name) has to use. A \emph{named} \ic{def}'s own name is also in scope
+inside its body, so \ic{count(n - 1, acc + 1)} and \ic{self(n - 1, ...)}
+are the same call:
+
+\begin{lstlisting}
+def fact(n: long) -> long {
+    if (n <= 1) { 1 } else { n * self(n - 1) }
+};
+\end{lstlisting}
+
+\noindent Functions are first-class values: they may be bound
+(\ic{let f = g;}), stored in arrays and records, passed to other
+functions, and called through any of those (\ic{f(1)}, \ic{fs[0](1)},
+\ic{r.handler(1)}). Calling a non-function is a compile error.
+
+Function types include both parameter and return types. A function may also
+be passed where the same parameters and a \ic{void} result are expected: the
+caller discards its result. Other result types must agree.
+
+\subsection{Tail calls}
+
+A self-call in \emph{tail position} --- the body's trailing expression,
+a \ic{return}'s value, or an if-arm's trailing expression --- recycles
+the stack frame instead of growing it: the arguments are evaluated, the
+frame is torn down, and control re-enters the function. Tail recursion
+therefore runs in constant stack space:
+
+\begin{lstlisting}
+def sum_to(n: long, acc: long) -> long {
+    if (n == 0) { acc } else { self(n - 1, acc + n) }
+};
+\end{lstlisting}
+
+\noindent Calls outside tail position (\ic{self(x) + self(y)},
+\ic{let t = self(x)}, inside loops) are ordinary calls and stack as
+usual.
+
+\subsection{Closures}
+\label{sec:closures}
+
+A function literal captures the enclosing bindings it reads --- and only
+those that are already in scope where the literal is written (a name
+bound by a \ic{let} \emph{after} the \ic{def} is not in scope and is an
+undefined-variable error, exactly like reading a local before its
+declaration). Captured bindings are \textbf{shared}: a write inside the
+closure is visible outside, and a write outside is visible inside.
+
+A literal written as an \emph{arrow} is the same closure with less
+punctuation: \ic{v => v + 1} is \ic{def(v) \{ v + 1 \}},
+\ic{(e, i) => e + i} takes two parameters, and \ic{() => 0} takes none.
+The body is one expression, or a block; a parameter may carry a type
+(\ic{(acc: long, v: long) => acc + v}), and the parentheses are optional
+for a lone parameter. Arrow literals appear anywhere a \ic{def} literal
+does, and they are what the array methods take
+(Section~\ref{sec:array-methods}).
+
+\begin{lstlisting}
+def counter() {
+    let n = 0;
+    def tick() -> long { n = n + 1; n };
+    tick
+};
+let t = counter();
+t(); t();
+print(t());        // 3 -- the one shared n
+\end{lstlisting}
+
+\noindent Each \emph{invocation} of the enclosing function creates fresh
+bindings, so closures created in different iterations see different
+cells (``\ic{let} semantics''):
+
+\begin{lstlisting}
+while (i < 3) {
+    let x = i;
+    fns += def() -> long { x };
+    i = i + 1;
+};
+\end{lstlisting}
+
+\noindent The \emph{loop variable} of a \ic{for x in a..b} or a
+\ic{foreach (x in a)} is fresh on each iteration, like the \ic{let}
+inside the loop above --- it is the one binding the loop makes per
+iteration rather than one the body does:
+
+\begin{lstlisting}
+let fns: [() -> long] = [];
+for i in 0..3 {
+    fns += def() -> long { i };     // this iteration's i: 0, 1, 2
+};
+foreach (e in [7, 8, 9]) {
+    fns += def() -> long { e };     // 7, 8, 9
+};
+\end{lstlisting}
+
+\noindent A binding that is \emph{not} a loop variable --- one declared
+before the loop, or the \ic{let} inside its body --- is a single cell,
+and every closure the loop makes shares it, so they all see where the
+loop ended:
+
+\begin{lstlisting}
+let k = 0;
+while (k < 3) {
+    k = k + 1;
+    fns += def() -> long { k };     // one k, shared: every call says 3
+};
+\end{lstlisting}
+
+\subsection{Options}
+\label{sec:builtin-option}
+
+\ic{T?} is the type of ``a \ty{T} or nothing''; its empty case is
+\ic{none}. \ic{some(v)} boxes a value as present, \ic{is\_some(v)}
+tests, and \ic{unwrap(v)} --- or its postfix spelling \ic{v!} ---
+returns the payload and is a \emph{runtime error} on \ic{none} (it is a
+programmer error, loudly). \ic{x == none} is the is-empty check, and
+two options are equal when both are \ic{none} or both hold equal payloads (Section~\ref{sec:equality});
+an option of an array is an optional reference, not a copied one.
+
+\begin{lstlisting}
+let line = readline();          // str?
+if (line == none) { print("eof"); } else { print(line! + "!"); };
+\end{lstlisting}
+
+\subsection{Void}
+\label{sec:void}
+
+A \ic{def} whose result is not a value is \ic{void}. Write \ic{-> void}
+to say so: the body's trailing value is then discarded, and \ic{return}
+takes no value. An unannotated \ic{def} whose body ends in a statement
+infers \ic{void}, and then every \ic{return} in it must be bare: a
+\ic{return 5;} there is an error, and so is a bare \ic{return;} in a body
+that ends in a value. A void call is a statement; using it as a value --- binding
+it, printing it, passing it as an argument --- is a compile error:
+
+\begin{lstlisting}
+def log(msg: str) -> void { print("log: " + msg); };
+log("hi");                 // fine: a statement
+let x = log("hi");         // error: cannot bind a void value to 'x'
+\end{lstlisting}
+
+\subsection{Pointers}
+\label{sec:pointers}
+
+\ic{*T} is a raw address of one \ty{T}; \ic{*p = v} stores,
+\ic{*p} reads. The address-of operator \ic{\&e} is deliberately narrow:
+
+\begin{itemize}[nosep]
+\item \ic{\&x} --- address of a local or parameter;
+\item \ic{\&a[i]} --- address of an array element (any array expression:
+  \ic{\&grid[0][i]} is legal);
+\item \ic{\&arr} on a whole array --- \emph{both} kinds, \ic{[T]} and
+  \ic{[T; N]} --- is a compile error
+  (``cannot take the address of a whole array``), and \ic{\&} of any
+  temporary is a different one (``'\&' needs a plain variable``). A binding names
+  the array \emph{header}, not its first element, so \ic{\&arr} would hand
+  out the header; write \ic{\&arr[0]}, which works for either kind.
+\end{itemize}
+
+\noindent Pointers are for interfacing with the system-call level
+(buffers for \ic{read}/\ic{write}-style calls); ordinary code uses
+arrays and records. They support C-style arithmetic: \ic{p + n} and
+\ic{p - n} move by whole \ty{T} elements (one byte for \ic{*byte}, the
+width of a sized integer for \ic{*u32} and its kind, eight bytes for every
+other pointer), \ic{n + p} is the mirror,
+\ic{p - q} counts elements when both pointers have the same type, and
+\ic{+=}, \ic{-=}, \ic{++} and \ic{--} scale the same way. Ordering
+comparisons compare raw addresses; equality is word equality. The
+offset must be \ic{long} or \ic{byte}, and mixing pointer types in a
+difference is a compile error.
+
+\noindent\textbf{Sized integers.} To read or write memory laid out by
+someone else (a system-call structure, a file or wire format), a pointer's
+target can be a sized integer: \ic{i8}, \ic{i16}, \ic{u16}, \ic{i32},
+\ic{u32} and \ic{u64}, and the 16-, 32- and 64-bit ones with a \ic{be}
+suffix for big-endian (\ic{*u32be}); \ic{le} spells the native order and
+is the same type. (\ic{u8} is \ty{byte} and \ic{i64} is \ty{long}.) A sized
+integer is \emph{only} a pointer's target: \ic{*p} is a \ty{long}, sign- or
+zero-extended from the width in memory, and \ic{*p = v} stores the low
+bytes of \ic{v} and drops the rest, as a store to a \ic{byte} does. A
+variable, parameter, field or array element of type \ic{u32} is a compile
+error (``u32 is only a pointer's target (write *u32)''): the width is a
+property of the memory, not of the value. The pointer comes from
+\ic{ptr\_from}, below, or from any \ic{*T} of the same type.
+
+\noindent\textbf{Packed records.} A record normally keeps each field in a
+word of its own, sorted by name; \ic{packed} lays the fields out in the order
+written, byte after byte with no padding, so a record can describe a region of
+memory someone else defined:
+\begin{verbatim}
+type Flags = bits u8 { ready, error, mode: 3, _: 2 };
+type Hdr = packed { magic: u32be, len: u16, flags: Flags, tag: [byte; 4] };
+let h: Hdr = { magic: 0xCAFEBABE, len: 513, flags: { ready: true, mode: 5 } };
+h.len = h.len + 1;
+h.flags.error = true;
+let p: *Hdr = ptr_from(addr);   // fields over memory you did not make
+\end{verbatim}
+\noindent Inside \ic{packed} the sized integers of the last paragraph are field
+types (\ic{u32be}, \ic{i16}, \ic{u8}\ldots), as are \ic{long}, \ic{float},
+\ic{bool} (one byte), a pointer, a fixed array \ic{[T; N]} of those, and another
+packed record, which sits inline. Anything with a header of its own (\ic{str},
+\ic{[T]}, a map, an ordinary record) is refused when the type is used: the
+collector does not read raw memory, so a reference stored in it would not be
+kept alive. \ic{bits u8 \{ a, b, mode: 3 \}} (backing \ic{u8}, \ic{u16},
+\ic{u32} or \ic{u64}) gives each name the next bits from the least significant
+end: one bit, read as a \ty{bool}, unless a width follows; \ic{\_} skips bits.
+Writing one bit field reads and rewrites the whole backing integer.
+
+\noindent A packed value \emph{is} the address of its bytes. \ic{h.len} reads
+or writes the field in place (widened by its sign, byte-swapped for \ic{be});
+\ic{h.flags} and \ic{h.sub} are views of the nested bytes, so they take no
+assignment as a whole, only their fields; an array field reads as a \ic{*T} to its
+first element. A literal \ic{\{ .. \}} where a packed type is expected allocates
+a zeroed block of \ic{sizeof(Hdr)} bytes and stores the fields it names.
+\ic{Hdr} and \ic{*Hdr} convert to each other, and \ic{ptr\_addr(h)} is the
+address. \ic{sizeof(T)} and \ic{offsetof(T, field)} are the layout as constants.
+A packed value is compared and copied as an address, and cannot be printed.
+
+\noindent\textbf{Pointers and integers.} A pointer is its address at run
+time, and two builtins say so. \ic{ptr\_addr(p)} is the \ic{long} value of a
+pointer. \ic{ptr\_from(n)} is the pointer whose address is the integer
+\ic{n} (a \ic{long} or a \ic{byte}), the inverse. Its result has no pointee
+type of its own, so the type comes from where it is used: write
+\ic{let p: *byte = ptr\_from(a)}, pass it to a \ic{*T} parameter, or store it
+in a \ic{*T} field. A bare \ic{let p = ptr\_from(a)} is a compile error
+(``ptr\_from does not say which pointer type it makes''), and so is a
+non-integer argument. Nothing checks that \ic{n} is mapped memory: a wrong
+address faults when it is dereferenced, which is what a kernel's physical
+memory access needs and why ordinary code does not use it.
+
+\noindent\textbf{A pointer does not outlive what it points into.}
+\ic{\&x} on a local or a parameter is the address of a cell in that
+function's frame, and the frame is reclaimed the moment the function
+returns: a pointer to a local that escapes reads whatever the stack
+holds by then --- a number that was never written, or an address, and
+it changes from run to run. Returning one is not a type error,
+because the checker cannot see how long a value lives; the rule is that
+a pointer into a frame may only be used while that frame is live, which
+means in practice that it must not be returned and must not be stored
+in anything outliving the call. Taking the address of a \emph{global}
+is fine (its storage is permanent), and so is \ic{\&a[i]}: a heap
+array's elements and a fixed array's live in a heap cell, never in a
+frame. To hand data to a function or keep it, return the value, an
+array or a record --- those never dangle --- and take a pointer to
+\ic{\&a[i]} where the callee needs an address.

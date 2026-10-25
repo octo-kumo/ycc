@@ -1,0 +1,66 @@
+initialize id 1
+textDocumentSync.change = 1
+openClose = true
+documentFormattingProvider = true
+advertised: documentFormattingProvider, documentSymbolProvider, textDocumentSync, definitionProvider, hoverProvider, completionProvider
+exactly the six it implements: true
+string id abc-1 is_json_string=true
+didOpen is a notification: true
+but it published: true
+unknown notification silent: true
+id null is silent: true
+items 2
+errors 1 warnings 1
+version echoed: 7
+first source: ycc
+second source: ycc (lint)
+import: 2 frames, want 2
+first is the document: true
+second is the import: true
+the import's own finding is in it: true
+the document's notification is empty: true
+import finding at line 7 (want 7)
+no version claimed for the import: true
+line is 36 bytes, 32 utf16 units
+diagnostics: 1
+at line 0 char 16: let 'n': expected str, got long
+compiler reports 1 at byte column 21
+byte column 21 -> character 16 (want 16)
+utf16 conversion agrees: true
+and it is NOT the byte column: true
+round trip lands on the same byte: true
+didChange saw the last edit: true
+didChange dropped the first: true
+didClose publishes an empty list: true
+didClose forgets the document: true
+format a closed doc: true
+one edit: true
+formatted [def f( ) -> long {
+    let x = 1;
+    return 2;
+}
+]
+same request twice gives the same edit: true
+applied then reformatted is a no-op: true
+unlexable buffer gets no edits: true
+unknown method -> code -32601
+range formatting -> code -32602
+bad body -> code -32700
+no method -> code -32600
+before initialize -> -32002 (want -32002)
+after initialize -> true
+plain      [/tmp/a.y]
+spaces     [/tmp/my dir/a.y]
+no scheme  [/tmp/a.y]
+bad escape [/tmp/100%.y]
+shutdown result is null: true
+shutdown sets the flag: true
+shutdown is a reply: true
+exit is silent: true
+exit sets the flag: true
+junk didOpen silent: true
+server still usable: true
+escaped uri echoed: true
+errors from it: true
+count check: true
+done

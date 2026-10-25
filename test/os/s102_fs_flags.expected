@@ -1,0 +1,31 @@
+user:/home/user$ /bin/fstest flags
+ok put x
+ok excl exists
+ok open missing
+append: abcdef
+ok trunc size
+ok open dir for write
+ok directory flag on file
+ok directory flag on dir ok
+ok slash after file
+ok creat with slash
+ok mode of file
+ok mode of root
+ok mode of tty
+ok mode of null
+ok mode of dev dir
+ok mode of missing
+ok put y
+ok ftruncate shrink
+after shrink: 0123
+ok ftruncate grow
+ok hole reads zero
+ok truncate
+ok truncate size
+ok getcwd ERANGE
+ok unlink x
+ok unlink y
+ok unlink missing
+done fails=0
+user:/home/user$ halt
+halting

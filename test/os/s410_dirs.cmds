@@ -1,0 +1,21 @@
+pwd
+mkdir -p a/b/c
+cd a/b
+pwd
+ls ..
+cd c
+cd ../../..
+echo data > a/f
+cp -r a z
+ls z
+mv z a/b
+ls a/b
+wc a/f
+rm a
+rm -r a
+ls
+rmdir /nosuch
+cd /nosuch
+cd
+pwd
+halt

@@ -1,0 +1,53 @@
+user:/home/user$ b1 pipe
+ok   pipe fds
+read: hello world
+ok   eof after writer exit
+ok   wait pid
+ok   exit status
+ok   no children left
+ok   wnohang running child
+ok   wait blocking
+ok   child saw eof
+ok   blocked reader woke
+ok   small big write
+ok   long write completes
+ok   reader counted 100000
+done
+user:/home/user$ b1 fd
+ok   dup lowest free
+ok   dup2 target
+ok   dup2 same fd
+ok   dup2 bad old
+ok   dup3 same fd
+ok   dup3 cloexec
+ok   getfd 20
+ok   getfd 21
+ok   setfd
+ok   getfd 20 now
+ok   dupfd >= 30
+ok   dupfd cloexec >= 40
+ok   getfd 40
+ok   close bad
+ok   write via dup
+ok   write via dup2
+ok   read gets both
+ok   write to read end
+ok   read from write end
+ok   getfl rd
+ok   getfl wr
+ok   setfl nonblock
+ok   getfl nonblock
+ok   empty nonblocking read
+ok   setfl clear
+ok   pipe2 nonblock
+ok   fionread
+ok   fionread value
+ok   ioctl on bad fd
+ok   lseek on pipe
+ok   stdout redirect
+ok   sigaction ignore
+ok   write to broken pipe
+ok   close read side
+done
+user:/home/user$ halt
+halting

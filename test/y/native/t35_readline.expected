@@ -1,0 +1,7 @@
+1: [alpha] len=5
+2: [] len=0
+3: [longer line here] len=16
+4: [   spaced   ] len=12
+5: [last-no-newline] len=15
+lines=5
+eof again

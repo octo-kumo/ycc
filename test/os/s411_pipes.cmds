@@ -1,0 +1,16 @@
+echo one two three | wc
+echo a b c | cat | cat | wc -w
+echo hello > f
+echo world >> f
+cat f
+cat < f | head -n 1
+wc < f
+nosuch 2> e.txt
+cat e.txt
+sleep 0.2 &
+echo after
+false | true
+echo $?
+true | false
+echo $?
+halt

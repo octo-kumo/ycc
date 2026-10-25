@@ -1,0 +1,1 @@
+ELF-specific obfuscation test; the sealed PE is covered by test/pe/obfseal

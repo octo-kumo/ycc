@@ -1,0 +1,7 @@
+it is an elf: true
+tasks: 3
+pids: 1 and 2
+starting A
+process A
+process B
+back in the kernel

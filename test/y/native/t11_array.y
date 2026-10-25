@@ -1,0 +1,13 @@
+let buf = [0; 8];
+print(len(buf));
+buf[0] = 11;
+buf[7] = 22;
+print(buf[0] + buf[7]);
+let i = 0;
+let s = 0;
+while (i < len(buf)) { s = s + buf[i]; i = i + 1; };
+print(s);
+buf = [1; 8];
+print(buf[3]);
+let c: [long; 2] = [5; 2];
+print(c[1] + len(c));

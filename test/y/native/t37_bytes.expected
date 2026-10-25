@@ -1,0 +1,36 @@
+5
+72
+111
+Hello
+b'Hello'
+73
+72
+hi!
+b'hi!'
+3
+Hi!
+Hi
+i!
+72 105 33 
+72-105-33
+true
+false
+40
+abcdefghijklmnopqrstuvwxyzabcdefghijklmn
+b'\x00\x00\x00\x00'
+b'\x00\x00\xff\x00'
+MIXED CASE 123
+b'\xc8\xff\x80'
+255
+5000
+true
+b'\xec\xed\xee\xef\xf0\xf1'
+5000
+true
+0
+b''
+
+b''
+b'\x07'
+b''
+9

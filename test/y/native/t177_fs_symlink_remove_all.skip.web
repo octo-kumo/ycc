@@ -1,0 +1,1 @@
+trailing slash: remove_all("link/") must follow the slash and leave the link, but the Node vfs normalizes the slash away (S9 vfs).

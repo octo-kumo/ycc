@@ -1,0 +1,23 @@
+user:/home/user$ b1 exec
+argc 4
+argv 0 b1
+argv 1 child
+argv 2 4
+argv 3 6
+env B1KEY=value1
+env B1B=2
+env entries 2
+ok   cloexec fd is closed
+ok   child status
+ok   inherited fd carried data
+ok   relative exec ran
+ok   relative exec status
+ok   exec of a missing file
+done
+user:/home/user$ b1 child
+argc 2
+argv 0 b1
+argv 1 child
+env entries 0
+user:/home/user$ halt
+halting

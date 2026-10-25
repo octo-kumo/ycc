@@ -1,0 +1,34 @@
+user:/home/user$ pwd
+/home/user
+user:/home/user$ mkdir -p a/b/c
+user:/home/user$ cd a/b
+user:/home/user/a/b$ pwd
+/home/user/a/b
+user:/home/user/a/b$ ls ..
+b
+user:/home/user/a/b$ cd c
+user:/home/user/a/b/c$ cd ../../..
+user:/home/user$ echo data > a/f
+user:/home/user$ cp -r a z
+user:/home/user$ ls z
+b
+f
+user:/home/user$ mv z a/b
+user:/home/user$ ls a/b
+c
+z
+user:/home/user$ wc a/f
+1 1 5 a/f
+user:/home/user$ rm a
+rm: a: is a directory (use -r)
+user:/home/user$ rm -r a
+user:/home/user$ ls
+user:/home/user$ rmdir /nosuch
+rmdir: /nosuch: cannot remove (missing, not a directory or not empty)
+user:/home/user$ cd /nosuch
+sh: cd: /nosuch: no such directory
+user:/home/user$ cd
+user:/home/user$ pwd
+/home/user
+user:/home/user$ halt
+halting

@@ -1,0 +1,12 @@
+[package]
+name = "w150"
+
+[bin]
+w150 = "main.y"
+
+[web]
+title = "Bundled"
+single = "true"
+files = ["www"]
+env = { GREETING = "hi" }
+args = ["--test"]

@@ -1,0 +1,6 @@
+user:/home/user$ sndtone
+sndtone: stream open
+sndtone: played
+user:/home/user$ sleep 1
+user:/home/user$ halt
+halting

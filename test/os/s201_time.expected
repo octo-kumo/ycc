@@ -1,0 +1,17 @@
+user:/home/user$ b2time
+monotonic: ok
+realtime year: ok
+gettimeofday: ok
+time: ok
+bad clock: ok
+getres: ok
+nanosleep 50ms returns 0: ok
+nanosleep >= 50ms: ok
+nanosleep < 500ms: ok
+nanosleep 1s: ok
+clock_nanosleep rel: ok
+clock_nanosleep abs: ok
+bad nsec: ok
+sched_yield: ok
+user:/home/user$ halt
+halting

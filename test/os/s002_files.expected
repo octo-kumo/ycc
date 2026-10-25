@@ -1,0 +1,22 @@
+user:/home/user$ write note.txt remember the milk
+user:/home/user$ cat note.txt
+remember the milk
+user:/home/user$ wc note.txt
+1 3 18 note.txt
+user:/home/user$ head -n 1 note.txt
+remember the milk
+user:/home/user$ cp note.txt copy.txt
+user:/home/user$ cat copy.txt
+remember the milk
+user:/home/user$ mv copy.txt moved.txt
+user:/home/user$ cat copy.txt
+cat: copy.txt: no such file
+user:/home/user$ cat moved.txt
+remember the milk
+user:/home/user$ rm note.txt
+user:/home/user$ rm note.txt
+rm: note.txt: no such file
+user:/home/user$ cp nosuch x
+cp: nosuch: no such file
+user:/home/user$ halt
+halting

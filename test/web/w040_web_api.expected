@@ -1,0 +1,16 @@
+available true
+platform node
+sym true
+nosym 0
+call0 0
+call_str node
+call node
+param none
+eval 2
+evalbody ab
+evalthrow none
+log line
+file web fixture data
+relative web fixture data
+missing none
+open false

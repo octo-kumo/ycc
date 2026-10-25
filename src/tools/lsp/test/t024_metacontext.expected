@@ -1,0 +1,15 @@
+delimiters scan cleanly: true
+formatter preserves meta source: true
+stray hash remains invalid: true
+meta import and declaration: true
+unfinished block: true
+generator failure is a finding: true
+next check survives: true
+shared declarations: true
+unsaved edit uses module coordinates: true
+disk source untouched: true
+overlay cleared: true
+module type index maps its own lines: true
+unrelated file checks independently: true
+src/y/asm.y diagnostics: 0
+src/y/array_lower.y diagnostics: 0

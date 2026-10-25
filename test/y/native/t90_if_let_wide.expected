@@ -1,0 +1,47 @@
+map 1
+map none
+field L
+field none
+nested 8 h
+slice 2
+element B
+param 6 -1
+call 1
+calls 1
+propagated wrap
+chained 1
+chained none
+thread 4
+destructure 5
+value L
+literal str
+literal str no
+literal long
+literal bool
+union sq 3
+union other
+union other
+some() miss
+some() hit
+no value
+bare none miss
+not two
+got 2
+hits 2
+9 0
+8
+h
+5
+40 -1
+total 4
+total 112
+total 115
+3 6 6
+arm other
+arm n 2
+one
+one
+body 1 outer
+after outer
+first 1
+second arm

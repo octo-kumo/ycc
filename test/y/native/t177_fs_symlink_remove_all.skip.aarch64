@@ -1,0 +1,1 @@
+Creates symlinks with raw x86-64 syscall 266; symlinkat is syscall 36 on AArch64.

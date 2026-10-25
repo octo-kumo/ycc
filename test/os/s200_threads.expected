@@ -1,0 +1,29 @@
+user:/home/user$ t341
+true
+16000
+[0, 2000, 4000, 6000, 8000, 10000, 12000, 14000]
+148500
+user:/home/user$ t342
+288
+[1, 2, 3, 4, 5, 6, 7, 8]
+4950
+m99
+12000
+12000
+user:/home/user$ t343
+499500
+true
+0
+8
+8
+user:/home/user$ t344
+16000
+12000
+true
+user:/home/user$ t385
+7088890
+7088890
+user:/home/user$ t406
+360
+user:/home/user$ halt
+halting

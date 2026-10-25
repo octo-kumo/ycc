@@ -1,0 +1,19 @@
+[doc]
+name = "docs"
+bundle = "https://data1b.fullyjustified.net/tlextras-2022.0r0.tar"
+
+# The document is these three files in this order: _preamble.tex opens it,
+# index.tex \inputs the eleven chapters, _postamble.tex closes it. `make docs`
+# (Makefile, "The reference manual") is what builds it: the tectonic in this
+# tree takes ONE input, so the recipe concatenates these three and pipes
+# them in on stdin, and writes docs/build/manual.pdf and manual.log. The
+# `inputs` list below is what a later tectonic reads from this file; on
+# 0.17 it is inert, so nothing here describes an invocation that fails.
+[[output]]
+name = "manual"
+type = "pdf"
+inputs = [
+    "_preamble.tex",
+    "index.tex",
+    "_postamble.tex",
+]

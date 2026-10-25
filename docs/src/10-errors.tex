@@ -1,0 +1,313 @@
+\section{Errors and diagnostics}
+\label{sec:errors}
+
+\subsection{Compile time}
+
+Static checking is fatal: a rejected program compiles to nothing.
+Diagnostics are one line each,
+
+\begin{center}
+\ic{line:col: error: message}
+\end{center}
+
+\noindent positioned in the user's source even when the compilation
+splices imported files or prelude/runtime code into it. An error in an
+imported file names that file, \ic{path:line:col: error: message}, with
+the line counted in that file and the path as the import resolved it.
+The checker reports a root
+cause \emph{once} (Section~\ref{sec:poison}): after an error, the
+expression gets the error type, which causes no follow-on errors
+through the enclosing uses. Typical families:
+
+\begin{itemize}[nosep]
+\item name errors: \ic{undefined variable 'x'};
+\item shape errors: \ic{record has no field 'f'};
+\item operator typing: \ic{'++' needs a number target};
+\item array operators: \ic{'+=' appended elements: expected [long], got str};
+\item in-place only: \ic{arrays support only '+=' and '*=' (in place), not '-='};
+\item call errors: \ic{call takes 2 args, got 1};
+\item non-value use: \ic{cannot index long (only arrays and maps)};
+\item void use: \ic{cannot bind a void value to 'x'}.
+\end{itemize}
+
+\noindent One limit is not a typing rule but a resource: the compiler
+walks the program recursively (the parser, then the renamer, the
+checker and the emitter), so an expression, a type or a block nested
+deeper than \textbf{1000} is refused with the position that was too
+deep. The message names what was nested, so there are three of them:
+\ic{an expression nests deeper than 1000, the
+compiler's limit},
+\ic{a type nests deeper than 1000, ...} and
+\ic{a statement nests deeper than 1000, ...} --- so a deep type says
+\ic{a type} and not \ic{an expression}.
+Both compilers share the number, so the same program
+is accepted or refused by each. A long chain counts too, once the
+walks reach it: \ic{1+1+1+...} parses in a loop, but the checker and
+the emitter follow it down, so a chain of a thousand terms is refused
+the same way.
+
+\subsection{Warnings}
+\label{sec:warnings}
+
+A program that compiles can still draw \emph{warnings}: code that is
+legal but looks like a mistake. They go to \textbf{stderr}, one line
+each, positioned like errors (an imported file's naming that file),
+
+\begin{center}
+\ic{line:col: warning: message}
+\end{center}
+
+\noindent and they never change the program: the binary is the same,
+byte for byte, with them or without, and \ic{ycc --warnings=none} turns them off. The
+std units never warn; a package warns when it compiles. What draws one:
+
+\begin{itemize}[nosep]
+\item a local binding nothing reads: \ic{unused variable 'x'} (or
+  \ic{unused constant}, \ic{unused function}), or one only assigned to:
+  \ic{variable 'x' is assigned but never read};
+\item a value computed and dropped: \ic{the value of 'x' is not used},
+  \ic{the result of '+' is not used} (for \ic{==} it adds \ic{did you
+  mean '='?}). A call's value may be dropped, and so may \ic{ok \&\& f()};
+\item \ic{unreachable code}: a statement after one that always returns;
+\item \ic{'x' is assigned to itself} for \ic{x = x}, and \ic{'x < x' is
+  always false} (or \ic{>}; \ic{x != x} is the NaN test and draws
+  nothing);
+\item \ic{division by zero}: \ic{/}, \ic{\%}, \ic{/=} or \ic{\%=} by a
+  literal integer \ic{0};
+\item a key given twice in a record or map literal --- \ic{duplicate field
+  'a' in a record literal}, or \ic{duplicate key}. The last one wins;
+\item a type that \ic{type} could name once: a record of two or more
+  fields, or a union, written out in full more than once (\ic{the type
+  \{...\} is written out 2 times}) or where an alias names it already
+  (\ic{... is already declared as 'Point'}); two aliases of one type
+  (\ic{type 'Spot' is the same type as 'Point'}); an alias declared
+  twice (\ic{type 'Tag' is declared more than once}), where the last
+  declaration counts.
+\end{itemize}
+
+\noindent Parameters, loop variables, top-level bindings and names
+starting with \ic{\_} are never unused: \ic{let \_x = f();} keeps a
+value on purpose.
+
+\paragraph{Optional checks: \ic{--warnings=LEVEL}}
+\label{sec:wlevel}
+
+Some checks are off by default, because in ordinary code they are a
+habit rather than a mistake: a getter call or a bare \ic{a[i]} as a
+statement reads fine. Raise the warning level to turn them on -- \ic{ycc
+--warnings=extra} (a project: \ic{ycc build --warnings=extra}), which adds
+
+\begin{itemize}[nosep]
+\item \ic{the value of 'f()' is not used}: a call to a function that
+  hands a value back, whose result nobody reads. A function that returns
+  \ic{void}, one with no written return type, a builtin, and a name from
+  another unit are all taken to return nothing and draw nothing;
+\item \ic{the value computed here is not used}: a read or a literal used
+  as a statement -- \ic{x.f}, \ic{a[i]}, \ic{a[1:2]}, \ic{\&x},
+  \ic{*p}, a record, array or map literal, \ic{[x; n]}, \ic{x is B};
+\item \ic{the 'else' branch is empty}: an \ic{if} whose \ic{else} does
+  nothing. The void redesign (Section~\ref{sec:void}) made the branch
+  unnecessary, so it can go; an \ic{else} that runs anything, and an
+  \ic{if} with no \ic{else}, draw nothing;
+\item \ic{unused import 'fs'}: a bare \ic{import fs;} in the program's own
+  file (or a package's) while \ic{fs.} appears nowhere else in it. The
+  check is a text search, so a use in a string counts, and a mention in a
+  \ic{//} comment or as the tail of a longer name (\ic{xfs.read}) does not.
+  An import by path (\ic{import m from "m.y"}) flattens its names and is not
+  checked.
+\end{itemize}
+
+\noindent \ic{--warnings=default} (level 0) is the set above. The named
+levels are \ic{default}, \ic{extra} and \ic{all}; an unknown name is an error. The
+level changes which warnings are printed and nothing else: the binary is the
+same either way.
+
+\paragraph{Refactoring advice: \ic{--warnings=all}}
+
+Level \ic{2} adds shortening and structural refactoring advice, not stronger
+errors. In addition to scalar compound assignments, option-pattern bindings and
+simpler iteration, it recognizes nested no-else guards that can share a
+short-circuit condition, an unnecessary else after a guaranteed return, and
+value-producing boolean conditionals that can use their condition directly.
+It also recognizes a fresh numeric accumulator followed by a simple array loop
+as a possible \ic{reduce}, and a flag set immediately before a search's
+\ic{break} as \ic{some} or \ic{all}. Empty arrays retain their initial result;
+callback accumulator types and per-step numeric conversions must be preserved.
+
+The structural suggestions are deliberately narrow: calls, raw memory access,
+extra loop effects, generated pattern bindings and unknown receivers are not
+proofs that a rewrite is safe. Keep a moved else body's block scope. An arm
+ending in a semicolon is void, not a boolean value to simplify. These new
+suggestions have no automatic edit; the existing \ic{--warnings=fix} handles only its
+supported shortening subset. Review edits and recompile and test afterward.
+The repository's \ic{LINT\_RULES.md} catalogs the rules and their limits.
+
+\paragraph{Checked lifetimes.}
+
+The default \ic{--gc=never} reports \ic{lifetime: cannot prove reclamation}
+when an allocation can repeat without a proved region to reclaim it.
+The diagnostic names the expression or the call whose allocation effects
+reach the program. Keep temporary work in a \ic{region}, let automatic
+regions reclaim it, or explicitly permit GC with \ic{--gc=auto}.
+\ic{heap} blocks bypass regions and still count. \ic{--gc=never} and
+\ic{--gc=never} enforce the same rule as the default. \ic{--gc=stress} opts in
+to collection for testing.
+
+\paragraph{Repeated allocations: \ic{--strict-heap}}
+\label{sec:strictheap}
+
+\ic{ycc --strict-heap} reports where a program allocates over and over with
+nothing to free what it allocated: the allocations that, without the
+collector, would grow its memory for as long as it runs. An allocation is a
+record, array or map literal, \ic{[v; n]}, a slice, a \ic{+} (or a
+\ic{bigint} operator) whose result is a string, array or \ic{bigint}, a
+call into code the program does not define (a builtin, a standard unit, a
+function value) that hands back one of those, a record or an option ---
+\ic{some(v)} boxes its value, so it is one too --- a \ic{+=} that copies a
+string instead of appending in place (on a field or an element, on a variable
+a closure captures, or on one the same loop also reads), and a nested function that
+captures a local (its closure is made where it is written). Each one that
+\emph{repeats} draws
+
+\begin{center}
+\ic{heap: this array literal repeats in a loop, and nothing frees it}
+\end{center}
+
+\noindent or, when the function holding it repeats, says why:
+\ic{heap: ... repeats: 'f' is recursive}, \ic{is called in a loop},
+\ic{is used as a function value}, \ic{is called by 'g', which repeats}, or
+\ic{a function literal is passed as a value}. A call to the program's own
+function is not an allocation of its own (the callee's are reported where
+they are), \ic{spawn(f)} and \ic{fork(f)} call \ic{f} once, and any other
+append (\ic{+=}) or a map store grows one value rather than making a new one,
+so none of them draws a warning. What runs a bounded number of times --- the
+top level, a function only it calls --- draws nothing, and neither does an
+allocation inside a \ic{region} (Section~\ref{sec:regions}), in a loop body
+the compiler made a region, or in a function that only regions call; one
+inside \ic{heap \{ .. \}} still counts. The analysis is
+conservative: a function reached from a loop is taken to repeat even when
+the path that reaches it runs once. It is a report only, so like every
+warning it leaves the binary as it is and \ic{--warnings=none} silences it.
+
+\subsection{Run time}
+
+The compiled program traps --- writes a one-line message to stdout and
+exits with status 1 --- on:
+
+\begin{center}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.34\linewidth}@{\quad}>{\raggedright\arraybackslash}p{0.58\linewidth}@{}}
+\toprule
+condition & message \\
+\midrule
+array index outside \ic{[0, len)} & \ic{runtime error: index out of bounds} \\
+division or remainder by zero & \ic{runtime error: division by zero} \\
+a float with no bigint value & \ic{runtime error: float has no bigint value} \\
+shift by a negative count & \ic{runtime error: negative shift count} \\
+\ic{unwrap(none)}, \ic{none!} & \ic{runtime error: unwrap of none} \\
+slice assignment out of range & \ic{runtime error: slice assignment out of bounds} \\
+\ic{a[lo:hi] = b}, wrong \ic{len(b)} & \ic{runtime error: slice assignment length mismatch} \\
+match with no arm covering a value & \ic{runtime error: no match arm matched} \\
+a union value cast to a member & \ic{runtime error: a union value cast to} \\
+\quad it does not hold (Section~\ref{sec:type-unions}) & \quad\ic{a member it does not hold} \\
+memory exhausted & \ic{runtime error: out of memory} \\
+unbounded (non-tail) recursion & stack exhaustion: no limit, so the
+  process dies on the guard page \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent These messages go to \textbf{stdout} (the trap stubs use
+\ic{write(1, ...)} directly), so a program's real output stays
+recognizable; \ic{eputs} is the way to send diagnostics to stderr.
+
+\noindent Fixed arrays trap exactly like heap arrays; slices never trap
+(they clamp). Integer overflow is \emph{not} an error
+(Section~\ref{sec:evaluation}).
+
+\subsection{Exit status}
+
+A successfully run program exits with the code it chose
+(\ic{exit(code)} or falling off the end, which is \ic{0}); a trapped
+program exits with \ic{1}. The compiler itself exits \ic{0} on success
+(warnings or not), \ic{1} on a rejected input.
+
+\subsection{Reproducibility}
+
+The compiler is deterministic: the same input produces byte-identical
+output on every run and in either implementation. This is checked
+continuously by comparing the two compilers' output binaries byte for
+byte, and by self-compilation (a compiler built by the compiler is
+identical to the one that built it).
+
+\section{The toolchain}
+\label{sec:toolchain}
+
+Everything above is the language. Three things ship beside it, and none is part
+of what a program means, so none has a section of its own earlier on.
+
+A compile has three targets. The default is a Linux x86-64 ELF;
+\ic{--target=win} writes a PE32+ executable (x64), which has its own
+assembler half (\ic{arch/wsys.s}, \ic{wproc.s}, \ic{wnet.s}, \ic{wcon.s},
+\ic{wgui.s}, \ic{wthreads.s}), its own PE writer and its own runtime: nothing in a standard
+unit reaches the kernel except through \ic{os\_call("y\_os\_\ldots")}, so the
+same program names the Linux system call in one target and the NT system call
+in the other. A Windows build carries no C toolchain either, and the compiler
+runs on either platform. Those PEs are run on a real Windows machine rather
+than under wine, because wine is more lenient about the alignment and import
+tables a real kernel enforces; the gates (\ic{ytest pe-gate}, \ic{pe-fixtures},
+\ic{cycc-win}) are run by hand. A Windows image is a console program unless
+\ic{--subsystem=gui} (or \ic{subsystem = "gui"} under \ic{[package]} in
+\ic{y.toml}) makes it a GUI one, which has no console (Section~\ref{sec:builtin-gui});
+\ic{ycc build --target=win} keeps its objects and writes
+\ic{build/win/NAME.exe}. \ic{--target=kernel} is the third target
+(Section~\ref{sec:os}).
+
+\subsection{Language server}
+
+\ic{make yserve} builds \ic{yserve}, the language server for
+\textsf{Y}. It is written in \textsf{Y} in the same tree (\ic{src/tools/lsp/}) It speaks the Language
+Server Protocol over its own standard streams, so an editor can ask it about a
+buffer it has not saved: the diagnostics the compiler itself would print for
+that text, TextMate syntax highlighting, formatting, hover, go-to-definition and completion
+from the buffer's own declarations. It is driven by a VS Code extension in
+\ic{vscode-y-lang/}, and it runs in the checked suite, which compiles and runs
+its fixtures under both compilers and compares each against its
+\ic{.expected}.
+
+Two things follow from it being in the same tree and written in the language.
+It \emph{imports the compiler's own modules by path}, so every name it defines
+joins the compiler's vocabulary --- which is why a fixture in the language
+suites and a fixture in the server's cannot both be named the same thing. And
+it produces byte-identical output under either compiler, which \ic{make yserve}
+checks rather than assumes.
+
+\subsection{Self-decompressing binaries}
+
+\ic{ycc --pack[=METHOD] FILE} writes a binary that carries a small stub, a
+compressed image of \ic{FILE}, and a trailer. On start the stub decodes the
+image into a memory file and \ic{execveat}s it, so \ic{argv}, the environment,
+the descriptors, the pid and the exit status are the payload's own, and
+nothing is written to disk. \ic{FILE} may be \textsf{Y} source or an existing
+executable (\ic{ycc --pack ./ycc} wraps the compiler itself). The methods are
+\ic{store}, \ic{lz}, \ic{fixed} and \ic{dynamic} (the default: raw deflate
+with a dynamic Huffman tree per 64\,KiB block). The cost is startup --- the
+whole payload is decoded before every run, about 35\,ms for the compiler ---
+and a program smaller than the roughly 20\,KB stub does not shrink at all.
+The target is a Linux ELF; \ic{--target=win} and \ic{--target=kernel} are
+refused by name. \ic{make pack-bench} prints the size of every method, the
+external compressors' floor on the same payload, and the startup cost.
+
+\subsection{Building this document}
+
+\ic{make docs} builds this manual and nothing else needs to be run first. It
+needs \ic{t tectonic} on the path; without it the target says so and stops. The
+result is \ic{docs/build/manual.pdf}, with \ic{docs/build/manual.log} beside it.
+
+The target fails the build on any \LaTeX{} error \emph{or} on any over- or
+underfull box, so a clean run is the proof that the typesetting is sound rather
+than a claim about it. That is deliberate: a manual that merely compiles is a
+manual with lines running into the margin, and nothing in the build would say
+so. The three source files are concatenated in the order \ic{\_preamble.tex},
+\ic{index.tex}, \ic{\_postamble.tex} and piped to \ic{tectonic} on its standard
+input, because the installed version takes exactly one input file; the sources
+live in \ic{docs/src/}.

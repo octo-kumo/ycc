@@ -1,0 +1,10 @@
+fs ok=true msg=3
+
+ls open=3
+
+entry ino=2 reclen=24 name=112114111103
+
+entry ino=3 reclen=24 name=1091151030
+
+ls done
+

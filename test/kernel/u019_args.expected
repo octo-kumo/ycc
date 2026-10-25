@@ -1,0 +1,8 @@
+fs ok=true ino=2 size_ok=true
+
+sh n=3 a1=/prog
+
+sh n=2 a1=hello
+
+done
+

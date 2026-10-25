@@ -1,0 +1,1 @@
+creates its symlinks with the Linux symlinkat syscall; a Windows symlink needs a privilege the test cannot assume

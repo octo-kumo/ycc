@@ -1,0 +1,12 @@
+1
+no
+medium
+14
+a = true
+1
+() -> long
+() -> void
+1 2
+r={x: 1} a=[1, 2] t=true
+2 2
+2 8

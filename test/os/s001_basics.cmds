@@ -1,0 +1,5 @@
+echo hello world
+pwd
+nosuch
+echo   spaced    out  
+halt

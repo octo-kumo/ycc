@@ -1,0 +1,20 @@
+{ a: long, b: str }
+{ a: long }
+(long) -> long
+((long, long) -> long, long, long) -> long
+long
+str
+[long]
+[byte]
+[long; 3]
+{str => long}
+*long
+{ a: long } | { b: long }
+{ head: long, tail: L? }
+{head: 1, tail: none}
+{head: 1, tail: {head: 2, tail: <L?>}}
+<function (long) -> long>
+<function ((long, long) -> long, long, long) -> long>
+{n: 7, f: <function (long) -> long>}
+mutex
+sem

@@ -1,0 +1,13 @@
+# Binary sizes in bytes. Growth fails; lower these after verified shrinkage.
+# Array methods use ordinary closure calls; the captured shape costs five
+# bytes more than the former specialized inliner. Other shapes are smaller
+# after the preceding compiler/runtime refactors.
+# Shared control-flow cleanup removes 23 bytes from dead.y and 3 from alloc_once.
+hello.y 370
+minimal.y 427
+forloop.y 4077
+foreach.y 4147
+dead.y 1497
+alloc_once.y 1316
+foreach_local.y 4157
+foreach_capture.y 4827

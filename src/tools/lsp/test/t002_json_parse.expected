@@ -1,0 +1,92 @@
+true
+{"a":1,"b":[1,2,{"c":true}],"d":null,"e":"s","f":false}
+[a, b, d, e, f]
+1
+[1,2,{"c":true}]
+false
+false
+false
+false
+false
+false
+[1,2]
+null
+"x"
+0 -> 0
+-0 -> -0
+1 -> 1
+-1 -> -1
+12345 -> 12345
+1.5 -> 1.5
+-1.5 -> -1.5
+0.0 -> 0.0
+1e10 -> 1e10
+1E10 -> 1E10
+1e+10 -> 1e+10
+1e-10 -> 1e-10
+3.14159 -> 3.14159
+9007199254740993 -> 9007199254740993
+01 -> false
+-01 -> false
+.5 -> false
+1. -> false
+1e -> false
+1e+ -> false
++1 -> false
+1.2.3 -> false
+--1 -> false
+1 2 -> false
+"a\"b"
+"a\\b"
+"a/b"
+"\b\f\n\r\t"
+"A"
+"é"
+"€"
+"😀"
+"\u0000"
+"\ud83d" -> false
+"\ude00" -> false
+"\ud83dx" -> false
+"\u00" -> false
+"\q" -> false
+"\uZZZZ" -> false
+"a
+b" -> false
+"unterminated -> false
+"" -> false
+"   " -> false
+"{" -> false
+"}" -> false
+"[" -> false
+"]" -> false
+"{"a"}" -> false
+"{"a":}" -> false
+"{"a": 1,}" -> false
+"{a: 1}" -> false
+"[1,]" -> false
+"[1 2]" -> false
+"{}{}" -> false
+"nul" -> false
+"tru" -> false
+"{"a": 1} extra" -> false
+"[1, 2] junk" -> false
+"+" -> false
+false
+unexpected '}'
+6
+false
+trailing 't'
+9
+false
+empty document
+true
+17
+{"k":[1,"two"]}
+{"a":1,"b":[1,2],"c":{"d":null},"e":"x","f":true,"g":1.5}
+{"a":1,"b":[1,2],"c":{"d":null},"e":"x","f":true,"g":1.5}
+true
+false
+false
+{"a":3,"b":2}
+[a, b]

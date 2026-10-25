@@ -1,0 +1,11 @@
+unanalysed: true
+valid index: true
+cached: true
+new version unanalysed: true
+bad index: true
+bad index again: true
+failure cached: true
+old version retained: true
+closed: true
+reopened unanalysed: true
+reopened index: true

@@ -1,0 +1,12 @@
+b'AB'
+b'\xff'
+[65, 66]
+[65, 66]
+[1, 1, 2, 2, 2, 2, 4, 4, 4, 4, 8, 8, 8, 8, 1]
+b'\x01\x00\x00\x00\x02'
+5
+b'\x01\x02\x03\x04\xfe\xff\x00\x00\x00A'
+[16909060, -2]
+65
+pad has no width of its own:
+struct.width_of: 'pad' has no width of its own (it is the value a format carries)

@@ -1,0 +1,55 @@
+user:/home/user$ b1 sig
+ok   SIGPIPE status
+ok   kill sig 0
+ok   kill SIGTERM
+ok   wait killed
+ok   SIGTERM status
+ok   kill blocked
+ok   SIGKILL status
+ok   SIGINT on a busy child
+ok   ignored signal
+ok   kill unknown pid
+ok   kill bad signal
+ok   SIGCHLD does nothing
+ok   pid
+ok   uid
+ok   gid
+ok   euid
+ok   egid
+ok   tid is pid
+ok   ppid
+ok   setsid in a child
+ok   setpgid
+ok   getpgrp
+ok   uname
+ok   sysname
+ok   machine
+ok   prlimit64 nofile
+ok   nofile cur
+ok   getrlimit stack
+ok   stack cur
+ok   umask old
+ok   umask new
+ok   sigprocmask
+ok   sigprocmask old
+done
+user:/home/user$ b1 poll
+ok   poll empty, timeout 0
+ok   empty pipe not readable
+ok   empty pipe writable
+ok   poll 20ms timeout
+ok   poll 2500ms timeout
+ok   it really waited
+ok   readable after write
+ok   bad fd
+ok   blocking poll wakes
+ok   hangup
+ok   ppoll timeout
+ok   select one writable
+ok   select timeout
+ok   select cleared the set
+ok   select readable
+ok   select set bit
+done
+user:/home/user$ halt
+halting

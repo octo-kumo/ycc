@@ -1,0 +1,3 @@
+[package]
+name = "liba"
+lib = "src/liba.y"

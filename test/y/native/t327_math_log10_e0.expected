@@ -1,0 +1,36 @@
+── the six non-negative powers of ten: exact integers ──
+log10(1)     0
+log10(10)    4607182418800017408   want 4607182418800017408
+log10(100)   4611686018427387904   want 4611686018427387904
+log10(1e10)  4621819117588971520   want 4621819117588971520
+log10(1e100) 4636737291354636288   want 4636737291354636288
+log10(1e300) 4643985272004935680   want 4643985272004935680
+
+── and why no negative one is: 1e-323 is 2^-1073, not 10^-323 ──
+log10(1e-323) -323.005185
+  and -1073*log10(2) -323.005185
+  which is the SAME number, so the module is right: true
+log10(1e-315) -315.000000   not -315 exactly
+  and the literal is 202402253 subnormal units: true
+  so its exact log10 is -315.00000000065938, not -315: true
+
+── the residual itself: 5 of 14 arguments in [1, 2) ──
+log10(1.000000)  off by 0
+log10(1.000000)  off by 0
+log10(1.100000)  off by -1
+log10(1.500000)  off by 1
+log10(1.707107)  off by 0
+log10(1.900000)  off by 0
+log10(1.990000)  off by 0
+log10(1.300000)  off by 0
+log10(1.700000)  off by 1
+log10(1.050000)  off by 0
+log10(1.250000)  off by -1
+log10(1.414214)  off by 0
+log10(1.732051)  off by 0
+log10(1.618034)  off by -1
+  arguments off by an ulp: 5 of 14
+
+── and ln(m) itself, which is never worse than one ulp ──
+  ln(m) over 16 arguments in [1, sqrt2): worst 1 ulp, exactly rounded 8 of 16
+  and 60 more gave worst 1, exactly rounded 34 -- so never worse than one

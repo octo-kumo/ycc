@@ -1,0 +1,199 @@
+\section{Expressions and evaluation}
+\label{sec:evaluation}
+
+Evaluation is strict and left-to-right; every operand is evaluated
+exactly once per execution of the enclosing expression. Side effects
+include calls, reads of places with side-effecting subexpressions, and
+the mutating array operators.
+
+\subsection{Numeric semantics}
+
+\ic{long} arithmetic is two's complement modulo $2^{64}$: overflow
+\emph{wraps}, it does not trap. Division and remainder truncate toward
+zero (C semantics) and are subject to:
+
+\begin{itemize}[nosep]
+\item division or remainder by zero is a runtime error
+  (Section~\ref{sec:errors});
+\item \ic{LONG\_MIN / -1} evaluates to \ic{LONG\_MIN} (the quotient does
+  not fit and would fault on x86) and \ic{LONG\_MIN \% -1} evaluates to
+  \ic{0}. Implementations must special-case these two.
+\end{itemize}
+
+\ic{float} arithmetic is IEEE-754 binary64. Mixed long/float operands
+widen the long side. Unary minus on a \ic{float} flips the sign, so
+\ic{-0.0} is a negative zero (\ic{1.0 / -0.0} is $-\infty$) and
+\ic{-(-x)} is \ic{x} for every \ic{x}.
+
+\ic{\%} on two \ic{float}s is the remainder truncated toward zero ---
+C's \ic{fmod}, not C's \ic{\%}, which is the same thing for integers
+and something else entirely here: the sign follows the dividend
+(\ic{-5.5 \% 2.0} is \ic{-1.5}), the magnitude is under that of the
+divisor, and the result is exact for every finite input (the quotient
+may be any size, \ic{1e300 \% 3.0} included). Dividing by a zero
+divisor, and any operand that is a NaN or an infinity as the dividend,
+give a NaN; an infinite divisor answers with the dividend.
+
+Every comparison is IEEE-ordered: a NaN compares \ic{false} to
+everything, itself included, in both directions. \ic{x != x} is
+therefore the NaN test (and the one the linter leaves alone,
+Section~\ref{sec:errors}), \ic{[nan] == [1.0]} is \ic{false}, and an
+\ic{inf} compares exactly as an infinity should.
+
+\ic{bigint} arithmetic is exact and unbounded. \ic{/} truncates toward zero
+and \ic{\%} takes the sign of the dividend, like the \ic{long} forms above,
+and division by zero is the same runtime error; the difference is that nothing
+wraps and nothing overflows, so the \ic{LONG\_MIN} special cases have no
+counterpart. A \ic{float} on either side of a bigint operation converts by
+truncating toward zero before the operation, so the fraction is gone rather
+than carried (Section~\ref{sec:type-bigint}).
+
+\subsection{Bitwise operators}
+\label{sec:bitwise}
+
+\ic{\&}, \ic{|} and \ic{\textasciicircum{}} are the and, or and exclusive
+or of two integers' 64 bits, and \ic{\textasciitilde{}x} flips every bit
+of \ic{x} (it is \ic{-x - 1}). A \ic{byte} operand widens first, so
+\ic{\textasciitilde{}b} of a \ic{byte} is a negative \ic{long}; the
+result is always a \ic{long}, and storing it into a \ic{byte} keeps its
+low 8 bits.
+
+The shifts move the bits of the left operand by the count on the right:
+\ic{x <{}< n} towards the top, zeros filling in; \ic{x >{}> n} towards
+the bottom, the sign bit filling in (arithmetic: \ic{-16 >{}> 2} is
+\ic{-4}); and \ic{x >{}>{}> n} towards the bottom, zeros filling in
+(logical: \ic{-16 >{}>{}> 60} is \ic{15}). Unlike C, and unlike the x86
+instructions, which use only the count's low 6 bits, every count has a
+meaning:
+
+\begin{itemize}[nosep]
+\item a count of 64 or more shifts every bit out: \ic{x <{}< 64} and
+  \ic{x >{}>{}> 64} are \ic{0}, and \ic{x >{}> 64} is \ic{0} or \ic{-1}
+  by the sign of \ic{x};
+\item a negative count is a runtime error (Section~\ref{sec:errors}).
+\end{itemize}
+
+\noindent The bitwise operators bind tighter than the comparisons
+(Section~\ref{sec:expr-grammar}), and a condition still takes a
+\ic{bool}: \ic{if (flags \& 4 != 0)} tests a bit. Radix literals spell
+masks with the top bit set as they are (Section~\ref{sec:literals}).
+
+\subsection{Logic}
+\label{sec:logic}
+
+\ic{\&\&} and \ic{||} short-circuit: the right operand is evaluated
+only when the left does not decide the result. Operands are not
+required to be \ic{bool} --- any non-zero value is true, and the result
+of either operator is a \ic{bool}.
+
+\subsection{Strings}
+
+Strings are immutable values: concatenation \ic{a + b} produces a new
+string. If exactly one side of \ic{+} is a string, the other side is
+stringified (Section~\ref{sec:builtin-tostring}) and concatenated, except a
+\ty{byte}, which is a character: \ic{"x" + s[i]} and \ic{s += b} append the
+one-byte string \ic{chr(b)} (a \ty{long} still gives its digits, and \ic{+=}
+rejects it).
+A format string, \ic{f"\{x\} of \{n:>4\}"}, writes such a concatenation
+with fields (Sections~\ref{sec:literals} and~\ref{sec:format-spec}).
+Comparisons \ic{<} \ic{<=} \ic{>} \ic{>=} on two strings compare bytes
+lexicographically; \ic{==} compares contents.
+
+\subsection{Appending}
+\label{sec:str-append}
+\ic{s += t} means \ic{s = s + t}, but a loop of
+appends is linear, not quadratic: when \ic{s} is a variable whose
+address is never taken and that no closure captures, and \ic{s} still
+holds the string its own previous \ic{+=} built, the bytes of \ic{t} are
+written in place behind it (the buffer doubles when full). Any other
+use of \ic{s} --- a read, a copy into another binding, an element or
+argument --- ends that ownership, and the next append copies once, so
+an append never changes a string that anything else can see. Building
+a string with \ic{+=} costs amortized $O(1)$ per appended byte, like
+pushing onto an array.
+
+\subsection{Assignment}
+\label{sec:assignment}
+
+\ic{p = e} evaluates \ic{e} and stores it into the place \ic{p}.
+Assignment is a statement form, not an operator: it cannot appear inside
+another expression, so \ic{let y = (x = 7);} and \ic{let y = x = 7;} are
+syntax errors (so are the compound forms of
+Section~\ref{sec:exactly-once}; only \ic{++} and \ic{--} nest). As the
+last statement of a block it gives the block its value, the value
+stored: \ic{let y = \{ x = 5 \};} sets both \ic{x} and \ic{y} to 5, and
+a function body ending in an assignment returns the assigned value.
+Section~\ref{sec:array-aliasing}
+defines what storing into arrays, records and variables means for
+aliasing.
+
+\subsection{Increment, decrement and compound assignment}
+\label{sec:exactly-once}
+
+The four increment/decrement forms and the eleven compound-assignment
+operators share one rule:
+
+\begin{quote}
+\textbf{Exactly-once rule.} The target place's subexpressions are
+evaluated \emph{exactly once}. Writing \ic{a[f()] += e} evaluates
+\ic{f()} one time, no matter how the place is read and written.
+\end{quote}
+
+\noindent Formally, let a \ty{place} be $p ::= x \mid a[i] \mid o.f$,
+possibly nested. Define $\mathrm{cap}(p)$, the capture of a place into
+fresh variables (every non-name subexpression runs once):
+
+\begin{align*}
+\mathrm{cap}(x) &= \epsilon \\
+\mathrm{cap}(a[i]) &= \mathrm{cap}(a);
+   \;\; \text{if } a \text{ is not a name: } \texttt{let } \beta = a \texttt{;}
+   \;\; \texttt{let } \iota = i \texttt{;} \\
+\mathrm{cap}(o.f) &= \mathrm{cap}(o);
+   \;\; \text{if } o \text{ is not a name: } \texttt{let } \beta = o \texttt{;}
+\end{align*}
+
+\noindent with $\mathrm{read}(p)$ and $\mathrm{write}(p, v)$ the
+corresponding read and store through the captured names. Then the
+\emph{numeric} forms desugar as:
+
+\begin{align*}
+\texttt{p++} &\;\equiv\; \mathrm{cap}(p);\;\texttt{\{}~\texttt{let t = read}(p)\texttt{;}
+   ~~\texttt{write}(p, \texttt{t + 1})\texttt{;}~~\texttt{t}~\texttt{\}} \\
+\texttt{++p} &\;\equiv\; \mathrm{cap}(p);\;\texttt{\{}~\texttt{let t = read}(p)\texttt{ + 1;}
+   ~~\texttt{write}(p, \texttt{t})\texttt{;}~~\texttt{t}~\texttt{\}} \\
+\texttt{p--} &\;\equiv\; \mathrm{cap}(p);\;\texttt{\{}~\texttt{let t = read}(p)\texttt{;}
+   ~~\texttt{write}(p, \texttt{t - 1})\texttt{;}~~\texttt{t}~\texttt{\}} \\
+\texttt{--p} &\;\equiv\; \mathrm{cap}(p);\;\texttt{\{}~\texttt{let t = read}(p)\texttt{ - 1;}
+   ~~\texttt{write}(p, \texttt{t})\texttt{;}~~\texttt{t}~\texttt{\}} \\[4pt]
+\texttt{p op= e} &\;\equiv\; \mathrm{cap}(p);\;\texttt{\{}~\texttt{let t = read}(p)
+   \texttt{ } op \texttt{ } e\texttt{;}~~\texttt{write}(p, \texttt{t})\texttt{;}~~\texttt{t}~\texttt{\}}
+\end{align*}
+
+\noindent for $op \in \{+,-,\times,\div,\%\}$ on numbers and for the
+bitwise \ic{\&} \ic{|} \ic{\textasciicircum{}} \ic{<{}<} \ic{>{}>}
+\ic{>{}>{}>} on integers (on a \ic{byte} place, \ic{t} is a \ic{byte}:
+the low 8 bits). The four
+increment and decrement forms are expressions: postfix yields the
+\emph{old} value, prefix the \emph{new} one. A compound assignment is,
+like \ic{=}, a statement form (Section~\ref{sec:assignment}): it cannot
+nest inside another expression, and as the last statement of a block it
+yields the new value of the place (\ic{\{ x += 2 \}}).
+
+\paragraph{Examples.}
+\begin{lstlisting}
+a[f()]++;         // { let y_t = f(); let v = a[y_t];
+                  //   a[y_t] = v + 1; v }   -- f() runs once
+rec.v[g()] += 1;  // g() once; the read and the write use the same element
+x.y.z += e;       // x and x.y evaluated once
+\end{lstlisting}
+
+\paragraph{Arrays.} On array targets \ic{+=} and \ic{*=} are
+\emph{primitive in-place} operations --- they do not desugar through
+\ic{+} (which copies) --- and are defined in Section~\ref{sec:arrays}.
+On string targets only \ic{+=} is legal and concatenates (in place when
+it can, Section~\ref{sec:str-append}). Every other
+combination is a type error (Section~\ref{sec:opassign-typing}).
+
+\paragraph{Maps and slices.} A map store \ic{m[k] = v} evaluates \ic{m},
+\ic{k} and \ic{v} once each; a slice assignment \ic{a[lo:hi] = b} the same
+way (Section~\ref{sec:arrays}).

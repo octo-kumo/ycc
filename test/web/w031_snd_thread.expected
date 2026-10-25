@@ -1,0 +1,9 @@
+chunks 8
+done 1
+main ticks > 0 true
+bytes 17632
+wav data 17632 expected 17632
+wav complete true
+wav rate 22050 channels 1
+wav nonsilent true
+wav remove true

@@ -1,0 +1,51 @@
+user:/home/user$ sktest
+ok socket
+ok bind
+ok bind twice -> EADDRINUSE
+ok listen
+ok connect nowhere -> ENOENT
+ok getsockname
+ok accept on a plain socket -> EINVAL
+ok bad family
+ok setsockopt
+ok accept
+ok recv hello
+ok send HELLO
+ok 100000 bytes, in order
+ok client finished
+ok accept4 would block -> EAGAIN
+ok poll listener idle
+ok connect
+ok poll listener ready
+ok accept4
+ok poll empty socket
+ok poll writable
+ok recv would block -> EAGAIN
+ok poll readable
+ok recv abc
+ok sendmsg
+ok recvmsg
+ok shutdown(WR) -> EOF for the peer
+ok poll after EOF
+ok write to a closed peer -> EPIPE
+ok poll hangup
+ok connect to a closed listener -> ECONNREFUSED
+ok socketpair
+ok socketpair recv
+ok socketpair back
+user:/home/user$ pulsetest
+ok create stream
+ok write
+ok drain
+ok ramp passes through
+ok two streams
+ok write a
+ok write b
+ok drain a
+ok drain b
+ok mixed sum
+ok unknown command refused
+ok exit acknowledged
+ok daemon gone
+user:/home/user$ halt
+halting

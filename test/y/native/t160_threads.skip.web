@@ -1,0 +1,1 @@
+fork: t160_threads also forks and waits for a child; S9 answers fork with ENOSYS (threads themselves work).

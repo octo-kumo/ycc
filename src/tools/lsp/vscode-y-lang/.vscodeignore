@@ -1,0 +1,9 @@
+# Keep runtime dependencies: vsce prunes devDependencies itself.
+# Exclude maintained sources and build configuration from the package.
+src/**
+tsconfig.json
+**/*.map
+**/*.ts
+.gitignore
+.vscodeignore
+*.y

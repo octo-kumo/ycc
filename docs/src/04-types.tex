@@ -1,0 +1,512 @@
+\section{Types and static semantics}
+\label{sec:types}
+
+Checking is static and \emph{fatal}: a type error is a compile error.
+The type system is small --- scalars, arrays, records, maps, options,
+pointers, functions and \ic{void} --- and mostly structural.
+
+\subsection{Scalar types}
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+type & domain & notes \\
+\midrule
+\ic{long}  & 64-bit signed integers & wraparound on overflow \\
+\ic{byte}  & $0\ldots255$ & stored in one byte inside \ic{[byte]} \\
+\ic{bool}  & \ic{true}, \ic{false} & \\
+\ic{float} & IEEE-754 binary64 & \\
+\ic{str}   & immutable byte strings & length-prefixed; may hold NUL \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Big integers}
+\label{sec:type-bigint}
+
+\ic{bigint} is the arbitrary-precision integer type, written with an \ic{n}
+suffix on the literal (Section~\ref{sec:literals}) and bounded by nothing:
+\ic{9223372036854775808n} is that number. A value is a heap record --- sign,
+limb count, limbs in base $2^{28}$ --- so a bigint is a reference like an
+array or a record, and the checker keeps the representation opaque. For
+\ic{==} it is nevertheless compared \emph{by value}, which is the one place
+a heap value of a record layout is: \ic{2n == 2n} is true for two separately
+allocated values, and \ic{[1n] == [1n]} is true (Section~\ref{sec:equality}).
+
+\paragraph{Operators.} If either operand of \ic{+ - * / \%} or of a
+comparison is a bigint, the other side converts to a bigint (next paragraph)
+and the result is a bigint (\ic{bool} for a comparison). The arithmetic is
+integers of unlimited size and follows C's rules for the two that have a
+sign choice: \ic{/} truncates toward zero (\ic{(0n - 7n) / 2n} is
+\ic{-3n}) and \ic{\%} takes the sign of the dividend (\ic{7n \% (0n -
+2n)} is \ic{1n}). Unary \ic{-} is defined; the bitwise and shift operators
+are not, and are rejected as \ic{'\&' left operand: expected long, got
+bigint}. Division or remainder by zero traps
+(Section~\ref{sec:errors}), as it does for \ic{long}.
+\ic{+= -= *= /= \%=} and \ic{++}/\ic{--} work on a bigint target; the
+bitwise compound forms do not and say so, one message for the family:
+\ic{bigints support only '+', '-', '*', '/' and '\%' with '='}.
+
+\paragraph{Conversion.} \ic{long}, \ic{byte} and \ic{float} convert to
+\ic{bigint} implicitly: the two integers exactly, a \ic{float} by
+\emph{truncating toward zero}. That truncation is the same one
+\ic{tolong} does and it is not a rounding, so \ic{2n + 0.9} is \ic{2n} and
+\ic{2n * 2.9} is \ic{4n} --- a float used where a bigint is wanted loses its
+fraction, silently, which is worth writing down because \ic{5n > 4.5} is
+\ic{5n > 4n} and is \ic{true}. A float with no integral value at all --- an
+infinity or a NaN --- traps rather than answering:
+\ic{runtime error: float has no bigint value}.
+
+The reverse is not implicit. \ic{tolong(b)} is a \ic{long?} and is
+\ic{none} outside the range it accepts for a \ic{str} or a \ic{float}:
+$2^{63} - 1$ converts and $2^{63}$ does not, with $-2^{63}$ the other end and
+\ic{some}. \ic{tofloat(b)} is
+a \ic{float?} and goes through the decimal text, so a magnitude past a
+\ic{double} reads \ic{inf} --- the same answer \ic{tofloat} gives for a
+string of the same digits --- and not \ic{none}. Both are in
+Section~\ref{sec:builtin-tostring}.
+
+\subsection{Arrays}
+\label{sec:type-arrays}
+
+\ic{[T]} is a heap array of \ty{T}, \ic{[T; N]} a fixed-length array of
+\ty{T} with \ty{N} a literal. The element type is part of the type and
+arrays are \textbf{homogeneous}: every element of an array has exactly
+the element type. Heterogeneous array literals are rejected:
+
+\begin{lstlisting}
+let bad = [1, "two"];        // error: array element: expected long, got str
+\end{lstlisting}
+
+\noindent This applies recursively --- \ic{[[1], [2]]} has type
+\ic{[[long]]}, and each element of the outer literal is checked against that
+inner type like any other element:
+
+\begin{lstlisting}
+let bad = [[1], 2];            // error: array element: expected [long], got long
+\end{lstlisting}
+
+\noindent Every operator that mixes arrays and elements
+(Section~\ref{sec:arrays}) enforces the same rule.
+
+\subsection{Records}
+\label{sec:type-records}
+
+A record literal \ic{\{ a: 1, b: "x" \}} has the record type
+\ic{\{ a: long, b: str \}}. A record type is the set of its fields: the
+order they are written in is not part of it, so
+\ic{\{ b: str, a: long \}} is the same type (and prints its fields in
+that order). A field read or write is legal when the static type has
+the field.
+
+Records are \textbf{exact}: a record goes only where its own type is
+expected, or a union that has it as a member
+(Section~\ref{sec:type-unions}). A \ic{\{ a: long, b: str \}} is not a
+\ic{\{ a: long \}}: records are shared by reference, their fields at
+fixed places, so no wider or narrower view of one is sound. There is no
+record type that takes ``any record'': \ic{\{ k: str \}} is the record
+with exactly one field, \ic{k}.
+
+A record literal written where a record type is declared --- an
+annotated \ic{let}, an argument, a \ic{return} or trailing value, a
+field, an element, an assignment \ic{r = \{... \}}, a map store
+\ic{m['k'] = \{... \}}, a pointee \ic{*p = \{... \}} and the element
+that \ic{+=}, \ic{*=} or \ic{::} adds --- is created as that type: each
+value is checked
+against its field's type, converting as any store does
+(Section~\ref{sec:conversions}), and a record literal among them
+likewise. Where a union is declared, the literal is the member with its
+field names. The same holds for the record literals inside an array
+literal written where \ic{[T]} or \ic{[T; N]} is declared:
+\ic{let rs: [R] = [\{ x: 1, b: 2 \}]} makes each element an \ic{R}.
+
+A field written \ic{name?: T} is \emph{optional}: its type is \ic{T?},
+and such a literal may leave it out (it is then \ic{none}) or give a
+plain \ic{T}, which is wrapped as \ic{some} would --- or a \ic{T?}, or
+\ic{none}. A record type whose fields are all optional takes \ic{\{\}}.
+Where a union is declared, a literal leaving optional fields out is the
+member it fits; when two fit, the one with exactly its field names, and
+otherwise none. The mark is not part of the type:
+\ic{\{ a?: long \}} and \ic{\{ a: long? \}} are one type, and only a
+literal sees the difference. A literal given to an optional parameter
+of such a type is created as it too:
+
+\begin{lstlisting}
+type Opts = { url: str, timeout?: long, tag?: str };
+def get(path: str, opts?: Opts) -> str { ... }
+get("/");
+get("/", { url: "x" });                 // timeout, tag: none
+get("/", { url: "x", timeout: 5 });     // timeout: some(5)
+\end{lstlisting}
+
+\paragraph{Tuples.} A parenthesized comma-separated list of expressions is
+a \emph{tuple}: \ic{(1, "two")} is a record whose fields are named by
+position, \ic{\$0} and \ic{\$1}. A tuple type is written the same way,
+\ic{(long, str)}, and its elements are read and written as \ic{t.0} and
+\ic{t.1} (the dot takes the position as a literal, so the parser turns
+\ic{t.0} into a read of the hidden field \ic{\$0}). A tuple is otherwise an
+ordinary first-class record value --- it may be bound, passed and
+returned, and it prints as its fields --- and parenthesising one
+expression, \ic{(e)}, is still just \ic{e}.
+
+\subsection{Unions}
+\label{sec:type-unions}
+
+\ic{A | B} holds a record whose type is exactly one of the members, which
+are record types (an alias of a union among them adds its members). A
+record goes into a union when its type is a member; a union goes into
+another whose members include all of its own. A field that every member
+has, with one type, is read and written straight through the union; any
+other needs a \ic{match}, which tells the members apart:
+
+\begin{lstlisting}
+type Circle = { name: str, r: float };
+type Rect = { name: str, w: float, h: float };
+type Shape = Circle | Rect;
+def area(s: Shape) -> float {
+    match s {
+        Circle c => 3.14159 * c.r * c.r,
+        Rect { w, h } => w * h
+    }
+}
+let s: Shape = { name: "box", w: 2.0, h: 3.0 };   // a Rect
+print(s.name, " ", area(s));                       // box 6.000000
+\end{lstlisting}
+
+\noindent In a \ic{match}, a type pattern such as \ic{Circle c} must
+name a member exactly. A record pattern such as
+\ic{(\{name: "box"\}) b} matches the members with those fields, and
+binds the one member with them, or the union of those members. Without
+\ic{\_}, every member needs a type arm. A union prints as the member it
+holds.
+
+A pattern's type may also be one of the language's own names, which
+narrows by type the same way: \ic{if let long n = v} asks whether
+\ic{v} is one of these, so on an option it is the payload --- \ic{if let str s = maybe}
+binds the string inside it, or takes the \ic{else}. \ic{int} is \ic{long}
+here as everywhere else, and the spelling works in a \ic{match} arm as well.
+A subject that already has that type always matches, so \ic{if let long n = 5}
+is simply true. One it cannot be is the error \ic{pattern type long can never
+match str} --- naming the payload of an option, not the option --- and one that
+is no value at all (\ic{void}, \ic{sem}) is the error \ic{match pattern type
+void is not a record or primitive type}, the one every pattern type that is
+not a record or a primitive has always got.
+
+An option is matched with \ic{none} and its payload: \ic{match o \{ T c => c.v,
+none => -1 \}} needs no \ic{\_}, because the \ic{none} arm covers the empty
+case and the type arm (or \ic{some(x)}, which takes any payload) the other.
+Either half alone is the error \ic{non-exhaustive match on T? (add a '\_'
+arm)}. A \ic{none} arm is a value pattern, so any other value arm
+(\ic{0 => ...}) does not count toward covering the payload.
+
+A union value also goes where one of its members is declared --- an
+annotated \ic{let}, an argument or a \ic{return} --- or a union of some of
+its members: that is a \emph{cast}, checked when the program runs. A value
+holding another member stops the program (Section~\ref{sec:errors}). After the
+cast the member's own fields read directly:
+
+\begin{lstlisting}
+def radius(s: Shape) -> float {
+    let c: Circle = s;       // stops the program if s holds a Rect
+    c.r
+}
+\end{lstlisting}
+
+A cast needs the member's type written down, so it cannot happen through a
+field or an element: reading \ic{r} out of a field of union type, or out of
+\ic{shapes[0]}, is an error --- nothing there states which member is meant.
+Bind or match one first (\ic{let c: Circle = ...;} and then \ic{c.r}).
+
+A union value keeps the fields its members share at one place, whatever
+member it holds, so reading one is a single load: each member is laid
+out for the union it is held in. Going between a union and a member,
+either way, or between two unions, is therefore a cast that may copy the
+record: a write through the cast value is not seen through the union,
+nor the other way round, and whether a cast copies depends on the field
+names, so a program should not count on either. A \ic{match} arm's
+binding (\ic{Circle c}) is such a cast; a destructuring pattern
+(\ic{Rect \{ w, h \}}) reads the fields in place. To change a field only
+some members have, cast, write and store the record back:
+
+\begin{lstlisting}
+let r: Rect = s;
+r.w = 4.0;
+s = r;
+\end{lstlisting}
+
+\subsection{Type aliases}
+\label{sec:type-aliases}
+
+\ic{type Name = T;} names a type: the alias stands for \ty{T} wherever
+it is written (two aliases of one structure are one type). An alias may
+refer to itself, or to aliases that refer back to it, when the reference
+sits behind an indirection --- a record's field, an array, a fixed array,
+an option, a map's key or value, a pointer, or a function type:
+
+\begin{lstlisting}
+type List = { head: long, tail: List? };
+type Expr = Num | Add;
+type Num = { n: long };
+type Add = { l: Expr, r: Expr };
+let e: Expr = { l: { n: 1 }, r: { l: { n: 2 }, r: { n: 3 } } };
+type Tree = { str => Tree };     // map of itself
+type Ids = [Ids];                // array of itself
+type Maybe = Maybe?;             // option of itself
+\end{lstlisting}
+
+\noindent Each of those is a heap object with a header at run time, so the
+cycle is closed by a pointer; that is why a record field always worked, and
+why the others do too. What names no type is a cycle with \emph{no}
+indirection --- \ic{type T = T;}, \ic{type A = B; type B = A;} or
+\ic{type U = U | \{ a: long \};} --- and that is an error at its
+declaration: \ic{type 'T' refers to itself outside any record field,}
+\ic{function type, array, option, map or pointer}.
+
+\subsection{Maps}
+\label{sec:type-maps}
+
+\ic{\{K => V\}} is a dynamic map from hashable keys \ty{K} to one
+value type \ty{V}. Reading \ic{m[k]} always yields \ic{V?}; see
+Section~\ref{sec:maps}.
+
+\ty{K} is a hashable key type (\ic{str}, \ic{long}, \ic{byte},
+\ic{bool}, \ic{float}), but a \textbf{map literal only accepts \ic{str}
+keys} --- the checker's inference for a literal fixes the key type to
+\ic{str}, so \ic{\{ 1: 5 \}} infers a shape rather than a map. Build a
+non-\ic{str}-keyed map from an annotated empty literal and store into
+it (Section~\ref{sec:maps}).
+
+\subsection{Options and pointers}
+\label{sec:type-options}
+
+\ic{T?} is ``a \ty{T} or nothing''. Its empty case is \ic{none};
+\ic{some}/\ic{unwrap}/\ic{is\_some}, the postfix unwrap \ic{x!}
+(Section~\ref{sec:builtin-option}) and the propagation operator \ic{?.}
+(below) manipulate it. There is no
+\ic{null}: \ic{none} is the only empty value, and it exists only at
+option types --- a plain \ic{str} or \ic{long} can never be empty, so
+\ic{s == none} on a \ic{str} is a type error. On its own \ic{none} has
+the type ``option of anything'' (printed \ic{none}) and adopts the
+option type its context expects. A plain \ty{T} does not widen to
+\ic{T?}; write \ic{some(v)} --- but an optional record field in a literal
+(Section~\ref{sec:type-records}) and an optional parameter
+(Section~\ref{sec:declarations}) take a plain \ty{T}. Two options are equal when both are
+\ic{none} or both hold equal payloads (Section~\ref{sec:equality}).
+
+\subsubsection{Option propagation}
+\label{sec:opt-propagation}
+
+\ic{e?.f} reads the field \ic{f} of \ic{e} when \ic{e} is there, and is
+\ic{none} when it is not --- no unwrap, no trap, and no \ic{!}:
+\begin{lstlisting}
+let a: str? = some("yo hi");
+let parts = a?.split(" ");   // [str]? --- the method, or none
+let part1 = parts?.[0];      // the first element, or none
+\end{lstlisting}
+% These four chains have no space and no underscore in them, so unlike every
+% other long code span in the manual (\ic breaks at \_ and at the spaces) they
+% are one unbreakable box: 33 to 38 characters, and a line carrying one of them
+% went 115pt over the measure. \allowbreak after a dot of the chain is a
+% discretionary, so nothing shows unless TeX needs it.
+The receiver is read \emph{once}, whatever it is, and \emph{every} link
+after the \ic{?.} propagates: \ic{obj?.inner.\allowbreak inneragain.inneragainn} is
+\ic{none} whenever \ic{obj} is, not just the first field. So a method
+call, a \ic{.length}, a slice or an index may all follow it:
+\ic{here()?.name.length}. A link whose own type is an option ends the
+propagating chain --- \ic{inneragain} is \ic{X?} here, so reading a field
+of \emph{it} needs a \ic{?.} of its own, and \ic{obj?.inner.inneragain.name}
+is a type error. Write \ic{obj?.inner.inneragain?.\allowbreak inneragainn}
+instead, or \ic{obj?.inner.inneragain?.name}. Further down, the same applies
+to a subscript or a method: \ic{a?.xs?.[0]?.f} reaches through two
+subscripts and a field.
+
+The type is the option of the field's --- of the subscript's, or of the
+method's return --- and it is \emph{flat}: a field that is itself an
+option needs no second wrapper, so \ic{a?.b} with \ic{b: T?} is \ic{T?},
+and \ic{none} then means \emph{either} \ic{a} or \ic{b} was \ic{none}.
+That is what lets the next link carry its own \ic{?.}. An optional field
+reached through a \ic{?.} is an option like any other, and may be
+unwrapped as one: \ic{a?.b!.tag}.
+
+A chain ending in a \ic{void} call stays \ic{void}: \ic{obj?.cleanup();}
+runs the method when the object is there, and there is nothing to hand
+back. Applying \ic{?.} to a type that is not an option is a type error
+(Section~\ref{sec:errors}) --- \ic{5?.f} does not compile --- and so is
+a \ic{?.} with neither a name nor \ic{[} after it.
+
+\ic{*T} is a raw machine pointer; \ic{\&e} yields one
+(Section~\ref{sec:pointers}).
+
+\subsection{Void}
+
+\ic{void} is the type of an expression that computes no value: a loop,
+an \ic{if} without \ic{else}, a call to a void function
+(Section~\ref{sec:void}), a bare \ic{return}. Void is not a value: it
+cannot be bound, passed, printed or returned as one.
+
+\paragraph{Disagreeing \ic{if} arms.} When the two arms of an
+\ic{if}/\ic{else} have different types, the whole \ic{if} is
+\ic{void} --- a statement. That is legal wherever a statement is, and
+an error wherever a value is needed:
+
+\begin{lstlisting}
+let ok = true;
+if (ok) { 1 } else { "one" };            // fine: a statement
+let v = if (ok) { 1 } else { 2 };        // long
+let w = if (ok) { 1 } else { "one" };    // error: cannot bind a void value to 'w'
+\end{lstlisting}
+
+\subsection{Functions}
+
+\ic{(T, T, ...) -> R}. Every parameter has a type: written, or the type
+of its default value (\ic{punct = "!"}); a parameter with neither is an
+error. Return types are inferred when omitted and checked when written.
+Function values are first-class (they may be bound, passed, stored and
+called); see Section~\ref{sec:functions}.
+
+\subsection{Annotations and inference}
+\label{sec:annotations}
+
+Every value has a type the program states or the checker can see; there
+is no unknown type. Where the type cannot be inferred, annotate:
+
+\begin{itemize}[nosep]
+\item \ic{def} parameters are annotated, or have a default.
+  The error is \ic{parameter 'x' has no type (annotate it)}.
+\item Return types are inferred from the body when omitted: the type of
+  its trailing value, or \ic{void} when it ends in a statement. Written or
+  inferred, every \ic{return} and the body's trailing value must conform,
+  converting as any store does (Section~\ref{sec:conversions}): \ic{half}
+  below returns \ic{1.0} for \ic{true}, and a \ic{return 1.5} in a body
+  that ends in a \ic{long} is an error. A bare \ic{return;} in a body
+  that ends in a value is one too, and its diagnostic names the type the
+  tail gave --- which the source never wrote --- so it also says what does
+  not: \ic{write '-> void' on the def to return nothing}. Writing it makes
+  the inferred type a written one and the \ic{return;} what the def says
+  it does.
+
+\begin{lstlisting}
+def half(c: bool) { if (c) { return 1; }; 2.5 };
+\end{lstlisting}
+\item An inferred return type is known once the body has been checked,
+  in program order. A call before that --- to a \ic{def} further down
+  that has no \ic{->}, or a value use of it --- is an error,
+  \ic{'f' is used before its return type is known (annotate it)}: write
+  the callee's return type. A \ic{def} calling itself needs none. Its body
+  is checked with the call's type unknown, then again as if the type
+  the rest of the body gives were written, so \ic{fact} below is a
+  \ic{long}; a body whose only value is the call itself, like
+  \ic{spin}'s, is an error:
+
+\begin{lstlisting}
+def fact(n: long) { if (n < 2) { 1 } else { n * self(n - 1) } };
+def spin(n: long) { self(n) };
+// error: the return type of 'spin' is not fully known (annotate it)
+\end{lstlisting}
+\item \ic{let} annotations are optional and checked; an annotated
+  \emph{array literal} \emph{adopts} the annotated element type:
+  \ic{let b: [byte] = [104, 105];} packs those elements one byte each.
+  Adoption is restricted to literals --- assigning an existing
+  \ic{[long]} to a \ic{[byte]} binding is a type error (the layouts
+  differ).
+\item An empty array literal \ic{[]} and \ic{none} take their type from
+  where they go (an annotated \ic{let}, an argument, an assignment, a
+  comparison). Bound with nothing to say it, the type is not known:
+  \ic{let xs = [];} is an error, \ic{the type of 'xs' is not fully known
+  (annotate it)}; write \ic{let xs: [str] = [];}. An unannotated
+  \ic{\{\}} is the empty record; under a map annotation it is the empty
+  map: \ic{let m: \{str => long\} = \{\};}.
+\end{itemize}
+
+\subsection{Conversions}
+\label{sec:conversions}
+
+The implicit conversions are:
+\ic{long $\bs to$ float} (the numeric widening),
+\ic{byte $\bs to$ long}, \ic{byte $\bs to$ float}, the narrowing
+\ic{long $\bs to$ byte} at a \ic{byte} position (the value is masked to
+eight bits: \ic{let b: byte = 258;} stores 2), and
+\ic{long}/\ic{byte}/\ic{float} $\bs to$ \ic{bigint} --- exact for the two
+integers, truncating toward zero for the float (Section~\ref{sec:type-bigint}).
+There is no implicit conversion the other way: a bigint needs \ic{tolong} or
+\ic{tofloat}, which answer options. A \ic{str} also
+flows into a \ic{*T} position, since a string value is a byte address.
+A union value converts to one of its members (a cast checked when the
+program runs, Section~\ref{sec:type-unions}). Apart from these, nothing
+converts: there is no cast syntax.
+
+A value converts where it is stored under a known type: an annotated
+\ic{let}; an assignment to a variable, element, field, map entry or
+pointee; an argument; a \ic{return} or trailing value under the
+function's return type, declared or inferred; an element of an array
+literal; and the element that
+\ic{+=}, \ic{*=} or \ic{::} adds. Array \ic{+} and \ic{+=} with an
+array operand convert element by element into the left operand's
+element type: \ic{[0.5] + [7, 8]} is \ic{[0.5, 7.0, 8.0]}. Arithmetic
+on a \ic{byte} is \ic{long} arithmetic (\ic{-b} is a negative
+\ic{long}); storing the result back into a \ic{byte} masks it.
+
+Nothing converts a value that is already inside another one. Arrays,
+maps and records are references and an option is a box, so an existing
+\ic{[long]} is not a \ic{[float]}, and an existing record
+\ic{\{x: long\}} is not a \ic{\{x: float\}}: a record's numeric field
+types must match exactly. A record \emph{literal} written where a record
+type is declared is created as that type, so its values convert:
+\ic{let p: \{x: float\} = \{x: 1\};} stores \ic{1.0}, and an optional
+field's plain value is wrapped: \ic{let q: \{x?: float\} = \{x: 1\};}
+stores \ic{some(1.0)} (Section~\ref{sec:type-records}).
+
+\subsection{Operator typing}
+
+Arithmetic requires numbers; if either side is \ic{bigint} the result is
+\ic{bigint} and the other side converts to it (a \ic{float} by truncating
+toward zero, Section~\ref{sec:type-bigint}), and otherwise if either side is
+\ic{float} the result is \ic{float} and the other side widens. \ic{+} additionally allows
+strings (concatenation, with auto-stringification of the non-string
+side) and arrays (Section~\ref{sec:arrays}); arrays win over strings
+when both appear. The bitwise operators \ic{\&} \ic{|}
+\ic{\textasciicircum{}} \ic{<{}<} \ic{>{}>} \ic{>{}>{}>} and unary
+\ic{\textasciitilde{}} take integers only --- a \ic{byte} widens --- and
+yield \ic{long}; any other operand is an error naming it (\ic{'\&' left
+operand: expected long, got float}). Comparisons yield \ic{bool}; \ic{<}\,\ldots\ic{>=}
+on two strings is lexicographic byte order. \ic{\&\&}/\ic{||} accept any
+values: a non-zero value is true and the result is \ic{bool}
+(Section~\ref{sec:logic}). Equality works on any two values of the
+same type; it is by content for scalars and strings, structural for
+heap arrays and options (at any depth), and by identity for records and
+maps (Section~\ref{sec:equality}).
+
+\subsection{Compound assignment typing}
+\label{sec:opassign-typing}
+
+For a target of type \ty{T} and value of type \ty{U}:
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\ty{T} & operators & rule \\
+\midrule
+numbers & \ic{+= -= *= /= \%=} & \ty{U} converts to \ty{T}; stored as \ty{T} \\
+integers & \ic{\&= |= \textasciicircum{}= <{}<= >{}>= >{}>{}>=} & \ty{U} an
+  integer; a \ic{byte} keeps the low 8 bits \\
+\ic{str} & \ic{+=} only & \ty{U} $=$ \ty{str}, or a \ic{byte} (appends \ic{chr(b)}) \\
+heap array & \ic{+=}, \ic{*=} only & Section~\ref{sec:arrays} \\
+\ic{[T; N]} & none & its length is part of its type, so it cannot grow \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent Anything else is a compile error, e.g. ``\ic{arrays support
+only '+=' and '*=' (in place), not '-='}'' or ``\ic{'\&=' needs an
+integer target, got float}''. \ic{++}/\ic{--} require a
+numeric target.
+
+\subsection{The poison law}
+\label{sec:poison}
+
+Every error is reported once, at its cause. After an error, the
+expression it was found in gets the \emph{error type} \ic{<error>}, which
+fits wherever it goes, so it never generates follow-on errors at every
+enclosing use: in element checks, call arguments and branches (an error
+arm never makes an \ic{if} void). The error type exists only where an
+error was reported; a program that compiles has none.

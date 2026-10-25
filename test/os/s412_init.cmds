@@ -1,0 +1,6 @@
+echo $HOME $USER $PATH $TERM $XDG_RUNTIME_DIR
+env | head -n 3
+ls /run/user
+ls /tmp
+uname
+exit 0

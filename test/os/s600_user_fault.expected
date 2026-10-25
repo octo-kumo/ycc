@@ -1,0 +1,10 @@
+user:/home/user$ segv
+before
+
+fault: task 4 cr2=8
+user:/home/user$ echo status $?
+status 139
+user:/home/user$ echo still alive
+still alive
+user:/home/user$ exit 0
+bye

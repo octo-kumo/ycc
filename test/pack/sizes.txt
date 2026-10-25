@@ -1,0 +1,5 @@
+# Packed size of su_pack.y's fixed source, dynamic Huffman, including the stub.
+# Growth fails. The default speed goal duplicates return tails: the stub grows
+# from 20977 to 21046 bytes (+69), while the compressed fixture shrinks 15 bytes.
+# The resulting 54-byte increase is the explicit speed/size tradeoff.
+src_dynamic 26231

@@ -1,0 +1,21 @@
+# Copy to .pe-vm.conf (git-ignored) to run the Windows gates: `make pe-test`,
+# or ./ytest pe-fixtures ./ycc, ./ytest cycc-win. A PE is only ever run on a
+# real Windows machine; there is no wine.
+#
+# backend: ssh (a Windows machine reached over ssh that sees a directory this
+# machine shares) or local (this machine is Windows; the default there).
+backend = ssh
+# the ssh command up to the destination (words split on spaces)
+ssh = ssh -i /home/you/.ssh/winvm -p 2223 -o IdentitiesOnly=yes you@localhost
+# a directory both machines see: as this machine names it ...
+share_local = /home/you/win-shared
+# ... and as Windows names it (a UNC path; a plain path when backend = local)
+share_remote = \\10.0.2.2\winshare
+# credentials for `net use` of the share (an ssh logon has no mapped drives); leave
+# empty for none
+share_user = you
+share_pass = secret
+# the drive letter Windows maps the share to
+drive = Z
+# seconds one fixture may run
+timeout = 30

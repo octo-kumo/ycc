@@ -1,0 +1,14 @@
+user:/home/user$ /bin/fstest big
+ok create big
+ok wrote 5 MiB
+ok size
+ok read back
+ok seek
+ok read after seek
+ok byte after seek
+ok ftruncate big
+ok blocks reused after unlink
+ok unlink big2
+done fails=0
+user:/home/user$ halt
+halting

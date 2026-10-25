@@ -1,0 +1,14 @@
+capture one line: [hello
+]
+capture fed input: [R:line
+]
+empty input, no output: []
+a session is three longs: 3
+pwrite bytes: 3
+read back: [got:hi
+]
+status: 0
+status 3 comes back: 3
+empty command still forks: 3
+its status: 0
+capture of an exit: []

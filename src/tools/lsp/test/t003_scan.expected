@@ -1,0 +1,119 @@
+keyword[let],ident[x],operator[=],number[1],punct[;]
+keyword[const],ident[y],punct[:],ident[long],operator[=],number[2],punct[;]
+keyword[def],ident[f],punct[(],ident[a],punct[:],ident[long],punct[)],operator[->],ident[long],punct[{],ident[a],punct[}]
+keyword[if],ident[x],operator[==],number[1],punct[{],ident[y],punct[}],keyword[else],punct[{],ident[z],punct[}]
+keyword[while],ident[i],operator[<],number[10],punct[{],ident[i],operator[=],ident[i],operator[+],number[1],punct[;],punct[}]
+keyword[foreach],punct[(],ident[k],keyword[in],ident[ks],punct[)],punct[{],ident[print],punct[(],ident[k],punct[)],punct[;],punct[}]
+keyword[return],keyword[true],punct[;]
+keyword[while],ident[i],operator[<],number[10],punct[{],keyword[if],ident[i],operator[==],number[5],punct[{],keyword[break],punct[;],punct[}],keyword[continue],punct[;],punct[}]
+keyword[for],punct[(],keyword[let],ident[k],operator[=],number[0],punct[;],ident[k],operator[<],number[3],punct[;],ident[k],operator[++],punct[)],punct[{],keyword[if],punct[(],ident[k],punct[)],punct[{],keyword[continue],punct[;],punct[}],keyword[break],punct[;],punct[}]
+number[1]
+number[1.5]
+number[1e10]
+number[1E-10]
+number[0x1f]
+number[0b1010_1010]
+number[1_000_000]
+number[3.14159]
+ident[a],operator[>>],ident[b]
+ident[a],operator[>>=],ident[b]
+ident[a],operator[>>>],ident[b]
+ident[a],operator[>>>=],ident[b]
+ident[a],operator[<<=],ident[b]
+ident[a],operator[==],ident[b],operator[!=],ident[c],operator[<=],ident[d],operator[>=],ident[e]
+ident[a],operator[&&],ident[b],operator[||],operator[!],ident[c]
+ident[a],operator[+=],ident[b],operator[-=],ident[c],operator[*=],ident[d],operator[/=],ident[e],operator[%=],ident[f]
+ident[a],operator[&],ident[b],operator[|],ident[c],operator[^],ident[d],operator[~],ident[e]
+ident[a],operator[..],ident[b]
+ident[a],operator[?.],ident[b]
+ident[m],operator[::],ident[x]
+keyword[def],ident[f],punct[(],punct[)],operator[->],ident[long],punct[{],number[1],punct[}]
+punct[(],ident[a],punct[,],ident[b],punct[)],punct[;]
+punct[{],ident[k],punct[:],ident[v],punct[}]
+contextual[match],ident[x],punct[{],ident[A],operator[=>],number[1],punct[}]
+contextual[spawn],punct[{],number[1],punct[}]
+keyword[let],ident[m],operator[=],contextual[mutex],punct[(],punct[)],punct[;],contextual[lock],ident[m],punct[{],punct[}]
+contextual[self],operator[.],ident[x]
+comment[// a line comment]
+keyword[let],ident[x],operator[=],number[1],punct[;],comment[// trailing]
+comment[/* a block comment */]
+comment[/* multi
+   line */]
+comment[/* one */],keyword[let],comment[/* two */],ident[x],operator[=],number[1],punct[;]
+comment[/* a /* b */],ident[c]
+ident[a],operator[/],ident[b]
+ident[a],operator[/=],ident[b]
+ident[a],operator[/],comment[// c],ident[b]
+string["plain"]
+string["with \"escape\""]
+char['single']
+bstring[b"bytes"]
+bstring[b'bytes']
+error[c'a']
+string["""line
+line"""]
+fstring[f"""x = {x}
+more"""]
+number[129b]
+number[0b10001b]
+string["tab\there"]
+string["\x41\n"]
+fstring[f"plain"]
+fstring[f"x = {x}"]
+fstring[f"{a}{b}{c}"]
+fstring[f"{d["k"]}"]
+fstring[f"{s[1:3]}"]
+fstring[f"{n == 1 ? "y" : "n"}"]
+fstring[f"{a[0]} and {b[1]}"]
+fstring[f"{{literal brace}}"]
+fstring[f"\n{x}\n"]
+keyword[let],ident[x],operator[=],error["unterminated]
+1
+error
+error[/* never closed]
+1
+1
+ident[a],error[@],ident[b]
+1
+{"a": "oops}"
+1
+/* oops*/
+let a = "x"; let b = 1;
+0
+keyword @1:1
+ident @1:5
+operator @1:7
+number @1:9
+punct @1:10
+keyword @2:1
+ident @2:5
+operator @2:7
+number @2:9
+punct @2:10
+comment @4:1
+keyword @5:7
+ident @5:11
+operator @5:13
+number @5:15
+punct @5:16
+keyword @1:1
+ident @1:5
+operator @1:7
+string @1:9
+punct @1:16
+keyword @1:18
+ident @1:22
+operator @1:24
+number @1:26
+punct @1:27
+[0, 2, 5]
+0
+2
+7
+-1
+-1
+1
+
+
+
+0

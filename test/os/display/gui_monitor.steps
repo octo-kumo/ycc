@@ -1,0 +1,11 @@
+boot std
+shot desktop
+key f3
+wait 3
+key f3
+wait 1
+key f1
+wait 1
+type osstat check
+key ret
+await osstat: ok

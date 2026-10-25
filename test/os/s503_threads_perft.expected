@@ -1,0 +1,28 @@
+user:/home/user$ perft
+perft -- chess perft, threaded.  4 workers
+built-in positions:
+  startpos  rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1
+    depth 1:          20
+    depth 2:         400
+    depth 3:        8902
+    depth 4:      197281
+    depth 5:     4865609
+  kiwipete  r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1
+    depth 1:          48
+    depth 2:        2039
+    depth 3:       97862
+    depth 4:     4085603
+  position3  8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1
+    depth 1:          14
+    depth 2:         191
+    depth 3:        2812
+    depth 4:       43238
+    depth 5:      674624
+  ep-pin  8/8/8/8/k1Pp3R/8/8/7K b - c3 0 1
+    depth 1:           5
+    depth 2:          70
+    depth 3:         438
+    depth 4:        7051
+    depth 5:       44848
+user:/home/user$ halt
+halting

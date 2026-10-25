@@ -1,0 +1,22 @@
+write t.txt one two three
+touch empty
+cat t.txt
+cat nosuch t.txt
+wc t.txt
+wc -w t.txt
+wc -l t.txt empty
+head -n 1 t.txt
+tail -n 1 t.txt
+tail -n 1 nosuch
+cp t.txt u.txt
+mv u.txt v.txt
+cat v.txt
+rm v.txt
+rm -f v.txt
+rm v.txt
+echo -n no newline
+echo
+sleep 0.2
+echo slept
+uname
+halt

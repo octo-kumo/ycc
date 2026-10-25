@@ -1,0 +1,1214 @@
+pat=[abc] subj=[xxabcyy]
+  match=-
+  full=-
+  search=[abc] 2..5
+  groups=-
+  find=abc@2
+  is_match=true
+  replace=[xx<abc>yy]
+pat=[abc] subj=[ab]
+  match=-
+  full=-
+  search=-
+  groups=-
+  find=-
+  is_match=false
+  replace=[ab]
+pat=[a.c] subj=[abc]
+  match=[abc] 0..3
+  full=[abc]
+  search=[abc] 0..3
+  groups=-
+  find=abc@0
+  is_match=true
+  replace=[<abc>]
+pat=[a.c] subj=[a\nc]
+  match=-
+  full=-
+  search=-
+  groups=-
+  find=-
+  is_match=false
+  replace=[a\nc]
+pat=[.] subj=[a]
+  match=[a] 0..1
+  full=[a]
+  search=[a] 0..1
+  groups=-
+  find=a@0
+  is_match=true
+  replace=[<a>]
+pat=[.*] subj=[abc]
+  match=[abc] 0..3
+  full=[abc]
+  search=[abc] 0..3
+  groups=-
+  find=<differs>
+  is_match=true
+  replace=<differs>
+pat=[a+b] subj=[aab]
+  match=[aab] 0..3
+  full=[aab]
+  search=[aab] 0..3
+  groups=-
+  find=aab@0
+  is_match=true
+  replace=[<aab>]
+pat=[a*b] subj=[b]
+  match=[b] 0..1
+  full=[b]
+  search=[b] 0..1
+  groups=-
+  find=b@0
+  is_match=true
+  replace=[<b>]
+pat=[a|] subj=[a]
+  match=[a] 0..1
+  full=[a]
+  search=[a] 0..1
+  groups=-
+  find=<differs>
+  is_match=true
+  replace=<differs>
+pat=[|a] subj=[ba]
+  match=<empty> 0..0
+  full=-
+  search=<empty> 0..0
+  groups=-
+  find=<differs>
+  is_match=true
+  replace=<differs>
+pat=[()] subj=[ab]
+  match=<empty> 0..0
+  full=-
+  search=<empty> 0..0
+  groups=<empty>
+  find=<differs>
+  is_match=true
+  replace=<differs>
+pat=[a||b] subj=[ab]
+  match=[a] 0..1
+  full=-
+  search=[a] 0..1
+  groups=-
+  find=<differs>
+  is_match=true
+  replace=<differs>
+pat=[[abc]+] subj=[xxcabz]
+  match=-
+  full=-
+  search=[cab] 2..5
+  groups=-
+  find=cab@2
+  is_match=true
+  replace=[xx<cab>z]
+pat=[[^abc]+] subj=[abxyz]
+  match=-
+  full=-
+  search=[xyz] 2..5
+  groups=-
+  find=xyz@2
+  is_match=true
+  replace=[ab<xyz>]
+pat=[[a-z0-9_]+] subj=[Ab_9-]
+  match=-
+  full=-
+  search=[b_9] 1..4
+  groups=-
+  find=b_9@1
+  is_match=true
+  replace=[A<b_9>-]
+pat=[[-a]] subj=[-a]
+  match=[-] 0..1
+  full=-
+  search=[-] 0..1
+  groups=-
+  find=-@0,a@1
+  is_match=true
+  replace=[<-><a>]
+pat=[[a-]] subj=[a-]
+  match=[a] 0..1
+  full=-
+  search=[a] 0..1
+  groups=-
+  find=a@0,-@1
+  is_match=true
+  replace=[<a><->]
+pat=[[]a]] subj=[]a]
+  match=[]] 0..1
+  full=-
+  search=[]] 0..1
+  groups=-
+  find=]@0,a@1
+  is_match=true
+  replace=[<]><a>]
+pat=[[\\]]] subj=[]]
+  match=-
+  full=-
+  search=-
+  groups=-
+  find=-
+  is_match=false
+  replace=[]]
+pat=[[[:digit:]]+] subj=[x42]
+  match=-
+  full=-
+  search=[42] 1..3
+  groups=-
+  find=42@1
+  is_match=true
+  replace=[x<42>]
+pat=[[[:^digit:]]+] subj=[4a2]
+  match=-
+  full=-
+  search=[a] 1..2
+  groups=-
+  find=a@1
+  is_match=true
+  replace=[4<a>2]
+pat=[[[:alpha:][:digit:]]+] subj=[a1-]
+  match=[a1] 0..2
+  full=-
+  search=[a1] 0..2
+  groups=-
+  find=a1@0
+  is_match=true
+  replace=[<a1>-]
+pat=[[\d]] subj=[5]
+  match=[5] 0..1
+  full=[5]
+  search=[5] 0..1
+  groups=-
+  find=5@0
+  is_match=true
+  replace=[<5>]
+pat=[[\-]] subj=[-]
+  match=[-] 0..1
+  full=[-]
+  search=[-] 0..1
+  groups=-
+  find=-@0
+  is_match=true
+  replace=[<->]
+pat=[[^\]]] subj=[a]
+  match=[a] 0..1
+  full=[a]
+  search=[a] 0..1
+  groups=-
+  find=a@0
+  is_match=true
+  replace=[<a>]
+pat=[[]]] subj=[]]
+  match=[]] 0..1
+  full=[]]
+  search=[]] 0..1
+  groups=-
+  find=]@0
+  is_match=true
+  replace=[<]>]
+pat=[\d+] subj=[x42y]
+  match=-
+  full=-
+  search=[42] 1..3
+  groups=-
+  find=42@1
+  is_match=true
+  replace=[x<42>y]
+pat=[\D+] subj=[ab1]
+  match=[ab] 0..2
+  full=-
+  search=[ab] 0..2
+  groups=-
+  find=ab@0
+  is_match=true
+  replace=[<ab>1]
+pat=[\w+] subj=[ a_1 ]
+  match=-
+  full=-
+  search=[a_1] 1..4
+  groups=-
+  find=a_1@1
+  is_match=true
+  replace=[ <a_1> ]
+pat=[\W+] subj=[ab!!cd]
+  match=-
+  full=-
+  search=[!!] 2..4
+  groups=-
+  find=!!@2
+  is_match=true
+  replace=[ab<!!>cd]
+pat=[\s+] subj=[a \t\nb]
+  match=-
+  full=-
+  search=[ \t\n] 1..4
+  groups=-
+  find= \t\n@1
+  is_match=true
+  replace=[a< \t\n>b]
+pat=[\S+] subj=[  ab ]
+  match=-
+  full=-
+  search=[ab] 2..4
+  groups=-
+  find=ab@2
+  is_match=true
+  replace=[  <ab> ]
+pat=[\bfoo\b] subj=[a foo b]
+  match=-
+  full=-
+  search=[foo] 2..5
+  groups=-
+  find=foo@2
+  is_match=true
+  replace=[a <foo> b]
+pat=[\Bfoo] subj=[afoob]
+  match=-
+  full=-
+  search=[foo] 1..4
+  groups=-
+  find=foo@1
+  is_match=true
+  replace=[a<foo>b]
+pat=[a\bb] subj=[ab]
+  match=-
+  full=-
+  search=-
+  groups=-
+  find=-
+  is_match=false
+  replace=[ab]
+pat=[\b] subj=[ab]
+  match=<empty> 0..0
+  full=-
+  search=<empty> 0..0
+  groups=-
+  find=<differs>
+  is_match=true
+  replace=<differs>
+pat=[\B] subj=[a b]
+  match=-
+  full=-
+  search=-
+  groups=-
+  find=<differs>
+  is_match=false
+  replace=<differs>
+pat=[\b\w+\b] subj=[  hi there  ]
+  match=-
+  full=-
+  search=[hi] 2..4
+  groups=-
+  find=hi@2,there@5
+  is_match=true
+  replace=[  <hi> <there>  ]
+pat=[\B] subj=[ab]
+  match=-
+  full=-
+  search=<empty> 1..1
+  groups=-
+  find=<differs>
+  is_match=true
+  replace=<differs>
+pat=[\x41\x42] subj=[zABz]
+  match=-
+  full=-
+  search=[AB] 1..3
+  groups=-
+  find=AB@1
+  is_match=true
+  replace=[z<AB>z]
+pat=[\x{263A}] subj=[a\xe2\x98\xbab]
+  match=-
+  full=-
+  search=[\xe2\x98\xba] 1..4
+  groups=-
+  find=\xe2\x98\xba@1
+  is_match=true
+  replace=[a<\xe2\x98\xba>b]
+pat=[\.] subj=[a.b]
+  match=-
+  full=-
+  search=[.] 1..2
+  groups=-
+  find=.@1
+  is_match=true
+  replace=[a<.>b]
+pat=[\[] subj=[a[b]
+  match=-
+  full=-
+  search=[[] 1..2
+  groups=-
+  find=[@1
+  is_match=true
+  replace=[a<[>b]
+pat=[\$] subj=[a$b]
+  match=-
+  full=-
+  search=[$] 1..2
+  groups=-
+  find=$@1
+  is_match=true
+  replace=[a<$>b]
+pat=[\^] subj=[a^b]
+  match=-
+  full=-
+  search=[^] 1..2
+  groups=-
+  find=^@1
+  is_match=true
+  replace=[a<^>b]
+pat=[(?i)\^] subj=[A^B]
+  match=-
+  full=-
+  search=[^] 1..2
+  groups=-
+  find=^@1
+  is_match=true
+  replace=[A<^>B]
+pat=[a\$] subj=[a$b]
+  match=[a$] 0..2
+  full=-
+  search=[a$] 0..2
+  groups=-
+  find=a$@0
+  is_match=true
+  replace=[<a$>b]
+pat=[\$\^\.\*] subj=[$^.*x]
+  match=[$^.*] 0..4
+  full=-
+  search=[$^.*] 0..4
+  groups=-
+  find=$^.*@0
+  is_match=true
+  replace=[<$^.*>x]
+pat=[a\\b] subj=[a\b]
+  match=[a\b] 0..3
+  full=[a\b]
+  search=[a\b] 0..3
+  groups=-
+  find=a\b@0
+  is_match=true
+  replace=[<a\b>]
+pat=[\0] subj=[a\x00b]
+  match=-
+  full=-
+  search=[\x00] 1..2
+  groups=-
+  find=\x00@1
+  is_match=true
+  replace=[a<\x00>b]
+pat=[\t\n] subj=[a\t\nb]
+  match=-
+  full=-
+  search=[\t\n] 1..3
+  groups=-
+  find=\t\n@1
+  is_match=true
+  replace=[a<\t\n>b]
+pat=[\x7f] subj=[a\x7fb]
+  match=-
+  full=-
+  search=[\x7f] 1..2
+  groups=-
+  find=\x7f@1
+  is_match=true
+  replace=[a<\x7f>b]
+pat=[\a\b\f\v] subj=[a\x07\x08\x0c\x0bb]
+  match=-
+  full=-
+  search=-
+  groups=-
+  find=-
+  is_match=false
+  replace=[a\x07\x08\x0c\x0bb]
+pat=[^abc] subj=[abc]
+  match=[abc] 0..3
+  full=[abc]
+  search=[abc] 0..3
+  groups=-
+  find=abc@0
+  is_match=true
+  replace=[<abc>]
+pat=[abc\Z] subj=[abc]\n  CHECK unknown escape \Z at byte 4
+pat=[^abc$] subj=[abc]
+  match=[abc] 0..3
+  full=[abc]
+  search=[abc] 0..3
+  groups=-
+  find=abc@0
+  is_match=true
+  replace=[<abc>]
+pat=[^abc\Z] subj=[abc]\n  CHECK unknown escape \Z at byte 5
+pat=[(?m)^b] subj=[a\nbc]
+  match=-
+  full=-
+  search=[b] 2..3
+  groups=-
+  find=b@2
+  is_match=true
+  replace=[a\n<b>c]
+pat=[(?m)c$] subj=[a\nbc]
+  match=-
+  full=-
+  search=[c] 3..4
+  groups=-
+  find=c@3
+  is_match=true
+  replace=[a\nb<c>]
+pat=[^$] subj=<empty>
+  match=<empty> 0..0
+  full=<empty>
+  search=<empty> 0..0
+  groups=-
+  find=<differs>
+  is_match=true
+  replace=<differs>
+pat=[^] subj=[abc]
+  match=<empty> 0..0
+  full=-
+  search=<empty> 0..0
+  groups=-
+  find=<differs>
+  is_match=true
+  replace=<differs>
+pat=[a\Z] subj=[a]\n  CHECK unknown escape \Z at byte 2
+pat=[^\w+$] subj=[abc]
+  match=[abc] 0..3
+  full=[abc]
+  search=[abc] 0..3
+  groups=-
+  find=abc@0
+  is_match=true
+  replace=[<abc>]
+pat=[(?m)^$] subj=[a\n\nb]
+  match=-
+  full=-
+  search=<empty> 2..2
+  groups=-
+  find=<differs>
+  is_match=true
+  replace=<differs>
+pat=[\Aa\Z] subj=[a]\n  CHECK unknown escape \Z at byte 4
+pat=[a|ab] subj=[ab]
+  match=[a] 0..1
+  full=[ab]
+  search=[a] 0..1
+  groups=-
+  find=a@0
+  is_match=true
+  replace=[<a>b]
+pat=[ab|a] subj=[ab]
+  match=[ab] 0..2
+  full=[ab]
+  search=[ab] 0..2
+  groups=-
+  find=ab@0
+  is_match=true
+  replace=[<ab>]
+pat=[a|ab|abc] subj=[abc]
+  match=[a] 0..1
+  full=[abc]
+  search=[a] 0..1
+  groups=-
+  find=a@0
+  is_match=true
+  replace=[<a>bc]
+pat=[(a|ab)c] subj=[abc]
+  match=[abc] 0..3
+  full=[abc]
+  search=[abc] 0..3
+  groups=[ab]
+  find=abc@0
+  is_match=true
+  replace=[<abc>]
+pat=[foo|bar|baz] subj=[xbarz]
+  match=-
+  full=-
+  search=[bar] 1..4
+  groups=-
+  find=bar@1
+  is_match=true
+  replace=[x<bar>z]
+pat=[(a+)(b+)?] subj=[aaa]
+  match=[aaa] 0..3
+  full=[aaa]
+  search=[aaa] 0..3
+  groups=[aaa]|-
+  find=aaa@0
+  is_match=true
+  replace=[<aaa>]
+pat=[(a|)(b|)] subj=[ab]
+  match=[ab] 0..2
+  full=[ab]
+  search=[ab] 0..2
+  groups=[a]|[b]
+  find=<differs>
+  is_match=true
+  replace=<differs>
+pat=[(\d+)-(\d+)] subj=[x 12-34 y]
+  match=-
+  full=-
+  search=[12-34] 2..7
+  groups=[12]|[34]
+  find=12-34@2
+  is_match=true
+  replace=[x <12-34> y]
+pat=[((a)(b))] subj=[ab]
+  match=[ab] 0..2
+  full=[ab]
+  search=[ab] 0..2
+  groups=[ab]|[a]|[b]
+  find=ab@0
+  is_match=true
+  replace=[<ab>]
+pat=[(a(b(c)))] subj=[abc]
+  match=[abc] 0..3
+  full=[abc]
+  search=[abc] 0..3
+  groups=[abc]|[bc]|[c]
+  find=abc@0
+  is_match=true
+  replace=[<abc>]
+pat=[(a)|(b)] subj=[b]
+  match=[b] 0..1
+  full=[b]
+  search=[b] 0..1
+  groups=-|[b]
+  find=b@0
+  is_match=true
+  replace=[<b>]
+pat=[(?:ab)+] subj=[ababab]
+  match=[ababab] 0..6
+  full=[ababab]
+  search=[ababab] 0..6
+  groups=-
+  find=ababab@0
+  is_match=true
+  replace=[<ababab>]
+pat=[(?P<w>\w+)] subj=[hello]\n  CHECK unknown flag 'P' at byte 2
+pat=[(?:a|b)+c] subj=[ababc]
+  match=[ababc] 0..5
+  full=[ababc]
+  search=[ababc] 0..5
+  groups=-
+  find=ababc@0
+  is_match=true
+  replace=[<ababc>]
+pat=[((a)|(b))+] subj=[ab]
+  match=[ab] 0..2
+  full=[ab]
+  search=[ab] 0..2
+  groups=[b]|[a]|[b]
+  find=ab@0
+  is_match=true
+  replace=[<ab>]
+pat=[(a(b)?)+] subj=[ab]
+  match=[ab] 0..2
+  full=[ab]
+  search=[ab] 0..2
+  groups=[ab]|[b]
+  find=ab@0
+  is_match=true
+  replace=[<ab>]
+pat=[a{3}] subj=[aaa]
+  match=[aaa] 0..3
+  full=[aaa]
+  search=[aaa] 0..3
+  groups=-
+  find=aaa@0
+  is_match=true
+  replace=[<aaa>]
+pat=[a{3}] subj=[aa]
+  match=-
+  full=-
+  search=-
+  groups=-
+  find=-
+  is_match=false
+  replace=[aa]
+pat=[a{2,}] subj=[aaaa]
+  match=[aaaa] 0..4
+  full=[aaaa]
+  search=[aaaa] 0..4
+  groups=-
+  find=aaaa@0
+  is_match=true
+  replace=[<aaaa>]
+pat=[a{2,3}] subj=[aaaa]
+  match=[aaa] 0..3
+  full=-
+  search=[aaa] 0..3
+  groups=-
+  find=aaa@0
+  is_match=true
+  replace=[<aaa>a]
+pat=[a{0,2}] subj=[aaa]
+  match=[aa] 0..2
+  full=-
+  search=[aa] 0..2
+  groups=-
+  find=<differs>
+  is_match=true
+  replace=<differs>
+pat=[a{0}] subj=[aaa]
+  match=<empty> 0..0
+  full=-
+  search=<empty> 0..0
+  groups=-
+  find=<differs>
+  is_match=true
+  replace=<differs>
+pat=[a+?] subj=[aaa]
+  match=[a] 0..1
+  full=[aaa]
+  search=[a] 0..1
+  groups=-
+  find=a@0,a@1,a@2
+  is_match=true
+  replace=[<a><a><a>]
+pat=[a*?] subj=[aaa]
+  match=<empty> 0..0
+  full=[aaa]
+  search=<empty> 0..0
+  groups=-
+  find=<differs>
+  is_match=true
+  replace=<differs>
+pat=[a{2,3}?] subj=[aaaa]
+  match=[aa] 0..2
+  full=-
+  search=[aa] 0..2
+  groups=-
+  find=aa@0,aa@2
+  is_match=true
+  replace=[<aa><aa>]
+pat=[(ab)*] subj=[ababab]
+  match=[ababab] 0..6
+  full=[ababab]
+  search=[ababab] 0..6
+  groups=[ab]
+  find=<differs>
+  is_match=true
+  replace=<differs>
+pat=[(ab)+c] subj=[ababc]
+  match=[ababc] 0..5
+  full=[ababc]
+  search=[ababc] 0..5
+  groups=[ab]
+  find=ababc@0
+  is_match=true
+  replace=[<ababc>]
+pat=[\d{1,3}] subj=[12345]
+  match=[123] 0..3
+  full=-
+  search=[123] 0..3
+  groups=-
+  find=123@0,45@3
+  is_match=true
+  replace=[<123><45>]
+pat=[(a*)*] subj=[aa]
+  match=[aa] 0..2
+  full=[aa]
+  search=[aa] 0..2
+  groups=[aa]
+  find=<differs>
+  is_match=true
+  replace=<differs>
+pat=[(a*)+] subj=[aa]
+  match=[aa] 0..2
+  full=[aa]
+  search=[aa] 0..2
+  groups=[aa]
+  find=<differs>
+  is_match=true
+  replace=<differs>
+pat=[(|a)*] subj=[aa]
+  match=[aa] 0..2
+  full=[aa]
+  search=[aa] 0..2
+  groups=[a]
+  find=<differs>
+  is_match=true
+  replace=<differs>
+pat=[a{2}b{2}] subj=[aabb]
+  match=[aabb] 0..4
+  full=[aabb]
+  search=[aabb] 0..4
+  groups=-
+  find=aabb@0
+  is_match=true
+  replace=[<aabb>]
+pat=[<.+>] subj=[<a><b>]
+  match=[<a><b>] 0..6
+  full=[<a><b>]
+  search=[<a><b>] 0..6
+  groups=-
+  find=<a><b>@0
+  is_match=true
+  replace=[<<a><b>>]
+pat=[<.+?>] subj=[<a><b>]
+  match=[<a>] 0..3
+  full=[<a><b>]
+  search=[<a>] 0..3
+  groups=-
+  find=<a>@0,<b>@3
+  is_match=true
+  replace=[<<a>><<b>>]
+pat=[a.*?b] subj=[axxbxxb]
+  match=[axxb] 0..4
+  full=[axxbxxb]
+  search=[axxb] 0..4
+  groups=-
+  find=axxb@0
+  is_match=true
+  replace=[<axxb>xxb]
+pat=[\d+?] subj=[12345]
+  match=[1] 0..1
+  full=[12345]
+  search=[1] 0..1
+  groups=-
+  find=1@0,2@1,3@2,4@3,5@4
+  is_match=true
+  replace=[<1><2><3><4><5>]
+pat=[(?:a|ab)+?] subj=[abab]
+  match=[a] 0..1
+  full=[abab]
+  search=[a] 0..1
+  groups=-
+  find=a@0,a@2
+  is_match=true
+  replace=[<a>b<a>b]
+pat=[foo(?=bar)] subj=[foobar]
+  match=[foo] 0..3
+  full=-
+  search=[foo] 0..3
+  groups=-
+  find=foo@0
+  is_match=true
+  replace=[<foo>bar]
+pat=[foo(?!bar)] subj=[foobaz]
+  match=[foo] 0..3
+  full=-
+  search=[foo] 0..3
+  groups=-
+  find=foo@0
+  is_match=true
+  replace=[<foo>baz]
+pat=[(?=bar)foo] subj=[barfoo]
+  match=-
+  full=-
+  search=-
+  groups=-
+  find=-
+  is_match=false
+  replace=[barfoo]
+pat=[foo(?<=foo)bar] subj=[foobar]
+  match=[foobar] 0..6
+  full=[foobar]
+  search=[foobar] 0..6
+  groups=-
+  find=foobar@0
+  is_match=true
+  replace=[<foobar>]
+pat=[(?<!x)bar] subj=[bar]
+  match=[bar] 0..3
+  full=[bar]
+  search=[bar] 0..3
+  groups=-
+  find=bar@0
+  is_match=true
+  replace=[<bar>]
+pat=[a(?!b)c] subj=[ac]
+  match=[ac] 0..2
+  full=[ac]
+  search=[ac] 0..2
+  groups=-
+  find=ac@0
+  is_match=true
+  replace=[<ac>]
+pat=[\d+(?=%)] subj=[50%]
+  match=[50] 0..2
+  full=-
+  search=[50] 0..2
+  groups=-
+  find=50@0
+  is_match=true
+  replace=[<50>%]
+pat=[(?<=a)b] subj=[ab]
+  match=-
+  full=-
+  search=[b] 1..2
+  groups=-
+  find=b@1
+  is_match=true
+  replace=[a<b>]
+pat=[(?<=ab)c] subj=[abc]
+  match=-
+  full=-
+  search=[c] 2..3
+  groups=-
+  find=c@2
+  is_match=true
+  replace=[ab<c>]
+pat=[(?!x)] subj=[abc]
+  match=<empty> 0..0
+  full=-
+  search=<empty> 0..0
+  groups=-
+  find=<differs>
+  is_match=true
+  replace=<differs>
+pat=[a(?=b|b)c] subj=[ac]
+  match=-
+  full=-
+  search=-
+  groups=-
+  find=-
+  is_match=false
+  replace=[ac]
+pat=[(?<=a|ab)c] subj=[abc]\n  CHECK lookbehind must be a fixed width at byte 9
+pat=[(?i)(?=abc)x] subj=[ABC]
+  match=-
+  full=-
+  search=-
+  groups=-
+  find=-
+  is_match=false
+  replace=[ABC]
+pat=[a(?!b)(?!c)d] subj=[ad]
+  match=[ad] 0..2
+  full=[ad]
+  search=[ad] 0..2
+  groups=-
+  find=ad@0
+  is_match=true
+  replace=[<ad>]
+pat=[(?i)abc] subj=[ABC]
+  match=[ABC] 0..3
+  full=[ABC]
+  search=[ABC] 0..3
+  groups=-
+  find=ABC@0
+  is_match=true
+  replace=[<ABC>]
+pat=[(?i)[a-z]+] subj=[AbC]
+  match=[AbC] 0..3
+  full=[AbC]
+  search=[AbC] 0..3
+  groups=-
+  find=AbC@0
+  is_match=true
+  replace=[<AbC>]
+pat=[(?s).+] subj=[a\nb]
+  match=[a\nb] 0..3
+  full=[a\nb]
+  search=[a\nb] 0..3
+  groups=-
+  find=a\nb@0
+  is_match=true
+  replace=[<a\nb>]
+pat=[(?i)(?-i:ab)] subj=[AB]\n  CHECK a flag cannot be turned off at byte 6
+pat=[(?im)^a$] subj=[A\nb]
+  match=[A] 0..1
+  full=-
+  search=[A] 0..1
+  groups=-
+  find=A@0
+  is_match=true
+  replace=[<A>\nb]
+pat=[(?i)AB] subj=[ab]
+  match=[ab] 0..2
+  full=[ab]
+  search=[ab] 0..2
+  groups=-
+  find=ab@0
+  is_match=true
+  replace=[<ab>]
+pat=[(?s)a.b] subj=[a\nb]
+  match=[a\nb] 0..3
+  full=[a\nb]
+  search=[a\nb] 0..3
+  groups=-
+  find=a\nb@0
+  is_match=true
+  replace=[<a\nb>]
+pat=[(?i)(?:AB)+] subj=[abAB]
+  match=[abAB] 0..4
+  full=[abAB]
+  search=[abAB] 0..4
+  groups=-
+  find=abAB@0
+  is_match=true
+  replace=[<abAB>]
+pat=[(?s)^.*$] subj=[a\nb\nc]
+  match=[a\nb\nc] 0..5
+  full=[a\nb\nc]
+  search=[a\nb\nc] 0..5
+  groups=-
+  find=<differs>
+  is_match=true
+  replace=<differs>
+pat=[(a)\1] subj=[aa]\n  CHECK a backreference is not supported at byte 4
+pat=[[a] subj=[a]\n  CHECK unterminated character class at byte 2
+pat=[(ab] subj=[ab]\n  CHECK unterminated group at byte 3
+pat=[ab)] subj=[ab]\n  CHECK unbalanced ) at byte 2
+pat=[*a] subj=[a]\n  CHECK nothing to repeat at byte 0
+pat=[a\\] subj=[a]
+  match=-
+  full=-
+  search=-
+  groups=-
+  find=-
+  is_match=false
+  replace=[a]
+pat=[a\\q] subj=[aq]
+  match=-
+  full=-
+  search=-
+  groups=-
+  find=-
+  is_match=false
+  replace=[aq]
+pat=[a{,3}] subj=[a{,3}]
+  match=[a{,3}] 0..5
+  full=[a{,3}]
+  search=[a{,3}] 0..5
+  groups=-
+  find=a{,3}@0
+  is_match=true
+  replace=[<a{,3}>]
+pat=[a}] subj=[a}]
+  match=[a}] 0..2
+  full=[a}]
+  search=[a}] 0..2
+  groups=-
+  find=a}@0
+  is_match=true
+  replace=[<a}>]
+pat=[a{2,x}] subj=[a]\n  CHECK bad repetition count at byte 4
+pat=[a{5,2}] subj=[a]\n  CHECK a repetition count is out of order at byte 6
+pat=[a{1,2000}] subj=[a]\n  CHECK a repetition count must be at most 1000 at byte 9
+pat=[(?<=a+)b] subj=[aab]\n  CHECK lookbehind must be a fixed width at byte 7
+pat=[(?=(a))a] subj=[a]\n  CHECK a group cannot be inside a lookaround at byte 7
+pat=[(?P<n>a)] subj=[a]\n  CHECK unknown flag 'P' at byte 2
+pat=[(?<n>a)(?<n>b)] subj=[ab]\n  CHECK duplicate group name 'n' at byte 12
+pat=[(?<1n>a)] subj=[a]\n  CHECK a group name must start with a letter or _ at byte 3
+pat=[(?q)a] subj=[a]\n  CHECK unknown flag 'q' at byte 2
+pat=[(?<>a)] subj=[a]\n  CHECK a group name must start with a letter or _ at byte 3
+pat=[[:foo:]] subj=[a]
+  match=-
+  full=-
+  search=-
+  groups=-
+  find=-
+  is_match=false
+  replace=[a]
+pat=[\x{110000}] subj=[a]\n  CHECK a \x{} value must be at most 0x10ffff at byte 10
+pat=[\x{ d}] subj=[a]\n  CHECK a \x{} needs at least one hex digit at byte 3
+pat=[\x{41] subj=[a]\n  CHECK a \x{ is not closed at byte 5
+pat=[\xZZ] subj=[a]\n  CHECK a \x needs two hex digits at byte 2
+pat=[a*+] subj=[x]\n  CHECK a repetition cannot be possessive at byte 2
+pat=[a**] subj=[a]\n  CHECK two repetitions in a row at byte 2
+pat=[a--b] subj=[a]
+  match=-
+  full=-
+  search=-
+  groups=-
+  find=-
+  is_match=false
+  replace=[a]
+pat=[\1] subj=[a]\n  CHECK a backreference is not supported at byte 1
+pat=[a{2,1}] subj=[a]\n  CHECK a repetition count is out of order at byte 6
+pat=<empty> subj=[abc]
+  match=<empty> 0..0
+  full=-
+  search=<empty> 0..0
+  groups=-
+  find=<differs>
+  is_match=true
+  replace=<differs>
+pat=[a*] subj=[baab]
+  match=<empty> 0..0
+  full=-
+  search=<empty> 0..0
+  groups=-
+  find=<differs>
+  is_match=true
+  replace=<differs>
+pat=[a*] subj=<empty>
+  match=<empty> 0..0
+  full=<empty>
+  search=<empty> 0..0
+  groups=-
+  find=<differs>
+  is_match=true
+  replace=<differs>
+pat=[x{0}] subj=[x]
+  match=<empty> 0..0
+  full=-
+  search=<empty> 0..0
+  groups=-
+  find=<differs>
+  is_match=true
+  replace=<differs>
+pat=[b*] subj=[abc]
+  match=<empty> 0..0
+  full=-
+  search=<empty> 0..0
+  groups=-
+  find=<differs>
+  is_match=true
+  replace=<differs>
+pat=[(\S+)@(\S+):(\d+)] subj=[root@localhost:22]
+  match=[root@localhost:22] 0..17
+  full=[root@localhost:22]
+  search=[root@localhost:22] 0..17
+  groups=[root]|[localhost]|[22]
+  find=root@localhost:22@0
+  is_match=true
+  replace=[<root@localhost:22>]
+pat=[(\w+)@(\w+)] subj=[a@b]
+  match=[a@b] 0..3
+  full=[a@b]
+  search=[a@b] 0..3
+  groups=[a]|[b]
+  find=a@b@0
+  is_match=true
+  replace=[<a@b>]
+pat=[(\w+)-(\w+)] subj=[ab-cd]
+  match=[ab-cd] 0..5
+  full=[ab-cd]
+  search=[ab-cd] 0..5
+  groups=[ab]|[cd]
+  find=ab-cd@0
+  is_match=true
+  replace=[<ab-cd>]
+pat=[(\S+)\s(\S+)] subj=[ab cd]
+  match=[ab cd] 0..5
+  full=[ab cd]
+  search=[ab cd] 0..5
+  groups=[ab]|[cd]
+  find=ab cd@0
+  is_match=true
+  replace=[<ab cd>]
+pat=[(.*),(.*)] subj=[a,b,c]
+  match=[a,b,c] 0..5
+  full=[a,b,c]
+  search=[a,b,c] 0..5
+  groups=[a,b]|[c]
+  find=a,b,c@0
+  is_match=true
+  replace=[<a,b,c>]
+pat=[(\w+)x(\w*)] subj=[aax]
+  match=[aax] 0..3
+  full=[aax]
+  search=[aax] 0..3
+  groups=[aa]|<empty>
+  find=aax@0
+  is_match=true
+  replace=[<aax>]
+pat=[(\d+):(\d+)] subj=[1:22]
+  match=[1:22] 0..4
+  full=[1:22]
+  search=[1:22] 0..4
+  groups=[1]|[22]
+  find=1:22@0
+  is_match=true
+  replace=[<1:22>]
+pat=[(a+)b] subj=[aaab]
+  match=[aaab] 0..4
+  full=[aaab]
+  search=[aaab] 0..4
+  groups=[aaa]
+  find=aaab@0
+  is_match=true
+  replace=[<aaab>]
+pat=[a+ab] subj=[aaab]
+  match=[aaab] 0..4
+  full=[aaab]
+  search=[aaab] 0..4
+  groups=-
+  find=aaab@0
+  is_match=true
+  replace=[<aaab>]
+pat=[(.*)b] subj=[aabb]
+  match=[aabb] 0..4
+  full=[aabb]
+  search=[aabb] 0..4
+  groups=[aab]
+  find=aabb@0
+  is_match=true
+  replace=[<aabb>]
+pat=[([^,]+),([^,]+)] subj=[a,bb,ccc]
+  match=[a,bb] 0..4
+  full=-
+  search=[a,bb] 0..4
+  groups=[a]|[bb]
+  find=a,bb@0
+  is_match=true
+  replace=[<a,bb>,ccc]
+pat=[(\w)(\w)?] subj=[a]
+  match=[a] 0..1
+  full=[a]
+  search=[a] 0..1
+  groups=[a]|-
+  find=a@0
+  is_match=true
+  replace=[<a>]
+pat=[(a*)(a*)b] subj=[aab]
+  match=[aab] 0..3
+  full=[aab]
+  search=[aab] 0..3
+  groups=[aa]|<empty>
+  find=aab@0
+  is_match=true
+  replace=[<aab>]
+pat=[(\S*)\s*(\S*)] subj=[  ]
+  match=[  ] 0..2
+  full=[  ]
+  search=[  ] 0..2
+  groups=<empty>|<empty>
+  find=<differs>
+  is_match=true
+  replace=<differs>
+pat=[nginx/1\.2] subj=[server nginx/1.2.3 ok]
+  match=-
+  full=-
+  search=[nginx/1.2] 7..16
+  groups=-
+  find=nginx/1.2@7
+  is_match=true
+  replace=[server <nginx/1.2>.3 ok]
+pat=[(?i)NGINX] subj=[x nginx y]
+  match=-
+  full=-
+  search=[nginx] 2..7
+  groups=-
+  find=nginx@2
+  is_match=true
+  replace=[x <nginx> y]
+pat=[(a*)*b] subj=[aaaaaaaaaaaac]
+  match=-
+  full=-
+  search=-
+  groups=-
+  find=-
+  is_match=false
+  replace=[aaaaaaaaaaaac]
+pat=[(a|aa)+b] subj=[aaaaaaaaaaaac]
+  match=-
+  full=-
+  search=-
+  groups=-
+  find=-
+  is_match=false
+  replace=[aaaaaaaaaaaac]
+pat=[a{1,1000}b] subj=[aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaac]
+  match=-
+  full=-
+  search=-
+  groups=-
+  find=-
+  is_match=false
+  replace=[aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaac]

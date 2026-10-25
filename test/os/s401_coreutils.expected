@@ -1,0 +1,38 @@
+user:/home/user$ write t.txt one two three
+user:/home/user$ touch empty
+user:/home/user$ cat t.txt
+one two three
+user:/home/user$ cat nosuch t.txt
+cat: nosuch: no such file
+one two three
+user:/home/user$ wc t.txt
+1 3 14 t.txt
+user:/home/user$ wc -w t.txt
+3 t.txt
+user:/home/user$ wc -l t.txt empty
+1 t.txt
+0 empty
+user:/home/user$ head -n 1 t.txt
+one two three
+user:/home/user$ tail -n 1 t.txt
+one two three
+user:/home/user$ tail -n 1 nosuch
+tail: nosuch: no such file
+user:/home/user$ cp t.txt u.txt
+user:/home/user$ mv u.txt v.txt
+user:/home/user$ cat v.txt
+one two three
+user:/home/user$ rm v.txt
+user:/home/user$ rm -f v.txt
+user:/home/user$ rm v.txt
+rm: v.txt: no such file
+user:/home/user$ echo -n no newline
+no newlineuser:/home/user$ echo
+
+user:/home/user$ sleep 0.2
+user:/home/user$ echo slept
+slept
+user:/home/user$ uname
+yunix
+user:/home/user$ halt
+halting

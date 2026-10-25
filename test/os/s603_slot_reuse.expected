@@ -1,0 +1,4 @@
+user:/home/user$ slotreuse
+slotreuse ok
+user:/home/user$ halt
+halting

@@ -1,0 +1,117 @@
+\section{The web target}
+\label{sec:web}
+
+\textsf{Y} compiles a second kind of executable beside the hosted ELF and
+the bootable kernel: \ic{--target=web} writes a WebAssembly module for
+\ic{wasm32}, and the same program runs under Node or in a page.  The target is
+not an interpreter and not a bytecode: the compiler's own IR is lowered to
+wasm, the context and the token encoding are fixed, and a JavaScript host
+supplies the kernel calls the program makes.  ABI 1 names the module's
+exports, its metadata section and the host calls; \ic{docs/TARGETS.md} is the
+reference table.
+
+\begin{lstlisting}
+$ ./ycc --target=web prog.y -o prog.wasm
+$ node --disable-wasm-trap-handler src/web/yhost.js run prog.wasm
+$ ./ycc --target=web --web-page -o site prog.y   # index.html + prog.wasm
+$ ./ycc build --target=web                        # y.toml: build/web/NAME/
+\end{lstlisting}
+
+\paragraph{The module.} Values are 64-bit; memory is wasm32 and grows on
+demand.  Each Y function body is a \emph{chunk}: a loop with a \ic{br\_table}
+on a token and \ic{return\_call}/\ic{return\_call\_indirect} between chunks,
+so a call does not grow the wasm operand stack and 1000-deep recursion costs
+no host stack.  A token is \ic{2\string^40 + (chunk << 20) + case}, a
+64-bit word whose low bits are the case and whose high bits say which
+function owns the continuation.  The module exports \ic{memory},
+\ic{resume(i64)}, \ic{ctx\_save(i32)}, \ic{ctx\_load(i32)},
+\ic{set\_fuel(i32)}, \ic{why()} and \ic{set\_why(i32)}; \ic{resume}
+runs until it returns a token, and the host turns that into the next
+\ic{resume}, a syscall or a trap.  The custom section \ic{yweb} carries
+\ic{abi}, \ic{stack\_lo}, \ic{stack\_hi}, \ic{data\_lo}, \ic{data\_end},
+\ic{heap\_lo}, \ic{entry}, \ic{chunks}, \ic{threads}, \ic{gui} and
+\ic{audio}.  The initial stack is the Linux one (argc, argv, envp, auxv), so
+\ic{argv()} and the environment work unchanged.
+
+\paragraph{The host.} \ic{src/web/core.js} is platform-neutral: it loads and
+validates a module, owns the linear memory, the green-thread scheduler, the
+syscall table and the host-call table.  \ic{vfs.js} is one VFS for both hosts
+(descriptors, pipes, eventfd/timerfd, \ic{/proc}, \ic{/dev}); the Node backend
+is the real filesystem, the browser backend an in-memory tree with
+\ic{/app} from \ic{files.bin} and \ic{/home/web} in IndexedDB.  Threads are
+green threads with a fuel budget: a slice ends after its fuel, a blocking
+call parks the thread and the scheduler resumes the next one, and
+\ic{pause\_hidden} freezes a hidden page's clock and scheduler.  A raw Linux
+syscall is answered by the VFS when it has a plausible answer and refused
+with the errno the program would get from a kernel that does not have the
+feature; \ic{fork}, \ic{exec}, sockets and \ic{obfuscate} are refused by
+design, each with its reason in \ic{test/y/native/*.skip.web}.
+
+\paragraph{The host API.} \ic{y\_os\_host\_sym(name, len)} returns a
+positive index for a host function and 0 when there is none;
+\ic{y\_os\_host\_call(h, args, n)} calls it with \ic{n} i64 arguments, and a
+Promise blocks the calling green thread until it settles.  Strings come back
+through a \ic{(buf, cap)} pair: the function returns the length, or
+\ic{-(needed)} when the buffer is too small.  The built-in names are
+\ic{gui.*}, \ic{audio.*} and \ic{web.*}; a page may register its own under
+\ic{app.*}.  \ic{std/web} wraps the page's own API: \ic{available},
+\ic{platform}, \ic{sym}, \ic{call}, \ic{call\_str}, \ic{eval}, \ic{log},
+\ic{param}, \ic{open\_url} and \ic{fetch}; off the web every one answers
+\ic{false}, \ic{""}, \ic{0} or \ic{none}, so the same source still builds and
+runs on Linux and Windows.
+
+\paragraph{The screen and sound.} \ic{std/gui} keeps one API.  For web it is
+\ic{gui.web.y}, a target overlay merged over \ic{gui.y} and packed as
+\ic{gui@web}: the nine \ic{gui.*} calls go through the host symbols, while
+present/pump/wait/resize/read\_back/verify\_present/close keep the X11 and
+Win32 arms for native builds.  The page owns a canvas: fixed or fit sizing,
+integer or automatic zoom (default 1, 100\%), a pixel buffer swapped from
+B G R A, and the full
+key, char, pointer, wheel, focus, composition and paste input map, with
+\ic{ResizeObserver} and \ic{pagehide} becoming events.  Sound is the four
+\ic{y\_os\_audio\_*} calls: the browser plays through an inline
+\ic{AudioWorklet} (a \ic{ScriptProcessorNode} fallback when a CSP refuses the
+Blob URL) and parks a thread while more than 250 ms is queued; Node writes a
+WAV with \ic{--audio=FILE.wav}.  \ic{web.available()} is the feature test a
+program uses before it asks for a window or a speaker.
+
+\paragraph{Page, site and deployment.} The page provides the stage the
+program runs in: one full-window area.  A program that opens a gui window
+draws into the viewport, and one without a window gets the console (the page's
+stdin/stdout/stderr); \ic{[web] console} = \ic{"show"} or \ic{"hide"} chooses.
+A \ic{[web]} table in \ic{y.toml} sets the
+title, id, start mode, canvas mode, zoom (100\% unless the app asks otherwise),
+console, persistence, \ic{files.bin}, arguments, environment, stack,
+pause\_hidden and the single-file form; a \ic{template} points the generator
+at the application's own page, whose four placeholders are \ic{TITLE},
+\ic{CONFIG}, \ic{HOST} and \ic{MODULE}.  See \ic{docs/TARGETS.md}.
+
+\ic{--web-page DIR} writes \ic{index.html} (the stylesheet and the linked host
+are inline) and \ic{NAME.wasm}, plus \ic{files.bin} for \ic{[web] files};
+the deployment is those files.  \ic{--web-page=html} additionally inlines the
+module and the bundle, so it is one file.  \ic{ycc build --target=web} writes
+the same site under \ic{build/web/NAME/}, a single file under
+\ic{build/web/NAME.html}, and a Node launcher under \ic{build/web/bin/NAME}
+with its private host copy.  A module is fetched as a sibling or as a data URL.
+\ic{?ytest=1} writes \ic{YDONE} into the title and \ic{<pre id="ytest">},
+which is how the browser suite drives a real page; \ic{?arg=} passes a program
+argument and \ic{?fuel=} a slice budget.  The page is inline JavaScript, so a
+deployment with a strict CSP must allow it (the module is still fetched, not
+eval'd).
+
+\paragraph{What runs.} The whole \ic{test/y/native} corpus runs through the
+Node host, and the fixtures that need a system the web does not have skip
+with a reason: \ic{fork}, sockets, \ic{exec}, and obfuscation.  Threads,
+sleep order, preemption, the collector, NaN and division flags, the token
+burst, big bodies, traps, checked builds, stdin, the page API, gui and sound
+all have web fixtures.
+Performance and size are measured, not guessed: the wasm module is several
+times a native build's work but a browser runs it inside a frame, and the
+network cost is the module's gzip size.
+
+\paragraph{Limits.} A web build has no \ic{fork}, \ic{exec}, \ic{popen},
+sockets, \ic{/proc/self/mem} or \ic{ptrace}; a program that needs a real
+kernel stays native.  \ic{--pack}, \ic{--obfuscate}, \ic{--target=kernel} and
+\ic{-g} either refuse the target or are not part of it.  The host is not a
+security boundary: a page's JavaScript can read its own module and memory as
+any page can, and a save in IndexedDB is the player's.

@@ -1,0 +1,67 @@
+-- hover on a string method
+split: ```y|split(str) -> [str]|```||string method
+pad_left: ```y|pad_left(long, str = " ") -> str|```||string method
+count: ```y|count(str) -> long|```||string method
+range on split: line 1 char 16..21
+-- hover NOT on a string method
+rec.k: long
+rec.k is a type, not a method: true
+a local of the same name, no dot: ```y|long|```||```y|split|```
+-- completion after a dot
+after `csv.`: 27 items
+has split: true
+has pad_left: true
+has alias lstrip: true
+has trim: true
+kind is Method(2): true
+detail is the signature: pad_left(long, str = " ") -> str
+after `csv.sp`: split
+no `print` after a dot: true
+no `csv` after a dot: true
+-- completion without a dot is still the names
+at an empty prefix: 51
+has print: true
+has csv (declared after this position): false
+no upper in the name list: true
+no pad_left in the name list: true
+has split (a local of that name): true
+prefix `csv`: csv
+-- generated metadata agrees with the checker
+methods 27, mismatches 0
+-- the set, so a change is visible
+  split
+  join
+  trim
+  strip
+  trim_start
+  lstrip
+  trim_end
+  rstrip
+  pad_left
+  pad_right
+  center
+  starts_with
+  ends_with
+  contains
+  index_of
+  last_index_of
+  count
+  replace
+  upper
+  lower
+  repeat
+  lines
+  bytes
+  tolong
+  tofloat
+  ord
+  byte_at
+-- the signatures
+  split(str) -> [str]
+  pad_left(long, str = " ") -> str
+  join([T]) -> str
+  trim() -> str
+  count(str) -> long
+  byte_at(long) -> long
+an unknown name: zzz(?) -> ?
+done

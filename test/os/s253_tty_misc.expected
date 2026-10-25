@@ -1,0 +1,11 @@
+user:/home/user$ ttyt poll0
+[0]
+[0]
+user:/home/user$ ttyt pgrp
+tiocgpgrp 0 true
+tiocspgrp 0 77
+user:/home/user$ ttyt fionread
+$ nread 4
+[4] 98 99 100 10
+user:/home/user$ halt
+halting

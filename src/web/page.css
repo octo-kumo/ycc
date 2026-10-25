@@ -1,0 +1,183 @@
+/* src/web/page.css — the default page for a Y web module.
+   The stage is the viewport and the canvas is the application.  The console
+   is the whole page for a program without a window, or an overlay when a
+   window program asks for it.  The page draws those and the transient start
+   and error overlays. */
+
+* { box-sizing: border-box; }
+
+[hidden] { display: none !important; }
+
+:root {
+  color-scheme: dark;
+  --bg: #000;
+  --fg: #d8e0ec;
+  --dim: #8b98ab;
+  --line: #263244;
+  --accent: #62d0ff;
+  --err: #ff8b8b;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  overflow: hidden;
+}
+
+#stage {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: #000;
+}
+
+#ycanvas {
+  display: none;
+  max-width: none;
+  max-height: none;
+  background: #000;
+  outline: none;
+  image-rendering: pixelated;
+}
+
+#ycanvas.visible { display: block; }
+
+/* The console: the program's own page when it has no window. */
+#console {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: #05070a;
+  color: var(--fg);
+  z-index: 5;
+}
+
+#console.overlay {
+  inset: auto 0 0 0;
+  max-height: 42vh;
+  background: rgba(5, 7, 10, 0.94);
+  border-top: 1px solid var(--line);
+}
+
+#console-out {
+  flex: 1 1 auto;
+  margin: 0;
+  padding: 12px 16px;
+  overflow: auto;
+  font: 12.5px/1.5 var(--mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #cfe3f7;
+  background: transparent;
+}
+
+#console-out .err { color: var(--err); }
+
+#stdin-form {
+  display: flex;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--line);
+  background: #080b10;
+  flex: 0 0 auto;
+}
+
+#console.overlay #stdin-form { padding: 6px 10px; }
+
+#stdin-line {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: 12.5px/1.4 var(--mono);
+  color: var(--fg);
+  background: #0a0f16;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 6px 9px;
+}
+
+#stdin-line:focus { outline: 1px solid var(--accent); }
+
+button {
+  font: inherit;
+  color: var(--fg);
+  background: #171e29;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 5px 12px;
+  cursor: pointer;
+}
+
+button:hover { border-color: var(--accent); }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+#start-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 14px;
+  background: #000;
+  z-index: 20;
+}
+
+#start-button {
+  font-size: 18px;
+  padding: 12px 32px;
+}
+
+#start-note {
+  color: var(--dim);
+  font-size: 13px;
+}
+
+#feature-error {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  max-width: min(680px, 92vw);
+  padding: 16px 20px;
+  border: 1px solid #7a3434;
+  border-radius: 6px;
+  background: #2a1414;
+  color: #ffd2d2;
+  font: 13px/1.5 var(--mono);
+  white-space: pre-wrap;
+  z-index: 30;
+}
+
+#banner {
+  position: fixed;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: min(760px, 92vw);
+  padding: 8px 14px;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+  background: rgba(18, 26, 36, 0.94);
+  color: var(--fg);
+  font-size: 13px;
+  z-index: 25;
+}
+
+#banner.trap { border-color: #7a3434; background: #2a1414; color: #ffd2d2; }
+
+#banner button { margin-left: 6px; padding: 2px 8px; }
+
+/* A window program that asked for the console gets it over the canvas. */
+body.text-mode #stage { display: none; }
+body.text-mode #console { position: fixed; }
+body.text-mode #banner { bottom: 56px; }
+
+#status-line { display: none; }

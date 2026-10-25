@@ -1,0 +1,102 @@
+# os/manifest.txt -- what `ytest os-build` puts into the Y-OS filesystem image.
+#
+#   dest-path  kind  source  [flags...]
+#
+# kinds:
+#   uland  a program in os/uland: `source` is the file name there (sh.y)
+#   y      `ycc source -o ...`; source relative to the repo root (or absolute);
+#          flags are extra ycc arguments (e.g. --gc=never)
+#   build  `ycc build` run in the directory `source`; a flag out=REL names the
+#          product, relative to that directory (required)
+#   file   `source` copied in as it is
+#   dir    an empty directory (source is -)
+#
+# `$NAME` in a source is taken from the environment.  The flag `optional` skips
+# an entry whose source is missing, with a note, instead of failing the build.
+# Order matters: files appear in a directory in the order they are listed here,
+# and the session transcripts in test/os/ depend on it.
+
+# --- filesystem tests
+/bin/fstest  y  test/os/fstest.y
+/bin/bigdata  file  cycc  optional
+
+# --- processes
+/bin/b1  y  test/os/b1/main.y
+
+# --- threads and memory
+/bin/t341   y  test/y/native/t341_threads_slices.y
+/bin/t342   y  test/y/native/t342_threads_barrier.y
+/bin/t343   y  test/y/native/t343_threads_queue.y
+/bin/t344   y  test/y/native/t344_threads_transfers.y
+/bin/t385   y  test/y/native/t385_gc_threads_alloc.y
+/bin/t406   y  test/y/native/t406_threads_spawn_storm.y
+/bin/b2time y  test/os/prog/b2time.y
+/bin/b2mm   y  test/os/prog/b2mm.y
+/bin/b2thr  y  test/os/prog/b2thr.y
+/bin/b2doom y  test/os/prog/b2doom.y
+
+# --- terminal, display and input
+/bin/stty   uland  stty.y
+/bin/ttyt   uland  ttyt.y
+/bin/vtdemo uland  vtdemo.y
+/bin/mousedemo uland  mousedemo.y
+/bin/osbench uland  osbench.y
+/bin/osstat uland  osstat.y
+/bin/slotreuse uland  slotreuse.y
+/bin/desktop uland desktop.y
+
+# --- sound
+/bin/beep  uland  beep.y
+
+/bin/sndtone  y  test/os/prog/sndtone.y
+/bin/pulsed     uland  pulsed.y
+/bin/sktest     uland  sktest.y
+/bin/pulsetest  uland  pulsetest.y
+/bin/segv       uland  segv.y
+
+# --- userland: /bin/init is what boot runs first
+/bin/init   uland  init.y
+/bin/sh     uland  sh.y
+/bin/ls     uland  ls.y
+/bin/cat    uland  cat.y
+/bin/echo   uland  echo.y
+/bin/mkdir  uland  mkdir.y
+/bin/rmdir  uland  rmdir.y
+/bin/rm     uland  rm.y
+/bin/cp     uland  cp.y
+/bin/mv     uland  mv.y
+/bin/touch  uland  touch.y
+/bin/wc     uland  wc.y
+/bin/head   uland  head.y
+/bin/tail   uland  tail.y
+/bin/pwd    uland  pwd.y
+/bin/stat   uland  stat.y
+/bin/env    uland  env.y
+/bin/clear  uland  clear.y
+/bin/sleep  uland  sleep.y
+/bin/uname  uland  uname.y
+/bin/write  uland  write.y
+/bin/halt   uland  halt.y
+/home       dir  -
+/home/user  dir  -
+/tmp        dir  -
+
+# --- the examples: programs go to /bin, their data under /usr/share/<name>/
+/usr          dir  -
+/usr/share    dir  -
+/bin/bignum         y  examples/bignum/bignum.y
+/bin/cube           y  examples/cube/cube.y
+/bin/donut          y  examples/donut/donut.y
+/bin/editor         y  examples/editor/editor.y
+/bin/life           y  examples/life/life.y
+/bin/mandelbrot     y  examples/mandelbrot/mandelbrot.y
+/bin/perft          y  examples/perft/perft.y
+/bin/raytracer      y  examples/raytracer/raytracer.y
+/bin/toolkit-cli  y  examples/toolkit-cli/toolkit_cli.y
+/usr/share/desktop   dir  -
+/usr/share/editor        dir  -
+/usr/share/editor/demo.txt  file  examples/editor/data/demo.txt
+/usr/share/toolkit-cli   dir  -
+/usr/share/toolkit-cli/demo.csv  file  examples/toolkit-cli/data/demo.csv
+/usr/share/toolkit-cli/demo.json  file  examples/toolkit-cli/data/demo.json
+

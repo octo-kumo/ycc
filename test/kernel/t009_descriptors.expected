@@ -1,0 +1,5 @@
+gdtr limit: 55
+tr selector: 40
+tr is the TSS: true
+tss descriptor is present: true
+kernel stack top: true

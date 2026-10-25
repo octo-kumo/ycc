@@ -1,0 +1,12 @@
+ports: 1 and 2
+starting the server
+S1
+C1
+S2
+C2
+client got 42
+S2b
+S3
+S4
+client got 10
+server done

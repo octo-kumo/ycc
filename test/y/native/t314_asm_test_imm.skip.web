@@ -1,0 +1,1 @@
+the fixture tests flags carried across arch blocks; S6 refuses flags live into an external entry on --target=web

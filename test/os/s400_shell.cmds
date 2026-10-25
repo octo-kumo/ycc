@@ -1,0 +1,25 @@
+echo "double  spaced" 'single $HOME' plain\ escaped
+X=hello
+echo $X ${X}world "$X" '$X'
+echo $?
+false
+echo status $?
+true && echo and-yes
+false && echo and-no
+false || echo or-yes
+true || echo or-no
+echo a ; echo b ; echo c
+echo ~ # a comment
+echo "unterminated
+echo > 
+cd /nosuch
+export Y=exported
+echo $HOME $USER $PATH $TERM
+unset Y
+nosuch-command
+echo $?
+sh -c "echo inner; exit 4"
+echo $?
+write script.sh echo from a script
+sh script.sh
+exit 0

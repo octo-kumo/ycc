@@ -1,0 +1,43 @@
+user:/home/user$ /bin/fstest dirs
+ok mkdir /a
+ok mkdir /a/b
+ok mkdir /a/b/c
+ok mkdir again
+ok mkdir no parent
+ok stat dir is dir
+ok put /a/b/f
+ok mkdir under a file
+ok rmdir non-empty
+ok rmdir a file
+ok unlink a dir
+ls /a/b: c f 
+ok chdir /a/b
+cwd /a/b
+ok relative read
+ok dotted read
+ok chdir ..
+cwd /a
+ok chdir ../..
+cwd /
+ok chdir above root
+cwd /
+ok chdir a/b/c
+cwd /a/b/c
+ok relative create
+ls .: g 
+ok chdir to file
+ok chdir missing
+ok access g
+ok access missing
+ok unlink g
+ok rmdir cwd child
+ok rmdir c
+ok rmdir b non-empty
+ok unlink f
+ok rmdir b
+ok rmdir a
+ok a is gone
+ok rmdir dot
+done fails=0
+user:/home/user$ halt
+halting

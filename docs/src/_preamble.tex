@@ -1,0 +1,79 @@
+\documentclass[11pt,a4paper]{article}
+\setlength{\emergencystretch}{3em}
+
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{amsmath,amssymb}
+\usepackage{siunitx}
+\usepackage[margin=2.6cm]{geometry}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true,linkcolor=blue!50!black,urlcolor=blue!50!black}
+
+% Inline Y code and identifiers.
+\newcommand{\y}[1]{\texttt{#1}}
+\newcommand{\ty}[1]{\textsf{\textit{#1}}}
+
+% Code blocks.
+\usepackage{listings}
+\lstdefinelanguage{Y}{
+  morekeywords={let,const,def,if,else,while,for,foreach,in,return,true,false,none},
+  sensitive=true,
+  morecomment=[l]{//},
+  morecomment=[s]{/*}{*/},
+  morestring=[b]",
+}
+\lstset{
+  language=Y,
+  basicstyle=\ttfamily\small,
+  keywordstyle=\bfseries,
+  commentstyle=\itshape\color{gray},
+  stringstyle=\color{blue!60!black},
+  columns=flexible,
+  keepspaces=true,
+  showstringspaces=false,
+  breaklines=true,
+  frame=single,
+  framerule=0.3pt,
+  rulecolor=\color{black!30},
+  xleftmargin=1.2em,
+  xrightmargin=1.2em,
+}
+% \ic in TEXT mode is \texttt, not \text{\ttfamily}: amsmath's \text is an \hbox,
+% so a multi-word code span inside it cannot break and overruns the measure --
+% one \ic{...} of 90 characters put a line 433pt overfull. \texttt is the same
+% font at the same size and does break at the spaces. In MATH mode it still has
+% to be \text, since \texttt is not available there; the four uses that need it
+% are in 09-builtins.
+\newcommand{\ic}[1]{\ifmmode\text{\ttfamily #1}\else\texttt{#1}\fi}
+% A break opportunity after every escaped underscore. \texttt is not
+% hyphenated and a name has no spaces in it, so \ic{tui.capture\_checksum()}
+% is a single 23-character box with no break inside -- measured, it put a
+% line 190pt over the measure on its own. The underscore is where the name
+% is already divided, so that is where it breaks; \allowbreak is a penalty
+% and costs nothing where line breaking cannot happen (a \label, a moving
+% argument). The dot of a module prefix is deliberately NOT a break point:
+% the same character occurs inside numbers, where a break would split a
+% decimal.
+\renewcommand{\_}{\textunderscore\allowbreak}
+\newcommand{\bs}{\text{\textbackslash{}}}
+
+% Description lists: names on a line of their own, the description indented
+% under it. This is what the description lists in 09-builtins use.
+%
+% `font=\lb` is the load-bearing part, and `font=` is the key that formats the
+% label's CONTENT in enumitem -- `label=` is a different key (it names the
+% counter), and using it here is an error. enumitem measures the widest
+% \item[] label in a list, sets \labelwidth to it, and typesets each label in a
+% box that width, so a label of names longer than the measure cannot wrap and
+% runs off the page. \lb puts the label in a \parbox the width of the measure
+% instead, so it wraps. A description item naming fourteen functions is the
+% ordinary case here, not the exception.
+\newcommand{\lb}[1]{\parbox[t]{\dimexpr\linewidth+\leftmargin\relax}{\raggedright #1}}
+\setlist[description]{style=nextline,leftmargin=5.2em,font=\lb}
+
+\begin{document}
+\raggedright

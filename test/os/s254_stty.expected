@@ -1,0 +1,14 @@
+user:/home/user$ stty size
+24 80
+user:/home/user$ stty rows 40 cols 132
+user:/home/user$ stty size
+40 132
+user:/home/user$ stty cols 200
+user:/home/user$ stty size
+40 200
+user:/home/user$ stty bogus
+stty: unknown argument: bogus
+user:/home/user$ stty rows
+stty: missing number
+user:/home/user$ halt
+halting

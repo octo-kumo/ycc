@@ -1,0 +1,224 @@
+
+the option table
+  ok    nopts counts the entries
+          got 4, want 4
+  ok    a NUM flag is args.NUM
+          got 2, want 2
+  ok    a STR flag is args.STR
+          got 1, want 1
+  ok    a BOOL flag is args.BOOL
+          got 0, want 0
+  ok    the kinds are distinct
+          so a table cannot confuse them
+  ok    the long name is the flag's name
+          3 chars
+  ok    and the short one is a str, possibly empty
+          0 chars
+
+the three outcomes are distinct
+  ok    OK, HELP and USAGE are three different values
+          so parse() cannot be read two ways
+
+reading a parsed flag
+  ok    an unseen flag is absent
+          nothing was passed
+  ok    and an absent one answers the default
+          the documented default
+  ok    get_long answers its default too
+          got 7, want 7
+  ok    so a default of 0 is distinguishable from a real 0 by asking
+          the default is returned, not the field
+
+num_ok: what counts as a whole number
+  ok    a plain integer is one
+          42
+  ok    a negative integer is one
+          -42
+  ok    zero is one
+          0
+  ok    a leading - is a sign, already counted above
+          -7
+  ok    a leading + is NOT accepted
+          the only sign num_ok knows is -, which is what a flag value can carry
+  ok    an empty string is not
+          nothing at all
+  ok    a float is not
+          num_ok is whole numbers only
+  ok    a float written with a dot and zeros is not either
+          still not a whole number as written
+  ok    trailing junk is not
+          42x
+  ok    leading whitespace is not
+          no trimming
+  ok    a hex literal is not
+          num_ok is decimal
+  ok    the empty default of a flag is not a number
+          so --seed= is an error
+
+the usage text
+  ok    usage names the program
+          the name init was given
+  ok    and carries the blurb
+          the line under the name
+  ok    and every long flag
+          --fps
+  ok    and the short one that exists
+          -s
+  ok    and the positional summary
+          the tail
+  ok    and each flag's help text
+          the help string is what the table was given
+  ok    a flag with no short spelling has no bare -
+          and it is still listed
+
+--help is an ordinary flag when the table declares one
+  ok    usage names this program too
+          re-init replaced it
+  ok    and no longer the old one
+          so init is not additive
+
+the accepted spellings
+  ok    no flags at all is OK
+          got 0, want 0
+  ok    and every flag is absent
+          nothing was passed and nothing is claimed
+  ok    --long value
+          got 0, want 0
+  ok      and get_long reads it
+          got 60, want 60
+  ok    --long=value
+          got 0, want 0
+  ok      and reads the same
+          got 60, want 60
+  ok    -s value
+          got 0, want 0
+  ok      short form reads it
+          got 25, want 25
+  ok    -sVALUE, glued
+          got 0, want 0
+  ok      and still reads it
+          got 25, want 25
+  ok    -s=VALUE
+          got 0, want 0
+  ok      and that too
+          got 25, want 25
+  ok    a BOOL flag takes no value
+          got 0, want 0
+  ok      and is present
+          --stats
+  ok    its short form too
+          got 0, want 0
+  ok      and present
+          -s
+  ok    a value that contains = is kept whole
+          got 0, want 0
+  ok      including the second =
+          3 chars
+  ok    -- ends the flags
+          got 0, want 0
+  ok      so the operands are the rest
+          got 2, want 2
+  ok      and the first is the literal
+          5 chars
+  ok      not a flag
+          1 chars
+  ok      and no flag was set by them
+          -- ends parsing
+  ok    operands before any flag are positional
+          got 0, want 0
+  ok      both of them
+          got 2, want 2
+  ok      in order
+          5 chars
+  ok      and the flag still parsed
+          got 5, want 5
+
+a table of one valueless flag
+  ok    its usage names the one flag
+          --verbose
+  ok    and its short form
+          -v
+  ok    and it is one entry
+          got 1, want 1
+  ok    the valueless flag parses bare
+          got 0, want 0
+  ok      and is present
+          --verbose
+  ok    --verbose=no is accepted, not an error
+          got 0, want 0
+  ok      and reads as false
+          5 chars
+  ok    --verbose=yes is accepted too
+          got 0, want 0
+  ok      and reads as true
+          4 chars
+  ok    and --no-verbose is the documented way to clear it
+          got 0, want 0
+  ok      the flag is on before the negation
+          bare means on
+  ok    --no-verbose parses
+          got 0, want 0
+  ok      and clears it
+          5 chars
+v: unknown option '--no-nope'
+  ok    but --no-nope is not a negated anything
+          the --no- prefix only ever clears a DECLARED flag
+
+the three outcomes, checked directly
+  ok    a good command line is OK
+          got 0, want 0
+  ok    and errmsg is empty
+          0 chars
+  ok    --help is HELP
+          got 1, want 1
+  ok    with no diagnostic
+          0 chars
+  ok    and the usage text is there for it
+          which is what a HELP branch prints
+demo: unknown option '--nope'
+  ok    an unknown flag is USAGE
+          got 2, want 2
+  ok    and the diagnostic names it
+          the flag the user typed
+demo: option '--fps' wants a number, got 'fast'
+  ok    a non-numeric value for a NUM flag is USAGE too
+          got 2, want 2
+  ok      and the diagnostic names that flag
+          --fps
+demo: option '--fps' needs a value
+  ok    a missing value for a flag that needs one is USAGE
+          --fps with nothing after it
+  ok    the state does not persist across parses
+          a clean parse clears the previous diagnostic
+  ok    and neither does a flag's value
+          a second parse starts from the defaults, not the first parse's values
+  ok    usage() is non-empty with no failure at all
+          so --help works with no error to report
+usage: demo [options] [file...]
+
+  a table for the flag tests
+
+options:
+  -f, --fps N        frames per second (default 30)
+  --seed N           random seed (default 1)
+  -c, --color VALUE  color mode (default mono)
+  -s, --stats        print stats at the end
+  -h, --help         print this message and exit
+  ok    print_usage wrote the usage text above
+          the lines just before this group are it
+  ok    parse_or_exit returns on a good command line
+          got 0, want 0
+  ok    and leaves the flags parsed
+          so the body can read them
+  ok    and leaves no diagnostic
+          a clean parse has nothing to say
+
+init replaces the table
+  ok    the second table is in force
+          got 4, want 4
+  ok    and the first one's flag is gone
+          so a stale flag cannot be read from the previous table
+  ok    while nopts was that of the first
+          got 1, want 1
+
+94 of 94 checks passed

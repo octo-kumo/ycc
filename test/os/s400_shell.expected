@@ -1,0 +1,45 @@
+user:/home/user$ echo "double  spaced" 'single $HOME' plain\ escaped
+double  spaced single $HOME plain escaped
+user:/home/user$ X=hello
+user:/home/user$ echo $X ${X}world "$X" '$X'
+hello helloworld hello $X
+user:/home/user$ echo $?
+0
+user:/home/user$ false
+user:/home/user$ echo status $?
+status 1
+user:/home/user$ true && echo and-yes
+and-yes
+user:/home/user$ false && echo and-no
+user:/home/user$ false || echo or-yes
+or-yes
+user:/home/user$ true || echo or-no
+user:/home/user$ echo a ; echo b ; echo c
+a
+b
+c
+user:/home/user$ echo ~ # a comment
+/home/user
+user:/home/user$ echo "unterminated
+sh: unterminated quote
+user:/home/user$ echo > 
+sh: syntax error
+user:/home/user$ cd /nosuch
+sh: cd: /nosuch: no such directory
+user:/home/user$ export Y=exported
+user:/home/user$ echo $HOME $USER $PATH $TERM
+/home/user user /bin xterm-256color
+user:/home/user$ unset Y
+user:/home/user$ nosuch-command
+sh: nosuch-command: not found
+user:/home/user$ echo $?
+127
+user:/home/user$ sh -c "echo inner; exit 4"
+inner
+user:/home/user$ echo $?
+4
+user:/home/user$ write script.sh echo from a script
+user:/home/user$ sh script.sh
+from a script
+user:/home/user$ exit 0
+bye

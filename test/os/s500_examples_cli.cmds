@@ -1,0 +1,3 @@
+bignum calc 2+3*4
+toolkit-cli version
+halt

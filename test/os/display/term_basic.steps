@@ -1,0 +1,12 @@
+boot std
+key f1
+wait 1
+type echo hello from the screen
+key ret
+await hello from the screen
+wait 1
+shot prompt
+type vtdemo
+key ret
+wait 3
+shot vtdemo

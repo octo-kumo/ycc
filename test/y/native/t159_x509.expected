@@ -1,0 +1,12 @@
+good: []
+wildcard: []
+two labels: [certificate is not valid for a.b.wild.example]
+other host: [certificate is not valid for test.example.com]
+before: [certificate has expired or is not yet valid]
+after: [certificate has expired or is not yet valid]
+no intermediate: [certificate signed by an unknown authority]
+no anchors: [certificate signed by an unknown authority]
+leaf trusted: []
+bad signature: [certificate signed by an unknown authority]
+true [test.example, *.wild.example] false true true
+false 0

@@ -1,0 +1,125 @@
+user:/home/user$ echo n0
+n0
+user:/home/user$ echo n1
+n1
+user:/home/user$ echo n2
+n2
+user:/home/user$ echo n3
+n3
+user:/home/user$ echo n4
+n4
+user:/home/user$ echo n5
+n5
+user:/home/user$ echo n6
+n6
+user:/home/user$ echo n7
+n7
+user:/home/user$ echo n8
+n8
+user:/home/user$ echo n9
+n9
+user:/home/user$ echo n10
+n10
+user:/home/user$ echo n11
+n11
+user:/home/user$ echo n12
+n12
+user:/home/user$ echo n13
+n13
+user:/home/user$ echo n14
+n14
+user:/home/user$ echo n15
+n15
+user:/home/user$ echo n16
+n16
+user:/home/user$ echo n17
+n17
+user:/home/user$ echo n18
+n18
+user:/home/user$ echo n19
+n19
+user:/home/user$ echo n20
+n20
+user:/home/user$ echo n21
+n21
+user:/home/user$ echo n22
+n22
+user:/home/user$ echo n23
+n23
+user:/home/user$ echo n24
+n24
+user:/home/user$ echo n25
+n25
+user:/home/user$ echo n26
+n26
+user:/home/user$ echo n27
+n27
+user:/home/user$ echo n28
+n28
+user:/home/user$ echo n29
+n29
+user:/home/user$ echo n30
+n30
+user:/home/user$ echo n31
+n31
+user:/home/user$ echo n32
+n32
+user:/home/user$ echo n33
+n33
+user:/home/user$ echo n34
+n34
+user:/home/user$ echo n35
+n35
+user:/home/user$ echo n36
+n36
+user:/home/user$ echo n37
+n37
+user:/home/user$ echo n38
+n38
+user:/home/user$ echo n39
+n39
+user:/home/user$ echo n40
+n40
+user:/home/user$ echo n41
+n41
+user:/home/user$ echo n42
+n42
+user:/home/user$ echo n43
+n43
+user:/home/user$ echo n44
+n44
+user:/home/user$ echo n45
+n45
+user:/home/user$ echo n46
+n46
+user:/home/user$ echo n47
+n47
+user:/home/user$ echo n48
+n48
+user:/home/user$ echo n49
+n49
+user:/home/user$ echo n50
+n50
+user:/home/user$ echo n51
+n51
+user:/home/user$ echo n52
+n52
+user:/home/user$ echo n53
+n53
+user:/home/user$ echo n54
+n54
+user:/home/user$ echo n55
+n55
+user:/home/user$ echo n56
+n56
+user:/home/user$ echo n57
+n57
+user:/home/user$ echo n58
+n58
+user:/home/user$ echo n59
+n59
+user:/home/user$ write a.txt x
+user:/home/user$ cat a.txt
+x
+user:/home/user$ halt
+halting

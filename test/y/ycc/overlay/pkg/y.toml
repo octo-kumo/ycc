@@ -1,0 +1,6 @@
+[package]
+name = "p"
+src = ["m"]
+
+[bin]
+p = "main.y"

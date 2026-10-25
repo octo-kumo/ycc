@@ -1,0 +1,1 @@
+sockets: the host answers socket/bind/listen with EAFNOSUPPORT

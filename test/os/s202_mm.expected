@@ -1,0 +1,35 @@
+user:/home/user$ b2mm
+mmap: ok
+zeroed: ok
+written: ok
+second mmap apart: ok
+munmap: ok
+mmap fixed: ok
+fresh after munmap: ok
+punch hole: ok
+neighbours kept: ok
+hole reusable: ok
+mprotect none: ok
+mprotect rw: ok
+mprotect unaligned: ok
+mprotect hole: ok
+mmap zero length: ok
+munmap unaligned: ok
+1 GB reserve: ok
+1 GB touch: ok
+1 GB munmap: ok
+200 map/touch/unmap cycles: ok
+madvise: ok
+madvise zeroed: ok
+brk query: ok
+brk grow: ok
+brk memory: ok
+brk shrink: ok
+brk regrow zero: ok
+brk absurd: ok
+getrandom len: ok
+getrandom nonzero: ok
+getrandom differs: ok
+getrandom odd length: ok
+user:/home/user$ halt
+halting

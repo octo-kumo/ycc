@@ -1,0 +1,14 @@
+user:/home/user$ ttyt canon
+$ hello
+[6] 104 101 108 108 111 10
+$ abcdef
+[3] 97 98 99
+[4] 100 101 102 10
+$ xy
+[2] 120 121
+[1] 10
+$ 
+[0]
+[1] 10
+user:/home/user$ halt
+halting

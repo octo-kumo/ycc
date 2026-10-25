@@ -1,0 +1,31 @@
+user:/home/user$ /bin/fstest rename
+ok mkdir d1
+ok mkdir d2
+ok put d1/f
+ok rename in dir
+ok old name gone
+ok across dirs
+d2: one
+ok put d1/k
+ok onto existing
+d2/h: two
+ok missing source
+ok dir rename
+d3: h 
+ok old dir gone
+ok dir into itself
+ok mkdir d3/s
+ok move dir under d1
+ok chdir d1/s
+ok dotdot after move
+cwd /d1
+ok file onto dir
+ok dir onto file
+ok dir onto non-empty
+ok cleanup 1
+ok cleanup 2
+ok cleanup 3
+ok cleanup 4
+done fails=0
+user:/home/user$ halt
+halting

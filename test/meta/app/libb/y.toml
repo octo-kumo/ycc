@@ -1,0 +1,3 @@
+[package]
+name = "libb"
+lib = "src/libb.y"

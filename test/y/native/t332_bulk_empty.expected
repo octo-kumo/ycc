@@ -1,0 +1,31 @@
+── the empty array ──
+fsum(empty)        0
+fsum_kahan(empty)  0
+fdot(empty,empty)  0
+fmean(empty)       -2251799813685248
+fvariance(empty)   -2251799813685248
+fmin_of(empty)     -2251799813685248
+fmax_of(empty)     -2251799813685248
+── one element: the case a `len < 2` guard and a `len == 0` guard differ on ──
+fsum(one)          4612811918334230528
+fmean(one)         4612811918334230528
+fvariance(one)     -2251799813685248
+  and the values themselves, so the bits above can be read:
+    fsum(one)      2.50000000000000000e+00
+    fmean(one)     2.50000000000000000e+00
+    fvariance(two) 5.00000000000000000e-01
+── a single-element array is a sum of itself, and its mean is itself ──
+  fsum(one)  == 2.5   true
+  fmean(one) == 2.5   true
+  fsum(two)  == 6.0   true
+  fmean(two) == 3.0   true
+── the NaN these produce carries its sign bit, and it does not matter ──
+  math.nan          nan
+  its bits          -2251799813685248
+  fmean(empty)      nan
+  0.0 / 0.0         nan
+  all three the same NaN: true
+  and the sign never escapes: 1/nan is a NaN, not an infinity: true
+── in place, where there is no sum to get wrong ──
+  after fscale and faxpy: 23.000000 46.000000
+  and both on an empty pair leave it empty: 0

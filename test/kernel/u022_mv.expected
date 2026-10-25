@@ -1,0 +1,4 @@
+fs ok=true msg=3
+
+mv old=3 ren=0 gone=-2 new=4
+

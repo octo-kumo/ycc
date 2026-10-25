@@ -1,0 +1,10 @@
+user:/home/user$ echo hello world
+hello world
+user:/home/user$ pwd
+/home/user
+user:/home/user$ nosuch
+sh: nosuch: not found
+user:/home/user$ echo   spaced    out  
+spaced out
+user:/home/user$ halt
+halting

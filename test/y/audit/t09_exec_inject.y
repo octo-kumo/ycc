@@ -1,0 +1,1 @@
+exec("echo pwned > /dev/null; echo injected")

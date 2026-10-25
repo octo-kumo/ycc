@@ -1,0 +1,2 @@
+before
+runtime error: slice assignment out of bounds

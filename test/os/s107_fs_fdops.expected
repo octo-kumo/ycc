@@ -1,0 +1,23 @@
+user:/home/user$ /bin/fstest fdops
+ok mkdir /q
+ok open dir
+ok openat on a dirfd
+ok created inside q
+getdents: . .. f 
+ok fchdir
+cwd /q
+ok relative to fchdir
+ok lseek dir back
+again: . .. f 
+ok chdir /
+append: abcdefghi
+ok read on write-only
+ok write on read-only
+ok unlink open file
+ok name is gone
+ok still readable
+ok rmdir q
+ok ftruncate on read fd
+done fails=0
+user:/home/user$ halt
+halting

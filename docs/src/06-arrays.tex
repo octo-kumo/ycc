@@ -1,0 +1,316 @@
+\section{Arrays}
+\label{sec:arrays}
+
+Arrays are the language's one growable sequence. They are
+\textbf{reference values}: a binding names an array \emph{object}, and
+mutating operators write into that object so every binding sees the
+change. Arrays are \textbf{homogeneous}: one element type, enforced
+everywhere.
+
+\subsection{Structure: length and capacity}
+\label{sec:lencap}
+
+An array object carries two independent quantities:
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+ & meaning & invariant \\
+\midrule
+\ic{len} & number of live elements & $\texttt{len} \ge 0$ \\
+\ic{cap} & elements the storage can hold & $\texttt{len} \le \texttt{cap}$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent Indexing is trapped: reading or writing \ic{a[i]} with
+\ic{i < 0} or \ic{i >= len} is a runtime error (``index out of
+bounds''). \ic{cap} is never observable through operators --- only
+\ic{len} is (\ic{len(a)}).
+
+\paragraph{Growth policy (amortized doubling).}
+\begin{align*}
+\texttt{cap}_0 &= 0 \\
+\texttt{cap}_{k+1} &= \max(8,\; 2\cdot\texttt{cap}_k)
+   \qquad \text{when } \texttt{len} \text{ reaches } \texttt{cap}
+\end{align*}
+
+\noindent That is: the array grows \emph{only} when the capacity is
+reached; the first growth yields capacity 8 and every later growth
+doubles it ($8, 16, 32, \ldots$). Appending $n$ elements one at a time
+therefore costs $O(n)$ copies total, $O(1)$ amortized per element. The
+capacity never shrinks.
+
+\subsection{Operators}
+\label{sec:array-ops}
+
+Let \ty{a}, \ty{b} be arrays of \ty{T}, and \ty{x} a value of type
+\ty{T}. The complete operator semantics:
+
+% The four columns are wide; a tighter \tabcolsep keeps the table inside
+% the text block.
+\begingroup
+\setlength{\tabcolsep}{3.4pt}
+\begin{center}
+\begin{tabular}{llll}
+\toprule
+expression & result & effect on operands & value types \\
+\midrule
+\ic{a + b} & new array $= a \mathbin{+\!\!+} b$ & none &
+   \ty{T} $=$ \ty{T} \\
+\ic{a + x} & new array $= a \mathbin{+\!\!+} [\,x\,]$ & none &
+   type of \ty{x} is \ty{T} \\
+\ic{x + a} & new array $= [\,x\,] \mathbin{+\!\!+} a$ & none &
+   type of \ty{x} is \ty{T} \\
+\ic{rows + row} & row appended whole & none & \ic{[[T]]}, \ic{[T]} \\
+\ic{row + rows} & row prepended whole & none & \ic{[[T]]}, \ic{[T]} \\
+\ic{x :: a} & new array $= [\,x\,] \mathbin{+\!\!+} a$ & none &
+   \ty{x} is ONE element \\
+\ic{a += b} & \ty{a} & appends every element of \ty{b}, in place &
+   \ty{T} $=$ \ty{T} \\
+\ic{a += x} & \ty{a} & pushes \ty{x}, in place &
+   type of \ty{x} is \ty{T} \\
+\ic{a *= x} & \ty{a} & prepends \ty{x}, in place &
+   type of \ty{x} is \ty{T} \\
+\ic{a = b}  & \ty{b} & aliases: both names name one array & \\
+\bottomrule
+\end{tabular}
+\end{center}
+\endgroup
+
+\noindent The two \ic{rows} rows are the array-as-an-element case, and
+they say what \ic{[[T]]} plus a \ic{[T]} does: the array goes in
+\emph{whole}, as one element, because a \ic{[T]} is what that array
+holds. \ic{rows + rows} (both \ic{[[T]]}) concatenates as usual, and so
+does \ic{rows += row}, which appends the row in place.
+
+\noindent In prose, matching the design intent exactly:
+
+\begin{itemize}[nosep]
+\item \ic{arr1 + arr2} --- make a new array which is \ic{arr1}
+  concatenated with \ic{arr2}; the operands are untouched.
+\item \ic{arr1 += arr2} --- append \ic{arr2} to the end of \ic{arr1},
+  \emph{in place}.
+\item \ic{arr1 = arr2} --- both point to the same array in memory.
+\item \ic{arr1 + elem} --- a new array which is \ic{arr1} concatenated
+  with \ic{[elem]}; only allowed if \ic{elem} has, or converts to, the
+  element type (Section~\ref{sec:conversions}).
+\item \ic{elem + arr1} --- a new array which is \ic{[elem]} concatenated
+  with \ic{arr1}.
+\item \ic{+=} means in-place push (of an element) or append (of an
+  array); \ic{+} always means a \emph{new} array; \ic{*=} means prepend
+  the item in place. A push and a prepend both take amortized constant
+  time: an array keeps spare room at both ends and doubles it when it
+  runs out, so building an array from either end is linear.
+\end{itemize}
+
+\paragraph{The one-thing rule.} Whether \ic{+=} pushes or appends is
+decided by the \emph{shape of the value against the target's element
+type}: an array whose own elements are the target's element type has
+those elements appended; anything else --- a single value, or an array of
+some other element type --- is pushed as one element. So a \ic{[long]}
+onto a \ic{[[long]]} is pushed whole (it is one \ic{[long]} element), a
+\ic{[[long]]} onto a \ic{[[long]]} appends its rows, and a \ic{[str]} is
+neither, so it is an error:
+
+\begin{lstlisting}
+let rows = [[1], [2]];
+rows += [3];        // pushes the one row [3] -- three rows now
+rows += [[4], [5]]; // appends two rows -- five rows now
+rows += 6;          // error: '+=' element: expected [long], got long
+rows += ["s"];      // error: '+=' appended elements: expected [long], got str
+\end{lstlisting}
+
+\paragraph{Homogeneity.} Every mixing form requires matching element
+types; the checker rejects mismatches --- including the append case, where
+a non-matching array would splice wrong-typed elements:
+
+\begin{lstlisting}
+let xs = [1, 2];
+let fs: [float] = [0.5];
+xs += fs;           // error: '+=' appended elements: expected long, got float
+\end{lstlisting}
+
+\paragraph{\ic{a += a}.} The right side is captured (its length snapshotted)
+before appending, so \ic{a += a} doubles \ic{a} with a copy of its
+original elements.
+
+\subsection{Aliasing and visibility}
+\label{sec:array-aliasing}
+
+Assigning arrays aliases; mutating operators are visible through every
+alias:
+
+\begin{lstlisting}
+let m1 = [1, 2];
+let m2 = m1;      // ONE array, two names
+m1 += 3;          // m2 sees it: len(m2) == 3
+\end{lstlisting}
+
+\noindent By contrast \ic{+} never mutates: \ic{let ys = xs + [9];}
+leaves \ic{xs} at its old length.
+
+\subsection{Fixed arrays}
+
+\ic{[T; N]} arrays are allocated with exactly \ic{N} slots; their length
+is part of the type, so they reject growth: \ic{+=} and \ic{*=} on a
+fixed array is a compile error (``cannot grow fixed array \ic{[long; 3]}
+with \ic{'+='}''). Indexing is bounds-trapped like heap arrays. A fixed
+array may be sliced (Section~\ref{sec:slices}) and slice-assigned
+(below); the result of a slice is a heap \ic{[T]}.
+
+Since the length is in the type, an annotated fixed array checks what it
+is given: a heap \ic{[T]} never converts to a \ic{[T; N]}, and a literal
+is checked against the size it claims --- \ic{let v: [long; 5] = [1, 2];}
+is an error (\ic{expected [long; 5], got [long]}), while the matching
+\ic{[long; 2]} is fine. Build one with \ic{[v; n]}, which is a fixed array
+of \ty{n} copies of \ic{v} (Section~\ref{sec:expr-grammar}).
+
+\subsection{Slices}
+\label{sec:slices}
+
+\ic{a[lo:hi]} evaluates to a \textbf{new} heap \ic{[T]} holding the
+elements in $[\texttt{lo}, \texttt{hi})$. Missing bounds default to
+\ic{0} and \ic{len}; bounds are clamped (no trap). All four spellings
+are legal: \ic{a[:]}, \ic{a[lo:]}, \ic{a[:hi]}, \ic{a[lo:hi]}. Strings
+slice the same way: \ic{s[lo:hi]} is a new \ic{str} of the bytes in that
+range, clamped alike. There is no \ic{substr}.
+
+\paragraph{Slice assignment.} \ic{a[lo:hi] = b} writes \ic{b} into \ic{a}
+in place, over the range \ic{[lo, hi)} --- the same clamped range a read
+would take, on either kind of array. It is a statement, and unlike \ic{=}
+and \ic{+=} --- which yield the new value of the place
+(Section~\ref{sec:assignment}) --- it is \ic{void}, so ending a
+block with one makes that block \ic{void}: \ic{let v = { a[lo:hi] = b };}
+is an error, for the same reason a block ending in a bare \ic{;} is.
+The target's subexpressions, the bounds and \ic{b} are each evaluated
+once, left to right (Section~\ref{sec:exactly-once}). The right side
+must be an array whose element type is the target's, a \ic{str} cannot
+be slice-assigned, and the length is checked when the program runs: a
+\ic{b} of another length traps with
+\ic{runtime error: slice assignment length mismatch}, and a range
+outside the array with \ic{runtime error: slice assignment out of
+bounds}. The static failures name themselves:
+
+\begingroup
+\setlength{\tabcolsep}{4pt}
+\begin{center}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.30\linewidth}@{\quad}>{\raggedright\arraybackslash}p{0.60\linewidth}@{}}
+\toprule
+mistake & message \\
+\midrule
+a \ic{[float]} into a \ic{[long]} &
+  \ic{slice assignment: cannot store [float] into [long]} \\
+not an array &
+  \ic{slice assignment needs an array on the right, got long} \\
+a \ic{str} target &
+  \ic{cannot assign to a slice of str (strings are immutable)} \\
+\bottomrule
+\end{tabular}
+\end{center}
+\endgroup
+
+\begin{lstlisting}
+let a = [1, 2, 3, 4, 5];
+a[1:3] = [9, 8];            // a is [1, 9, 8, 4, 5]
+a[1:3] = [7];               // traps: slice assignment length mismatch
+\end{lstlisting}
+
+\subsection{Byte strings}
+
+A \ic{[byte]} array \emph{is} a binary string: \ic{b"..."} literals
+produce them, \ic{+} concatenates, slices cut, and printing one shows
+the Python-style repr --- printable ASCII verbatim, quote and backslash
+escaped, \ic{\bs n} \ic{\bs r} \ic{\bs t} as escapes, and every other
+byte as \ic{\bs xHH}:
+
+\begin{lstlisting}
+print(b"\x7fELF");     // b'\x7fELF'
+let hdr = b"AB" + b"\x00";
+print(hdr);              // b'AB\x00'
+print(hdr[0:2]);         // b'AB'
+\end{lstlisting}
+
+\noindent \ic{\bs{std/struct.y}} builds on this with pack/unpack
+helpers for file headers and binary layouts (\ic{u32be}, \ic{get\_i16le},
+\ic{pack}, \ic{unpack}, \ldots).
+
+\subsection{Methods}
+\label{sec:array-methods}
+
+Besides the operators, an array carries methods, called \ic{a.m(args)}.
+The read-only methods take a closure and leave the receiver alone:
+
+\begin{center}
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lll}
+\toprule
+call & returns & meaning \\
+\midrule
+\ic{a.foreach(f)} & \ic{void} & call \ic{f(elem[, idx])} for each element \\
+\ic{a.map(f)}     & \ic{[R]} & a new array of \ic{f(elem[, idx])} \\
+\ic{a.filter(f)}  & \ic{[T]} & a new array of the elements \ic{f} accepts \\
+\ic{a.all(f)}     & \ic{bool} & every element accepted (true for an empty array) \\
+\ic{a.some(f)}    & \ic{bool} & some element accepted (false for an empty array) \\
+\ic{a.find(f)}    & \ic{T?} & the first element \ic{f} accepts, or \ic{none} \\
+\ic{a.index(x)}   & \ic{long} & the first index whose element equals \ic{x}, else $-1$ \\
+\ic{a.reduce(f, init)} & \ic{R} & fold \ic{f(acc, v)} over the array from \ic{init} \\
+\ic{a.flat()}     & \ic{[T]} & one level: the elements of each inner array \\
+\ic{a.sorted(f)}  & \ic{[T]} & a new array sorted by \ic{f} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent and the mutating ones change the receiver in place, which every
+alias sees:
+
+\begin{center}
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lll}
+\toprule
+call & returns & meaning \\
+\midrule
+\ic{a.pop()}          & \ic{T} & remove and return the last element \\
+\ic{a.shift()}        & \ic{T} & remove and return the first element \\
+\ic{a.remove(i)}      & \ic{T} & remove and return element \ic{i} \\
+\ic{a.remove(i, n)}   & \ic{[T]} & remove \ic{n} elements at \ic{i} and return them \\
+\ic{a.push(x)}        & \ic{long} & append \ic{x}; the new length \\
+\ic{a.unshift(x)}     & \ic{long} & prepend \ic{x}; the new length \\
+\ic{a.insert(i, x)}   & \ic{void} & insert \ic{x} at index \ic{i} \\
+\ic{a.sort(f)}        & \ic{[T]} & sort in place by \ic{f} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent A sort comparator or a predicate is an ordinary closure with the
+element (and, where it wants it, the index) as its parameters:
+\ic{f(a, b) < 0} puts \ic{a} first. The index is optional, so \ic{a.map(e
+=> e + 1)} and \ic{a.map((e, i) => e + i)} are both the same kind of
+literal, and a missing parameter type is filled from the receiver --- the
+element for the first parameter, \ic{long} for the second
+(Section~\ref{sec:closures}). An empty array answers each method's
+identity: \ic{all} is true, \ic{some} is false, \ic{find} is \ic{none},
+\ic{index} is $-1$, and \ic{map}/\ic{filter}/\ic{flat} are empty.
+\ic{pop} and \ic{shift} on an empty array are a runtime error
+(``index out of bounds''). \ic{remove(i)} checks that \ic{i} is in
+\ic{[0, len)}. \ic{remove(i, n)} requires \ic{i} in \ic{[0, len]},
+\ic{n >= 0}, and \ic{n <= len - i}; a zero count removes nothing,
+including at the end of an empty array. Invalid removals trap before changing
+the array. \ic{insert} still requires the caller to check its index in
+\ic{[0, len]}: an invalid index can corrupt the array.
+
+\paragraph{Constants and fixed arrays.} Calling a method that mutates a
+\ic{const} array is the usual \ic{cannot modify 'a': it is a constant}.
+A length-changing method (\ic{pop}, \ic{shift}, \ic{remove}, \ic{push},
+\ic{unshift}, \ic{insert}) on a fixed \ic{[T; N]} is rejected like
+\ic{+=} is, because the length is part of its type
+(``cannot resize fixed array \ic{[long; 3]} with \ic{'.pop'}''); the
+read-only methods and \ic{sort}, which keeps the length, are fine.
+
+\noindent \ic{len(a)} is still the builtin whose argument is an array
+\emph{as such}; \ic{join(xs, sep)} also takes an array but of any element
+type (each element is stringified); \ic{bytes} takes a \ic{str} and gives
+its \ic{[byte]}, while \ic{from\_bytes} and \ic{fs.write\_bytes} take a
+\ic{[byte]}. There is no free \ic{push} or
+\ic{prepend} function: \ic{+=} and \ic{*=} remain the operator spelling
+of the two ends (Section~\ref{sec:builtins}).

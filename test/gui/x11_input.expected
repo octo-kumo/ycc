@@ -1,0 +1,22 @@
+ready
+key 65 mods 0
+char 97 mods 0
+key 66 mods 1
+char 66 mods 1
+key 67 mods 2
+char 3 mods 2
+key 37 mods 0
+key 13 mods 0
+char 13 mods 0
+key 27 mods 0
+char 27 mods 0
+key 8 mods 0
+char 8 mods 0
+button 1 1 at 40,50
+button 1 0 at 40,50
+button 3 1 at 40,50
+button 3 0 at 40,50
+wheel 1 at 40,50
+wheel -1 at 40,50
+close
+done

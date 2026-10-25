@@ -1,0 +1,16 @@
+let a = [1, 2];
+print(len(a));
+a += 3;
+print(len(a));
+print(a[0] + a[1] + a[2]);
+let e: [long] = [];
+e += 7;
+print(e[0]);
+a[0] = 100;
+print(a[0]);
+let g = [1];
+g += 2;
+g += 3;
+g += 4;
+print(len(g));
+print(g[0] + g[1] + g[2] + g[3]);

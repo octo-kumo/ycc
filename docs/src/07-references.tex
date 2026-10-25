@@ -1,0 +1,329 @@
+\section{Records and maps}
+\label{sec:references}
+
+Y has \emph{two} key/value types, deliberately distinct:
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+ & \textbf{record} (static) & \textbf{map} (dynamic) \\
+\midrule
+type & \ic{\{ a: long, b: str \}} & \ic{\{str => long\}} \\
+keys & identifiers, fixed at compile time & any hashable value at run time \\
+values & may differ per field & one homogeneous type \ty{V} \\
+layout & C struct: fields at fixed offsets & growable key/value store \\
+keying & \ic{r.a} & \ic{m["a"]} (or \ic{m.a} for a \ic{str} key) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{The value model}
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+category & types & assignment \\
+\midrule
+values & \ic{long} \ic{byte} \ic{bool} \ic{float} \ic{str} options
+   & copies the bits \\
+references & arrays (\ic{[T]}, \ic{[T; N]}), records, maps, \ic{bigint}
+   & \textbf{aliases} the object \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent ``Reference'' means: every binding of the same object names
+one storage, and every in-place mutation (\ic{+=}, \ic{*=}, field
+assignment, map stores) is observable through all of them.
+
+\subsection{Records}
+
+A record literal \ic{\{ name: "y", n: 1 \}} allocates one record object
+of its record type (Section~\ref{sec:type-records}). At run time a
+record is a C struct laid out by field name: its fields sorted, the
+\ty{i}-th is the word at \ic{+8i} from the record address, whatever
+order a literal or a type writes them in --- so \ic{r.a} compiles to a
+single load at a compile-time offset. The word before the fields points
+to a descriptor of the record's type, which a \ic{match} on a union
+compares to tell the members apart.
+
+\begin{lstlisting}
+let r = { v: [7], n: 1 };
+let s = r;            // aliases the record
+r.v += 8;             // s.v sees it
+s.n = 2;              // r.n sees it
+\end{lstlisting}
+
+\noindent The shape is fixed: writing a field the shape does not have is
+a \emph{compile error} (there is no runtime field growth), and a field
+read requires the field to exist statically.
+
+\paragraph{Record spread.} \ic{\{a: 0, ...obj\}} builds a record whose
+shape is the \emph{union} of the two shapes --- entirely statically; no
+dynamic shape is involved. Entries merge with last-wins values and
+first-appearance positions, so \ic{obj} may overwrite \ic{a} and a later
+explicit key may overwrite what \ic{obj} spread:
+
+\begin{lstlisting}
+let b = {x: 1, y: 2};
+let c = {y: 9, z: 3};
+print({a: 0, ...b});     // {a: 0, x: 1, y: 2}
+print({...b, ...c});     // {x: 1, y: 9, z: 3}
+print({...b, y: 100});   // {x: 1, y: 100}
+\end{lstlisting}
+
+\subsection{Maps}
+\label{sec:maps}
+
+A map type is \ic{\{\ty{K} => \ty{V}\}} where \ty{K} is a hashable key
+type (\ic{str}, \ic{long}, \ic{byte}, \ic{bool}, \ic{float}) and \ty{V}
+is one homogeneous value type. Map literals use quoted keys (identifier
+keys are record syntax):
+
+\begin{lstlisting}
+let m = {"a": 1, "b": 2};      // {str => long}
+let empty: {str => long} = {}; // an empty map needs the annotation
+m["c"] = 3;                    // insert, or overwrite in place
+print(m["a"]);                 // 1 -- reads yield V? (here: long?)
+print(m["zz"]);                // none
+print(m["a"]! + 1);            // 2 -- x! unwraps
+print(m);                      // {"a": 1, "b": 2, "c": 3}
+\end{lstlisting}
+
+\paragraph{Key types.} Only \ic{str} keys can be written in a map
+\emph{literal}: the checker's literal inference fixes the key type to
+\ic{str}, so \ic{\{ 1: 5 \}} is rejected as a shape rather than
+accepted as a \ic{\{long => long\}}. Every other hashable key type
+works when the map is built from an annotated empty literal and stored
+into --- which is the only way to write one today:
+
+\begin{lstlisting}
+let m: {long => long} = {};   // the annotation is load-bearing here
+m[1] = 5;                     // insert
+print(m[1]);                  // 5 -- a read is still V? (here: long?)
+print(m[2]);                  // none
+print(m);                     // {1: 5}
+\end{lstlisting}
+
+\noindent \ic{byte}, \ic{bool} and \ic{float} keys behave the same
+way; see Section~\ref{sec:type-maps} for the type-level rule.
+
+\noindent Keying is symbolic: \ic{m["k"]} is the map form and is reserved
+for maps; \ic{r.a} is the record form --- except on a map keyed by
+\ic{str}, where a dot is the same entry spelled the other way
+(\emph{below}). Reading
+\ic{m[k]} yields \ic{\ty{V}?} --- \ic{none} when the key is absent,
+even though the map's type says \ty{V} --- and \ic{m[k] = v} stores in
+place (the store is visible through every binding of the map). A store
+to an existing key keeps its position; a new key is appended, so maps
+print in insertion order. Duplicate keys in a literal collapse the same
+way (the last value wins, the first position stays). \ic{len(m)} and
+\ic{m.length} are the number of entries, and \ic{keys(m)} and
+\ic{values(m)} list the keys and the values in that same order (each a
+copy), so \ic{keys(m)[i]} and \ic{values(m)[i]} are one entry:
+\ic{foreach (k in keys(m)) \{ ... \}} visits every entry. The
+map grows as needed (amortized doubling, like arrays), and a \ic{str}, \ic{long} or \ic{float} key is found through a hash index that appears once the map holds more than eight entries, so a lookup, a store and a miss are O(1) on average (\ic{0.0} and \ic{-0.0} are one key, and a NaN key is never found again); a smaller map, and one keyed by \ic{byte} or \ic{bool}, scans its keys, which are at most 256 and 2. Values are homogeneous: storing a \ic{str} into a
+\ic{\{str => long\}} is a compile error, as is a key of the wrong type.
+
+\paragraph{\ic{m.k} --- the dot form.} On a map keyed by \ic{str}, a
+dot names an entry: \ic{m.a} is \ic{m["a"]}, and \ic{m.a = v} is
+\ic{m["a"] = v} --- for a \ic{str}, \ic{long}, \ic{bool}, \ic{float} or
+union value alike, since the key type is what a dot name has to be. It
+reads as the \emph{value}, not the option a bracket read gives: there is
+no \ic{?} and no \ic{none} for a missing entry, because a dot is a
+claim that the entry is there, so the program stops with the key in the
+message instead:
+
+\begin{lstlisting}
+let m: {str => long} = {"a": 1};
+print(m.a);         // 1        -- m["a"]! is the same value
+m.a = 2;            // store, creating the entry like any other store
+print(m["a"]);      // some(2)  -- the probe spelling
+print(m.zz);        // runtime error: no entry 'zz' in this map
+\end{lstlisting}
+
+\noindent So \ic{m["k"]} remains the way to ask, and \ic{m["k"]!} to
+answer. \ic{m.length} is the one name a dot does \emph{not} read as an
+entry --- it is the count, as on an array or a string --- and \ic{m.ptr}
+is not a property of a map at all, so a read and a store both say so. A
+map keyed by anything else keeps its brackets and says why: a dot name
+is a string, so the keys have to be strings too.
+
+\paragraph{\ic{k in m} --- the presence test.} \ic{in} is a
+keyword (\ic{for x in xs}), reused here as an operator: \ic{"k" in m}
+asks whether the map has that key, and answers \ic{bool}. It binds as a
+comparison --- looser than arithmetic, tighter than \ic{\&\&} --- and
+costs what a map read costs, the same key scan in its \emph{has} form.
+It is the way to ask about a key without naming the value's type, which
+the bracket spellings force you to do (\ic{if let long v = m["k"]}), and it
+composes with them:
+
+\begin{lstlisting}
+let m: {str => long} = {"a": 1};
+print("a" in m);         // true
+print("zz" in m);        // false
+if "a" in m { m["a"] = m["a"]! + 1; };
+\end{lstlisting}
+
+\noindent The left operand must be the map's key type and the right a
+map, so a \ic{str}-keyed map takes a string; anything else says so
+(\ic{'in' needs a str, an array or a map on the right, got [long]}). On a
+\ty{str} or an array the operator keeps its other two meanings --- a
+substring and an element, both answered by \ic{index\_of} and a scan
+respectively --- which is why the diagnostic names all three and not
+just the map.
+
+\subsection{Equality}
+\label{sec:equality}
+
+\ic{==} and \ic{!=} on two \textbf{heap arrays} \ic{[T]} are
+\textbf{structural}: same
+length, pairwise-equal elements. It is never a pointer comparison;
+\ic{arr == []} is an emptiness test. Each pair of elements is compared
+with the element type's own \ic{==}, at any depth: numbers as numbers
+(so \ic{[0.0]} equals an array holding a negative zero), strings by
+content, arrays and options structurally (\ic{[[1, 2]] == [[1, 2]]} is
+\ic{true}), records and maps by identity.
+
+Two \textbf{options} are equal when both are \ic{none}, or both are
+\ic{some} with equal payloads, compared with the payload type's own
+\ic{==}: \ic{some("ab") == some("a" + "b")} and \ic{some([1]) ==
+some([1])} are \ic{true}, \ic{some(1) == some(2)} is \ic{false}. A map
+read is an option, so \ic{m["a"] == m["b"]} compares the two values (or
+their absence). \ic{x == none} remains the emptiness test.
+
+On two \textbf{records} or two \textbf{maps}, \ic{==} compares
+\emph{identity}: it is true exactly when both names refer to the same
+object. Two equal-looking literals are two objects, so \ic{\{x: 1\} ==
+\{x: 1\}} is \ic{false}; compare fields yourself, or copy the record and
+compare the copy's fields.
+
+\subsection{Copying}
+
+There is no implicit deep copy. To duplicate an array use \ic{+} with an
+empty right side (\ic{a + []}) or slicing (\ic{a[:]}); records can be
+rebuilt field by field. The language deliberately makes sharing the
+default and copying explicit.
+
+\subsection{Regions}
+\label{sec:regions}
+
+By default there is no collector. The lifetime solver proves temporary
+allocations reclaimable by a \emph{region}; a program with unproved repeated
+allocations is rejected. Opting in with \ic{--gc=auto} allows the collector
+to reclaim what nothing reaches any more. A region reclaims at a moment the
+program chooses:
+
+\begin{verbatim}
+for (line in lines) {
+    region {
+        let rec = json.parse(line);
+        total += rec.count;
+    }
+}
+\end{verbatim}
+
+\noindent Everything the block allocates --- and everything the functions it
+calls allocate --- comes from the region's own memory, and all of it is
+returned at once when the block ends, without the collector running and with
+no collector linked at all (\ic{--gc=never}). Regions nest; an inner one ends
+first. A region is a statement and has no value. \ic{region} and \ic{heap}
+are words only at the start of a statement and before a block, so they remain
+ordinary names everywhere else.
+
+\paragraph{What may not leave.} A value made inside a region must not be
+reachable after it ends, and the compiler checks it. Inside the block a value
+is either made there (by the block or by a function it calls) or came from
+outside, and each of these is an error:
+\begin{itemize}
+\item assigning a value made in the region to a variable declared outside it
+  (\ic{a reference made in this region escapes to 'names', which outlives it});
+\item storing one into a field or element of a value from outside, or a map
+  read that would keep its boxed entry in such a map;
+\item growing a value from outside --- \ic{+=} on an array, a map store, a
+  string \ic{+=} on an outer variable --- since the new storage would be the
+  region's;
+\item returning one out of the region;
+\item calling a function that may do any of these with what it is given or
+  with a global (\ic{'keep' may keep a reference or grow memory outside the
+  region}), calling through a function value the compiler cannot see, and
+  \ic{spawn} or \ic{fork}.
+\end{itemize}
+Plain values --- numbers, booleans, bytes --- leave freely: \ic{total +=
+rec.count} above is fine. Each function, the standard library's included, has
+a summary of what it may keep, worked out from its body, so the check reaches
+through calls.
+
+\paragraph{\ic{heap \{ .. \}}.} Inside a region, \ic{heap \{ .. \}}
+allocates in the collector's heap instead, so what it makes may outlive the
+region and may be stored anywhere. It is the way to keep something:
+
+\begin{verbatim}
+region {
+    let rec = json.parse(line);
+    heap { names += rec.name + ""; }   // a copy the collector owns
+}
+\end{verbatim}
+
+\noindent and how a library fills a cache the first time it is called (the
+standard library's crypto tables, \ic{readline}'s buffer): a function whose
+cache is filled in a \ic{heap} block can be called from a region. A
+\ic{heap} block outside any region changes nothing.
+
+\paragraph{Jumps.} A \ic{break}, \ic{continue} (labelled or not) or
+\ic{return} that leaves a region or a heap block closes it on the way, the
+innermost first, exactly as falling off its end does.
+
+\paragraph{Automatic regions.} A loop that allocates, and from which
+nothing a turn makes can be reached once the turn is over, gets a region from
+the compiler: what its turns allocate comes from the region, and goes back to
+the start of the region each time 64 KiB of it has piled up (between two
+turns) and when the loop ends, with no collection. The test is the one above,
+applied to the body together with the condition and the step, which run inside
+the region; so a loop that keeps what it makes (\ic{out += line}) stays as it
+is and requires a lifetime proof or \ic{--gc=auto}. When GC is enabled,
+automatic regions that grow past 32 MiB without reaching a turn's end hand
+their memory to the collector and stay off for the rest of the run. In a
+checked build they keep reclaiming their memory, including large turns.
+\ic{--regions=off} turns the transformation off.
+
+In checked builds a function can also get a region for its entire call.
+Its summary must prove that no reference to its scratch allocations is
+returned, stored outside the call, or kept by a callee. All return paths
+close this region; scalar-returning helpers and allocating loop conditions
+therefore need no collector when this proof succeeds. A whole-call region
+cannot conceal unplaced allocating loops inside the function or its callees.
+Allocation effects,
+including allocations hidden behind a scalar result and in \ic{heap}
+blocks, travel with standard and package units. Recursive call cycles and
+callbacks that repeat allocations are included in the check. Finite setup
+allocations and geometric array-capacity growth are permitted.
+Implicit bigint promotions, union boxing, callback argument conversions and
+numeric output formatting count as allocations too. The packed launcher uses
+an explicit temporary region and also contains no collector.
+
+A top-level \ic{region \{ exit(main(argv())); \}} gives a command's state
+a process lifetime. Its only statement must call the builtin \ic{exit};
+retaining values in globals is then safe because no code observes them after
+the region ends. The compiler itself uses this form and builds with
+\ic{--gc=never}. Temporary inner regions still reclaim scratch work, while
+the process arena retains other compilation state until exit. Threads and
+unknown calls remain errors, including with GC enabled. A user function
+named \ic{exit} does not establish this lifetime.
+
+In a complete source program, known function arguments propagate their
+allocation effects through callback parameters. A function exposed as a
+value, an unresolved alias, or a packed callback interface remains
+conservative. Assignment and increment results participate in
+escape analysis, including an array builder ending in \ic{a += item}.
+
+The proof is conservative: an indirect call or an unaudited assembly body
+can require \ic{--gc=auto} even if a particular execution would not allocate.
+Old unit packs without lifetime summaries must be rebuilt or used with GC.
+Raw OS resources retain their explicit resource-management API.
+
+\paragraph{Threads.} Regions are one-thread only: \ic{spawn} inside a
+region is an error, and a region in a program that has already started a
+thread stops it with \ic{runtime error: regions are one-thread only}. An
+automatic region in such a program simply does nothing.
+Checked builds therefore require a GC opt-in for threads.

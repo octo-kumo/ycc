@@ -1,0 +1,21 @@
+{
+  "title": "Handbook of Small Machines",
+  "revision": 7,
+  "draft": false,
+  "published": "2026-02-14",
+  "ratings": { "imprecision": 3, "usefulness": 9, "danger": 2 },
+  "authors": [
+    { "name": "R. Vasquez", "email": "rv@example.org", "orcid": "0000-0002-1825-0097" },
+    { "name": "M. Okonkwo", "email": "mo@example.org", "orcid": null }
+  ],
+  "chapters": [
+    { "n": 1, "title": "Screws", "pages": 24, "tags": ["fasteners", "metal"], "notes": "with a key:\nline two\tand a tab\ttwice" },
+    { "n": 2, "title": "Quote \" handling", "pages": 7, "tags": ["meta"], "notes": "back\\slash and a solidus \\/" },
+    { "n": 3, "title": "Café — naïve façade", "pages": 31, "tags": ["unicode"], "notes": "U+1F600 is 😀" },
+    { "n": 4, "title": "Numbers", "pages": 12, "tags": ["math"], "notes": null }
+  ],
+  "numbers": [0, -0, 1.0, 1e2, 1E+2, -1.5e-3, 9007199254740993, 123456789012345678901234567890],
+  "empty_object": {},
+  "empty_array": [],
+  "unicode_escapes": "\u00e9\u0141\u4e2d\ud83d\ude00"
+}

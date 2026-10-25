@@ -1,0 +1,123 @@
+\section{Overview}
+\label{sec:overview}
+
+\textsf{Y} is a small imperative language with a static checker, designed
+so that a complete implementation of the language fits in one head: the
+compiler is written in \textsf{Y} itself (\ic{src/y/}) and compiles a
+program to a \emph{static} x86-64 ELF executable using only
+its own assembler and ELF writer --- no system assembler, linker, or C
+toolchain is involved at run time or at build time of user programs.
+
+Two further targets come from the same pipeline: \ic{--target=win}
+writes a PE32+ executable (Section~\ref{sec:toolchain}) and
+\ic{--target=kernel} writes a freestanding image that boots on bare metal
+(Section~\ref{sec:os}).
+
+\subsection*{Implementations}
+
+The compiler in \ic{src/y/} is self-hosting and byte-reproducible.
+A generated C seed (\ic{bootstrap/ycc.c}) lets GCC build it without a Y
+executable; \ic{src/c/} contains the seed's boxed value runtime.
+Compiler passes are maintained in Y.
+
+This document defines observable behavior, including value sharing,
+integer wraparound and trap conditions.
+
+\subsection*{Compiler options}
+
+\ic{ycc [OPTIONS] FILE}, \ic{ycc run [OPTIONS] FILE [-- ARG...]}, and
+\ic{ycc build [OPTIONS] [DIR]} share their code-generation options.
+\ic{--optimize=speed} (the default) and \ic{--optimize=size} select mutually
+exclusive goals; there are no numeric optimization levels. Optimizations that
+improve both code size and execution speed run in both modes. These include
+removing redundant moves, branches to the following label, and dead instructions,
+and using zero idioms where arithmetic flags are dead. Speed mode duplicates
+short return sequences to remove taken branches; size mode uses compact
+constant loads. These final-link passes also optimize bundled standard-library
+units and cached packages. Neither mode changes language semantics.
+
+\ic{--emit=asm|source|wat} selects assembly, expanded source, or a wasm
+listing (the executable is the default). \ic{--output=PATH} (or \ic{-o PATH})
+chooses an executable or assembly path; assembly and the wasm listing default
+to stdout, and expanded source goes to stdout. \ic{--target=linux|win|kernel|web}
+names the OS and \ic{--arch=x64|aarch64} the instruction set (Linux only; the
+default arch is the host's). \ic{--debug} (or \ic{-g}) includes symbols and
+source lines.
+\ic{--obfuscate[=MODE]} is an opt-in code-protection mode; it never changes what a
+program does, and there is one level: the bare flag and \ic{--obfuscate=full}
+select the strongest preset. The program's own
+bodies are rewritten at final link: numeric constants are rebuilt, stack frames
+are shifted, dead bodies, opaque guards and junk bytes are added, calls may
+become indirect, basic blocks are reordered, and the diversity-default static
+pass is applied. The image is encrypted and starts through a plaintext page;
+code pages stay encrypted until first use (a page fault decodes one page), and
+eligible helpers, including float/SSE and division shapes, become generated
+bytecode run by a per-build interpreter with a per-function opcode map.
+Runtime messages are decoded eagerly because a system call reading a protected
+page fails with EFAULT instead of taking the page-fault handler; literals and
+the bytecode are decoded page by page, and a literal use touches one byte per
+page first. \ic{--obfuscate-seed=N} makes a build reproducible;
+\ic{--obfuscate-key=PATH} keeps the stream key in a 16-byte external file;
+the sub-flags \ic{--obfuscate-vm=off|auto|all|bytecode} (default \ic{bytecode}),
+\ic{--obfuscate-layout=source|shuffle}, \ic{--obfuscate-std=off|auto|all} and
+\ic{--obfuscate-diversity=standard|high} tune a layer for tests and bring-up;
+\ic{--obfuscate-no-anti-debug} disables the dumpable/tracer checks;
+\ic{--obfuscate-report} prints a per-build id and counts;
+\ic{--obfuscate-map=PATH} writes a label/address map outside the binary. The
+cipher and loader are per-build and page-keyed, with
+runtime-dependent opaque branches, jumps over random bytes and a key-derived
+startup page schedule; there is no plaintext per-function table. A keyed hash
+of the sealed ciphertext refuses a modified file, a keyed per-page MAC refuses
+a page whose plaintext is wrong when it first decrypts, and a key-derived
+canary replaces the old fixed magic. Full mode reads TracerPid instead of becoming a
+tracee, so lazy page faults stay with the loader. Neither makes a standalone
+binary cryptographically secure.
+Obfuscation covers Linux ELF and Windows PE; a PE has a plaintext entry stub
+that decrypts code and literals in place in a writable \ic{.text}, uses the
+flatten layer and the embedded key, and has no lazy pages or per-page MACs.
+It refuses \ic{-g}, \ic{--pack}, \ic{--emit=asm}, \ic{--emit=source} and \ic{--target=kernel}. The mode raises the cost of static and
+dynamic analysis; it is not a cryptographic guarantee.
+\ic{--warnings=none|default|extra|all|fix} selects diagnostics by name
+(\ic{fix} applies the safe shortenings in place). \ic{--gc=never|auto|always|stress},
+\ic{--regions=auto|off}, \ic{--exec=on|off}, and \ic{--std=pack|source} control
+the collector, automatic regions, the \ic{exec()} builtin, and standard-unit
+sources. \ic{--pack[=METHOD]} writes a self-decompressing executable and
+\ic{--time} prints a phase table. Value options accept either
+\ic{--name=value} or \ic{--name value}; \ic{-O}, \ic{-o} and \ic{-p} are the
+short forms. Build chooses its own output paths and accepts executable output
+only.
+
+The default is \ic{--gc=never}: executables contain no collector. The
+lifetime solver places temporary allocations in regions and rejects a
+program when it cannot prove reclamation for repeated allocations.
+\ic{--gc=auto} explicitly permits collection where needed;
+\ic{--gc=always} forces it; \ic{--gc=stress} runs a cycle at every allocation.
+
+\subsection*{Notation}
+
+Grammar productions are given in EBNF, with
+\texttt{typewriter} for terminals, \ty{italic} for nonterminals,
+\texttt{[~]} for option, \texttt{\{~\}} for repetition,
+\texttt{|} for alternation, and \texttt{(~)} for grouping.
+Semantic rules are written as equational desugars or prose; the desugars
+are normative: an implementation may use any mechanism that produces the
+same observable behavior.
+
+\subsection*{A taste}
+
+\begin{lstlisting}
+// values, references, and the mutating operators
+let xs = [1, 2, 3];      // heap array: len 3
+xs += 4;                 // in-place push:        [1, 2, 3, 4]
+xs *= 0;                 // in-place prepend:     [0, 1, 2, 3, 4]
+let ys = xs + [9];       // NEW array, xs untouched
+
+// the target of a compound assignment runs exactly once
+let a = [1, 2];
+def idx() -> long { print("called"); 0 };
+a[idx()] += 10;          // idx() runs ONE time
+
+// records are reference values too
+let r = { name: "y", nums: [1, 2] };
+r.nums += 3;             // visible through every binding of r
+\end{lstlisting}

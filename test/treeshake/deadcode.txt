@@ -1,0 +1,13 @@
+# The instructions a program cannot execute, in the shaken -S listing
+# (src/tools/ytest/deadcode.y, `ytest deadcode`). A ratchet: growth fails, shrinkage is reported so the
+# numbers can be brought down deliberately.
+#
+# hello.y and minimal.y allocate nothing (print(<int>) formats on the stack),
+# so no trap stub or collector block is linked and nothing is unreachable; the
+# loop pair is clean too. dead.y carries deliberate dead code; final-link
+# control-flow cleanup now removes the instructions after its transfers.
+hello.y 0
+minimal.y 0
+forloop.y 0
+foreach.y 0
+dead.y 0

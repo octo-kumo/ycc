@@ -1,0 +1,9 @@
+level=42
+default=1
+gone=no
+on=yes
+zero=no
+empty=no
+target=linux linux aarch64 elf
+is=y
+quote=a"b\c

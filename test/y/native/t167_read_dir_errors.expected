@@ -1,0 +1,17 @@
+is_dir true exists true is_file false
+read_file none true
+read_bytes none true
+read_lines none true
+missing none true
+list_dir true
+write true
+read one
+two
+
+lines 2
+empty true true
+make_dir true
+read the new dir none true
+rmdir true
+remove true
+remove true

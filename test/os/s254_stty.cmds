@@ -1,0 +1,8 @@
+stty size
+stty rows 40 cols 132
+stty size
+stty cols 200
+stty size
+stty bogus
+stty rows
+halt

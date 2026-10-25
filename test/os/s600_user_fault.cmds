@@ -1,0 +1,4 @@
+segv
+echo status $?
+echo still alive
+exit 0

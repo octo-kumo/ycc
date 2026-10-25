@@ -1,0 +1,27 @@
+fd 1 is stdout
+true
+true
+-1
+-1
+-1
+false
+true
+true
+true
+8 0
+b'io:' b'\x01\x02\x03\x00\xff' b''
+6 -1
+true false false
+8
+false b'' b''
+8 true
+b'' true
+0 true true
+b'io:\x01\x02\x03\x00\xff!?'
+true b':' true
+b'IO:\x01' 10
+-1
+true true 0 new true
+true 0 newer true
+true 0
+true true

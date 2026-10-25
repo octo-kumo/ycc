@@ -1,0 +1,2 @@
+--display=320x200
+--events=test/web/w022_gui_resize.events

@@ -1,0 +1,43 @@
+1
+5
+10
+5
+7
+{"a": 7, "b": 2}
+2
+20
+true
+false
+false
+true
+true
+false
+true
+true
+7
+7
+true
+true
+false
+20
+7
+66
+3
+false
+true
+true
+true
+0
+0
+true
+true
+0
+{"x": 600, "y": 200, "z": 200}
+534500
+{"x": [1, 2], "y": [], "z": [3]}
+3
+0
+{"a": [[]], "b": []}
+1
+{"k": 8}
+runtime error: unwrap of none

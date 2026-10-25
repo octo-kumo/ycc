@@ -1,0 +1,12 @@
+devs true
+play true
+rate 22050 channels 1
+frames 8820 ms 400
+bytes 17640
+wav riff true
+wav size ok true
+wav rate 22050 channels 1
+wav data 17640 file 17640
+wav ms 400
+wav nonsilent true peak 15999
+wav remove true

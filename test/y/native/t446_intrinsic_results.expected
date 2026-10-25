@@ -1,0 +1,4 @@
+left|right 42
+27 2.500000 b'ok'
+[first, second] [3, 5]
+roundtrip true

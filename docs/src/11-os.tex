@@ -1,0 +1,258 @@
+\section{Y-OS and yunix}
+\label{sec:os}
+
+\textsf{Y} has a second compilation target beside the hosted Linux ELF:
+\ic{ycc --target=kernel} compiles a program that boots on bare metal, and \emph{Y-OS}
+is a small operating system built from such programs. It is a target, not a
+mode on top of Linux: \ic{res\_target} becomes \ic{"kernel"} and everything
+downstream that would otherwise assume an operating system changes behind one
+predicate, \ic{target\_is\_kernel()}. A hosted compile is untouched
+(Section~\ref{sec:os-cost}).
+
+Y-OS is written in \textsf{Y} alone. The kernel proper is the standard units
+\ic{kernel}, \ic{kmem}, \ic{yfs} and \ic{fd}, which travel in the std pack
+like every other unit, so a lone \ic{ycc --target=kernel} in an empty directory
+builds a bootable kernel with no checkout; the \emph{system} on top of it is
+\ic{os/kernel/*.y}, the shell and its programs in \ic{os/uland/}, and the
+host-side image builder \ic{os/tools/mkfs.y}.
+
+\subsection{The kernel target}
+
+\begin{lstlisting}
+$ ./ycc --target=kernel prog.y -o prog.elf
+$ qemu-system-x86_64 -kernel prog.elf -serial stdio -display none
+\end{lstlisting}
+
+\noindent The output is an ELF32 Multiboot-1 payload: the entry is 32-bit
+code that builds paging, sets PAE/LME/PG and far-jumps into long mode,
+because that is the mode a Multiboot loader starts an image in --- the one
+step the in-tree assembler cannot express, whose encoder is x86-64 only. The
+image is linked at 1\,MB, the serial port COM1 is its output, and \ic{print}
+and \ic{puts} work there unchanged (\ic{y\_os\_write} is replaced by a COM1
+writer). There is no libc, no Linux and no \ic{/bin}.
+
+\paragraph{What a kernel can use.} The runtime is the same prelude with the
+few blocks that reach an operating system replaced: the allocator bumps
+through a kernel heap, \ic{y\_os\_read} blocks on the 16550, \ic{y\_os\_exit}
+halts the machine, and the five trap stubs print and stop. The string, array
+and float cores are pure computation and are used as they are, and the tree
+shaker drops what the program does not call exactly as it does for a hosted
+program.
+
+A kernel refuses the std units that are one Linux system call away from
+working --- \ic{fs}, \ic{net}, \ic{exec}, \ic{prelude}, \ic{crypto}, \ic{x509},
+\ic{tls}, \ic{http}, \ic{tui}, \ic{args}, \ic{random}, \ic{test}, \ic{img},
+\ic{audio}, \ic{ipc} and \ic{snd} --- each with a one-line reason
+(\ic{kernel\_std\_why}), because ``not available'' without one reads as a
+compiler limitation. The rule is a deny list, not an allow list: a unit that
+is plain computation (\ic{json}, \ic{regex}, \ic{math}, \ic{struct}, \ic{utf8})
+is available in a kernel the day it lands. The reverse rule is \ic{std/kernel},
+which is \ic{ndef}s into assembly only a kernel image has, so a hosted compile
+refuses \ic{import kernel} and says so. Both rules fire only when the unit
+resolved \emph{is} the standard one: a program's own \ic{kernel.y} or \ic{fs.y}
+beside it shadows std and stays its own business.
+
+\paragraph{\ic{irq N def}.} A top-level declaration that exists only in kernel
+mode, whose \ty{N} is the 8259 line (0--15), not the IDT vector:
+
+\begin{lstlisting}
+import kernel;
+
+irq 4 def serial_rx() -> void {      // 4 is the 8259 line
+    let c = kernel.getc();
+    kernel.putc(c);
+};
+\end{lstlisting}
+
+\noindent The parser records the declaration; the checker requires no
+parameters and a \ic{void} result (the generated stub is entered from the
+interrupt with nothing to pass and nowhere to put an answer) and refuses a
+handler nested inside another \ic{def}; the emitter makes the handler a
+body-shake root, because the stub that calls it is generated text the shaker
+cannot see; and codegen writes, per declared line, a stub that saves the
+caller-saved registers, aligns the stack, calls the handler, acknowledges the
+8259 and \ic{iretq}s, and unmasks the declared line. Two handlers on one line,
+or one name on two lines, is an error.
+
+The CPU's exceptions (vectors 0--31) get stubs of their own rather than the
+halting default: each reports the vector, the error code and, for a page
+fault, CR2. A fault is not resumed from.
+
+\subsection{The image and the filesystem}
+
+Y-OS is built as one kernel image and one filesystem image:
+
+\begin{lstlisting}
+$ make os            # os/build/os.img and os/build/os.fs
+$ make run-os        # boot it here, the serial console on this terminal
+$ make run-os-gui    # the same with a screen, keyboard and mouse
+\end{lstlisting}
+
+\noindent \ic{make os} needs \ic{qemu-system-x86\_64}. The filesystem is a
+YFS1 image; \ic{os/tools/mkfs.y} builds it, \ic{os/manifest.txt} lists what
+goes into it and \ic{os/kernel/boot.y} is the kernel program. qemu hands the
+kernel one Multiboot module (the filesystem) and it is mounted where it lies:
+the files the shell makes and removes live in RAM and are gone when the
+machine stops.
+
+\paragraph{YFS1.} Blocks are a superblock field, so the reader is not
+hard-wired to a size. Block 0 is the superblock, then the inode table
+(64 bytes per inode), then data. An inode has a mode (0 free, 1 file, 2
+directory), a size --- bytes for a file, \emph{entry count} for a directory
+--- twelve direct block slots and one single-indirect block. A directory entry
+is a length, a type, an inode number and a name padded to 4 bytes. An image
+must be zeroed where nothing was written, because a free inode is found by
+reading a zero mode.
+
+\ic{boot.y} mounts the filesystem, loads \ic{/bin/init} (or, failing that,
+\ic{/sh}) into a fresh address space and starts it; when it halts the machine
+or exits, so does the kernel. \ic{init} sets the environment
+(\ic{HOME}, \ic{USER}, \ic{PATH}, \ic{TERM}, \ic{XDG\_RUNTIME\_DIR}), makes
+\ic{/tmp}, \ic{/run/user/1000} and \ic{/home/user}, starts the audio server
+\ic{/bin/pulsed} if there is one, runs \ic{/bin/sh} in \ic{/home/user}, and
+stays to reap orphans.
+
+\subsection{yunix: the Linux ABI}
+
+\emph{yunix} is the layer that makes the compiler's runtime work on that
+kernel: the programs are ordinary \ic{ycc} programs because the kernel
+implements the Linux system-call interface the runtime already speaks.
+\ic{os/kernel/*.y} are modules of the kernel program \ic{boot.y}, and the
+system call table is \ic{sys.y}: \ic{std/kernel.y}'s dispatcher calls
+\ic{y\_os\_sys} first for every number, and an answer of
+\ic{kernel.SYS\_FALLBACK} hands the call to the kernel's own built-in handler
+--- what worked before yunix --- so a stub keeps today's behaviour until its
+owner replaces it.
+
+\begin{center}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.24\linewidth}@{\quad}>{\raggedright\arraybackslash}p{0.68\linewidth}@{}}
+\toprule
+module & what it owns \\
+\midrule
+\ic{fdt} & per-process descriptor tables: \ic{read}, \ic{write}, \ic{close},
+  \ic{lseek}, \ic{ioctl}, \ic{pread}/\ic{pwrite}, \ic{readv}/\ic{writev},
+  \ic{poll}, \ic{select}, \ic{dup}/\ic{dup2}/\ic{dup3}, \ic{fcntl} \\
+\ic{pipe} & \ic{pipe}, \ic{pipe2} \\
+\ic{proc} & \ic{fork}, \ic{vfork}, \ic{execve}, \ic{wait4}, signals (they
+  terminate: there are no handlers), ids, \ic{uname}, \ic{kill}, rlimits,
+  \ic{reboot} (halt) \\
+\ic{time} & a 1\,kHz clock, \ic{clock\_gettime}, \ic{clock\_nanosleep},
+  \ic{gettimeofday}, \ic{nanosleep}, \ic{sched\_yield} \\
+\ic{thread} & \ic{clone} and \ic{clone3}, \ic{futex}, \ic{arch\_prctl},
+  \ic{set\_tid\_address} \\
+\ic{mm} & region-based \ic{mmap}, \ic{mprotect}, \ic{munmap}, \ic{brk},
+  \ic{madvise}, \ic{getrandom} (\ic{mremap} answers \ic{ENOSYS}) \\
+\ic{vfs} & directories and paths over \ic{yfs}: \ic{open}, \ic{openat},
+  \ic{stat}/\ic{fstat}/\ic{lstat}/\ic{statx}, \ic{mkdir}, \ic{rmdir},
+  \ic{unlink}, \ic{rename}, \ic{chdir}/\ic{getcwd}, \ic{readlink},
+  \ic{getdents64}, \ic{truncate}, time stamps \\
+\ic{tty} & termios, canonical and raw modes, \ic{VMIN}/\ic{VTIME}, \ic{ISIG},
+  window size and job control, over the console \\
+\ic{unix} & AF\_UNIX sockets: \ic{socket}, \ic{bind}, \ic{listen}, \ic{accept},
+  \ic{connect}, \ic{send}/\ic{recv}, \ic{socketpair}, options \\
+\ic{pci}, \ic{ac97}, \ic{dsp} & an AC97 sound card behind \ic{/dev/dsp} with
+  the OSS ioctls \\
+\ic{tty}, \ic{kbd}, \ic{input} & the console and the input devices \\
+\ic{kstat} & the counters the resource monitor and \ic{osstat} read \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent The hooks the modules plug into live in \ic{std/kernel.y}: the
+syscall entry \ic{y\_os\_sys}, the lifecycle calls \ic{y\_os\_task\_forked},
+\ic{y\_os\_task\_exec}, \ic{y\_os\_task\_exited} and \ic{y\_os\_task\_switch},
+and \ic{block\_restart}/\ic{wake\_chan}/\ic{wake\_expired}. A system call that
+must wait does not park in the kernel: it rewinds the user instruction pointer
+over the \ic{syscall} and runs again when its channel is woken, so a blocking
+read is a normal function that returns when there is something to return.
+
+\paragraph{Memory.} A user program is a Linux executable linked at
+\ic{0x400000}, so that address is free in a process's address space. The
+kernel maps one 2\,MB page for itself (image, stack, IDT, all below 2\,MB) and
+reaches every other physical byte through a direct map at
+\ic{0xFFFF888000000000}. Every address space is the kernel's low half, the
+direct map, and the process's own user half. An anonymous \ic{mmap} only
+reserves a region: the page-fault stub for vector 14 maps a zeroed page on
+first touch and resumes the instruction, so a fork copies the few pages a
+program touched rather than the whole heap.
+
+\paragraph{The shell and the programs.} \ic{sh} reads a line itself on a
+terminal (the tty is raw for the length of the line): cursor and history
+editing, Tab completion, quotes and \ic{\bs}, \ic{\$NAME} and \ic{\$?}
+expansion, \ic{|}, \ic{<}, \ic{>}, \ic{>>}, \ic{2>}, \ic{;}, \ic{\&\&},
+\ic{||}, \ic{\&} and \ic{\#}. Built in are \ic{cd pwd export unset exit env
+help true false todesktop} and \ic{NAME=value}; anything else is looked up in
+\ic{\$PATH}. Every job runs in its own process group and owns the console
+while it runs, so Ctrl-C stops the job and not the shell. Programs in
+\ic{/bin} include \ic{ls}, \ic{cat}, \ic{echo}, \ic{mkdir}, \ic{rmdir},
+\ic{rm}, \ic{cp}, \ic{mv}, \ic{touch}, \ic{wc}, \ic{head}, \ic{tail},
+\ic{pwd}, \ic{stat}, \ic{env}, \ic{clear}, \ic{sleep}, \ic{uname},
+\ic{halt}, \ic{write}, \ic{osbench} and \ic{osstat}; a program that reads a
+file reads standard input when given none.
+
+\subsection{The screen}
+
+With a display device the machine draws a text terminal and takes keys from a
+keyboard and a mouse (\ic{make run-os-gui}, \ic{OS\_VGA=virtio} for
+virtio-gpu and virtio-input, or \ic{OS\_VGA=std} for standard VGA with a PS/2
+keyboard and mouse). The serial console keeps working beside it, and the
+backends follow the host window: a resize gives the terminal new rows and
+columns.
+
+\ic{vt.y} is an xterm-style terminal in the kernel (UTF-8 in an 8x16 font,
+the 16 colours, a 256-colour cube and 24-bit colour, cursor movement, scroll
+regions, the alternate screen, DEC line drawing, mouse reports). The desktop
+is what the machine shows at boot: \ic{F1} or \ic{F12} switches between the
+terminal and the GUI and the terminal keeps its state while the GUI is up.
+\ic{/bin/desktop} shows a wallpaper and a dock whose icons are one per program in
+\ic{/bin}; a click types its name into the shell and switches to the terminal.
+A file explorer and a resource monitor are panels of the desktop itself. The
+wallpaper is a vector image (\ic{os/assets/wallpaper.yvg}) filled by a small
+renderer once per size, never per frame. The display is reached through
+\ic{/dev/fb0}, which is ioctl-only: information, blit, switch view, type text
+and a statistics snapshot.
+
+\subsection{Building, running and testing}
+\label{sec:os-cost}
+
+The kernel and system suites are in \ic{make test}:
+
+\begin{itemize}[nosep]
+\item the \ic{kernel} suite (\ic{test/kernel/}) builds each fixture with both
+  compilers, compares the images, boots them under qemu and checks the serial
+  output and the exit status;
+\item the \ic{os} suite builds Y-OS with both compilers and requires the
+  images to be identical, then boots scripted sessions
+  (\ic{test/os/*.cmds}) under qemu and compares the whole serial transcript
+  with \ic{test/os/*.expected}. The display has sessions of its own
+  (\ic{test/os/display/*.steps}), where each screendump is compared by
+  SHA-256 and a mismatch leaves the pictures in \ic{\_check/os-display/}.
+\end{itemize}
+
+\noindent \ic{ytest os-session CMD...} scripts a session by hand, and
+\ic{YBLESS=1 ./ytest os} rewrites the display hashes after a change that is
+meant to move pixels.
+
+\subsection{Limits}
+
+Y-OS is a proof of concept and says where it stops. The kernel heap is a bump
+allocator that never gives memory back (64\,MB on a machine with 256\,MB or
+more, about 600k path system calls; below that, 8\,MB). Only the 8259
+interrupt path is wired: no APIC, no IOAPIC, no MSI. There are no signal
+handlers (a signal terminates the task) and no \ic{mremap}. The filesystem and
+the terminal live \emph{in} the kernel rather than in user-space servers. The
+physical memory allocator hands pages back, but the kernel's own bookkeeping
+does not. The GUI has no windows, the screen has no text selection or clipboard
+and no font beyond the 8x16 one, and there is no disk: the filesystem is the
+boot module. The shell has no job control beyond one foreground job per line
+--- no \ic{fg}/\ic{bg}/\ic{jobs}, no Ctrl-Z --- and no shell functions,
+\ic{if}/\ic{for}, globbing, history search or wrapped-line editing.
+\ic{ycc} itself does not run on Y-OS yet.
+Finally, \ic{-g} is refused for a kernel image, because the debug writers are
+ELF64/DWARF64.
+
+\paragraph{Cost to a normal compile.} Nothing observable: it is all
+behind \ic{target\_is\_kernel()}, the two engines stay byte-identical on the
+whole hosted corpus, and the added encoder arms sit at the end of the
+instruction ladder, so a hosted line pays for them only if it reaches the end
+without matching.

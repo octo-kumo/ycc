@@ -1,0 +1,6 @@
+12
+17 17
+3579111315
+20 3 17 20 3
+11
+a pointer that escaped its frame exists and is never read

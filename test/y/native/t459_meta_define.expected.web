@@ -1,0 +1,9 @@
+level=42
+default=1
+gone=no
+on=yes
+zero=no
+empty=no
+target=web web wasm32 wasm
+is=n
+quote=a"b\c

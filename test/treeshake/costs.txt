@@ -1,0 +1,25 @@
+# The recorded size an unused `import <unit>;` adds to a program that only
+# prints a constant (test/treeshake/minimal.y), in bytes. Growth fails the
+# suite; shrinkage is reported so the file can be lowered deliberately.
+#
+# These were the tree shake's blind spot until TODO.md 9: functions were
+# dropped, top-level globals were not, so `import math;` paid 6705 bytes for
+# `const pi` and coefficient tables built at startup and read by nobody. The
+# emitter now brackets each global's initializer with `ygiS_<cell>` /
+# `ygiE_<cell>` marks and the link step deletes the range for a cell nothing
+# reads -- and refuses to, unless the range is pure (no call but the
+# allocator, no store to another cell, no raw text).
+#
+# So math, regex, crypto, fs and struct are FREE, and what is left is the
+# purity rule keeping what has an effect: x509 and tls each have a top-level
+# statement that runs (94 bytes), json too (25). A unit with nothing to
+# initialize is free already.
+fs 0
+struct 0
+net 0
+json 0
+regex 0
+crypto 0
+x509 0
+tls 0
+math 0

@@ -1,0 +1,2 @@
+fstest stress 80000
+exit 0

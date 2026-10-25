@@ -1,0 +1,37 @@
+// Every Node has k, line and col. The remaining fields define its shape.
+// nline/ncol locate a member or binding name; Func.ppos packs parameter
+// positions as line * 65536 + col (an empty array means unavailable).
+const AST_SHAPES = [
+    "Leaf v:str",
+    "Bare",
+    "Wrap e:Node",
+    "Un op:str e:Node",
+    "Bin op:str l:Node r:Node",
+    "ArrLit elems:[Node]",
+    "ArrRep v:Node n:long",
+    "Assign name:str v:Node",
+    "Block stmts:[Node]",
+    "Call callee:Node args:[Node]",
+    "Decl kind:str name:str typ:Type v:Node nline:long ncol:long",
+    "Dot obj:Node key:str nline:long ncol:long",
+    "DotAssign obj:Node key:str v:Node nline:long ncol:long",
+    "Err msg:str",
+    "For init:Node cond:Node step:Node body:Node",
+    "Foreach name:str iter:Node body:Node",
+    "ForRange name:str lo:Node hi:Node body:Node",
+    "Func params:[str] ptypes:[Type] ret:Type body:Node defs:[Node] label:str ppos:[long]",
+    "IdxAssign arr:Node idx:Node v:Node",
+    "If cond:Node then:Node els:Node has_else:bool",
+    "IncDec op:str pre:bool tgt:Node",
+    "Index arr:Node idx:Node",
+    "RecLit keys:[str] vals:[Node]",
+    "MatchEnd e:Node cover:[Type] vals:long",
+    "Narrow e:Node typ:Type",
+    "OpAssign op:str tgt:Node v:Node",
+    "Slice arr:Node lo:Node hi:Node",
+    "SliceAssign arr:Node lo:Node hi:Node v:Node",
+    "Store p:Node v:Node",
+    "TypeDef name:str typ:Type",
+    "While cond:Node body:Node",
+];
+export { AST_SHAPES };

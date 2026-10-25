@@ -1,0 +1,26 @@
+boot std
+key f1
+wait 1
+type mousedemo
+key ret
+await q quits
+move 40 20
+wait 1
+click
+await release
+wait 1
+shot reported
+move 0 0 -1
+await wheel
+type q
+key ret
+await $ 
+type mousedemo legacy
+key ret
+await q quits
+click
+await release
+wait 1
+shot legacy
+type q
+key ret

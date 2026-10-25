@@ -1,0 +1,13 @@
+boot std
+key f1
+wait 1
+type ls /bin
+key ret
+await $ 
+wait 2
+move 0 0 1
+wait 1
+shot back
+move 0 0 -1
+wait 1
+shot live

@@ -1,0 +1,10 @@
+# Build products (extension-less files) are ignored by the root .gitignore.
+# Local verification harnesses and their artefacts are not part of the examples.
+**/*.py
+**/*.sh
+**/gate.conf
+**/EXPECTED
+**/golden/
+__pycache__/
+/bignum/repro/
+/_scratch/

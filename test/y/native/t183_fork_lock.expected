@@ -1,0 +1,7 @@
+parent: try_lock while holding gives false
+runtime error: this mutex is held by another process (a fork) and a lock held across a fork is undefined
+parent: released
+child: my own lock works
+child: took it again
+child: after my lock, try_lock gives true
+done

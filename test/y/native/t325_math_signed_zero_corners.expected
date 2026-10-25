@@ -1,0 +1,62 @@
+── atan2, all four zero pairs (C99 7.12.7.4) ──
+atan2(+0, +0) bits 0
+  and +0 is:          0
+atan2(-0, +0) bits -9223372036854775808
+  and -0 is:          -9223372036854775808
+atan2(+0, -0) bits 4614256656552045848
+  and +pi is:         4614256656552045848
+atan2(-0, -0) bits -4609115380302729960
+  and -pi is:         -4609115380302729960
+
+── atan2, the corners with a nonzero operand, unchanged ──
+atan2(+0, -1) 4614256656552045848   want +pi 4614256656552045848
+atan2(-0, -1) -4609115380302729960   want -pi -4609115380302729960
+atan2(+1, -0) 4609753056924675352   want +pi/2 4609753056924675352
+atan2(-1, -0) -4613618979930100456   want -pi/2 -4613618979930100456
+atan2(+1, +0) 4609753056924675352   want +pi/2 4609753056924675352
+atan2(-1, +0) -4613618979930100456   want -pi/2 -4613618979930100456
+atan2(+1, -1) 4612488097114038738   want 3pi/4 
+atan2(-1, -1) -4610883939740737070   want -3pi/4 
+atan2(inf, -inf) 2.356194   want 3pi/4
+atan2(-inf, -inf) -2.356194   want -3pi/4
+
+── hypot, an infinity beside a NaN ──
+hypot(inf, nan)  9218868437227405312
+hypot(nan, inf)  9218868437227405312
+hypot(-inf, nan) 9218868437227405312
+hypot(nan, -inf) 9218868437227405312
+  and +inf is:      9218868437227405312
+hypot(nan, 1) is NaN: true
+hypot(inf, inf)  9218868437227405312
+hypot(-inf, 1)   9218868437227405312
+
+── hypot, the ordinary cases, unchanged ──
+hypot(3, 4) == 5            true
+hypot(3e200, 4e200)  7609430662777223920
+  which is one ulp under the 5e200 literal, and matches glibc: true
+  while 5e200 itself is:  7609430662777223921
+hypot(3.284781714398278e282, 1.5206628784236626e287)  8903604381772537045
+  the ratio form answered:                               8903604381772537043
+  the power-of-two form answered:                        8903604381772537044
+  glibc answers, and so does this:                      8903604381772537045
+wide-ratio pairs outside their bound or asymmetric: 0
+  and 3e200*3e200 overflows: true
+hypot(DBL_MAX, DBL_MAX) is inf true
+hypot(2, 3) bits  4615301398490339827
+  sqrt(13) bits   4615301398490339827   one ulp above
+hypot(1, 1) bits  4609047870845172685
+  sqrt(2) bits    4609047870845172685   exact
+hypot(3, 4) == 5.0        true
+hypot(5, 12) == 13.0      true
+hypot(8, 15) == 17.0      true
+hypot(0, -0) is +0          0
+hypot(-0, -0) is +0         0
+hypot(1e-320, 1e-320)       2862
+  which is sqrt(2)*1e-320    2862
+hypot(1e-320, 0) == 1e-320   2024   want 2024
+hypot(3.5, 0) == 3.5         4615063718147915776   want 4615063718147915776
+hypot(-3.5, 0) == 3.5        4615063718147915776   want 4615063718147915776
+hypot(0, 3.5) == 3.5         4615063718147915776   want 4615063718147915776
+
+hypot is commutative on the whole set: 
+  five pairs, the ones that disagreed in either order: 0

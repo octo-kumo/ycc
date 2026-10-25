@@ -1,0 +1,8 @@
+M1 d=3
+
+M2 child=4
+
+M3 deep=4
+
+create ok=true made=2 w=4 found=2 n=4 text=979899100
+

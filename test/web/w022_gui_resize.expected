@@ -1,0 +1,6 @@
+start 320x200 pixels 256000
+event 400x240 pixels 384000
+size 400x240 pixels 384000
+resize 500x320 pixels 640000
+final 500x320 pixels 640000
+closed true

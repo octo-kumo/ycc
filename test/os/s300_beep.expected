@@ -1,0 +1,8 @@
+user:/home/user$ beep
+beep: 440 Hz 300 ms
+beep: done
+user:/home/user$ beep 880 200
+beep: 880 Hz 200 ms
+beep: done
+user:/home/user$ halt
+halting

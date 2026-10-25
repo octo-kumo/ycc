@@ -1,0 +1,14 @@
+chunks: ok
+mapped: ok
+blocks grew: ok
+bytes grew: ok
+largest: ok
+pointer-free: ok
+used: ok
+classes: ok
+class sum: ok
+trigger: ok
+since: ok
+report: ok
+rss: ok
+305000

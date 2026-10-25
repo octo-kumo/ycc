@@ -1,0 +1,1 @@
+the commands are POSIX shell (read, true, false, $x); Windows runs cmd.exe: test/pe/execpipe.y covers exec and popen there

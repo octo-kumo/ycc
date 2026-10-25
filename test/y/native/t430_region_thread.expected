@@ -1,0 +1,4 @@
+before
+worker
+6
+runtime error: regions are one-thread only (a spawn inside a region, or a region after a spawn)

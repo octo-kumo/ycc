@@ -1,0 +1,50 @@
+<!doctype html>
+<!--
+  src/web/page.html — the default page for a Y web module.
+
+  The page provides the stage the program runs in: one full-window canvas.
+  The host fills it when the program opens a gui window; a program without gui
+  gets the console.  [web] console = "show" or "hide" chooses.  A page that
+  wants its own furniture writes a template and points [web] template at it;
+  the generator substitutes TITLE, CONFIG, HOST and MODULE.
+
+  The site writer inlines page.css and the host into index.html, so the
+  deployed directory is this page, NAME.wasm and an optional files.bin.
+  ?ytest=1 turns it into the self-driving test page (document.title and
+  <pre id=ytest> become "YDONE status=<n> out=<base64 stdout>").
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>{{TITLE}}</title>
+  <link rel="stylesheet" href="page.css">
+</head>
+<body data-module="{{MODULE}}">
+  <main id="stage" aria-label="Program display">
+    <canvas id="ycanvas" tabindex="0"></canvas>
+  </main>
+
+  <section id="console" hidden aria-label="Program output">
+    <pre id="console-out"></pre>
+    <form id="stdin-form" autocomplete="off">
+      <input id="stdin-line" type="text" spellcheck="false" placeholder="stdin">
+      <button type="submit">Send</button>
+      <button id="stdin-eof" type="button" title="Deliver end-of-file">EOF</button>
+    </form>
+  </section>
+
+  <div id="start-overlay" hidden>
+    <button id="start-button" type="button">Start</button>
+    <div id="start-note">Click to run.</div>
+  </div>
+
+  <div id="feature-error" hidden></div>
+  <div id="banner" hidden></div>
+  <div id="status-line" hidden></div>
+
+  <script type="application/json" id="yweb-config">{{CONFIG}}</script>
+  <script type="module" src="{{HOST}}"></script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+x86_64 8
+linux elf threads
+[prelude]
+[7, 6, 2, 10, 8, 9] 0 0
+win pe wthreads
+[prelude, wsys, wproc, wnet, wcon, wgui]
+[10, 2, 8, 9] 96 40
+kernel kelf threads
+[prelude, kernel]
+[7, 6, 2, 10, 8, 9] 0 0
+web wasm threads
+[prelude, web]
+[7, 6, 2, 10, 8, 9] 0 0
+true false
+linux, win, kernel, web
+windows true false
+kernel false true

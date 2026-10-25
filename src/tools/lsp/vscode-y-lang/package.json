@@ -1,0 +1,114 @@
+{
+    "name": "y-lang",
+    "displayName": "Y Language Support",
+    "description": "Language server for the Y programming language (ycc): diagnostics, TextMate highlighting, formatting",
+    "version": "0.2.0",
+    "publisher": "yun",
+    "license": "MIT",
+    "engines": {
+        "vscode": "^1.75.0"
+    },
+    "categories": [
+        "Programming Languages"
+    ],
+    "main": "./out/extension.js",
+    "activationEvents": [
+        "onLanguage:y"
+    ],
+    "contributes": {
+        "languages": [
+            {
+                "id": "y",
+                "aliases": [
+                    "Y",
+                    "y"
+                ],
+                "extensions": [
+                    ".y"
+                ],
+                "configuration": "./language-configuration.json"
+            }
+        ],
+        "configurationDefaults": {
+            "[y]": {
+                "editor.bracketPairColorization.enabled": false
+            }
+        },
+        "configuration": {
+            "title": "Y",
+            "properties": {
+                "y.lsp.serverPath": {
+                    "type": "string",
+                    "default": "",
+                    "markdownDescription": "Path to the `yserve` binary. Leave empty to search next to the extension, then the workspace root, then `$PATH`."
+                },
+                "y.lsp.rootPath": {
+                    "type": "string",
+                    "default": "",
+                    "markdownDescription": "Workspace root passed to `yserve` as `--root`. Imports in an open file resolve against the file's own directory first, so this only matters for files outside the workspace. Empty uses the server's working directory."
+                },
+                "y.lsp.checkOnChange": {
+                    "type": "boolean",
+                    "default": true,
+                    "markdownDescription": "Run the checker and the linter on every keystroke. Off checks on `didOpen` and `didSave` only, which is much cheaper on a large file and costs you live errors. **The other features are unaffected**: hover, completion and formatting still read your unsaved buffer, so they are never a keystroke behind."
+                },
+                "y.lsp.warnings": {
+                    "type": "boolean",
+                    "default": false,
+                    "markdownDescription": "Pass `-W` to `yserve`, which adds the dropped-value and empty-`else` checks. Off is `yserve`'s own default and is **less** than `ycc`, which warns by default \u2014 turn this on if you want the editor to agree with the compiler."
+                },
+                "y.lsp.trace.server": {
+                    "type": "string",
+                    "enum": [
+                        "off",
+                        "messages",
+                        "verbose"
+                    ],
+                    "default": "off",
+                    "description": "Log the JSON-RPC traffic between VS Code and yserve to the Y output channel. The per-request timing lines are separate -- see y.lsp.timing."
+                },
+                "y.lsp.timing": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Write a line per LSP request to the Y output channel: the method, how long yserve spent on it, and how long it was parked waiting. This is how you see whether the server or the editor is the slow side, so it is on by default. Each line is work on the extension host, which is the thread a slow editor is made of -- turn it off to A/B whether it is contributing."
+                }
+            }
+        },
+        "commands": [
+            {
+                "command": "y.formatDocument",
+                "title": "Y: Format Document",
+                "category": "Y"
+            },
+            {
+                "command": "y.restartLanguageServer",
+                "title": "Y: Restart Language Server",
+                "category": "Y"
+            },
+            {
+                "command": "y.showServerOutput",
+                "title": "Y: Show Server Output",
+                "category": "Y"
+            }
+        ],
+        "grammars": [
+            {
+                "language": "y",
+                "scopeName": "source.y",
+                "path": "./syntaxes/y.tmLanguage.json"
+            }
+        ]
+    },
+    "scripts": {
+        "compile": "tsc -p ./",
+        "watch": "tsc -watch -p ./"
+    },
+    "devDependencies": {
+        "@types/node": "^20.11.0",
+        "@types/vscode": "^1.75.0",
+        "typescript": "^5.3.0"
+    },
+    "dependencies": {
+        "vscode-languageclient": "^9.0.1"
+    }
+}

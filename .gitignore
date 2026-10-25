@@ -1,0 +1,60 @@
+.cache/
+src/c/*.o
+*.o
+a.out
+vgcore.*
+yboot
+/cycc
+cycc.exe
+ycc1
+ycc2
+ycc3
+/ycc
+/yserve
+/yfmt
+*.fmt
+/ytest
+/ytest-report.md
+_yserve0
+_yserve1
+_yserve1p
+yserve.pack
+_ycc
+_ycc0
+ynew
+_ynew[123]
+_ynewp
+_rb[12]
+_rbp
+*.pack
+_check/
+# docs/build/ is Tectonic's output (docs/build/default/default.pdf)
+docs/build/
+.vscode/
+embedded_runtime.inc
+
+# Reference binaries kept for port verification (see refs/SHA256SUMS)
+refs/
+cycc-asan
+# `ytest fuzz` scratch directories
+test/fuzz/work.*
+compiler-audit
+
+
+# ignore files in examples without extensions (that means they are compiled binaries)
+examples/**
+!examples/**/
+!examples/**/*.*
+__pycache__/
+*.pyc
+_ktmp/
+ycc_t
+os/build/
+
+# the Windows machine the PE gates run on (pe-vm.conf.example)
+.pe-vm.conf
+
+/ycc-aarch64
+
+# new files under bootstrap/ are generated scratch (the seed itself is tracked)
+bootstrap/

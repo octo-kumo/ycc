@@ -1,0 +1,22 @@
+boot std
+key f1
+wait 1
+type echo one
+key ret
+await one
+type echo two
+key ret
+await two
+key up
+key up
+wait 1
+shot history
+key ret
+type ech
+key tab
+type zz
+key ret
+type /bi
+key tab
+wait 1
+shot complete

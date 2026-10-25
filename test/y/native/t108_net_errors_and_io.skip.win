@@ -1,0 +1,1 @@
+Windows retries a refused loopback connect for about 2 s (measured on 10.0.19045), so the 2000-attempt fd-leak loop takes over an hour; the error value (-111) is right

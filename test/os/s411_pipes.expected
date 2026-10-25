@@ -1,0 +1,28 @@
+user:/home/user$ echo one two three | wc
+1 3 14
+user:/home/user$ echo a b c | cat | cat | wc -w
+3
+user:/home/user$ echo hello > f
+user:/home/user$ echo world >> f
+user:/home/user$ cat f
+hello
+world
+user:/home/user$ cat < f | head -n 1
+hello
+user:/home/user$ wc < f
+2 2 12
+user:/home/user$ nosuch 2> e.txt
+user:/home/user$ cat e.txt
+sh: nosuch: not found
+user:/home/user$ sleep 0.2 &
+[1]
+user:/home/user$ echo after
+after
+user:/home/user$ false | true
+user:/home/user$ echo $?
+0
+user:/home/user$ true | false
+user:/home/user$ echo $?
+1
+user:/home/user$ halt
+halting

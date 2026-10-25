@@ -1,0 +1,2293 @@
+\section{Builtins}
+\label{sec:builtins}
+
+The following functions are available without declaration. ``Trap'' marks
+a runtime error (Section~\ref{sec:errors}).
+
+\subsection{Sequences and text}
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{len(x)}] Length of a string (bytes), array (elements) or map
+  (entries) as \ic{long}. Records are rejected (a record's field count
+  is part of its type).
+\item[\ic{keys(m)}, \ic{values(m)}] The keys and the values of map \ic{m}
+  in the same insertion order, each an array of its own (\ic{[K]} and
+  \ic{[V]}; growing one leaves the map alone), so
+  \ic{keys(m)[i]} and \ic{values(m)[i]} are the same entry:
+  \ic{foreach (k in keys(m)) \{ print(k, m[k]!); \};}.
+\item[\ic{range(n)}] \ic{[0, 1, ..., n-1]}.
+\item[\ic{trim(s)}] Strip leading/trailing space, tab, CR, LF.
+\item[\ic{join(xs, sep)}] Concatenate an array with a separator. The
+  elements need not be strings --- each is converted as \ic{tostring}
+  would, so a \ic{float}, a \ic{bool} or a \ic{[long]} may be joined as
+  readily as a \ic{str}.
+\item[\ic{split(s, sep)}] Split on every occurrence of a non-empty
+  separator; returns \ic{[str]} (empty for empty separator). A trailing
+  empty piece is dropped, so \ic{"a,".split(",")} is \ic{["a"]} where
+  Python's \ic{split} would give \ic{['a', '']}. Exactly one is
+  dropped, so \ic{"a,,".split(",")} is \ic{["a", ""]}, and an empty
+  string gives an empty array --- \ic{"".split(",")} is \ic{[]} rather
+  than Python's \ic{['']}. That is Python's \ic{splitlines} rule, not
+  its \ic{split}: \ic{s.split(sep)} with a newline separator and
+  \ic{s.lines()} give the same pieces --- except that \ic{lines()} also
+  drops the \ic{CR} of a \ic{CRLF} pair, which is the point of it. It
+  does mean \ic{join(s.split(sep), sep)} is \ic{s} only when \ic{s} does
+  not end in \ic{sep}; for the pieces of a line-based text use
+  \ic{lines()}, and to rebuild a string that does end in the separator,
+  join the pieces with the separator's bytes yourself.
+\item[\ic{index\_of(s, sub)}, \ic{index\_of(s, sub, start)}] The first
+  index of \ic{sub} in \ic{s} at or after \ic{start} (default \ic{0}), or
+  \ic{-1}.
+\item[\ic{last\_index\_of(s, sub)}, \ic{last\_index\_of(s, sub, from)}] The
+  last index at or before \ic{from} (default: anywhere), or \ic{-1}.
+\item[\ic{ord(s)}] First byte as \ic{long}, or \ic{-1} for empty.
+\item[\ic{chr(n)}] One-byte string of \ic{n} (masked to 8 bits).
+\item[\ic{byte\_at(s, i)}] Byte at \ic{i} as \ic{long}; traps out of
+  bounds. Cheap per-byte access (no copy).
+\end{description}
+
+\noindent There is no \ic{substr}: a substring is a slice,
+\ic{s[i:i + n]} (Section~\ref{sec:slices}). Joining is not restricted to
+strings either, so \ic{join([1, 2, 3], ",")} is \ic{"1,2,3"}.
+
+\subsection{String methods}
+\label{sec:string-methods}
+
+A \ic{str} value takes methods: \ic{"str 1 2 3".split(" ")} is
+\ic{["str", "1", "2", "3"]}, and the call is checked like a function
+call (argument count and types). Method names are not reserved: a
+function, a variable or a record field may share one, and \ic{r.f(x)} on
+a record still calls the field. \ic{s.length} is a property, so
+\ic{s.length()} is an error. Widths and positions count bytes.
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[Builtins as methods] \ic{s.split(sep)}, \ic{s.trim()} (also
+  \ic{s.strip()}), \ic{s.index\_of(sub, start)}, \ic{s.last\_index\_of(sub, from)},
+  \ic{s.ord()}, \ic{s.byte\_at(i)}, \ic{s.tolong()}, \ic{s.tofloat()} and
+  \ic{s.bytes()} are
+  the builtins of the same name with \ic{s} as the first argument.
+\item[\ic{s.index\_of(sub, start)}, \ic{s.last\_index\_of(sub, from)}] The
+  byte index of \ic{sub}, or \ic{-1}: the first one \emph{at or after}
+  \ic{start} (default \ic{0}), or the last one \emph{at or before}
+  \ic{from} (default: anywhere, which is also what an offset past the end
+  means). An empty \ic{sub} never matches. A scanner that wants ``the next
+  \ic{)} from here'' passes the offset rather than slicing the tail --- a
+  slice allocates a copy \emph{and} an index into the copy, which is the
+  wrong number in the caller's frame.
+\item[\ic{sep.join(xs)}] \ic{join(xs, sep)}: the receiver is the
+  separator.
+\item[\ic{s.trim\_start()}, \ic{s.trim\_end()}] Strip space, tab, CR and
+  LF at one end only (also spelled \ic{lstrip}, \ic{rstrip}).
+\item[\ic{s.pad\_left(w, fill)}, \ic{s.pad\_right(w, fill)}, \ic{s.center(w, fill)}]
+  Widen \ic{s} to \ic{w} bytes with \ic{fill} (default \ic{" "}, repeated
+  and cut to fit); a longer \ic{s} is returned unchanged. \ic{center}
+  puts the odd byte on the right.
+\item[\ic{s.starts\_with(p)}, \ic{s.ends\_with(p)}, \ic{s.contains(p)}]
+  \ic{bool}; \ic{""} is a prefix, suffix and part of every string.
+\item[\ic{s.count(p)}] Non-overlapping occurrences, left to right
+  (\ic{0} for an empty \ic{p}).
+\item[\ic{s.replace(p, r)}] Every non-overlapping occurrence of \ic{p},
+  left to right, replaced by \ic{r}; an empty \ic{p} replaces nothing.
+\item[\ic{s.upper()}, \ic{s.lower()}] ASCII case mapping; other bytes are
+  kept.
+\item[\ic{s.repeat(n)}] \ic{s} written \ic{n} times; \ic{""} when
+  \ic{n <= 0}.
+\item[\ic{s.lines()}] Split at each LF, dropping a CR just before it; a
+  final newline does not start an empty line, so \ic{"a\bs nb\bs n".lines()}
+  is \ic{["a", "b"]} and \ic{"".lines()} is \ic{[]}.
+\end{description}
+
+\subsection{Conversions}
+\label{sec:builtin-tostring}
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{tostring(v)}] String form: numbers as decimal (a \ic{float}
+  with six decimals, its digits exact), \ic{true}/\ic{false}, strings
+  unchanged, options as their
+  payload or \ic{"none"}, arrays as \ic{"[e0, e1, ...]"} --- except a
+  \ic{[byte]} or \ic{[byte; N]}, which is the byte-string repr
+  \ic{b'...'} of Section~\ref{sec:arrays} --- records as
+  \ic{"\{k: v, ...\}"}, maps as \ic{"\{"k": v, ...\}"} (string keys
+  quoted). A function is \emph{not} accepted here (only \ic{print} takes
+  one, Section~\ref{sec:builtin-io}).
+\item[\ic{tolong(x)}] A \ic{long?} from a \ic{str}, a \ic{float} or a
+  \ic{bigint}.
+  The \ic{str} arm is exact rather than a prefix scan: optional whitespace,
+  an optional \ic{+} or \ic{-}, one or more digits, and then only
+  whitespace. Anything else is \ic{none} --- \ic{tolong("12x")},
+  \ic{tolong("3.14")}, \ic{tolong("")} and \ic{tolong("0x10")} all are,
+  where they used to answer \ic{12}, \ic{3}, \ic{0} and \ic{0} and say
+  nothing about what they had ignored --- and so is a value outside the
+  \ic{long} range, rather than the wrapped number the prefix scan produced.
+  Whitespace \emph{around} the number is fine, interior whitespace is not:
+  \ic{tolong(" 42 ")} is \ic{some(42)} and \ic{tolong("4 2")} is \ic{none}.
+  On a \ic{float} it \emph{truncates toward zero} --- \ic{tolong(-3.99)} is
+  \ic{some(-3)}, not \ic{-4}, which is \ic{floor} and not \ic{trunc} ---
+  and a float with no long answer is \ic{none} rather than a trap: a NaN, or
+  a magnitude at or past \ic{2\textasciicircum 63} (\ic{-2\textasciicircum 63}
+  \emph{is} a long, and comes back as \ic{some(\ldots)}). On a \ic{bigint}
+  it is the same answer for a value that never had 64 bits to begin with:
+  \ic{none} exactly when the value is outside the \ic{long} range, so
+  $2^{63} - 1$ converts and $2^{63}$ does not, and $-2^{63}$ is the one that
+  fits at the bottom (Section~\ref{sec:type-bigint}).
+\item[\ic{tofloat(x)}] A \ic{float?} from a \ic{str}, a \ic{long} or a
+  \ic{bigint}.
+  A \ic{str} is read by \ic{tolong}'s rule with at most one point: at least
+  one digit, so \ic{tofloat(".5")} and \ic{tofloat("1.")} are both
+  \ic{some(\ldots)}, while \ic{tofloat("1e9")}, \ic{tofloat(".")} and
+  \ic{tofloat("")} are \ic{none}. It accumulates in \ic{double} as it goes,
+  so \ic{tofloat("3.14")} is the double nearest \ic{3.14}, the same answer
+  the literal \ic{3.14} has and the same one every other language's parser
+  gives. An exponent is not read, and is \ic{none} rather than the digits
+  before the \ic{e}. On a \ic{long} it is the widening the language already
+  does implicitly, made explicit so that \ic{tolong} and \ic{tofloat} are a
+  pair; a long beyond \ic{2\textasciicircum 53} rounds to the nearest
+  double, as widening always does, and that arm is always \ic{some(\ldots)}.
+  A \ic{bigint} is converted through the same decimal text the \ic{str} arm
+  reads, so a magnitude past a \ic{double} answers \ic{inf} (not \ic{none})
+  --- the same answer a string of its digits gives.
+\item[\ic{mod(a, b)}] The \emph{floored} remainder of two \ic{long}s: the
+  result has the sign of \ic{b}, so \ic{mod(-949, 100)} is \ic{51} and
+  \ic{mod(949, -100)} is \ic{-51}. The \ic{\%} operator is C's --- it
+  truncates toward zero and takes the sign of \ic{a}, so \ic{-949 \% 100}
+  is \ic{-49} --- which is the wrong answer for a wrap-around index, a ring
+  buffer or a clock face, and the right one for a quotient. A zero divisor
+  traps, and \ic{mod(x, -1)} is \ic{0} for every \ic{x}, \ic{LONG\_MIN}
+  included, exactly as \ic{\%} is.
+\item[\ic{typeof(v)}] The static type as a printable value
+  (\ic{typeof(none)} is \ic{"none"}). The rendering is the one the
+  compiler's own diagnostics use, character for character, so what
+  \ic{typeof} prints is text a type error may quote back at you:
+  \ic{typeof(add)} is \ic{(long, long) -> long} and a diagnostic says
+  \ic{expected (long, long) -> long}. Printing a \emph{value} is a
+  different thing: a record prints as \ic{\{a: 1\}} with its contents,
+  a function has no printable contents and prints its signature as
+  \ic{<function (long, long) -> long>}, and a type that refers to
+  itself prints as \ic{<T?>} in place of the cycle --- the alias as the
+  program wrote it, so the option marker is part of it. A bare \ic{<T>} is not
+  reachable: a self-reference with no \ic{?} cannot be given a base value.
+\end{description}
+
+\subsection{Format specifications}
+\label{sec:format-spec}
+
+A field \ic{\{e:spec\}} of an f-string (Section~\ref{sec:literals})
+formats \ic{e} as Python's \ic{format(e, spec)} would, in the same
+mini-language:
+
+\begin{center}
+[[\ty{fill}]\ty{align}][\ty{sign}][\ic{\#}][\ic{0}][\ty{width}][\ty{grouping}][\ic{.}\ty{precision}][\ty{type}]
+\end{center}
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ty{align}] \ic{<} left, \ic{>} right, \ic{\textasciicircum{}}
+  centred (the odd byte goes right), \ic{=} padding between the sign and
+  the digits. Numbers align right by default, everything else left. A
+  \ty{fill} byte in front of it replaces the default space.
+\item[\ty{sign}] \ic{+} on every number, \ic{-} on the negative ones only
+  (the default), or a space in front of the others.
+\item[\ic{\#}] The prefix \ic{0x}, \ic{0X}, \ic{0o} or \ic{0b} for the
+  radix types; a decimal point even with no digits after it for the
+  float types.
+\item[\ic{0}] Pad with zeros after the sign: fill \ic{0} and align
+  \ic{=}, unless the spec gives its own. The zeros are grouped too:
+  \ic{f"\{255:\#010\_x\}"} is \ic{0x000\_00ff}.
+\item[\ty{width}] The least number of bytes; padding makes up the rest.
+\item[\ty{grouping}] \ic{,} or \ic{\_} between groups of three digits;
+  \ic{\_} between groups of four for \ic{x}, \ic{X}, \ic{o} and \ic{b},
+  which do not take \ic{,}.
+\item[\ty{precision}] Digits after the point for \ic{f}, \ic{F} and
+  \ic{\%}, after the first digit for \ic{e} and \ic{E} (6 if omitted);
+  for a string, the most bytes kept. The integer types take none.
+\item[\ty{type}] \ic{d} decimal, \ic{x}/\ic{X} hexadecimal, \ic{o} octal,
+  \ic{b} binary, \ic{c} the byte \ic{chr(e)}: integers only. \ic{f}/\ic{F}
+  fixed point, \ic{e}/\ic{E} scientific, \ic{\%} times 100 in fixed point
+  with a \ic{\%} sign: floats and integers. \ic{s}: strings and the other
+  non-numbers. Without a type, integers use \ic{d}, floats \ic{f} and
+  everything else \ic{s}.
+\end{description}
+
+\noindent Floats print exactly: the digits are those of the binary
+value, rounded half to even. So \ic{f"\{0.125:.2f\}"} is \ic{0.12}, and
+\ic{f"\{0.1:.20f\}"} is \ic{0.10000000000000000555}. Infinities and NaNs
+print as \ic{inf} and \ic{nan} (\ic{INF} and \ic{NAN} for \ic{F} and
+\ic{E}). A value that is neither a number nor a string --- a \ic{bool},
+an array, a record, a map, an option --- formats its \ic{tostring} text
+as a string. Width and precision stop at 99999. A spec that does not
+read, or does not suit the field's static type, is a compile-time error;
+\ic{f"\{1.5:d\}"} gets
+\begin{center}
+\ic{format spec 'd': type 'd' needs an integer, not float}
+\end{center}
+
+A float shows six decimals, and that rule has a seam and an end, both pinned
+rather than left to the reader. The seam is at $5\cdot10^{-7}$: bisecting against
+Python's \ic{\%.6f} puts the last \ic{0.000000} at
+$4.9999999999999998\cdot10^{-7}$ and the first \ic{0.000001} at
+$5.0000000000000008\cdot10^{-7}$, so \ic{5e-7} itself is \emph{below} it and the
+seam is one representable step above --- not where a reader would guess it.
+Below the seam the rule degenerates: every float under it prints as
+\ic{0.000000}, \ic{1e-300} and the least subnormal included. That is what six
+decimals means and it is not a defect, but it is a place a program can lose a
+value, so it is written down. Given a precision the rule rounds \emph{half to
+even}, as Python's does: \ic{f"\{3.5:.0f\}"} is \ic{4}, \ic{f"\{2.5:.0f\}"} is
+\ic{2} and \ic{f"\{-2.5:.0f\}"} is \ic{-2}. And a zero keeps its sign --- which this
+language has got wrong three times elsewhere --- so \ic{f"\{-0.0:.0f\}"} is
+\ic{-0} and \ic{f"\{-0.0\}"} is \ic{-0.000000}
+(\ic{t331\_float\_print\_seams.y}).
+
+Where Y differs from Python: a field without a spec is \ic{tostring}, so
+a float shows six decimals (\ic{f"\{2.5\}"} is \ic{2.500000}); a float
+spec without a type means \ic{f}, so \ic{\{x:.2\}} gives two decimals
+rather than two significant digits; a \ic{bool} is text, not a number;
+there are no \ic{g}, \ic{G} or \ic{n} types and no nested fields; the
+fill is one byte, and widths count bytes.
+
+\subsection{Binary data}
+\label{sec:builtin-bytes}
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{bytes(s)}] \ic{[byte]} of the string's raw bytes.
+\item[\ic{from\_bytes(b)}] String from a \ic{[byte]} or fixed \ic{[byte; N]} array.
+\end{description}
+
+\subsection{Binary layouts (the struct module)}
+\label{sec:builtin-struct}
+
+\noindent\ic{import struct;} writes and reads binary layouts --- a file
+header, a message framing, the \ic{struct} in a C header --- one field at
+a time over \ic{[byte]}. \ty{le} and \ty{be} are the byte orders, little
+and big endian, and there is no ``host's'' spelling: name both or one.
+Every value is stored in two's complement, truncated to the field's width,
+so \ic{struct.u8(-1)} is \ic{b'\bs xff'} and \ic{struct.u8(300)} is
+\ic{b','} (300 mod 256). A reader gives the same bytes back signed or
+unsigned as its name says, and an offset past the end of the array
+\textbf{traps}.
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{struct.u8(v)}, \ic{struct.i8(v)}, \ic{struct.u16le(v)},
+  \ic{struct.u16be(v)}, \ic{struct.i16le(v)}, \ic{struct.i16be(v)},
+  \ic{struct.u32le(v)}, \ic{struct.u32be(v)}, \ic{struct.i32le(v)},
+  \ic{struct.i32be(v)}, \ic{struct.u64le(v)}, \ic{struct.u64be(v)},
+  \ic{struct.i64le(v)}, \ic{struct.i64be(v)}] One field as \ic{[byte]}:
+  the 8-bit pair is one byte wide, the 16-bit pairs two, the 32-bit pairs
+  four, the 64-bit pairs eight.
+\item[\ic{struct.get\_u8(b, off)}, \ic{struct.get\_i8(b, off)},
+  \ic{struct.get\_u16le(b, off)}, \ic{struct.get\_u16be(b, off)},
+  \ic{struct.get\_i16le(b, off)}, \ic{struct.get\_i16be(b, off)},
+  \ic{struct.get\_u32le(b, off)}, \ic{struct.get\_u32be(b, off)},
+  \ic{struct.get\_i32le(b, off)}, \ic{struct.get\_i32be(b, off)},
+  \ic{struct.get\_u64le(b, off)}, \ic{struct.get\_u64be(b, off)},
+  \ic{struct.get\_i64le(b, off)}, \ic{struct.get\_i64be(b, off)}] One
+  field out of \ic{b} at byte \ic{off}, the same widths, a \ic{u} name
+  giving the bytes' unsigned value and an \ic{i} name the signed one
+  (\ic{struct.get\_i8(b, off)} on \ic{b'\bs xff'} is $-1$).
+\item[\ic{struct.pad(n)}] \ty{n} zero bytes, for a field whose value
+  does not matter; \ic{struct.fill(n, v)} \ty{n} copies of the byte
+  \ty{v}.
+\item[\ic{struct.pack(fmt, values)}, \ic{struct.unpack(fmt, b)}] A whole
+  layout from a format string: \ic{fmt} is a comma-separated list of
+  field names, each with one value, and \ic{pack} writes them in order
+  while \ic{unpack} reads them back as \ic{[long]}. A name is one of the
+  fourteen writers above --- that is the value to store --- or \ic{pad},
+  whose value is a \emph{width}, or \ic{fill}, whose value is the
+  \emph{byte} to store. To write \ty{n} copies of one byte, call
+  \ic{struct.fill(n, v)} itself, since a format carries one value per
+  name. \ic{pad} has no width of its own to read back --- a reader
+  advances by each field's width --- so a format containing it can be
+  packed but not unpacked, and the fields after one are read by offset; a
+  name that is not a field stops the program saying so.
+
+\begin{lstlisting}
+import struct;
+let hdr = struct.pack("u32be,i16le,pad,fill", [0x01020304, -2, 3, 65]);
+print(hdr);                 // b'\x01\x02\x03\x04\xfe\xff\x00\x00\x00A'
+print(struct.unpack("u32be,i16le", hdr));      // [16909060, -2]
+print(struct.get_u8(hdr, 9));                  // 65 -- the fill's byte, by offset
+\end{lstlisting}
+\end{description}
+
+\noindent base64 is here too, both directions (RFC 4648, standard alphabet,
+padded):
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{struct.b64\_encode(b)}] The base64 text of \ty{b}. Three bytes
+  become four characters; a tail of one byte is padded \ic{==} and of two
+  \ic{=} (\ic{struct.b64\_encode(b"foob")} is \ic{"Zm9vYg=="}).
+\item[\ic{struct.b64\_decode(s)}] The bytes \ty{s} encodes, skipping every
+  character outside the alphabet and stopping at \ic{=} --- so a PEM block's
+  line breaks cost nothing. \ic{std/x509}'s \ic{b64\_decode} is the same
+  function under the name PEM users reach it through.
+\end{description}
+
+\subsection{Ordering (the sort module)}
+\label{sec:builtin-sort}
+
+\ic{import sort;} sorts arrays. Y has no generics, so each element type has
+its own pair: \ty{long}, \ty{str} and \ty{float}, each with a plain
+\ic{sort} and a \ic{sort\_by} that takes your own comparison. Every one is a
+merge sort --- stable (equal elements keep their order) and O($n \log n$).
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{sort.sort(a)}, \ic{sort.sort\_desc(a)}] The elements of a
+  \ic{[long]} in order, and the other way round.
+\item[\ic{sort.sort\_str(a)}, \ic{sort.sort\_str\_desc(a)}] The same for a
+  \ic{[str]}, compared by bytes.
+\item[\ic{sort.sort\_f(a)}] The same for a \ic{[float]}. A NaN compares
+  false both ways, so it keeps its place among its equals rather than sinking
+  to an end --- stable is observable there.
+\item[\ic{sort.sort\_by(a, less)}, \ic{sort.sort\_str\_by(a, less)},
+  \ic{sort.sort\_f\_by(a, less)}] Sorted by \ty{less}, a function of two
+  elements answering whether the first comes before the second. It must be a
+  strict order --- never true of equal elements --- or the merge's choice
+  between two equal runs stops meaning anything:
+  \ic{sort.sort\_by([5, -1, 9], def (a, b) -> bool \{ abs(a) < abs(b) \})}.
+\end{description}
+
+\noindent A sort returns a new array; the one you passed is not touched.
+\ic{fs.list\_dir} and \ic{json}'s sorted printer use this module, so their
+output is the order it gives.
+
+\subsection{Algorithms and data structures (the algo module)}
+\label{sec:builtin-algo}
+
+\ic{import algo;} holds the algorithms a program reaches for and the small
+data structures they want. Y has no generics, so what is about numbers takes
+a \ic{[long]}, what is about text a \ty{str}, and what is about positions in
+any array a size and a question about an index. It is plain Y over arrays and
+records: no system calls, no state kept between calls. \ty{long} arithmetic
+wraps on overflow, as everywhere; the number-theory functions are written so
+that no intermediate value overflows for any argument they accept.
+
+\paragraph{Numbers.}
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{algo.gcd(a, b)}, \ic{algo.lcm(a, b)}] The greatest common divisor
+  (never negative; \ic{gcd(0, 0)} is 0) and the least common multiple (0 if
+  either is 0; it wraps if it does not fit).
+\item[\ic{algo.mulmod(a, b, m)}, \ic{algo.powmod(b, e, m)}] \ic{a * b mod m} and
+  \ic{b ** e mod m} for \ic{m >= 1} and \ic{e >= 0}, exact for every \ty{m} a
+  \ty{long} holds: no product is ever formed.
+\item[\ic{algo.isqrt(n)}] The largest \ic{r} with \ic{r * r <= n}; \ic{-1}
+  for a negative \ty{n}.
+\item[\ic{algo.is\_prime(n)}] Whether \ty{n} is prime, exactly, for every
+  \ty{long}: Miller-Rabin with the first twelve primes, a proof below
+  \num{3.3e24}.
+\item[\ic{algo.primes(n)}] Every prime up to \ty{n}, ascending (a sieve).
+\item[\ic{algo.factorize(n)}] The prime factors of \ty{n} with multiplicity,
+  ascending (\ic{[2, 2, 3]} for 12); \ic{[]} below 2. Trial division, then
+  Pollard's rho, so a product of two 31-bit primes is as quick as a small
+  number.
+\item[\ic{algo.choose(n, k)}] The binomial coefficient as a \ic{long?}:
+  \ic{none} when \ty{k} is out of range or the answer does not fit.
+\end{description}
+
+\paragraph{Searching and sequences.}
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{algo.partition\_point(n, pred)}] The smallest \ic{i} in \ic{[0, n]}
+  for which \ty{pred} is true at \ty{i}, given that it is false up to some point
+  and true after: binary search over any sorted structure, \ty{pred} being the
+  question asked of position \ty{i}.
+\item[\ic{algo.lower\_bound(a, x)}, \ic{algo.upper\_bound(a, x)}] In an ascending
+  \ic{[long]}, the first index whose element is \ic{>= x}, and \ic{> x}
+  (\ic{a.length} if none); their difference counts the \ty{x}s.
+\item[\ic{algo.bsearch(a, x)}] The index of the first \ty{x}, or \ic{-1}.
+\item[\ic{algo.lower\_bound\_str(a, x)}] \ic{lower\_bound} for an ascending
+  \ic{[str]}, compared by bytes.
+\item[\ic{algo.dedup(a)}, \ic{algo.rotate(a, k)}, \ic{algo.prefix\_sums(a)}]
+  Each run of equal neighbours as one element; \ty{a} rotated left by \ty{k}
+  (right if negative); and the \ic{n + 1} running sums from 0, so the sum of
+  \ic{a[i..j)} is \ic{p[j] - p[i]}. New arrays.
+\item[\ic{algo.next\_permutation(a)}] Rearranges \ty{a} in place into the next
+  permutation in lexicographic order and answers true; at the last one it
+  leaves the first and answers false. Looping it from a sorted array visits
+  every distinct ordering once.
+\item[\ic{algo.permutations(a)}, \ic{algo.combinations(a, k)}] Every ordering
+  of the elements (by position, so \ic{a.length!} arrays), and every choice of
+  \ty{k} of them keeping their order. Only for small \ty{a}.
+\item[\ic{algo.kth\_smallest(a, k)}] The \ty{k}th smallest element (0 is the
+  smallest) as a \ic{long?}, by quickselect on a copy.
+\item[\ic{algo.lis(a)}] The length of the longest strictly increasing
+  subsequence, in O($n \log n$).
+\item[\ic{algo.lcs(a, b)}, \ic{algo.edit\_distance(a, b)}] A longest common
+  subsequence of two strings, and their Levenshtein distance, both by bytes.
+\item[\ic{algo.kmp(hay, needle)}, \ic{algo.z\_function(s)}] Every position
+  where \ty{needle} occurs in \ty{hay}, overlapping ones included, in
+  O($n + m$); and the Z-function, element \ic{i} being the length of the
+  longest common prefix of \ty{s} and \ic{s[i:]}.
+\item[\ic{algo.knapsack(weights, values, cap)}] The best total value of items
+  taken at most once each whose weights fit \ty{cap} (0/1 knapsack).
+\end{description}
+
+\paragraph{Heap and disjoint sets.}
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{algo.heap\_new()}, \ic{algo.heap\_len(h)}] A binary min-heap of
+  \ic{(key, val)} pairs (type \ty{algo.Heap}) and how many pairs it holds.
+\item[\ic{algo.heap\_push(h, key, val)}, \ic{algo.heap\_pop(h)},
+  \ic{algo.heap\_peek(h)}] Add a pair; remove and return the pair with the
+  smallest key; return it without removing. The result is an
+  \ty{algo.Entry}\ic{?} --- \ic{none} when the heap is empty --- with fields
+  \ic{key} and \ic{val}. Equal keys come out in no particular order.
+\item[\ic{algo.dsu\_new(n)}, \ic{algo.dsu\_find(d, x)}] Disjoint sets over
+  \ic{0 .. n - 1} (type \ty{algo.DSU}), each element alone, with path halving
+  and union by size; and the representative of \ty{x}'s set.
+\item[\ic{algo.dsu\_union(d, a, b)}, \ic{algo.dsu\_same(d, a, b)},
+  \ic{algo.dsu\_size(d, x)}, \ic{algo.dsu\_sets(d)}] Merge two sets (true if they
+  were different); whether two elements share a set; the size of \ty{x}'s
+  set; and how many sets there are.
+\end{description}
+
+\paragraph{Graphs.} A graph of \ty{n} nodes numbered \ic{0 .. n - 1} is its
+adjacency lists, \ic{adj[u]} being the nodes \ty{u} has an edge to; a weighted
+graph has a parallel \ic{w}, \ic{w[u][i]} the weight of the edge to
+\ic{adj[u][i]}. An undirected edge is listed both ways.
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{algo.bfs(adj, s)}, \ic{algo.dfs(adj, s)}] The fewest edges from
+  \ty{s} to every node (\ic{-1} if unreachable); and the nodes reachable from
+  \ty{s} in depth-first preorder, neighbours tried in adjacency order.
+\item[\ic{algo.toposort(adj)}] The nodes of a directed graph in an order where
+  every edge goes forward (Kahn's algorithm, lowest number first among the
+  free ones), as a \ic{[long]?}; \ic{none} if there is a cycle.
+\item[\ic{algo.dijkstra(adj, w, s)}, \ic{algo.shortest\_path(adj, w, s, t)}] The
+  least total weight from \ty{s} to every node (\ic{-1} if unreachable), and the
+  nodes along a lightest path from \ty{s} to \ty{t} (\ic{[]} if there is none).
+  Weights must be non-negative.
+\item[\ic{algo.components(adj)}] A label per node, shared exactly by nodes
+  joined by edges (read as undirected), numbered by each component's lowest node.
+\item[\ic{algo.kruskal(n, edges)}] A minimum spanning forest: of the
+  \ic{[u, v, weight]} edges over \ty{n} nodes, the ones chosen, lightest first.
+\end{description}
+
+\subsection{Compression (the zlib module)}
+\label{sec:builtin-zlib}
+
+\ic{import zlib;} reads and writes DEFLATE (RFC 1951) and its two wrappers,
+zlib (RFC 1950) and gzip (RFC 1952), in plain Y: no system calls, no state.
+Every decoder returns \ic{[byte]?}, \ic{none} for a stream that is truncated,
+corrupt, fails its checksum, or would inflate past \ic{limit} bytes (default
+1\,GiB, a guard against decompression bombs).
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{zlib.crc32(data, crc)}, \ic{zlib.adler32(data, adler)}] The two
+  checksums; pass a previous result as the second argument to continue over
+  more data (the defaults are 0 and 1).
+\item[\ic{zlib.inflate(data, limit)}] Raw DEFLATE: stored, fixed-Huffman and
+  dynamic-Huffman blocks.
+\item[\ic{zlib.decompress(data, limit)}, \ic{zlib.gunzip(data, limit)}] The
+  zlib wrapper (header check, Adler-32) and the first gzip member (CRC-32 and
+  size check; the optional header fields are skipped).
+\item[\ic{zlib.deflate(data, effort)}, \ic{zlib.compress(data, effort)},
+  \ic{zlib.gzip(data, effort)}] A compressor: LZ77 over hash chains of at most
+  \ic{effort} candidates, coded with the fixed Huffman tables, and replaced by
+  stored blocks when that is smaller, so the output is never more than a few
+  bytes larger than the input. Any inflater reads it.
+\item[\ic{zlib.stored(data)}] DEFLATE with no compression at all.
+\end{description}
+
+\subsection{Images (the img module)}
+\label{sec:builtin-img}
+
+\ic{import img;} reads and writes raster images in plain Y. An \ty{Image} is a
+record of \ic{w}, \ic{h} and \ic{px}: four bytes a pixel (red, green, blue,
+alpha), rows from the top, whatever the file held expanded to that. A colour is
+one \ty{long}, \ic{0xRRGGBBAA}. Every decoder answers \ic{none} for a file that
+is damaged, truncated, of a kind it does not read or larger than
+\ic{img.MAX\_PIXELS}, and never traps on hostile input.
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{img.decode(bytes)}, \ic{img.load(path)}, \ic{img.format(bytes)}]
+  Decode by content, not by name. PNG: every colour type and depth, palettes
+  and \ic{tRNS}, Adam7, every chunk CRC and the zlib checksum checked. BMP:
+  1/4/8/16/24/32 bits, bit fields, RLE4/RLE8, either row order. GIF: the first
+  frame, interlaced or not, with its transparent colour. JPEG: baseline and
+  progressive, any sampling factors, restart intervals, grey or YCbCr, with
+  libjpeg's integer inverse DCT and fancy upsampling (so the pixels match it).
+  PNM: P1 to P6, to 16 bits. \ic{img.format} names the kind (\ic{"png"},
+  \ic{"bmp"}, \ic{"gif"}, \ic{"jpeg"}, \ic{"pnm"}, or \ic{""}).
+\item[\ic{img.encode\_png(im)}, \ic{img.encode\_bmp(im)}, \ic{img.encode\_ppm(im)}, \ic{img.save(path, im)}]
+  PNG (RGB or RGBA, each row filtered by the smallest-sum heuristic), BMP
+  (24-bit, or 32-bit with an alpha mask) and binary PPM; \ic{save} picks by
+  the extension and answers false for any other.
+\item[\ic{img.new\_image(w, h)}, \ic{img.rgba(r, g, b, a)}, \ic{img.pixel(im, x, y)}, \ic{img.set\_pixel(im, x, y, c)}, \ic{img.fill(im, c)}]
+  Make, read and write. Outside the image, \ic{pixel} is 0 and \ic{set\_pixel}
+  does nothing.
+\item[\ic{img.crop(im, x, y, w, h)}, \ic{img.flip\_h(im)}, \ic{img.flip\_v(im)}, \ic{img.resize(im, w, h, smooth)}, \ic{img.to\_gray(im)}]
+  New images; \ic{resize} is bilinear when \ic{smooth}, nearest otherwise.
+\end{description}
+
+\subsection{Sound files (the audio module)}
+\label{sec:builtin-audio}
+
+\ic{import audio;} decodes sound files to 16-bit PCM in plain Y. A \ty{Sound}
+is a record of \ic{rate} (frames a second), \ic{channels} and \ic{pcm}:
+signed 16-bit little-endian samples, the channels interleaved. Whatever a file
+held (8, 12, 20, 24 or 32 bit integers, 32 or 64 bit floats) is converted to
+that, dropping the low bits. Decoders answer \ic{none} for damaged, truncated or
+unsupported data, or for a file that would decode to more than
+\ic{MAX\_BYTES} (1\,GiB, \ic{audio.MAX\_BYTES}), and never trap on hostile
+input.
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{audio.decode(bytes)}, \ic{audio.load(path)}, \ic{audio.format(bytes)}]
+  WAV (integer and float, \ic{WAVE\_FORMAT\_EXTENSIBLE}, any channel count) and
+  FLAC (every subframe kind, all stereo modes, wasted bits, 4 to 32 bit
+  samples; every frame header CRC-8 and frame CRC-16 is checked).
+  \ic{format} is \ic{"wav"}, \ic{"flac"} or \ic{""}.
+\item[\ic{audio.encode\_wav(s)}, \ic{audio.save(path, s)}] A 16-bit PCM WAV
+  file; \ic{save} answers false for any other extension.
+\item[\ic{audio.new\_sound(rate, channels, n)}, \ic{audio.tone(rate, hz, ms)}]
+  Silence, and a sine wave.
+\item[\ic{audio.frames(s)}, \ic{audio.seconds(s)}, \ic{audio.sample(s, i, c)}, \ic{audio.set\_sample(s, i, c, v)}]
+  Length and single samples (0 out of range; \ic{set\_sample} clips to 16 bits).
+\item[\ic{audio.to\_mono(s)}, \ic{audio.resample(s, rate)}, \ic{audio.gain(s, f)}, \ic{audio.concat(a, b)}]
+  New sounds: channels averaged, linear interpolation, volume with clipping,
+  and one after the other.
+\end{description}
+
+\subsection{Playing sound (the snd and ipc modules)}
+\label{sec:builtin-snd}
+
+\ic{import snd;} plays 16-bit PCM through the desktop's audio server by
+speaking the PulseAudio native protocol on its Unix socket (PipeWire's pulse
+server answers it too), so it needs neither a library nor access to a device
+node. The server is \ic{\$PULSE\_SERVER} (\ic{unix:/path} or a path), else
+\ic{\$XDG\_RUNTIME\_DIR/pulse/native}; the cookie comes from
+\ic{\$PULSE\_COOKIE}, \ic{\~{}/.config/pulse/cookie} or \ic{\~{}/.pulse-cookie}.
+Streams are 1, 2 or 6 channels of signed 16-bit little-endian samples, which is
+what \ic{audio.Sound.pcm} holds. On Windows there is no such socket: the
+stream goes to the system's own output (waveOut), \ic{snd.available()} is
+whether the system has one, and a \ic{snd.write} returns once its block has
+been played.
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{snd.available()}, \ic{snd.server\_path()}] Whether a server socket is
+  configured, and its path (\ic{""} if not).
+\item[\ic{snd.play(sound)}] Plays an \ty{audio.Sound} to the end; false if there
+  is no server or it refuses.
+\item[\ic{snd.open(rate, channels, name)}, \ic{snd.write(stream, pcm)}, \ic{snd.drain(stream)}, \ic{snd.close(stream)}]
+  The streaming form: \ic{write} blocks while the server's buffer is full,
+  \ic{drain} waits until everything written has been heard.
+\item[\ic{snd.auth\_packet(cookie)}, \ic{snd.name\_packet(tag, name)}, \ic{snd.create\_packet(tag, rate, channels, name)}]
+  The protocol's own packets, exposed so they can be checked byte for byte.
+\end{description}
+
+\ic{import ipc;} is the plumbing under it: \ic{ipc.connect\_unix(path)} (a file
+descriptor, or a negative errno), \ic{ipc.send(fd, data)} (all of it),
+\ic{ipc.recv\_exact(fd, n)} and \ic{ipc.recv\_some(fd, max)} (\ic{none} at end
+of stream), \ic{ipc.wait\_readable(fd, ms)} (\ic{poll}; a negative time waits
+for ever) and \ic{ipc.close(fd)}.
+
+\subsection{Mathematics (the math module)}
+\label{sec:builtin-math}
+
+\ic{import math;} brings number helpers: integer and bit twiddling, the float
+comparisons and constants, random numbers, and whole-array arithmetic over
+\ic{[float]}. Every function is called through the \ic{math} namespace.
+
+Y has no overloading, so \ic{min}, \ic{max}, \ic{abs}, \ic{clamp} and \ic{sign}
+take \ty{long}s and their float counterparts carry an \ic{f}: \ic{fmin},
+\ic{fmax}, \ic{fabs}, \ic{fsign}.
+
+\ic{math.sqrt}, \ic{math.floor}, \ic{math.ceil}, \ic{math.trunc},
+\ic{math.round}, \ic{math.fract}, \ic{math.cbrt}, \ic{math.hypot},
+\ic{math.to\_int}, \ic{math.ldexp}, \ic{math.frexp}, \ic{math.nextafter},
+\ic{math.is\_signed\_zero} and the bit casts \ic{math.fbits} /
+\ic{math.bitsf} need a machine primitive Y has no spelling for: a truncating
+\ty{float}-to-\ty{long} cast, or a look at a float's bits. The module declares
+those with \ic{ndef} (Section~\ref{sec:declarations}). The
+primitives behind them live in \ic{src/y/arch/math.s}, and so do the
+transcendentals further down --- \ic{exp}, \ic{log}, \ic{sin}, \ic{cos}, \ic{pow}
+and the five array kernels are machine code reached the same way, so the set
+is larger than the four that first needed a machine primitive. Everything
+else in the module is ordinary Y.
+
+The transcendentals are written the way the good libraries write them, and the
+two halves of that matter separately. Each polynomial is a \emph{correction} to a
+term already in hand --- $\ty{e}^r = 1 + r(1 + rQ(r))$,
+$\log m = z(2 + z^2P(z^2))$ with $z = (m-1)/(m+1)$, $\sin x = x(1 + x^2P(x^2))$,
+$\cos x = 1 - x^2P(x^2)$ --- so its error reaches the answer multiplied by the
+argument's square rather than standing on its own. And every coefficient is split
+in two with the low parts carried in a second accumulator, because Horner's rule
+rounds once a term and a degree-$n$ kernel otherwise sits $n$ ulps out for good;
+the split costs one multiply and one add a term and nothing at all in the
+constants. \ic{ytest math-fit} fits the coefficients, prints them as
+the literals in the module, and reports the error of the split evaluation in ulps
+of the answer --- so no coefficient set was ever pasted in unseen.
+
+Argument reduction is Cody--Waite, and \ic{$\pi/2$} gets four pieces (to about
+fifty decimal digits) where \ic{$\ln 2$} gets two, because the double nearest
+$\pi$ is \num{1.2e-16} from it and a reduction good to \num{1e-26} is already a
+hundred thousand ulps of \ic{math.sin(math.pi)}.
+
+\emph{How close.} \ic{ytest math-table} is the gate: a checked-in table of
+IEEE-754 bit patterns (\ic{test/math/ulp\_table.txt}, \num{2713} cases, generated
+from this platform's libm) and a program
+that reads it, calls this module, and measures the gap in ulps. Two NaNs count as
+the same answer however their signs differ --- a sign bit is not an ulp --- and any
+other NaN is infinitely far away. Over that table every function here is within
+\emph{one} ulp of all its pinned edge cases (the overflows, the flushes, the
+poles, both sides of 1, the signed zeros) and of a seeded \num{1884}-case spread (1540 of one argument, 344
+of two or three),
+and \ic{asin} and \ic{acos} additionally of \num{240} cases drawn over their own
+domain. That second spread is not tidiness: a uniform value in [-8, 8] lands
+inside [-1, 1] about one time in eight, so the general one left each of them with
+eight interior arguments --- which is not a gate on a 24-term polynomial, and
+which was how \ic{acos} went on cancelling eight digits near \ic{x = 1} for a
+forty-ulp answer that nothing in the suite could see.
+
+\emph{One limit, and it is not a number.} \ic{sin}, \ic{cos} and \ic{tan}
+reduce their argument in one step: the quadrant is \ic{round(x*2/$\pi$)} as a
+single \ic{double}, and the subtraction of \ic{n*($\pi$/2)} that follows is
+compensated in double-double and is exact. The quotient is not. That product
+wants about \num{106} bits and rounds, and whether the rounding carries it
+across the half-integer boundary is a property of the particular \ic{x} and not
+a bound on it --- \ic{sin(1e15)} is exact and \ic{sin(1e16)} is \num{33} ulps out.
+
+So there is no sharp edge, and saying otherwise would be worse than admitting
+it. Measured against this platform's libm over \num{3000} arguments per decade:
+\ic{sin} and \ic{cos} are within one ulp of every one of \num{3000} arguments up
+to \ic{1e8}; at \ic{1e10} three are not, at \ic{1e12} four are, at \ic{1e14}
+eleven are and the worst is eight ulps, and at \ic{1e18} the quadrant is wrong
+by one and the answer is unrelated (\ic{-3.7e18}, where the truth is
+\num{-0.993}). One earlier draft of this section claimed the limit was
+\ic{$2^{53}\cdot(\pi/2)$}, about \num{1.41e16}; it was wrong by a factor of a
+thousand, and a limit asserted without a measurement behind it is the thing this
+section exists to avoid.
+
+What \emph{is} a boundary is where the reduction cannot be performed at all: the
+quadrant stops fitting a \ic{long} at \num{9.9999999999995904e18}, and all three
+answer \ic{nan} from there --- \ic{tan} used to \emph{kill the program} instead,
+because the cast it uses traps rather than returning a wrong number, and a trap
+ends the program. The guard asks on the expression itself rather than against a
+constant, so it cannot be out by a double: the constant one would guess is
+\ic{$2^{63}\cdot(\pi/2)$ = \num{1.4488038916154245e19}}, but the reduction
+computes \ic{floor(x*2/$\pi$ + 0.5)} and the \ic{+0.5} moves the edge a third of
+the way sooner. Closing the accuracy gap needs the multi-precision reduction
+\ic{libm} uses, a three-word quotient;
+\ic{test/y/native/t320\_sin\_reduction\_limit.y} records all of it, so that
+changing any of this is a diff rather than a silence.
+
+A third gap of the same shape was still open after that: nine functions this
+module exports had \emph{no cases at all} --- \ic{fmin}, \ic{fmax},
+\ic{fabs}, \ic{fsign}, \ic{lerp}, and the three predicates --- because the table
+only ever carried the ones with rounding in them. (\ic{ldexp} was the ninth and still
+has no cases of its own, being checked instead through \ic{frexp}'s
+identity (Section~\ref{eq:frexp-ldexp}), which is the stronger statement
+anyway.) \ic{fmin} and \ic{fmax} were
+the ones that mattered. Their zeros' signs were decided by whichever operand came
+last, so \ic{math.fmax(0.0, -0.0)} answered \ic{-0.0} and \ic{1.0/math.fmax(0.0, -0.0)}
+came out \ic{-inf}; C99 does allow either sign there, and IEEE~754-2019's
+\ic{maxNum}, this platform's libm and any caller dividing by the answer do not.
+The tie now goes to the positive-signed operand for \ic{fmax} and the
+negative-signed one for \ic{fmin}, which is \ic{minNum}/\ic{maxNum}, and all
+four orderings of the \ic{$\pm0$} pair are pinned.
+
+Getting every case inside one ulp took three one-rounding
+fixes, and all three were the same mistake in different clothes: the question is
+never \emph{which} line rounds, it is \emph{at what size}. \ic{cosh} summed two
+exponentials where one exponential and its reciprocal is enough (for
+\ic{a >= 0.5}, \ic{$e^{-a}$} is \num{1.2}\% of the answer, so its own rounding is a
+hundredth of an ulp, while a second call to \ic{math.exp} brings a whole
+kernel's
+error along). \ic{pow} was three and two ulps out because its logarithm formed
+\ic{z*(2 + w*P)}, whose brackets round \emph{at the size of \num{2.0}} --- a whole
+ulp of the logarithm, which \ic{pow} then multiplies by the exponent; as a
+\ic{two\_sum} of \ic{2*z} and \ic{(z*w)*P} that term is \num{2.3} times more
+accurate and both cases went with it. \ic{asin} reached \ic{atan}, whose own ulp
+lands inside the answer whole, and then needed \ic{two = 2*asin(s)} to be a
+double before the \ic{pi/2} subtraction, whose half-ulp is a whole ulp of the
+answer; it has its own \num{24}-term kernel on the Taylor values
+\ic{$C(2k,k)/(4^k(2k+1))$} --- the same rationals \ic{sinh} uses --- with the square
+root's own residual put back and \ic{two} carried in two parts \emph{through} the
+subtraction. \ic{acos} was the same cancellation seen from the other side: it
+was \ic{pi/2 - asin(x)}, and near \ic{x = 1} that answer is \num{3e-8} against a
+\ic{pi/2}, so \ic{math.acos(1 - 4e-17)} was forty ulps out. Its large half now takes
+the half-angle \ic{2*asin(sqrt((1-x)/2))} \ic{asin}'s kernel already computes, and
+forms the small answer directly. \ic{pow} is still the one to know about: its accuracy degrades with
+the \emph{exponent}, not the base, so \ic{math.pow(x, 0.5)} for a large \ic{x} is
+a few ulps out while \ic{math.pow(x, 3.0)} is exact (an integer exponent is
+computed by squaring).
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{math.sqrt(x)}] The IEEE square root, and the one function here that
+  is a machine instruction: correctly rounded, so \ic{math.sqrt(2)} is the double
+  below and not a number computed to a few digits. A negative \ty{x} is the
+  NaN; $\pm\infty$ is itself.
+\item[\ic{math.floor(x)}, \ic{math.ceil(x)}, \ic{math.trunc(x)}] The
+  greatest integer $\leq x$, the least integer $\geq x$, and the integer part
+  alone. A zero keeps its sign (\ic{math.floor(-0.0)} is \ic{-0.0}), and so does an
+  input too large for a \ty{long}, which comes back unchanged.
+\item[\ic{math.round(x)}] The nearest integer, halves away from zero --- C's
+  \ic{round}, which is neither the current rounding mode nor \ic{rint}.
+\item[\ic{math.fract(x)}] The fractional part, $x-\ty{trunc}(x)$, with
+  $x$'s sign. An infinite \ty{x} gives a NaN, as C's does.
+\item[\ic{math.to\_int(x)}] The integer part as a \ty{long}, truncated toward
+  zero. A NaN, an infinity, or a magnitude past the largest \ty{long} has no
+  answer, and \emph{stops the program} (\ic{runtime error: a float with no
+  integer part a long holds}) rather than returning a value indistinguishable
+  from a real one.
+\item[\ic{math.cbrt(x)}] The cube root. The exponent is split into threes
+  first, so the Newton iteration that finishes the job always begins within
+  17\% of the answer: a cube root's iteration is only locally convergent, and
+  the obvious seed --- a fourth root --- is off by a factor of $a^{1/12}$, which
+  is \num{1e27} for a subnormal.
+\item[\ic{math.hypot(x, y)}] $\sqrt{x^2+y^2}$ without the overflow. Which form
+  computes it is decided by the argument, because the form that is accurate
+  everywhere and the form that is cheap everywhere turned out to be nearly the
+  same cost once the argument was looked at.
+
+  The form to avoid is $m\sqrt{(s/m)^2+1}$: it divides by an arbitrary float and
+  multiplies by one, and both of those round at full size, which measured it 2
+  ulps from this platform's \ic{libm} on \num{0.75} per cent of pairs with
+  $|s/m|$ between $10^{-8}$ and $10^{-1}$. So what the module does instead is:
+
+  \begin{itemize}
+  \item $m$ in $[10^{-152}, 10^{154}]$: $\sqrt{m^2+s^2}$ directly, with no
+    scaling at all. Three roundings where the ratio form had four, and none of
+    them spent on a scale factor --- so it is \emph{more} accurate as well as
+    cheaper, and about half of all arguments land here.
+  \item otherwise, and $s/m < 10^{-4}$: $m + (s/m)s/2$. When the ratio is that
+    small the terms past $s^2/2m$ are below an ulp of the answer, and the
+    correction's own rounding is multiplied by $p^2/2$ before it arrives --- so a
+    form built from three sloppy operations beats one built from a scaling. It is
+    written $(s/m)s$ rather than $s^2/2m$ because the first cannot overflow when
+    $m$ is near $10^{308}$, which is the case that brought it here.
+  \item otherwise: both magnitudes divided by a \emph{power of two} bringing the
+    larger into $[1,2)$, the sum of squares taken there, and the answer scaled
+    back by $2^k$ --- exact, because multiplying by a power of two only changes
+    the exponent, and it is what puts $m^2$ where it cannot overflow. Under one
+    per cent of arguments.
+  \end{itemize}
+
+  Over \num{2044} pairs spanning every decade from $10^{-320}$ to
+  $1.8\cdot10^{308}$ and every ratio from $10^{-300}$ to $10^{300}$, and over
+  \num{20000} pairs with each argument drawn independently from the decades, the
+  answer is within one ulp of \ic{libm} --- against 2 ulps on \num{0.75} per
+  cent for the ratio form, for \num{2.2} per cent more instructions. The
+  Pythagorean triples are exact, and \ic{hypot(2.0, 3.0)} is still one ulp above
+  the correctly rounded $\sqrt{13}$, which no form here fixes.
+
+  An infinity is the larger of the two whatever else is beside it, so
+  \ic{hypot(inf, nan)} is $+\infty$ --- found by looking for one, not by taking
+  a maximum, since every comparison against a \ic{nan} is false. And the answer
+  is symmetric: the scaling takes the larger magnitude, so \ic{hypot(x, y)} and
+  \ic{hypot(y, x)} agree to the bit, which is a property the function has and
+  one the ratio form could have lost; t325 pins both.
+\item[\ic{math.ldexp(x, e)}] $x\cdot 2^e$, exactly. Scaling by a power of two
+  is exact while the result stays normal, so this is the one scaling that never
+  rounds --- and it has to be checked where it stops being exact, which is when
+  the answer leaves the range. It used not to be, in two distinct ways, and both
+  gave a \ic{nan}: after the big steps the running value can already be an
+  infinity, and the exponent-field shift then \emph{adds} $e$ to a field that is
+  already \num{2047}, which overflows a signed \ty{long}, wraps, and comes back
+  with the sign bit set --- \ic{ldexp(1.0, 2046)} answered that where the answer
+  is $+\infty$. And the running value can stay finite while the answer does not,
+  which is \ic{ldexp(2.47, 1024)}: the big step leaves \num{1.11e308}, the field
+  is \num{2046}, and adding $e=2$ carries it to \num{2047}. Both now answer an
+  infinity carrying $x$'s sign, and the underflow end is checked for the same
+  reason.
+\item[\ic{math.frexp(x)}] $[\,\ty{fraction\ bits}, \;\ty{exponent}\,]$: the
+  fraction's IEEE-754 pattern, a value in $[0.5, 1)$, and the exponent, such that
+  %
+  % \ic breaks at spaces and at \_, and \allowbreak was tried at every
+  % bracket here as well: the expression is 328pt and the body measure 393pt,
+  % so what is left after any break cannot fill the line. It wants a display.
+  \[\ic{math.ldexp(math.bitsf(math.frexp(x)[0]), math.frexp(x)[1])} = x\]
+  \label{eq:frexp-ldexp}
+  Bits rather than a float because this is the one conversion with no rounding
+  in it at all.
+\item[\ic{math.nextafter(x, y)}] The next double from \ty{x} toward \ty{y} (C's
+  \ic{nextafter}, also \ic{nexttoward} toward \ty{y}). The step is one unit in
+  the last place, and its \emph{direction flips with the sign}: the bit patterns
+  run the other way for a negative double.
+\item[\ic{math.fbits(x)}, \ic{math.bitsf(b)}] A double's 64-bit pattern as a
+  \ty{long}, and a \ty{long} read back as a double. The two casts Y cannot
+  spell, and the reason the names above can exist at all.
+\item[\ic{math.is\_signed\_zero(x)}] True for \ic{-0.0}, which no comparison
+  can see.
+  \item[\ic{math.exp(x)}, \ic{math.exp2(x)}, \ic{math.expm1(x)}] $e^x$, $2^x$
+    and $e^x-1$. The argument is split as $k\ln 2 + r$, the kernel computes
+    $e^r$ in $[0.707, 1.414)$, and $2^k$ goes back on by adding to the exponent
+    field --- which is exact, so the whole answer is as accurate as the kernel and
+    the reduction. The top of the range is the interesting part: $2^{1024}$ is an
+    overflow and $\operatorname{round}(x\log_2 e)$ reaches \num{1024} for every $x$ above
+    \num{709.4}, so the last whole $\ln 2$ stays in $r$ and its factor of two
+    goes in by hand. \ic{expm1} is not $e^x - 1$ with a cast: it is
+    $2^k\!\left(e^r-1\right) + \left(2^k-1\right)$, and the second term is
+    \emph{exact} ($2^k-1$ needs at most 53 bits), so nothing is ever subtracted
+    from something nearly equal to it --- which is the whole difficulty with
+    $e^x-1$: it is \ic{0.0} for $x = \num{1e-300}$, and at $x = -9$ it is
+    \num{1.23e-4} $- 1$ with the answer's last bits gone.
+    \ic{exp} is machine code (\texttt{src/y/arch/math.s}), reached through
+    \ic{ndef}: \num{106} instructions with no calls at
+    all, against the ten Y functions it replaced and \num{1422} instructions a
+    call. It is \emph{bit-identical} to that loop --- same operations in the same
+    order --- and \texttt{test/y/native/t311\_math\_exp\_asm.y} says so over
+    \num{10420} arguments; \ic{exp\_y} is that loop, kept as the oracle, and
+    \ic{ytest math-gen exp} generates the routine from the module's own
+    constants so the two cannot drift apart.
+  \item[\ic{math.log(x)}, \ic{math.log2(x)}, \ic{math.log10(x)},
+    \ic{math.log1p(x)}] $\log x$ in the base given. \ic{frexp} splits
+    $x = f\,2^e$ and $f$ is doubled into $[1/\sqrt{2}, \sqrt{2})$ when it is
+    below $1/\sqrt{2}$, which keeps $|z| = |(m-1)/(m+1)|$ at $\sqrt{2}-1$ and the
+    kernel short; the two halves of the answer --- the small $z$ part and the
+    large $e\ln 2$ --- are each computed to their own scale and added last.
+    $m+1$ rounds as well as the division, and its half-ulp is a whole ulp of $z$,
+    so \ic{two\_sum} takes its residual out and one more divide turns it into the
+    low part of the quotient. \ic{log1p} is \ic{log}'s kernel with $m = 1+x$ and
+    $z = x/(2+x)$, so a tiny \ic{x} comes out as itself instead of as
+    \ic{math.log(1.0)} $-$ \ic{0}. That claim had one hole in it: $z$ is a
+    \emph{halving} of \ic{x}, and halving the smallest subnormal leaves the
+    $2^{-1074}$ grid on a tie to even, so \ic{math.log1p(5e-324)} answered
+    \ic{0.0} where the answer is \ic{5e-324}. It is one value and not a range ---
+    $2^{-1073}$ halved is still on the grid --- which is why no edge is its
+    neighbour and only a spread uniform in the decades found it. The arm that
+    answers \ic{x} outright now sits below $2^{-52}$, where the series' first
+    correction $x^2/2$ is under half an ulp of \ic{x}.
+    \ic{log} is machine code (\texttt{src/y/arch/math.s}), reached through
+    \ic{ndef} and \emph{bit-identical} to the loop it replaced ---
+    \texttt{test/y/native/t312\_math\_log\_asm.y} says so over
+    \num{10317} arguments --- \num{1335} instructions a call against \num{115},
+    as \num{115} in one routine with no calls at all against eight functions
+    and a hundred and thirty-odd calls between them. The module's \ic{nan} is
+    \ic{0.0}/\ic{0.0}, so the assembly's is a divide rather than a stored
+    constant: the default NaN carries the sign bit, and the one you would write
+    down is a different double from the one the Y returns.
+    \emph{Not} \ic{math.log}'s answer
+    times a constant, which is what C does and what these used to do here. That
+    was \emph{wrong}: \ic{math.log} is inside its own one-ulp promise but is one
+    ulp out on six of every nine arguments tried, and multiplying that by
+    \num{1.4427} --- or by \num{3.32} for the other base --- makes it two. Over
+    \num{12026} arguments drawn log-uniformly from \num{5e-324} to
+    \ic{DBL\_MAX}, against a \num{60}-digit logarithm, the old code was two ulps
+    out on a fraction of a percent of them. Nine pinned cases each had let it
+    stand; the thinnest coverage in the table, for two functions the promise names.
+
+    That spread is log-uniform, and a spread uniform in the \emph{decades} is
+    what finds these --- and it gives a different and less flattering figure for
+    what replaced it. Over \num{20000} decade-uniform arguments \ic{log2} is
+    within an ulp on every one, and \ic{log10} is still two ulps out on
+    \num{1.9} percent of them, across every decade rather than concentrated near
+    zero. The difference is not the reduction, which they share, nor the
+    z-series, which they share: it is that \ic{log10}'s two terms are of
+    comparable size --- $e\log_{10}2$ beside $\ln(m)\log_{10}e$ --- so
+    \ic{ln(m)}'s own error is not diluted, where in \ic{log2} the integer part is
+    a thousand times the small one and no error in the small one can move the
+    rounding --- and the measurement says something sharper than that. Swept by
+    binary exponent, all 62 arguments with a non-zero exponent are exact and the
+    failures sit entirely at exponent \emph{zero}, where the first term vanishes
+    and the answer is $\ln(m)\log_{10}e$ alone: 5 of 14 arguments in $[1,2)$ are
+    one ulp out. Five compensations left those five bit for bit unchanged, and the
+    fourth proves why --- the terms are exact to far below the last bit, so the
+    residual is the rounding of the final sum, which no compensation of a term
+    reaches. Reordering the sum does not fix it either, and the reason is worth
+    the space: sorting the four corrections smallest-first takes the sweep from
+    \num{288} to \num{467} (a partial sort, \num{619}), and choosing the order by
+    the argument --- sort only where \ic{e} is zero --- gives \num{290} with the
+    worst gap rising to 3, because for
+    every argument with a non-zero exponent the term that needs to go first is
+    \emph{already} first --- it is the residual of the \ic{two\_sum}, and
+    \ic{two\_sum} puts it last in the expression and first in the sum. The two
+    orders cannot both be had, because the answer's dominant term is absent exactly
+    where the order is wrong. It wants the pieces held apart across the sum, in
+    one extra-precision accumulator, which is a different algorithm rather than a
+    sixth compensation of this one. Recorded in t322 and
+    pinned by t327, which also carries the six \emph{non-negative} powers of ten
+    (exact integers) and why no negative one is: \ic{1e-323} is $2^{-1073}$, not
+    $10^{-323}$.
+
+    What replaced it keeps \ic{log}'s reduction and scales the \emph{exact}
+    integer part:
+    \[
+      \log_2 x = e + \log_2 m, \qquad
+      \log_{10} x = e\log_{10} 2 + \ln m \cdot \log_{10} e,
+      \qquad x = m\,2^e.
+    \]
+    Each product's own rounding is taken back out with \ic{prod\_err} and
+    \ic{two\_sum}, and the two constants are carried as hi/lo pairs \emph{generated}
+    from a \num{90}-digit computation --- typing them is how the first attempt got
+    one of them wrong by a factor of eight, on a test that then turned out to be
+    an exact power of ten where the tail cannot show. Note the two different
+    scalings: $e$ is a \emph{base 2} exponent, so it takes $\log_{10} 2$, while
+    the other term is a \emph{natural} logarithm and takes $\log_{10} e$. Scaling
+    both by $\log_{10} 2$ answers a different function, and did --- it gave
+    $\log_{10} 0.75 = \num{0.1307}$ where the answer is $-\num{0.1249}$.
+
+    Measured on the same \num{12026} arguments: \ic{log2} within one ulp of
+    \emph{every one}, \ic{log10} within one ulp of all but one
+    (\num{0.76939152581348347}, where $\ln m$ is itself half an ulp out).
+    \ic{test/y/native/t322\_math\_log\_base.y} records it.
+
+    This cost \num{5.5}$\times$ the instructions: log through assembly and a
+    multiply is \num{149} a call, this is \num{817}. A deliberate trade, named as
+    one --- the promise is one ulp, and on a Y path that is what holding it
+    costs. Closing it means writing these two kernels in assembly, which is a
+    piece of work in its own right rather than a patch.
+  \item[\ic{math.sin(x)}, \ic{math.cos(x)}, \ic{math.tan(x)}] The trigonometry,
+    reduced modulo $\pi/2$ with \ic{two\_sum} taking out the two products that can
+    round (the first piece's product needs more than 53 bits once $n$ passes
+    $2^{21}$, the first tail piece's once $n$ passes $2^{10}$; the other two
+    are \num{3.5e-27} and below, where the rounding is twenty orders under the
+    answer's last bit however large $n$ grows). The quadrant is $n \bmod 4$
+    normalized --- C's \% keeps the sign of the dividend, so a negative count
+    comes out negative. The range is $|x| \lesssim 2^{52}$: like every library
+    without Payne--Hanek reduction, a larger argument reduces to something near
+    $x$ rather than to its own angle.
+
+    \ic{tan} has no pole it can reach. Both of its infinity arms are guarded on
+    the computed cosine being \emph{exactly} zero, and no double gets there: the
+    cosine is \ic{sin\_cos\_k}'s \ic{1 - w*poly\_cos(w)}, which is \ic{cos(x)}
+    for $|x| \le \pi/4$, where its magnitude is at least \num{0.7071}. So
+    \ic{tan(pi/2)} is not an infinity but \num{1.633123935319537e16} --- what this
+    platform's \ic{libm} gives, and correct: the double nearest $\pi/2$ is not
+    $\pi/2$, its cosine is \num{6.1e-17} and not zero, and the tangent of that is
+    finite and enormous. The guards stay, because they are what would turn a
+    future broken reduction into an infinity rather than a \ic{nan} from
+    dividing by zero --- and because deleting a branch that cannot fire is how the
+    day it can fire arrives with no guard at all
+    (\ic{t320\_sin\_reduction\_limit.y}).
+
+    \ic{cos}'s coefficient table is \ic{sin}'s rotated left by one, which is what
+    lets one routine answer both: \ic{sin} and \ic{cos} are two instructions
+    each that set a register and fall into the same body, and the quadrant picks
+    between the two halves at the end with two tests of the index rather than
+    eight cases. \ic{math.sin} and \ic{math.cos} are machine code
+    (\texttt{src/y/arch/math.s}), reached through \ic{ndef} and
+    \emph{bit-identical} to the loops they replaced ---
+    \texttt{test/y/native/t313\_math\_sin\_asm.y} says so over \num{10410}
+    arguments each --- \num{190} instructions a call against \num{1775}, and one
+    routine for both rather than one for each. \ic{sin\_y} and \ic{cos\_y} are
+    the loops, kept as the oracle, and \ic{ytest math-gen sin} generates
+    the routine from the module's own constants. The negation is
+    \ic{0.0} $- x$ and not a sign-bit flip, which is the difference in
+    \ic{math.sin(-0.0)}.
+  \item[\ic{math.asin(x)}, \ic{math.acos(x)}, \ic{math.atan(x)},
+    \ic{math.atan2(y, x)}] The inverse trigonometry. \ic{atan} folds until its
+    argument is inside the kernel's range --- the reciprocal above 1, then the
+    tangent addition at $\pi/8$ --- and both folds are exact identities, so unlike
+    a division they cost nothing of their own. \ic{asin} above $0.5$ uses the
+    half-angle step $\arcsin x = \pi/2 - 2\arcsin\sqrt{(1-x)/2}$, one step, with the
+    square root computed from $1-x$ alone (which Sterbenz makes exact) so nothing
+    is lost however close $x$ is to 1; \ic{acos} is $\pi/2 - \arcsin x$ with the
+    subtraction corrected afterwards, because $\pi/2$ minus something an ulp off
+    is an ulp off. \ic{atan2} is the quadrant of $(y,x)$, with every zero and
+    infinity spelled out --- and the sign of a \emph{zero} is a direction, which
+    is the whole of the four cases where both arguments are a zero
+    (C99~7.12.7.4): a negative \ic{x} means the negative axis and a signed
+    $\pi$, a positive one means the positive axis and a signed zero, and the
+    sign of \ic{y} carries through either way. So \ic{math.atan2(-0.0, -1.0)}
+    is $-\pi$, and \ic{math.atan2(0.0, -0.0)} is $\pi$ where it used to be
+    \ic{0.0}.
+  \item[\ic{math.sinh(x)}, \ic{math.cosh(x)}, \ic{math.tanh(x)}] One formula
+    each, out of \ic{expm1}:
+    $\cosh x = 1 + (\operatorname{expm1} x + \operatorname{expm1}(-x))/2$ and
+    $\tanh x = \operatorname{expm1}(2x)/(\operatorname{expm1}(2x) + 2)$. The plain forms ---
+    $(e^x+e^{-x})/2$ and $\sinh/\cosh$ --- are a rounding or two worse, because
+    each of their terms is computed to its own last bit and then added.
+    \ic{sinh} needs a polynomial of its own below \num{0.5}, where $(e^x-e^{-x})/2$
+    is a subtraction of nearly equal numbers, and \ic{tanh} now does the same for
+    the same reason: its answer never leaves $[-1, 1]$, so reaching for a
+    full-range exponential to produce it is paying for reach it does not need.
+    Measured at \num{10000} calls with $|x| \leq \num{0.5}$, the polynomial is
+    \num{577} instructions against the exponential form's \num{1008}, and the two
+    agree with an exact \num{50}-digit \ic{tanh} on \num{3999} of \num{4000}
+    arguments each --- which is to say they are the same function. The degree-11
+    coefficients come from \ic{gen\_kernel.py}'s own fit, reporting
+    \num{1.000} ulp over the branch.
+  \item[\ic{math.pow(x, y)}] $x^y$, with C's cases. An integer exponent is
+    computed by repeated squaring, which is exact --- so every integer exponent
+    below \num{1024} comes out exactly, and it is the only way a negative base
+    is defined at all. Past that, and for a fractional exponent, it is
+    $\operatorname{expm1}$-style: the logarithm in two parts, the exponent in two parts, and
+    the reduced argument in two parts, because the exponent multiplies the
+    logarithm's error --- one ulp of an exponent of \num{500} is
+    \num{5.7e-14} of the answer, which is 360 ulps of it. That is also why $1/\ln 2$
+    is a pair of constants here and not one. \ic{math.pow} is machine code
+    (\texttt{src/y/arch/math.s}) like \ic{exp}, \ic{log} and \ic{sin}, reached
+    through \ic{ndef} and \emph{bit-identical} to the loop it replaced ---
+    \texttt{test/y/native/t315\_math\_pow\_asm.y} says so over \num{15137}
+    pairs, every arm of the dispatch and then the general path from a subnormal
+    base to an overflowing exponent --- \num{472} instructions a call against
+    \num{3004}. It is the only kernel in the file with a frame, because it is the
+    only one that \emph{calls}: the dispatch, the two-part logarithm, $\exp 2$ of
+    the pair and \ic{ldexp} are four routines, and every SSE register is
+    caller-saved, so what has to outlive a call lives in memory. \ic{pow\_y} is the
+    loop, kept as the oracle, and \ic{ytest math-gen pow} generates the
+    routine from the module's own constants --- the same generator shape as the
+    three before it, and its intermediate probes are what located four bugs in an
+    earlier version.
+\item[\ic{math.min(a, b)}, \ic{math.max(a, b)}] The smaller or larger of two
+  \ty{long}s.
+\item[\ic{math.abs(x)}] \ic{|x|}. The most negative \ty{long} has no positive
+  counterpart and comes back unchanged, as in C.
+\item[\ic{math.clamp(x, lo, hi)}, \ic{math.sign(x)}] \ty{x} moved into
+  \ic{[lo, hi]}; and \ic{-1}, \ic{0} or \ic{1}.
+\item[\ic{math.gcd(a, b)}, \ic{math.lcm(a, b)}] Greatest common divisor and
+  least common multiple, both $\geq 0$; \ic{math.gcd(0, 0)} and
+  \ic{math.lcm(0, x)} are \ic{0}.
+\item[\ic{math.isqrt(n)}] $\lfloor\sqrt{n}\rfloor$ for $n \geq 0$, and \ic{0}
+  for a negative $n$.
+\item[\ic{math.popcount(x)}, \ic{math.ctz(x)}, \ic{math.clz(x)}] The number of
+  set bits, of trailing zeros and of leading zeros in the 64-bit word;
+  \ic{math.ctz(0)} and \ic{math.clz(0)} are \ic{64}, since \ic{0} has no other answer. A
+  negative \ty{x} is counted in its two's-complement form, so
+  \ic{math.popcount(-1)} is \ic{64} and \ic{math.clz(-1)} is \ic{0}.
+\item[\ic{math.next\_pow2(x)}] The smallest power of two $\geq$ \ty{x}; \ic{1}
+  for $x \leq 1$, and \ic{0} past \ic{2\^{}62}, where no such power fits.
+\item[\ic{math.rotl(x, k)}] \ty{x} rotated left by $k$ bits, with $k$ taken
+  modulo \num{64}: a multiple of \num{64} is the identity, and no argument ends
+  the program. That last part is the whole point, and it was not true. The
+  function was \ic{x << k | x >>> (64 - k)} under a comment saying
+  \emph{for $1 \leq k \leq 63$}, and \ic{k = 0} and \ic{k = 64} both
+  \emph{happened} to be right --- \ic{x | 0} and \ic{0 | x} --- so it read as
+  though it took \ic{0}, while \ic{k = 65} \emph{killed the program}, because
+  \ic{64 - 65} is \ic{-1} and a negative shift count traps. Every other count out
+  of range in this section merely zeroes; the rotation was the one that died.
+  Masking is what \ic{ROL} does, and it makes \ic{rotl(x, 64) == x} a fact rather
+  than a coincidence. \ic{t321\_math\_rotl.y} holds it down, including the
+  identity at \ic{0}, \ic{64} and \ic{128} and both directions.
+\item[\ic{math.mul\_mod(a, b, m)}, \ic{math.pow\_mod(b, e, m)}] \ic{a * b} and
+  \ic{b\^{}e} reduced modulo \ic{m}, for \ic{0 < m <= 2147483647}: the operands
+  are reduced first, so the product cannot overflow a \ty{long}. A larger
+  modulus would need a 128-bit product and would be silently wrong.
+  \ic{pow\_mod} gives \ic{0} for a negative exponent.
+\item[\ic{math.inv\_mod(a, m)}] The inverse of \ty{a} modulo \ic{m}, or \ic{0}
+  when there is none.
+\item[\ic{math.fmin(a, b)}, \ic{math.fmax(a, b)}] The smaller or larger float,
+  with C's rule that a NaN loses to the other operand. The tie between the two
+  signed zeros goes to \ic{-0.0} for \ic{fmin} and to \ic{+0.0} for \ic{fmax},
+  which is what \ic{minNum}/\ic{maxNum} say and what any caller dividing by the
+  answer needs --- C99 permits either sign, and \ic{1.0/fmax(0.0, -0.0)} is
+  \ic{+inf} rather than \ic{-inf}.
+\item[\ic{math.fabs(x)}, \ic{math.fsign(x)}] \ic{|x|}, with \ic{-0.0} coming
+  back as \ic{+0.0}; and \ic{-1.0}, \ic{0.0} or \ic{1.0}.
+\item[\ic{math.lerp(a, b, t)}] \ic{a + (b - a) * t}: the linear interpolation
+  of two floats.
+\item[\ic{math.is\_nan(x)}, \ic{math.is\_inf(x)}, \ic{math.is\_finite(x)}]
+  The three IEEE classifications, as \ty{bool}.
+\item[\ic{math.pi}, \ic{e}, \ic{tau}, \ic{ln2}, \ic{ln10}, \ic{sqrt2},
+  \ic{phi}, \ic{nan}, \ic{inf}] Constants, each the \ty{float} nearest the
+  mathematical value; \ic{math.nan} and \ic{math.inf} are values, not calls,
+  and \ic{math.neg\_zero} is \ic{-0.0} for a caller that needs the negative
+  zero without computing one.
+\item[\ic{math.splitmix64(state)}, \ic{math.seed\_xoshiro256(state, seed)},
+  \ic{math.xoshiro256pp(state)}, \ic{math.xoshiro256ss(state)}] SplitMix64 and
+  xoshiro256** / xoshiro256+. The state is a \ic{[long]} the caller owns and
+  passes in, so a stream is reproducible from its seed: \ic{splitmix64} wants
+  one element, the xoshiro pair four, and a shorter array traps. Seed with
+  \ic{seed\_xoshiro256}, which fills four words from SplitMix64 --- xoshiro must
+  not start from all zeros.
+\item[\ic{math.rand\_unit(state)}, \ic{math.rand\_range(state, n)}] A
+  \ty{float} in \ic{[0, 1)} from 53 random bits, and a \ty{long} in \ic{[0, n)}
+  with no modulo bias, for \ic{0 < n <= 2\^{}62}. Both drive xoshiro, so they
+  want the four-element state.
+\item[\ic{math.fsum(a)}, \ic{math.fsum\_kahan(a)}] The sum of a \ic{[float]},
+  the second with Neumaier compensation, which keeps the error near one ulp of
+  the total however long the array is --- measured, \ic{fsum\_kahan} is within
+  one ulp of the exact rational sum on \num{21} of \num{22} adversarial arrays
+  where \ic{fsum}, which is the plain left-to-right sum, is \num{18} ulps out on
+  a \num{500}-element one. That is the trade, and the name is the trap:
+  \ic{fsum} is \emph{not} the accurate one, and
+  \ic{fsum([1e16, 1, -1e16])} is \ic{0} where the answer is \ic{1}. An infinity in
+  the running total is returned rather than computed with: on the way to one the
+  compensation evaluates \ic{(s - t) + x}, which is \ic{inf - inf}, so
+  \ic{fsum\_kahan([1e308, 1e308])} used to answer \ic{nan} where the answer is
+  \ic{+inf} --- the accurate sum unable to answer where the plain one could. \ic{fsum}, \ic{fdot}, \ic{fmin\_of},
+  \ic{fmax\_of}, \ic{fscale} and \ic{faxpy} are machine code
+  (\texttt{src/y/arch/math.s}), reached through \ic{ndef}; each returns
+  exactly what the equivalent Y loop would, which is what makes it a
+  drop-in rather than a second opinion, and \ic{bench/y/fmath.y} measures them
+  at \num{0.44} ns an element against \num{1.26} for the loop.
+\item[\ic{math.fdot(a, b)}] The dot product of two equal-length arrays.
+\item[\ic{math.fmin\_of(a)}, \ic{math.fmax\_of(a)}] The smallest and largest
+  element, or NaN for an empty array.
+\item[\ic{math.fscale(a, k)}, \ic{math.faxpy(y, k, x)}] \ic{a *= k} and
+  \ic{y += k * x}, in place.
+\item[\ic{math.fmean(a)}, \ic{math.fvariance(a)}] The arithmetic mean and the
+  sample variance (dividing by $n-1$), the latter by the two-pass method; NaN
+  for an empty array, and NaN for a variance of fewer than two elements --- which
+  is a \emph{single} element as much as none is, since $n-1$ is zero there too.
+  \ic{fsum} of an empty array is $+0$ rather than NaN: there is nothing to be
+  inaccurate about, and a one-element sum is that element
+  (\ic{t332\_bulk\_empty.y}, which pins the empty and one-element cases together
+  for exactly that reason).
+
+  \ic{fvariance} scales by a power of two before the two passes and multiplies
+  the answer back by its square, because the plain two-pass takes the mean
+  \emph{first} and the mean of two equal \ic{1e308} values is \ic{inf} --- so
+  \ic{fvariance([1e308, 1e308])} answered \ic{inf} for an array whose spread is
+  exactly zero. It is the SIZE of the mean that overflowed, not the spread, and
+  a method that cannot see that is measuring the wrong thing. The scale is a
+  power of two, so it is exact, changes no comparison or sign, and cannot push a
+  normal number into the subnormals. A spread that genuinely overflows is still
+  \ic{inf}: \ic{fvariance([1e308, -1e308])} is \num{4e616} and has no double.
+\item[\textnormal{(the polynomial kernels)}] Every kernel in the module is a
+  split Horner evaluation --- the high coefficients and their low halves carried
+  side by side --- and each one is written \emph{twice}: once as a loop over two
+  arrays, and once unrolled with the coefficients as literals. An array read
+  costs twelve instructions in this compiler, of which the arithmetic the read
+  feeds needs about eight, so the loop spends \num{68} per cent of its time
+  fetching coefficients. It is \emph{not} the bounds check that costs:
+  \ic{y\_oob} is three instructions a call, because the index runs from
+  \ic{len-1} down to \ic{0} and is never out of range. It is the read sequence
+  itself --- reload the record, reload its length, check, reload the data
+  pointer, load --- four steps of which are loop-invariant. The unrolled form is
+  therefore the one a program runs, and there are eight of them: \ic{exp},
+  \ic{log}, \ic{sinh}, \ic{tanh}, \ic{atan}, \ic{asin}, \ic{sin} and \ic{cos}.
+
+  Measured, this is the largest single saving in the module's arithmetic:
+  \ic{atan} goes from \num{982} to \num{489} instructions a call, \ic{asin}
+  from \num{1124} to \num{631}, \ic{tan} from \num{1212} to \num{666} ---
+  between \num{45} and \num{50} per cent each --- and a benchmark loop over
+  \ic{atan}, \ic{asin} and \ic{tan} from \num{47.5} million instructions to
+  \num{36.6}. Wall-clock numbers on a shared machine are indicative only; these
+  are callgrind instruction counts, which are exact and independent of load. The
+  price is code: a chain is longer than a loop, some \num{5.5} KB of binary on a
+  program using all of them, so this is a good trade for a function called in a
+  loop and a poor one for a program that calls it once and exits.
+
+  The chains are \emph{generated}, by \ic{ytest math-unroll},
+  which reads the coefficient arrays out of this module rather than restating
+  them --- a coefficient's low half lives in its sixteenth digit, and a second
+  copy of these numbers is a second thing to keep in step. Two gates ask
+  different questions of the result, and both had to be added because each was
+  missing. \texttt{test/y/native/t328\_split\_unrolled.y} asks every chain and
+  \ic{poly\_split}, the loop it replaced, the same \num{32024} questions and
+  requires the same \emph{bits} --- the two perform the same operations in the
+  same order, so anything but equality is a defect. Running \ic{ytest math-unroll}
+  with no arguments asks the other question: whether this module still holds
+  byte-for-byte what the generator writes. That is the one which catches what the
+  first cannot --- a chain hand-edited after generation, or a banner whose
+  caller list has gone stale, still answers within an ulp, because the
+  coefficients are right and only the arrangement moved.
+\end{description}
+
+\subsection{Options}
+\label{sec:builtin-option-b}
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{some(v)}] A present option holding \ic{v}.
+\item[\ic{is\_some(v)}] \ic{true} unless \ic{v} is \ic{none}.
+\item[\ic{unwrap(v)}] The payload; \textbf{traps} on \ic{none}. The
+  postfix form \ic{v!} is the same operation.
+\end{description}
+
+\subsection{Input/output and the environment}
+\label{sec:builtin-io}
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{print(x)}] Print a value followed by a newline to stdout. Any
+  value may be printed, \ic{void} excepted; a function prints as its
+  type, spelled out:
+
+\begin{lstlisting}
+def add(a: long, b: long) -> long { return a + b; };
+print(add);      // <function (long, long) -> long>
+\end{lstlisting}
+\item[\ic{print(a, b, ...)}] Several arguments are allowed: each is
+  written as \ic{tostring} would and they are concatenated with no
+  separator, so \ic{print(n, " ", xs)} prints \ic{7 [1, 2]}. A call with
+  no argument at all is an error (\ic{print takes exactly 1 argument}).
+  \ic{print} is the only builtin that ends the line: it appends one
+  \ic{\bs n} for the whole call, whatever the argument count.
+\item[\ic{puts(s)}] Write to stdout with NO newline added --- the
+  contrast is \ic{print}, not a convention you can guess, so a call that
+  ends a line carries its own \ic{"\bs n"}. A \ic{long},
+  \ic{bool} or \ic{float} is written as \ic{tostring} would.
+\item[\ic{eputs(s)}] Same, to stderr (keeps \ic{--time} output and
+  program output apart); the same three numeric types as \ic{puts}, and
+  the same rule: no newline of its own, which is why two diagnostics
+  written without one run together on a single line.
+\item[\ic{readline()}] One line from stdin without its newline, or
+  \ic{none} at end of input (\ic{str?}). Stdin is buffered (16\,KB per
+  \ic{read(2)}); before \ic{exec()} starts a child, the unread part is
+  given back when stdin is a file, so the child reads on from the next
+  line. On a pipe, lines already buffered stay with the program, as with
+  C stdio.
+\item[\ic{clear\_eof()}] No-op: \ic{readline()} reads again whenever
+  its buffer is empty, so end of input is never latched. Present so the
+  same source runs on every compiler. It answers \ic{0} (a \ic{long}),
+  so it may stand where a value is wanted.
+\item[\ic{argv()}] \ic{[str]} of the program's arguments.
+\item[\ic{exit(code)}] Terminate with an exit code.
+\item[\ic{clock\_us()}] Monotonic microseconds as \ic{long}: for
+  intervals.
+\item[\ic{time\_us()}] Wall-clock microseconds since the Unix epoch
+  (UTC) as \ic{long}: the time of day, which jumps when the clock is
+  set.
+\item[\ic{heap\_used()}] Bytes allocated so far (by the thread that
+  asks: each has a heap of its own). The arena the process was handed
+  before the first line of \ic{main} is not counted --- in particular the
+  heap copy of the argument vector the prologue makes, which is why the
+  figure does not change with how the caller spelled the command line.
+  Report a \emph{difference} (measure, work, measure) rather than an
+  absolute number anyway: that is what stays meaningful as the runtime
+  changes, and a golden built on an absolute one is the trap this
+  exemption exists to remove.
+\item[\ic{sleep(ms)}] Suspend the calling \emph{thread} for \ty{ms}
+  milliseconds, so every other thread keeps running
+  (Section~\ref{sec:builtin-threads}); \ic{void}.
+\item[\ic{syscall(...)}] Raw Linux syscall wrapper: the first argument
+  is the syscall number and one to six arguments follow it, each a
+  \ic{long}, \ic{bool}, \ic{str} or \ic{*T}. A call outside that shape is
+  an error, as is a first argument that is not a number; a failure is the
+  kernel's own negative return. It is the host operating system's call:
+  compiled for Windows, the number is an NT system service and the arguments
+  follow the NT convention, so a program meant for both uses the modules
+  (\ic{fs}, \ic{net}, \ic{ipc}, \ic{tui}, \ic{snd}), which name the
+  operation and not the number.
+\item[\ic{exec(cmd)}] Run a shell command, return its exit code, or
+  \ic{-1} when the child could not be started or died on a signal.
+  Removed from the binary entirely by \ic{--exec=off} (then calling it
+  is a compile error).
+\item[\ic{popen(cmd)}] Run \ic{sh -c cmd} with its stdin and stdout on
+  two pipes, and answer a session \ic{[pid, in, out]} (three longs), or
+  the empty array when no child could be started. \ic{pwrite(p, s)} writes
+  \ic{s} to its stdin; \ic{pclose\_in(p)} closes that end so the child
+  sees end-of-file; \ic{pread(p)} reads its stdout to the end; and
+  \ic{pclose(p)} closes both ends, reaps the child and returns its decoded
+  status. \ic{exec\_capture(cmd)} and \ic{exec\_capture\_in(cmd, input)}
+  are the one-call forms that answer only the stdout. Like \ic{exec()},
+  they are removed by \ic{--exec=off}.
+\end{description}
+
+\noindent Files are the standard module \ic{fs} (below), not builtins.
+
+\subsection{Threads and processes}
+\label{sec:builtin-threads}
+
+A program can run threads: the kernel's own, sharing the program's
+memory, each with a stack of 8\,MB and a heap of its own to allocate
+from. The forms are a word followed by a block or by an operand
+(Section~\ref{sec:expr-grammar}); each calls the builtin of the same name
+on the operand and on a function of no parameters made of the block, so
+\ic{spawn \{ e \}} is \ic{spawn(def () \{ e \})} and \ic{lock m \{ e \}}
+is \ic{lock(m, def () \{ e \})}:
+
+\begin{lstlisting}
+let m = mutex();
+let total = 0;
+let ts: [() -> long] = [];
+for i in 1..5 {
+    ts += spawn { let n = i * 1000; lock m { total += n; }; n };
+};
+foreach (t in ts) { join t; };
+print(total);                                    // 10000
+print(ts[3]());                                  // 4000
+let pid = fork { print("child"); exit(3); };
+print(wait_pid(pid));                            // 3
+\end{lstlisting}
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{spawn \{ e \}}] Start a thread running the block. The value
+  is the thread: a function \ic{() -> T}, \ty{T} the block's type, that
+  waits for the thread to end and gives the block's value, as often as
+  it is called.
+\item[\ic{join t}] The same as \ic{t()}.
+\item[\ic{mutex()}] A new mutex, unlocked; its type is \ic{mutex}.
+\item[\ic{lock m \{ e \}}] Wait for \ty{m}, run the block, release
+  \ty{m}; the value is the block's. The block is a function: a
+  \ic{return} in it leaves the block, and \ty{m} is released either way.
+\item[\ic{try\_lock m \{ e \}}] Run the block under \ty{m} when \ty{m}
+  is free, and give \ic{true}; give \ic{false} when it is not.
+\item[\ic{sem(n)}] A counting semaphore holding \ty{n}; its type is
+  \ic{sem}.
+\item[\ic{post s}] Add one to \ty{s}, waking a thread that waits for it.
+\item[\ic{wait s}] Wait until \ty{s} is above zero, then take one.
+\item[\ic{fork \{ e \}}] Start a child process, a copy of this one, that
+  runs the block and exits with 0 (or with its own \ic{exit}). The value
+  is the child's pid (negative when there is none).
+\item[\ic{wait\_pid(pid)}] Wait for that child to end: its exit code,
+  128 plus the signal that ended it, or $-1$ when \ty{pid} is not a
+  child.
+\end{description}
+
+\noindent \ic{mutex} and \ic{sem} are types: a field, a parameter or an
+array holds them like any value, and every copy names the same lock.
+Threads share every global and every captured variable, and arrays,
+maps and owned strings lock nothing: threads that change one value must
+hold a mutex while they do. \ic{readline()} serves one thread at a time.
+When the program ends --- its last statement, \ic{exit} or a trap in any
+thread --- its threads end with it; \ic{join} the ones whose work must
+finish. None of these waits has a timeout: \ic{join} of a thread that never
+returns, and \ic{wait s} on a semaphore nobody posts, block forever, so the
+program has to be killed from outside.
+
+\ic{fork} copies the process, and a copy of a lock is still locked: a
+mutex another process holds is one whose owner will never release it, and
+a thread that started in the parent cannot end in the child. Both are
+undefined (POSIX says as much of \ic{fork} in a threaded program), so
+\ic{lock} and \ic{join} of one \emph{trap} in the child rather than wait
+for a release that never comes; \ic{try\_lock} answers \ic{false}, which is
+what the mutex being held already said. A mutex or a thread the child
+makes for itself is its own and works as usual. For the same reason, take
+no mutex across a \ic{fork} in the parent unless every child is to take
+that same mutex after it has released it --- and release it before the
+child is created where the child needs to lock it. The words are not
+reserved: \ic{lock}, \ic{join} and the others
+mean these forms only where one is written, and a def or a variable of
+the program named like one wins.
+
+\paragraph{On Windows.} A program compiled for Windows has all of this. Its
+threads are the system's; a \ic{fork} is not a system call there, so it starts
+a copy of the executable and puts a copy of the program's heap into it at the
+same addresses (the child inherits the open handles that are inheritable, and
+the standard ones), after which it behaves as above; \ic{wait\_pid} gives its
+exit code. The shell of \ic{exec} and \ic{popen} is \ic{cmd.exe /d /s /c}.
+
+\subsection{Files (the fs module)}
+\label{sec:builtin-fs}
+
+\ic{import fs;} brings the file system: whole files as text (\ic{str})
+or bytes (\ic{[byte]}), paths, directories and file descriptors, all over
+raw syscalls. A read gives \ic{none} and a write \ic{false} when it
+fails; paths are relative to the working directory. A \ty{mode} is the
+octal permission number, written as one (\ic{0o644}, \ic{0o755});
+\ic{-1} leaves a new file at \ic{0o644} minus the umask.
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{fs.read\_file(path)}] The file as \ic{str?}.
+\item[\ic{fs.read\_bytes(path)}] The file as \ic{[byte]?}.
+\item[\ic{fs.read\_lines(path)}] Its lines, without their newlines, as
+  \ic{[str]?}.
+\item[\ic{fs.write\_file(path, s, mode = -1)}] Create or truncate the file,
+  write \ty{s}, then (\ty{mode} $\geq 0$) set its permissions; \ic{bool}.
+\item[\ic{fs.write\_bytes(path, b, mode = -1)}] The same with a
+  \ic{[byte]}.
+\item[\ic{fs.append\_file(path, s)}] Add \ty{s} at the end (creating the
+  file); \ic{bool}.
+\item[\ic{fs.append\_bytes(path, b)}] The same with a \ic{[byte]}.
+\item[\ic{fs.copy\_file(from, to)}] \ic{bool}.
+\item[\ic{fs.rename(from, to)}] Rename or move; \ic{bool}.
+\item[\ic{fs.remove\_file(path)}] \ic{bool}.
+\item[\ic{fs.exists(path)}] Whether there is such a path.
+\item[\ic{fs.is\_file(path)}] A regular file (following a symlink).
+\item[\ic{fs.is\_dir(path)}] A directory.
+\item[\ic{fs.file\_size(path)}] Its size in bytes, \ic{long?}.
+\item[\ic{fs.set\_mode(path, mode)}] Set the permissions; \ic{bool}.
+  (On Windows there are no permission bits: the only thing the mode can say
+  there is the write bit, which maps to \ic{FILE\_ATTRIBUTE\_READONLY}. A
+  mode with the owner-write bit clears it, one without sets it.)
+\item[\ic{fs.make\_dir(path, mode = 0o755)}] \ic{bool}.
+\item[\ic{fs.make\_dirs(path, mode = 0o755)}] The directory and every one
+  above it that is missing; \ic{true} when it exists already.
+\item[\ic{fs.list\_dir(path)}] The names in a directory, sorted, without
+  \ic{.} and \ic{..}; \ic{[str]?}.
+\item[\ic{fs.remove\_dir(path)}] An empty directory; \ic{bool}.
+\item[\ic{fs.remove\_all(path)}] A file, or a directory and everything in
+  it; \ic{bool}. A symlink is unlinked, never followed: what it names is
+  not this path's to delete, as with \ic{rm -rf}. A trailing slash is a
+  different path, and names what the link names.
+\item[\ic{fs.cwd()}] The working directory.
+\item[\ic{fs.getenv(name)}] The value of an environment variable, or
+  \ic{none} if it is unset; \ic{str?}. It is read from
+  \ic{/proc/self/environ}, so it is the environment the process started with
+  (there is no \ic{setenv}); on Windows it is the process's environment
+  block, and a name with no \ic{/proc} and no such block is \ic{none}.
+\item[\ic{fs.chdir(path)}] Change it; \ic{bool}.
+\item[\ic{fs.open\_file(path, how, mode = 0o644)}] Open with a mode string:
+  \ic{"r"} read, \ic{"w"} write (create, truncate), \ic{"a"} append
+  (create), \ic{"x"} create a file that must not exist; a trailing
+  \ic{+} adds the other direction (\ic{"r+"}, \ic{"w+"}, \ic{"a+"}). The
+  file descriptor, or \ic{-1}.
+\item[\ic{fs.read\_all(fd)}] Everything left, as \ic{str}
+  (\ic{fs.read\_all\_bytes(fd)}: as \ic{[byte]}).
+\item[\ic{fs.read\_some(fd, n)}] Up to \ty{n} bytes (at most 65536);
+  \ic{[]} at the end.
+\item[\ic{fs.write\_text(fd, s)}] \ic{bool} (\ic{fs.write\_data(fd, b)}:
+  a \ic{[byte]}).
+\item[\ic{fs.seek(fd, off, whence)}] Move: from the start (0), the current
+  position (1) or the end (2); the new position, or \ic{-1}.
+\item[\ic{fs.close\_file(fd)}] \ic{bool}.
+\item[\ic{fs.path\_dirname(path)}] The directory part: \ic{"/a/b/c"} is
+  \ic{"/a/b"}, a name with no \ic{/} is \ic{"."}, the root is \ic{"/"}, and
+  a trailing \ic{/} does not count. Pure string work --- no file is
+  touched, and \ic{.} and \ic{..} are left as they are.
+\item[\ic{fs.path\_basename(path)}] The last piece: \ic{"/a/b/c"} is
+  \ic{"c"}, the root is \ic{"/"}, the empty path is \ic{""}.
+\item[\ic{fs.path\_extension(path)}] The base name's last
+  \ic{.name} without the dot, or \ic{""}: \ic{"c.txt"} is \ic{"txt"}, and a
+  leading dot is part of the name, so \ic{".bashrc"} has none.
+\item[\ic{fs.path\_stem(path)}] The base name without that extension:
+  \ic{"a.tar.gz"} is \ic{"a.tar"}.
+\item[\ic{fs.path\_join(a, b)}] Two paths as one: an empty side is the
+  other, an absolute \ty{b} replaces \ty{a} outright, and otherwise exactly
+  one \ic{/} goes between. Joining is not resolving --- what you write is
+  what you get.
+\end{description}
+
+\subsection{Text and Unicode (the utf8 module)}
+\label{sec:builtin-utf8}
+
+\ic{import utf8;} encodes and decodes UTF-8. The builtin \ic{chr} is the
+inverse of \ic{ord}, and \ic{ord} reads a \emph{byte} --- so
+\ic{chr(9608)} is one byte, \ic{0x88}, and not the block character
+U+2588 that it looks like. \ic{utf8.chr} is the one that makes the glyph,
+and it builds a \ic{str}, so a frame of text can be assembled with
+\ic{+=} and printed with \ic{puts}.
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{utf8.chr(cp)}] The UTF-8 encoding of \ty{cp} as a \ic{str}:
+  one to four bytes by the width table (1 below U+0080, 2 below U+0800, 3
+  below U+10000, 4 below U+110000). A negative \ty{cp}, or one past
+  U+10FFFF, gives \ic{""}; a surrogate is encoded rather than rejected.
+\item[\ic{utf8.len\_of(cp)}] How many bytes \ic{utf8.chr(cp)} is, or
+  \ic{0} for a value it cannot encode --- so a caller can size a buffer
+  without building the string.
+\item[\ic{utf8.codes(s)}] The codepoints of \ty{s} as \ic{[long]}. An
+  invalid byte decodes as U+FFFD and is consumed one byte at a time, so
+  there is one codepoint per position and no trap.
+\item[\ic{utf8.builder()}] An empty \ic{utf8.Builder}: a byte buffer for
+  building one string from many small pieces. Each push below appends in place
+  and allocates nothing per piece (the buffer doubles), where
+  \ic{s += utf8.chr(cp)} makes a string per glyph.
+\item[\ic{utf8.push\_byte(sb, n)}, \ic{utf8.push\_cp(sb, cp)}] Append the low
+  eight bits of \ty{n}, or the UTF-8 encoding of \ty{cp} (nothing for a value
+  \ic{utf8.chr} would answer \ic{""} for).
+\item[\ic{utf8.push\_str(sb, s)}, \ic{utf8.push\_long(sb, n)}] Append the
+  bytes of \ty{s}, or \ty{n} in decimal as \ic{tostring(n)} writes it. All the
+  pushes return \ic{0}.
+\item[\ic{utf8.build(sb)}] The contents so far as a \ic{str}. The builder
+  keeps them, so it can be read and then extended.
+\item[\ic{utf8.reset(sb)}] Empties the builder.
+\end{description}
+
+\subsection{The web (the http, tls and net modules)}
+\label{sec:builtin-http}
+
+\ic{import http;} is an HTTP/1.1 client, \ic{https} included, in plain Y
+(it brings the modules below with it). One call makes a request; its
+options are an \ic{http.Opts} record whose fields may all be left out
+(Section~\ref{sec:type-records}), so a program that wants to name the
+type can:
+
+\begin{lstlisting}
+import http;
+let res = http.get("https://example.com/");
+print(res.status, " ", res.headers["content-type"]);    // 200 text/html...
+print(res.text());
+let made = http.post("https://api.example.com/items", "{\"a\": 1}",
+                     { headers: {"Content-Type": "application/json"} });
+\end{lstlisting}
+
+\noindent \ic{get}, \ic{head} and \ic{delete} take the URL, \ic{post},
+\ic{put} and \ic{patch} the URL and a body, \ic{request} a method and
+the URL; each then the options: \ic{headers} (a map; they replace the
+client's own of the same name), \ic{body}, \ic{timeout} (seconds a read
+or a connect may wait, 30), \ic{redirects} (how many to follow, 5),
+\ic{insecure} (do not check an \ic{https} server's chain) and
+\ic{anchors} (PEM certificates to trust instead of the system's).
+A redirect that leaves the origin --- a different scheme, host or port ---
+drops the caller's \ic{Authorization} and \ic{Cookie} headers, as
+RFC~9110 \S11.6.2 has them conditional on the target being the origin
+they were minted for; every other header rides along, and so do the
+cookies the jar holds for the new host. Once dropped they stay dropped,
+even if a later hop returns to where the request started: the header has
+already been offered to a host it was not for. The response is an
+\ic{http.Response}: \ic{status} (0 when none came, and then \ic{err}
+says why), \ic{reason}, \ic{headers} (names in lower case; a repeated
+header's values joined by \ic{", "}, \ic{set-cookie}'s by newlines),
+\ic{size} (the Content-Length, or $-1$), \ic{url} (after redirects), and
+the body, which is kept rather than drained: \ic{res.read(n)} gives the
+first \ty{n} bytes of it (all of it for $n \leq 0$ or an \ty{n} past
+its end), \ic{res.text()} all of it as a \ic{str}. A read after the body
+has ended is answered from what already came, so \ic{read(n)} twice
+gives the same bytes twice and \ic{text()} twice the same text;
+\ic{[]} is only ever a body that was empty (a \ic{204}, a \ic{HEAD}).
+
+Many requests that look alike go through a session: a base URL their
+paths resolve against, headers for every request (\ic{s.header(name,
+value)} adds one), connections kept open and used again, and the cookies
+servers set, sent back. \ic{http.session(opts)} answers an \ic{http.Session} --- a
+record of the request methods, each taking a path and answering an
+\ic{http.Response} --- and its argument is an \ic{http.SessionOpts}, the same
+optional fields as \ic{http.Opts} with \ic{base} added:
+
+\begin{lstlisting}
+import http;
+let s = http.session({ base: "https://api.example.com",
+                       headers: {"Authorization": "Bearer t0ken"} });
+let users = s.get("/users");
+let made = s.post("/users", "{\"name\": \"ann\"}");
+let gone = s.request("DELETE", "/users/7", { timeout: 5 });
+s.close();
+\end{lstlisting}
+
+\ic{import tls;} is the TLS 1.3 client underneath, and
+\ic{tls.connect(host, port)} gives a \ic{tls.Conn} whose
+\ic{err} is \ic{""} when the handshake held. \ic{tls.send(c, bytes)},
+\ic{tls.recv(c)} (the next data, \ic{none} at the end) and
+\ic{tls.close(c)} work on it. \ic{tls.connect\_with(host, port,
+opts)} is the same, with an \ic{tls.Opts} of \ic{anchors}, \ic{alpn}, \ic{insecure} and
+\ic{timeout} to choose instead. \ic{c.alpn} is what the server chose by
+ALPN (\ic{""} when it chose none) and \ic{c.alpn\_matched} whether that is
+the protocol \ic{alpn} asked for --- RFC~7301 \S3.2 has the client check it,
+so a program that offered one and needs it tests that flag. The server's chain must reach a
+trust anchor and name the host; X25519 and three suites are offered;
+there is no TLS 1.2.
+
+\ic{import net;} has the sockets. \ic{net.resolve(name)} gives IPv4
+addresses from \ic{/etc/hosts} and DNS; \ic{net.resolve\_with(name,
+server, port)} asks that resolver instead.
+
+\ic{net.connect\_tcp(host, port)}, \ic{net.send\_str(fd, data)}
+and \ic{net.recv\_str(fd, max)} (the next \ic{str}, \ic{none} at the end)
+work on one, as does \ic{net.close\_fd(fd)}. A descriptor that fails is
+negative, never a value to close.
+
+Under them are the pieces a server is built from: \ic{net.socket\_tcp()},
+\ic{net.bind\_tcp(fd, port)},
+\ic{net.listen\_fd(fd, backlog)} and \ic{net.accept\_tcp(fd)} take and
+give them, and \ic{net.set\_timeouts(fd, secs)} sets the timeouts.
+\ic{net.addr\_set(addr, host, port)} names one, and \ic{net.is\_quad(addr)}
+is whether that address is four decimal octets --- which is what \ic{resolve}
+reads \ic{/etc/hosts} and a resolver's answers for. \ic{net.local\_port(fd)}
+is the port a socket took, which is how port 0 is used.
+
+Two accept loops sit on that. \ic{net.listen\_tcp(port, handler)} calls
+\ic{handler} --- a \ic{(long) -> long} --- with each connection's
+descriptor until an accept fails. \ic{net.listen\_http(port, handler)} is
+a small blocking HTTP server whose \ic{handler} is a \ic{(str) -> str}
+given the request head and answering the body, usually through
+\ic{net.http\_response(code, body)};
+\ic{net.http\_read\_head(fd)} reads one request head by hand and
+\ic{net.http\_serve\_one(fd, handler)} serves a single connection
+already accepted. Both loops check the bind and listen results, and a port
+that could not be taken is reported on standard output and stops the
+program (\ic{net: cannot listen on port 34567: errno -98 (address in
+use)}) rather than leaving \ic{accept} to wait on a socket bound to
+nothing. The socket itself is not checked --- it fails only when the
+process is out of descriptors.
+
+Two URL helpers stand apart from the requests, since a redirect or a
+\ic{<base>} path is often already split: \ic{http.parse\_url(s)} gives
+the parts of a URL as an \ic{http.Url} --- \ic{ok}, \ic{secure}, \ic{host},
+\ic{port}, \ic{path} --- and \ic{http.resolve\_ref(base, ref)} resolves a
+reference against a base URL the way a browser would.
+
+\subsection{Cryptography (the crypto and x509 modules)}
+\label{sec:builtin-crypto}
+
+\ic{import crypto;} has what TLS uses, in plain Y over \ic{[byte]}:
+\ic{sha256}, \ic{sha384}, \ic{sha512}, and \ic{hmac}.
+The hashes are \ic{crypto.sha256}, \ic{crypto.sha384}
+and \ic{crypto.sha512}, and \ic{crypto.hash\_sha256()} /
+\ic{crypto.hash\_sha384()} are the two constructors that build the
+\ic{crypto.Hash} naming a digest to use. (There is no
+\ic{crypto.hash\_sha512()}.) \ic{crypto.hmac} takes one, and so do \ic{crypto.hkdf\_extract},
+\ic{crypto.hkdf\_expand} and \ic{crypto.rsa\_verify\_pss}; the last two
+together are the key derivation TLS 1.3 asks for;
+\ic{chacha\_seal}/\ic{chacha\_open} (ChaCha20-Poly1305) and
+\ic{gcm\_seal}/\ic{gcm\_open} (AES-GCM), each \ic{(key, nonce, aad,
+data)}, an open giving \ic{none} for a forged message; the AES key is 16,
+24 or 32 bytes, the ChaCha20 key 32, and the nonce 12 bytes either way ---
+any other length stops the program saying so, since sealing under the
+wrong length would give two different nonces the same ciphertext and the
+same tag (SP 800-38D's rule for a longer GCM nonce, a GHASH of it, is not
+implemented); \ic{x25519} and \ic{x25519\_base}, each a 32-byte scalar
+and a 32-byte point, where a peer point of low order --- one that would
+make the shared secret all zeros --- stops the program, as RFC 8446
+\S7.4.2 requires; \ic{rsa\_verify\_pkcs1} and \ic{rsa\_verify\_pss}, which
+take an RSA modulus and exponent as \ic{[byte]}, and \ic{ecdsa\_verify},
+whose first argument is the \ic{crypto.Curve} that
+\ic{crypto.p256()} and \ic{crypto.p384()} each answer;
+\ic{random\_bytes(n)}, \ic{hex} and \ic{unhex}. The primitives those
+use are exported too, for building something the above does not cover:
+\ic{bytes\_eq} (a constant-time compare of two \ic{[byte]}), the
+endianness helpers \ic{be\_bytes}/\ic{le\_bytes}, \ic{poly1305}, and the
+raw ciphers \ic{chacha20} and \ic{aes\_encrypt} under \ic{aes\_key}.
+
+\ic{import x509;} reads certificates: \ic{x509.verify\_chain(chain,
+host, now)} is \ic{""} when the DER certificates \ty{chain} (the
+server's first) reach a system trust anchor and name \ty{host} at
+\ty{now} (Unix seconds), else why not. \ic{x509.verify\_chain\_with} takes
+the anchors (\ic{x509.anchors\_pem(text)}), and \ic{x509.pem\_certs(text)}
+splits a PEM file while \ic{x509.system\_roots()} answers the system's own
+roots as \ic{[x509.Cert]}.
+
+A single certificate is an \ic{x509.Cert}, and \ic{x509.parse\_cert(der)} is
+how one is read out of its DER.
+\ic{x509.verify\_signed(leaf, scheme, data, sig)} checks a signed message
+(the DER leaf bytes, a scheme id, the data and the signature),
+\ic{x509.names\_host(cert, host)} matches a certificate to a name (while
+\ic{x509.name\_matches(pattern, host)} matches a \ic{str} pattern), and
+\ic{x509.days\_from\_civil(y, m, d)} is the date arithmetic
+\ic{x509.verify\_chain} uses. \ic{x509.b64\_decode} is the Base64 decoder it
+needs to read a PEM file.
+
+\paragraph{Big integers.} \ic{crypto} also carries the number theory a
+prime needs, over the \ic{bigint} of Section~\ref{sec:type-bigint} --- where
+\ic{math}'s integer helpers stop at 64 bits, these do not.
+\ic{crypto.is\_prime(n)} is a Miller-Rabin test with 16 random bases after
+the small primes are divided out, so it is deterministic for small \ic{n} and
+has a negligible error probability past them: it is not a proof.
+\ic{random\_prime\_bytes} answers a random prime of \ic{k} bytes as a
+\ic{[byte]}, and \ic{random\_bigint} answers \ic{k} random bytes as a
+non-negative bigint;
+\ic{bigint\_from\_bytes\_be} and \ic{bigint\_to\_bytes\_be} convert
+between a big-endian byte string and a bigint, and \ic{bigint\_byte\_len}
+is the shortest byte length that holds one. \ic{crypto.bigint\_mod\_pow(b, e, m)} is
+$b^e \bmod m$ by square and multiply, \ic{crypto.bigint\_gcd(a, b)} the
+greatest common divisor, and \ic{crypto.bigint\_inv\_mod(a, m)} the inverse
+of \ic{a} modulo \ic{m} --- \ic{0n} when there is none, which is an answer
+rather than a trap, so a caller has to test it. The shorter names
+\ic{gcd}, \ic{inv\_mod}, \ic{pow\_mod} and \ic{mod\_pow} are the same
+functions, and \ic{math.isnan(x)} is the C spelling of \ic{math.is\_nan}.
+
+\subsection{The terminal (the tui module)}
+\label{sec:builtin-tui}
+
+\ic{import tui;} gives a program a terminal: the tty and its modes, a grid of
+cells with colours, the diff that turns a changed grid into escape sequences, a
+capture for testing, and a frame pacer. It is one unit rather than three
+because the parts do not separate --- diffing a grid means diffing it
+\emph{into a tty}, and a frame loop needs a pacer to call both at a rate --- so
+one import cannot get the order wrong.
+
+Four types come with it. \ic{Size} is a record of \ic{rows} and \ic{cols}. A
+\ic{Surface} is a grid: \ic{tui.new(rows, cols)} makes one, and it carries \ic{rows},
+\ic{cols} and the cell data as plain fields. \ic{Pacer} and \ic{Fps} are the
+frame clock and the frame meter.
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{tui.is\_tty(fd)}] \ty{bool}: whether the output is a terminal. Every
+  drawing program asks this first, because the answer decides whether to animate
+  or to print something a diff can check.
+\item[\ic{tui.size()}] The terminal's size as \ic{Size}, from
+  \ic{TIOCGWINSZ}.
+\item[\ic{tui.raw\_mode()}] Put the tty in raw mode and remember the old
+  termios; \ic{tui.cooked\_mode()} puts it back, and \ic{tui.restore()} puts back whatever
+  was saved at the last \ic{tui.raw\_mode()}.
+\item[\ic{tui.active()}] \ty{bool}: whether raw mode is on now, so a cleanup path
+  can be called from anywhere without checking first.
+\item[\ic{tui.restore\_exit(code)},
+  \ic{tui.restore\_all\_exit(code)}] The call to make on every exit path:
+  restore, then \ic{exit(code)}. There is no \ic{atexit} handler in the
+  module, and there is nothing after this call either --- which is what makes it
+  impossible to forget half way. \ic{tui.restore\_all\_exit(code)} puts the
+  cursor back and leaves the alternate screen before the same exit.
+\item[\ic{tui.arm\_watchdog()}] \ic{fork} a child that waits for this process to
+  die and restores the terminal from the child --- the one path a call cannot
+  cover, since \ic{SIGKILL} runs nothing. The alt screen and the cursor are
+  emulator state, so the watchdog can put the \emph{termios} back but not those.
+\item[\ic{tui.read\_key()}] The next key, decoded: arrows, function keys,
+  \ic{Esc}, \ic{Ctrl-C} and the rest as their own constants, printable keys as
+  their code point, and \ic{KEY\_NONE} when nothing is waiting.
+  The constants are in this module, \ic{KEY\_NONE} at $-1$ for nothing
+  waiting --- also what \ic{tui.read\_key\_timeout} and \ic{tui.pop\_key()} answer --- and
+  then twenty-four specials, contiguous from 4096 to 4119:
+  \ic{KEY\_ESC}, \ic{KEY\_UNKNOWN}, \ic{KEY\_UP}, \ic{KEY\_DOWN},
+  \ic{KEY\_RIGHT}, \ic{KEY\_LEFT}, \ic{KEY\_HOME}, \ic{KEY\_END},
+  \ic{KEY\_PGUP}, \ic{KEY\_PGDN}, \ic{KEY\_INSERT}, \ic{KEY\_DELETE}, and
+  \ic{KEY\_F1} through \ic{KEY\_F12}. Every one of them sits at or
+  above 4096, where a key press cannot deliver a character --- a key arrives as
+  one byte or as a decoded escape sequence --- so a value in that range is a
+  named special and not a code point.
+\item[\ic{tui.read\_key\_timeout(ms)}] The same, but it gives up after \ic{ms} and
+  answers \ic{KEY\_NONE}. Note the unit --- the code is \ic{let ds = (ms + 99) /
+  100;} because \ic{VTIME} counts \emph{deciseconds}, so a request under 10 ms
+  becomes 100 ms. Poll with \ic{0} for a non-blocking read, and let the pacer own
+  the frame deadline.
+\item[\ic{tui.push\_key(n)}, \ic{tui.pop\_key()}] Push a pushed-back key:
+  \ic{tui.push\_key(n)} takes the first \ic{n} bytes of the raw-input queue and
+  puts them on the pushback stack, and \ic{tui.pop\_key()} pops one byte;
+  \ic{tui.pop\_key()} on an empty stack answers \ic{KEY\_NONE}. The argument
+  is a byte count over the module's own queue, not a key code to remember.
+\item[\ic{tui.key\_pending()}] A \ic{long}: the module's output-buffer
+  length, the same number \ic{tui.buf\_len()} gives. The name is
+  historical; it does not report whether input is waiting.
+\item[\ic{tui.enter\_screen()}, \ic{tui.leave\_screen()}] The alternate screen
+  buffer, so a full-screen program leaves the scrollback alone. These are
+  \ic{tui.enter\_alt\_screen()} and \ic{tui.leave\_alt\_screen()} plus the
+  cursor, which is what a full-screen program wants; the plain alt-screen
+  forms move the buffer alone.
+\item[\ic{tui.hide\_cursor()}, \ic{tui.show\_cursor()}] Cursor visibility. \ic{tui.cursor\_to(row, col)} moves
+  it, \ic{tui.home()} goes to the top left and \ic{tui.clear\_screen()}
+  wipes the screen.
+\item[\ic{tui.new(rows, cols)}] A \ic{Surface}. It allocates six
+  \ic{[long; 32768]} arrays --- 1.5 MiB --- \emph{once}, whatever size it is asked
+  for, and the surface is capped at 32768 cells: a 128x256 screen. Those three
+  numbers are \ic{tui.MAX\_CELLS}, \ic{tui.MAX\_ROWS} and
+  \ic{tui.MAX\_COLS}, so a program can name the limit it is checking
+  against; a request above it is clamped, not refused. A larger screen does not
+  fit, which is why a program wanting 320x240 keeps its own byte buffer instead. Cells above \ic{rows * cols} are never flushed.
+\item[\ic{tui.resize(s, rows, cols)}] The same surface at another size, without a
+  second allocation, and \ic{tui.rows(s)} / \ic{tui.cols(s)} read its size back.
+\item[\ic{tui.clear(s, bg)}, \ic{tui.fill(s, cp, fg, bg)}] Every cell to a space, or to
+  a code point with a foreground and a background.
+\item[\ic{tui.put(s, row, col, cp, fg, bg)}] One cell; \ic{tui.put\_skip(s, row, col, fg, bg)} the same for a character that is a \emph{continuation} of a wide glyph
+  to its left, and \ic{tui.put\_at(s, i, cp, fg, bg)} an absolute write by cell index that
+  does no continuation bookkeeping.
+\item[\ic{tui.get(s, r, c)}] The code point in a cell, \ic{tui.key\_at(s, r, c)}
+  its colour packed as one integer, and \ic{tui.text(s, row, col, t, fg, bg)} a run of cells
+  written from a \ic{str} and read back as one.
+\item[\ic{tui.hline(s, row, col, n, cp, fg, bg)},
+  \ic{tui.vline(...)}, \ic{tui.rect(...)},
+  \ic{tui.fill\_rect(...)}] Straight runs and boxes --- the primitives a chart or
+  a frame border is made of.
+\item[\ic{tui.blit(dst, src, sr, sc, dr, dc, rows, cols)}] A rectangle of one
+  surface onto another.
+\item[\ic{tui.rgb(r, g, b)}, \ic{tui.grey(v)}, \ic{tui.lerp\_rgb(a, b, t)},
+  \ic{tui.clamp255(v)}] Colour, and \ic{tui.r\_of(c)}, \ic{tui.g\_of(c)},
+  \ic{tui.b\_of(c)} to take one apart. A colour is one integer, so a frame buffer
+  of them is an array of integers.
+\item[\ic{tui.begin\_frame()}, \ic{tui.cell\_same(s, i)},
+  \ic{tui.cell\_commit(s, i)}] The diff's three steps: start a
+  frame, ask whether a cell already holds what you want, and write it if not.
+\item[\ic{tui.flush(s)}] Every changed cell as escape sequences, and
+  \ic{tui.flush\_diff(s)} the same but only for the rows that changed ---
+  \ic{tui.row\_count()} rows in the worst case, \ic{tui.row\_bytes()} the
+  size of one, \ic{tui.frame\_bytes()} the whole frame.
+\item[\ic{tui.end\_frame(s)}, \ic{tui.spill()}] Finish a frame, and what to do
+  when one row's worth of output overflows the buffer: the cursor is positioned
+  absolutely, so a spill is a row boundary, not a corruption.
+\item[\ic{tui.set\_fd(n)}, \ic{tui.fd()}] Draw to a descriptor other than 1, which
+  is how output goes to a file or a pipe for a test. \ic{tui.set\_size(rows,
+  cols)} tells the module a window size instead of asking the terminal, and says
+  whether it took it --- which is how a test draws a surface it can read back.
+\item[\ic{tui.put\_byte(b)}, \ic{tui.put\_num(n)}, \ic{tui.put\_str(s)},
+  \ic{tui.put\_csi()}] The output buffer, below the grid: a byte, a decimal
+  number, a string, and a control-sequence introducer.
+\item[\ic{tui.esc\_fg(r, g, b)}, \ic{tui.esc\_bg(...)}] One complete SGR sequence
+  as a number, \ic{tui.esc\_clear()}, \ic{tui.esc\_home()}, \ic{tui.esc\_cursor(r, c)},
+  \ic{tui.esc\_reset()}, and \ic{tui.out\_flush()} to write the buffer out.
+  \ic{tui.esc\_rg(...)} is one sequence carrying both colours.
+  The \ic{tui.sgr\_fg(r, g, b)}, \ic{tui.sgr\_bg(r, g, b)},
+  \ic{tui.sgr\_rg(...)} and \ic{tui.sgr\_reset()} forms are the same sequences
+  without the introducer, for a caller assembling its own.
+\item[\ic{tui.buf\_len()}, \ic{tui.buf\_at(i)}, \ic{tui.buf\_reset()}] The output
+  buffer read back and cleared, which is how a test checks what a draw would
+  have written without a terminal.
+\item[\ic{tui.rd16(b, i)}, \ic{tui.rd32(b, i)}] Little-endian reads from a
+  \ic{[byte]}, for a protocol that arrives in that order.
+\item[\ic{tui.capture\_on()}, \ic{tui.capture\_off()}, \ic{tui.capture\_reset()}] Record
+  everything drawn, so a test can compare it. Four accessors read it back:
+  \ic{tui.capture\_len()}, \ic{tui.capture\_byte(i)},
+  \ic{tui.capture\_str(from, to)} and \ic{tui.capture\_checksum()}. The checksum is FNV-1a over the bytes,
+  which makes a frame comparable without being readable.
+\item[\ic{tui.grid\_digest(s)}] FNV-1a over the surface's \emph{cells}, a different number
+  from \ic{tui.capture\_checksum()} (which is over the bytes written): a
+  colour change moves one and not the other.
+\item[\ic{tui.grid\_text(s)}] The grid as plain text, no escapes. This is what a
+  golden file holds.
+\item[\ic{tui.shade(v, n)}] A colour mapped to a glyph by luminance, \ic{v} against ramp
+  entry \ic{n}: the default block ramp, five entries.
+\ic{shade\_ascii}, \ic{shade\_blocks}, \ic{shade\_half} and \ic{shade\_braille}
+  are the four ramps, each a two-argument function of its own; they are
+  numbered 0, 1, 2 and 3, which is what
+  \ic{tui.shade\_len(mode)} answers (10, 5, 4 and 16 entries) for a caller
+  selecting a ramp itself. \ic{tui.ramp\_index(v, n, k)} is the
+  one place a value becomes a ramp position. A braille dot pattern is \ic{tui.braille(vs, thresh)}, which names the cell,
+  \ic{tui.braille\_cp(mask)}, which names the code point; \ic{tui.braille\_mask(sub)} is the mask,
+  and \ic{tui.braille\_put(s, row, col, vs, thresh, fg, bg)}
+  writes one into a cell.
+\item[\ic{tui.utf8\_len(cp)}, \ic{tui.utf8\_byte(cp, i)}, \ic{tui.width\_of(cp)}] A
+  code point's UTF-8 length and bytes, and how many terminal columns it occupies
+  --- 2 for a wide CJK or emoji glyph, 0 for a combining mark.
+\item[\ic{tui.pacer\_new(fps)}] A \ic{Pacer} for a frame rate, with the period
+  clamped so a rate below 1 or above a million cannot divide by zero.
+  \ic{tui.pacer\_next(p)} draws the next frame or skips it, and returns
+  the microseconds it slept (at least \textbf{0}, so the frame is due) or the
+  negative lag when the frame was \emph{dropped} --- the sign is the yes-or-no
+  and the magnitude is the number; \ic{tui.pacer\_start(p)} re-bases the schedule for a second run;
+  \ic{tui.pacer\_period\_us(p)} the period, \ic{tui.pacer\_frames(p)} and
+  \ic{tui.pacer\_dropped(p)} the counters, and \ic{tui.pacer\_lag\_us(p)} how far behind
+  the schedule is.
+\item[\ic{tui.fps\_new(win\_us = 500000)}, \ic{tui.fps\_tick(f)},
+  \ic{tui.fps\_x100(f)}, \ic{tui.fps\_avg\_x100(f)}, \ic{tui.fps\_frames(f)},
+  \ic{tui.fps\_line(f)}] A sliding-window frame meter. The window defaults to half
+  a second, which at 30 fps holds about 15 frames --- so one frame either way is
+  6.7\% and the reading cannot resolve 29 from 30. Measure a \emph{sustained}
+  rate from outside the meter, over seconds, or you will file a defect against a
+  program holding 29.99.
+\end{description}
+
+\subsection{Command lines (the args module)}
+\label{sec:builtin-args}
+
+\ic{import args;} parses \ic{argv} against a table you declare, so a program does
+not hand-roll \ic{index\_of} loops over \ic{--} and \ic{=}, and need not
+invent an exit-code convention: \ic{args.parse\_or\_exit(toks)} leaves on the
+usage error itself. The table is \ic{[args.Opt]}, one entry per flag, and each
+\ic{Opt}'s \ic{kind} is \ic{args.BOOL}, \ic{args.STR} or \ic{args.NUM} --- a flag
+with no value, a flag taking one of any shape, or a flag whose value must parse
+as a whole number.
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{args.init(name, blurb, opts, tail)}] Declare the program and its flags.
+  \ic{name} is what usage calls it, \ic{blurb} the line under it, \ic{opts} the
+  table, and \ic{tail} the argument summary after the flags --- \ic{"[file...]"},
+  say. Any \ic{Opt} with a non-empty \ic{help} makes \ic{--help} an ordinary flag
+  rather than a special case.
+\item[\ic{args.parse(toks)}] Read \ic{toks}, normally \ic{argv()}: \ic{args.OK} when
+  every flag was understood, \ic{args.HELP} for \ic{--help}, and \ic{args.USAGE}
+  for a usage error --- after which \ic{args.errmsg()} says what was wrong and
+  \ic{args.print\_usage()} writes the usage text. Entry 0 is the program
+  name and is skipped.
+\item[\ic{args.parse\_or\_exit(toks)}] The same, but it prints the
+  diagnostic and exits \textbf{2} itself. A program wanting a different exit code calls
+  \ic{args.parse(toks)} and decides --- which is why one example exits 1 on an
+  unknown flag rather than \ic{args}' own 2.
+\item[\ic{args.nopts()}] How many entries the table has, and
+  \ic{args.positional()} the arguments that were not flags, as \ic{[str]}.
+\item[\ic{args.has(long)}] \ty{bool}, \ic{args.get\_str(long, default)} a
+  string, \ic{args.get\_long(long, default)} a number. \ic{get\_long} on a value
+  that is not a number is a \ic{USAGE} error, not a silent zero --- which is why
+  \ic{args.num\_ok(s)} exists to check before asking.
+\item[\ic{args.usage()}] The usage text as a \ic{str}, for a program that wants to
+  print it somewhere other than stderr.
+\end{description}
+
+Accepted spellings are \ic{--long}, \ic{--long=value} and \ic{--long value} for a
+flag that takes one, \ic{-s} and \ic{-svalue} for a short one, and \ic{--} to end
+the flags. A flag not in the table is an error naming it. An \ic{Opt} whose
+\ic{short} is empty simply has no short spelling.
+
+\subsection{Assertions (the test module)}
+\label{sec:builtin-test}
+
+\ic{import test;} is a checking harness for a program's own self-test: it counts
+checks, prints the ones that failed with what they got and what they wanted, and
+\ic{test.report()} prints the summary and returns the failure count --- which is
+what a program hands to \ic{exit}, so a self-test that fails is a non-zero exit
+rather than a line somebody has to notice.
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{test.group(name)}] Start a named section; the failures under it are
+  reported beneath it.
+\item[\ic{test.ck(name, ok, detail)}] \ty{bool}: record whether \ic{ok} holds,
+  with \ic{detail} printed when it does not. Every function below is this one
+  with a comparison already written, and all of them return \ty{bool} so a caller
+  can stop at the first failure.
+\item[\ic{test.ck\_eq(name, got, want)}] Two longs equal, and
+  \ic{test.ck\_near(name, got, want, tol)} equal within \ic{tol} --- for a measurement
+  rather than a constant.
+\item[\ic{test.ck\_str(name, got, want)}, \ic{test.ck\_bytes(name, got, want)}]
+  The same for a \ic{str} and a \ic{[byte]}.
+\item[\ic{test.checks()}, \ic{test.failures()}] How many have run and how many
+  failed. \ic{test.report()} prints both plus the detail lines, and returns the
+  failure count.
+\end{description}
+
+There is no assertion that aborts on the first failure, and no way to register a
+teardown. A self-test needing either is a program, not a check list.
+
+\subsection{Randomness (the random module)}
+\label{sec:builtin-random}
+
+\ic{import random;} is one stream, and it is deliberately \emph{not}
+thread-local: \ic{random.state()} and \ic{random.set\_state(v)} are there so a caller needing a
+private stream can make one.
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{random.seed(v)}] Start the stream at \ic{v}.
+\item[\ic{random.next()}] The next 64 bits of splitmix64. The shifts are
+  \ic{>>>} and not \ic{>>}, because the reference algorithm shifts a bit pattern
+  and an arithmetic shift on a signed long carries the sign down, mixing in a
+  weaker mixer.
+\item[\ic{random.below(n)}] A uniform integer in \ic{0..n-1}, by rejection
+  sampling --- not \ic{\% n}, which is measurably biased for an \ic{n} that does
+  not divide the range. An \ic{n} below 1 answers 0 rather than trapping: a
+  caller dividing by an empty frontier has already lost, and a trap prints to
+  stdout. So does an \ic{n} above $2^{62}$, which is the largest bound that can
+  be served, and which used to \emph{hang}: the draws come from $[0, 2^{62})$
+  and are rejected at or above the largest whole multiple of \ic{n} in that
+  range, and one past $2^{62}$ there is no such multiple --- the quotient is 0,
+  the limit is 0, and every draw is rejected. A range that spans more than the
+  stream has granularity for is answered \ic{lo} instead, by the same rule.
+\item[\ic{random.range(lo, hi)}] Uniform in \ic{lo..hi} --- \emph{both} ends
+  inclusive, so a one-wide range is that one value and an inverted range
+  answers \ic{lo} rather than trapping --- and
+  \ic{random.chance(pct)} a \ty{bool} true \ic{pct} times in 100. The width is
+  computed so it cannot wrap: \ic{hi - lo + 1} overflows for a range spanning
+  most of the word, and such a range answers an endpoint rather than reaching
+  \ic{below} with a width that is no longer a width.
+\item[\ic{random.state()}, \ic{random.set\_state(v)}] Read and write the state,
+  for a save file or for a second independent stream.
+\end{description}
+
+\subsection{Patterns (the regex module)}
+\label{sec:builtin-regex}
+
+\ic{import regex;} compiles patterns and matches them. The engine is a Pike VM
+--- a Thompson NFA simulated with priority-ordered thread lists --- so a match
+takes time linear in the subject times the pattern, whatever the pattern says:
+\ic{(a*)*b} and \ic{(a|aa)+b} against a megabyte of \ic{a} answer at once, where
+a backtracker would not finish. What it buys with that is no backreferences
+(\ic{\textbackslash1} has no path to compare against) and no pattern recursion
+(\ic{(?R)} would want the machine stack). The only recursion at match time is a
+lookaround's, and a pattern nesting more than 32 of them is refused.
+
+Matching is over \ty{bytes}, like every other text operation in the language:
+\ic{.} is one byte, \ic{\textbackslash d} \ic{\textbackslash w} \ic{\textbackslash s}
+\ic{\textbackslash b} and \ic{(?i)} are ASCII, and \ic{\textbackslash x\{\ldots\}} is a
+code point encoded as UTF-8 at compile time. There are no code points and no
+\ic{\textbackslash p\{\ldots\}}. The dialect is Perl's where it can be, and the
+choices are leftmost-then-first-alternative, greedy unless lazy --- so
+\ic{a|ab} against \ic{ab} matches \ic{a}, and \ic{regex.full} with it matches
+\ic{ab} (the short branch fails the end and the search goes on, as a backtracker
+would try the next alternative).
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{regex.compile(pattern)}] The compiled pattern as \ic{Re?}: \ic{none}
+  for one that does not compile, since a pattern is data (a config file, an
+  \ic{argv}) rather than a caller bug.
+\item[\ic{regex.check(pattern)}] Why it does not compile, or \ic{""} when it
+  does --- the same pass, so \ic{compile} plus \ic{check} is never two answers.
+\item[\ic{regex.escape(s)}] \ty{s} with the bytes a pattern would read as
+  syntax escaped, so it can be pasted into one.
+\item[\ic{regex.match(re, s)}] A match at position 0, as \ic{Match?}.
+\item[\ic{regex.match\_at(re, s, at)}] A match at \ic{at} --- \ic{none} when
+  \ic{at} is out of range.
+\item[\ic{regex.search(re, s)}] The leftmost match anywhere in \ty{s}.
+\item[\ic{regex.search\_at(re, s, at)}] The leftmost match at or after \ic{at}.
+\item[\ic{regex.full(re, s)}] A match of the whole subject, whatever \ic{(?m)}
+  does to \ic{\^{} } and \ic{\$} elsewhere in the pattern.
+\item[\ic{regex.is\_match(re, s)}] \ic{bool}: whether there is any match, with
+  nothing built for it.
+\item[\ic{regex.find(re, s, limit = -1)}] Every non-overlapping match, left to
+  right, as \ic{[Match]} (\ic{limit} 0 gives none, a positive one stops there).
+\item[\ic{regex.split(re, s)}] The subject cut at every match, as \ic{[str]}.
+\item[\ic{regex.replace(re, s, rep)}] Every match replaced by \ic{rep}, in
+  which \ic{\$0}..\ic{\$9} and \ic{\$\{name\}} are a group's text and \ic{\$\$} a
+  literal \ic{\$}; a name or count the pattern has no group for stays as
+  written, so a typo shows instead of going quietly.
+\item[\ic{regex.replace\_with(re, s, f)}] The same, with
+  \ic{f: (regex.Match) -> str} deciding each one --- the module has no
+  closures, so this is a function the caller passes, not a method on a match.
+\item[\ic{regex.group(m, n)}] What group \ic{n} matched, as \ic{str?}: \ic{none}
+  when it took no part, which is not the same as matching nothing (that is
+  \ic{some("")}). A count past the last group traps, as any index does.
+\item[\ic{regex.named(m, name)}] The same by name; \ic{none} for a name the
+  pattern does not have.
+\item[\ic{regex.start(m, n)}] Group \ic{n}'s offset, \ic{-1} when it took no
+  part.
+\item[\ic{regex.end(m, n)}] Its end offset, on the same terms.
+\end{description}
+
+A \ic{Match} is plain data --- \ic{subject}, \ic{text}, \ic{start}, \ic{end},
+\ic{caps} (two slots per group, group 0 first, \ic{-1} for one that took no
+part) and \ic{names} --- so an offset needs no call at all: \ic{m.caps[2 * 1]} is
+group 1's start. \ic{text} is a copy (a string slice always is). An \ic{Re} is
+the pattern's own fields, the engine's included: \ic{pattern},
+\ic{prog}, \ic{classes},
+\ic{nclass}, \ic{first}, \ic{literal}, \ic{need}, \ic{anchored}, \ic{groups},
+\ic{names}. A record type is exact, so there is nowhere to hide them; they are
+there because a Y program is free to look.
+
+The dialect, roughly in the order a pattern is read:
+
+\begin{itemize}
+\item Literals, \ic{.} for any byte, and the classes \ic{[abc]}
+  \ic{[\^{}a-z]} \ic{[[:alpha:]]}, the POSIX names \ic{alnum} \ic{alpha}
+  \ic{ascii} \ic{blank} \ic{cntrl} \ic{digit} \ic{graph} \ic{lower}
+  \ic{print} \ic{punct} \ic{space} \ic{upper} \ic{word} \ic{xdigit} as well,
+  each negatable with \ic{\^{}} inside the brackets.
+\item The shorthands \ic{\textbackslash d} \ic{\textbackslash D}
+  \ic{\textbackslash w} \ic{\textbackslash W} \ic{\textbackslash s}
+  \ic{\textbackslash S} \ic{\textbackslash b} \ic{\textbackslash B}
+  \ic{\textbackslash A} \ic{\textbackslash z} --- ASCII by definition --- and the
+  escapes \ic{\textbackslash n} \ic{\textbackslash r} \ic{\textbackslash t}
+  \ic{\textbackslash f} \ic{\textbackslash v} \ic{\textbackslash a}
+  \ic{\textbackslash 0} \ic{\textbackslash xHH} \ic{\textbackslash x\{H+\}}.
+\item The anchors \ic{\^{}} \ic{\$}, alternation \ic{a|b}, the groups \ic{(}
+  \ic{)} \ic{(?:} \ic{(?<name>}, and the repetitions \ic{*} \ic{+} \ic{?}
+  \ic{\{n\}} \ic{\{n,\}} \ic{\{n,m\}}, each of them lazy with a trailing
+  \ic{?}.
+\item Flags \ic{(?i)} \ic{(?s)} \ic{(?m)}, scoped with \ic{(?is: \ldots )}, and
+  the lookarounds \ic{(?=} \ic{(?!} \ic{(?<=} \ic{(?<!}, where a lookbehind
+  must be of a fixed width.
+\item Deliberately not: \ic{(?>...)} and \ic{a*+} (they need backtracking to
+  mean anything), \ic{(?-i)} (turning a flag off would re-fold an
+  already-emitted set), and a capture group inside a lookaround (an NFA
+  simulation has no path to give it to).
+\end{itemize}
+
+Three rules are worth stating outright, because every engine spells them
+differently and they are the ones a reader is most likely to trip on:
+
+\begin{itemize}
+\item An empty match in \ic{find} abutting the previous match's end is
+  \emph{skipped}, and the scan then moves on one byte --- Go's rule, and
+  CPython's since 3.7. So \ic{a*} over \ic{baab} gives \ic{""}, \ic{aa}, \ic{""}.
+\item \ic{split} cuts only on a match that took bytes, and drops one trailing
+  empty piece: the rules \ic{str.split} already has, with a pattern in place of
+  the separator.
+\item \ic{replace} replaces nothing for an empty match --- the text passes
+  through and the scan moves on, where Python's \ic{re.sub} inserts at every
+  one. \ic{replace\_with} is the way to insert between matches.
+\end{itemize}
+
+Where an NFA and a backtracker differ, this is the NFA: the captures of a loop
+whose last iteration took no bytes are the last one that did, so \ic{(a*)*}
+against \ic{aa} reports group 1 as \ic{aa} where PCRE reports it empty. A
+\ic{\{} that does not open a valid repetition is a literal byte, so
+\ic{a\{,3\}} is those four bytes where PCRE reads \ic{\{0,3\}}; a repetition
+count over 1000, a pattern over 4096 instructions, more than 200 capture groups,
+more than 32 lookarounds and more than 200 levels of \ic{(} nesting are each
+refused with a message from \ic{check}.
+
+
+
+\subsection{JSON (the json module)}
+\label{sec:builtin-json}
+
+\ic{import json;} reads and writes JSON. It exists because the language server
+needs it, and because every other reader in the tree turned out to be a worse
+one --- but its shape is not the usual one, and the shape is the point.
+
+A \ic{Val} is one of six shapes and \emph{a number is its literal text}.
+\ic{json.parse} of a document holding \ic{3.14} gives a \ic{json.Num} carrying
+\ic{"3.14"}, not a float, and it prints back byte for byte. That is deliberate:
+the text is the value, so a number survives a round trip through the parser and
+the printer unchanged, while converting through a \ic{float} would round it and
+\ic{tofloat} reads no exponent at all.
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{json.Num}, \ic{json.Str}, \ic{json.Bool}, \ic{json.Null},
+  \ic{json.Arr}, \ic{json.JObj}] The six shapes, each a one-field record, and
+  \ic{json.Val} their union. Every member has its own field name because a
+  record type is exactly its set of fields: two shapes sharing \ic{v: str} would
+  be one type, and a \ic{match} could not tell them apart.
+\item[\ic{json.obj()}, \ic{json.arr()}] An empty \ic{{ str => Val }} to assign
+  into, and an empty \ic{[Val]} to \ic{+=}. Build the object with this, not with
+  a map literal: a literal pins its value type from its first entry and then
+  rejects every other member's shape.
+\item[\ic{json.jobj(o)}, \ic{json.jarr(a)}] The two wraps. A \emph{nested}
+  object and a nested array are values, so they need one --- and only those do.
+  A top-level object does not, and that asymmetry is worth remembering: it
+  indexes directly, while every member below it goes through \ic{json.field} or
+  a plain index.
+\item[\ic{json.num(n)}, \ic{json.numtext(t)}, \ic{json.str(s)},
+  \ic{json.boolean(b)}, \ic{json.nul()}] The constructors. \ic{num} takes a
+  \ic{long}, so a float goes in as \ic{json.numtext("1.5e-3")}. And
+  \ic{numtext} checks nothing at all:
+  text that is not a number comes back out as text that is not a number.
+\item[\ic{json.parse(s)}] A whole document that must be an object, returned as
+  an option holding the bare map, so \ic{json.parse(s)!} indexes directly. A perfectly good array, number, string,
+  boolean or null document is \ic{none} here rather than an error ---
+  \ic{json.parse\_val(s)} is the one that takes those.
+\item[\ic{json.parse\_val(s)}] A whole document as any value.
+\item[\ic{json.parse\_err(s)}] The same, plus what went wrong and where:
+  \ic{ok}, \ic{value}, \ic{err} and \ic{at}, the byte offset. There are three
+  messages --- \ic{"empty document"}, \ic{"unexpected "} and \ic{"trailing "},
+  each followed by \ic{json.p\_show}'s rendering of the byte. This is the entry
+  to reach for when a document is refused and the question is why.
+\item[\ic{json.parse\_bytes(b, len)}] \ic{parse\_val} over the first \ic{len}
+  bytes of \ic{b}. It still copies into a string, so it is not the cheaper path.
+\item[\ic{json.field(o, k)}, \ic{json.index(a, i)}] One member, or one element,
+  as an option: \ic{none} for an absent key, for an index past the end, and for
+  the wrong shape entirely. An array read is otherwise total, so this is where
+  the bounds test lives.
+\item[\ic{json.as\_str(v)}, \ic{json.as\_long(v)}, \ic{json.as\_bool(v)},
+  \ic{json.as\_arr(v)}, \ic{json.as\_obj(v)}, \ic{json.is\_null(v)}] The shape
+  asked for, or \ic{none} if \ic{v} is another one. \ic{as\_long} is
+  \ic{tolong} over the literal text and is emphatically \emph{not} a numeric
+  conversion: a number with a fraction or an exponent is \ic{none}
+  (\ic{"3.9"}, \ic{"1e10"}) rather than a truncation, and so is one past 64
+  bits. \ic{get\_long} below keeps the caller's default for all of those.
+\item[\ic{json.get\_long(o, k, d)}, \ic{json.get\_str(o, k, d)},
+  \ic{json.get\_arr(o, k)}] That member as a number, a string or an array, or
+  the default. \ic{get\_long} takes the default for a missing key, a null and a
+  non-number alike. There is no \ic{get\_bool}, because a default for a bool is
+  a choice rather than a convenience.
+\item[\ic{json.keys\_of(o)}] The keys, in insertion order --- which is the order
+  the printer uses.
+\item[\ic{json.stringify(o)}] The compact form of a top-level object: no space
+  after \ic{:} or \ic{,}, members in insertion order, never sorted.
+\item[\ic{json.stringify\_val(v, d)}, \ic{json.stringify\_obj(o, d)}] The same
+  for a value, and for an object at a given depth. \ic{d} is the caller's own
+  recursion depth: pass \ic{0}.
+\item[\ic{json.pretty(v, indent, sorted)}] The multi-line form:
+  \ic{indent} spaces per level, a space after each \ic{:}, and empty containers
+  kept inline. This is also the only way to get sorted output, through
+  \ic{sorted} or \ic{json.sort\_keys(ks)}.
+\item[\ic{json.pretty\_val(v, d, w, s)}] What \ic{pretty} calls.
+\item[\ic{json.same(a, b)}] Structural equality, order-insensitive for members
+  --- but numbers compare as \emph{text}, so \ic{1.5} and \ic{1.50} are not the
+  same value. Two documents any other library would call equal can compare
+  unequal here.
+\item[\ic{json.node\_count(v)}, \ic{json.max\_depth(v)}] How many nodes a tree
+  holds, containers included, and how deep it is; a scalar is depth 1.
+\item[\ic{json.sort\_keys(ks)}] A new key list in byte order. A thin wrapper
+  over \ic{sort.sort\_str}, so it is a stable O($n \log n$) merge sort, not
+  the insertion sort it once was.
+\item[\ic{json.escape(s)}] A string \emph{body} without its quotes: \ic{"} and a
+  backslash escaped, the C0 controls as their two-letter forms, everything else
+  raw.
+\item[\ic{json.utf8\_put(b, cp)}, \ic{json.hex2(c)}] Append one code point to a
+  \ic{[byte]} as UTF-8 --- the two-, three- and four-byte forms are built here,
+  because \ic{chr} gives one byte --- and two lowercase hex digits of a byte
+  value.
+\item[\ic{json.p\_show(s, i)}, \ic{json.hexval(c)}] The fragment the
+  diagnostics quote and one hex digit. The parser's own cursor type,
+  \ic{json.P}, is a two-field record (\ic{s}, \ic{i}), so a program can also
+  reach \ic{json.at(p)} and \ic{json.lit(p, t)} by building one:
+  \ic{json.at(\{ s: text, i: 0 \})} is a legal call. There is no named
+  \ic{json.P} constructor, but a record literal of the same shape is enough.
+\item[\ic{json.json\_depth\_max}, \ic{json.json\_depth\_error}] The nesting
+  limit, \textbf{200}, and the text that stands in for a subtree past it.
+\end{description}
+
+Four edges, all of which a reader would otherwise get wrong.
+
+\emph{Trailing data is an error}, for all three parsers, so \ic{parse\_val} of two
+objects in a row is \ic{none}. An empty document is \ic{none} too, not an empty
+object --- while an empty \emph{object} is a value, with no members.
+
+\emph{Duplicate keys are resolved silently}: the last one wins and it keeps the
+first one's position, so \ic{{"a": 1, "b": 2, "a": 3}} gives two members,
+\ic{a} and \ic{b}, in that order. Nothing is rejected and nothing is warned.
+
+\emph{\ic{null} is a value, not an absence.} A missing key is \ic{none}; a
+present null is a \ic{json.Null}, which is why \ic{get\_long} answers its
+default for one.
+
+\emph{The depth limit truncates on the way out.} Past \ic{json\_depth\_max} the
+parser refuses, so \ic{parse} and \ic{parse\_err} report it; the printer instead
+puts the literal \ic{<json: too deep>} where the subtree was and still emits the
+brackets around it. So printing a deep enough tree produces a document that is
+\textbf{not valid JSON}, and the sign that it happened is that string rather
+than an error.
+
+\begin{lstlisting}
+import json;
+
+// A document is built, not parsed: obj() gives the map the top level wants,
+// and only a NESTED object or array needs a wrap.
+let o = json.obj();
+o["name"] = json.str("widget");
+o["count"] = json.num(3);
+o["ratio"] = json.numtext("1.50");      // a long cannot hold 1.50, and this
+                                        // is the only way a float gets in
+let tags = json.arr();
+tags += json.str("a");
+tags += json.str("b");
+o["tags"] = json.jarr(tags);
+print(json.stringify(o));
+// {"name":"widget","count":3,"ratio":1.50,"tags":["a","b"]}
+print(json.pretty(json.jobj(o), 2, true));   // the same, one member per line
+
+// show(s) parses, and pays for a diagnostic only when it has to.
+def show(s: str) {
+    let doc = json.parse(s);
+    if (doc != none) {
+        print(json.get_long(json.jobj(doc!), "id", -1));
+    } else {
+        let r = json.parse_err(s);
+        print("refused at " + tostring(r.at) + ": " + r.err);
+    }
+};
+
+show("{\"id\": 7}");      // 7
+show("{\"id\": }");       // refused at 7: unexpected '}'
+show("{\"id\": 1} x");    // refused at 10: trailing 'x'
+\end{lstlisting}
+\subsection{Memory statistics (the memstat module)}
+\label{sec:builtin-memstat}
+
+\ic{import memstat;} answers where a program's memory is: the heap's size,
+what the collector found live, and a walk of every block on it. It reads the
+allocator's own structures, so call it from one thread and between collections.
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{memstat.used()}, \ic{memstat.mapped()}] The bytes this thread's heap
+  has handed out (the same number \ic{heap\_used()} gives), and the bytes of
+  address space the allocator has mapped. The gap is the room not yet handed
+  out plus what a collection has recycled.
+\item[\ic{memstat.since\_gc()}, \ic{memstat.gc\_trigger()}] The bytes handed
+  out since the last collection, and the number at which the next one runs
+  (two and a half times the live size, at least 12\,MiB).
+\item[\ic{memstat.census()}, \ic{memstat.chunk\_count()}] A walk of the heap as
+  a \ic{[long]}, plus how many chunks it holds. The census is indexed by the
+  \ic{memstat.C\_*} constants: \ic{C\_CHUNKS}, \ic{C\_MAPPED},
+  \ic{C\_LIVE\_BLOCKS}, \ic{C\_LIVE\_BYTES}, \ic{C\_PF\_BYTES},
+  \ic{C\_FREE\_BLOCKS}, \ic{C\_FREE\_BYTES}, \ic{C\_TAIL\_BYTES} and
+  \ic{C\_LARGEST}, and then by size class:
+  \ic{C\_CLASS0 + 2 * k} and \ic{+ 1} hold the block count and the byte
+  count of class \ic{k}, over \ic{memstat.NCLASS} classes.
+\item[\ic{memstat.report()}] The same census as text, and
+  \ic{memstat.rss\_kb()} the resident memory the OS reports, or \ic{-1}.
+\end{description}
+
+\noindent The bytes the last collection found reachable are \ic{live}; they are
+zero before the first cycle.
+
+\subsection{Windows (the gui module)}
+\label{sec:builtin-gui}
+
+\ic{import gui;} is one window API over Win32, X11 and a plain buffer. A
+program does not learn which system it is on: \ic{gui.open(title, w, h)} answers
+a \ic{gui.Window?} for the system the process runs on (user32 and gdi32 on
+Windows; the X server's socket on Linux, the wire protocol spoken in Y, so a
+static ELF needs no \ic{libX11}) and \ic{none} when there is no display;
+\ic{gui.open\_headless(w, h)} is a window that is only a buffer. A program that
+wants the platform reaches it through \ic{win.win32?.hwnd} or
+\ic{win.x11?.fd}: exactly one of the two is set. All calls come from the thread
+that opened the window.
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{win.pixels}] The client area, four bytes a pixel in the order blue,
+  green, red, unused (read as a \ic{u32}, \ic{0xAARRGGBB}); the rows are
+  \ic{win.width * 4} bytes apart, top row first. What a program writes there is shown by \ic{gui.present(win)},
+  which sends only the rectangle that changed since the last call
+  (\ic{gui.present\_all} sends everything). A resize replaces the array when
+  the old one is too small, so read it from \ic{win} each frame.
+\item[\ic{gui.poll(win, ev)}, \ic{gui.wait(win, ms)}] \ic{poll} fills the
+  \ic{gui.Event} \ic{ev} (\ic{kind}, \ic{a}..\ic{d}) with the next event and
+  answers false when there is none; it never waits. \ic{wait} sleeps up to
+  \ic{ms} milliseconds for input and returns at once when an event is queued.
+  The kinds are \ic{EV\_KEY} (the key, down or up, modifiers, auto-repeat),
+  \ic{EV\_CHAR} (a code point, after the keyboard layout), \ic{EV\_MOVE},
+  \ic{EV\_BUTTON}, \ic{EV\_WHEEL} (client pixels), \ic{EV\_RESIZE},
+  \ic{EV\_FOCUS}, \ic{EV\_CLOSE} (the user asked to close: the window stays
+  until \ic{gui.close}) and \ic{EV\_EXPOSE} (already repainted). Key codes are
+  the Windows virtual-key numbers on every system (\ic{K\_LEFT}, \ic{K\_F1}, the
+  capital letters and digits as ASCII).
+\item[\ic{gui.clear}, \ic{gui.fill}, \ic{gui.pixel}] Fill the window or a
+  rectangle with a colour \ic{0xRRGGBB}; read one pixel (\ic{-1} outside).
+\item[\ic{gui.cell(win, col, row, cp, fg, bg, attr)}, \ic{gui.text}] Rasterise
+  one character cell, 8 by 16 pixels times \ic{win.scale} (\ic{gui.set\_scale}),
+  with a baked bitmap font (about 1\,200 glyphs: ASCII, Latin-1, Greek, arrows,
+  mathematical and geometric shapes, the miscellaneous symbols, and a rune set).
+  Box drawing, block elements, shades and braille are not in the font: they are
+  drawn from rules, so they tile exactly. Every pixel is integer arithmetic, so
+  the same cell gives the same pixels on every system. \ic{attr}: 1 bold,
+  2 dim, 8 underline, 16 reverse. \ic{gui.text} draws a UTF-8 string.
+  \ic{gui.set\_scale(win, s)} sets \ic{win.scale}; \ic{gui.set\_hard(true)}
+  thresholds the baked coverage to a one-bit pixel font instead of blending its
+  four-bit edges.
+\item[\ic{gui.Grid}, \ic{gui.grid\_flush(win, grid)}] A grid of cells and the
+  frame before it: \ic{gui.grid\_put} and \ic{gui.grid\_text} write it,
+  \ic{gui.grid\_flush} rasterises only the cells that differ from the last flush
+  and answers how many that was.
+\item[\ic{gui.read\_back}, \ic{gui.verify\_present}, \ic{gui.checksum}] The
+  window's contents as the system holds them, a check that what \ic{present}
+  sends arrives intact (on Windows through a memory bitmap, since the surface of
+  a window in a session with no visible desktop keeps nothing), and a digest of
+  the pixel buffer that is the same everywhere.
+\item[\ic{gui.on\_windows()}, \ic{gui.redirect\_stderr(path)}] Whether this is a
+  Windows process, and a way to keep a trap's message when there is no console.
+\end{description}
+
+\noindent A program with no console is built with \ic{--subsystem=gui}
+(\ic{subsystem = "gui"} in the \ic{[package]} table of \ic{y.toml}); its
+standard output goes nowhere. \ic{ycc build --target=win} writes
+\ic{build/win/NAME.exe}.
+
+\subsection{Pointers}
+\label{sec:builtin-pointers}
+
+\begin{description}[style=nextline,leftmargin=5.2em]
+\item[\ic{ptr\_addr(p)}] The address of a pointer as \ic{long}. A
+  \ic{str} is accepted as well as a \ic{*T} --- a string value is a byte
+  address --- so the address of a string's bytes is one call away
+  (Section~\ref{sec:pointers}).
+\item[\ic{ptr\_from(n)}] The pointer whose address is the integer \ic{n}, the
+  inverse of \ic{ptr\_addr}. Its pointee type comes from the context:
+  \ic{let p: *long = ptr\_from(a)}. A bare \ic{let p = ptr\_from(a)}, a
+  non-integer argument, and a dereference or store written directly through the
+  call are compile errors (Section~\ref{sec:pointers}).
+\end{description}
+
+\noindent Mutating and keying are symbolic, not functional: arrays use
+\ic{+=} / \ic{*=} and slice assignment, records use \ic{r.f}, maps use
+\ic{m['k']} and
+\ic{m['k'] = v}. The legacy functions \ic{push}, \ic{prepend},
+\ic{map\_get} and \ic{map\_set} do not exist --- the operators above are
+the whole interface (Section~\ref{sec:arrays}).

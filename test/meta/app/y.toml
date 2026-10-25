@@ -1,0 +1,11 @@
+[package]
+name = "app"
+src = ["src"]
+[bin]
+app = "src/main.y"
+[defines]
+LEVEL = "1"
+GONE = "manifest"
+[dependencies]
+liba = { path = "liba" }
+libb = { path = "libb" }

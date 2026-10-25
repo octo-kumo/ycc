@@ -1,0 +1,7 @@
+heap bytes: 8388608
+heap is 8 MB: true
+heap start above the image: true
+page region below the heap: true
+image fits the kernel's 2 MB page: true
+free pages: true
+heap round trip: true

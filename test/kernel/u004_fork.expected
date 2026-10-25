@@ -1,0 +1,6 @@
+module bytes: true
+it is an elf: true
+entering ring 3
+parent
+child
+reaped 1 status 3

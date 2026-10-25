@@ -1,0 +1,17 @@
+user:/home/user$ /bin/fstest many
+ok mkdir /m
+ok created 700
+ok count after create
+ok size of dir > one block
+ok unlinked evens
+ok count after unlink
+ok odd still there
+ok even gone
+ok first odd
+ok count after recreate
+ok rmdir busy
+ok removed all
+ok rmdir /m
+done fails=0
+user:/home/user$ halt
+halting

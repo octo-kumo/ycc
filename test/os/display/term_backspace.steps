@@ -1,0 +1,8 @@
+boot std
+key f1
+wait 1
+type echo abcdef
+key backspace
+key backspace
+wait 1
+shot bs

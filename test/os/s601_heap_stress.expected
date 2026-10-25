@@ -1,0 +1,5 @@
+user:/home/user$ fstest stress 80000
+ok stress
+done fails=0
+user:/home/user$ exit 0
+bye

@@ -1,0 +1,6 @@
+user:/home/user$ ttyt raw
+$ [4] 97 98 99 13
+user:/home/user$ ttyt isig
+$ [2] 3 10
+user:/home/user$ halt
+halting

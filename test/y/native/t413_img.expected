@@ -1,0 +1,63 @@
+decode
+png_t6_d8 png 31x17 true 0
+png_t6_d16 png 31x17 true 0
+png_t2_d8 png 31x17 true 0
+png_t2_d16 png 31x17 true 0
+png_t4_d8 png 31x17 true 0
+png_t0_d8 png 31x17 true 0
+png_t0_d16 png 31x17 true 0
+png_gray1 png 40x30 true 0
+png_gray2 png 40x30 true 0
+png_gray4 png 40x30 true 0
+png_pal8 png 67x45 true 0
+png_pal4 png 67x45 true 0
+png_pal_trns png 31x17 true 0
+png_interlaced png 67x45 true 0
+png_interlaced_rgba png 31x17 true 0
+png_big png 300x200 true 0
+bmp24 bmp 67x45 true 0
+bmp32 bmp 31x17 true 0
+bmp8 bmp 67x45 true 0
+bmp4 bmp 67x45 true 0
+bmp1 bmp 40x30 true 0
+ppm_raw pnm 67x45 true 0
+ppm_plain pnm 67x45 true 0
+ppm_16 pnm 67x45 true 0
+pgm_raw pnm 40x30 true 0
+pgm_plain pnm 40x30 true 0
+pbm_raw pnm 40x30 true 0
+pbm_plain pnm 40x30 true 0
+gif gif 67x45 true 0
+gif_interlaced gif 67x45 true 0
+gif_transparent gif 31x17 true 0
+gif_2color gif 40x30 true 0
+jpeg_444 jpeg 67x45 true 0
+jpeg_420 jpeg 67x45 true 0
+jpeg_422 jpeg 67x45 true 0
+jpeg_gray jpeg 40x30 true 0
+jpeg_prog_420 jpeg 67x45 true 0
+jpeg_prog_444 jpeg 67x45 true 0
+jpeg_restart jpeg 67x45 true 0
+jpeg_lowq jpeg 67x45 true 0
+bmp24_topdown bmp 67x45 true 0
+encode
+0 pngbmppnm png true bmp true ppm true false c647e7a3bf3bacbe 141 2230
+10 pngbmppnm png true bmp true ppm true true 5a78125c8724e342 7029 9234
+14 pngbmppnm png true bmp true ppm true false c647e7a3bf3bacbe 141 2230
+16 pngbmppnm png true bmp true ppm true true 99244fb013a09af1 8538 9234
+17 pngbmppnm png true bmp true ppm true false c647e7a3bf3bacbe 141 2230
+20 pngbmppnm png true bmp true ppm true true 73953fb2ab9faa39 269 3654
+32 pngbmppnm png true bmp true ppm true true 17ea9eef7220dcfc 8728 9234
+true true true false
+1 1 2 true
+operations
+169090815 4278190208 0 0
+3x3 4278190208 0
+4278190208 4278190208
+8x6 4278190208 4278190208 169090815
+2x3 169090815
+76 76 76 0
+hostile
+624 mutated or truncated files decoded without a trap
+true true
+true true true png

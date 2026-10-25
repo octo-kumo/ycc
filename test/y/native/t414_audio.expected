@@ -1,0 +1,34 @@
+decode
+wav16_1ch wav true true true 6000
+wav8_1ch wav true true true 6000
+wav16_2ch wav true true true 12000
+wav8_2ch wav true true true 12000
+wav24 wav true true true 12000
+wav32 wav true true true 12000
+wavf32 wav true true true 12000
+wavf64 wav true true true 12000
+flac_l0 flac true true true 6000
+flac_l5_stereo flac true true true 12000
+flac_l8 flac true true true 12000
+flac_l8e flac true true true 12000
+flac_b256 flac true true true 12000
+flac_b4608 flac true true true 24000
+flac_verbatim flac true true true 12000
+flac_mono8 flac true true true 6000
+flac_24 flac true true true 12000
+flac_ms flac true true true 12000
+flac_ind flac true true true 12000
+flac_6ch flac true true true 36000
+encode
+2000 0.250000 15803 14020 0
+4044 8000 1 true wav
+true false true true
+operations
+1000 3000 -32768 0 0
+1 4 2000 -16384
+16000 4000 15803 14911
+7901 32767
+4000 true
+hostile
+228 mutated or truncated files decoded without a trap
+true true

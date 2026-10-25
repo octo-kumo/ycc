@@ -1,0 +1,23 @@
+user:/home/user$ b2thr
+futex EAGAIN: ok
+futex timeout: ok
+futex wake none: ok
+get fs: ok
+set fs: ok
+fs round trip: ok
+bad arch_prctl: ok
+affinity: ok
+affinity small: ok
+set_tid_address: ok
+getpid == gettid in a single thread: ok
+set_robust_list: ok
+thread sees the group's pid: ok
+thread has its own tid: ok
+user:/home/user$ b2doom
+leader exit with a spinning worker: ok
+worker exit_group status: ok
+worker exit_group is prompt: ok
+preempted spin: ok
+worker exit(60) leaves the process: ok
+user:/home/user$ halt
+halting

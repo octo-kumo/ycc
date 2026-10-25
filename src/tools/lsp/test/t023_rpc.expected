@@ -1,0 +1,11 @@
+UTF-8 body: é
+next frame: abc
+EOF: true
+consumed released: true
+unread retained: NEXT
+truncated body: short
+empty stream: true
+header spaces: [42]
+wrong header: []
+large body exact: true
+buffer bounded: true

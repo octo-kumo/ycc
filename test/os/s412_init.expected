@@ -1,0 +1,13 @@
+user:/home/user$ echo $HOME $USER $PATH $TERM $XDG_RUNTIME_DIR
+/home/user user /bin xterm-256color /run/user/1000
+user:/home/user$ env | head -n 3
+HOME=/home/user
+USER=user
+PATH=/bin
+user:/home/user$ ls /run/user
+1000
+user:/home/user$ ls /tmp
+user:/home/user$ uname
+yunix
+user:/home/user$ exit 0
+bye

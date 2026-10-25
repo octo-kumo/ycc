@@ -1,0 +1,12 @@
+{m: {"k": 1}, o: 2, r: {x: 1}, b: b'\x01\x02\xff', a: [7, 8], s: hi, n: 5, f: 1.500000, t: true, u: {tag: 1, v: 9}}
+{m: {}, o: none, r: {x: 0}, b: b'\x01\x02\xff', a: [], s: , n: 0, f: 0.000000, t: false, u: {tag: 1, v: 0}}
+{u: {tag: 2, w: second}}
+{s: s, n: 1, f: 0.500000, t: false}
+{outer: {inner: [[1, 2], [3]]}}
+{x: 1}
+[7, 8]
+{"k": 1}
+{tag: 1, v: 9}
+true
+1 2 1 2 8 2
+true true false

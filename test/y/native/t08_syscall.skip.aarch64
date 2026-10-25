@@ -1,0 +1,1 @@
+This fixture passes x86-64 Linux syscall numbers; AArch64 syscall() takes AArch64 numbers.
