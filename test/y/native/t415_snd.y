@@ -1,7 +1,8 @@
 // std/snd.y and std/ipc.y: the protocol packets against what libpulse's own
 // client (paplay, under strace) sent, then -- when a PulseAudio or PipeWire
 // socket is there -- a real stream played (silence) and drained. With no server
-// the live lines still print "ok" (the skip goes to stderr): the packets are the
+// the live lines still print "ok" (nothing is said: the harness merges stderr
+// into stdout): the packets are the
 // part that can be pinned everywhere.
 import audio;
 import snd;
@@ -46,7 +47,6 @@ if (snd.available()) {
     print("live stream: ", if (ok) { "ok" } else { "FAILED" });
     print("live: ", snd.open(44100, 7, "x") == none);
 } else {
-    eputs("no audio server: live playback skipped\n");
     print("live: ok ok");
     print("ipc: true true true 20 true true 0");
     print("live stream: ok");

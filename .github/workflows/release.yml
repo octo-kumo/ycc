@@ -1,13 +1,16 @@
 name: release
 
-# Every push to master that passes the fast suites becomes a release. The tag
+# Every push to master whose ci run succeeds becomes a release (this workflow
+# starts only when ci completes, and skips unless it passed). The tag
 # is vMAJOR.MINOR.PATCH: MAJOR.MINOR from the VERSION file, PATCH one past the
 # highest existing tag for that pair (0 for a new pair). Edit VERSION to start
 # a new minor or major line. Assets: ycc (Linux x86-64), ycc-aarch64, ycc.exe
 # and ycc.wasm, each the compiler built from this commit.
 
 on:
-  push:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
     branches: [master]
 
 concurrency:
@@ -20,21 +23,24 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
     timeout-minutes: 60
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
       - name: Dependencies
         run: sudo apt-get update && sudo apt-get install -y gcc make libgc1 libgc-dev python3
       - name: Bootstrap
         run: tools/ci-bootstrap.sh
-      - name: Fast suites
-        run: make test BOOT="$BOOT" </dev/null
       - name: Build release assets
         run: |
+          # ci already ran the fast suites on this commit; make ycc
+          # re-verifies that the build reproduces itself.
+          make ycc BOOT="$BOOT" </dev/null
           mkdir dist
           cp ycc dist/ycc
           make ycc-aarch64 BOOT="$BOOT" </dev/null
@@ -52,4 +58,4 @@ jobs:
           base=$(tr -d '[:space:]' < VERSION)
           last=$(git tag -l "v${base}.*" | sed "s/^v${base}\.//" | grep -E '^[0-9]+$' | sort -n | tail -1 || true)
           v="v${base}.$(( ${last:--1} + 1 ))"
-          gh release create "$v" dist/* --target "$GITHUB_SHA" --title "$v" --generate-notes
+          gh release create "$v" dist/* --target "${{ github.event.workflow_run.head_sha }}" --title "$v" --generate-notes
