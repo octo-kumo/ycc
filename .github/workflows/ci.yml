@@ -1,0 +1,25 @@
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependencies
+        run: sudo apt-get update && sudo apt-get install -y gcc make libgc1 libgc-dev python3
+      - name: Bootstrap
+        run: tools/ci-bootstrap.sh
+      - name: Fast suites
+        run: make test BOOT="$BOOT" </dev/null

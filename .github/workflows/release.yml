@@ -1,0 +1,55 @@
+name: release
+
+# Every push to master that passes the fast suites becomes a release. The tag
+# is vMAJOR.MINOR.PATCH: MAJOR.MINOR from the VERSION file, PATCH one past the
+# highest existing tag for that pair (0 for a new pair). Edit VERSION to start
+# a new minor or major line. Assets: ycc (Linux x86-64), ycc-aarch64, ycc.exe
+# and ycc.wasm, each the compiler built from this commit.
+
+on:
+  push:
+    branches: [master]
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Dependencies
+        run: sudo apt-get update && sudo apt-get install -y gcc make libgc1 libgc-dev python3
+      - name: Bootstrap
+        run: tools/ci-bootstrap.sh
+      - name: Fast suites
+        run: make test BOOT="$BOOT" </dev/null
+      - name: Build release assets
+        run: |
+          mkdir dist
+          cp ycc dist/ycc
+          make ycc-aarch64 BOOT="$BOOT" </dev/null
+          cp ycc-aarch64 dist/ycc-aarch64
+          # The Windows compiler carries the std pack as a trailer, like ycc.
+          ./ycc --target=win --gc=never -o dist/ycc.exe src/y/ycc.y </dev/null
+          ./ycc --std-pack dist/exe.pack </dev/null
+          cat dist/exe.pack >> dist/ycc.exe
+          rm dist/exe.pack
+          ./ycc --target=web --gc=never -o dist/ycc.wasm src/y/ycc.y </dev/null
+          chmod 755 dist/ycc dist/ycc-aarch64
+          (cd dist && sha256sum ycc ycc-aarch64 ycc.exe ycc.wasm > SHA256SUMS)
+      - name: Tag and publish
+        run: |
+          base=$(tr -d '[:space:]' < VERSION)
+          last=$(git tag -l "v${base}.*" | sed "s/^v${base}\.//" | grep -E '^[0-9]+$' | sort -n | tail -1 || true)
+          v="v${base}.$(( ${last:--1} + 1 ))"
+          gh release create "$v" dist/* --target "$GITHUB_SHA" --title "$v" --generate-notes
