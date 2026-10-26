@@ -1,7 +1,7 @@
 // std/exec.y -- exec(cmd) and exit_status, written in Y. native.y embeds
 // this file's text (`embed EXEC_SRC from "./std/exec.y";`) and splices it
 // in front of a program that mentions `exec` (exec_names()). It is its own
-// file so `ycc --exec=off` can leave it out entirely: the call then fails
+// file, so a program that never names it does not link it: the call then fails
 // with "undefined function 'exec'" rather than compiling into a binary that
 // can spawn a shell. exec() calls y_stdin_sync, a prelude name, so
 // splicing this file always pulls std/prelude.y in as well.
@@ -12,7 +12,7 @@
 // cmd.exe /d /s /c on Windows.
 //
 // SECURITY: there is no sanitizing here. Never pass untrusted
-// input. ycc --exec=off omits this function entirely, so a binary
+// input. A program that never names exec() omits this function entirely, so a binary
 // built with it cannot reach a shell at all.
 //
 // The parent's environment is inherited as it stands; a Linux child gets

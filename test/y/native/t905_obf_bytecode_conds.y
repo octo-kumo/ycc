@@ -1,4 +1,4 @@
-// flags: --obfuscate=full --obfuscate-vm=bytecode --obfuscate-seed=3
+// flags: --ob=full --ob-seed=3
 def ops(a: long, b: long) -> long {
     let r = 0;
     if (a == b) { r += 1 };

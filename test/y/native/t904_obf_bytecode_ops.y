@@ -1,4 +1,4 @@
-// flags: --obfuscate=full --obfuscate-vm=bytecode --obfuscate-seed=2
+// flags: --ob=full --ob-seed=2
 def mix(a: long, b: long) -> long { ((a * 3) ^ (b + 11)) - (a & b) }
 def sign(n: long) -> long { if (n < 0) { 0 - n } else { n } }
 def sh(n: long) -> long { (n << 3) + (n >> 1) }

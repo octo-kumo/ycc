@@ -1633,7 +1633,7 @@ def relax_place(items: [AsmItem], labels: [AsmLabel], lens: [long], secs: [long]
 // ── pass 2: layout, fixups, ELF ────────────────────────────────────────
 
 let asm_a64_base = 0;
-// The opt-in --obfuscate-map text: label addresses, kept out of the binary.
+// The opt-in --ob-map text: label addresses, kept out of the binary.
 let asm_obf_map = "";
 let asm_map_on = false;
 def asm_map_enable(v: bool) -> void { asm_map_on = v; };

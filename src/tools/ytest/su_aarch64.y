@@ -102,8 +102,8 @@ def sealed_keys() {
     yt.write(key, secret);
     yt.write(src, "def add(a: long, b: long) -> long { a + b }; print(add(2, 3), \"ARM_SEAL_MARKER_0123456789\");\n");
     foreach (fd in [false, true]) {
-        let flags = ["--target=linux", "--arch=aarch64", "--obfuscate-key=" + key, "--obfuscate-seed=9", "--obfuscate-report"];
-        if (fd) { flags += "--obfuscate-key-fd=0"; };
+        let flags = ["--target=linux", "--arch=aarch64", "--ob-key=" + key, "--ob-seed=9", "--ob-report"];
+        if (fd) { flags += "--ob-key-fd=0"; };
         let bin = dir + "/sealed";
         let c = yc.compile(yc.YCC, flags, src, bin, 30);
         yt.check("AArch64 sealed external key", c.code == 0 && c.out.contains("bytecode="), c.out);

@@ -8,7 +8,7 @@
 // what --std-pack writes, and what the C copy writes; linking from it gives the
 // same bytes as compiling from source, plain and -g; a pack this ycc cannot
 // read, or none, falls back to source; a program's own y_ helper or readline
-// replaces std's; --exec=off leaves exec out; std's line markers appear only
+// replaces std's; std's line markers appear only
 // under -g; a lone compiler still resolves a library import from its pack,
 // while --std=source there says it has no source.
 import fs;
@@ -274,11 +274,6 @@ def body() {
         "def y_print_long(n: long) -> long { puts(\"<\" + tostring(n) + \">\\n\"); 0 };\nprint(42);\n", "<42>\n");
     runs_as("a program's readline replaces the prelude's",
         "def readline() -> str? { some(\"mine\") };\nputs(unwrap(readline()) + \"\\n\");\n", "mine\n");
-    // 6. --exec=off: exec is not linked, so a call to it does not compile
-    yt.write(D + "/ex.y", "let r = exec(\"echo hi\");\n");
-    let ex = cc([ycc_bin(), "--exec=off", "-o", D + "/ex", D + "/ex.y"]);
-    yt.check("--exec=off leaves exec out", ex.code == 1 && ex.out.contains("undefined function 'exec'"),
-        "exit " + tostring(ex.code) + ": " + yt.clip(ex.out, 200));
     markers();
     crypto_tables();
     pack_errors();

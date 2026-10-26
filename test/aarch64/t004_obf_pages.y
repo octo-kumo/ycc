@@ -1,4 +1,4 @@
-// flags: --obfuscate=full --obfuscate-vm=off --obfuscate-seed=17
+// flags: --ob=full --ob-seed=17
 #{
     let text = "";
     for i in 0..120 {

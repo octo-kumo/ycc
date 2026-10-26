@@ -89,13 +89,13 @@ ycc vendor [DIR]
 | `-o PATH` / `--output=PATH` | the output file |
 | `--target=linux\|win\|kernel\|web` | the OS to build for (default `linux`) |
 | `--arch=x64\|aarch64` | the instruction set (default: the host's; Linux only) |
-| `--emit=asm\|source\|wat` | assembly, expanded source, or a wasm listing (default: the executable) |
+| `--emit=asm\|source\|wasm\|wat` | assembly, expanded source, the wasm module, or a wasm listing (default: the executable; a site on web) |
 | `-O speed\|size` / `--optimize=` | the one optimization goal (speed by default) |
 | `-g` / `--debug` | symbols, DWARF line tables and section headers for gdb, perf and valgrind |
-| `--warnings=none\|default\|extra\|all\|fix` | diagnostics, and safe lint fixes applied in place |
+| `-W`, `--warnings=none\|default\|extra\|all\|fix` | diagnostics, and safe lint fixes applied in place |
 | `--gc=never\|auto\|always\|stress` | checked lifetimes without a collector (default), or a collector |
 | `-p` / `--pack[=METHOD]` | a self-decompressing executable |
-| `--obfuscate[=MODE]` | an obfuscated, sealed and encrypted executable (Linux and Windows) |
+| `--ob[=MODE]` | an obfuscated, sealed and encrypted executable (Linux and Windows) |
 | `--time` | a per-phase timing table |
 
 ## Projects and packages

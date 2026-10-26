@@ -1,7 +1,7 @@
 // The launcher: hash the sealed binary, verify the pinned server key, run an
 // X25519 handshake, optionally quote this client with TPM 2.0, fetch the key,
 // put it on fd 9 through an anonymous pipe, exec.
-// Compile the sealed binary with --obfuscate-key-fd=9.
+// Compile the sealed binary with --ob-key-fd=9.
 import net;
 import fs;
 import crypto;

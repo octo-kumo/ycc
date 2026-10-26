@@ -104,7 +104,7 @@ def lint_unit(ast: Block, ast3: Block, ofile: [long], fmods: [str], wlevel: long
             };
         };
     };
-    // --strict-heap (native.y strict_heap): the allocations that repeat.
+    // strict-heap (native.y strict_heap): the allocations that repeat.
     if (heap) { lint_heap(st, ast3.stmts) };
     lint_sorted(st.warns)
 };
@@ -3899,7 +3899,7 @@ def lint_before(a: Diag, b: Diag) -> bool {
     }
 };
 
-// ── --strict-heap: allocations that repeat with nothing to free them ─────
+// ── strict-heap: allocations that repeat with nothing to free them ─────
 type HeapFn = { name: str, parent: long, line: long, col: long, inloop: bool, reg: bool, caps: bool, rep: bool, why: str, placed: bool, val: bool };
 type HeapUse = { fn: long, name: str, call: bool, inloop: bool, reg: bool, typ: Type, line: long, col: long };
 type HeapSite = { fn: long, inloop: bool, what: str, line: long, col: long };

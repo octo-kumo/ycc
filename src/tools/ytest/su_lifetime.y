@@ -52,13 +52,12 @@ def one(cc: str) -> void {
     probe(cc, "recursive scratch", "def sum(n:long)->long { let a=[n]; if(n==0){a[0]}else{a[0]+self(n-1)} }; print(sum(100));", [], "5050\n", true);
     probe(cc, "array growth", "let a:[long]=[]; for i in 0..100 { a += i; }; print(a.length);", [], "100\n", true);
     probe(cc, "pure callback", "let a=[1,2,3].map((n:long)=>n*2); print(a[2]);", [], "6\n", true);
-    probe(cc, "explicit region", "let s=0; for i in 0..100 { region { let a=[i;1000]; s += a[0]; } }; print(s);", ["--regions=off"], "4950\n", true);
+    probe(cc, "explicit region", "let s=0; for i in 0..100 { region { let a=[i;1000]; s += a[0]; } }; print(s);", [], "4950\n", true);
     probe(cc, "return unwinds", "def pick(i:long)->long { region { let a=[i;1000]; if(i>0){return a[999];}; }; -1 }; let s=0; for i in 0..100 { s += pick(i); }; print(s);", [], "4949\n", true);
     probe(cc, "unused unsafe def", "def unused()->[long] { let a:[long]=[]; for i in 0..10 { a=a+[i]; }; a }; print(7);", [], "7\n", true);
     let leak = "let a:[str]=[]; for i in 0..3 { a += tostring(i); }; print(a.length);";
     probe(cc, "escaping loop", leak, [], "", false);
     probe(cc, "explicit never", leak, ["--gc=never"], "", false);
-    probe(cc, "unsafe loop without automatic regions", "for i in 0..3 { let a=[i]; print(a[0]); };", ["--regions=off"], "", false);
     probe(cc, "recursive result", "def nest(n:long)->[long] { if(n==0){[n]}else{self(n-1)+[n]} }; print(nest(4));", [], "", false);
     probe(cc, "heap bypass", "for i in 0..3 { region { heap { let a=[i]; print(a[0]); } } };", [], "", false);
     probe(cc, "known scalar callback", "def invoke(f:()->long)->long { f() }; print(invoke(()=>1));", [], "1\n", true);

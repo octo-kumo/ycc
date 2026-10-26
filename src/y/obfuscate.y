@@ -20,10 +20,6 @@ type ObfCounts = { bodies: long, frame: long, consts: long, mba: long,
 type ObfResult = { ir: [long], txt: [str] };
 
 let obf_mode = "off";
-let obf_vm_mode = "bytecode";
-let obf_layout = "shuffle";
-let obf_std = "auto";
-let obf_diversity = "standard";
 let obf_seed_value = 0;
 let obf_seed_set = false;
 let obf_run_seed = 0;
@@ -42,18 +38,11 @@ let obf_counts: ObfCounts = { bodies: 0, frame: 0, consts: 0, mba: 0,
     junk_bodies: 0, junk_bytes: 0, patterns: 0, skipped: 0 };
 
 def mode() -> str { obf_mode };
-def vm_mode() -> str { obf_vm_mode };
-def layout() -> str { obf_layout };
 def seed_value() -> long { obf_seed_value };
 def seed_set() -> bool { obf_seed_set };
 def seal_key() -> long { obf_seal_key };
 
 def set_mode(m: str) -> void { obf_mode = m; };
-def set_vm_mode(m: str) -> void { obf_vm_mode = m; };
-def set_layout(m: str) -> void { obf_layout = m; };
-def set_std_mode(m: str) -> void { obf_std = m; };
-def set_diversity(d: str) -> void { obf_diversity = d; };
-def diversity() -> str { obf_diversity };
 def set_seed(v: long) -> void {
     obf_seed_value = v;
     obf_seed_set = true
@@ -67,16 +56,13 @@ def resume() -> void {
 def on() -> bool { obf_suspend_depth == 0 && obf_mode != "off" };
 def seal_on() -> bool { on() };
 def lazy_on() -> bool { on() && !wintgt.target_is_windows() };
-def vm_on() -> bool { on() && obf_vm_mode != "off" };
+def vm_on() -> bool { on() };
 // The bytecode interpreter is SysV-flavoured machine code; the PE target uses
-// the dispatch-state flatten layer instead. `bytecode` on Windows therefore
-// means flatten-on (all eligible bodies), not "no VM layer".
-def flatten_on() -> bool {
-    vm_on() && (obf_vm_mode != "bytecode" || wintgt.target_is_windows())
-};
-def std_on() -> bool { on() && obf_std != "off" };
-def layout_shuffle() -> bool { on() && obf_layout != "source" };
-def diversity_high() -> bool { on() && obf_diversity == "high" };
+// the dispatch-state flatten layer instead.
+def flatten_on() -> bool { vm_on() && wintgt.target_is_windows() };
+def std_on() -> bool { on() };
+def layout_shuffle() -> bool { on() };
+def diversity_high() -> bool { on() };
 
 // A seeded permutation of 0..n-1, for the body parts. It consumes the program
 // RNG, so the layout is part of the reproducible build.
@@ -887,8 +873,7 @@ def transform(ir: [long], txt: [str], name: str) -> ObfResult {
         at += insn.IR_W;
     };
     out = indirect(out, name);
-    if (flatten_on()
-        && (vm_mode() == "all" || vm_mode() == "bytecode" || body_below(2) == 0)) {
+    if (flatten_on()) {
         out = flatten(out, name, txt);
     } else {
         out = shuffle(out, name, txt);
@@ -1006,7 +991,7 @@ def note_vm_bc() -> void { obf_counts.vm_bc += 1; };
 def program_seed() -> long { obf_run_seed };
 def path_key() -> long { mix64(obf_run_seed ^ 0x504154484B4559) | 1 };
 def build_id() -> long {
-    mix64(obf_seed_value ^ str_hash(obf_mode) ^ str_hash(obf_diversity) ^ 0x4255494C44)
+    mix64(obf_seed_value ^ str_hash(obf_mode) ^ 0x4255494C44)
 };
 
 def set_external_key(key: long, path: str) -> void {
@@ -1026,9 +1011,9 @@ def report() -> [str] {
     if (!on()) { return out; };
     let seed = obf_seed_value;
     out += "obfuscate: mode=" + obf_mode + " seed=" + tostring(seed)
-        + " build=" + tostring(build_id()) + " layout=" + obf_layout
-        + " std=" + obf_std + " diversity=" + obf_diversity;
-    if (obf_mode == "full") { out += " vm=" + obf_vm_mode; };
+        + " build=" + tostring(build_id()) + " layout=shuffle"
+        + " std=all diversity=high";
+    if (obf_mode == "full") { out += " vm=bytecode"; };
     out += "obfuscate: bodies=" + tostring(obf_counts.bodies)
         + " frame=" + tostring(obf_counts.frame)
         + " consts=" + tostring(obf_counts.consts)
@@ -1045,8 +1030,8 @@ def report() -> [str] {
     out
 };
 
-export { ObfCounts, ObfResult, set_mode, mode, set_vm_mode, vm_mode, set_seed, seed_value,
+export { ObfCounts, ObfResult, set_mode, mode, set_seed, seed_value,
     seed_set, seal_key, suspend, resume, on, seal_on, lazy_on,
-    vm_on, flatten_on, std_on, layout_shuffle, diversity, set_diversity, diversity_high, shuffle_order, begin, transform, junk_bodies, junk_bytes, report, mix64,
+    vm_on, flatten_on, std_on, layout_shuffle, diversity_high, shuffle_order, begin, transform, junk_bodies, junk_bytes, report, mix64,
     program_seed, path_key, build_id, note_vm_bc, set_external_key, key_file, set_key_fd, key_fd,
     set_anti_debug, anti_debug, set_no_anti_debug, no_anti_debug };

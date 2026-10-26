@@ -1,4 +1,4 @@
-// flags: --gc=always --regions=off
+// flags: --gc=always
 import memstat;
 // The reader's raw ARM read must publish its stack while a peer collects.
 let fds: [long; 1] = [0];

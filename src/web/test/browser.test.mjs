@@ -32,7 +32,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // one index.html.  Build one base page, then rewrite its config per scenario.
 function buildBaseSite(site) {
   const ycc = process.env.YCC || path.join(ROOT, 'ycc');
-  execFileSync(ycc, ['--target=web', '--web=title=Base', '--web-page', '-o', site,
+  execFileSync(ycc, ['--target=web', '--web=title=Base', '-o', site,
     path.join(FIXTURES, 'w100_console.y')], { stdio: 'pipe', cwd: ROOT });
   fs.copyFileSync(path.join(site, 'index.html'), path.join(site, 'index.base.html'));
 }

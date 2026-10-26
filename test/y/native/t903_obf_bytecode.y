@@ -1,4 +1,4 @@
-// flags: --obfuscate=full --obfuscate-vm=bytecode --obfuscate-seed=1
+// flags: --ob=full --ob-seed=1
 def add(a: long, b: long) -> long { a + b }
 def sq(n: long) -> long { n * n }
 def choose(n: long) -> long { if (n > 3) { n - 1 } else { n + 1 } }

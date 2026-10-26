@@ -151,8 +151,7 @@ what is being built. The pass injects
 
 \begin{lstlisting}
 type YccBuild = { target: str, os: str, arch: str, format: str, host: str,
-    debug: bool, gc: str, root: str, out: str, defines: [str], values: [str],
-    args: [str] };
+    debug: bool, gc: str, root: str, out: str, defines: [str], values: [str] };
 \end{lstlisting}
 
 \noindent and \ic{const YCC: YccBuild}, one value per build: \ic{target} is
@@ -162,8 +161,7 @@ type YccBuild = { target: str, os: str, arch: str, format: str, host: str,
 (\ic{elf}, \ic{pe} or \ic{kelf}); \ic{host} is where the compiler runs;
 \ic{debug} is \ic{-g}; \ic{gc} is the \ic{--gc} wish; \ic{root} and
 \ic{out} are the command line's spellings, empty under \ic{ycc build};
-\ic{defines} and \ic{values} are aligned and sorted by name; \ic{args} is
-the \ic{--meta-arg} list in its command-line order.
+\ic{defines} and \ic{values} are aligned and sorted by name.
 
 Six helpers read it: \ic{ycc\_define(name) -> str?} answers a value or
 \ic{none}, \ic{ycc\_defined(name) -> bool} says whether there is one,
@@ -182,9 +180,8 @@ is an identifier (\ic{[A-Za-z\_][A-Za-z0-9\_]*}); anything else is refused
 with \ic{ycc: -D wants NAME or NAME=VALUE, got '...'}. In a project,
 \ic{[defines]} in \ic{y.toml} supplies string-valued defaults below the
 command line, and \ic{ycc build} passes its command-line defines on to every
-package it compiles, so each child sees the same build. \ic{--meta-arg=VALUE}
-is free-form and appends to \ic{YCC.args}. All three are part of a package's
-cache key, so changing one recompiles the packages. The environment is not
+package it compiles, so each child sees the same build. Every define is part
+of a package's cache key, so changing one recompiles the packages. The environment is not
 part of the key; use \ic{-D} for a build input.
 
 \paragraph{Escaping.} \ic{ycc\_quote} and the injected constants write

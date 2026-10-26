@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Red-team checks for a ycc --obfuscate image.
+"""Red-team checks for a ycc --ob image.
 
 This is deliberately a small, external tool: it does not import the compiler
 and it does not try to be a full reverse-engineering suite.  It checks the

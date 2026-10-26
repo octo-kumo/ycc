@@ -219,7 +219,7 @@ def wl_addr(ctx: WCtx, op: Operand, where: str, allow_code: bool) -> void {
     };
 };
 
-// TM holds a byte address; validate it (--web-checked) and wrap it to wasm32.
+// TM holds a byte address; validate it when checked and wrap it to wasm32.
 def wl_addr_from_tm(ctx: WCtx) -> void {
     if (ctx.checked) {
         wb_local_get(L_TM);
@@ -243,7 +243,7 @@ def wl_addr_tm(ctx: WCtx, op: Operand, where: str, allow_code: bool) -> void {
     wl_addr_from_tm(ctx);
 };
 
-// The --web-checked guard on a register holding a byte address (the Y stack
+// The checked-address guard on a register holding a byte address (the Y stack
 // pointer around push/pop and the call tokens).
 def wl_chk_local(ctx: WCtx, n: long) -> void {
     if (ctx.checked) {

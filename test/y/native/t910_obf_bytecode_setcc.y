@@ -1,4 +1,4 @@
-// flags: --obfuscate=full --obfuscate-vm=bytecode --obfuscate-seed=4
+// flags: --ob=full --ob-seed=4
 // setcc + movzbq are VM opcodes, so boolean helpers stay in bytecode.
 def lt(a: long, b: long) -> long { let x = a < b; if (x) { 1 } else { 0 } };
 def eq(a: long, b: long) -> long { let x = a == b; if (x) { 1 } else { 0 } };

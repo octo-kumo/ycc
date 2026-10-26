@@ -1,4 +1,4 @@
-// flags: --obfuscate=full --obfuscate-vm=all --obfuscate-seed=1
+// flags: --ob=full --ob-seed=1
 def fib(n: long) -> long {
     if (n < 2) { n } else { self(n - 1) + self(n - 2) }
 };

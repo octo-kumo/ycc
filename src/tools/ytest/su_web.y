@@ -22,6 +22,20 @@ def webcc() -> str { yt.env("YWEB", yc.YCC) };
 
 def compile(flags: [str], src: str, out: str) -> yt.Res {
     init();
+    let has_emit = false;
+    foreach (f in flags) { if (f.starts_with("--emit=")) { has_emit = true; }; };
+    let fl = if (has_emit) { flags } else { ["--emit=wasm"] + flags };
+    let c = yt.cmd([webcc(), "--target=web"] + fl + ["-o", out, src]);
+    c.cwd = yc.ROOT;
+    c.merge = true;
+    c.timeout = 300 * yt.SCALE;
+    c.mem_kb = yc.PROG_MEM_KB;
+    yt.run(c)
+};
+
+// A web compile that writes the site (the default output).
+def compile_page(flags: [str], src: str, out: str) -> yt.Res {
+    init();
     let c = yt.cmd([webcc(), "--target=web"] + flags + ["-o", out, src]);
     c.cwd = yc.ROOT;
     c.merge = true;
@@ -135,19 +149,16 @@ def refuses(name: str, flags: [str], want: str) {
 };
 
 def refusal_case() {
-    refuses("--obfuscate on web", ["--target=web", "--obfuscate"], "--obfuscate is not available for --target=web");
+    refuses("--ob on web", ["--target=web", "--ob"], "--ob is not available for --target=web");
     refuses("--pack on web", ["--target=web", "--pack"], "--pack is Linux ELF only");
     refuses("conflicting targets", ["--target=web", "--target=kernel"], "conflicting --target values");
-    refuses("--subsystem=gui on web", ["--target=web", "--subsystem=gui"],
-        "--subsystem=gui is not available for --target=web");
-    refuses("--web-page on linux", ["--web-page"], "--web-page is only for --target=web");
     refuses("--emit=wat on linux", ["--emit=wat"], "--emit=wat is only for --target=web");
+    refuses("--emit=wasm on linux", ["--emit=wasm"], "--emit=wasm is only for --target=web");
     refuses("--web=stack out of range", ["--target=web", "--web=stack=1K"],
         "wants a byte size from 64K to 256M");
     refuses("--web=stack not a size", ["--target=web", "--web=stack=big"],
         "'stack' wants a byte size from 64K to 256M");
     refuses("--web= without =", ["--target=web", "--web=nope"], "--web wants KEY=VALUE");
-    refuses("--web-page=html on linux", ["--web-page=html"], "--web-page is only for --target=web");
 };
 
 def wat_case() {
@@ -162,7 +173,7 @@ def wat_case() {
 
 def page_case() {
     let dir = yt.tmp_dir("site");
-    let c = compile(["--web-page"], DIR + "/w001_hello.y", dir);
+    let c = compile_page([], DIR + "/w001_hello.y", dir);
     let ok = c.code == 0;
     let why = "";
     foreach (f in ["index.html", "w001_hello.wasm"]) {
@@ -177,7 +188,7 @@ def page_case() {
         if (!html.contains("importmap") || !html.contains("yweb:page.js")) { ok = false; why += "host not inline "; };
         if (html.contains("src=\"page.js\"")) { ok = false; why += "still loads page.js "; };
     };
-    yt.check("--web-page writes the page and the module", ok,
+    yt.check("a web compile writes the page and the module", ok,
         "exit=" + tostring(c.code) + " " + why + yt.clip(c.out, 200));
     let chk = yt.cmd([NODE, "--check", yc.ROOT + "/src/web/page.js"]);
     chk.cwd = yc.ROOT;
@@ -212,7 +223,7 @@ def failure_case() {
         r2.code == 1 && r2.out.contains("ycc: cannot make a temporary directory for the web run"),
         "exit=" + tostring(r2.code) + ": " + yt.clip(r2.out, 240));
     let dir = yt.tmp_dir("sitefail");
-    let no_host = yt.cmd([webcc(), "--target=web", "--web-page", "-o", dir, DIR + "/w001_hello.y"]);
+    let no_host = yt.cmd([webcc(), "--target=web", "-o", dir, DIR + "/w001_hello.y"]);
     no_host.cwd = yc.ROOT;
     no_host.merge = true;
     no_host.timeout = 120 * yt.SCALE;
@@ -223,7 +234,7 @@ def failure_case() {
         "exit=" + tostring(r3.code) + ": " + yt.clip(r3.out, 240));
     // a directory where the module file must go makes the write fail
     fs.make_dirs(dir + "/w001_hello.wasm");
-    let bad = compile(["--web-page"], DIR + "/w001_hello.y", dir);
+    let bad = compile_page([], DIR + "/w001_hello.y", dir);
     yt.check("a page write failure is a clear message",
         bad.code == 1 && bad.out.contains("ycc: writing the page under '" + dir + "' failed"),
         "exit=" + tostring(bad.code) + ": " + yt.clip(bad.out, 240));
@@ -334,11 +345,11 @@ def host_case() {
 
 def options_case() {
     let wasm = yt.tmp("w001checked");
-    let c = compile(["--web-checked", "--web=stack=1M"], DIR + "/w001_hello.y", wasm);
+    let c = compile(["--web=stack=1M"], DIR + "/w001_hello.y", wasm);
     let r = c;
     let out = "";
     if (c.code == 0) { r = node_run(wasm, [], []); out = r.out; };
-    yt.check("--web-checked and --web=stack run", c.code == 0 && r.code == 0 && out == expected("w001_hello"),
+    yt.check("--web=stack runs", c.code == 0 && r.code == 0 && out == expected("w001_hello"),
         "compile=" + tostring(c.code) + " run=" + tostring(r.code) + " out='" + yt.clip(out, 160) + "'");
     let text = "";
     if (fs.exists(wasm)) { text = from_bytes(yt.bytes_of(wasm)); };
@@ -349,7 +360,7 @@ def options_case() {
 def parity_case() {
     let cc = yc.CYCC;
     let probe = yt.tmp("ccprobe");
-    let p = yt.cmd([cc, "--target=web", "-o", probe, DIR + "/w001_hello.y"]);
+    let p = yt.cmd([cc, "--target=web", "--emit=wasm", "-o", probe, DIR + "/w001_hello.y"]);
     p.cwd = yc.ROOT;
     p.merge = true;
     p.timeout = 300 * yt.SCALE;
@@ -366,12 +377,12 @@ def parity_case() {
     foreach (n in names) {
         let a = yt.tmp("cy" + n);
         let b = yt.tmp("yy" + n);
-        let ca = yt.cmd([cc, "--target=web", "-o", a, DIR + "/" + n + ".y"]);
+        let ca = yt.cmd([cc, "--target=web", "--emit=wasm", "-o", a, DIR + "/" + n + ".y"]);
         ca.cwd = yc.ROOT;
         ca.merge = true;
         ca.timeout = 300 * yt.SCALE;
         ca.mem_kb = yc.PROG_MEM_KB;
-        let cb = yt.cmd([y, "--target=web", "-o", b, DIR + "/" + n + ".y"]);
+        let cb = yt.cmd([y, "--target=web", "--emit=wasm", "-o", b, DIR + "/" + n + ".y"]);
         cb.cwd = yc.ROOT;
         cb.merge = true;
         cb.timeout = 300 * yt.SCALE;
@@ -485,7 +496,7 @@ def nfixture(file: str, base: str) -> void {
         if (line.starts_with("// scratch")) { scratch = true; };
     };
     let wasm = yt.tmp("wbin");
-    let c = yt.cmd([webcc(), "--target=web"] + flags + ["-o", wasm, file]);
+    let c = yt.cmd([webcc(), "--target=web", "--emit=wasm"] + flags + ["-o", wasm, file]);
     c.cwd = yc.ROOT;
     c.merge = true;
     c.timeout = 180 * yt.SCALE;
@@ -534,7 +545,7 @@ def nreject(file: str, base: str) -> void {
     let wasm = yt.tmp("wbin");
     // From the fixture's own directory with its bare name, so a message
     // naming an imported file reads the same as the native run's.
-    let c = yt.cmd([webcc(), "--target=web"] + flags + ["-o", wasm, base + ".y"]);
+    let c = yt.cmd([webcc(), "--target=web", "--emit=wasm"] + flags + ["-o", wasm, base + ".y"]);
     c.cwd = yc.ROOT + "/test/y/native";
     c.merge = true;
     c.timeout = 120 * yt.SCALE;
@@ -579,7 +590,7 @@ def compiler_case() {
     init();
     let d = yt.tmp_dir("oracle");
     let wasm = d + "/ycc.wasm";
-    let c = yt.cmd([webcc(), "--target=web", "--gc=auto", "--std=source", "-o", wasm, yc.ROOT + "/src/y/ycc.y"]);
+    let c = yt.cmd([webcc(), "--target=web", "--emit=wasm", "--gc=auto", "--std=source", "-o", wasm, yc.ROOT + "/src/y/ycc.y"]);
     c.cwd = yc.ROOT;
     c.merge = true;
     c.timeout = 600 * yt.SCALE;
@@ -642,7 +653,7 @@ def web_fixture(name: str) {
     };
     let cflags = read_words(name, ".cflags");
     let wasm = yt.tmp("wfx");
-    let c = yt.cmd([webcc(), "--target=web"] + cflags + ["-o", wasm, DIR + "/" + name + ".y"]);
+    let c = yt.cmd([webcc(), "--target=web", "--emit=wasm"] + cflags + ["-o", wasm, DIR + "/" + name + ".y"]);
     c.cwd = yc.ROOT;
     c.merge = true;
     c.timeout = 300 * yt.SCALE;
@@ -721,11 +732,11 @@ def cases() -> [yt.Case] {
         yt.case_of("web-smoke", "exit(7) is status 7", exit_case),
         yt.case_of("web-smoke", "refusals", refusal_case),
         yt.case_of("web-smoke", "--emit=wat", wat_case),
-        yt.case_of("web-smoke", "--web-page", page_case),
+        yt.case_of("web-smoke", "web site", page_case),
         yt.case_of("web-smoke", "host selftest", host_case),
         yt.case_of("web-smoke", "environment failures", failure_case),
         yt.case_of("web-smoke", "pack-same", pack_same_case),
-        yt.case_of("web-smoke", "--web-checked/--web=stack", options_case),
+        yt.case_of("web-smoke", "--web=stack", options_case),
         yt.case_of("web-smoke", "C/Y parity", parity_case),
         yt.case_of("web-smoke", "web-forms", forms_case),
         yt.case_of("web-smoke", "web-census", census_case),

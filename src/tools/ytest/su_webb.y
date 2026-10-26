@@ -94,7 +94,7 @@ def driver_case(name: str, wants: [str]) -> yt.Case {
     })
 };
 
-// --web-page=html and --web-page: the placeholders are gone, the host and the
+// --web=single=true and the default site: the placeholders are gone, the host and the
 // config are where page.js looks for them, and no relative file is missing.
 def emit_case() {
     init();
@@ -105,7 +105,7 @@ def emit_case() {
     let d = yt.tmp_dir("webb");
     let src = DIR + "/w100_console.y";
     let site = d + "/site";
-    let c1 = yt.cmd([webcc(), "--target=web", "--web=title=Site Title", "--web-page", "-o", site, src]);
+    let c1 = yt.cmd([webcc(), "--target=web", "--web=title=Site Title", "-o", site, src]);
     c1.cwd = yc.ROOT; c1.merge = true; c1.timeout = 180 * yt.SCALE; c1.mem_kb = yc.PROG_MEM_KB;
     let r1 = yt.run(c1);
     let ok = r1.code == 0;
@@ -125,10 +125,10 @@ def emit_case() {
             ok = false; why = "title or inline host wrong";
         };
     };
-    yt.check("--web-page writes the site", ok, why);
+    yt.check("a web compile writes the site", ok, why);
 
     let one = d + "/one.html";
-    let c2 = yt.cmd([webcc(), "--target=web", "--web-page=html", "-o", one, src]);
+    let c2 = yt.cmd([webcc(), "--target=web", "--web=single=true", "-o", one, src]);
     c2.cwd = yc.ROOT; c2.merge = true; c2.timeout = 180 * yt.SCALE; c2.mem_kb = yc.PROG_MEM_KB;
     let r2 = yt.run(c2);
     let ok2 = r2.code == 0 && fs.is_file(one);
@@ -140,7 +140,7 @@ def emit_case() {
         if (h.contains("src=\"page.js\"")) { ok2 = false; why2 = "the single file still loads page.js"; };
         if (!h.contains("<style>")) { ok2 = false; why2 = "page.css was not inlined"; };
     };
-    yt.check("--web-page=html writes one self-contained file", ok2, why2);
+    yt.check("--web=single=true writes one self-contained file", ok2, why2);
     fs.remove_all(d);
 };
 
@@ -266,7 +266,7 @@ def manifest_case() {
     if (fs.is_file(yc.ROOT + "/src/web/page.html")) {
         let site = d + "/site";
         let c5 = yt.cmd([webcc(), "--target=web", "--web=title=Override", "--web=stack=1M",
-            "--web-page", "-o", site, src]);
+            "-o", site, src]);
         c5.cwd = yc.ROOT; c5.merge = true; c5.timeout = 180 * yt.SCALE; c5.mem_kb = yc.PROG_MEM_KB;
         let r5 = yt.run(c5);
         let h = if (fs.is_file(site + "/index.html")) { yt.read(site + "/index.html") } else { "" };
@@ -331,7 +331,7 @@ def coverage_case() {
         bad += "launcher: " + yt.clip(o.out, 160);
     };
     // no page.html from the environment
-    let n = yt.cmd([webcc(), "--target=web", "--web-page", "-o", d + "/site", DIR + "/w100_console.y"]);
+    let n = yt.cmd([webcc(), "--target=web", "-o", d + "/site", DIR + "/w100_console.y"]);
     n.cwd = yc.ROOT; n.merge = true; n.timeout = 120 * yt.SCALE; n.mem_kb = yc.PROG_MEM_KB;
     n.env = ["YWEB_PAGE=", "PATH=" + yt.env("PATH", "/usr/bin:/bin")];
     let no = yt.run(n);

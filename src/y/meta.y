@@ -1563,11 +1563,9 @@ let mg_ready = false;
 // recursion and before the generator runs.
 let mg_root = "";
 let mg_files: [str] = [];
-// G's own resolution: its dir, whether exec() is allowed in it, and the
-// package names and source roots the splicer should resolve G's bare imports
-// against.
+// G's own resolution: its dir and the package names and source roots the
+// splicer should resolve G's bare imports against.
 let mg_gbase = "";
-let mg_gexec = true;
 let mg_pkgs: [str] = [];
 let mg_roots: [str] = [];
 
@@ -1579,7 +1577,6 @@ def meta_begin() -> void {
     mg_piece = [];
     mg_have = [];
     mg_gbase = "";
-    mg_gexec = true;
     mg_pkgs = [];
     mg_roots = [];
     // mg_bkids is NOT reset here: it is structural, so every pass learns the same
@@ -1633,11 +1630,10 @@ def mg_pending() -> bool {
 // `meta.<field> = v` is a namespaced field ASSIGNMENT and strip_ns rewrites
 // only namespaced dot READS (it handles K.dot, not K.dotassign -- see
 // strip_ns), so a module cannot set another module's global by name.
-def mg_setup(root: str, files: [str], base: str, exec: bool, pkgs: [str], roots: [str]) -> void {
+def mg_setup(root: str, files: [str], base: str, pkgs: [str], roots: [str]) -> void {
     mg_root = root;
     mg_files = files;
     mg_gbase = base;
-    mg_gexec = exec;
     mg_pkgs = pkgs;
     mg_roots = roots;
 };
@@ -1718,8 +1714,8 @@ def mg_target_arch(target: str, arch: str) -> str {
 // the command line's spellings, so the text is deterministic.
 def mg_build_text(target: str, os: str, arch: str, format: str, host: str,
     debug: bool, gc: str, root: str, out: str,
-    names: [str], values: [str], args: [str]) -> str {
-    let t = "type YccBuild = { target: str, os: str, arch: str, format: str, host: str, debug: bool, gc: str, root: str, out: str, defines: [str], values: [str], args: [str] };";
+    names: [str], values: [str]) -> str {
+    let t = "type YccBuild = { target: str, os: str, arch: str, format: str, host: str, debug: bool, gc: str, root: str, out: str, defines: [str], values: [str] };";
     t += chr(10) + "const YCC: YccBuild = { target: " + mg_quote(target);
     t += ", os: " + mg_quote(os);
     t += ", arch: " + mg_quote(arch);
@@ -1731,7 +1727,6 @@ def mg_build_text(target: str, os: str, arch: str, format: str, host: str,
     t += ", out: " + mg_quote(out);
     t += ", defines: " + mg_str_array(names);
     t += ", values: " + mg_str_array(values);
-    t += ", args: " + mg_str_array(args);
     t + " };"
 };
 
@@ -1743,7 +1738,7 @@ def mg_fallback_text() -> str {
     let t = hostos.name();
     let fmt = if (t == "win") { "pe" } else { "elf" };
     mg_build_text(t, mg_target_os(t), mg_target_arch(t, hostos.arch()), fmt, t,
-        false, "never", "", "", [], [], [])
+        false, "never", "", "", [], [])
 };
 
 def mg_helpers() -> [str] {
@@ -2153,6 +2148,6 @@ export { run_image, pipe_fds, RunRes, Img, elf_img,
     meta_begin, mg_pass, mg_pending, mg_reduce_on, mg_nest,
     mg_set, mg_setup, mg_on, mg_check, mg_report,
     mg_probe, mg_take_pieces, meta_scan, Scan, scan_none,
-    meta_gtext, mg_generator_files, mg_ghead, mg_glines, mg_gol, mg_gbase, mg_gexec, mg_pkgs, mg_roots,
+    meta_gtext, mg_generator_files, mg_ghead, mg_glines, mg_gol, mg_gbase, mg_pkgs, mg_roots,
     mg_build, mg_build_unset, mg_build_text, mg_quote, mg_target_os, mg_target_arch,
     mg_root, MG_NEST, MG_ROUND };

@@ -179,7 +179,7 @@ def document_resolve(src: str, dir: str, path: str, pack: str) -> Resolved {
     if (entry != "" && entry != source_path(path)) {
         set_source_overlay(path, src);
         metapass.meta_begin();
-        let nr = native_resolve_x(fs.read_file(entry)!, fs.path_dirname(entry), 0, true, entry);
+        let nr = native_resolve_x(fs.read_file(entry)!, fs.path_dirname(entry), 0, entry);
         metapass.mg_set(false);
         set_source_overlay("", "");
         if (document_file(nr.origin, path) >= 0) {
@@ -188,7 +188,7 @@ def document_resolve(src: str, dir: str, path: str, pack: str) -> Resolved {
         };
     };
     metapass.meta_begin();
-    let nr = native_resolve_x(src, dir, 0, true, path);
+    let nr = native_resolve_x(src, dir, 0, path);
     metapass.mg_set(false);
     res_target = saved_target;
     nr

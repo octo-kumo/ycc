@@ -134,21 +134,14 @@ def gate(av: [str]) -> long {
         if (!yt.same_file(out + "/gimp.exe", out + "/cgimp.exe")) { return bad("the C copy's -g PE differs from the Y compiler's"); };
         say("the C copy's -g PE is byte-identical");
     };
-    // --subsystem=gui makes a GUI image (no console), changing the one header word and
-    // nothing else; the C copy writes the same bytes
+    // A default PE is a console image; the manifest's subsystem key is tested
+    // by `ycc build --target=win` in the pkg suite.
     if (!objdump(["-x", out + "/gimp.exe"]).contains("(Windows CUI)")) { return bad("a default PE is not a console image"); };
-    if (pe_compile(ycc, ["--subsystem=gui", "--gc=auto"], fssrc, out + "/gui.exe").code != 0) { return bad("the compiler refused --subsystem=gui"); };
-    if (!objdump(["-x", out + "/gui.exe"]).contains("(Windows GUI)")) { return bad("--subsystem=gui did not make a GUI image"); };
-    if (fs.is_file(yc.CYCC)) {
-        if (pe_compile(yc.CYCC, ["--subsystem=gui", "--gc=auto"], fssrc, out + "/cgui.exe").code != 0) { return bad("the C copy refused --subsystem=gui"); };
-        if (!yt.same_file(out + "/gui.exe", out + "/cgui.exe")) { return bad("the C copy's GUI PE differs from the Y compiler's"); };
-    };
-    if (pe_compile(ycc, ["--subsystem=bogus"], fssrc, out + "/bad.exe").code == 0) { return bad("--subsystem=bogus was accepted"); };
-    say("--subsystem=gui: a GUI image, byte-identical in the C copy, a bad name refused");
+    say("default PE subsystem: console");
     // A sealed PE: writable .text, entry inside it, no plaintext marker, the
     // same seed reproduces the image and another seed does not.
     let seal_src = yc.ROOT + "/test/pe/obfseal.y";
-    let seal = pe_compile(ycc, ["--obfuscate", "--obfuscate-seed=9"], seal_src, out + "/seal.exe");
+    let seal = pe_compile(ycc, ["--ob", "--ob-seed=9"], seal_src, out + "/seal.exe");
     if (seal.code != 0) { return bad("the compiler refused a sealed PE: " + yt.first_line(seal.out)); };
     let v = pe_view(out + "/seal.exe");
     if (!v.ok) { return bad("no .text in a sealed PE"); };
@@ -158,8 +151,8 @@ def gate(av: [str]) -> long {
     if (v.entry < v.trva || v.entry >= v.trva + v.tvsz) { return bad("the sealed entry is outside .text"); };
     let sbytes = fs.read_bytes(out + "/seal.exe");
     if (sbytes == none || has_bytes(sbytes!, "PE SEAL OK")) { return bad("a sealed PE still holds its literal"); };
-    let seal2 = pe_compile(ycc, ["--obfuscate", "--obfuscate-seed=9"], seal_src, out + "/seal2.exe");
-    let seal3 = pe_compile(ycc, ["--obfuscate", "--obfuscate-seed=10"], seal_src, out + "/seal3.exe");
+    let seal2 = pe_compile(ycc, ["--ob", "--ob-seed=9"], seal_src, out + "/seal2.exe");
+    let seal3 = pe_compile(ycc, ["--ob", "--ob-seed=10"], seal_src, out + "/seal3.exe");
     if (seal2.code != 0 || seal3.code != 0 || !yt.same_file(out + "/seal.exe", out + "/seal2.exe")
         || yt.same_file(out + "/seal.exe", out + "/seal3.exe")) {
         return bad("a sealed PE is not seed-reproducible");

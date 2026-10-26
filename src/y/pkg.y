@@ -13,14 +13,14 @@ type PkDep = { name: str, path: str, git: str, rev: str };
 type PkBin = { name: str, path: str };
 type PkMan = { file: str, name: str, lib: str, roots: [str], bins: [PkBin], deps: [PkDep], subsystem: str,
     defines: [str], web: [str],
-    obf: str, obf_seed: str, obf_layout: str, obf_std: str, obf_diversity: str, obf_map: str };
+    obf: str, obf_seed: str, obf_map: str };
 type PkLock = { name: str, git: str, rev: str, commit: str };
 type PkNode = { name: str, dir: str, lib: str, roots: [str], deps: [str], git: str, rev: str, commit: str };
 type PkDecl = { name: str, src: str, by: str, dep: PkDep, fdir: str };
 type PkSt = { root: str, rdir: str, decls: [PkDecl], didx: NameIx, done: NameIx, stack: [str], nodes: [PkNode], lock: [PkLock] };
 type PkGraph = { dir: str, name: str, lib: str, roots: [str], bins: [PkBin], deps: [str], pkgs: [PkNode], subsystem: str,
     defines: [str], web: [str],
-    obf: str, obf_seed: str, obf_layout: str, obf_std: str, obf_diversity: str, obf_map: str };
+    obf: str, obf_seed: str, obf_map: str };
 // A git dependency's checkout and the commit it holds (pk_git_dir); a
 // hash being computed (pk_hash_new).
 type PkGit = { dir: str, commit: str };
@@ -553,7 +553,7 @@ def pk_manifest(dir: str) -> PkMan {
     let deps: [PkDep] = [];
     let m = { file: file, name: "", lib: "", roots: pk_nostrs(), bins: bins, deps: deps, subsystem: "",
         defines: pk_nostrs(), web: pk_nostrs(),
-        obf: "", obf_seed: "", obf_layout: "", obf_std: "", obf_diversity: "", obf_map: "" };
+        obf: "", obf_seed: "", obf_map: "" };
     ents.foreach((e) => {
         let at = file + ":" + tostring(e.line) + ": ";
         let tab = e.tab;
@@ -610,12 +610,6 @@ def pk_man_package(m: PkMan, e: PkEnt, at: str) -> void {
         m.obf = pk_want_str(e, at);
     } else if (key == "obfuscate_seed") {
         m.obf_seed = pk_want_str(e, at);
-    } else if (key == "obfuscate_layout") {
-        m.obf_layout = pk_want_str(e, at);
-    } else if (key == "obfuscate_std") {
-        m.obf_std = pk_want_str(e, at);
-    } else if (key == "obfuscate_diversity") {
-        m.obf_diversity = pk_want_str(e, at);
     } else if (key == "obfuscate_map") {
         m.obf_map = pk_want_str(e, at);
     } else if (key in ["version", "description", "license", "authors"]) {
@@ -718,8 +712,7 @@ def pk_load(dir: str) -> PkGraph {
     };
     { dir: dir, name: m.name, lib: lib, roots: roots, bins: bins, deps: pk_dep_names(ds), pkgs: st.nodes, subsystem: m.subsystem,
         defines: m.defines, web: m.web,
-        obf: m.obf, obf_seed: m.obf_seed, obf_layout: m.obf_layout, obf_std: m.obf_std,
-        obf_diversity: m.obf_diversity, obf_map: m.obf_map }
+        obf: m.obf, obf_seed: m.obf_seed, obf_map: m.obf_map }
 };
 
 // Dependency `d0` of package `by` (whose manifest is in `fdir0`), and

@@ -126,30 +126,28 @@ type Origin = { files: [str], nuser: long, file: [long], line: [long], mods: [st
 type Resolved = { src: str, imports: [str], origin: Origin, std: [str], pkgs: [str], ogen: [bool] };
 
 def native_resolve(src: str, base_dir: str, depth: long) -> Resolved {
-    native_resolve_x(src, base_dir, depth, true, "")
+    native_resolve_x(src, base_dir, depth, "")
 };
 
-def native_resolve_x(src: str, base_dir: str, depth: long, allow_exec: bool, root: str) -> Resolved {
+def native_resolve_x(src: str, base_dir: str, depth: long, root: str) -> Resolved {
     res_pkgs = [];
     res_roots = [];
-    resolve_unit(src, base_dir, depth, allow_exec, root)
+    resolve_unit(src, base_dir, depth, root)
 };
 
 // One unit of a project (`ycc build`): a bare `import name;` with
 // `name` in `pkgs` (the package's dependencies) imports that package
 // instead of splicing a file -- see res_pkgs -- and one naming a module
 // looks in the package's source roots `roots` too (std_resolve).
-def native_resolve_pk(src: str, base_dir: str, allow_exec: bool, root: str, pkgs: [str], roots: [str]) -> Resolved {
+def native_resolve_pk(src: str, base_dir: str, root: str, pkgs: [str], roots: [str]) -> Resolved {
     res_pkgs = pkgs;
     res_roots = roots;
-    resolve_unit(src, base_dir, 0, allow_exec, root)
+    resolve_unit(src, base_dir, 0, root)
 };
 
 // `std` lists the std units the program links, in link order: prelude,
-// exec, str, rt (std_units compiles them). allow_exec = false is
-// `ycc --exec=off`: exec is left out, so `exec(...)` fails with
-// "undefined function" and the binary has no path to a shell at all.
-def resolve_unit(src: str, base_dir: str, depth: long, allow_exec: bool, root: str) -> Resolved {
+// exec, str, rt (std_units compiles them).
+def resolve_unit(src: str, base_dir: str, depth: long, root: str) -> Resolved {
     res_used = [];
     res_std_lib = [];
     let self_path = "";
@@ -176,7 +174,7 @@ def resolve_unit(src: str, base_dir: str, depth: long, allow_exec: bool, root: s
     // NOTE: seen-threading wrapper (see native_resolve_seen): asm.y imports
     // enc64 as `enc` AND elf.y imports enc64 as `elfenc`; without dedup the
     // encoder splices twice and every enc64 def collides (find_dup).
-    let r = meta_prepare(src, base_dir, depth, allow_exec, root, self_path);
+    let r = meta_prepare(src, base_dir, depth, root, self_path);
     tov_root_ov = "";
     tov_root_ov_path = "";
     let rsrc = join(r.lines, "\n");
@@ -192,11 +190,9 @@ def resolve_unit(src: str, base_dir: str, depth: long, allow_exec: bool, root: s
     let px = len(pn) + len(xn);
     let want_prelude = seen_any(seen, 0, len(pn), 1);
     let want_exec = false;
-    if (allow_exec) {
-        if (seen_any(seen, len(pn), px, 1)) {
-            want_exec = true;
-            want_prelude = true;
-        }
+    if (seen_any(seen, len(pn), px, 1)) {
+        want_exec = true;
+        want_prelude = true;
     }
     let std: [str] = [];
     if (!target_is_kernel()) {
@@ -496,7 +492,7 @@ def meta_meta_scan(src: str, base_dir: str, fid: long) -> Scan {
 };
 
 // ── the meta pass ──────────────────────────────────────────────────────
-def meta_prepare(src: str, base_dir: str, depth: long, allow_exec: bool, root: str, self_path: str) -> SrcLines {
+def meta_prepare(src: str, base_dir: str, depth: long, root: str, self_path: str) -> SrcLines {
     if (!meta.mg_on) {
         return native_resolve_seen(src, base_dir, depth, [], [], 0, self_path, self_path);
     };
@@ -508,11 +504,11 @@ def meta_prepare(src: str, base_dir: str, depth: long, allow_exec: bool, root: s
         // is byte for byte what the pass-off path returns
         first
     } else {
-        meta_resolve(src, base_dir, depth, allow_exec, root, first, self_path)
+        meta_resolve(src, base_dir, depth, root, first, self_path)
     }
 };
 
-def meta_resolve(src: str, base_dir: str, depth: long, allow_exec: bool,
+def meta_resolve(src: str, base_dir: str, depth: long,
     root: str, first: SrcLines, self_path: str) -> SrcLines {
     if (meta.mg_nest > 0) {
         // A round in which a block cannot produce its text leaves a stand-in
@@ -526,7 +522,7 @@ def meta_resolve(src: str, base_dir: str, depth: long, allow_exec: bool,
     let rounds = 0;
     let done = false;
     while (!done) {
-        meta_run_generator(src, base_dir, allow_exec, root, first);
+        meta_run_generator(src, base_dir, root, first);
         rounds++;
         if (!meta.mg_pending()) {
             done = true
@@ -546,7 +542,7 @@ def meta_resolve(src: str, base_dir: str, depth: long, allow_exec: bool,
 };
 
 // Compile and run G, with every global it disturbs saved and put back.
-def meta_run_generator(src: str, base_dir: str, allow_exec: bool, root: str,
+def meta_run_generator(src: str, base_dir: str, root: str,
     first: SrcLines) -> long {
     let spk = res_pkgs;
     let sro = res_roots;
@@ -557,7 +553,7 @@ def meta_run_generator(src: str, base_dir: str, allow_exec: bool, root: str,
     let sns = pkg_ns;
     let mf: [str] = [root];
     mf += first.seen;
-    meta.mg_setup(root, mf, base_dir, allow_exec, spk, sro);
+    meta.mg_setup(root, mf, base_dir, spk, sro);
     let av: [str] = [root + ".meta"];
     // Compiling the generator is the single largest transient allocation of a
     // meta compile (a whole second program: parse, check, emit, assemble).
@@ -683,12 +679,12 @@ def meta_compile_gen() -> [byte] {
     if (meta.mg_build_unset()) {
         meta.mg_build(meta.mg_build_text(res_target, meta.mg_target_os(res_target),
             meta.mg_target_arch(res_target, res_arch), target_info(res_target).format,
-            hostos.name(), false, "never", "", "", [], [], []));
+            hostos.name(), false, "never", "", "", [], []));
     };
     let gt = meta.meta_gtext();
     let go = meta_gorigin(meta.mg_glines());
     meta.mg_set(false);
-    let nr = native_resolve_pk(gt, meta.mg_gbase, meta.mg_gexec,
+    let nr = native_resolve_pk(gt, meta.mg_gbase,
         meta.mg_root + ".meta", meta.mg_pkgs, meta.mg_roots);
     if (meta.mg_probe(nr.src, meta.mg_gbase)) {
         meta.mg_report("a meta block cannot appear in a module imported into the meta generator: the generator's text is compiled with the pass off, so nothing in it is scanned");
@@ -10299,7 +10295,7 @@ def std_compile(name: str, ext: [Sym], exfx: [str], prev: [Unit]) -> Unit {
     let ogen: [bool] = [];
     if (index_of(raw, "import ") >= 0) {
         res_in_std = true;
-        let nr = native_resolve_x(raw, "std", 0, true, path);
+        let nr = native_resolve_x(raw, "std", 0, path);
         res_in_std = false;
         ssrc = nr.src;
         imports = nr.imports;
@@ -10396,18 +10392,12 @@ def unit_prep(xt: Externs) {
     };
 };
 
-// --strict-heap: report each allocation the program repeats with nothing to
-// free it (lint.y lint_heap). Warnings only; the
-// emitted bytes never depend on it.
-let strict_heap: bool = false;
+// Report each allocation the program repeats with nothing to free it
+// (lint.y lint_heap). Warnings only; the emitted bytes never depend on it.
+const strict_heap: bool = true;
 
-def set_strict_heap(v: bool) -> void { strict_heap = v; };
-
-// Whether loop bodies are made regions where escape.y proves they can be
-// (on unless --regions=off).
-let auto_regions: bool = true;
-
-def set_auto_regions(v: bool) -> void { auto_regions = v; };
+// Loop bodies are made regions where escape.y proves they can be.
+const auto_regions: bool = true;
 
 def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel: long, name: str, base: long, xt: Externs, ogen: [bool]) -> UnitRes {
     tyset_reset();
@@ -10443,7 +10433,9 @@ def compile_unit(ast: Block, imports: [str], origin: Origin, debug: bool, wlevel
     };
     pr = phase_end(times, "rename", pt, ph);
     times = pr.times; pt = pr.t; ph = pr.h;
-    let heap = strict_heap && (len(name) == 0 || pkg_base(base));
+    // The heap report is part of the extra warning level: a default compile
+    // stays quiet, and -W extra/all asks what repeats unfreed.
+    let heap = strict_heap && wlevel > 0 && (len(name) == 0 || pkg_base(base));
     let process_region = false;
     foreach (n in ast3.stmts) { if (escape.esc_process_region(n, false)) { process_region = true; }; };
     let lifetimes = len(name) > 0 || process_region || (gc_mode == 2 && !gc_stress && !target_is_kernel());
@@ -11435,7 +11427,9 @@ def link_units(std: [Unit], deps: [Unit], prog: Unit, gcmode: long, seal_key: lo
         dupmap = (asm.labmap_put(dupmap, e, 1, di)).map;
     });
     let parts: [LinkPart] = [];
-    let vm_bc = obf.vm_on() && obf.vm_mode() == "bytecode" && !target_is_windows();
+    // The bytecode interpreter is x86-64 machine code; AArch64 keeps the
+    // static layers and the seal, without a VM body layer.
+    let vm_bc = obf.vm_on() && !target_is_windows() && !target_is_aarch64();
     if (vm_bc) { obfvm.vm_begin(obf.program_seed(), obf.diversity_high()); };
     let vm_ros: [str] = [];
     let head = arch.arch_header();
@@ -13301,7 +13295,7 @@ def emit_program(ast: Block, nr: Resolved, debug: bool, wlevel: long, std: [Unit
 // needs to KNOW whether a word is a builtin, and the list it keeps of them is
 // the one this predicate tests. Inert like the rest of the names here -- the
 // splicer deletes the export line, so nothing reaches codegen (LSP.md 9.1).
-export { emit_program, set_strict_heap, set_auto_regions, zero_bytes, compile_package, set_meta_pack, set_source_overlay, source_path, unit_externs, unit_prep, std_lib_path, std_units, std_unit_names, std_lib_deps, std_pack, pack_store, pack_plain_frame, lz_encode, deflate_pack, deflate_dynamic, unit_obj, unit_unobj, unit_iface, native_resolve, native_resolve_x, native_resolve_pk, origin_at, unused_imports, strip_ns, strip_list, strip_decl, phase_end, link_text, is_intrinsic_name, intrinsic_names };
+export { emit_program, zero_bytes, compile_package, set_meta_pack, set_source_overlay, source_path, unit_externs, unit_prep, std_lib_path, std_units, std_unit_names, std_lib_deps, std_pack, pack_store, pack_plain_frame, lz_encode, deflate_pack, deflate_dynamic, unit_obj, unit_unobj, unit_iface, native_resolve, native_resolve_x, native_resolve_pk, origin_at, unused_imports, strip_ns, strip_list, strip_decl, phase_end, link_text, is_intrinsic_name, intrinsic_names };
 
 // ── maps: dynamic {K => V} ────────────────────────────────────────────
 

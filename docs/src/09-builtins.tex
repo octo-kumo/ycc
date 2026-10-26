@@ -1233,8 +1233,7 @@ print(add);      // <function (long, long) -> long>
   operation and not the number.
 \item[\ic{exec(cmd)}] Run a shell command, return its exit code, or
   \ic{-1} when the child could not be started or died on a signal.
-  Removed from the binary entirely by \ic{--exec=off} (then calling it
-  is a compile error).
+  A program that never names \ic{exec} does not link it.
 \item[\ic{popen(cmd)}] Run \ic{sh -c cmd} with its stdin and stdout on
   two pipes, and answer a session \ic{[pid, in, out]} (three longs), or
   the empty array when no child could be started. \ic{pwrite(p, s)} writes
@@ -1242,8 +1241,7 @@ print(add);      // <function (long, long) -> long>
   sees end-of-file; \ic{pread(p)} reads its stdout to the end; and
   \ic{pclose(p)} closes both ends, reaps the child and returns its decoded
   status. \ic{exec\_capture(cmd)} and \ic{exec\_capture\_in(cmd, input)}
-  are the one-call forms that answer only the stdout. Like \ic{exec()},
-  they are removed by \ic{--exec=off}.
+  are the one-call forms that answer only the stdout.
 \end{description}
 
 \noindent Files are the standard module \ic{fs} (below), not builtins.
@@ -2265,9 +2263,8 @@ that opened the window.
   Windows process, and a way to keep a trap's message when there is no console.
 \end{description}
 
-\noindent A program with no console is built with \ic{--subsystem=gui}
-(\ic{subsystem = "gui"} in the \ic{[package]} table of \ic{y.toml}); its
-standard output goes nowhere. \ic{ycc build --target=win} writes
+\noindent A program with no console is built with \ic{subsystem = "gui"} in the
+\ic{[package]} table of \ic{y.toml}; its standard output goes nowhere. \ic{ycc build --target=win} writes
 \ic{build/win/NAME.exe}.
 
 \subsection{Pointers}

@@ -1,4 +1,4 @@
-// obf_vm.y -- the bytecode VM layer (--obfuscate-vm=bytecode).
+// obf_vm.y -- the bytecode VM layer of --ob.
 //
 // A selected leaf function is replaced by a native wrapper that builds a VM
 // context and calls a generated interpreter. The function's final IR is

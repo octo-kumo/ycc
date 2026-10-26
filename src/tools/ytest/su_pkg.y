@@ -12,7 +12,7 @@
 // damaged object, or one another compiler wrote, is rebuilt; a fresh build
 // gives the same bytes as a cached one, and the C copy the same as ycc; inside
 // a package, std modules, relative imports, its src roots, argv and exec work;
-// --exec=off and -g reach the packages; errors and warnings name their file;
+// -g reaches the packages; errors and warnings name their file;
 // every manifest, graph and command-line error; git dependencies are fetched,
 // pinned in y.lock, and vendored. Each numbered section is a case of its own.
 import fs;
@@ -305,8 +305,6 @@ def inside() {
         yt.fail("a project with imports inside its packages builds", yt.clip(b.out, 300));
     };
     runs("std, relative and root imports, argv and exec inside a package", "xyz 42 43 4\nran", app + "/build/app", ["xyz"]);
-    same_text("--exec=off reaches the packages", "compiling u\n../u/src/u.y:5:33: error: undefined function 'exec'",
-        yb(ycc_bin(), app, ["--exec=off"]).out);
     agree("imports inside packages", app, []);
     agree("imports inside packages, -g", app, ["-g"]);
     if (yt.have("addr2line") && yt.have("nm")) {
@@ -458,8 +456,8 @@ def manifests() {
 
 // ── 5b. a Windows build: build/win/NAME.exe, and its subsystem ────────
 // `ycc build --target=win` keeps its objects and its image apart from the Linux ones; the
-// manifest's `subsystem = "gui"` makes a GUI image, the command line's flag wins over it, and
-// the C copy builds the same bytes. A PE header's Subsystem word is at the optional header's
+// manifest's `subsystem = "gui"` makes a GUI image, and the C copy builds the same bytes.
+// A PE header's Subsystem word is at the optional header's
 // offset 68; the PE header's offset is the dword at 0x3c.
 def subsystem_of(path: str) -> long {
     let b = yt.bytes_of(path);
@@ -479,15 +477,11 @@ def windows_build() {
     let keep = yt.tmp("gui.exe");
     yt.sh("cp " + yt.q(exe) + " " + yt.q(keep));
     fs.remove_all(p + "/build");
-    let b = yb(ycc_bin(), p, ["--target=win", "--subsystem=console"]);
-    yt.check("the flag wins over the manifest", b.code == 0 && subsystem_of(exe) == 3, "subsystem " + tostring(subsystem_of(exe)));
-    fs.remove_all(p + "/build");
     let c = yb(yc.CYCC, p, ["--target=win"]);
     yt.check("the C copy builds the same GUI image", c.code == 0 && yt.same_file(keep, exe), yt.clip(c.out, 300));
     fs.remove_all(p + "/build");
     let l = yb(ycc_bin(), p, []);
     yt.check("a Linux build is not a Windows one", l.code == 0 && fs.is_file(p + "/build/w") && !fs.is_file(p + "/build/win/w.exe"), yt.clip(l.out, 300));
-    fails("a subsystem the flag does not know", "ycc: unknown subsystem 'bogus' (console, gui)", p, ["--subsystem=bogus"]);
 };
 
 // ── 6. errors: the dependency graph ──────────────────────────────────────
@@ -656,7 +650,7 @@ def optimization_goals() -> void {
 // map in y.toml; the command line still wins.
 def project_obfuscation() -> void {
     let app = D + "/obf";
-    mk(app + "/y.toml", "[package]\nname = \"po\"\nobfuscate = \"full\"\nobfuscate_seed = \"13\"\nobfuscate_layout = \"source\"\nobfuscate_std = \"off\"\nobfuscate_map = \"map.txt\"\n[bin]\npo = \"main.y\"\n");
+    mk(app + "/y.toml", "[package]\nname = \"po\"\nobfuscate = \"full\"\nobfuscate_seed = \"13\"\nobfuscate_map = \"map.txt\"\n[bin]\npo = \"main.y\"\n");
     mk(app + "/main.y", "print(\"PKG_OBF \" + tostring(6 * 7));\n");
     let b = yb(ycc_bin(), app, []);
     yt.check("obf manifest builds", b.code == 0, b.out);
@@ -668,17 +662,11 @@ def project_obfuscation() -> void {
     let again = yb(ycc_bin(), app, []);
     yt.check("obf manifest is reproducible", again.code == 0 && first == yt.bytes_of(app + "/build/po"), again.out);
     mk(app + "/y.toml", "[package]\nname = \"po\"\nobfuscate = \"bogus\"\n[bin]\npo = \"main.y\"\n");
-    fails("obf manifest refuses a bad mode", "ycc: --obfuscate wants off or full, got 'bogus'", app, []);
+    fails("obf manifest refuses a bad mode", "ycc: --ob wants off or full, got 'bogus'", app, []);
     mk(app + "/y.toml", "[package]\nname = \"po\"\nobfuscate = \"full\"\n[bin]\npo = \"main.y\"\n");
     fails("obf manifest refuses -g", "error: -g cannot combine with obfuscation (symbols and line tables expose the layout)", app, ["-g"]);
     mk(app + "/y.toml", "[package]\nname = \"po\"\nobfuscate = \"full\"\nobfuscate_seed = \"x\"\n[bin]\npo = \"main.y\"\n");
     fails("obf manifest refuses a bad seed", "error: y.toml: obfuscate_seed 'x' is not a number", app, []);
-    mk(app + "/y.toml", "[package]\nname = \"po\"\nobfuscate = \"full\"\nobfuscate_layout = \"x\"\n[bin]\npo = \"main.y\"\n");
-    fails("obf manifest refuses a bad layout", "error: y.toml: obfuscate_layout wants source or shuffle", app, []);
-    mk(app + "/y.toml", "[package]\nname = \"po\"\nobfuscate = \"full\"\nobfuscate_std = \"x\"\n[bin]\npo = \"main.y\"\n");
-    fails("obf manifest refuses a bad std mode", "error: y.toml: obfuscate_std wants off, auto or all", app, []);
-    mk(app + "/y.toml", "[package]\nname = \"po\"\nobfuscate = \"full\"\nobfuscate_diversity = \"x\"\n[bin]\npo = \"main.y\"\n");
-    fails("obf manifest refuses a bad diversity", "error: y.toml: obfuscate_diversity wants standard or high", app, []);
     mk(app + "/y.toml", "[package]\nname = \"po\"\nobfuscate = \"full\"\n[bin]\npo = \"main.y\"\n");
     let wb = yb(ycc_bin(), app, ["--target=win"]);
     yt.check("obf manifest seals a Windows PE", wb.code == 0

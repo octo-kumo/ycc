@@ -97,7 +97,7 @@ def exporter_source():
         }};''')
     code += ['let args = argv();', 'let text = unwrap(fs.read_file(args[1]));',
              'meta.meta_begin();',
-             'let nr = nativelib.native_resolve_x(text, args[2], 0, true, args[1]);',
+             'let nr = nativelib.native_resolve_x(text, args[2], 0, args[1]);',
              'let parsed = parser.parse_program(lexer.tokenize(nr.src));',
              'let units = nativelib.std_units(nr.std, "");',
              'let ext = nativelib.unit_externs(units, nr.std, [], nr.pkgs);',

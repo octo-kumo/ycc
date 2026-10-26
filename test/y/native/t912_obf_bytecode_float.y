@@ -1,4 +1,4 @@
-// flags: --obfuscate --obfuscate-seed=3
+// flags: --ob --ob-seed=3
 // SSE arithmetic, comparisons and integer division in the bytecode VM.
 def mixf(a: float, b: float) -> float { a * b + a / b - 1.25 };
 def cmp(a: float, b: float) -> long {

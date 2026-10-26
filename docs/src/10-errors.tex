@@ -153,10 +153,10 @@ regions reclaim it, or explicitly permit GC with \ic{--gc=auto}.
 \ic{--gc=never} enforce the same rule as the default. \ic{--gc=stress} opts in
 to collection for testing.
 
-\paragraph{Repeated allocations: \ic{--strict-heap}}
+\paragraph{Repeated allocations: the heap report}
 \label{sec:strictheap}
 
-\ic{ycc --strict-heap} reports where a program allocates over and over with
+\ic{ycc -W 1} (or \ic{--warnings=extra}) reports where a program allocates over and over with
 nothing to free what it allocated: the allocations that, without the
 collector, would grow its memory for as long as it runs. An allocation is a
 record, array or map literal, \ic{[v; n]}, a slice, a \ic{+} (or a
@@ -256,8 +256,7 @@ runs on either platform. Those PEs are run on a real Windows machine rather
 than under wine, because wine is more lenient about the alignment and import
 tables a real kernel enforces; the gates (\ic{ytest pe-gate}, \ic{pe-fixtures},
 \ic{cycc-win}) are run by hand. A Windows image is a console program unless
-\ic{--subsystem=gui} (or \ic{subsystem = "gui"} under \ic{[package]} in
-\ic{y.toml}) makes it a GUI one, which has no console (Section~\ref{sec:builtin-gui});
+\ic{subsystem = "gui"} under \ic{[package]} in \ic{y.toml} makes it a GUI one, which has no console (Section~\ref{sec:builtin-gui});
 \ic{ycc build --target=win} keeps its objects and writes
 \ic{build/win/NAME.exe}. \ic{--target=kernel} is the third target
 (Section~\ref{sec:os}).

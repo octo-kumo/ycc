@@ -12,8 +12,8 @@ let res_target = hostos.name();
 let res_arch = hostos.arch();
 
 // The PE subsystem a Windows image declares: 3 is a console program, 2 a GUI program, which has no
-// console (--subsystem=gui, or `subsystem = "gui"` in y.toml); 0 is "not asked", and a
-// console program is the default. A flag on the command line wins over the manifest. Read by pe.y.
+// console (`subsystem = "gui"` in y.toml); 0 is "not asked", and a console
+// program is the default. Read by pe.y.
 let res_subsystem = 0;
 
 // ── the kernel's IRQ declarations ───────────────────────────────────────

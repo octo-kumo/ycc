@@ -50,8 +50,7 @@ def run_src(src: str) -> long {
         return 1;
     };
     fs.write_file(SRC_PATH, src);
-    // --exec=off strips exec() from the evaluated program.
-    let rc = exec(YCC + " --exec=off -o " + OUT_PATH + " " + SRC_PATH + " 2>&1");
+    let rc = exec(YCC + " -o " + OUT_PATH + " " + SRC_PATH + " 2>&1");
     if (rc != 0) {
         puts("compile failed (exit " + tostring(rc) + ")\n");
         return rc;

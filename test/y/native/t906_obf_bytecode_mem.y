@@ -1,4 +1,4 @@
-// flags: --obfuscate=full --obfuscate-vm=bytecode --obfuscate-seed=4
+// flags: --ob=full --ob-seed=4
 let g = 41;
 type Cell = { v: long };
 def load(p: *long) -> long { *p }

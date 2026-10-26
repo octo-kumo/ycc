@@ -2,7 +2,7 @@
 // per-user licence HMACs, a persistent client-nonce store and per-connection
 // timeouts. Offline tpm2_checkquote verifies an optional TPM 2.0 quote; the
 // PCR values must match the server's expected file. It is not TLS; see
-// AGENTS.md (--obfuscate) for the threat model.
+// AGENTS.md (--ob) for the threat model.
 import net;
 import fs;
 import crypto;

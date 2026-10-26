@@ -42,15 +42,11 @@ def ysh() {
     syscall(88, &ln[0], &to[0]);
     let c = yc.compile(yc.YCC, [], yc.ROOT + "/test/y/examples/ysh.y", d + "/ysh", 120);
     let ok = "(ycc failed on ysh.y)";
-    let bad = "";
     if (c.code == 0) {
         ok = in_dir(d, [d + "/ysh", "-c", "eval print(6 * 7)"], 60).out;
-        bad = in_dir(d, [d + "/ysh", "-c", "eval exec(\"true\")"], 60).out;
     };
     fs.remove_all(d);
     yt.check("ysh eval compiles and runs through ycc", ok.trim() == "42", "got: " + yt.clip(ok, 300));
-    yt.check("ysh eval compiles with --exec=off", bad.contains("undefined function 'exec'") && bad.contains("compile failed"),
-        "got: " + yt.clip(bad, 300));
 };
 
 // Warnings (lint.y): on stderr, an import's as its path from the main file's
@@ -144,61 +140,41 @@ def cli_errors() -> [[str]] {
      ["optimization conflicting goals", "ycc: size and speed optimizations are mutually exclusive", "--optimize=size", "--optimize=speed"],
      ["optimization reversed goals", "ycc: size and speed optimizations are mutually exclusive", "--optimize=speed", "--optimize=size"],
      ["build optimization conflicting goals", "ycc: size and speed optimizations are mutually exclusive", "build", "--optimize=size", "--optimize=speed"],
-     ["bad output kind", "ycc: --emit wants asm, source or wat, got 'bad'", "--emit=bad"],
-     ["conflicting output kinds", "ycc: choose one output kind: asm, source or wat", "--emit=asm", "--emit=source"],
+     ["bad output kind", "ycc: --emit wants asm, source, wasm or wat, got 'bad'", "--emit=bad"],
+     ["conflicting output kinds", "ycc: choose one output kind: asm, source, wasm or wat", "--emit=asm", "--emit=source"],
      ["run needs executable", "ycc: run needs executable output", "run", "--emit=asm"],
      ["bad warnings", "ycc: --warnings wants none, default, extra, all or fix, got '3'", "--warnings=3"],
-     ["bad regions", "ycc: --regions wants auto or off, got 'bad'", "--regions=bad"],
-     ["bad exec", "ycc: --exec wants on or off, got 'bad'", "--exec=bad"],
+     ["-W needs a level", "ycc: -W needs LEVEL", "-W"],
+     ["-W bad level", "ycc: --warnings wants none, default, extra, all or fix, got '3'", "-W", "3"],
      ["bad std", "ycc: --std wants pack or source, got 'bad'", "--std=bad"],
      ["empty named output", "ycc: --output needs a path", "--output="],
      ["build refuses assembly", "ycc: build accepts executable build options only (see ycc --help)", "build", "--emit=asm"],
      ["unknown flag", "ycc: unknown flag '--bad' (see ycc -h)", "--bad"],
      ["-o with an empty path", "ycc: -o needs a path, got ''", "-o", "", t01],
      ["-o last, with no path", "ycc: -o needs an argument", t01, "-o"],
-     ["-W is gone", "ycc: -W is now --warnings=extra or --warnings=all", "-W", "1", "-o", w, t01],
-     ["-t is gone", "ycc: -t is now --time", "-t", "-o", w, t01],
-     ["--no-gc is gone", "ycc: --no-gc is now --gc=never", "--no-gc", "-o", w, t01],
-     ["--gc-stress is gone", "ycc: --gc-stress is now --gc=stress", "--gc-stress", "-o", w, t01],
-     ["--no-auto-regions is gone", "ycc: --no-auto-regions is now --regions=off", "--no-auto-regions", "-o", w, t01],
-     ["--no-exec is gone", "ycc: --no-exec is now --exec=off", "--no-exec", "-o", w, t01],
-     ["--std-src is gone", "ycc: --std-src is now --std=source", "--std-src", "-o", w, t01],
-     ["--fix is gone", "ycc: --fix is now --warnings=fix", "--fix", "-o", w, t01],
-     ["--web-stack is gone", "ycc: --web-stack is now --web=stack=SIZE", "--web-stack=1M", "-o", w, t01],
-     ["--subsystem=windows is gone", "ycc: --subsystem=windows is now --subsystem=gui", "--subsystem=windows", "-o", w, t01],
-     ["--emit=page is gone", "ycc: --emit=page is now --web-page", "--emit=page", "-o", w, t01],
-     ["--emit=exe is the default", "ycc: --emit wants asm, source or wat (the executable is the default)", "--emit=exe", "-o", w, t01],
-     ["bad web page kind", "ycc: --web-page wants site or html, got 'bogus'", "--target=web", "--web-page=bogus", "-o", w, t01],
-     ["conflicting page and emit", "ycc: choose one output kind: asm, source, wat or --web-page", "--emit=asm", "--web-page", "-o", w, t01],
+     ["--emit=exe was never a value", "ycc: --emit wants asm, source, wasm or wat, got 'exe'", "--emit=exe", "-o", w, t01],
      ["--one outside build", "ycc: --one is only for ycc build", "--one=x", t01],
      ["--arch without an arch", "ycc: --arch needs an arch (x64, aarch64)", "-o", tg, t01, "--arch"],
-     ["-w is gone", "ycc: -w is now --warnings=none", "-w", "-o", w, t01],
-     ["-S is gone", "ycc: -S is now --emit=asm", "-S", "-o", w, t01],
-     ["-E is gone", "ycc: -E is now --emit=source", "-E", "-o", w, t01],
-     ["--kernel is gone", "ycc: --kernel is now --target=kernel", "--kernel", "-o", w, t01],
      // --target: both spellings; anything after --target is its name, so only
      // the flag LAST reaches "needs a name"
      ["--target without a name", "ycc: --target needs an OS (linux, win, kernel, web)", "-o", tg, t01, "--target"],
      ["--target with an unknown name", "ycc: unknown target 'plan9' (linux, win, kernel, web)", "--target=plan9", "-o", tg, t01],
-     ["--target names the old spelling", "ycc: --target=windows is now --target=win", "--target=windows", "-o", tg, t01],
-     ["--target names the old arch", "ycc: --target=aarch64 is now --target=linux --arch=aarch64", "--target=aarch64", "-o", tg, t01],
+     ["--target=windows is unknown", "ycc: unknown target 'windows' (linux, win, kernel, web)", "--target=windows", "-o", tg, t01],
+     ["--target=aarch64 is unknown", "ycc: unknown target 'aarch64' (linux, win, kernel, web)", "--target=aarch64", "-o", tg, t01],
      ["--arch with an unknown name", "ycc: unknown arch 'x86' (x64, aarch64)", "--arch=x86", "-o", tg, t01],
      ["--arch conflicts", "ycc: conflicting --arch values (x64, aarch64)", "--arch=x64", "--arch=aarch64", "-o", tg, t01],
      ["--arch does not fit win", "ycc: --target=win is x64 only", "--target=win", "--arch=aarch64", "-o", tg, t01],
      ["--arch does not fit web", "ycc: --target=web is wasm32 (--arch does not apply)", "--target=web", "--arch=x64", "-o", tg, t01],
-     ["--subsystem with an unknown name", "ycc: unknown subsystem 'bogus' (console, gui)", "--subsystem=bogus", "-o", tg, t01],
      // the web target's own flags and refusals (S1); su_web runs the programs
-     ["emit page on linux", "ycc: --web-page is only for --target=web", "--web-page", "-o", tg, t01],
-     ["emit html on linux", "ycc: --web-page is only for --target=web", "--web-page=html", "-o", tg, t01],
      ["emit wat on linux", "ycc: --emit=wat is only for --target=web", "--emit=wat", "-o", tg, t01],
+     ["emit wasm on linux", "ycc: --emit=wasm is only for --target=web", "--emit=wasm", "-o", tg, t01],
      ["web stack not a size", "ycc: --web: 'stack' wants a byte size from 64K to 256M (a K or M suffix is allowed), got 'big'", "--target=web", "--web=stack=big", "-o", tg, t01],
      ["web stack out of range", "ycc: --web: 'stack' wants a byte size from 64K to 256M (a K or M suffix is allowed), got '1K'", "--target=web", "--web=stack=1K", "-o", tg, t01],
      ["web key without =", "ycc: --web wants KEY=VALUE, got 'nope'", "--target=web", "--web=nope", "-o", tg, t01],
      ["pack on web", "ycc: --pack is Linux ELF only (--target=web writes a wasm module)", "--target=web", "--pack", "-o", tg, t01],
-     ["obfuscate on web", "ycc: --obfuscate is not available for --target=web", "--target=web", "--obfuscate", "-o", tg, t01],
+     ["obfuscate on web", "ycc: --ob is not available for --target=web", "--target=web", "--ob", "-o", tg, t01],
      ["target conflicts", "ycc: conflicting --target values (web, kernel)", "--target=web", "--target=kernel", "-o", tg, t01],
-     ["subsystem on web", "ycc: --subsystem=gui is not available for --target=web", "--target=web", "--subsystem=gui", "-o", tg, t01],
-     ["page directory failure", "ycc: cannot make the page directory '/nonexistent/yweb'", "--target=web", "--web-page", "-o", "/nonexistent/yweb", yc.ROOT + "/test/web/w001_hello.y"],
+     ["page directory failure", "ycc: cannot make the page directory '/nonexistent/yweb'", "--target=web", "-o", "/nonexistent/yweb", yc.ROOT + "/test/web/w001_hello.y"],
      ["no input file", "error: no input file (see ycc -h)"],
      ["multiple input files", "error: ycc compiles one program; use imports to combine files", t01,
       yc.ROOT + "/test/y/native/t02_recursion.y"],
@@ -335,7 +311,7 @@ def meta_dump(prog: str, tag: str) {
     c.timeout = 120 * yt.SCALE;
     let e = yt.run(c);
     if (e.code != 0) {
-        yt.fail(tag + " -E", "exit " + tostring(e.code));
+        yt.fail(tag + " --emit=source", "exit " + tostring(e.code));
         return;
     };
     let b = yc.compile(yc.YCC, [], d + "/dump.y", d + "/b", 120);
@@ -349,7 +325,7 @@ def meta_dump(prog: str, tag: str) {
 };
 
 // ── the build a meta generator sees (S15) ───────────────────────────────
-// --emit=source renders the target fields, the command line reaches -D/-U/--meta-arg,
+// --emit=source renders the target fields and the command line reaches -D/-U,
 // escaping survives both quotes, and a project's manifest defines lose to the
 // command line in every child package.
 
@@ -382,16 +358,16 @@ def meta_inputs() -> void {
     let val = "a" + chr(34) + "b" + chr(92) + "c" + chr(10) + "d é";
     let bin = d + "/in";
     let c = yc.compile(yc.YCC, ["-D", "TEXT=" + val, "-DDEFAULT", "--define", "EQ=a=b",
-        "-D", "GONE", "-U", "GONE", "--meta-arg", "one", "--meta-arg", "two words"], f, bin, 120);
+        "-D", "GONE", "-U", "GONE"], f, bin, 120);
     if (c.code != 0) {
         yt.fail("meta inputs compile", yt.clip(c.out, 300));
         fs.remove_all(d);
         return;
     };
     let want = val + chr(10) + "1" + chr(10) + "a=b" + chr(10) + "DEFAULT,EQ,TEXT" + chr(10)
-        + "no" + chr(10) + "2" + chr(10) + "one" + chr(10) + "two words" + chr(10);
+        + "no" + chr(10);
     let r = yc.run_bin(bin, [], "", 10);
-    yt.check("meta -D/-U/--meta-arg/escaping", r.code == 0 && r.out == want,
+    yt.check("meta -D/-U/escaping", r.code == 0 && r.out == want,
         "got: " + yt.clip(r.out, 300));
     fs.remove_all(d);
 };
@@ -405,8 +381,7 @@ def meta_cli_errors() -> void {
         ["-D bad name", "ycc: -D wants NAME or NAME=VALUE, got '1BAD'", "-D", "1BAD", "-o", w, t01],
         ["--define bad name", "ycc: -D wants NAME or NAME=VALUE, got 'A-B'", "--define", "A-B", "-o", w, t01],
         ["-U bad name", "ycc: -U wants NAME, got 'A=B'", "-U", "A=B", "-o", w, t01],
-        ["-D without a name", "ycc: -D wants NAME or NAME=VALUE", "-o", w, t01, "-D"],
-        ["--meta-arg without a value", "ycc: --meta-arg needs a value", "-o", w, t01, "--meta-arg"]];
+        ["-D without a name", "ycc: -D wants NAME or NAME=VALUE", "-o", w, t01, "-D"]];
     foreach (e in cases) {
         let c = yt.cmd([yc.YCC] + e[2:]);
         c.merge = true;
@@ -452,21 +427,19 @@ def meta_project() -> void {
     let bin = d + "/app/build/app";
     let b1 = in_dir(d, [yc.YCC, "build", "app"], 240);
     let r1 = if (fs.is_file(bin)) { yc.run_bin(bin, [], "", 10).out } else { "" };
-    yt.check("meta build: manifest defines", b1.code == 0 && r1 == "1" + chr(10) + "yes" + chr(10) + chr(10),
+    yt.check("meta build: manifest defines", b1.code == 0 && r1 == "1" + chr(10) + "yes" + chr(10) + "1" + chr(10),
         "exit=" + tostring(b1.code) + " got: " + yt.clip(b1.out + " / " + r1, 300));
-    let args = [yc.YCC, "build", "app", "-D", "LEVEL=2", "-U", "GONE",
-        "--meta-arg", "x", "--meta-arg", "y z"];
+    let args = [yc.YCC, "build", "app", "-D", "LEVEL=2", "-U", "GONE"];
     let b2 = in_dir(d, args, 240);
     let r2 = if (fs.is_file(bin)) { yc.run_bin(bin, [], "", 10).out } else { "" };
-    yt.check("meta build: command line wins in every package", b2.code == 0 && r2 == "2" + chr(10) + "no" + chr(10) + "x,y z" + chr(10),
+    yt.check("meta build: command line wins in every package", b2.code == 0 && r2 == "2" + chr(10) + "no" + chr(10) + "2" + chr(10),
         "exit=" + tostring(b2.code) + " got: " + yt.clip(b2.out + " / " + r2, 300));
     // A child that did not read the -D would key its object differently and the
     // parent would compile the package a second time.
     yt.check("meta build: the children saw the defines",
         meta_line_count(b2.out, "compiling liba") == 1 && meta_line_count(b2.out, "compiling libb") == 1,
         yt.clip(b2.out, 300));
-    let b3 = in_dir(d, [yc.YCC, "build", "app", "-D", "LEVEL=3", "-U", "GONE",
-        "--meta-arg", "x", "--meta-arg", "y z"], 240);
+    let b3 = in_dir(d, [yc.YCC, "build", "app", "-D", "LEVEL=3", "-U", "GONE"], 240);
     yt.check("meta build: a define change rebuilds", b3.code == 0 && b3.out.contains("compiling libb"),
         yt.clip(b3.out, 300));
     // A [defines] key is the -D spelling.
@@ -687,11 +660,11 @@ def cases() -> [yt.Case] {
     foreach (cc in [yc.YCC, yc.CYCC]) { cs += yt.case_of(s, "many", () => many_errors(cc)); };
     cs += yt.case_of(s, "fifo", fifo);
     let nat = yc.ROOT + "/test/y/native/";
-    cs += yt.case_of(s, "--emit=source", () => meta_dump(nat + "t01_arith.y", "-E dump"));
+    cs += yt.case_of(s, "--emit=source", () => meta_dump(nat + "t01_arith.y", "--emit=source dump"));
     // a meta file whose top level prints nothing (it would print to ycc's stdout
     // before the dump), and one with a MID-TOKEN block
-    cs += yt.case_of(s, "-E meta", () => meta_dump(nat + "t197_meta_field_name_ok.y", "-E dump of a meta file"));
-    cs += yt.case_of(s, "-E mid", () => meta_dump(nat + "t200_meta_mid_token.y", "-E dump of a mid-token meta file"));
+    cs += yt.case_of(s, "meta dump", () => meta_dump(nat + "t197_meta_field_name_ok.y", "--emit=source dump of a meta file"));
+    cs += yt.case_of(s, "mid-token dump", () => meta_dump(nat + "t200_meta_mid_token.y", "--emit=source dump of a mid-token meta file"));
     cs += yt.case_of(s, "meta targets", meta_targets);
     cs += yt.case_of(s, "meta inputs", meta_inputs);
     cs += yt.case_of(s, "meta CLI", meta_cli_errors);

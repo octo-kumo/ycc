@@ -1,35 +1,24 @@
 // Diagnostics this suite's refusals assert, kept verbatim for the coverage
 // scanner (it reads a suite's own lines as the test corpus):
-// --obfuscate wants off or full, got '*'
-// conflicting --obfuscate modes
-// --obfuscate-seed wants a decimal number, got '*'
-// --obfuscate-vm wants off, auto, all or bytecode, got '*'
-// --obfuscate-seed needs --obfuscate
-// --obfuscate-vm needs --obfuscate
-// -g cannot combine with --obfuscate (symbols and line tables expose the layout)
-// --obfuscate is not supported with --target=kernel
-// a PE seal uses the embedded key only (no --obfuscate-key on --target=win)
-// --pack cannot combine with --obfuscate
-// --emit=asm cannot combine with --obfuscate (no plaintext listing)
-// --emit=source cannot combine with --obfuscate
-// --obfuscate applies to executable generation only
-// --obfuscate-key-file needs --obfuscate
-// --obfuscate-anti-debug needs --obfuscate
-// --obfuscate-key-file: cannot read 16 bytes from '*'
-// --obfuscate-key-file needs a path
-// --obfuscate-key needs a path
-// --obfuscate-map needs --obfuscate
-// --obfuscate-map needs a path
-// --obfuscate-layout wants source or shuffle, got '*'
-// --obfuscate-std wants off, auto or all, got '*'
-// --obfuscate-layout needs --obfuscate
-// --obfuscate-std needs --obfuscate
-// --obfuscate-diversity wants standard or high, got '*'
-// --obfuscate-diversity needs --obfuscate
-// --obfuscate-key-fd needs --obfuscate
-// --obfuscate-key-fd needs --obfuscate-key=PATH
-// --obfuscate-key-fd wants a non-negative descriptor
-// --obfuscate-no-anti-debug needs --obfuscate
+// --ob wants off or full, got '*'
+// conflicting --ob modes
+// --ob-seed wants a decimal number, got '*'
+// --ob-seed needs --ob
+// -g cannot combine with --ob (symbols and line tables expose the layout)
+// --ob is not supported with --target=kernel
+// a PE seal uses the embedded key only (no --ob-key on --target=win)
+// --pack cannot combine with --ob
+// --emit=asm cannot combine with --ob (no plaintext listing)
+// --emit=source cannot combine with --ob
+// --ob applies to executable generation only
+// --ob-key: cannot read 16 bytes from '*'
+// --ob-key needs a path
+// --ob-map needs --ob
+// --ob-map needs a path
+// --ob-key-fd needs --ob
+// --ob-key-fd needs --ob-key=PATH
+// --ob-key-fd wants a non-negative descriptor
+//
 //
 // su_obf.y -- the one obfuscation level (native.y link_units, obfuscate.y,
 // seal.y): output parity, reproducibility, hidden data, and the refusals.
@@ -129,30 +118,28 @@ def body() {
     yt.check("the marker is in the plain binary", has_bytes(bytes_plain, "OBF_MARKER_Z9"),
         "plain binary lost its own literal");
 
-    // --obfuscate is the one level: full with the strongest settings.
-    // (The sub-flags below may tune a layer for a test, but a user asks for
-    // obfuscation and gets all of it.)
-    let bare = build(["--obfuscate", "--obfuscate-report",
-        "--obfuscate-seed=7"], "bare");
-    let bare2 = build(["--obfuscate", "--obfuscate-seed=7"], "bare2");
-    let bare3 = build(["--obfuscate", "--obfuscate-seed=8"], "bare3");
-    yt.check("--obfuscate: compiles and runs at the full level",
+    // --ob is the one level: full with every layer at its strongest.
+    let bare = build(["--ob", "--ob-report",
+        "--ob-seed=7"], "bare");
+    let bare2 = build(["--ob", "--ob-seed=7"], "bare2");
+    let bare3 = build(["--ob", "--ob-seed=8"], "bare3");
+    yt.check("--ob: compiles and runs at the full level",
         bare.code == 0 && run("bare").code == 0 && run("bare").out == WANT,
         yt.clip(bare.out, 400));
-    yt.check("--obfuscate: the report names high diversity and the bytecode VM",
+    yt.check("--ob: the report names high diversity and the bytecode VM",
         bare.out.contains("mode=full") && bare.out.contains("diversity=high")
             && bare.out.contains("vm=bytecode"),
         yt.clip(bare.out, 300));
-    yt.check("--obfuscate: the same seed is byte-identical",
+    yt.check("--ob: the same seed is byte-identical",
         bare2.code == 0 && yt.same_file(D + "/bare", D + "/bare2"),
         yt.clip(bare2.out, 200));
-    yt.check("--obfuscate: a different seed changes the bytes",
+    yt.check("--ob: a different seed changes the bytes",
         bare3.code == 0 && !yt.same_file(D + "/bare", D + "/bare3"),
         "seed 7 and 8 produced one binary");
-    yt.check("--obfuscate: the marker is not in the file",
+    yt.check("--ob: the marker is not in the file",
         bare.code == 0 && !has_bytes(yt.bytes_of(D + "/bare"), "OBF_MARKER_Z9"),
         "the full file still holds the marker");
-    yt.check("--obfuscate: no fixed canary",
+    yt.check("--ob: no fixed canary",
         bare.code == 0 && !has_bytes(yt.bytes_of(D + "/bare"), "YOBFMAGI")
             && !has_bytes(yt.bytes_of(D + "/bare"), "IGAMFBOY"),
         "the full file still holds the fixed magic");
@@ -161,102 +148,60 @@ def body() {
         tb[len(tb) - 9] = tb[len(tb) - 9] ^ 1;
         fs.write_bytes(D + "/bare.bad", tb, 493);
         let tbr = run("bare.bad");
-        yt.check("--obfuscate: a changed byte is refused",
+        yt.check("--ob: a changed byte is refused",
             tbr.code == 127 && tbr.out == "",
             "tampered copy exit " + tostring(tbr.code) + ": " + yt.clip(tbr.out, 200));
     } else {
-        yt.fail("--obfuscate: a changed byte is refused", "image too short to flip");
+        yt.fail("--ob: a changed byte is refused", "image too short to flip");
     };
-    let cbare = yc.compile(yc.CYCC, ["--obfuscate", "--obfuscate-seed=7"],
+    let cbare = yc.compile(yc.CYCC, ["--ob", "--ob-seed=7"],
         D + "/p.y", D + "/cbare", 180);
-    yt.check("--obfuscate: cycc and ycc emit the same bytes",
+    yt.check("--ob: cycc and ycc emit the same bytes",
         cbare.code == 0 && yt.same_file(D + "/cbare", D + "/bare2"),
         yt.clip(cbare.out, 300));
-    let fx = build(["--obfuscate=full", "--obfuscate-seed=7"], "fx");
-    yt.check("--obfuscate=full is the same image as the bare flag",
+    let fx = build(["--ob=full", "--ob-seed=7"], "fx");
+    yt.check("--ob=full is the same image as the bare flag",
         fx.code == 0 && yt.same_file(D + "/fx", D + "/bare2"),
         yt.clip(fx.out, 300));
 
-    // --obfuscate-vm=all selects the dispatch-state flatten layer for the
-    // eligible helpers the bytecode VM does not take.
-    let flat = build(["--obfuscate", "--obfuscate-vm=all", "--obfuscate-seed=7"], "flat");
-    yt.check("flatten: compiles and runs",
-        flat.code == 0 && run("flat").code == 0 && run("flat").out == WANT, yt.clip(flat.out, 400));
-    yt.check("flatten: the marker is not in the file",
-        flat.code == 0 && !has_bytes(yt.bytes_of(D + "/flat"), "OBF_MARKER_Z9"),
-        "the full file still holds the marker");
     yt.write(D + "/vm.y", VM_SRC);
-    let vm = yc.compile(yc.YCC, ["--obfuscate=full", "--obfuscate-vm=bytecode",
-        "--obfuscate-seed=7", "--obfuscate-report"], D + "/vm.y", D + "/vm", 180);
+    let vm = yc.compile(yc.YCC, ["--ob=full",
+        "--ob-seed=7", "--ob-report"], D + "/vm.y", D + "/vm", 180);
     let vmr = if (vm.code == 0) { yc.run_bin(D + "/vm", [], "", 20) } else { vm };
     yt.check("bytecode: frame-only helpers run and the report counts them",
         vm.code == 0 && vmr.code == 0 && vmr.out == VM_WANT
             && vm.out.contains("bytecode=") && !vm.out.contains("bytecode=0"),
         yt.clip(vm.out + " / " + vmr.out, 400));
     yt.write(D + "/float.y", FLOAT_SRC);
-    let fl = yc.compile(yc.YCC, ["--obfuscate", "--obfuscate-seed=3",
-        "--obfuscate-report"], D + "/float.y", D + "/float", 180);
+    let fl = yc.compile(yc.YCC, ["--ob", "--ob-seed=3",
+        "--ob-report"], D + "/float.y", D + "/float", 180);
     let flr = if (fl.code == 0) { yc.run_bin(D + "/float", [], "", 20) } else { fl };
     yt.check("bytecode: float arithmetic and integer division stay in the VM",
         fl.code == 0 && flr.code == 0 && flr.out == FLOAT_WANT
             && fl.out.contains("bytecode=") && !fl.out.contains("bytecode=0"),
         yt.clip(fl.out + " / " + flr.out, 400));
     yt.write(D + "/lazy.y", LAZY_SRC);
-    let lz = yc.compile(yc.YCC, ["--obfuscate", "--obfuscate-seed=5",
-        "--obfuscate-report"], D + "/lazy.y", D + "/lazy", 180);
+    let lz = yc.compile(yc.YCC, ["--ob", "--ob-seed=5",
+        "--ob-report"], D + "/lazy.y", D + "/lazy", 180);
     let lzr = if (lz.code == 0) { yc.run_bin(D + "/lazy", [], "", 20) } else { lz };
     yt.check("literals: a VM helper returns a lazily decrypted literal",
         lz.code == 0 && lzr.code == 0 && lzr.out == LAZY_WANT
             && lz.out.contains("bytecode=") && !lz.out.contains("bytecode=0"),
         yt.clip(lz.out + " / " + lzr.out, 400));
-    let cvm = yc.compile(yc.CYCC, ["--obfuscate=full", "--obfuscate-vm=bytecode",
-        "--obfuscate-seed=7"], D + "/vm.y", D + "/cvm", 180);
+    let cvm = yc.compile(yc.CYCC, ["--ob=full",
+        "--ob-seed=7"], D + "/vm.y", D + "/cvm", 180);
     yt.check("bytecode: cycc and ycc emit the same VM bytes",
         cvm.code == 0 && yt.same_file(D + "/cvm", D + "/vm"), yt.clip(cvm.out, 300));
-    let rep = build(["--obfuscate", "--obfuscate-vm=all", "--obfuscate-seed=7",
-        "--obfuscate-report"], "rep");
-    let cfu = yc.compile(yc.CYCC, ["--obfuscate", "--obfuscate-vm=all", "--obfuscate-seed=7"], D + "/p.y", D + "/cfu", 180);
-    yt.check("flatten: cycc and ycc emit the same VM bytes", cfu.code == 0 && yt.same_file(D + "/cfu", D + "/flat"),
-        yt.clip(cfu.out, 300));
-    // Layout and std-body choices are seeded, behaviour-preserving and
-    // independent of each other.
-    let lsrc = build(["--obfuscate=full", "--obfuscate-vm=all",
-        "--obfuscate-layout=source", "--obfuscate-seed=7"], "lsrc");
-    let lshuf = build(["--obfuscate=full", "--obfuscate-vm=all",
-        "--obfuscate-layout=shuffle", "--obfuscate-seed=7"], "lshuf");
-    yt.check("layout: shuffle is a different byte image but the same behaviour",
-        lsrc.code == 0 && lshuf.code == 0
-            && !yt.same_file(D + "/lsrc", D + "/lshuf")
-            && run("lsrc").out == WANT && run("lshuf").out == WANT,
-        yt.clip(lsrc.out + " / " + lshuf.out, 300));
-    let stdoff = build(["--obfuscate=full", "--obfuscate-vm=all",
-        "--obfuscate-std=off", "--obfuscate-seed=7"], "stdoff");
-    let stdall = build(["--obfuscate=full", "--obfuscate-vm=all",
-        "--obfuscate-std=all", "--obfuscate-seed=7"], "stdall");
-    yt.check("std: auto/all transform std bodies and keep the behaviour",
-        stdoff.code == 0 && stdall.code == 0
-            && run("stdoff").out == WANT && run("stdall").out == WANT
-            && !yt.same_file(D + "/stdoff", D + "/stdall"),
-        yt.clip(stdoff.out + " / " + stdall.out, 300));
-    let dvstd = build(["--obfuscate", "--obfuscate-vm=all",
-        "--obfuscate-seed=7", "--obfuscate-diversity=standard"], "dvstd");
-    let dvhi = build(["--obfuscate", "--obfuscate-vm=all",
-        "--obfuscate-seed=7", "--obfuscate-diversity=high"], "dvhi");
-    yt.check("diversity: high is the default and changes the image",
-        dvstd.code == 0 && dvhi.code == 0
-            && run("dvstd").out == WANT && run("dvhi").out == WANT
-            && !yt.same_file(D + "/dvstd", D + "/dvhi")
-            && yt.same_file(D + "/dvhi", D + "/flat"),
-        yt.clip(dvstd.out + " / " + dvhi.out, 300));
-    yt.check("--obfuscate-report names the mode, the VM and the build",
+    let rep = build(["--ob", "--ob-seed=7", "--ob-report"], "rep");
+    yt.check("--ob-report names the mode, the VM and the build",
         rep.code == 0 && rep.out.contains("obfuscate: mode=full")
-            && rep.out.contains("vm=") && rep.out.contains("build=")
-            && rep.out.contains("patterns=") && rep.out.contains("layout=")
-            && rep.out.contains("std=") && rep.out.contains("diversity=high"),
+            && rep.out.contains("vm=bytecode") && rep.out.contains("build=")
+            && rep.out.contains("patterns=") && rep.out.contains("layout=shuffle")
+            && rep.out.contains("std=all") && rep.out.contains("diversity=high"),
         yt.clip(rep.out, 300));
     // The map is an opt-in deobfuscation aid, and it must not be in the file.
-    let mp = build(["--obfuscate=full", "--obfuscate-vm=all",
-        "--obfuscate-seed=7", "--obfuscate-map=" + D + "/map"], "fum");
+    let mp = build(["--ob=full",
+        "--ob-seed=7", "--ob-map=" + D + "/map"], "fum");
     let mtext = if (mp.code == 0) { yt.read(D + "/map") } else { "" };
     yt.check("map: written outside the binary",
         mp.code == 0 && mtext.contains("build=") && mtext.contains("y_obf_")
@@ -313,8 +258,8 @@ def body() {
     // External key file: the key is not in the binary, and the binary does
     // not start without the file.
     yt.write(D + "/key", "0123456789abcdef");
-    let kf = build(["--obfuscate=full", "--obfuscate-key-file=" + D + "/key",
-        "--obfuscate-seed=7"], "kf");
+    let kf = build(["--ob=full", "--ob-key=" + D + "/key",
+        "--ob-seed=7"], "kf");
     yt.check("key-file: compiles and runs with the key file",
         kf.code == 0 && run("kf").code == 0 && run("kf").out == WANT,
         yt.clip(kf.out, 400));
@@ -324,8 +269,8 @@ def body() {
     yt.check("key-file: the key path is not plaintext",
         kf.code == 0 && !has_bytes(yt.bytes_of(D + "/kf"), D + "/key"),
         "the key path is readable in the stub");
-    let ckf = yc.compile(yc.CYCC, ["--obfuscate=full",
-        "--obfuscate-key-file=" + D + "/key", "--obfuscate-seed=7"],
+    let ckf = yc.compile(yc.CYCC, ["--ob=full",
+        "--ob-key=" + D + "/key", "--ob-seed=7"],
         D + "/p.y", D + "/ckf", 180);
     yt.check("key-file: cycc and ycc emit the same bytes",
         ckf.code == 0 && yt.same_file(D + "/ckf", D + "/kf"),
@@ -338,8 +283,8 @@ def body() {
     yt.check("key-file: refuses a wrong key",
         run("kf").code != 0, yt.clip(run("kf").out, 200));
     yt.write(D + "/key", "0123456789abcdef");
-    let kfd = build(["--obfuscate=full", "--obfuscate-key=" + D + "/key",
-        "--obfuscate-key-fd=0", "--obfuscate-seed=7"], "kfd");
+    let kfd = build(["--ob=full", "--ob-key=" + D + "/key",
+        "--ob-key-fd=0", "--ob-seed=7"], "kfd");
     yt.write(D + "/keystdin", "0123456789abcdef");
     let kfdok = if (kfd.code == 0) {
         yc.run_bin(D + "/kfd", [], D + "/keystdin", 20)
@@ -351,21 +296,15 @@ def body() {
         run("kfd").code != 0
             && yc.run_bin(D + "/kfd", [], D + "/p.y", 20).code != 0,
         "a key-fd run accepted a missing or wrong key");
-    let kf2 = build(["--obfuscate=full", "--obfuscate-key-file=" + D + "/key",
-        "--obfuscate-seed=8"], "kf2");
+    let kf2 = build(["--ob=full", "--ob-key=" + D + "/key",
+        "--ob-seed=8"], "kf2");
     yt.check("key-file: a different seed changes the loader and cipher",
         kf2.code == 0 && !yt.same_file(D + "/kf", D + "/kf2"),
         "the two keyed builds are identical");
-    let ad = build(["--obfuscate=full", "--obfuscate-anti-debug",
-        "--obfuscate-seed=7"], "ad");
+    let ad = build(["--ob", "--ob-seed=7"], "ad");
     yt.check("anti-debug: compiles and runs untraced",
         ad.code == 0 && run("ad").code == 0 && run("ad").out == WANT,
         yt.clip(ad.out, 300));
-    let nad = build(["--obfuscate=full", "--obfuscate-no-anti-debug",
-        "--obfuscate-seed=7"], "nad");
-    yt.check("anti-debug: --obfuscate-no-anti-debug keeps it off",
-        nad.code == 0 && run("nad").code == 0 && run("nad").out == WANT,
-        yt.clip(nad.out, 300));
     if (yt.have("gdb")) {
         let gc = yt.cmd(["gdb", "-q", "-batch", "-ex",
             "handle SIGSEGV nostop noprint pass", "-ex", "run", D + "/ad"]);
@@ -373,61 +312,41 @@ def body() {
         let gr = yt.run(gc);
         yt.check("anti-debug: gdb cannot start a full build",
             gr.out.contains("0177"), yt.clip(gr.out, 300));
-        let gn = yt.cmd(["gdb", "-q", "-batch", "-ex",
-            "handle SIGSEGV nostop noprint pass", "-ex", "run", D + "/nad"]);
-        gn.timeout = 30;
-        let gnr = yt.run(gn);
-        yt.check("anti-debug: gdb runs with the checks off",
-            gnr.out.contains("OBF_MARKER_Z9"), yt.clip(gnr.out, 300));
     } else {
         yt.skip("anti-debug: gdb cannot start a full build", "no gdb");
     };
-    let strong = build(["--obfuscate=strong", "--obfuscate-seed=7"], "strong");
-    yt.check("--obfuscate=strong is gone (one full level)",
+    let strong = build(["--ob=strong", "--ob-seed=7"], "strong");
+    yt.check("--ob=strong is gone (one full level)",
         strong.code != 0 && strong.out.contains("wants off or full"),
         yt.clip(strong.out, 300));
-    let mx = build(["--obfuscate=max", "--obfuscate-seed=7"], "mx");
-    yt.check("--obfuscate=max is gone (one full level)",
+    let mx = build(["--ob=max", "--ob-seed=7"], "mx");
+    yt.check("--ob=max is gone (one full level)",
         mx.code != 0 && mx.out.contains("wants off or full"),
         yt.clip(mx.out, 300));
-    let kal = build(["--obfuscate-key=" + D + "/key", "--obfuscate-seed=7"], "kal");
-    yt.check("--obfuscate-key implies full and runs",
+    let kal = build(["--ob-key=" + D + "/key", "--ob-seed=7"], "kal");
+    yt.check("--ob-key implies full and runs",
         kal.code == 0 && run("kal").code == 0 && run("kal").out == WANT,
         yt.clip(kal.out, 300));
 
     // The refusals, each by its own message.
-    refused(["--obfuscate", "-g"], "cannot combine with --obfuscate", "-g with obfuscate");
-    refused(["--obfuscate", "--pack"], "cannot combine with --obfuscate", "--pack");
-    refused(["--obfuscate", "--emit=asm"], "cannot combine with --obfuscate", "--emit=asm");
-    refused(["--obfuscate", "--emit=source"], "cannot combine with --obfuscate", "--emit=source");
-    refused(["--obfuscate", "--target=kernel"], "not supported with --target=kernel", "--target=kernel");
-    refused(["--obfuscate", "--target=win", "--obfuscate-key=" + D + "/key"], "PE seal uses the embedded key", "an external key on Windows");
-    refused(["--obfuscate=bogus"], "wants off or full", "a bad mode");
-    refused(["--obfuscate=static"], "wants off or full", "the removed static mode");
-    refused(["--obfuscate=seal"], "wants off or full", "the removed seal mode");
-    refused(["--obfuscate", "--obfuscate=off"], "conflicting --obfuscate modes", "two modes");
-    refused(["--obfuscate-seed=7"], "needs --obfuscate", "a seed alone");
-    refused(["--obfuscate", "--obfuscate-seed=x"], "wants a decimal number", "a bad seed");
-    refused(["--obfuscate=off", "--obfuscate-vm=all"], "needs --obfuscate", "vm without obfuscate");
-    refused(["--obfuscate", "--obfuscate-vm=bogus"], "wants off, auto, all or bytecode", "a bad vm mode");
-    refused(["--obfuscate=off", "--obfuscate-key-file=" + D + "/key"], "needs --obfuscate", "key file without obfuscate");
-    refused(["--obfuscate=off", "--obfuscate-anti-debug"], "needs --obfuscate", "anti-debug without obfuscate");
-    refused(["--obfuscate", "--obfuscate-key-file=" + D + "/missing"], "cannot read 16 bytes", "a missing key file");
-    refused(["--obfuscate", "--obfuscate-key-file="], "needs a path", "an empty key path");
-    refused(["--obfuscate", "--obfuscate-key="], "needs a path", "an empty key alias path");
-    refused(["--obfuscate=off", "--obfuscate-key-fd=0", "--obfuscate-key-file=" + D + "/key"], "needs --obfuscate", "key fd without obfuscate");
-    refused(["--obfuscate-map=" + D + "/map"], "needs --obfuscate", "map without obfuscate");
-    refused(["--obfuscate", "--obfuscate-map="], "needs a path", "an empty map path");
-    refused(["--obfuscate", "--obfuscate-layout=bogus"], "wants source or shuffle", "a bad layout");
-    refused(["--obfuscate", "--obfuscate-std=bogus"], "wants off, auto or all", "a bad std mode");
-    refused(["--obfuscate-layout=source"], "needs --obfuscate", "layout without obfuscate");
-    refused(["--obfuscate-std=off"], "needs --obfuscate", "std without obfuscate");
-    refused(["--obfuscate", "--obfuscate-diversity=bogus"], "wants standard or high", "a bad diversity");
-    refused(["--obfuscate-diversity=high"], "needs --obfuscate", "diversity without obfuscate");
-    refused(["--obfuscate", "--obfuscate-key-fd=x", "--obfuscate-key=" + D + "/key"], "non-negative descriptor", "a bad key fd");
-    refused(["--obfuscate", "--obfuscate-key-fd=0"], "needs --obfuscate-key=PATH", "key fd without key file");
-    refused(["--obfuscate-no-anti-debug"], "needs --obfuscate", "anti-debug off alone");
-    refused(["--obfuscate=off", "--obfuscate-no-anti-debug"], "needs --obfuscate", "anti-debug off with off");
+    refused(["--ob", "-g"], "cannot combine with --ob", "-g with obfuscate");
+    refused(["--ob", "--pack"], "cannot combine with --ob", "--pack");
+    refused(["--ob", "--emit=asm"], "cannot combine with --ob", "--emit=asm");
+    refused(["--ob", "--emit=source"], "cannot combine with --ob", "--emit=source");
+    refused(["--ob", "--target=kernel"], "not supported with --target=kernel", "--target=kernel");
+    refused(["--ob", "--target=win", "--ob-key=" + D + "/key"], "PE seal uses the embedded key", "an external key on Windows");
+    refused(["--ob=bogus"], "wants off or full", "a bad mode");
+    refused(["--ob=static"], "wants off or full", "the removed static mode");
+    refused(["--ob=seal"], "wants off or full", "the removed seal mode");
+    refused(["--ob", "--ob=off"], "conflicting --ob modes", "two modes");
+    refused(["--ob-seed=7"], "needs --ob", "a seed alone");
+    refused(["--ob", "--ob-seed=x"], "wants a decimal number", "a bad seed");
+    refused(["--ob", "--ob-key=" + D + "/missing"], "cannot read 16 bytes", "a missing key file");
+    refused(["--ob", "--ob-key="], "needs a path", "an empty key path");
+    refused(["--ob-map=" + D + "/map"], "needs --ob", "map without obfuscate");
+    refused(["--ob", "--ob-map="], "needs a path", "an empty map path");
+    refused(["--ob", "--ob-key-fd=x", "--ob-key=" + D + "/key"], "non-negative descriptor", "a bad key fd");
+    refused(["--ob", "--ob-key-fd=0"], "needs --ob-key=PATH", "key fd without key file");
 };
 
 def cases() -> [yt.Case] { [yt.case_of("obf", "obf", body)] };

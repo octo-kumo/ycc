@@ -215,7 +215,7 @@ run-os-gui: os
 obf-audit: ycc
 	@d=$$(mktemp -d -t y-obf-audit.XXXXXXXX) || exit $$?; trap 'rm -rf "$$d"' EXIT; \
 	  printf 'def main() -> long { print("OBF_AUDIT_MARKER"); 0 };\nlet r = main();\n' > "$$d/p.y"; \
-	  ./ycc --obfuscate=full --obfuscate-seed=7 --obfuscate-map="$$d/map" "$$d/p.y" -o "$$d/p" && \
+	  ./ycc --ob=full --ob-seed=7 --ob-map="$$d/map" "$$d/p.y" -o "$$d/p" && \
 	  python3 tools/obf-audit/audit.py scan "$$d/p" --marker OBF_AUDIT_MARKER --map "$$d/map" && \
 	  python3 tools/obf-audit/audit.py tamper "$$d/p" && \
 	  python3 tools/obf-audit/audit.py gdb "$$d/p"

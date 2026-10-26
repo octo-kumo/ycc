@@ -140,7 +140,7 @@ fs.write_file(WS + "/mod.y", join(MOD, "\n"));
 // test is the shape of the NAME, not the index cache.
 const MAIN3_URI = "file://" + WS + "/main3.y";
 let main_text = join(MAIN, "\n");
-let nr = native_resolve_x(main_text, WS, 0, true, WS + "/main.y");
+let nr = native_resolve_x(main_text, WS, 0, WS + "/main.y");
 let ast = parse_program(tokenize(scan.repair(nr.src).text));
 let ast2: Block = strip_ns(ast, nr.imports);
 let ast3: Block = rename_program_x(ast2, [], nr.origin.file, nr.origin.mods);

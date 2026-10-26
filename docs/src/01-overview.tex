@@ -36,15 +36,15 @@ short return sequences to remove taken branches; size mode uses compact
 constant loads. These final-link passes also optimize bundled standard-library
 units and cached packages. Neither mode changes language semantics.
 
-\ic{--emit=asm|source|wat} selects assembly, expanded source, or a wasm
-listing (the executable is the default). \ic{--output=PATH} (or \ic{-o PATH})
+\ic{--emit=asm|source|wasm|wat} selects assembly, expanded source, the wasm
+module, or a wasm listing (the executable, or the site on web, is the default). \ic{--output=PATH} (or \ic{-o PATH})
 chooses an executable or assembly path; assembly and the wasm listing default
 to stdout, and expanded source goes to stdout. \ic{--target=linux|win|kernel|web}
 names the OS and \ic{--arch=x64|aarch64} the instruction set (Linux only; the
 default arch is the host's). \ic{--debug} (or \ic{-g}) includes symbols and
 source lines.
-\ic{--obfuscate[=MODE]} is an opt-in code-protection mode; it never changes what a
-program does, and there is one level: the bare flag and \ic{--obfuscate=full}
+\ic{--ob[=MODE]} is an opt-in code-protection mode; it never changes what a
+program does, and there is one level: the bare flag and \ic{--ob=full}
 select the strongest preset. The program's own
 bodies are rewritten at final link: numeric constants are rebuilt, stack frames
 are shifted, dead bodies, opaque guards and junk bytes are added, calls may
@@ -56,14 +56,11 @@ bytecode run by a per-build interpreter with a per-function opcode map.
 Runtime messages are decoded eagerly because a system call reading a protected
 page fails with EFAULT instead of taking the page-fault handler; literals and
 the bytecode are decoded page by page, and a literal use touches one byte per
-page first. \ic{--obfuscate-seed=N} makes a build reproducible;
-\ic{--obfuscate-key=PATH} keeps the stream key in a 16-byte external file;
-the sub-flags \ic{--obfuscate-vm=off|auto|all|bytecode} (default \ic{bytecode}),
-\ic{--obfuscate-layout=source|shuffle}, \ic{--obfuscate-std=off|auto|all} and
-\ic{--obfuscate-diversity=standard|high} tune a layer for tests and bring-up;
-\ic{--obfuscate-no-anti-debug} disables the dumpable/tracer checks;
-\ic{--obfuscate-report} prints a per-build id and counts;
-\ic{--obfuscate-map=PATH} writes a label/address map outside the binary. The
+page first. \ic{--ob-seed=N} makes a build reproducible;
+\ic{--ob-key=PATH} keeps the stream key in a 16-byte external file;
+\ic{--ob-report} prints a per-build id and counts;
+\ic{--ob-map=PATH} writes a label/address map outside the binary. There is no
+strength knob: every layer runs at its maximum. The
 cipher and loader are per-build and page-keyed, with
 runtime-dependent opaque branches, jumps over random bytes and a key-derived
 startup page schedule; there is no plaintext per-function table. A keyed hash
@@ -77,14 +74,14 @@ that decrypts code and literals in place in a writable \ic{.text}, uses the
 flatten layer and the embedded key, and has no lazy pages or per-page MACs.
 It refuses \ic{-g}, \ic{--pack}, \ic{--emit=asm}, \ic{--emit=source} and \ic{--target=kernel}. The mode raises the cost of static and
 dynamic analysis; it is not a cryptographic guarantee.
-\ic{--warnings=none|default|extra|all|fix} selects diagnostics by name
-(\ic{fix} applies the safe shortenings in place). \ic{--gc=never|auto|always|stress},
-\ic{--regions=auto|off}, \ic{--exec=on|off}, and \ic{--std=pack|source} control
-the collector, automatic regions, the \ic{exec()} builtin, and standard-unit
-sources. \ic{--pack[=METHOD]} writes a self-decompressing executable and
+\ic{-W LEVEL} (or \ic{--warnings=none|default|extra|all|fix}) selects diagnostics
+by name (\ic{fix} applies the safe shortenings in place; \ic{0}, \ic{1} and
+\ic{2} are accepted for the three levels). \ic{--gc=never|auto|always|stress} and
+\ic{--std=pack|source} control the collector and standard-unit sources;
+automatic regions and the heap report are always on. \ic{--pack[=METHOD]} writes a self-decompressing executable and
 \ic{--time} prints a phase table. Value options accept either
-\ic{--name=value} or \ic{--name value}; \ic{-O}, \ic{-o} and \ic{-p} are the
-short forms. Build chooses its own output paths and accepts executable output
+\ic{--name=value} or \ic{--name value}; \ic{-O}, \ic{-o}, \ic{-W} and \ic{-p}
+are the short forms. Build chooses its own output paths and accepts executable output
 only.
 
 The default is \ic{--gc=never}: executables contain no collector. The

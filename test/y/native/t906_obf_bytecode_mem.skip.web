@@ -1,1 +1,1 @@
-obfuscation is Linux ELF only: --obfuscate is refused for --target=web
+obfuscation is Linux ELF only: --ob is refused for --target=web

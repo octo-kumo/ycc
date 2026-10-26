@@ -13,7 +13,9 @@ reference table.
 \begin{lstlisting}
 $ ./ycc --target=web prog.y -o prog.wasm
 $ node --disable-wasm-trap-handler src/web/yhost.js run prog.wasm
-$ ./ycc --target=web --web-page -o site prog.y   # index.html + prog.wasm
+$ ./ycc --target=web -o site prog.y              # index.html + prog.wasm
+$ ./ycc --target=web --web=single=true -o prog.html prog.y  # one file
+$ ./ycc --target=web --emit=wasm -o prog.wasm prog.y        # the module alone
 $ ./ycc build --target=web                        # y.toml: build/web/NAME/
 \end{lstlisting}
 
@@ -86,10 +88,11 @@ pause\_hidden and the single-file form; a \ic{template} points the generator
 at the application's own page, whose four placeholders are \ic{TITLE},
 \ic{CONFIG}, \ic{HOST} and \ic{MODULE}.  See \ic{docs/TARGETS.md}.
 
-\ic{--web-page DIR} writes \ic{index.html} (the stylesheet and the linked host
-are inline) and \ic{NAME.wasm}, plus \ic{files.bin} for \ic{[web] files};
-the deployment is those files.  \ic{--web-page=html} additionally inlines the
-module and the bundle, so it is one file.  \ic{ycc build --target=web} writes
+\ic{--target=web} writes the site: \ic{index.html} (the stylesheet and the
+linked host are inline) and \ic{NAME.wasm}, plus \ic{files.bin} for
+\ic{[web] files}; the deployment is those files.  \ic{--web=single=true}
+inlines the module and the bundle too, so the output is one HTML file;
+\ic{--emit=wasm} writes the module alone.  \ic{ycc build --target=web} writes
 the same site under \ic{build/web/NAME/}, a single file under
 \ic{build/web/NAME.html}, and a Node launcher under \ic{build/web/bin/NAME}
 with its private host copy.  A module is fetched as a sibling or as a data URL.
@@ -111,7 +114,7 @@ network cost is the module's gzip size.
 
 \paragraph{Limits.} A web build has no \ic{fork}, \ic{exec}, \ic{popen},
 sockets, \ic{/proc/self/mem} or \ic{ptrace}; a program that needs a real
-kernel stays native.  \ic{--pack}, \ic{--obfuscate}, \ic{--target=kernel} and
+kernel stays native.  \ic{--pack}, \ic{--ob}, \ic{--target=kernel} and
 \ic{-g} either refuse the target or are not part of it.  The host is not a
 security boundary: a page's JavaScript can read its own module and memory as
 any page can, and a save in IndexedDB is the player's.

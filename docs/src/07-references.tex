@@ -285,7 +285,7 @@ is and requires a lifetime proof or \ic{--gc=auto}. When GC is enabled,
 automatic regions that grow past 32 MiB without reaching a turn's end hand
 their memory to the collector and stay off for the rest of the run. In a
 checked build they keep reclaiming their memory, including large turns.
-\ic{--regions=off} turns the transformation off.
+The transformation is always on.
 
 In checked builds a function can also get a region for its entire call.
 Its summary must prove that no reference to its scratch allocations is

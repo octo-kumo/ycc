@@ -664,7 +664,7 @@ def main_check(av: [str]) -> long {
 // outputs, under _check/fuzz; each input is reproducible from its seed line.
 
 def fz_compile(cc: str, src: str, bin: str) -> yt.Res {
-    let c = yt.cmd([cc, "--exec=off", "-o", bin, src]);
+    let c = yt.cmd([cc, "-o", bin, src]);
     c.merge = true;
     c.timeout = yt.num(yt.env("FUZZ_TIMEOUT", "10"), 10);
     c.mem_kb = yt.num(yt.env("FUZZ_MEM_KB", "2000000"), 2000000);

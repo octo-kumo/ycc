@@ -189,9 +189,10 @@ adds the console over a window; `"hide"` keeps it closed; `"auto"` follows the
 program.
 
 The site writer inlines `page.css` and the page's linked host modules into
-`index.html`, so `ycc --target=web --web-page DIR` writes `index.html`,
-`NAME.wasm` and (when `[web] files` is set) `files.bin`. `--web-page=html`
-inlines the module and the bundle as data URLs and writes one file. The
+`index.html`, so `ycc --target=web -o DIR prog.y` writes `index.html`,
+`NAME.wasm` and (when `[web] files` is set) `files.bin`. `--web=single=true`
+inlines the module and the bundle as data URLs and writes one file; `--emit=wasm`
+writes `NAME.wasm` alone. The
 `[web] zoom` default is `"1"` (100%); `"auto"` is still the largest integer
 that fits in fixed mode. A `[web] template` page keeps the four placeholders
 `TITLE`, `CONFIG`, `HOST` and `MODULE`.

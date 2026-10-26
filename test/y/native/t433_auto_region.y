@@ -1,10 +1,10 @@
-// flags: --gc=auto --strict-heap
+// flags: --gc=auto -W 1
 import memstat;
 // A loop that allocates, and from which nothing a turn makes can be reached
 // after the turn, gets a region from the compiler (escape.y, `region$auto`):
 // its turns' allocations are freed between turns (every 64 KiB) and when it
 // ends. With no collector at all, the
-// first loop churns about a gigabyte in a few megabytes, and --strict-heap has
+// first loop churns about a gigabyte in a few megabytes, and the heap report has
 // nothing to say about it. A loop that keeps what it makes is left alone, and
 // still draws its warnings.
 
