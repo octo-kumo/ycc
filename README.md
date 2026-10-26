@@ -1,6 +1,7 @@
 # ycc — the Y compiler
 
 > ycc might mean 'y code compiler' or 'yun's crappy compiler' or 'y compiler collections'
+> The original version is over here: https://github.com/octo-kumo/compiler , it has a VM that interprets Y 
 
 A self-hosting compiler for **Y**, a small, statically checked systems
 language. `ycc` compiles a Y program straight to a *static* executable with its
