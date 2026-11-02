@@ -1,4 +1,11 @@
 // rename.y — static name resolution (uniquify) for the native pipeline.
+//
+// Compiler role: take the syntax AST after strip_ns and give every binding a
+// unique name, rewrite every reference to it, resolve type aliases and inline
+// call-site defaults. The checker and emitter then work in a flat namespace
+// without implementing lexical scope again.
+//
+// The reader's route is docs/compiler/README.md.
 
 // For its AST and type aliases.
 import tags from "./tags.y";
@@ -737,7 +744,7 @@ def rn_decl(node: Decl, st: RnSt) -> RnRes {
         };
         if (node.kind == "native") {
             let f: Func = value;
-            value = {k: K.func, params: f.params, ptypes: rn_types(st, f.ptypes), ret: rn_type(st, f.ret), body: f.body, defs: f.defs, label: f.label, line: f.line, col: f.col, ppos: f.ppos};
+            value = {k: K.func, params: f.params, ptypes: rn_types(st, f.ptypes), ret: rn_type(st, f.ret), body: f.body, defs: f.defs, label: f.label, line: f.line, col: f.col, ppos: f.ppos, arrow: f.arrow};
         } else {
             if (node.kind == "def") { typ = rn_type(st, typ); };
             let renamed = rn_func(value, st);
@@ -784,7 +791,7 @@ def rn_func(node: Func, st: RnSt) -> RnRes {
     let body: [Node] = [];
     if (un != "") { body += rn_unknown_err(un, node.line, node.col); };
     body += b.stmts;
-    { st: st, node: { k: K.func, params: params, ptypes: rn_types(st, node.ptypes), ret: rn_type(st, node.ret), body: { k: K.block, stmts: body, line: node.line, col: node.col }, line: node.line, col: node.col, defs: [], label: "", ppos: node.ppos } }
+    { st: st, node: { k: K.func, params: params, ptypes: rn_types(st, node.ptypes), ret: rn_type(st, node.ret), body: { k: K.block, stmts: body, line: node.line, col: node.col }, line: node.line, col: node.col, defs: [], label: "", ppos: node.ppos, arrow: node.arrow } }
 };
 
 def rename_program(ast: Block) -> Block {
@@ -794,6 +801,11 @@ def rename_program(ast: Block) -> Block {
     rename_program_x(ast, none, nofile, nomods)
 };
 
+// Compiler role: the public name-resolution entry. It seeds the alias and
+// default tables, then walks the whole tree with one scope stack.
+//
+// Implementation note: the walk returns a new tree; the only shared state is
+// the alias table and the default-value table the caller reads after it.
 def rename_program_x(ast: Block, dfl: [Dfl], ofile: [long], fmods: [str]) -> Block {
     let noids: [long] = [];
     let nonodes: [TRef] = [];

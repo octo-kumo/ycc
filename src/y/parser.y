@@ -1,9 +1,20 @@
-// parser.y — parse a token list into an AST of nested maps.
+// parser.y — parse a token list into an AST of nested records.
+//
+// Compiler role: tokens -> syntax only. It does not resolve names or check
+// types. Parameter types that the source implies are filled by
+// infer_params.y, which parse_program calls once after the syntax tree is
+// complete. A malformed construct becomes an Err node so the parser can keep
+// going and report at the offending token.
+//
+// The reader's route is docs/compiler/README.md; the AST shapes are generated
+// from ast_schema.y (and listed in docs/compiler/generated/ast.md).
 
 // For its alias Tok.
 import tags from "./tags.y";
 import ktgt from "./target.y";
 import lexer from "./lexer.y";
+import litt from "./literal_type.y";
+import inf from "./infer_params.y";
 
 // ── loop labels ─────────────────────────────────────────
 let ploop_names: [str] = [];
@@ -28,137 +39,6 @@ def loop_resolve(label: str) -> str {
         if (len(ploop_names) > 0) { found = 0; } else { return label; };
     };
     tostring(found)
-};
-
-// ── parameter type inference (from the parser) ────────────────────────────
-let pbody_names: [str] = [];
-let pbody_typs: [Type] = [];
-let pcall_names: [str] = [];
-let pcall_idxs: [long] = [];
-let pcall_typs: [Type] = [];
-let pfunc_names: [str] = [];
-let pfunc_nodes: [Func] = [];
-
-def p_infer_reset() -> void {
-    pbody_names = [];
-    pbody_typs = [];
-    pcall_names = [];
-    pcall_idxs = [];
-    pcall_typs = [];
-    pfunc_names = [];
-    pfunc_nodes = [];
-};
-
-def p_body_note(name: str, t: Type) -> void {
-    if (t.k == K.tnone) { 0; return; };
-    for i in 0..len(pbody_names) {
-        if (pbody_names[i] == name) { pbody_typs[i] = t; 0; return; };
-    };
-    pbody_names += name;
-    pbody_typs += t;
-};
-
-def p_body_get(name: str) -> Type {
-    for i in 0..len(pbody_names) {
-        if (pbody_names[i] == name) { return pbody_typs[i]; };
-    };
-    { k: K.tnone }
-};
-
-def p_body_apply(names: [str], ptypes: [Type]) -> void {
-    let i = 0;
-    while (i < len(names) && i < len(ptypes)) {
-        if (ptypes[i].k == K.tnone) {
-            let cl = p_body_get(names[i]);
-            if (cl.k != K.tnone) { ptypes[i] = cl; };
-        };
-        i++;
-    };
-};
-
-// The type a binary operator implies for a missing parameter on one side
-// when the other side is a primitive literal.
-def p_bin_hint(op: str, other: Node) -> Type {
-    let out: Type = { k: K.tnone };
-    let ht = lit_type(other);
-    if (ht.k != K.tnone) {
-        if (op == "+" && ht.k == K.tstr) { out = { k: K.tstr }; }
-        else if (index_of("+-*/%", op) >= 0) {
-            if (ht.k == K.tlong || ht.k == K.tbyte || ht.k == K.tfloat || ht.k == K.tbigint) {
-                if (ht.k == K.tfloat) { out = { k: K.tfloat }; }
-                else { out = { k: K.tlong }; };
-            };
-        }
-        else if (op in ["<", ">", "<=", ">="]) { out = ht; }
-        else if (op == "==" || op == "!=") { out = ht; }
-        else if (op in ["&", "|", "^", "<<", ">>", ">>>"]) { out = { k: K.tlong }; }
-        else if ((op == "&&" || op == "||") && ht.k == K.tbool) { out = { k: K.tbool }; };
-    };
-    out
-};
-def p_str_in(xs: [str], s: str) -> bool {
-    let found = false;
-    xs.foreach((e) => {
-        if (e == s) { found = true; };
-    });
-    found
-};
-
-def p_body_bin_clue(left: Node, op: str, right: Node) -> void {
-    if (len(pbody_names) == 0) { 0; return; };
-    if (left.k == K.id) {
-        let id: Leaf = left;
-        if (p_str_in(pbody_names, id.v)) { p_body_note(id.v, p_bin_hint(op, right)); };
-    };
-    if (right.k == K.id) {
-        let id2: Leaf = right;
-        if (p_str_in(pbody_names, id2.v)) { p_body_note(id2.v, p_bin_hint(op, left)); };
-    };
-};
-
-def p_call_note(callee: Node, args: [Node]) -> void {
-    if (callee.k != K.id) { 0; return; };
-    let id: Leaf = callee;
-    for i in 0..len(args) {
-        let lt = lit_type(args[i]);
-        if (lt.k != K.tnone) {
-            pcall_names += id.v;
-            pcall_idxs += i;
-            pcall_typs += lt;
-        };
-    };
-};
-
-def p_infer_finish() -> void {
-    // The functions by name, a name's indices chained in order through `next`:
-    // every call against every function was quadratic, 9% of a self-compile.
-    let nf = len(pfunc_names);
-    let fix = nameix_new(16);
-    let next: [long] = [];
-    for i in 0..nf { next += -1; };
-    let fi = nf - 1;
-    while (fi >= 0) {
-        let e: str = pfunc_names[fi];
-        if (e != "") {
-            next[fi] = nameix_get(fix, e);
-            nameix_put(fix, e, fi);
-        };
-        fi--;
-    };
-    let c = 0;
-    while (c < len(pcall_names)) {
-        let n: str = pcall_names[c];
-        let j = if (n == "") { -1 } else { nameix_get(fix, n) };
-        while (j >= 0) {
-            let f = pfunc_nodes[j];
-            let ix = pcall_idxs[c];
-            if (ix < len(f.ptypes) && f.ptypes[ix].k == K.tnone) {
-                f.ptypes[ix] = pcall_typs[c];
-            };
-            j = next[j];
-        };
-        c++;
-    };
 };
 
 // Node shapes and child operations share one compile-time schema.
@@ -591,7 +471,7 @@ def parse_arrow_func(toks: [Tok], p: long) -> Parsed {
         pos = p + 1;
     };
     let body = parse_expr(toks, pos + 1);
-    let f: Func = { k: K.func, params: names, ptypes: ptypes, ret: { k: K.tnone }, body: block1(body.node, ln, cl), defs: [], label: "", line: ln, col: cl, ppos: ppos };
+    let f: Func = { k: K.func, params: names, ptypes: ptypes, ret: { k: K.tnone }, body: block1(body.node, ln, cl), defs: [], label: "", line: ln, col: cl, ppos: ppos, arrow: true };
     let node: Node = f;
     res(node, body.pos)
 };
@@ -761,7 +641,7 @@ def sync_type(nm: str) -> Type {
 
 // A block as a function of no parameters, its return type inferred.
 def block_func(body: Node, ln: long, cl: long) -> Node {
-    let f: Func = { k: K.func, params: [], ptypes: [], ret: { k: K.tnone }, body: body, defs: [], label: "", line: ln, col: cl, ppos: [] };
+    let f: Func = { k: K.func, params: [], ptypes: [], ret: { k: K.tnone }, body: body, defs: [], label: "", line: ln, col: cl, ppos: [], arrow: false };
     let node: Node = f;
     node
 };
@@ -801,7 +681,6 @@ def parse_postfix(toks: [Tok], p: long) -> Parsed {
             };
         } else if (is_punct(toks, pos, "(")) {
             let a = parse_args(toks, pos + 1);
-            p_call_note(node, a.node);
             node = mk_call(node, a.node, tline(toks, pos), tcol(toks, pos));
             pos = skip_close(toks, a.pos, ")");
         } else if (is_punct(toks, pos, "[")) {
@@ -989,7 +868,6 @@ def parse_binary(toks: [Tok], p: long, min_prec: long) -> Parsed {
                 next_min = prec;
             }
             let right_r = parse_binary(toks, pos + 1, next_min);
-            p_body_bin_clue(left, op, right_r.node);
             left = { k: K.bin, op: op, l: left, r: right_r.node, line: tline(toks, pos), col: tcol(toks, pos) };
             pos = right_r.pos;
         };
@@ -1727,43 +1605,8 @@ def parse_type_full(toks: [Tok], p: long) -> PType {
     }
 };
 
-// The type a literal default value gives an unannotated parameter
-// (`tnone` when the value is not a literal).
-def lit_type(node: Node) -> Type {
-    let k: long = node.k;
-    if (k == K.num) {
-        let leaf: Leaf = node;
-        num_lit_type(leaf.v)
-    }
-    else if (k == K.bignum) { let ty: Type = { k: K.tbigint }; ty }
-    else if (k == K.str) { let ty: Type = { k: K.tstr }; ty }
-    else if (k == K.bool) { let ty: Type = { k: K.tbool }; ty }
-    else if (k == K.char) { let ty: Type = { k: K.tbyte }; ty }
-    else if (k == K.un) {
-        let un: Un = node;
-        lit_type_neg(un)
-    }
-    else { let ty: Type = { k: K.tnone }; ty }
-};
-
-def lit_type_neg(node: Un) -> Type {
-    let e = node.e;
-    if (node.op == "-" && e.k == K.num) {
-        let leaf: Leaf = e;
-        num_lit_type(leaf.v)
-    } else { let ty: Type = { k: K.tnone }; ty }
-};
-
 // T? -- the type an optional parameter `name?: T` has in the body.
 def topt_of(t: Type) -> TOf { { k: K.topt, of: t } };
-
-// float when the literal has a fraction or an exponent (radix literals
-// like 0xE1 never do).
-def num_lit_type(s: str) -> Type {
-    if (radix_of(s) != 0) { { k: K.tlong } }
-    else if (index_of(s, ".") >= 0 || index_of(s, "e") >= 0 || index_of(s, "E") >= 0) { { k: K.tfloat } }
-    else { { k: K.tlong } }
-};
 
 def parse_irq_def(toks: [Tok], p: long) -> Parsed {
     let ln = tline(toks, p);
@@ -1892,7 +1735,7 @@ def parse_func(toks: [Tok], p: long, isnat: bool) -> Parsed {
                     // annotation the literal also gives the parameter its type.
                     let dr = parse_unary(toks, pos + 1);
                     pos = dr.pos;
-                    let dt = lit_type(dr.node);
+                    let dt = litt.lit_type(dr.node);
                     if (dt.k == K.tnone) {
                         derrs += { k: K.err, msg: "default value of parameter '" + nm + "' must be a literal", line: tline(toks, pos), col: tcol(toks, pos) };
                     } else {
@@ -1960,28 +1803,13 @@ def parse_func(toks: [Tok], p: long, isnat: bool) -> Parsed {
         // the body holds only the header's errors, if any: a native has none
         // of its own, and the checker reads them so they are reported once
         let bnode: Block = { k: K.block, stmts: derrs, line: ln, col: cl };
-        let func: Func = { k: K.func, params: names, ptypes: ptypes, ret: ret, body: bnode, line: ln, col: cl, defs: defs, label: label, ppos: ppos };
+        let func: Func = { k: K.func, params: names, ptypes: ptypes, ret: ret, body: bnode, line: ln, col: cl, defs: defs, label: label, ppos: ppos, arrow: false };
         res({ k: K.decl, kind: "native", name: fname, typ: { k: K.tnone }, v: func, line: ln, col: cl, nline: nln, ncol: ncl }, pos)
     } else {
         let saved_loops = ploop_names;
         let no_loops: [str] = [];
         ploop_names = no_loops;
-        let saved_pbody_names = pbody_names;
-        let saved_pbody_typs = pbody_typs;
-        pbody_names = [];
-        pbody_typs = [];
-        let pi = 0;
-        while (pi < len(names) && pi < len(ptypes)) {
-            if (ptypes[pi].k == K.tnone) {
-                pbody_names += names[pi];
-                pbody_typs += { k: K.tnone };
-            };
-            pi++;
-        };
         let body = parse_block(toks, pos);
-        p_body_apply(names, ptypes);
-        pbody_names = saved_pbody_names;
-        pbody_typs = saved_pbody_typs;
         ploop_names = saved_loops;
         let bnode: Block = body.node;
         if (len(derrs) > 0) {
@@ -1991,11 +1819,7 @@ def parse_func(toks: [Tok], p: long, isnat: bool) -> Parsed {
             nst += bst;
             bnode = { k: K.block, stmts: nst, line: bnode.line, col: bnode.col };
         };
-        let func: Func = { k: K.func, params: names, ptypes: ptypes, ret: ret, body: bnode, line: ln, col: cl, defs: defs, label: "", ppos: ppos };
-        if (fname != "") {
-            pfunc_names += fname;
-            pfunc_nodes += func;
-        };
+        let func: Func = { k: K.func, params: names, ptypes: ptypes, ret: ret, body: bnode, line: ln, col: cl, defs: defs, label: "", ppos: ppos, arrow: false };
         if (fname == "") {
             res(func, body.pos)
         } else {
@@ -2703,8 +2527,13 @@ def parse_value_pattern(toks: [Tok], node: Node, pos: long, tmp: str, ln: long, 
 
 // ── top level: a program is a block of statements (no surrounding braces) ─
 
+// Compiler role: tokens -> syntax tree. Parameter hints are filled by
+// infer_params.y after the tree is complete, so this function does not decide
+// any type.
+//
+// Implementation note: statements are parsed until eof, with `stmt_end` as the
+// sync point that keeps a malformed statement from consuming the next one.
 def parse_program(toks: [Tok]) -> Block {
-    p_infer_reset();
     let stmts: [Node] = [];
     let pos = 0;
     while (tt(toks, pos) != K.eof) {
@@ -2719,7 +2548,6 @@ def parse_program(toks: [Tok]) -> Block {
             pos++;
         };
     };
-    p_infer_finish();
     // A ndef owns an assembly label, so it cannot share its name with
     // another top-level declaration of the same unit. This is the only place
     // that can see it: renaming makes every name unique, so by the time the
@@ -2745,7 +2573,8 @@ def parse_program(toks: [Tok]) -> Block {
     let all: [Node] = [];
     all += clash;
     all += stmts;
-    { k: K.block, stmts: all, line: 1, col: 1 }
+    let program: Block = { k: K.block, stmts: all, line: 1, col: 1 };
+    inf.infer_program(program)
 };
 
 export { parse_program, parse_type_full, type_word_names, nameix_new, nameix_put, nameix_get };

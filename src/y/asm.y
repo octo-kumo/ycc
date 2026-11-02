@@ -556,6 +556,11 @@ let asm_a64_sealed = false;
 let asm_a64_want_listing = false;
 let asm_a64_listing = "";
 
+// Compiler role: the assembler/linker. It lays out the parts, resolves labels,
+// encodes instructions, and hands code/rodata/bss to the target writer.
+//
+// Implementation note: `parts` may be packed IR or raw assembly text; both are
+// reduced to items before layout so the same label fixup serves both.
 def asm_assemble(parts: [LinkPart], debug: bool, seal_key: long = 0) -> AsmOutI {
     asm_a64_sealed = seal_key != 0;
     armenc.set_signals(asm_a64_sealed);

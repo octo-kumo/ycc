@@ -349,7 +349,7 @@ lsp-grammar lsp-grammar-check: cycc src/y/language_schema.y src/tools/lsp/vscode
 	@task_scratch=$$(mktemp -d -t y-grammar.XXXXXXXX) || exit $$?; trap 'rm -rf "$$task_scratch"' EXIT; \
 	  $(call CAP,$(CYCC_MEM_KB)) ./cycc --gc=auto -o "$$task_scratch/grammar" src/tools/lsp/vscode-y-lang/grammar.y </dev/null || exit $$?; \
 	  $(call CAP,$(YCC_MEM_KB)) "$$task_scratch/grammar" src/tools/lsp/vscode-y-lang/syntaxes/y.tmLanguage.json $(if $(filter lsp-grammar-check,$@),--check,) </dev/null
-.PHONY: lsp-grammar lsp-grammar-check
+.PHONY: lsp-grammar lsp-grammar-check compiler-docs compiler-docs-check
 
 lsp-ext: lsp-grammar
 	cd src/tools/lsp/vscode-y-lang && \
@@ -359,6 +359,23 @@ lsp-vsix: lsp-ext
 	  npx -y @vscode/vsce package --no-git-tag-version --allow-missing-repository
 lsp-e2e: ycc ytest
 	./ytest lsp-e2e
+
+## compiler-docs         generate docs/compiler/generated from the compiler schemas
+## compiler-docs-check   fail if those generated pages are stale
+COMPILER_DOC_SRCS = src/tools/compiler_docs.y src/y/ast_schema.y src/y/type_schema.y \
+                    src/y/ir_schema.y src/y/dispatch_schema.y
+COMPILER_DOC_OUT = docs/compiler/generated
+compiler-docs: ycc $(COMPILER_DOC_SRCS)
+	@mkdir -p _check $(COMPILER_DOC_OUT)
+	$(call CAP,$(YCC_MEM_KB)) ./ycc --gc=auto -o _check/compiler-docs src/tools/compiler_docs.y </dev/null
+	./_check/compiler-docs $(COMPILER_DOC_OUT) </dev/null
+
+compiler-docs-check: ycc $(COMPILER_DOC_SRCS)
+	@d=$$(mktemp -d -t y-compiler-docs.XXXXXXXX) || exit $$?; trap 'rm -rf "$$d"' EXIT; \
+	  $(call CAP,$(YCC_MEM_KB)) ./ycc --gc=auto -o "$$d/tool" src/tools/compiler_docs.y </dev/null || exit $$?; \
+	  "$$d/tool" "$$d/generated" </dev/null || exit $$?; \
+	  diff -ru $(COMPILER_DOC_OUT) "$$d/generated" || { \
+	    echo "compiler-docs-check: generated pages are stale; run 'make compiler-docs'"; exit 1; }
 
 ## docs        the manual, docs/build/manual.pdf (needs tectonic; fails on any
 ##             LaTeX error or over/underfull box)

@@ -39,7 +39,7 @@ The requirement text below is unchanged and still the target; where a
 requirement is partly delivered the status note at its head says which part.
 
 **On citations.** Compiler internals are named by **symbol** — `types.check_program`,
-`native.origin_file`, `rename.rn_reaches_go` — and never by line number. `src/y`
+`resolve.origin_file`, `rename.rn_reaches_go` — and never by line number. `src/y`
 moves: a single refactor shifts hundreds of lines, and during this document's
 life `native.y` moved twice (the wide-environment index, then the extraction of
 the prelude into `src/y/arch/*.s`) for a cumulative drift of over 600 lines on
@@ -470,7 +470,7 @@ setting in the settings UI that does nothing. (Verified: deleting the one line t
 reads it turns that check red.)
 
 **R1.9** Unsaved buffer contents are what gets checked. `native_resolve_x`
-takes source text, not a path (`native.native_resolve_x`); the `native_resolve_x` call in `ycc.y` is the only
+takes source text, not a path (`resolve.native_resolve_x`); the `native_resolve_x` call in `ycc.y` is the only
 `fs.read_file` in the pipeline. The document arrives from `didChange`.
 
 **R1.10** Non-parsing input is a diagnostic, not a crash. A `ferr` token
@@ -926,7 +926,7 @@ sequence is 2 units, a 2- or 3-byte sequence is 1, ASCII is 1. A file with
 non-ASCII source is the case that makes this necessary, and it must have a
 test.
 
-CRLF: `\r` is whitespace to the lexer (`lexer.isspace`) and only `\n` advances
+CRLF: `\r` is whitespace to the lexer (`lexer.is_blank_byte`) and only `\n` advances
 the line, so a `\r` counts toward the byte column and must be handled in the
 line table.
 
@@ -950,7 +950,7 @@ unnecessary and one issue turned out to be a compiler bug.
 ### 9.1 C1 — two exports: NOT NEEDED
 
 The plan was to export `native.unit_externs` (to build the `ext` symbol list the
-checker binds) and `native.origin_file` (to map a diagnostic to its file), and
+checker binds) and `resolve.origin_file` (to map a diagnostic to its file), and
 M0 existed to prove the edit byte-free before building on it.
 
 **M1 does not need either, and so M0 has nothing to prove.** Both were
@@ -959,7 +959,7 @@ reconstructed in `diag.y` instead:
 * `diag.externs_for` rebuilds `ext` from `std_units(...)`: a unit's exports are
   bound when `std_unit_bound(u.name)` *and* the program named it. Both are read
   off `Unit`, which is reachable through the flattened namespace.
-* `diag.file_of` renders `native.origin_at(o, ln, false)` — exported — and takes
+* `diag.file_of` renders `resolve.origin_at(o, ln, false)` — exported — and takes
   everything before the last `:` as the path.
 
 The cost of the reconstruction is drift, so it is **pinned behaviourally rather
@@ -973,7 +973,7 @@ reblessed anyway; do not do it to unblock the server.
 
 ### 9.1a A compiler bug this work found
 
-`native.norm_path` dropped `.` from a path but did not collapse `..`, so the same
+`resolve.norm_path` dropped `.` from a path but did not collapse `..`, so the same
 file reached two ways compared as two files and the import splicer spliced
 `std/fs.y` twice — 97 duplicate-definition errors. It only bit when a module was
 reached by a path containing `..`, which is to say only for code outside
@@ -1741,7 +1741,7 @@ together read as "the errors are nonsense". The user reported it as "errors show
 at the end of file", and separately as "`+=` shows up at the end of file", which is
 the same bug: a lint warning is the same shape.
 
-The cause was one discarded value. `native.origin_at` renders `"path:line"` and
+The cause was one discarded value. `resolve.origin_at` renders `"path:line"` and
 already computes the line **in the file the spliced line came from**. Every caller
 wanted only the path, so `diag.file_of` took everything up to the last colon and
 **threw the line away** — leaving a `Finding` carrying a *spliced* line, published
@@ -1808,7 +1808,7 @@ class from the command line:
 ```
 
 and `type 'AsmLabel' is declared more than once`, which `ycc ycc.y` has never
-said. The cause was in `native.resolve_unit`: `native_resolve_seen`
+said. The cause was in `resolve.resolve_unit`: `native_resolve_seen`
 de-duplicates spliced modules through a `seen` list, and **the program itself
 was never in it**. `asm.y` imports `ir.y`, and `ir.y` imports `asm.y` back,
 which is legal — they are separate units, and a unit may be imported by more
@@ -1951,7 +1951,7 @@ A `.ycontext` file names an entry point relative to its directory. The nearest
 one in the document directory or its parents wins. `src/y/.ycontext` names
 `ycc.y`: compiler modules share declarations and generated types that do not
 exist when each file is checked as an independent program. The resolver's
-`native.set_source_overlay` substitutes the open document's unsaved text while
+`resolve.set_source_overlay` substitutes the open document's unsaved text while
 loading that entry point. It is cleared after resolution and does not write to
 disk. If the entry point does not import the document, analysis falls back to
 the document itself. Without a `.ycontext`, files keep independent analysis.
@@ -2056,8 +2056,8 @@ Reusable as-is, no compiler change:
 | `types.check_program(ast, ext) -> [Diag]` (`types.check_program`) | all errors at once, via the `tunk` poison (`types.t_unk`, `teq` `:224`). |
 | `lint.lint_unit(ast, ast3, ofile, fmods, wlevel, ogen) -> [Diag]` | all warnings, sorted and deduped. `ogen` is the meta pass's "this file has a block" flag, so `lint_meta_top` can warn about a top-level statement that runs twice. |
 | `types.inferred_ret(line, col)` (`types.inferred_ret`) | exported already; function return types free. |
-| `native.native_resolve_x(src, base_dir, …)` (`native.native_resolve_x`) | takes **text**; the unsaved-buffer seam. |
-| `native.origin_file` / `origin_at` | spliced line → file + line. |
+| `resolve.native_resolve_x(src, base_dir, …)` (`resolve.native_resolve_x`) | takes **text**; the unsaved-buffer seam. |
+| `resolve.origin_file` / `origin_at` | spliced line → file + line. |
 | `native.strip_ns` (`native.strip_ns`), `rename.rename_program_x` (`rename.rename_program_x`) | the pipeline, in order. |
 | `native.std_units` (`:13619`), `unit_iface` (`:16824`), `unit_externs` (`:16836`) | std units and the checker's externs. |
 | `native.is_intrinsic_name` (`:4248`), `types.str_method` (`types.str_method`) | the completion item sources. |

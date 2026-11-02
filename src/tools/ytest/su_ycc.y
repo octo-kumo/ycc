@@ -324,6 +324,56 @@ def meta_dump(prog: str, tag: str) {
     fs.remove_all(d);
 };
 
+// --dump prints a stage and writes no executable. The stage names and the
+// expected fragments are part of the driver's learning interface, so each one
+// gets a check: a renamed binding, a type line, an IR mnemonic, and the token
+// stream's eof.
+def dump_stages() {
+    let d = yt.tmp_dir("dump");
+    yt.write(d + "/x.y", "let x = 1 + 2;\nprint(x);\n");
+    let rows: [[str]] = [
+        ["tokens", "eof"],
+        ["ast", "Binary \"+\""],
+        ["renamed", "x$1"],
+        ["types", "x$1 : long"],
+        ["ir", "mov $1, %rax"],
+        ["ir-opt", "# stage: machine IR"]];
+    foreach (row in rows) {
+        let c = yt.cmd([yc.YCC, "--dump=" + row[0], "x.y"]);
+        c.cwd = d;
+        c.merge = true;
+        c.timeout = 120 * yt.SCALE;
+        let r = yt.run(c);
+        yt.check("--dump=" + row[0], r.code == 0 && r.out.contains(row[1]) && !fs.exists(d + "/a.out"),
+            "exit=" + tostring(r.code) + ", missing '" + row[1] + "', output: " + yt.clip(r.out, 300));
+    };
+    fs.remove_all(d);
+};
+
+type DumpCli = { name: str, want: str, args: [str] };
+
+// A --dump run is a reader, not a build: the choices that would write or run
+// something are refused by name instead of being silently ignored.
+def dump_cli_errors() {
+    let d = yt.tmp_dir("dump-cli");
+    let t01 = yc.ROOT + "/test/y/native/t01_arith.y";
+    let rows: [DumpCli] = [
+        { name: "unknown stage", want: "ycc: --dump wants tokens, ast, renamed, types, ir or ir-opt, got 'nope'", args: ["--dump=nope", t01] },
+        { name: "two stages", want: "ycc: choose one --dump stage, got 'ast' and 'tokens'", args: ["--dump=ast", "--dump=tokens", t01] },
+        { name: "dump and emit", want: "ycc: choose --dump or --emit, not both", args: ["--dump=ast", "--emit=asm", t01] },
+        { name: "dump and -o", want: "ycc: --dump writes to stdout; -o does not apply", args: ["--dump=ast", "-o", d + "/out", t01] },
+        { name: "dump and run", want: "ycc: --dump writes no executable, so it cannot run one", args: ["--dump=ast", "run", t01] },
+        { name: "dump and fix", want: "ycc: --dump and --warnings=fix do not combine (one reads, one edits)", args: ["--dump=ast", "--warnings=fix", t01] },
+        { name: "dump and pack", want: "ycc: --dump writes no executable, so it cannot pack one", args: ["--dump=ast", "--pack", t01] },
+        { name: "dump and obfuscate", want: "ycc: --dump shows the stages before obfuscation; it cannot combine with --ob", args: ["--dump=ast", "--ob", t01] }];
+    foreach (row in rows) {
+        let r = in_dir(d, [yc.YCC] + row.args, 120);
+        yt.check("dump CLI error " + row.name, r.code == 1 && r.out.contains(row.want),
+            "exit=" + tostring(r.code) + ", expected '" + row.want + "', got: " + yt.clip(r.out, 300));
+    };
+    fs.remove_all(d);
+};
+
 // ── the build a meta generator sees (S15) ───────────────────────────────
 // --emit=source renders the target fields and the command line reaches -D/-U,
 // escaping survives both quotes, and a project's manifest defines lose to the
@@ -665,6 +715,8 @@ def cases() -> [yt.Case] {
     // before the dump), and one with a MID-TOKEN block
     cs += yt.case_of(s, "meta dump", () => meta_dump(nat + "t197_meta_field_name_ok.y", "--emit=source dump of a meta file"));
     cs += yt.case_of(s, "mid-token dump", () => meta_dump(nat + "t200_meta_mid_token.y", "--emit=source dump of a mid-token meta file"));
+    cs += yt.case_of(s, "dumps", dump_stages);
+    cs += yt.case_of(s, "dump CLI", dump_cli_errors);
     cs += yt.case_of(s, "meta targets", meta_targets);
     cs += yt.case_of(s, "meta inputs", meta_inputs);
     cs += yt.case_of(s, "meta CLI", meta_cli_errors);

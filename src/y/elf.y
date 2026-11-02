@@ -39,6 +39,10 @@ def elf_bss_from_ro(code_len: long, ro_len: long) -> long {
     elf_mem_code(code_len, ro_len) + elf_page() - code_len
 };
 
+// Compiler role: serialize the final image as an ELF64 executable.
+//
+// Implementation note: without -g this writes program headers but no section
+// table; with -g it places the caller's sections and debug data at the end.
 def elf_build(code: [byte], rodata: [byte], entry_off: long, bss_len: long, syms: [ElfSym], dsecs: [ElfSec],
         sealed: bool = false) -> [byte] {
     let code_off = elf_code_off(bss_len, sealed);

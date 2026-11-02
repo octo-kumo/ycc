@@ -39,7 +39,10 @@ units and cached packages. Neither mode changes language semantics.
 \ic{--emit=asm|source|wasm|wat} selects assembly, expanded source, the wasm
 module, or a wasm listing (the executable, or the site on web, is the default). \ic{--output=PATH} (or \ic{-o PATH})
 chooses an executable or assembly path; assembly and the wasm listing default
-to stdout, and expanded source goes to stdout. \ic{--target=linux|win|kernel|web}
+to stdout, and expanded source goes to stdout.
+\ic{--dump=tokens|ast|renamed|types|ir|ir-opt} prints one compiler stage to
+stdout and writes no executable; it is the learning and debugging view, separate
+from \ic{--emit}. \ic{--target=linux|win|kernel|web}
 names the OS and \ic{--arch=x64|aarch64} the instruction set (Linux only; the
 default arch is the host's). \ic{--debug} (or \ic{-g}) includes symbols and
 source lines.

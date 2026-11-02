@@ -134,7 +134,7 @@ def scan_none(src: str, fid: long) -> Scan {
 };
 
 // ── byte classes (the lexer's own predicates, spelled here because they are
-// not exported, and they must agree with lexer.y's wordbyte/isspace) ──────
+// not exported, and they must agree with lexer.y's wordbyte/is_blank_byte) ──────
 
 def m_word(c: long) -> bool {
     c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||

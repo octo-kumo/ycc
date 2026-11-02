@@ -19,7 +19,7 @@ const AST_SHAPES = [
     "For init:Node cond:Node step:Node body:Node",
     "Foreach name:str iter:Node body:Node",
     "ForRange name:str lo:Node hi:Node body:Node",
-    "Func params:[str] ptypes:[Type] ret:Type body:Node defs:[Node] label:str ppos:[long]",
+    "Func params:[str] ptypes:[Type] ret:Type body:Node defs:[Node] label:str ppos:[long] arrow:bool",
     "IdxAssign arr:Node idx:Node v:Node",
     "If cond:Node then:Node els:Node has_else:bool",
     "IncDec op:str pre:bool tgt:Node",

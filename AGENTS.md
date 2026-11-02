@@ -362,8 +362,9 @@ Turn each finding into a hostile-input case in the decoder's `t*` fixture. A sho
 
 ## Pipeline
 
-Splice imports, pick the std units → per unit: strip namespaces (`strip_ns`,
-`strip_type`) → rename → typecheck → escape (escape.y: region errors, region
+Splice imports and pick the std units (`resolve.y`) → infer parameter hints
+(`infer_params.y`) → per unit: strip namespaces (`strip_ns`, `strip_type`) →
+rename → typecheck → escape (escape.y: region errors, region
 summaries, automatic regions) → lint (warnings to stderr; the program's unit
 and its packages, never a std unit) → hoist → emit bodies → link and tree-shake
 the units into one `.s` → `asm.y` assembles → `elf.y` writes the ELF (`-g`:
@@ -436,13 +437,15 @@ under its bare name because generated code calls it by label, and a program's ow
 
 ## Layout
 
-- `src/y/` — the compiler: `ycc.y` (driver), `pkg.y` (`ycc build`), `lexer.y`,
-  `parser.y`, `rename.y`, `types.y` (checker), `escape.y` (what may outlive a
-  region; automatic regions), `lint.y` (warnings and `--warnings=fix`),
-  `native.y` (emitter), `meta.y`, `ir.y` (the instruction IR), `labels.y`,
+- `src/y/` — the compiler: `ycc.y` (driver), `pkg.y` (`ycc build`),
+  `resolve.y` (imports, overlays and origin maps), `lexer.y`, `parser.y`,
+  `infer_params.y` (post-parse parameter hints), `rename.y`, `types.y`
+  (checker), `escape.y` (what may outlive a region; automatic regions),
+  `lint.y` (warnings and `--warnings=fix`), `native.y` (backend; the section
+  map is at the top), `meta.y`, `ir.y` (the instruction IR), `labels.y`,
   `arch_x64.y`, `enc64.y`, `asm.y`, `elf.y`, `pe.y` (the PE writer), `kelf.y`
-  (the kernel image), `dwarf.y`, `target.y`, `tags.y`, `packstub.y` (the
-  `--pack` stub); `std/` (the four core units, plus
+  (the kernel image), `dwarf.y`, `target.y`, `tags.y`, `dump.y` (the `--dump`
+  views), `packstub.y` (the `--pack` stub); `std/` (the four core units, plus
   `fs`, `net`, `struct`, `math`, `crypto`, `x509`, `tls`, `regex`, `json`,
   `args`, `tui`, `utf8`, … — all of them pack units, see Build); `arch/*.s`.
 - `src/c/` — the boxed value runtime for `bootstrap/ycc.c`.

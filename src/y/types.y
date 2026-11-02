@@ -1,4 +1,11 @@
 // types.y — static type checker for the native backend.
+//
+// Compiler role: consume the renamed AST and imported units' symbols, report
+// every static error, and leave a flat binding table for later phases. The
+// checker does not rewrite the tree; expression types are queried through
+// bind_type/expr_type.
+//
+// The reader's route is docs/compiler/README.md.
 
 // For its aliases Field, Node and Type.
 import tags from "./tags.y";
@@ -4769,6 +4776,12 @@ def st_fdepth(st: TcSt, d: long) -> TcSt { {...st, fdepth: d} };
 let tc_final: [Binding] = [];
 let tc_none: Type = { k: K.tnone };
 
+// Compiler role: check a renamed program against the imported units' symbols
+// and return every static diagnostic. The tree is not rewritten.
+//
+// Implementation note: pass 1 binds top-level signatures (mutual recursion),
+// pass 2 checks statements and leaves the final flat binding table behind for
+// bind_type/expr_type.
 def check_program(ast: Block, ext: [Sym]) -> [Diag] {
     // Escape checking needs implicit conversions even with GC enabled:
     // an explicit or automatic region must not free a boxed return value.

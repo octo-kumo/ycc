@@ -8,17 +8,23 @@ import vocabulary from "./lex_words.y";
 type Tok = { t: long, v: str, line: long, col: long, off: long, end: long };
 type Cursor = { s: str, p: long };
 
-// NOTE: short underscore-free names (isdigit/isalpha/...) — see below.
-def isdigit(c: byte) -> bool {
+// A decimal digit. (The old name, isdigit, hid that this is not the
+// Unicode-aware C predicate: it is a byte test for '0'..'9'.)
+def is_digit_byte(c: byte) -> bool {
     c >= '0' && c <= '9'
 };
 
-def isalpha(c: byte) -> bool {
-    (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' || (c >= '0' && c <= '9')
+// The first byte of an identifier: an ASCII letter or `_`. A digit is NOT a
+// valid start, which is why the lexer tries the digit branch before this one.
+def is_ident_start(c: byte) -> bool {
+    (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'
 };
 
-def isalnum(c: byte) -> bool {
-    isalpha(c)
+// A later byte of an identifier: a letter, a digit or `_`. The old isalpha
+// accepted digits too, so `isalpha('7')` was true; this name says what the
+// predicate actually means, and `_` is no longer tested twice at call sites.
+def is_ident_continue(c: byte) -> bool {
+    is_ident_start(c) || is_digit_byte(c)
 };
 
 def radix_of(s: str) -> long {
@@ -36,7 +42,7 @@ def is_radix_ch(c: byte, radix: long) -> bool {
     if ( c == '_') { true }
     else if (radix == 2) { c == '0' || c == '1' }
     else if (radix == 8) { c >= '0' && c <= '7' }
-    else { isdigit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F') }
+    else { is_digit_byte(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F') }
 };
 
 // A decimal literal's text without its `_` digit separators: its num token
@@ -51,7 +57,7 @@ def strip_seps(s: str) -> str {
 // slice -- one past the end of the source -- is not, so `1b` at EOF is a byte
 // literal and `1bx` is not.
 def lex_word_slice(s: str) -> bool {
-    len(s) == 1 && (isalnum(s[0]) || s[0] == '_')
+    len(s) == 1 && (is_ident_continue(s[0]) || s[0] == '_')
 };
 
 // The value of one digit byte in a radix literal (0-9a-fA-F).
@@ -83,13 +89,12 @@ def lex_int_value(txt: str, radix: long) -> long {
 };
 
 // A space, tab, newline or carriage return.
-def isspace(c: byte) -> bool {
+def is_blank_byte(c: byte) -> bool {
     c == ' ' || c == '\t' || c == '\n' || c == '\r'
 };
 
-// is c one of the single-char punctuation symbols?
 // One of the nine punctuation characters Y uses.
-def ispunct(c: byte) -> bool {
+def is_punct_byte(c: byte) -> bool {
     c == '(' || c == ')' || c == '{' || c == '}' || c == '[' || c == ']' || c == ',' || c == ';' || c == ':'
 };
 
@@ -215,9 +220,9 @@ def unescape(raw: str, braces: bool) -> str {
 
 // ── f-strings ────────────────────────────────────────────────────────────
 
-// A byte of an identifier-shaped word (isalnum, on a byte).
+// A byte of an identifier-shaped word (is_ident_continue, on a byte).
 def wordbyte(c: long) -> bool {
-    isalpha(c)
+    is_ident_continue(c)
 };
 
 def lit_end(src: str, q: long, closed: [long]) -> long {
@@ -284,7 +289,7 @@ def fstr_blank(src: str, lo: long, hi: long) -> bool {
     let i = lo;
     let blank = true;
     while (blank && i < hi) {
-        blank = isspace(src[i]);
+        blank = is_blank_byte(src[i]);
         i = i + 1;
     };
     blank
@@ -547,11 +552,11 @@ def tokenize_go(src: str, lsp: bool) -> [Tok] {
     let col = 1;
     while (i < n) {
         let c = src[i];
-        if (isspace(c)) {
+        if (is_blank_byte(c)) {
             if (c == '\n') { line++; col = 1; }
             else { col++; };
             i++;
-        } else if (isdigit(c)) {
+        } else if (is_digit_byte(c)) {
             let start = i;
             let startcol = col;
             // 0x../0X.. (hex), 0o../0O.. (octal) and 0b../0B.. (binary)
@@ -585,7 +590,7 @@ def tokenize_go(src: str, lsp: bool) -> [Tok] {
                     // A prefix without a digit (`0x`, `0b_`, `0b2`) is no
                     // number: the word characters after it are taken into
                     // the bad literal, reported once, where it starts.
-                    while (i < n && isalnum(src[i])) { i++; col++; };
+                    while (i < n && is_ident_continue(src[i])) { i++; col++; };
                     let what = "binary";
                     if (radix == 16) { what = "hex"; }
                     else if (radix == 8) { what = "octal"; };
@@ -616,7 +621,7 @@ def tokenize_go(src: str, lsp: bool) -> [Tok] {
                 while (true) {
                     if (i < n) {
                         let dc = src[i];
-                        if (isdigit(dc) || dc == '_') { i++; col++; }
+                        if (is_digit_byte(dc) || dc == '_') { i++; col++; }
                         else { break; };
                     } else { break; };
                 };
@@ -628,7 +633,7 @@ def tokenize_go(src: str, lsp: bool) -> [Tok] {
                     while (true) {
                         if (i < n) {
                             let fc = src[i];
-                            if (isdigit(fc) || (fc == '_' && i > fs)) { i++; col++; }
+                            if (is_digit_byte(fc) || (fc == '_' && i > fs)) { i++; col++; }
                             else { break; };
                         } else { break; };
                     };
@@ -643,13 +648,13 @@ def tokenize_go(src: str, lsp: bool) -> [Tok] {
                     if (sc == "+" || sc == "-") { esign = 1; };
                     // one past the digits can be the end of the source (`1e`):
                     // a guarded read, so it is an identifier next, not a trap
-                    if (i + 1 + esign < n && isdigit(src[i + 1 + esign])) {
+                    if (i + 1 + esign < n && is_digit_byte(src[i + 1 + esign])) {
                         i = i + 1 + esign;
                         col = col + 1 + esign;
                         while (true) {
                             if (i < n) {
                                 let xc = src[i];
-                                if (isdigit(xc) || xc == '_') { i++; col++; }
+                                if (is_digit_byte(xc) || xc == '_') { i++; col++; }
                                 else { break; };
                             } else { break; };
                         };
@@ -695,7 +700,7 @@ def tokenize_go(src: str, lsp: bool) -> [Tok] {
                 if (radix == 0) { txt = strip_seps(txt); };
                 toks += mktok(K.num, txt, line, startcol, start, i);
             };
-        } else if (isalpha(c)) {
+        } else if (is_ident_start(c)) {
             let start = i;
             let startcol = col;
             // The first character is already known to be a word character.
@@ -703,7 +708,7 @@ def tokenize_go(src: str, lsp: bool) -> [Tok] {
             col++;
             while (true) {
                 if (i < n) {
-                    if (isalnum(src[i])) { i++; col++; }
+                    if (is_ident_continue(src[i])) { i++; col++; }
                     else { break; };
                 } else { break; };
             };
@@ -889,7 +894,7 @@ def tokenize_go(src: str, lsp: bool) -> [Tok] {
                 toks += mktok(K.op, src[i:i + 1], line, col, i, i + 1);
                 i++;
                 col++;
-            } else if (ispunct(c)) {
+            } else if (is_punct_byte(c)) {
                 toks += mktok(K.punct, src[i:i + 1], line, col, i, i + 1);
                 i++;
                 col++;

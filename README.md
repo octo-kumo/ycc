@@ -74,6 +74,33 @@ collector instead).
 The full definition (grammar, type system, standard library, targets, Y-OS)
 is the manual in `docs/`, built with Tectonic: `make docs`.
 
+## Learning how the compiler works
+
+If you have never written a compiler before, start with the tour in
+[`docs/compiler/README.md`](docs/compiler/README.md). It shows the complete
+pipeline and points at the file for each phase. Then follow
+[`docs/compiler/walkthrough.md`](docs/compiler/walkthrough.md), which traces one
+small program from source text to tokens, AST, types, IR, assembly, machine
+bytes and an ELF.
+
+You can inspect the same stages without a debugger:
+
+```console
+$ ./ycc --dump=tokens  hello.y
+$ ./ycc --dump=ast     hello.y
+$ ./ycc --dump=renamed hello.y
+$ ./ycc --dump=types   hello.y
+$ ./ycc --dump=ir      hello.y
+$ ./ycc --emit=asm     hello.y
+```
+
+The recommended source order is `resolve.y` -> `lexer.y` -> `ast_schema.y` ->
+`parser.y` -> `infer_params.y` -> `rename.y` -> `types.y` -> `ir_schema.y` +
+`ir.y` -> native code generation -> `asm.y` -> `elf.y`. The generated
+AST/type/IR/dispatch references live in
+[`docs/compiler/generated/`](docs/compiler/generated/); rebuild them with
+`make compiler-docs` and check them with `make compiler-docs-check`.
+
 ## Usage
 
 ```text
@@ -91,6 +118,7 @@ ycc vendor [DIR]
 | `--target=linux\|win\|kernel\|web` | the OS to build for (default `linux`) |
 | `--arch=x64\|aarch64` | the instruction set (default: the host's; Linux only) |
 | `--emit=asm\|source\|wasm\|wat` | assembly, expanded source, the wasm module, or a wasm listing (default: the executable; a site on web) |
+| `--dump=tokens\|ast\|renamed\|types\|ir\|ir-opt` | print a compiler stage to stdout (writes no executable) |
 | `-O speed\|size` / `--optimize=` | the one optimization goal (speed by default) |
 | `-g` / `--debug` | symbols, DWARF line tables and section headers for gdb, perf and valgrind |
 | `-W`, `--warnings=none\|default\|extra\|all\|fix` | diagnostics, and safe lint fixes applied in place |
@@ -155,7 +183,7 @@ lifetime default, so build them with the collector:
 | `src/tools/lsp/` | `yserve`, the language server, and the VS Code extension |
 | `src/tools/ytest/` | `ytest`: the test framework, every suite and tool |
 | `os/` | Y-OS: kernel modules, userland, filesystem builder |
-| `docs/` | the manual (LaTeX) and `TARGETS.md` (target ABIs) |
+| `docs/` | the manual (LaTeX), `TARGETS.md` (target ABIs) and `compiler/` (the compiler tour) |
 | `examples/` | example programs |
 | `test/`, `bench/` | test corpora and benchmarks |
 | `tools/` | obfuscation audit, key server and remote-execution prototypes |

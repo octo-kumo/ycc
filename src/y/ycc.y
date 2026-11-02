@@ -7,6 +7,7 @@ import lexer from "./lexer.y";
 import parser from "./parser.y";
 import nasm from "./asm.y";
 import nativelib from "./native.y";
+import dumper from "./dump.y";
 import optim from "./optimize.y";
 import obf from "./obfuscate.y";
 import seal from "./seal.y";
@@ -67,6 +68,20 @@ def pack_method_ok(m: str) -> bool {
     m in ["dynamic", "store", "fixed", "lz"]
 };
 
+// --dump: a human-readable compiler stage, printed to stdout. This is the
+// learning/debugging view; --emit writes the actual compiler output.
+def pick_dump_stage(mode: str, selected: str) -> str {
+    if (!(mode in ["tokens", "ast", "renamed", "types", "ir", "ir-opt"])) {
+        puts("ycc: --dump wants tokens, ast, renamed, types, ir or ir-opt, got '" + mode + "'\n");
+        exit(1);
+    };
+    if (selected != "" && selected != mode) {
+        puts("ycc: choose one --dump stage, got '" + selected + "' and '" + mode + "'\n");
+        exit(1);
+    };
+    mode
+};
+
 // --emit: an intermediate listing or the wasm module alone. The executable
 // (the site on web) is the default.
 def pick_emit(mode: str, emit: str) -> str {
@@ -121,6 +136,8 @@ def usage() -> void {
     puts("                           anti-debug; Linux ELF and Windows PE\n");
     puts("      --emit=KIND          asm, source, wasm or wat (default: the executable;\n");
     puts("                           the site on web)\n");
+    puts("      --dump=STAGE         print a compiler stage: tokens, ast, renamed,\n");
+    puts("                           types, ir or ir-opt\n");
     puts("  -W, --warnings=LEVEL     none, default, extra, all or fix\n");
     puts("      --gc=MODE            never (default, checked), auto, always or stress\n");
     puts("      --std=pack|source    bundled std units (default) or compile sources\n");
@@ -166,12 +183,12 @@ type Define = { name: str, value: str, on: bool };
 type Defs = { names: [str], values: [str] };
 type DefinePair = { name: str, value: str };
 
-type CliArgs = { out: str, files: [str], asm_only: bool, timing: bool, debug: bool, nowarn: bool, wlevel: long, std_src: bool, std_pack: str, run: bool, dump: bool, prog: [str], fix: bool, pack: bool, pack_method: str, one: str, defines: [Define], emit: str };
+type CliArgs = { out: str, files: [str], asm_only: bool, timing: bool, debug: bool, nowarn: bool, wlevel: long, std_src: bool, std_pack: str, run: bool, dump: bool, dump_stage: str, prog: [str], fix: bool, pack: bool, pack_method: str, one: str, defines: [Define], emit: str };
 
 // One parser for compile, run and build. Value options accept =VALUE or VALUE.
 def cli_value_option(a: str) -> bool {
-    a in ["--output", "--optimize", "--emit", "--warnings", "--target", "--arch",
-        "--gc", "--std", "--one", "--define", "--undef", "--std-pack",
+    a in ["--output", "--optimize", "--emit", "--dump", "--warnings", "--target",
+        "--arch", "--gc", "--std", "--one", "--define", "--undef", "--std-pack",
         "--ob-seed", "--ob-key", "--ob-key-fd", "--web"]
 };
 
@@ -225,6 +242,7 @@ def parse_cli_args(argv: [str], project: bool = false) -> CliArgs {
     let std_pack = "";
     let run = false;
     let dump = false;
+    let dump_stage = "";
     let prog: [str] = [];
     let fix = false;
     let pack = false;
@@ -283,6 +301,8 @@ def parse_cli_args(argv: [str], project: bool = false) -> CliArgs {
             };
         } else if (a.starts_with("--emit=")) {
             emit = pick_emit(a[7:], emit);
+        } else if (a.starts_with("--dump=")) {
+            dump_stage = pick_dump_stage(a[7:], dump_stage);
         } else if (a.starts_with("--warnings=")) {
             let ws = pick_warnings(a[11:]);
             fix = ws.fix;
@@ -496,6 +516,32 @@ def parse_cli_args(argv: [str], project: bool = false) -> CliArgs {
             exit(1);
         };
     };
+    if (dump_stage != "") {
+        if (emit != "") {
+            puts("ycc: choose --dump or --emit, not both\n");
+            exit(1);
+        };
+        if (run) {
+            puts("ycc: --dump writes no executable, so it cannot run one\n");
+            exit(1);
+        };
+        if (fix) {
+            puts("ycc: --dump and --warnings=fix do not combine (one reads, one edits)\n");
+            exit(1);
+        };
+        if (pack) {
+            puts("ycc: --dump writes no executable, so it cannot pack one\n");
+            exit(1);
+        };
+        if (len(out) > 0) {
+            puts("ycc: --dump writes to stdout; -o does not apply\n");
+            exit(1);
+        };
+        if (obf.mode() != "off") {
+            puts("ycc: --dump shows the stages before obfuscation; it cannot combine with --ob\n");
+            exit(1);
+        };
+    };
     if (target_is_web()) {
         if (obf.mode() != "off") {
             puts("ycc: --ob is not available for --target=web\n");
@@ -506,7 +552,7 @@ def parse_cli_args(argv: [str], project: bool = false) -> CliArgs {
             exit(1);
         };
     };
-    { out: out, files: files, asm_only: asm_only, timing: timing, debug: debug, nowarn: nowarn, wlevel: wlevel, std_src: std_src, std_pack: std_pack, run: run, dump: dump, prog: prog, fix: fix, pack: pack, pack_method: pack_method, one: one, defines: defines, emit: emit }
+    { out: out, files: files, asm_only: asm_only, timing: timing, debug: debug, nowarn: nowarn, wlevel: wlevel, std_src: std_src, std_pack: std_pack, run: run, dump: dump, dump_stage: dump_stage, prog: prog, fix: fix, pack: pack, pack_method: pack_method, one: one, defines: defines, emit: emit }
 };
 
 // --target=OS: the one place a target name becomes the global every other
@@ -1031,8 +1077,8 @@ def build_args(cl: [str]) -> { dir: str, debug: bool, nowarn: bool, wlevel: long
     validate_obf(args.debug, args.pack, args.asm_only, args.dump, args.fix,
         args.std_pack);
     nasm.asm_map_enable(len(obf_map_path) > 0);
-    if (len(args.out) > 0 || args.asm_only || args.dump || args.run || args.fix
-        || len(args.emit) > 0
+    if (len(args.out) > 0 || args.asm_only || args.dump || len(args.dump_stage) > 0
+        || args.run || args.fix || len(args.emit) > 0
         || args.pack || len(args.std_pack) > 0 || args.timing) {
         puts("ycc: " + cl[1] + " accepts executable build options only (see ycc --help)\n");
         exit(1);
@@ -2259,7 +2305,7 @@ def main(cmdline: [str]) -> long {
         exit(0);
     };
     nasm.asm_map_enable(len(obf_map_path) > 0);
-    if (args.run && (args.asm_only || args.dump || args.fix)) {
+    if (args.run && (args.asm_only || args.dump || len(args.dump_stage) > 0 || args.fix)) {
         puts("ycc: run needs executable output\n"); exit(1);
     };
     // --pack writes a self-decompressing binary: a stub, a codec and a
@@ -2364,9 +2410,17 @@ def main(cmdline: [str]) -> long {
             let toks = lexer.tokenize(nrsrc);
             ph = nativelib.phase_end(dt, "tokenize", t0, h0);
             dt = ph.times; t0 = ph.t; h0 = ph.h;
+            if (args.dump_stage == "tokens") {
+                dumper.dump_tokens(toks);
+                exit(0);
+            };
             let ast = parser.parse_program(toks);
             ph = nativelib.phase_end(dt, "parse", t0, h0);
             dt = ph.times; t0 = ph.t; h0 = ph.h;
+            if (args.dump_stage == "ast") {
+                dumper.dump_ast(ast);
+                exit(0);
+            };
             // The std units the program links (native_resolve_x picked
             // them): the ones attached to ycc, compiled when it was built,
             // or (--std=source, or a ycc with none) compiled from their sources
@@ -2377,6 +2431,7 @@ def main(cmdline: [str]) -> long {
             let su = nativelib.std_units(std_order(nrstd), pack);
             ph = nativelib.phase_end(dt, "std", t0, h0);
             dt = ph.times; t0 = ph.t; h0 = ph.h;
+            if (len(args.dump_stage) > 0) { nativelib.set_dump_stage(args.dump_stage); };
             let r = nativelib.emit_program(ast, nr, args.debug, args.wlevel, su, []);
             // emit_program reports its own sub-phases (strip_ns, rename,
             // typecheck, lint, emit_fns, emit_start, asm_text); splice them in.
